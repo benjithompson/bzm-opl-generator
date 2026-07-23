@@ -1,0 +1,22 @@
+[project]
+name = "bzm-opl-gen"
+version = "0.1.0"
+description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pyyaml", "pytest"]
+
+[project.scripts]
+bzm-opl-gen = "bzm_opl_gen.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bzm_opl_gen*"]
+
+[tool.setuptools.package-data]
+bzm_opl_gen = ["templates/*.yaml"]

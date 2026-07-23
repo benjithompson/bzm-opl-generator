@@ -1,0 +1,9 @@
+{
+  "platform": "openshift",
+  "use_secret": true,
+  "service_type": "CLUSTERIP",
+  "cluster_rbac": false,
+  "private_registry": "<YOUR_PRIVATE_REGISTRY>",
+  "registry_auth": true,
+  "pull_secret": "<YOUR_REGISTRY_PULL_SECRET>"
+}

@@ -1,0 +1,21 @@
+# credentials -- never commit
+api-key*.json
+*.env
+
+# generated artifacts
+out/
+facts.json
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+
+# os/ide
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/

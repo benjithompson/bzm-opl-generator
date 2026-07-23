@@ -1,0 +1,11 @@
+# OPTIONAL -- cluster-scoped. Not required to run performance tests.
+# Crane uses node read access only for cluster capacity awareness; without it
+# crane logs a "forbidden: nodes" warning and proceeds. Only apply if your
+# cluster admins allow it and node-capacity features are needed.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: cluster-role-crane }
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
