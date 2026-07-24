@@ -4,7 +4,7 @@ import {
   Location, Options, Ship, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
 
@@ -181,6 +181,40 @@ export default function App() {
     ca_bundle: m === "inline" ? (o.ca_bundle ?? "") : null,
     ca_openshift_inject: m === "inject",
   }));
+
+  // Toggle-to-enable option groups: OFF hides the fields AND wipes their
+  // options, so nothing hidden ever reaches the manifests. Auto-flips on when
+  // a preset/import brings values in.
+  type GroupId = "registry" | "proxy" | "ca" | "sched" | "sizing" | "security";
+  const [grpOn, setGrpOn] = useState<Record<GroupId, boolean>>({
+    registry: false, proxy: false, ca: false, sched: false, sizing: false, security: false,
+  });
+  useEffect(() => {
+    setGrpOn((g) => ({
+      registry: g.registry || !!(options.private_registry || options.pull_secret || options.registry_auth),
+      proxy: g.proxy || !!options.proxy,
+      ca: g.ca || caMode !== "none",
+      sched: g.sched || !!(options.tolerations || options.node_selector),
+      sizing: g.sizing || !!(options.engine_cpu_limit || options.engine_mem_limit),
+      security: g.security || options.use_secret === false || !!options.cluster_rbac ||
+        (options.service_type != null && options.service_type !== "CLUSTERIP"),
+    }));
+  }, [options, caMode]);
+  const flipGroup = (id: GroupId, on: boolean) => {
+    setGrpOn((g) => ({ ...g, [id]: on }));
+    if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
+    if (on) return;
+    setOptions((o) => {
+      const w = { ...o };
+      if (id === "registry") Object.assign(w, { private_registry: null, pull_secret: null, registry_auth: false });
+      if (id === "proxy") w.proxy = null;
+      if (id === "sched") Object.assign(w, { tolerations: null, node_selector: null });
+      if (id === "sizing") Object.assign(w, { engine_cpu_limit: null, engine_mem_limit: null });
+      if (id === "security") Object.assign(w, { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" });
+      return w;
+    });
+  };
+  const namespaceOk = !!String(options.namespace ?? "").trim();
 
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
@@ -413,61 +447,41 @@ export default function App() {
           <Section n={4} title="Configure"
             hint="Everything re-renders the preview live. Presets give a starting point.">
             <div className="space-y-4">
-              <div className="flex gap-2 items-end flex-wrap">
-                <Field label="Start from preset">
-                  <select className={inputCls} defaultValue=""
-                    onChange={(e) => e.target.value && applyProfile(e.target.value)}>
-                    <option value="">—</option>
-                    {profiles.map((p) => (
-                      <option key={p.name} value={p.name}>{p.name}</option>))}
-                  </select>
-                </Field>
-                <Button kind="ghost" onClick={exportProfile}>Export profile</Button>
+              <div className="flex gap-2 items-center flex-wrap">
+                <span className="text-xs font-medium text-slate-500">Presets:</span>
+                {profiles.map((p) => (
+                  <button key={p.name}
+                    className="px-2.5 py-1 rounded-full text-xs border border-slate-300 text-slate-600 hover:bg-slate-50"
+                    onClick={() => applyProfile(p.name)}>
+                    {p.name}
+                  </button>
+                ))}
+                <span className="flex-1" />
+                <Button kind="ghost" onClick={exportProfile}>Export</Button>
                 <label className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 cursor-pointer">
-                  Import profile
+                  Import
                   <input type="file" accept=".json" className="hidden"
                     onChange={(e) => e.target.files?.[0] && importProfile(e.target.files[0])} />
                 </label>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Platform">
-                  <select className={inputCls} value={String(options.platform)}
-                    onChange={(e) => set("platform", e.target.value)}>
-                    <option value="openshift">OpenShift (SCC-friendly)</option>
-                    <option value="k8s">Kubernetes (pinned UID)</option>
-                  </select>
-                </Field>
-                <Field label="Namespace">
-                  <TextInput value={String(options.namespace ?? "")}
-                    onChange={(v) => set("namespace", v)} />
-                </Field>
-                <Field label="Service type" hint="NODEPORT is BlazeMeter's default but often disallowed">
-                  <select className={inputCls} value={String(options.service_type)}
-                    onChange={(e) => set("service_type", e.target.value)}>
-                    <option value="CLUSTERIP">CLUSTERIP</option>
-                    <option value="NODEPORT">NODEPORT</option>
-                  </select>
-                </Field>
-                {!openshift && (
-                  <Field label="runAsUser / runAsGroup">
-                    <input type="number" className={inputCls}
-                      value={Number(options.run_as_user ?? 1337)}
-                      onChange={(e) => set("run_as_user", Number(e.target.value))} />
-                  </Field>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <Check label="AUTH_TOKEN in a Secret"
-                  hint="uncheck = simplified ConfigMap variant"
-                  checked={Boolean(options.use_secret)}
-                  onChange={(v) => set("use_secret", v)} />
-                <Check label="Read-only nodes ClusterRole"
-                  hint="optional; not needed for perf tests"
-                  checked={Boolean(options.cluster_rbac)}
-                  onChange={(v) => set("cluster_rbac", v)} />
-              </div>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
+                  Namespace
+                  {namespaceOk
+                    ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
+                    : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>}
+                </span>
+                <div className="relative">
+                  <input className={inputCls + (namespaceOk ? " border-emerald-400" : " border-red-300")}
+                    value={String(options.namespace ?? "")} placeholder="e.g. blazemeter"
+                    onChange={(e) => set("namespace", e.target.value)} />
+                  {namespaceOk && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-sm">✓</span>}
+                </div>
+                <span className="text-[11px] text-slate-400">
+                  the only required setting — every group below is optional
+                </span>
+              </label>
               {facts && (
                 <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
                   Images are selected automatically from the location's enabled
@@ -477,11 +491,18 @@ export default function App() {
                 </p>
               )}
 
-              <details className="border border-slate-200 rounded-md" open={!!options.private_registry}>
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
-                  Private registry
-                </summary>
-                <div className="p-3 pt-1 space-y-2">
+              <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
+
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.registry} onChange={(v) => flipGroup("registry", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.registry ? "text-slate-900" : "text-slate-500"}`}>Private registry</p>
+                    <p className="text-[11px] text-slate-400 truncate">mirror images into your own registry (air-gapped)</p>
+                  </div>
+                </div>
+                {grpOn.registry && (
+                <div className="mt-3 pl-12 space-y-2">
                   <Field label="Registry" hint="sets DOCKER_REGISTRY + IMAGE_OVERRIDES, disables auto-update, emits bzm-opl-image-mirror.sh">
                     <TextInput mono value={String(options.private_registry ?? "")}
                       placeholder="registry.corp.com/bzm"
@@ -499,14 +520,19 @@ export default function App() {
                       onChange={(v) => set("registry_auth", v)} />
                   </div>
                 </div>
-              </details>
+                )}
+              </div>
 
-              <details className="border border-slate-200 rounded-md"
-                open={!!options.proxy}>
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
-                  HTTP(S) proxy
-                </summary>
-                <div className="p-3 pt-1 space-y-2">
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.proxy} onChange={(v) => flipGroup("proxy", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.proxy ? "text-slate-900" : "text-slate-500"}`}>HTTP(S) proxy</p>
+                    <p className="text-[11px] text-slate-400 truncate">egress via a corporate proxy, optional authentication</p>
+                  </div>
+                </div>
+                {grpOn.proxy && (
+                <div className="mt-3 pl-12 space-y-2">
                   <div className="grid grid-cols-2 gap-2">
                     <Field label="HTTP proxy">
                       <TextInput mono placeholder="http://proxy:3128"
@@ -539,17 +565,21 @@ export default function App() {
                     into the Secret instead of the ConfigMap.
                   </p>
                 </div>
-              </details>
+                )}
+              </div>
 
-              <details className="border border-slate-200 rounded-md"
-                open={caMode !== "none"}>
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
-                  Custom CA trust (TLS interception)
-                </summary>
-                <div className="p-3 pt-1 space-y-2">
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.ca} onChange={(v) => flipGroup("ca", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.ca ? "text-slate-900" : "text-slate-500"}`}>Custom CA trust</p>
+                    <p className="text-[11px] text-slate-400 truncate">TLS-intercepting proxy / private CAs — mounted into crane + engines</p>
+                  </div>
+                </div>
+                {grpOn.ca && (
+                <div className="mt-3 pl-12 space-y-2">
                   <div className="space-y-1.5 text-sm">
                     {([
-                      ["none", "None", "cluster trusts BlazeMeter's public certs already"],
                       ["existing", "Reference an existing ConfigMap (recommended)",
                         "your platform/security team owns and rotates the trust bundle (e.g. via trust-manager); manifests only reference it"],
                       ["inline", "Paste PEM — generator creates the ConfigMap",
@@ -588,23 +618,25 @@ export default function App() {
                         onChange={(e) => set("ca_bundle", e.target.value)} />
                     </Field>
                   )}
-                  {caMode !== "none" && (
-                    <p className="text-[11px] text-slate-400">
-                      Mounted read-only at /var/cm in crane; engines get the same
-                      ConfigMap via KUBERNETES_CA_BUNDLE_MOUNT, and
-                      REQUESTS_CA_BUNDLE / AWS_CA_BUNDLE point at it.
-                    </p>
-                  )}
+                  <p className="text-[11px] text-slate-400">
+                    Mounted read-only at /var/cm in crane; engines get the same
+                    ConfigMap via KUBERNETES_CA_BUNDLE_MOUNT, and
+                    REQUESTS_CA_BUNDLE / AWS_CA_BUNDLE point at it.
+                  </p>
                 </div>
-              </details>
+                )}
+              </div>
 
-              <details className="border border-slate-200 rounded-md"
-                open={!!(options.tolerations || options.node_selector ||
-                  options.engine_cpu_limit || options.engine_mem_limit)}>
-                <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
-                  Scheduling & engine sizing
-                </summary>
-                <div className="p-3 pt-1 space-y-2">
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.sched} onChange={(v) => flipGroup("sched", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.sched ? "text-slate-900" : "text-slate-500"}`}>Scheduling</p>
+                    <p className="text-[11px] text-slate-400 truncate">tolerations + nodeSelector for crane & engines</p>
+                  </div>
+                </div>
+                {grpOn.sched && (
+                <div className="mt-3 pl-12 space-y-2">
                   <JsonArea label="Tolerations (JSON list — crane pod + engines)"
                     value={options.tolerations}
                     placeholder='[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]'
@@ -613,18 +645,87 @@ export default function App() {
                     value={options.node_selector}
                     placeholder='{"pool":"loadtest"}'
                     onValid={(v) => set("node_selector", v)} />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="Engine CPU limit" hint="KUBERNETES_RESOURCES_LIMITS_CPU">
-                      <TextInput mono placeholder="2"
-                        value={String(options.engine_cpu_limit ?? "")}
-                        onChange={(v) => set("engine_cpu_limit", v || null)} />
-                    </Field>
-                    <Field label="Engine memory limit" hint="KUBERNETES_RESOURCES_LIMITS_MEMORY">
-                      <TextInput mono placeholder="8Gi"
-                        value={String(options.engine_mem_limit ?? "")}
-                        onChange={(v) => set("engine_mem_limit", v || null)} />
-                    </Field>
+                </div>
+                )}
+              </div>
+
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.sizing} onChange={(v) => flipGroup("sizing", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.sizing ? "text-slate-900" : "text-slate-500"}`}>Engine sizing</p>
+                    <p className="text-[11px] text-slate-400 truncate">CPU / memory limits for load engines (default 2 CPU / 8Gi)</p>
                   </div>
+                </div>
+                {grpOn.sizing && (
+                <div className="mt-3 pl-12 grid grid-cols-2 gap-2">
+                  <Field label="Engine CPU limit" hint="KUBERNETES_RESOURCES_LIMITS_CPU">
+                    <TextInput mono placeholder="2"
+                      value={String(options.engine_cpu_limit ?? "")}
+                      onChange={(v) => set("engine_cpu_limit", v || null)} />
+                  </Field>
+                  <Field label="Engine memory limit" hint="KUBERNETES_RESOURCES_LIMITS_MEMORY">
+                    <TextInput mono placeholder="8Gi"
+                      value={String(options.engine_mem_limit ?? "")}
+                      onChange={(v) => set("engine_mem_limit", v || null)} />
+                  </Field>
+                </div>
+                )}
+              </div>
+
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.security} onChange={(v) => flipGroup("security", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.security ? "text-slate-900" : "text-slate-500"}`}>Security & RBAC</p>
+                    <p className="text-[11px] text-slate-400 truncate">defaults: token in a Secret, CLUSTERIP, no cluster RBAC</p>
+                  </div>
+                </div>
+                {grpOn.security && (
+                <div className="mt-3 pl-12 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Check label="AUTH_TOKEN in a Secret"
+                      hint="uncheck = simplified ConfigMap variant"
+                      checked={Boolean(options.use_secret)}
+                      onChange={(v) => set("use_secret", v)} />
+                    <Check label="Read-only nodes ClusterRole"
+                      hint="optional; not needed for perf tests"
+                      checked={Boolean(options.cluster_rbac)}
+                      onChange={(v) => set("cluster_rbac", v)} />
+                  </div>
+                  <Field label="Service type" hint="NODEPORT is BlazeMeter's default but often disallowed">
+                    <select className={inputCls} value={String(options.service_type)}
+                      onChange={(e) => set("service_type", e.target.value)}>
+                      <option value="CLUSTERIP">CLUSTERIP</option>
+                      <option value="NODEPORT">NODEPORT</option>
+                    </select>
+                  </Field>
+                </div>
+                )}
+              </div>
+
+              </div>
+
+              <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
+                <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-slate-500">
+                  Advanced — you should not need this
+                </summary>
+                <div className="px-4 pb-3 pt-1 grid grid-cols-2 gap-3">
+                  <Field label="Security posture"
+                    hint="the SCC-friendly posture works on both OpenShift and vanilla k8s; the pinned-UID variant exists only for clusters that reject it">
+                    <select className={inputCls} value={String(options.platform)}
+                      onChange={(e) => set("platform", e.target.value)}>
+                      <option value="openshift">Unified SCC-friendly (recommended)</option>
+                      <option value="k8s">Legacy pinned-UID k8s</option>
+                    </select>
+                  </Field>
+                  {!openshift && (
+                    <Field label="runAsUser / runAsGroup">
+                      <input type="number" className={inputCls}
+                        value={Number(options.run_as_user ?? 1337)}
+                        onChange={(e) => set("run_as_user", Number(e.target.value))} />
+                    </Field>
+                  )}
                 </div>
               </details>
             </div>
