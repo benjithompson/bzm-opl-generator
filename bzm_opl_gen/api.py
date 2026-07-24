@@ -114,6 +114,51 @@ class BzmClient:
     def delete_private_location(self, harbor_id):
         return self.delete(f"/private-locations/{harbor_id}")
 
+    # -- tests / executions (used by livetest --run-test) ----------------------
+    def test(self, test_id):
+        return self.get(f"/tests/{test_id}")
+
+    def update_test(self, test_id, body):
+        return self.patch(f"/tests/{test_id}", body)
+
+    def point_test_at_location(self, test_id, harbor_id, concurrency=1):
+        """Repoint a test's executions at a private location, returning the
+        previous executions so the caller can put them back. BlazeMeter keys
+        private locations as 'harbor-<harborId>'."""
+        t = self.test(test_id)
+        before = {"executions": t.get("executions"),
+                  "overrideExecutions": t.get("overrideExecutions")}
+        loc = {f"harbor-{harbor_id}": concurrency}
+        pct = {f"harbor-{harbor_id}": 100}
+
+        def repoint(execs):
+            out = []
+            for e in execs or []:
+                e = dict(e, locations=loc, locationsPercents=pct,
+                         concurrency=concurrency)
+                out.append(e)
+            return out
+
+        self.update_test(test_id, {
+            "executions": repoint(before["executions"]),
+            "overrideExecutions": repoint(before["overrideExecutions"]),
+        })
+        return before
+
+    def start_test(self, test_id):
+        """Returns the master (report) id of the run."""
+        r = self.post(f"/tests/{test_id}/start")
+        return r["id"] if isinstance(r, dict) else r
+
+    def master_status(self, master_id):
+        return self.get(f"/masters/{master_id}/status")
+
+    def master(self, master_id):
+        return self.get(f"/masters/{master_id}")
+
+    def stop_master(self, master_id):
+        return self.post(f"/masters/{master_id}/stop")
+
     def create_ship(self, harbor_id, name):
         return self.post(f"/private-locations/{harbor_id}/servers", {"name": name})
 

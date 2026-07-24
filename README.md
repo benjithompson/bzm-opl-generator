@@ -142,6 +142,7 @@ are torn down with the cluster.
 | `--local-registry [PORT]` (5001) | `registry:2`, published on the host, pulled via `host.minikube.internal` | air-gapped pulls: `DOCKER_REGISTRY`, `IMAGE_OVERRIDES`, auto-update off |
 | `--local-proxy` | `mitmproxy`, joined to the cluster's own docker network | proxy egress **and** custom CA trust |
 | `--contain-egress` | calico + a default-deny egress NetworkPolicy | that the proxy is the **only** way out, not just the way that was taken |
+| `--run-test TEST_ID` | a real BlazeMeter run on the location | what crane passes to the **engines** it spawns: image override, CA propagation, proxy env |
 
 `--local-proxy` is deliberately hostile: mitmproxy terminates TLS with its own
 CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDLE`
@@ -215,6 +216,37 @@ nothing. Two details this needs to be real rather than decorative:
 Probes run `curl` inside the crane pod, not python: `/usr/local/bin/python3`
 there is a crane-agent shim, not an interpreter.
 
+### Engine validation (`--run-test TEST_ID`)
+
+Crane coming online says nothing about the pods crane *creates*. `--run-test`
+runs an existing BlazeMeter test on the location so an engine actually spawns,
+then checks what crane handed it:
+
+```
+test 15783207 repointed at harbor-6a63a79dcc45dccca90bf440 (original locations saved for restore)
+started test 15783207 -> master 82803809
+  engine pod r-v4-6a63ce4e06112601331279-0-0-c-t6cd7 (Running, 10.244.0.9)
+  master 82803809: BOOT_STARTING … TAURUS_ENGINE_READY … DATA_RECEIVED … ENDED
+  proxy saw engine upload traffic: data.blazemeter.com=64, storage.blazemeter.com=22
+restored the original locations on test 15783207
+```
+
+Checked: the engine image comes from the private registry (a *different*
+`IMAGE_OVERRIDES` key than crane's own, so crane being right proves nothing
+about it), the CA bundle propagated via `KUBERNETES_CA_BUNDLE_MOUNT`,
+`HTTPS_PROXY` reached the engine env, the engine's own traffic appears in the
+proxy log under its pod IP, and the run reached `ENDED` rather than dying.
+
+The test's `executions[].locations` are repointed at `harbor-<id>` and restored
+in a `finally`; the original is printed so it can be put back by hand if the
+process is killed. Engines are sized down with `--engine-cpu` / `--engine-mem`
+(default 1 / 4Gi) — the documented 2 CPU / 8Gi will not schedule on a laptop.
+Note crane sets its own resource *requests* (250m / 256Mi) and only the limits
+come from the generated envs.
+
+Engines mount the bundle as a file (`/var/cm/ca-bundle.crt`, subPath) where
+crane mounts the directory — the check accepts both.
+
 Why the CONNECT probe, and why the cluster network rather than a published port: a host
 port belongs to whatever already claimed it (an ssh tunnel, a stray Java
 process), and the node then reaches *that* instead. The symptom is a plausible
@@ -251,9 +283,8 @@ tests/           offline unit tests (fixture facts)
 
 - Istio/nginx service-virtualization ingress env sets
 - External Secrets Operator / CSI secret-store variants
-- CA propagation into *engine* pods — `KUBERNETES_CA_BUNDLE_MOUNT` is generated
-  and crane-online proves crane's own trust, but only a real test run on the
-  location exercises the engines
+- Multi-engine runs (the rig validates one engine pod, on one node)
+- Engine ephemeral-storage sizing under a real 40GB `/tmp` workload
 
 References: [help.blazemeter.com — private locations](https://help.blazemeter.com/docs/guide/private-locations-install-blazemeter-agent-for-kubernetes.html),
 [agent env variables](https://help.blazemeter.com/docs/guide/private-locations-blazemeter-agent-environment-variables.html),

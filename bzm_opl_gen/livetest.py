@@ -405,6 +405,144 @@ def assert_egress_contained(cli, namespace, host="a.blazemeter.com"):
     return fails
 
 
+def engine_pods(cli, namespace):
+    """Pods crane created for a run -- everything in the namespace that is not
+    crane itself."""
+    out = subprocess.run([cli, "-n", namespace, "get", "pods", "-o", "json"],
+                         capture_output=True, text=True)
+    items = json.loads(out.stdout or "{}").get("items", [])
+    return [p for p in items
+            if not p["metadata"]["name"].startswith("crane-")]
+
+
+def wait_for_engine_pod(cli, namespace, timeout=420, poll=10):
+    """Crane only creates the engine once BlazeMeter hands it the run, so this
+    is a wait, not a check. Waits for an IP too -- that is how the engine's own
+    traffic is later recognised in the proxy log."""
+    deadline = time.time() + timeout
+    seen = None
+    while time.time() < deadline:
+        pods = engine_pods(cli, namespace)
+        if pods:
+            seen = pods[0]
+            if seen["status"].get("podIP"):
+                print(f"  engine pod {seen['metadata']['name']} "
+                      f"({seen['status'].get('phase')}, {seen['status']['podIP']})")
+                return seen
+        time.sleep(poll)
+    return seen        # spec is still checkable without an IP
+
+
+# Hosts only an engine talks to: results and artifact upload. Crane itself uses
+# a.blazemeter.com. Pod IPs cannot be used to tell them apart -- pod traffic is
+# SNAT'd to the node address before it reaches the proxy, so every flow in the
+# proxy log has the same source.
+ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+
+
+def engine_upload_marks():
+    return {h: len(proxy_flows(h)) for h in ENGINE_UPLOAD_HOSTS}
+
+
+def engine_proxy_evidence(before):
+    """Did the engine's own upload traffic go through the proxy? The env var can
+    be present and still ignored by whatever the engine runs; the proxy's log
+    is what settles it."""
+    new = {h: len(proxy_flows(h)) - before.get(h, 0) for h in ENGINE_UPLOAD_HOSTS}
+    total = sum(new.values())
+    print("  proxy saw engine upload traffic: " +
+          ", ".join(f"{h}={n}" for h, n in new.items()))
+    if total:
+        return []
+    return ["the engine's results never went through the proxy (no new "
+            f"{' / '.join(ENGINE_UPLOAD_HOSTS)} flows) -- engines egress around it"]
+
+
+def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
+                    engine_timeout=420, run_timeout=900):
+    """Start a real BlazeMeter test on the location so crane actually spawns an
+    engine, then check what that engine was given. The test's own locations are
+    repointed at the private location and restored afterwards."""
+    before = client.point_test_at_location(test_id, harbor_id)
+    print(f"test {test_id} repointed at harbor-{harbor_id} "
+          f"(original locations saved for restore)")
+    before_upload = engine_upload_marks()
+    master_id = None
+    try:
+        master_id = client.start_test(test_id)
+        print(f"started test {test_id} -> master {master_id}")
+        pod = wait_for_engine_pod(cli, namespace, engine_timeout)
+        if not pod:
+            return [f"crane never created an engine pod for master {master_id} "
+                    f"-- RBAC, resources, or IMAGE_OVERRIDES for the engine"]
+        fails = assert_engine_config(pod, opts)
+        status = wait_master_done(client, master_id, run_timeout)
+        if status != "ENDED":
+            fails.append(f"the run finished as {status}, not ENDED -- the engine "
+                         f"did not complete and report back to BlazeMeter")
+        if opts.get("proxy"):
+            fails += engine_proxy_evidence(before_upload)
+        return fails
+    finally:
+        if master_id:
+            try:
+                client.stop_master(master_id)
+            except Exception:
+                pass                      # already finished; nothing to stop
+        client.update_test(test_id, before)
+        print(f"restored the original locations on test {test_id}")
+
+
+def assert_engine_config(pod, opts):
+    """What crane passed down to the engine it spawned. Everything here is
+    invisible to a crane-only live test: the image override for the engine (a
+    different IMAGE_OVERRIDES key from crane's own), the CA bundle propagated
+    via KUBERNETES_CA_BUNDLE_MOUNT, and the proxy env."""
+    from .generate import CA_MOUNT_PATH
+    fails = []
+    containers = pod["spec"].get("containers", [])
+    env = {e["name"]: e.get("value") for c in containers for e in c.get("env", [])}
+    images = [c.get("image", "") for c in containers]
+
+    reg = opts.get("private_registry")
+    if reg and not all(i.startswith(reg.split("/")[0]) for i in images):
+        fails.append(f"engine image is not from the private registry: {images} "
+                     f"-- IMAGE_OVERRIDES does not cover the engine")
+    if opts.get("ca_bundle") or opts.get("ca_existing_configmap"):
+        # Crane mounts the ConfigMap as a directory at /var/cm; the engine gets
+        # the bundle file itself (/var/cm/ca-bundle.crt, subPath). Accept both.
+        mounts = [m for c in containers for m in c.get("volumeMounts", [])
+                  if (m.get("mountPath") or "").startswith(CA_MOUNT_PATH)]
+        if not mounts:
+            fails.append(f"engine pod has no CA bundle mounted at {CA_MOUNT_PATH} "
+                         f"-- KUBERNETES_CA_BUNDLE_MOUNT did not propagate")
+        if not env.get("REQUESTS_CA_BUNDLE"):
+            fails.append("engine pod has no REQUESTS_CA_BUNDLE -- it cannot trust "
+                         "the corporate CA even if the bundle is mounted")
+    if opts.get("proxy"):
+        if not (env.get("HTTPS_PROXY") or env.get("https_proxy")):
+            fails.append("engine pod has no HTTPS_PROXY -- engines would egress "
+                         "directly, bypassing the customer's proxy")
+    return fails
+
+
+def wait_master_done(client, master_id, timeout=900, poll=20):
+    """Poll the run to completion. 'ENDED' with sessions that produced data is
+    the only outcome that proves the engine talked to BlazeMeter."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        st = client.master_status(master_id)
+        status = st.get("status") if isinstance(st, dict) else st
+        if status != last:
+            print(f"  master {master_id}: {status}")
+            last = status
+        if status in ("ENDED", "ABORTED", "FAILED"):
+            return status
+        time.sleep(poll)
+    return last
+
+
 def _kget(cli, namespace, kind, name):
     out = subprocess.run([cli, "-n", namespace, "get", kind, name, "-o", "json"],
                          capture_output=True, text=True)
@@ -574,7 +712,8 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         cluster="current", timeout=600, keep=False,
         facts=None, local_registry=None,
         local_proxy=None, proxy_user=None, proxy_pass=None, regenerate=None,
-        negative_control_check=True, opts=None, contain_egress=False):
+        negative_control_check=True, opts=None, contain_egress=False,
+        run_test=None, engine_cpu="1", engine_mem="4Gi"):
     """regenerate(overlay) -- callback that re-renders the manifests in
     manifest_dir with extra generate() options merged in. Required with
     --local-proxy, whose CA only exists once the proxy container is up.
@@ -595,6 +734,15 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         if local_registry:
             blackhole_public_registries(facts, cluster,
                                         (opts or {}).get("private_registry"))
+        # Engines are sized down so one fits a laptop cluster; the default
+        # request (2 CPU / 8Gi) would sit Pending forever.
+        engine_overlay = {"engine_cpu_limit": engine_cpu,
+                          "engine_mem_limit": engine_mem} if run_test else {}
+        if engine_overlay and not local_proxy:
+            if not regenerate:
+                raise RuntimeError("--run-test needs a regenerate callback")
+            regenerate(engine_overlay)
+            opts = dict(opts or {}, **engine_overlay)
         if local_proxy:
             if not regenerate:
                 raise RuntimeError("--local-proxy needs a regenerate callback")
@@ -604,7 +752,8 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                   f"MITM CA bundle {len(ca_pem)} bytes")
             if not verify_proxy_reachable(host, cluster, proxy_user, proxy_pass):
                 return False
-            overlay = proxy_overlay(host, PROXY_PORT, ca_pem, proxy_user, proxy_pass)
+            overlay = {**proxy_overlay(host, PROXY_PORT, ca_pem,
+                                       proxy_user, proxy_pass), **engine_overlay}
             if contain_egress:
                 apply_egress_policy(_cli_for(manifest_dir), namespace, host,
                                     manifest_dir)
@@ -640,6 +789,9 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                 fails += proxy_log_failures(marks)
             if contain_egress:
                 fails += assert_egress_contained(_cli_for(manifest_dir), namespace)
+            if run_test:
+                fails += run_engine_test(client, _cli_for(manifest_dir), namespace,
+                                         run_test, harbor_id, opts or {})
             for f in fails:
                 print("  CONFIG FAILURE: " + f)
             if fails:

@@ -210,6 +210,88 @@ def test_policy_enforced_detects_calico(monkeypatch):
     assert not livetest.policy_enforced()
 
 
+def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True):
+    env = []
+    mounts = []
+    if ca:
+        env.append({"name": "REQUESTS_CA_BUNDLE", "value": "/var/cm/ca-bundle.crt"})
+        # What crane actually gives an engine: the bundle file via subPath,
+        # not the /var/cm directory it mounts for itself.
+        mounts.append({"name": "cacerts", "mountPath": "/var/cm/ca-bundle.crt",
+                       "subPath": "ca-bundle.crt"})
+    if proxy:
+        env.append({"name": "HTTPS_PROXY", "value": "http://bzm:s3cr3t@1.2.3.4:8080"})
+    return {"metadata": {"name": "engine-abc"},
+            "status": {"phase": "Running"},
+            "spec": {"containers": [{"image": image, "env": env,
+                                     "volumeMounts": mounts}]}}
+
+
+ENGINE_OPTS = {"private_registry": "reg:5001", "ca_bundle": CA_PEM,
+               "proxy": {"https": "http://1.2.3.4:8080"}}
+
+
+def test_engine_config_clean():
+    assert livetest.assert_engine_config(_engine_pod(), ENGINE_OPTS) == []
+
+
+def test_engine_config_catches_public_engine_image():
+    pod = _engine_pod(image="gcr.io/verdant-bulwark-278/blazemeter/v4:latest")
+    fails = livetest.assert_engine_config(pod, ENGINE_OPTS)
+    assert any("does not cover the engine" in f for f in fails)
+
+
+def test_engine_config_catches_missing_ca_propagation():
+    fails = livetest.assert_engine_config(_engine_pod(ca=False), ENGINE_OPTS)
+    assert any("KUBERNETES_CA_BUNDLE_MOUNT did not propagate" in f for f in fails)
+    assert any("REQUESTS_CA_BUNDLE" in f for f in fails)
+
+
+def test_engine_config_catches_missing_proxy_env():
+    fails = livetest.assert_engine_config(_engine_pod(proxy=False), ENGINE_OPTS)
+    assert any("bypassing the customer's proxy" in f for f in fails)
+
+
+def test_engine_pods_excludes_crane(monkeypatch):
+    items = {"items": [{"metadata": {"name": "crane-7d9-abc"}},
+                       {"metadata": {"name": "taurus-cloud-xyz"}}]}
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"stdout": json.dumps(items)})())
+    pods = livetest.engine_pods("kubectl", "ns1")
+    assert [p["metadata"]["name"] for p in pods] == ["taurus-cloud-xyz"]
+
+
+def test_engine_proxy_evidence(monkeypatch):
+    """Engine traffic is identified by the hosts only engines use -- pod IPs are
+    SNAT'd to the node before the proxy sees them."""
+    log = {"data.blazemeter.com": [], "storage.blazemeter.com": []}
+    monkeypatch.setattr(livetest, "proxy_flows", lambda s="blazemeter.com": log.get(s, []))
+    before = livetest.engine_upload_marks()
+    fails = livetest.engine_proxy_evidence(before)
+    assert any("never went through the proxy" in f for f in fails)
+    log["data.blazemeter.com"] = ["POST https://data.blazemeter.com/api/v4/taurus/r-v4-x"]
+    assert livetest.engine_proxy_evidence(before) == []
+
+
+def test_point_test_at_location_returns_original(monkeypatch):
+    """The rig must be able to put the customer's test back the way it was."""
+    from bzm_opl_gen import api
+    original = {"executions": [{"concurrency": 5, "locations": {"us-east4-a": 5},
+                                "executor": "jmeter"}],
+                "overrideExecutions": [{"locations": {"us-east4-a": 5}}]}
+    sent = {}
+    c = api.BzmClient.__new__(api.BzmClient)
+    monkeypatch.setattr(api.BzmClient, "test", lambda self, tid: dict(original))
+    monkeypatch.setattr(api.BzmClient, "update_test",
+                        lambda self, tid, body: sent.update(body))
+    before = c.point_test_at_location(15783207, "abc123", concurrency=1)
+    assert before == original                       # caller can restore verbatim
+    ex = sent["executions"][0]
+    assert ex["locations"] == {"harbor-abc123": 1} and ex["concurrency"] == 1
+    assert ex["executor"] == "jmeter"               # untouched fields survive
+    assert sent["overrideExecutions"][0]["locations"] == {"harbor-abc123": 1}
+
+
 def test_profile_json_roundtrip(tmp_path):
     files = gen.generate(FACTS, {"namespace": "ns1", "platform": "k8s",
                                  "private_registry": "reg:5001",
