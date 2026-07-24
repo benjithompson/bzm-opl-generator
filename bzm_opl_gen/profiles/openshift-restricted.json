@@ -1,6 +1,0 @@
-{
-  "platform": "openshift",
-  "use_secret": true,
-  "service_type": "CLUSTERIP",
-  "cluster_rbac": false
-}

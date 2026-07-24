@@ -50,11 +50,11 @@ bzm-opl-gen create-ship --api-key api-key.json --harbor-id <HARBOR_ID> \
 bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>
 
 # 2. generate manifests (--api-key fetches AUTH_TOKEN automatically)
-bzm-opl-gen generate --profile profiles/openshift-restricted.json \
-    --namespace my-project --api-key api-key.json -o out/
+bzm-opl-gen generate --namespace my-project --api-key api-key.json -o out/
 
-# private-registry variant
-bzm-opl-gen generate --profile profiles/openshift-private-registry.json \
+# private-registry scenario (profiles are scenario presets, not platforms —
+# the default posture works on OpenShift and vanilla k8s alike)
+bzm-opl-gen generate --profile bzm_opl_gen/profiles/private-registry.json \
     --namespace my-project --private-registry registry.corp.com/bzm -o out/
 
 # 3. mirror images if using a private registry (pulls linux/amd64)
@@ -129,7 +129,7 @@ bzm_opl_gen/
   livetest.py    deploy, poll-until-online, teardown
   cli.py         subcommands: facts | generate | images | livetest
   templates/     per-CRD best-practice templates
-profiles/        ready-made option sets
+  profiles/      scenario presets (standard | private-registry | proxy-ca)
 tests/           offline unit tests (fixture facts)
 ```
 
