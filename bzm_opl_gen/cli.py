@@ -45,6 +45,35 @@ def cmd_locations(a):
               f"funcIds={l.get('funcIds')}\n      ships: {ships}")
 
 
+def cmd_create_location(a):
+    client = api.BzmClient(a.api_key)
+    account_id = _resolve_account(client, a)
+    if a.workspace_id:
+        wsid = a.workspace_id
+    else:
+        if not a.workspace_name:
+            sys.exit("--workspace-id or --workspace-name required")
+        wss = client.workspaces(account_id)
+        hits = [w for w in wss if a.workspace_name.lower() in (w.get("name") or "").lower()]
+        if len(hits) != 1:
+            sys.exit(f"--workspace-name '{a.workspace_name}' matched {len(hits)}: "
+                     f"{[(w['id'], w.get('name')) for w in hits]}")
+        wsid = hits[0]["id"]
+    h = client.create_private_location(a.name, account_id, [wsid],
+                                       func_ids=a.func_ids, slots=a.slots)
+    print(f"created location '{h.get('name')}' harbor_id={h['id']} "
+          f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, slots={a.slots})")
+    print(f"next: bzm-opl-gen create-ship --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
+
+
+def cmd_delete_location(a):
+    client = api.BzmClient(a.api_key)
+    h = client.private_location(a.harbor_id)
+    client.delete_private_location(a.harbor_id)
+    print(f"deleted location '{h.get('name')}' ({a.harbor_id}) and its "
+          f"{len(h.get('ships', []))} ship(s)")
+
+
 def cmd_create_ship(a):
     client = api.BzmClient(a.api_key)
     ship = client.create_ship(a.harbor_id, a.name)
@@ -143,6 +172,22 @@ def main():
     l.add_argument("--account-name", help="case-insensitive substring, must match one")
     l.set_defaults(fn=cmd_locations)
 
+    cl = sub.add_parser("create-location", help="create a private location (harbor)")
+    cl.add_argument("--api-key", required=True)
+    cl.add_argument("--account-id", type=int)
+    cl.add_argument("--account-name")
+    cl.add_argument("--workspace-id", type=int)
+    cl.add_argument("--workspace-name", help="case-insensitive substring, must match one")
+    cl.add_argument("--name", required=True)
+    cl.add_argument("--func-ids", nargs="+", default=["performance"])
+    cl.add_argument("--slots", type=int, default=1)
+    cl.set_defaults(fn=cmd_create_location)
+
+    dl = sub.add_parser("delete-location", help="delete a private location and its ships")
+    dl.add_argument("--api-key", required=True)
+    dl.add_argument("--harbor-id", required=True)
+    dl.set_defaults(fn=cmd_delete_location)
+
     cs = sub.add_parser("create-ship", help="create an agent (ship), print id + AUTH_TOKEN")
     cs.add_argument("--api-key", required=True)
     cs.add_argument("--harbor-id", required=True)
@@ -188,7 +233,7 @@ def main():
     t.add_argument("--manifests", default="out")
     t.add_argument("--namespace", required=True)
     t.add_argument("--ship-id", dest="ship_id")
-    t.add_argument("--cluster", choices=["current", "kind"], default="current")
+    t.add_argument("--cluster", choices=["current", "kind", "minikube"], default="current")
     t.add_argument("--timeout", type=int, default=600)
     t.add_argument("--keep", action="store_true", help="skip teardown")
     t.set_defaults(fn=cmd_livetest)

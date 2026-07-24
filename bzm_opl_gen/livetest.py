@@ -6,18 +6,23 @@ Success criterion = BlazeMeter API reports the ship with a fresh heartbeat
 egress to *.blazemeter.com, and credentials.
 
 Cluster targets:
-  current  -- whatever kubectl/oc context is active (CRC, remote OpenShift...)
-  kind     -- create/reuse a disposable kind cluster (smoke test; engines
-              won't fit laptop resources, but crane-online still validates
-              the deployment itself)
+  current   -- whatever kubectl/oc context is active (CRC, remote OpenShift...)
+  kind      -- create/reuse a disposable kind cluster (smoke test; engines
+               won't fit laptop resources, but crane-online still validates
+               the deployment itself)
+  minikube  -- create/reuse a disposable minikube profile (docker driver).
+               On Apple Silicon the BlazeMeter images are amd64-only: enable
+               Docker Desktop's Rosetta emulation (works, but engines are slow)
 """
 
 import glob
 import os
+import platform
 import subprocess
 import time
 
 KIND_CLUSTER = "bzm-opl-test"
+MINIKUBE_PROFILE = "bzm-opl-test"
 
 
 def _run(cmd, check=True, capture=False):
@@ -44,9 +49,23 @@ def ensure_kind():
     _run(["kubectl", "config", "use-context", f"kind-{KIND_CLUSTER}"])
 
 
+def ensure_minikube():
+    if platform.machine() in ("arm64", "aarch64"):
+        print("note: BlazeMeter images are amd64-only -- Docker Desktop's Rosetta "
+              "emulation must be enabled for pods to run on this machine")
+    st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
+                         "--format", "{{.Host}}"], capture_output=True, text=True)
+    if st.stdout.strip() != "Running":
+        _run(["minikube", "start", "-p", MINIKUBE_PROFILE, "--driver=docker",
+              "--cpus=4", "--memory=6g", "--wait=all"])
+    _run(["kubectl", "config", "use-context", MINIKUBE_PROFILE])
+
+
 def deploy(manifest_dir, namespace, cluster="current"):
     if cluster == "kind":
         ensure_kind()
+    elif cluster == "minikube":
+        ensure_minikube()
     cli = _cli_for(manifest_dir)
     _run([cli, "get", "ns", namespace], check=False)
     _run([cli, "create", "ns", namespace], check=False)
@@ -75,6 +94,9 @@ def wait_online(client, harbor_id, ship_id, timeout=600, poll=15):
 def teardown(manifest_dir, namespace, cluster="current"):
     if cluster == "kind":
         _run(["kind", "delete", "cluster", "--name", KIND_CLUSTER], check=False)
+        return
+    if cluster == "minikube":
+        _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
         return
     cli = _cli_for(manifest_dir)
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
