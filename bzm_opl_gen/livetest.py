@@ -23,6 +23,10 @@ import time
 
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
+REGISTRY_NAME = "bzm-opl-registry"
+# What the minikube node calls the host's registry. generate() manifests must
+# use this as --private-registry when livetesting with --local-registry.
+REGISTRY_CLUSTER_HOST = "host.minikube.internal"
 
 
 def _run(cmd, check=True, capture=False):
@@ -49,23 +53,55 @@ def ensure_kind():
     _run(["kubectl", "config", "use-context", f"kind-{KIND_CLUSTER}"])
 
 
-def ensure_minikube():
+def ensure_minikube(insecure_registry=None):
     if platform.machine() in ("arm64", "aarch64"):
         print("note: BlazeMeter images are amd64-only -- Docker Desktop's Rosetta "
               "emulation must be enabled for pods to run on this machine")
     st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
                          "--format", "{{.Host}}"], capture_output=True, text=True)
     if st.stdout.strip() != "Running":
-        _run(["minikube", "start", "-p", MINIKUBE_PROFILE, "--driver=docker",
-              "--cpus=4", "--memory=6g", "--wait=all"])
+        cmd = ["minikube", "start", "-p", MINIKUBE_PROFILE, "--driver=docker",
+               "--cpus=4", "--memory=6g", "--wait=all"]
+        if insecure_registry:
+            cmd.append(f"--insecure-registry={insecure_registry}")
+        _run(cmd)
+    elif insecure_registry:
+        print(f"note: reusing running minikube profile -- it must already trust "
+              f"insecure registry {insecure_registry} (flag only applies at creation)")
     _run(["kubectl", "config", "use-context", MINIKUBE_PROFILE])
 
 
-def deploy(manifest_dir, namespace, cluster="current"):
+def ensure_registry(port):
+    out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}",
+                          REGISTRY_NAME], capture_output=True, text=True)
+    if out.stdout.strip() != "true":
+        _run(["docker", "rm", "-f", REGISTRY_NAME], check=False, capture=True)
+        _run(["docker", "run", "-d", "--name", REGISTRY_NAME,
+              "-p", f"{port}:5000", "registry:2"])
+
+
+def mirror_images(facts, port, arch="linux/amd64", gui=False):
+    """Pull the location's images (amd64 -- what the engines are built for),
+    push into the local registry under the names generate() writes into
+    IMAGE_OVERRIDES / the crane Deployment."""
+    refs = [facts["crane_image"]] + [
+        f"{i['repo']}:{i['tag']}" for i in facts["images"]
+        if i.get("key") and (gui or i.get("performance", True))
+    ]
+    for ref in refs:
+        name = ref.rsplit("/", 1)[-1]
+        target = f"localhost:{port}/{name}"
+        _run(["docker", "pull", "--platform", arch, ref])
+        _run(["docker", "tag", ref, target])
+        _run(["docker", "push", target])
+    return refs
+
+
+def deploy(manifest_dir, namespace, cluster="current", insecure_registry=None):
     if cluster == "kind":
         ensure_kind()
     elif cluster == "minikube":
-        ensure_minikube()
+        ensure_minikube(insecure_registry)
     cli = _cli_for(manifest_dir)
     _run([cli, "get", "ns", namespace], check=False)
     _run([cli, "create", "ns", namespace], check=False)
@@ -104,10 +140,17 @@ def teardown(manifest_dir, namespace, cluster="current"):
 
 
 def run(client, manifest_dir, namespace, harbor_id, ship_id,
-        cluster="current", timeout=600, keep=False):
+        cluster="current", timeout=600, keep=False,
+        facts=None, local_registry=None):
     ok = False
     try:
-        deploy(manifest_dir, namespace, cluster)
+        insecure = None
+        if local_registry:
+            ensure_registry(local_registry)
+            refs = mirror_images(facts, local_registry)
+            print(f"mirrored {len(refs)} images into localhost:{local_registry}")
+            insecure = f"{REGISTRY_CLUSTER_HOST}:{local_registry}"
+        deploy(manifest_dir, namespace, cluster, insecure_registry=insecure)
         print(f"waiting up to {timeout}s for agent to report online in BlazeMeter...")
         ok = wait_online(client, harbor_id, ship_id, timeout)
         print("LIVE TEST " + ("PASSED: agent online in BlazeMeter" if ok
@@ -115,4 +158,6 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     finally:
         if not keep:
             teardown(manifest_dir, namespace, cluster)
+            if local_registry:
+                _run(["docker", "rm", "-f", REGISTRY_NAME], check=False, capture=True)
     return ok

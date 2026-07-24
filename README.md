@@ -45,8 +45,15 @@ bzm-opl-gen generate --profile profiles/openshift-restricted.json \
 bzm-opl-gen generate --profile profiles/openshift-private-registry.json \
     --namespace my-project --private-registry registry.corp.com/bzm -o out/
 
-# 3. mirror images if using a private registry
+# 3. mirror images if using a private registry (pulls linux/amd64)
 bzm-opl-gen images --facts facts.json --pull --mirror registry.corp.com/bzm
+
+# 3b. or test the whole private-registry path locally: generate with
+#     --private-registry host.minikube.internal:5001 then
+bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
+    --cluster minikube --local-registry 5001
+#     (starts a registry:2 container, mirrors the location's images into it,
+#      starts minikube trusting it, deploys, verifies agent online, tears down)
 
 # 4. live-test: deploy + verify the agent reports online in BlazeMeter
 bzm-opl-gen livetest --api-key api-key.json --namespace my-project \

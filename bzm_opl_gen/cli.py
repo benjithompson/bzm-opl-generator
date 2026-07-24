@@ -135,7 +135,7 @@ def cmd_images(a):
     if not a.pull:
         return
     for ref in imgs:
-        _docker(["pull", ref], a.dry_run)
+        _docker(["pull", "--platform", a.platform, ref], a.dry_run)
         if a.mirror:
             name = ref.rsplit("/", 1)[-1]
             target = f"{a.mirror.rstrip('/')}/{name}"
@@ -157,7 +157,8 @@ def cmd_livetest(a):
     if not ship_id:
         sys.exit(f"--ship-id required (location has {len(f['ships'])} ships)")
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
-                      cluster=a.cluster, timeout=a.timeout, keep=a.keep)
+                      cluster=a.cluster, timeout=a.timeout, keep=a.keep,
+                      facts=f, local_registry=a.local_registry)
     sys.exit(0 if ok else 1)
 
 
@@ -224,6 +225,8 @@ def main():
     i.add_argument("--all", action="store_true")
     i.add_argument("--pull", action="store_true")
     i.add_argument("--mirror", metavar="REGISTRY")
+    i.add_argument("--platform", default="linux/amd64",
+                   help="pull arch (BlazeMeter images are amd64-only)")
     i.add_argument("--dry-run", action="store_true")
     i.set_defaults(fn=cmd_images)
 
@@ -236,6 +239,10 @@ def main():
     t.add_argument("--cluster", choices=["current", "kind", "minikube"], default="current")
     t.add_argument("--timeout", type=int, default=600)
     t.add_argument("--keep", action="store_true", help="skip teardown")
+    t.add_argument("--local-registry", type=int, nargs="?", const=5001, metavar="PORT",
+                   help="start a registry:2 container, mirror the location's images "
+                        "into it, and make minikube trust it (generate manifests "
+                        "with --private-registry host.minikube.internal:PORT)")
     t.set_defaults(fn=cmd_livetest)
 
     a = p.parse_args()
