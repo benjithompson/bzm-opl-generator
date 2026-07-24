@@ -43,7 +43,7 @@ def test_generate_invalid_options_400():
 def test_profiles_and_defaults():
     r = client.get("/api/profiles")
     assert {p["name"] for p in r.json()} >= {
-        "k8s-vanilla", "openshift-restricted", "openshift-private-registry"}
+        "standard", "private-registry", "proxy-ca"}
     r2 = client.get("/api/option-defaults")
     assert r2.json()["platform"] == "openshift"
 
