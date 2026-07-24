@@ -213,6 +213,10 @@ def cmd_livetest(a):
               f"configuration checks (regenerate to enable them)")
     proxy_user = proxy_pass = None
     regenerate = None
+    if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
+        sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "
+                 "the policy denies everything except DNS, the apiserver, and "
+                 "that proxy, so without it the agent has no way out at all")
     if a.local_proxy:
         if a.cluster not in ("minikube", "kind"):
             sys.exit("--local-proxy needs --cluster minikube|kind (the proxy "
@@ -225,7 +229,8 @@ def cmd_livetest(a):
                       facts=f, local_registry=a.local_registry,
                       local_proxy=a.local_proxy, proxy_user=proxy_user,
                       proxy_pass=proxy_pass, regenerate=regenerate, opts=opts,
-                      negative_control_check=not a.skip_negative_control)
+                      negative_control_check=not a.skip_negative_control,
+                      contain_egress=a.contain_egress)
     sys.exit(0 if ok else 1)
 
 
@@ -356,6 +361,11 @@ def main():
                         "out/profile.json) with HTTP(S)_PROXY + that CA, and "
                         "require the agent's blazemeter.com traffic to show up "
                         "in the proxy log. minikube/kind only")
+    t.add_argument("--contain-egress", action="store_true",
+                   help="with --local-proxy: start minikube with calico and apply "
+                        "a default-deny egress NetworkPolicy (DNS + apiserver + "
+                        "proxy only), then prove from inside the crane pod that "
+                        "BlazeMeter is unreachable except through the proxy")
     t.add_argument("--skip-negative-control", action="store_true",
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "

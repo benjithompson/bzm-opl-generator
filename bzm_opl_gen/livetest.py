@@ -73,22 +73,44 @@ def ensure_kind():
     _run(["kubectl", "config", "use-context", f"kind-{KIND_CLUSTER}"])
 
 
-def ensure_minikube(insecure_registry=None):
+def ensure_minikube(insecure_registry=None, cni=None):
     if platform.machine() in ("arm64", "aarch64"):
         print("note: BlazeMeter images are amd64-only -- Docker Desktop's Rosetta "
               "emulation must be enabled for pods to run on this machine")
     st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
                          "--format", "{{.Host}}"], capture_output=True, text=True)
-    if st.stdout.strip() != "Running":
+    running = st.stdout.strip() == "Running"
+    if running and cni and not policy_enforced():
+        # minikube's default CNI accepts NetworkPolicies and enforces nothing,
+        # so containment would silently be a no-op. --cni only applies at
+        # creation; the profile is disposable, so recreate it.
+        print(f"recreating the '{MINIKUBE_PROFILE}' profile: egress containment "
+              f"needs --cni={cni}, and the running profile has no policy enforcer")
+        _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
+        running = False
+    if not running:
         cmd = ["minikube", "start", "-p", MINIKUBE_PROFILE, "--driver=docker",
                "--cpus=4", "--memory=6g", "--wait=all"]
         if insecure_registry:
             cmd.append(f"--insecure-registry={insecure_registry}")
+        if cni:
+            cmd.append(f"--cni={cni}")
         _run(cmd)
     elif insecure_registry:
         print(f"note: reusing running minikube profile -- it must already trust "
               f"insecure registry {insecure_registry} (flag only applies at creation)")
     _run(["kubectl", "config", "use-context", MINIKUBE_PROFILE])
+    if cni:
+        _run(["kubectl", "-n", "kube-system", "rollout", "status",
+              "daemonset/calico-node", "--timeout=300s"], check=False)
+
+
+def policy_enforced():
+    """Is there a CNI in the cluster that actually enforces NetworkPolicy?"""
+    out = subprocess.run(["kubectl", "-n", "kube-system", "get", "pods",
+                          "-l", "k8s-app=calico-node", "-o", "name"],
+                         capture_output=True, text=True)
+    return bool(out.stdout.strip())
 
 
 def ensure_registry(port):
@@ -220,13 +242,13 @@ def verify_proxy_reachable(host, cluster, user=None, password=None):
     return False
 
 
-def ensure_cluster(cluster, insecure_registry=None):
+def ensure_cluster(cluster, insecure_registry=None, cni=None):
     """Idempotent -- safe to call before deploy() when something (the proxy
     overlay) needs the node up early."""
     if cluster == "kind":
         ensure_kind()
     elif cluster == "minikube":
-        ensure_minikube(insecure_registry)
+        ensure_minikube(insecure_registry, cni=cni)
 
 
 def blackhole_public_registries(facts, cluster, private_registry):
@@ -257,6 +279,130 @@ def blackhole_public_registries(facts, cluster, private_registry):
              check=False, capture=True)
     print(f"blackholed public registries on the node: {', '.join(hosts)}")
     return hosts
+
+
+EGRESS_POLICY_NAME = "bzm-opl-egress-containment"
+
+
+def egress_policy(namespace, proxy_ip, api_targets):
+    """Default-deny egress for the whole namespace, with three holes: DNS, the
+    Kubernetes API (crane creates engine pods through it), and the proxy.
+
+    api_targets is a list of (ip, port). Both the Service ClusterIP and the real
+    endpoint belong there: policy is evaluated after kube-proxy's DNAT, so a
+    rule naming only the ClusterIP would not match the packet that leaves.
+
+    This is rig-only -- applied by livetest, never emitted into the customer's
+    manifests. Its job is to turn 'the agent used the proxy' into 'the agent had
+    no other way out'."""
+    api_rules = "".join(
+        f"    - to:\n"
+        f"        - ipBlock:\n"
+        f"            cidr: {ip}/32\n"
+        f"      ports:\n"
+        f"        - {{protocol: TCP, port: {port}}}\n"
+        for ip, port in api_targets)
+    return f"""apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {EGRESS_POLICY_NAME}
+  namespace: {namespace}
+spec:
+  podSelector: {{}}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - {{protocol: UDP, port: 53}}
+        - {{protocol: TCP, port: 53}}
+{api_rules}    - to:
+        - ipBlock:
+            cidr: {proxy_ip}/32
+      ports:
+        - {{protocol: TCP, port: {PROXY_PORT}}}
+"""
+
+
+def apply_egress_policy(cli, namespace, proxy_ip, manifest_dir):
+    """Namespace and policy before the workload: a pod that starts under no
+    policy could reach the internet before enforcement lands."""
+    _run([cli, "create", "ns", namespace], check=False, capture=True)
+    targets = _apiserver_targets(cli)
+    path = os.path.join(manifest_dir, ".egress-policy.yaml")   # dot: deploy() globs *.yaml
+    with open(path, "w") as f:
+        f.write(egress_policy(namespace, proxy_ip, targets))
+    _run([cli, "-n", namespace, "apply", "-f", path])
+    allowed = ", ".join(f"{ip}:{port}" for ip, port in targets)
+    print(f"egress contained: DNS + apiserver ({allowed}) + proxy "
+          f"{proxy_ip}:{PROXY_PORT}, everything else denied")
+
+
+def _apiserver_targets(cli):
+    """Service ClusterIP and the endpoint behind it -- see egress_policy()."""
+    svc = json.loads(subprocess.run(
+        [cli, "get", "svc", "kubernetes", "-n", "default", "-o", "json"],
+        capture_output=True, text=True).stdout or "{}")
+    targets = [(svc["spec"]["clusterIP"], p["port"]) for p in svc["spec"]["ports"]] \
+        if svc else []
+    eps = json.loads(subprocess.run(
+        [cli, "get", "endpoints", "kubernetes", "-n", "default", "-o", "json"],
+        capture_output=True, text=True).stdout or "{}")
+    for sub in eps.get("subsets", []):
+        for addr in sub.get("addresses", []):
+            for port in sub.get("ports", []):
+                targets.append((addr["ip"], port["port"]))
+    if not targets:
+        raise RuntimeError("could not resolve the Kubernetes API address")
+    return targets
+
+
+# curl exit codes: 6 = DNS, 7 = refused, 28 = timeout. Anything else means the
+# TCP connection got somewhere, however badly it then went.
+CURL_DNS, CURL_BLOCKED = 6, (7, 28)
+
+
+def _crane_curl(cli, namespace, args):
+    """Run curl inside the crane pod and return its exit code. curl rather than
+    python: /usr/local/bin/python3 in the crane image is a crane-agent shim, not
+    an interpreter."""
+    out = _crane_exec(cli, namespace, f"curl {args}; echo rc=$?")
+    for line in reversed(out.splitlines()):
+        if line.startswith("rc="):
+            return int(line[3:])
+    return -1
+
+
+def assert_egress_contained(cli, namespace, host="a.blazemeter.com"):
+    """Two probes from inside the crane pod: BlazeMeter must be unreachable
+    directly, and reachable through the proxy.
+
+    The second probe is what makes the first mean anything -- 'direct fails'
+    on its own is equally consistent with a policy so tight that nothing works,
+    which would pass a containment check while proving nothing.
+    """
+    direct = _crane_curl(cli, namespace,
+                         f"-s -o /dev/null --max-time 6 --noproxy '*' https://{host}/")
+    proxied = _crane_curl(cli, namespace,
+                          f'-s -o /dev/null --max-time 20 --cacert "$REQUESTS_CA_BUNDLE" '
+                          f"https://{host}/api/v4/web/version")
+    print(f"  egress probes from the crane pod: direct rc={direct}, "
+          f"via proxy rc={proxied}")
+    fails = []
+    if direct == CURL_DNS:
+        fails.append(f"the crane pod cannot resolve {host} -- the egress policy "
+                     f"blocks DNS, so the containment probe proves nothing")
+    elif direct not in CURL_BLOCKED:
+        fails.append(f"the crane pod reached {host} directly (curl rc={direct}) "
+                     f"-- egress is not contained, so using the proxy was optional")
+    if proxied != 0:
+        fails.append(f"the crane pod could not reach {host} through the proxy "
+                     f"either (curl rc={proxied}) -- the policy denies more than "
+                     f"it should, so 'direct is blocked' proves nothing")
+    return fails
 
 
 def _kget(cli, namespace, kind, name):
@@ -428,7 +574,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         cluster="current", timeout=600, keep=False,
         facts=None, local_registry=None,
         local_proxy=None, proxy_user=None, proxy_pass=None, regenerate=None,
-        negative_control_check=True, opts=None):
+        negative_control_check=True, opts=None, contain_egress=False):
     """regenerate(overlay) -- callback that re-renders the manifests in
     manifest_dir with extra generate() options merged in. Required with
     --local-proxy, whose CA only exists once the proxy container is up.
@@ -445,7 +591,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             insecure = f"{REGISTRY_CLUSTER_HOST}:{local_registry}"
         # The node has to exist before anything can be done to it: joining the
         # proxy to its network, blackholing registries, deploying.
-        ensure_cluster(cluster, insecure)
+        ensure_cluster(cluster, insecure, cni="calico" if contain_egress else None)
         if local_registry:
             blackhole_public_registries(facts, cluster,
                                         (opts or {}).get("private_registry"))
@@ -459,6 +605,9 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             if not verify_proxy_reachable(host, cluster, proxy_user, proxy_pass):
                 return False
             overlay = proxy_overlay(host, PROXY_PORT, ca_pem, proxy_user, proxy_pass)
+            if contain_egress:
+                apply_egress_policy(_cli_for(manifest_dir), namespace, host,
+                                    manifest_dir)
             if negative_control_check and not negative_control(
                     regenerate, overlay, manifest_dir, namespace, cluster):
                 return False
@@ -489,6 +638,8 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                                        facts, opts or {})
             if local_proxy:
                 fails += proxy_log_failures(marks)
+            if contain_egress:
+                fails += assert_egress_contained(_cli_for(manifest_dir), namespace)
             for f in fails:
                 print("  CONFIG FAILURE: " + f)
             if fails:

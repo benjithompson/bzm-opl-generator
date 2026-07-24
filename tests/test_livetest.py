@@ -5,6 +5,7 @@ import json
 import os
 import sys
 
+import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -162,6 +163,51 @@ def test_blackhole_skips_the_private_registry(monkeypatch):
     hosts = livetest.blackhole_public_registries(FACTS, "minikube", "reg.corp:5001/bzm")
     assert hosts == ["gcr.io"]                      # the fixture's images live there
     assert "reg.corp:5001" not in " ".join(str(c) for c in cmds)
+
+
+def test_egress_policy_allows_only_dns_apiserver_and_proxy():
+    pol = yaml.safe_load(livetest.egress_policy(
+        "ns1", "192.168.67.3", [("10.96.0.1", 443), ("192.168.49.2", 8443)]))
+    assert pol["spec"]["policyTypes"] == ["Egress"]
+    assert pol["spec"]["podSelector"] == {}          # whole namespace
+    rules = pol["spec"]["egress"]
+    assert len(rules) == 4
+    dns, api_svc, api_ep, proxy = rules
+    assert {p["port"] for p in dns["ports"]} == {53}
+    # Both the ClusterIP and the endpoint: policy is matched after DNAT.
+    assert api_svc["to"][0]["ipBlock"]["cidr"] == "10.96.0.1/32"
+    assert api_ep["to"][0]["ipBlock"]["cidr"] == "192.168.49.2/32"
+    assert api_ep["ports"][0]["port"] == 8443
+    assert proxy["to"][0]["ipBlock"]["cidr"] == "192.168.67.3/32"
+    assert proxy["ports"][0]["port"] == livetest.PROXY_PORT
+    # No blanket allow anywhere: that would defeat the point.
+    assert not any(r.get("to") == [] or "to" not in r for r in rules)
+
+
+@pytest.mark.parametrize("direct,proxied,ok,marker", [
+    (28, 0, True, None),                       # timed out direct, fine via proxy
+    (7, 0, True, None),                        # refused direct
+    (0, 0, False, "not contained"),            # direct reached BlazeMeter
+    (60, 0, False, "not contained"),           # TLS error = it still got there
+    (6, 0, False, "blocks DNS"),
+    (28, 28, False, "denies more than it should"),
+])
+def test_egress_probe_verdicts(monkeypatch, direct, proxied, ok, marker):
+    rcs = iter([direct, proxied])
+    monkeypatch.setattr(livetest, "_crane_exec", lambda *a: f"rc={next(rcs)}")
+    fails = livetest.assert_egress_contained("kubectl", "ns1")
+    assert (fails == []) is ok
+    if marker:
+        assert any(marker in f for f in fails)
+
+
+def test_policy_enforced_detects_calico(monkeypatch):
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"stdout": "pod/calico-node-abc\n"})())
+    assert livetest.policy_enforced()
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: type("R", (), {"stdout": ""})())
+    assert not livetest.policy_enforced()
 
 
 def test_profile_json_roundtrip(tmp_path):

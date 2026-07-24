@@ -71,7 +71,9 @@ bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
 #     generate flags: it regenerates out/ from out/profile.json with the
 #     proxy env + the proxy's own CA once the container is up.
 bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
-    --cluster minikube --local-registry 5001 --local-proxy
+    --cluster minikube --local-registry 5001 --local-proxy --contain-egress
+#     (--contain-egress adds calico + a default-deny egress NetworkPolicy, so
+#      the proxy is the only way out -- not merely the way that was taken)
 
 # 4. live-test: deploy + verify the agent reports online in BlazeMeter
 bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
@@ -139,6 +141,7 @@ are torn down with the cluster.
 |---|---|---|
 | `--local-registry [PORT]` (5001) | `registry:2`, published on the host, pulled via `host.minikube.internal` | air-gapped pulls: `DOCKER_REGISTRY`, `IMAGE_OVERRIDES`, auto-update off |
 | `--local-proxy` | `mitmproxy`, joined to the cluster's own docker network | proxy egress **and** custom CA trust |
+| `--contain-egress` | calico + a default-deny egress NetworkPolicy | that the proxy is the **only** way out, not just the way that was taken |
 
 `--local-proxy` is deliberately hostile: mitmproxy terminates TLS with its own
 CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDLE`
@@ -183,6 +186,35 @@ reach it. The run therefore also:
 
 Any of these failing turns a green run red, with the specific claim printed.
 
+### Egress containment (`--contain-egress`)
+
+Without it, the proxy log proves the agent *used* the proxy — not that it had
+to. `--contain-egress` starts minikube with calico and applies a default-deny
+egress NetworkPolicy to the namespace, opening only DNS, the Kubernetes API,
+and the proxy. Then it probes from inside the crane pod: `a.blazemeter.com`
+must be unreachable directly and reachable through the proxy.
+
+```
+egress contained: DNS + apiserver (10.96.0.1:443, 192.168.67.2:8443) + proxy 192.168.67.3:8080, everything else denied
+  egress probes from the crane pod: direct rc=28, via proxy rc=0
+```
+
+Both halves matter: "direct fails" alone is equally consistent with a policy so
+tight nothing works, which would pass a containment check while proving
+nothing. Two details this needs to be real rather than decorative:
+
+- **minikube's default CNI accepts NetworkPolicies and enforces none**, so the
+  policy would be a silent no-op. `--cni` only applies at cluster creation, so
+  if the running profile has no policy enforcer the rig recreates it (it is
+  disposable by design).
+- **The API rule names both the Service ClusterIP and the endpoint behind it**,
+  because policy is evaluated after kube-proxy's DNAT — a rule listing only the
+  ClusterIP does not match the packet that actually leaves, and crane loses the
+  API access it needs to create engine pods.
+
+Probes run `curl` inside the crane pod, not python: `/usr/local/bin/python3`
+there is a crane-agent shim, not an interpreter.
+
 Why the CONNECT probe, and why the cluster network rather than a published port: a host
 port belongs to whatever already claimed it (an ssh tunnel, a stray Java
 process), and the node then reaches *that* instead. The symptom is a plausible
@@ -219,9 +251,6 @@ tests/           offline unit tests (fixture facts)
 
 - Istio/nginx service-virtualization ingress env sets
 - External Secrets Operator / CSI secret-store variants
-- Proof that egress *can't* bypass the proxy (`--cni=calico` + default-deny
-  egress NetworkPolicy); today the proxy log proves it was used, not that it
-  was the only way out
 - CA propagation into *engine* pods — `KUBERNETES_CA_BUNDLE_MOUNT` is generated
   and crane-online proves crane's own trust, but only a real test run on the
   location exercises the engines
