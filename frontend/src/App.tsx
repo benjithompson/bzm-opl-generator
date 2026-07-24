@@ -193,10 +193,29 @@ export default function App() {
                         placeholder="/path/to/api-key.json" />
                     </Field>
                   </div>
+                  <label className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 cursor-pointer whitespace-nowrap">
+                    Browse…
+                    <input type="file" accept=".json,application/json" className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        e.target.value = "";
+                        setConnErr(null);
+                        try {
+                          const d = JSON.parse(await f.text());
+                          if (!d.id || !d.secret) throw new Error();
+                          connect({ id: d.id, secret: d.secret, save: saveKey });
+                        } catch {
+                          setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
+                        }
+                      }} />
+                  </label>
                   <Button onClick={() => connect({ path: keyPath })} disabled={!keyPath}>
                     Connect
                   </Button>
                 </div>
+                <Check label="Remember this key on this machine" checked={saveKey} onChange={setSaveKey}
+                  hint="applies to Browse & paste — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
                 <details className="text-sm">
                   <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
                   <div className="mt-2 space-y-2">
@@ -206,8 +225,6 @@ export default function App() {
                       <input type="password" className={inputCls + " font-mono text-xs"}
                         value={pasteSecret} onChange={(e) => setPasteSecret(e.target.value)} />
                     </Field>
-                    <Check label="Remember on this machine" checked={saveKey} onChange={setSaveKey}
-                      hint="~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
                     <Button onClick={() => connect({ id: pasteId, secret: pasteSecret, save: saveKey })}
                       disabled={!pasteId || !pasteSecret}>Connect</Button>
                   </div>
