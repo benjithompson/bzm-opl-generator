@@ -7,6 +7,18 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import generate as gen  # noqa: E402
+from bzm_opl_gen.api import BzmApiError, parse_auth_token  # noqa: E402
+
+
+def test_parse_auth_token():
+    cmd = ("sudo docker run -d --env HARBOR_ID=aaa --env SHIP_ID=bbb "
+           "--env AUTH_TOKEN=0k3ycd8fb0a1e2d3 --name=blazemeter-crane blazemeter/crane")
+    assert parse_auth_token(cmd) == "0k3ycd8fb0a1e2d3"
+
+
+def test_parse_auth_token_missing():
+    with pytest.raises(BzmApiError):
+        parse_auth_token("docker run blazemeter/crane")
 
 FACTS = {
     "harbor_id": "aaa111",

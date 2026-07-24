@@ -2,10 +2,12 @@
 from a customer's actual BlazeMeter account.
 
 Subcommands:
-  facts     query the account, write facts.json (harbor, ships, images, features)
-  generate  render manifests from facts + customer parameters
-  images    list / pull / mirror the images the location actually needs
-  livetest  apply manifests to a cluster and verify the agent comes online
+  locations   list private locations (harbors) across the account
+  create-ship create an agent (ship) in a location, print id + AUTH_TOKEN
+  facts       query the account, write facts.json (harbor, ships, images, features)
+  generate    render manifests from facts + customer parameters
+  images      list / pull / mirror the images the location actually needs
+  livetest    apply manifests to a cluster and verify the agent comes online
 """
 
 import argparse
@@ -14,6 +16,44 @@ import subprocess
 import sys
 
 from . import api, facts as facts_mod, generate as gen_mod, livetest
+
+
+def _resolve_account(client, a):
+    """--account-id wins; --account-name matches case-insensitive substring."""
+    if a.account_id:
+        return a.account_id
+    accounts = client.accounts()
+    if a.account_name:
+        hits = [x for x in accounts if a.account_name.lower() in (x.get("name") or "").lower()]
+        if len(hits) != 1:
+            sys.exit(f"--account-name '{a.account_name}' matched {len(hits)} accounts: "
+                     f"{[(x['id'], x.get('name')) for x in hits or accounts]}")
+        return hits[0]["id"]
+    u = client.user()
+    return u["defaultProject"]["accountId"]
+
+
+def cmd_locations(a):
+    client = api.BzmClient(a.api_key)
+    account_id = _resolve_account(client, a)
+    locs = client.private_locations(account_id)
+    print(f"account {account_id}: {len(locs)} private locations")
+    for l in locs:
+        ships = ", ".join(f"{s['id']} ({s.get('name')}, {s.get('state')})"
+                          for s in l.get("ships", [])) or "none"
+        print(f"  {l['id']}  {l.get('name')!r}  slots={l.get('slots')}  "
+              f"funcIds={l.get('funcIds')}\n      ships: {ships}")
+
+
+def cmd_create_ship(a):
+    client = api.BzmClient(a.api_key)
+    ship = client.create_ship(a.harbor_id, a.name)
+    token = client.auth_token(a.harbor_id, ship["id"])
+    print(f"harbor_id:  {a.harbor_id}")
+    print(f"ship_id:    {ship['id']}  (name: {ship.get('name')})")
+    print(f"auth_token: {token}")
+    print(f"\nnext: bzm-opl-gen facts --api-key {a.api_key} --harbor-id {a.harbor_id}")
+    print(f"      bzm-opl-gen generate --ship-id {ship['id']} --api-key {a.api_key} ...")
 
 
 def cmd_facts(a):
@@ -41,6 +81,12 @@ def cmd_generate(a):
         opts["cluster_rbac"] = True
     if a.gui:
         opts["gui"] = True
+    if a.api_key and not opts.get("auth_token"):
+        ship_id = opts.get("ship_id") or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
+        if ship_id:
+            client = api.BzmClient(a.api_key)
+            opts["auth_token"] = client.auth_token(f["harbor_id"], ship_id)
+            print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
@@ -91,6 +137,18 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    l = sub.add_parser("locations", help="list private locations in an account")
+    l.add_argument("--api-key", required=True)
+    l.add_argument("--account-id", type=int)
+    l.add_argument("--account-name", help="case-insensitive substring, must match one")
+    l.set_defaults(fn=cmd_locations)
+
+    cs = sub.add_parser("create-ship", help="create an agent (ship), print id + AUTH_TOKEN")
+    cs.add_argument("--api-key", required=True)
+    cs.add_argument("--harbor-id", required=True)
+    cs.add_argument("--name", required=True)
+    cs.set_defaults(fn=cmd_create_ship)
+
     f = sub.add_parser("facts", help="gather account facts -> facts.json")
     f.add_argument("--api-key", required=True)
     f.add_argument("--harbor-id", required=True)
@@ -99,6 +157,7 @@ def main():
 
     g = sub.add_parser("generate", help="render manifests from facts")
     g.add_argument("--facts", default="facts.json")
+    g.add_argument("--api-key", help="fetch AUTH_TOKEN from the API if not given")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
     g.add_argument("--platform", choices=["openshift", "k8s"])
     g.add_argument("--namespace")

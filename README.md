@@ -29,12 +29,17 @@ actual BlazeMeter account** instead of hand-edited templates.
 ## Quick start
 
 ```
+# 0. find (or create) the location and agent
+bzm-opl-gen locations --api-key api-key.json --account-name "SE Demo"
+bzm-opl-gen create-ship --api-key api-key.json --harbor-id <HARBOR_ID> \
+    --name my-k8s-agent        # prints ship_id + AUTH_TOKEN
+
 # 1. gather facts from the customer's account
 bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>
 
-# 2. generate manifests
+# 2. generate manifests (--api-key fetches AUTH_TOKEN automatically)
 bzm-opl-gen generate --profile profiles/openshift-restricted.json \
-    --namespace my-project --auth-token <TOKEN> -o out/
+    --namespace my-project --api-key api-key.json -o out/
 
 # private-registry variant
 bzm-opl-gen generate --profile profiles/openshift-private-registry.json \
@@ -95,8 +100,9 @@ tests/           offline unit tests (fixture facts)
 - Istio/nginx service-virtualization ingress env sets
 - Tolerations / nodeSelector for crane + engines
 - External Secrets Operator / CSI secret-store variants
-- Creating a new harbor/ship + token via API (today: existing location only)
 - Engine resource override envs (`KUBERNETES_RESOURCES_*`)
+- funcIds-driven image selection (auto `--gui` when location has functionalGui)
+- `livetest --cluster minikube` target (today: current | kind)
 
 References: [help.blazemeter.com — private locations](https://help.blazemeter.com/docs/guide/private-locations-install-blazemeter-agent-for-kubernetes.html),
 [agent env variables](https://help.blazemeter.com/docs/guide/private-locations-blazemeter-agent-environment-variables.html),
