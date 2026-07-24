@@ -179,7 +179,8 @@ def cmd_ui(a):
     except ImportError:
         sys.exit("UI dependencies missing -- pip install 'bzm-opl-gen[ui]'")
     print(f"bzm-opl-gen ui -> http://127.0.0.1:{a.port}  (Ctrl-C to stop)")
-    server.main(port=a.port, open_browser=not a.no_browser, api_key_path=a.api_key)
+    server.main(port=a.port, open_browser=not a.no_browser, api_key_path=a.api_key,
+                dev=a.dev)
 
 
 def main():
@@ -275,6 +276,9 @@ def main():
     u.add_argument("--port", type=int, default=8765)
     u.add_argument("--api-key", help="preload this api-key.json")
     u.add_argument("--no-browser", action="store_true")
+    u.add_argument("--dev", action="store_true",
+                   help="auto-restart on backend code changes; pair with "
+                        "`npm run dev` in frontend/ for UI hot-reload")
     u.set_defaults(fn=cmd_ui)
 
     a = p.parse_args()

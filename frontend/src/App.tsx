@@ -97,8 +97,13 @@ export default function App() {
     api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message));
   }, [harborId]);
 
+  const shipOnline = (s: Ship) =>
+    !!s.lastHeartBeat && Date.now() / 1000 - s.lastHeartBeat < 300;
+
   useEffect(() => {
-    if (ships.length === 1) setShipId(ships[0].id);
+    // Auto-pick a lone agent only if it isn't running somewhere already --
+    // a new deployment should get a NEW agent identity, not clone a live one.
+    if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
   }, [harborId, ships.length]);
 
   // debounced live preview
@@ -245,7 +250,7 @@ export default function App() {
 
           {/* 2 · Location */}
           <Section n={2} title="Private location" done={!!harborId}
-            hint="The BlazeMeter location (harbor) these manifests deploy an agent for.">
+            hint="The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests.">
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
@@ -287,7 +292,7 @@ export default function App() {
               <ErrorMsg msg={locErr} />
               {!showCreateLoc ? (
                 <Button kind="ghost" onClick={() => setShowCreateLoc(true)} disabled={!who}>
-                  + New location
+                  + New location (new harbor_id)
                 </Button>
               ) : (
                 <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
@@ -330,22 +335,11 @@ export default function App() {
 
           {/* 3 · Agent */}
           <Section n={3} title="Agent (ship)" done={!!shipId}
-            hint="The agent identity this deployment runs as; its AUTH_TOKEN is fetched automatically on download.">
+            hint="A new deployment needs a NEW agent identity (new ship_id + AUTH_TOKEN, same harbor). The token is fetched automatically on download.">
             <div className="space-y-3">
-              {ships.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {ships.map((s) => (
-                    <button key={s.id}
-                      className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
-                      onClick={() => setShipId(s.id)}>
-                      {s.name || s.id} <span className="text-xs text-slate-400">({s.state})</span>
-                    </button>
-                  ))}
-                </div>
-              )}
               <div className="flex gap-2 items-end">
                 <div className="grow">
-                  <Field label={ships.length ? "…or create a new agent" : "Create an agent"}>
+                  <Field label="Create a new agent in this location (recommended)">
                     <TextInput value={newShipName} onChange={setNewShipName}
                       placeholder="e.g. k8s-prod-cluster" />
                   </Field>
@@ -360,6 +354,35 @@ export default function App() {
                     } catch (e) { setShipErr(String((e as Error).message)); }
                   }}>Create</Button>
               </div>
+              {ships.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-1.5">
+                    …or reuse an existing agent identity (re-deploying / replacing it):
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {ships.map((s) => (
+                      <button key={s.id}
+                        className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
+                        onClick={() => setShipId(s.id)}>
+                        {s.name || s.id}{" "}
+                        <span className={`text-xs ${shipOnline(s) ? "text-emerald-600" : "text-slate-400"}`}>
+                          ({shipOnline(s) ? "online" : s.state})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {(() => {
+                const sel = ships.find((s) => s.id === shipId);
+                return sel && shipOnline(sel) ? (
+                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                    <b>{sel.name}</b> is currently online — it's already running
+                    somewhere. Deploying a second agent with the same identity will
+                    conflict. Create a new agent unless you're replacing that install.
+                  </p>
+                ) : null;
+              })()}
               <ErrorMsg msg={shipErr} />
               {facts && (
                 <p className="text-xs text-slate-500">

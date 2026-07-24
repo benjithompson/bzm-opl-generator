@@ -244,7 +244,7 @@ else:
                 "api_docs": "/api/docs"}
 
 
-def main(port=8765, open_browser=True, api_key_path=None):
+def main(port=8765, open_browser=True, api_key_path=None, dev=False):
     import uvicorn
     if api_key_path:
         _state["client"] = api.BzmClient(api_key_path)
@@ -254,4 +254,13 @@ def main(port=8765, open_browser=True, api_key_path=None):
         import threading
         import webbrowser
         threading.Timer(0.8, webbrowser.open, [f"http://127.0.0.1:{port}"]).start()
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    if dev:
+        # Reload needs an import string; the reloader subprocess starts fresh,
+        # so pass the key via env for /api/key/detect to find.
+        if api_key_path:
+            os.environ["BZM_API_KEY_FILE"] = os.path.abspath(api_key_path)
+        uvicorn.run("bzm_opl_gen.server:app", host="127.0.0.1", port=port,
+                    reload=True, reload_dirs=[os.path.dirname(__file__)],
+                    log_level="info")
+    else:
+        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
