@@ -26,6 +26,18 @@ actual BlazeMeter account** instead of hand-edited templates.
   is `blazemeter/v4`, locally tagged `taurus-cloud` — easy to get wrong by hand).
 - Ship id, crane version, heartbeat — all read, not typed.
 
+## Install
+
+```
+brew install pipx && pipx ensurepath        # once, if you don't have pipx
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator"
+bzm-opl-gen ui                              # opens the web UI
+```
+
+`pipx` puts `bzm-opl-gen` on your PATH globally, isolated from everything else.
+Upgrade later with `pipx reinstall bzm-opl-gen`. Working on the code instead?
+`pipx install -e ".[ui]"` from a checkout tracks your edits live.
+
 ## Quick start
 
 ```
