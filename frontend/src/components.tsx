@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 export function Section(props: {
   n: number; title: string; hint?: string; done?: boolean; children: ReactNode;
@@ -78,6 +78,91 @@ export function Button(props: {
       onClick={props.onClick} disabled={props.disabled}>
       {props.children}
     </button>
+  );
+}
+
+export interface SelectOption {
+  value: string | number;
+  label: string;
+}
+
+// Combobox with type-to-filter: shows the selected label; typing filters the
+// list; ↑/↓ + Enter select, Esc/blur closes and restores the selection.
+export function SearchSelect(props: {
+  options: SelectOption[];
+  value: string | number | null;
+  onChange: (v: string | number) => void;
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const { options, value, onChange } = props;
+  const selected = options.find((o) => o.value === value) ?? null;
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [hi, setHi] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
+  }, [options, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  useEffect(() => { setHi(0); }, [query, open]);
+  useEffect(() => {
+    listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
+  }, [hi]);
+
+  const pick = (o: SelectOption) => {
+    onChange(o.value);
+    setOpen(false);
+    setQuery("");
+  };
+
+  return (
+    <div ref={rootRef} className="relative">
+      <input
+        className={inputCls + " pr-7"}
+        disabled={props.disabled}
+        placeholder={selected?.label ?? props.placeholder ?? "type to search…"}
+        value={open ? query : selected?.label ?? ""}
+        onFocus={() => { setOpen(true); setQuery(""); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "Enter")) { setOpen(true); return; }
+          if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, filtered.length - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+          else if (e.key === "Enter") { e.preventDefault(); if (filtered[hi]) pick(filtered[hi]); }
+          else if (e.key === "Escape") { setOpen(false); setQuery(""); (e.target as HTMLInputElement).blur(); }
+        }}
+      />
+      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+      {open && (
+        <div ref={listRef}
+          className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-md shadow-lg">
+          {filtered.map((o, i) => (
+            <button key={o.value} type="button"
+              className={`w-full text-left px-2.5 py-1.5 text-sm ${i === hi ? "bg-bzm/10 text-bzm-dark" : "hover:bg-slate-50"} ${o.value === value ? "font-semibold" : ""}`}
+              onMouseEnter={() => setHi(i)}
+              onMouseDown={(e) => { e.preventDefault(); pick(o); }}>
+              {o.label}
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <p className="px-2.5 py-1.5 text-sm text-slate-400">no matches</p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

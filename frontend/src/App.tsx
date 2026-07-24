@@ -4,7 +4,7 @@ import {
   Location, Options, Ship, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, Section, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
 
@@ -255,20 +255,16 @@ export default function App() {
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
-                  <select className={inputCls} value={accountId ?? ""}
-                    disabled={!who}
-                    onChange={(e) => setAccountId(Number(e.target.value))}>
-                    {accounts.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name} ({a.id})</option>))}
-                  </select>
+                  <SearchSelect
+                    options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+                    value={accountId} disabled={!who}
+                    onChange={(v) => setAccountId(Number(v))} />
                 </Field>
                 <Field label="Workspace">
-                  <select className={inputCls} value={workspaceId ?? ""}
-                    disabled={!who || workspaces.length === 0}
-                    onChange={(e) => setWorkspaceId(Number(e.target.value))}>
-                    {workspaces.map((w) => (
-                      <option key={w.id} value={w.id}>{w.name}</option>))}
-                  </select>
+                  <SearchSelect
+                    options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
+                    value={workspaceId} disabled={!who || workspaces.length === 0}
+                    onChange={(v) => setWorkspaceId(Number(v))} />
                 </Field>
               </div>
               {locations.length > 8 && (
