@@ -11,6 +11,10 @@ import urllib.request
 
 API_BASE = "https://a.blazemeter.com/api/v4"
 
+# Max threads one engine will run. A location with this unset cannot start a
+# test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
+DEFAULT_THREADS_PER_ENGINE = 500
+
 
 class BzmApiError(RuntimeError):
     pass
@@ -54,6 +58,9 @@ class BzmClient:
     def post(self, path, body=None):
         return self._request("POST", path, body if body is not None else {})
 
+    def patch(self, path, body):
+        return self._request("PATCH", path, body)
+
     def delete(self, path):
         return self._request("DELETE", path)
 
@@ -78,14 +85,31 @@ class BzmClient:
         return self.get(f"/private-locations?{scope}&limit=1000")
 
     def create_private_location(self, name, account_id, workspace_ids,
-                                func_ids=("performance",), slots=1):
-        return self.post("/private-locations", {
+                                func_ids=("performance",), slots=1,
+                                threads_per_engine=DEFAULT_THREADS_PER_ENGINE):
+        h = self.post("/private-locations", {
             "name": name,
             "accountId": account_id,
             "workspacesId": list(workspace_ids),
             "funcIds": list(func_ids),
             "slots": slots,
         })
+        # POST ignores threadsPerEngine, so a freshly created location has it
+        # null and every test start fails with 403 "Not enough available
+        # resources". PATCH it into a runnable state before handing it back.
+        return self.update_private_location(
+            h["id"], slots=slots, threads_per_engine=threads_per_engine)
+
+    def update_private_location(self, harbor_id, slots=None,
+                                threads_per_engine=None):
+        body = {}
+        if slots is not None:
+            body["slots"] = slots
+        if threads_per_engine is not None:
+            body["threadsPerEngine"] = threads_per_engine
+        if not body:
+            return self.private_location(harbor_id)
+        return self.patch(f"/private-locations/{harbor_id}", body)
 
     def delete_private_location(self, harbor_id):
         return self.delete(f"/private-locations/{harbor_id}")

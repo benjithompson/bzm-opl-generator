@@ -130,12 +130,14 @@ class LocationIn(BaseModel):
     workspace_id: int
     func_ids: list[str] = ["performance"]
     slots: int = 1
+    threads_per_engine: int = api.DEFAULT_THREADS_PER_ENGINE
 
 
 @app.post("/api/locations")
 def location_create(loc: LocationIn):
     return _wrap(_client().create_private_location, loc.name, loc.account_id,
-                 [loc.workspace_id], func_ids=loc.func_ids, slots=loc.slots)
+                 [loc.workspace_id], func_ids=loc.func_ids, slots=loc.slots,
+                 threads_per_engine=loc.threads_per_engine)
 
 
 class ShipIn(BaseModel):

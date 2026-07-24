@@ -50,7 +50,7 @@ export const api = {
     req<Location[]>("GET", `/api/locations?workspace_id=${workspaceId}`),
   createLocation: (body: {
     name: string; account_id: number; workspace_id: number;
-    func_ids: string[]; slots: number;
+    func_ids: string[]; slots: number; threads_per_engine: number;
   }) => req<Location>("POST", "/api/locations", body),
   createShip: (harborId: string, name: string) =>
     req<{ ship: Ship }>("POST", "/api/ships", { harbor_id: harborId, name }),

@@ -60,9 +60,15 @@ def cmd_create_location(a):
                      f"{[(w['id'], w.get('name')) for w in hits]}")
         wsid = hits[0]["id"]
     h = client.create_private_location(a.name, account_id, [wsid],
-                                       func_ids=a.func_ids, slots=a.slots)
+                                       func_ids=a.func_ids, slots=a.slots,
+                                       threads_per_engine=a.threads_per_engine)
     print(f"created location '{h.get('name')}' harbor_id={h['id']} "
-          f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, slots={a.slots})")
+          f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, "
+          f"slots={h.get('slots')}, threadsPerEngine={h.get('threadsPerEngine')})")
+    if not h.get("slots") or not h.get("threadsPerEngine"):
+        print("WARNING: location is not runnable -- tests will fail to start with "
+              "403 'Not enough available resources'. Set the missing field(s) in "
+              "the BlazeMeter UI (Settings -> Private Locations).", file=sys.stderr)
     print(f"next: bzm-opl-gen create-ship --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
 
 
@@ -216,7 +222,13 @@ def main():
     cl.add_argument("--workspace-name", help="case-insensitive substring, must match one")
     cl.add_argument("--name", required=True)
     cl.add_argument("--func-ids", nargs="+", default=["performance"])
-    cl.add_argument("--slots", type=int, default=1)
+    cl.add_argument("--slots", type=int, default=1,
+                    help="concurrent engines the location may run (default 1)")
+    cl.add_argument("--threads-per-engine", type=int,
+                    default=api.DEFAULT_THREADS_PER_ENGINE,
+                    help=f"max threads per engine (default "
+                         f"{api.DEFAULT_THREADS_PER_ENGINE}); a location with "
+                         f"this unset cannot start tests")
     cl.set_defaults(fn=cmd_create_location)
 
     dl = sub.add_parser("delete-location", help="delete a private location and its ships")

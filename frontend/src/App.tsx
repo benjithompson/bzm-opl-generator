@@ -10,6 +10,14 @@ import { Preview } from "./Preview";
 
 const FUNC_ID_CHOICES = ["performance", "functionalApi", "functionalGui", "mockServices"];
 
+// Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
+// to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
+const ENGINE_SIZES = [
+  { id: "small", cpu: "1", mem: "4Gi", label: "Small — 1 CPU / 4Gi (dev clusters, light tests)" },
+  { id: "standard", cpu: "2", mem: "8Gi", label: "Standard — 2 CPU / 8Gi (BlazeMeter default)" },
+  { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
+];
+
 export default function App() {
   // -- connection ------------------------------------------------------------
   const [candidates, setCandidates] = useState<KeyCandidate[]>([]);
@@ -29,7 +37,8 @@ export default function App() {
   const [locFilter, setLocFilter] = useState("");
   const [harborId, setHarborId] = useState<string | null>(null);
   const [showCreateLoc, setShowCreateLoc] = useState(false);
-  const [newLoc, setNewLoc] = useState({ name: "", workspace_id: 0, func_ids: ["performance"], slots: 1 });
+  const [newLoc, setNewLoc] = useState({
+    name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
 
   // -- agent -----------------------------------------------------------------
@@ -182,6 +191,13 @@ export default function App() {
     ca_openshift_inject: m === "inject",
   }));
 
+  // Engine size is a dropdown of known-good shapes; the preset is derived from
+  // the two limits rather than stored, so an imported/preset config lands on
+  // the right entry and anything unrecognised shows as Custom.
+  const sizePreset = ENGINE_SIZES.find(
+    (s) => s.cpu === options.engine_cpu_limit && s.mem === options.engine_mem_limit,
+  )?.id ?? "custom";
+
   // Toggle-to-enable option groups: OFF hides the fields AND wipes their
   // options, so nothing hidden ever reaches the manifests. Auto-flips on when
   // a preset/import brings values in.
@@ -203,7 +219,13 @@ export default function App() {
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
-    if (on) return;
+    if (on) {
+      if (id === "sizing" && sizePreset === "custom") {
+        const d = ENGINE_SIZES.find((s) => s.id === "standard")!;
+        setOptions((o) => ({ ...o, engine_cpu_limit: d.cpu, engine_mem_limit: d.mem }));
+      }
+      return;
+    }
     setOptions((o) => {
       const w = { ...o };
       if (id === "registry") Object.assign(w, { private_registry: null, pull_secret: null, registry_auth: false });
@@ -362,10 +384,15 @@ export default function App() {
                           })} />
                       ))}
                     </div>
-                    <Field label="Slots">
+                    <Field label="Slots" hint="concurrent engines">
                       <input type="number" min={1} className={inputCls + " w-20"}
                         value={newLoc.slots}
                         onChange={(e) => setNewLoc({ ...newLoc, slots: Number(e.target.value) })} />
+                    </Field>
+                    <Field label="Threads per engine" hint="required — tests can't start without it">
+                      <input type="number" min={1} className={inputCls + " w-24"}
+                        value={newLoc.threads_per_engine}
+                        onChange={(e) => setNewLoc({ ...newLoc, threads_per_engine: Number(e.target.value) })} />
                     </Field>
                   </div>
                   <div className="flex gap-2">
@@ -658,17 +685,42 @@ export default function App() {
                   </div>
                 </div>
                 {grpOn.sizing && (
-                <div className="mt-3 pl-12 grid grid-cols-2 gap-2">
-                  <Field label="Engine CPU limit" hint="KUBERNETES_RESOURCES_LIMITS_CPU">
-                    <TextInput mono placeholder="2"
-                      value={String(options.engine_cpu_limit ?? "")}
-                      onChange={(v) => set("engine_cpu_limit", v || null)} />
+                <div className="mt-3 pl-12 space-y-2">
+                  <Field label="Engine size"
+                    hint="KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY — the pod limits the crane stamps on every engine it spawns">
+                    <select className={inputCls} value={sizePreset}
+                      onChange={(e) => {
+                        // "Custom…" clears both, which is what makes sizePreset
+                        // fall through to "custom" and reveal the two fields.
+                        const p = ENGINE_SIZES.find((s) => s.id === e.target.value);
+                        setOptions((o) => ({ ...o,
+                          engine_cpu_limit: p?.cpu ?? null,
+                          engine_mem_limit: p?.mem ?? null }));
+                      }}>
+                      {ENGINE_SIZES.map((s) => (
+                        <option key={s.id} value={s.id}>{s.label}</option>
+                      ))}
+                      <option value="custom">Custom…</option>
+                    </select>
                   </Field>
-                  <Field label="Engine memory limit" hint="KUBERNETES_RESOURCES_LIMITS_MEMORY">
-                    <TextInput mono placeholder="8Gi"
-                      value={String(options.engine_mem_limit ?? "")}
-                      onChange={(v) => set("engine_mem_limit", v || null)} />
-                  </Field>
+                  {sizePreset === "custom" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="CPU limit">
+                        <TextInput mono placeholder="2"
+                          value={String(options.engine_cpu_limit ?? "")}
+                          onChange={(v) => set("engine_cpu_limit", v || null)} />
+                      </Field>
+                      <Field label="Memory limit">
+                        <TextInput mono placeholder="8Gi"
+                          value={String(options.engine_mem_limit ?? "")}
+                          onChange={(v) => set("engine_mem_limit", v || null)} />
+                      </Field>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-slate-400">
+                    Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
+                    Size worker nodes for slots × engine size.
+                  </p>
                 </div>
                 )}
               </div>
