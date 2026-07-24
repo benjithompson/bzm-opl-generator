@@ -46,8 +46,8 @@ export const api = {
   accounts: () => req<Account[]>("GET", "/api/accounts"),
   workspaces: (accountId: number) =>
     req<Workspace[]>("GET", `/api/workspaces?account_id=${accountId}`),
-  locations: (accountId: number) =>
-    req<Location[]>("GET", `/api/locations?account_id=${accountId}`),
+  locations: (workspaceId: number) =>
+    req<Location[]>("GET", `/api/locations?workspace_id=${workspaceId}`),
   createLocation: (body: {
     name: string; account_id: number; workspace_id: number;
     func_ids: string[]; slots: number;

@@ -70,8 +70,12 @@ class BzmClient:
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")
 
-    def private_locations(self, account_id):
-        return self.get(f"/private-locations?accountId={account_id}&limit=100")
+    def private_locations(self, account_id=None, workspace_id=None):
+        """All private locations for a workspace or account. The endpoint
+        ignores `offset`, so ask for one big page instead of paginating."""
+        scope = (f"workspaceId={workspace_id}" if workspace_id
+                 else f"accountId={account_id}")
+        return self.get(f"/private-locations?{scope}&limit=1000")
 
     def create_private_location(self, name, account_id, workspace_ids,
                                 func_ids=("performance",), slots=1):

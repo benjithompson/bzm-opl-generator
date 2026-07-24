@@ -118,8 +118,10 @@ def workspaces(account_id: int):
 
 
 @app.get("/api/locations")
-def locations(account_id: int):
-    return _wrap(_client().private_locations, account_id)
+def locations(account_id: Optional[int] = None, workspace_id: Optional[int] = None):
+    if not account_id and not workspace_id:
+        raise HTTPException(400, "account_id or workspace_id required")
+    return _wrap(_client().private_locations, account_id, workspace_id)
 
 
 class LocationIn(BaseModel):

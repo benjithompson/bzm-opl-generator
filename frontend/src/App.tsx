@@ -73,17 +73,18 @@ export default function App() {
 
   useEffect(() => {
     if (!accountId || !who) return;
-    setLocations([]); setHarborId(null); setWorkspaceId(null);
-    api.locations(accountId).then(setLocations).catch((e) => setLocErr(e.message));
+    setWorkspaces([]); setWorkspaceId(null);
     api.workspaces(accountId).then((ws) => {
       setWorkspaces(ws);
       setWorkspaceId(ws[0]?.id ?? null);
-    }).catch(() => {});
+    }).catch((e) => setLocErr(e.message));
   }, [accountId, who]);
 
   useEffect(() => {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
-    setHarborId(null);
+    setLocations([]); setHarborId(null); setLocErr(null);
+    if (workspaceId == null) return;
+    api.locations(workspaceId).then(setLocations).catch((e) => setLocErr(e.message));
   }, [workspaceId]);
 
   const location = useMemo(
@@ -155,9 +156,7 @@ export default function App() {
   };
 
   const openshift = options.platform === "openshift";
-  const wsLocs = locations.filter((l) =>
-    workspaceId == null || (l.workspacesId ?? []).includes(workspaceId));
-  const filteredLocs = wsLocs.filter((l) =>
+  const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
 
   return (
@@ -266,9 +265,9 @@ export default function App() {
                   </select>
                 </Field>
               </div>
-              {wsLocs.length > 8 && (
+              {locations.length > 8 && (
                 <TextInput value={locFilter} onChange={setLocFilter}
-                  placeholder={`filter ${wsLocs.length} locations…`} />
+                  placeholder={`filter ${locations.length} locations…`} />
               )}
               <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
                 {filteredLocs.map((l) => (
@@ -318,7 +317,7 @@ export default function App() {
                       onClick={async () => {
                         try {
                           const l = await api.createLocation({ ...newLoc, account_id: accountId! });
-                          const ls = await api.locations(accountId!);
+                          const ls = await api.locations(workspaceId!);
                           setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
                         } catch (e) { setLocErr(String((e as Error).message)); }
                       }}>Create</Button>
@@ -355,7 +354,7 @@ export default function App() {
                   onClick={async () => {
                     try {
                       const r = await api.createShip(harborId!, newShipName);
-                      const ls = await api.locations(accountId!);
+                      const ls = await api.locations(workspaceId!);
                       setLocations(ls); setShipId(r.ship.id); setNewShipName("");
                       api.facts(harborId!).then(setFacts).catch(() => {});
                     } catch (e) { setShipErr(String((e as Error).message)); }
