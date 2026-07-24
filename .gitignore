@@ -19,3 +19,8 @@ build/
 .vscode/
 .idea/
 .pytest_cache/
+
+# tooling debris
+.playwright-mcp/
+*.tsbuildinfo
+node_modules/
