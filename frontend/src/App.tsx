@@ -23,6 +23,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountId, setAccountId] = useState<number | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspaceId, setWorkspaceId] = useState<number | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [locFilter, setLocFilter] = useState("");
   const [harborId, setHarborId] = useState<string | null>(null);
@@ -72,13 +73,18 @@ export default function App() {
 
   useEffect(() => {
     if (!accountId || !who) return;
-    setLocations([]); setHarborId(null);
+    setLocations([]); setHarborId(null); setWorkspaceId(null);
     api.locations(accountId).then(setLocations).catch((e) => setLocErr(e.message));
     api.workspaces(accountId).then((ws) => {
       setWorkspaces(ws);
-      setNewLoc((n) => ({ ...n, workspace_id: ws[0]?.id ?? 0 }));
+      setWorkspaceId(ws[0]?.id ?? null);
     }).catch(() => {});
   }, [accountId, who]);
+
+  useEffect(() => {
+    setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
+    setHarborId(null);
+  }, [workspaceId]);
 
   const location = useMemo(
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
@@ -149,7 +155,9 @@ export default function App() {
   };
 
   const openshift = options.platform === "openshift";
-  const filteredLocs = locations.filter((l) =>
+  const wsLocs = locations.filter((l) =>
+    workspaceId == null || (l.workspacesId ?? []).includes(workspaceId));
+  const filteredLocs = wsLocs.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
 
   return (
@@ -240,17 +248,27 @@ export default function App() {
           <Section n={2} title="Private location" done={!!harborId}
             hint="The BlazeMeter location (harbor) these manifests deploy an agent for.">
             <div className="space-y-3">
-              <Field label="Account">
-                <select className={inputCls} value={accountId ?? ""}
-                  disabled={!who}
-                  onChange={(e) => setAccountId(Number(e.target.value))}>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.id})</option>))}
-                </select>
-              </Field>
-              {locations.length > 8 && (
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Account">
+                  <select className={inputCls} value={accountId ?? ""}
+                    disabled={!who}
+                    onChange={(e) => setAccountId(Number(e.target.value))}>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name} ({a.id})</option>))}
+                  </select>
+                </Field>
+                <Field label="Workspace">
+                  <select className={inputCls} value={workspaceId ?? ""}
+                    disabled={!who || workspaces.length === 0}
+                    onChange={(e) => setWorkspaceId(Number(e.target.value))}>
+                    {workspaces.map((w) => (
+                      <option key={w.id} value={w.id}>{w.name}</option>))}
+                  </select>
+                </Field>
+              </div>
+              {wsLocs.length > 8 && (
                 <TextInput value={locFilter} onChange={setLocFilter}
-                  placeholder={`filter ${locations.length} locations…`} />
+                  placeholder={`filter ${wsLocs.length} locations…`} />
               )}
               <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
                 {filteredLocs.map((l) => (
@@ -274,18 +292,9 @@ export default function App() {
                 </Button>
               ) : (
                 <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="Name">
-                      <TextInput value={newLoc.name}
-                        onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
-                    <Field label="Workspace">
-                      <select className={inputCls} value={newLoc.workspace_id}
-                        onChange={(e) => setNewLoc({ ...newLoc, workspace_id: Number(e.target.value) })}>
-                        {workspaces.map((w) => (
-                          <option key={w.id} value={w.id}>{w.name}</option>))}
-                      </select>
-                    </Field>
-                  </div>
+                  <Field label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
+                    <TextInput value={newLoc.name}
+                      onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
                   <div className="flex gap-4 items-end">
                     <div className="flex gap-3 flex-wrap">
                       {FUNC_ID_CHOICES.map((f) => (

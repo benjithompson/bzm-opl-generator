@@ -9,6 +9,7 @@ export interface Ship {
 }
 export interface Location {
   id: string; name: string; funcIds?: string[]; slots?: number; ships?: Ship[];
+  workspacesId?: number[];
 }
 export interface Facts {
   harbor_id: string; harbor_name?: string; func_ids?: string[];
