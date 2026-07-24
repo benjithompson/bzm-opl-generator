@@ -63,7 +63,22 @@ bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
 ```
 
 Run without installing: `python3 -m bzm_opl_gen ...` from the repo root.
-No runtime dependencies (stdlib only); tests need `pip install -e .[test]`.
+No runtime dependencies for the CLI (stdlib only); tests need `pip install -e .[test]`.
+
+## Web UI
+
+```
+pip install -e .[ui]
+bzm-opl-gen ui          # opens http://127.0.0.1:8765
+```
+
+Single page: Connect (key stays local) → pick/create location & agent →
+configure (presets, private registry, proxy/CA, tolerations/nodeSelector,
+engine sizing) → live manifest preview → download zip (AUTH_TOKEN fetched on
+download) → watch the agent flip online. Profile JSON import/export round-trips
+with `generate --profile`. Frontend dev: `cd frontend && npm install && npm run
+dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
+`bzm_opl_gen/ui_dist/`.
 
 ## Options (flags or `--profile` JSON)
 

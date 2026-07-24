@@ -1,0 +1,149 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - heading "BlazeMeter OPL Generator" [level=1] [ref=e6]
+      - generic [ref=e7]: private-location Kubernetes / OpenShift manifests, from your real account
+      - generic [ref=e104]: ben.thompson@perforce.com · key 54b3cc11…
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]:
+          - generic [ref=e12]: ✓
+          - generic [ref=e13]:
+            - heading "Connect" [level=2] [ref=e14]
+            - paragraph [ref=e15]: API key stays on this machine; only used server-side.
+        - paragraph [ref=e105]: Connected as ben.thompson@perforce.com
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: ✓
+          - generic [ref=e27]:
+            - heading "Private location" [level=2] [ref=e28]
+            - paragraph [ref=e29]: The BlazeMeter location (harbor) these manifests deploy an agent for.
+        - generic [ref=e30]:
+          - generic [ref=e31]:
+            - text: Account
+            - combobox "Account" [ref=e32]:
+              - option "BlazeData (514413)"
+              - option "BlazeMeter SE Demo (291446)" [selected]
+              - option "GKE PC Account (1798215)"
+              - option "PERFORCE (1002130)"
+              - option "POC_USAA (2188915)"
+              - option "T-Mobile (284907)"
+          - textbox "filter 100 locations…" [ref=e112]: Bens Linux
+          - button "Bens Linuxperformance · 100 slots · 1 agent(s)" [ref=e261]:
+            - text: Bens Linux
+            - generic [ref=e262]: performance · 100 slots · 1 agent(s)
+          - button "+ New location" [ref=e34]
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]: ✓
+          - generic [ref=e38]:
+            - heading "Agent (ship)" [level=2] [ref=e39]
+            - paragraph [ref=e40]: The agent identity this deployment runs as; its AUTH_TOKEN is fetched automatically on download.
+        - generic [ref=e41]:
+          - button "agent1 (idle)" [ref=e314]:
+            - text: agent1
+            - generic [ref=e315]: (idle)
+          - generic [ref=e42]:
+            - generic [ref=e44]:
+              - text: …or create a new agent
+              - textbox "…or create a new agent" [ref=e316]:
+                - /placeholder: e.g. k8s-prod-cluster
+            - button "Create" [disabled] [ref=e46]
+          - paragraph [ref=e317]: "image inventory: live agent inventory · features: performance"
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - generic [ref=e49]: "4"
+          - generic [ref=e50]:
+            - heading "Configure" [level=2] [ref=e51]
+            - paragraph [ref=e52]: Everything re-renders the preview live. Presets give a starting point.
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]:
+              - text: Start from preset
+              - combobox "Start from preset" [ref=e56]:
+                - option "—" [selected]
+                - option "k8s-vanilla"
+                - option "openshift-private-registry"
+                - option "openshift-restricted"
+            - button "Export profile" [ref=e57]
+            - generic [ref=e58] [cursor=pointer]: Import profile
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - text: Platform
+              - combobox "Platform" [ref=e61]:
+                - option "OpenShift (SCC-friendly)" [selected]
+                - option "Kubernetes (pinned UID)"
+            - generic [ref=e62]:
+              - text: Namespace
+              - textbox "Namespace" [ref=e63]: blazemeter
+            - generic [ref=e64]:
+              - text: Service type
+              - combobox "Service type NODEPORT is BlazeMeter's default but often disallowed" [ref=e65]:
+                - option "CLUSTERIP" [selected]
+                - option "NODEPORT"
+              - text: NODEPORT is BlazeMeter's default but often disallowed
+          - generic [ref=e66]:
+            - generic [ref=e67] [cursor=pointer]:
+              - checkbox "AUTH_TOKEN in a Secret uncheck = simplified ConfigMap variant" [checked] [ref=e68]
+              - generic [ref=e69]:
+                - text: AUTH_TOKEN in a Secret
+                - generic [ref=e70]: uncheck = simplified ConfigMap variant
+            - generic [ref=e71] [cursor=pointer]:
+              - checkbox "Read-only nodes ClusterRole optional; not needed for perf tests" [ref=e72]
+              - generic [ref=e73]:
+                - text: Read-only nodes ClusterRole
+                - generic [ref=e74]: optional; not needed for perf tests
+            - generic [ref=e75] [cursor=pointer]:
+              - checkbox "Include GUI/mock images for functionalGui / mockServices locations" [ref=e76]
+              - generic [ref=e77]:
+                - text: Include GUI/mock images
+                - generic [ref=e78]: for functionalGui / mockServices locations
+          - group [ref=e79]:
+            - generic "Private registry" [ref=e80] [cursor=pointer]
+            - generic [ref=e328]:
+              - generic [ref=e329]:
+                - text: Registry
+                - textbox "Registry sets DOCKER_REGISTRY + IMAGE_OVERRIDES, disables auto-update, emits bzm-opl-image-mirror.sh" [ref=e330]:
+                  - /placeholder: registry.corp.com/bzm
+                  - text: registry.corp.example/bzm
+                - text: sets DOCKER_REGISTRY + IMAGE_OVERRIDES, disables auto-update, emits bzm-opl-image-mirror.sh
+              - generic [ref=e331]:
+                - generic [ref=e332]:
+                  - text: imagePullSecret name (crane image)
+                  - textbox "imagePullSecret name (crane image)" [ref=e333]
+                - generic [ref=e334] [cursor=pointer]:
+                  - checkbox "Registry auth env stubs commented DOCKER_REGISTRY_USERNAME/PASSWORD" [ref=e335]
+                  - generic [ref=e336]:
+                    - text: Registry auth env stubs
+                    - generic [ref=e337]: commented DOCKER_REGISTRY_USERNAME/PASSWORD
+          - group [ref=e81]:
+            - 'generic "Egress: proxy & corporate CA" [ref=e82] [cursor=pointer]'
+          - group [ref=e83]:
+            - generic "Scheduling & engine sizing" [ref=e84] [cursor=pointer]
+      - generic [ref=e85]:
+        - generic [ref=e86]:
+          - generic [ref=e87]: "5"
+          - heading "Download & verify" [level=2] [ref=e89]
+        - generic [ref=e90]:
+          - generic [ref=e91]:
+            - button "⬇ Download bundle (.zip)" [ref=e92]
+            - generic [ref=e93]: manifests + README + bzm-opl-image-mirror.sh; AUTH_TOKEN fetched on download
+          - generic [ref=e96] [cursor=pointer]:
+            - checkbox "Watch agent status polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats" [ref=e97]
+            - generic [ref=e98]:
+              - text: Watch agent status
+              - generic [ref=e99]: polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats
+    - generic [ref=e101]:
+      - generic [ref=e102]:
+        - button "bzm_serviceaccount.yaml" [ref=e318]
+        - button "bzm_configmap.yaml" [active] [ref=e319]
+        - button "bzm_secret.yaml" [ref=e320]
+        - button "bzm_role.yaml" [ref=e321]
+        - button "bzm_rolebinding.yaml" [ref=e322]
+        - button "bzm_deployment.yaml" [ref=e323]
+        - button "bzm-opl-image-mirror.sh" [ref=e338]
+        - button "README.md" [ref=e324]
+      - generic [ref=e325]:
+        - button "copy" [ref=e326]
+        - generic [ref=e327]: "kind: ConfigMap apiVersion: v1 metadata: name: blazemeter-configmap namespace: blazemeter data: HARBOR_ID: \"688954e684909ce3860336d4\" SHIP_ID: \"68cac13504f626e2ca02a124\" CONTAINER_MANAGER_TYPE: KUBERNETES # OpenShift non-privileged path: engines inherit crane's SCC-assigned # UID:GID and drop all capabilities, so spawned engine pods also pass # the restricted-v2 SCC. INHERIT_RUNNING_USER_AND_GROUP: 'true' KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{\"drop\": [\"ALL\"]}' KUBERNETES_SERVICE_USE_TYPE: CLUSTERIP RUN_HEALTH_WEB_SERVICE: 'true' # Private registry: images resolved from the account's live agent # inventory (live agent inventory). DOCKER_REGISTRY: registry.corp.example/bzm IMAGE_OVERRIDES: '{\"apm-image:latest\": \"registry.corp.example/bzm/apm:1.7.112\", \"taurus-cloud:latest\": \"registry.corp.example/bzm/v4:2.4.444-reduced\"}' # Auto-update pulls from BlazeMeter's public registry -- disabled for # private-registry clusters. Upgrade = re-mirror + bump tags. AUTO_KUBERNETES_UPDATE: 'false'"

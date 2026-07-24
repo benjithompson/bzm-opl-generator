@@ -19,7 +19,19 @@ DEFAULT_OPTIONS = {
     "proxy": None,                   # {"http": ..., "https": ..., "no_proxy": ...}
     "gui": False,                    # include GUI-functional images in overrides
     "run_as_user": 1337,             # k8s platform only (openshift: SCC assigns)
+    # Real-cluster scheduling / trust / sizing (all optional):
+    "tolerations": None,             # k8s toleration list -> crane pod + engines
+    "node_selector": None,           # {"label": "value"} -> crane pod + engines
+    "ca_bundle": None,               # PEM text -> ConfigMap mounted into crane
+    "engine_cpu_limit": None,        # e.g. "2" -> KUBERNETES_RESOURCES_LIMITS_CPU
+    "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
+    "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
+    "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
 }
+
+CA_MOUNT_PATH = "/var/cm"
+CA_FILENAME = "ca-bundle.crt"
+CA_CONFIGMAP = "blazemeter-cacerts"
 
 
 def _tpl(name):
@@ -100,7 +112,87 @@ def _configmap(facts, o):
         if p.get("https"):
             lines.append(f"  HTTPS_PROXY: {p['https']}")
         lines.append(f"  NO_PROXY: {p.get('no_proxy', 'kubernetes.default,127.0.0.1,localhost')}")
+    if o["tolerations"]:
+        lines += [
+            "  # Engines inherit the crane pod's tolerations via this env.",
+            f"  KUBERNETES_TOLERATIONS_JSON: '{json.dumps(o['tolerations'])}'",
+        ]
+    if o["node_selector"]:
+        lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(o['node_selector'])}'")
+    if o["engine_cpu_limit"]:
+        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: \"{o['engine_cpu_limit']}\"")
+    if o["engine_mem_limit"]:
+        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: \"{o['engine_mem_limit']}\"")
+    if o["engine_ephemeral_request_mb"]:
+        lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_request_mb']}\"")
+    if o["engine_ephemeral_limit_mb"]:
+        lines.append(f"  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_limit_mb']}\"")
+    if o["ca_bundle"]:
+        lines += [
+            "  # Corporate CA bundle: mounted into crane; engines get the same",
+            "  # ConfigMap mounted via KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmap=file).",
+            f"  REQUESTS_CA_BUNDLE: {CA_MOUNT_PATH}/{CA_FILENAME}",
+            f"  AWS_CA_BUNDLE: {CA_MOUNT_PATH}/{CA_FILENAME}",
+            f"  KUBERNETES_CA_BUNDLE_MOUNT: \"REQUESTS_CA_BUNDLE={CA_CONFIGMAP}={CA_FILENAME}:AWS_CA_BUNDLE={CA_CONFIGMAP}={CA_FILENAME}\"",
+        ]
     return "\n".join(lines) + "\n"
+
+
+def _indent_yaml(obj, indent):
+    """Render obj as indented YAML-compatible JSON block lines."""
+    pad = " " * indent
+    return "\n".join(pad + line for line in json.dumps(obj, indent=2).splitlines())
+
+
+def _scheduling_block(o):
+    """tolerations / nodeSelector for the crane pod itself (engines get the
+    matching env vars in the ConfigMap)."""
+    out = ""
+    if o["tolerations"]:
+        out += "      tolerations:\n" + _indent_yaml(o["tolerations"], 8) + "\n"
+    if o["node_selector"]:
+        out += "      nodeSelector:\n" + "\n".join(
+            f"        {k}: \"{v}\"" for k, v in o["node_selector"].items()) + "\n"
+    return out
+
+
+def _ca_configmap(facts, o):
+    pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
+    return f"""kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {CA_CONFIGMAP}
+  namespace: {o['namespace']}
+data:
+  {CA_FILENAME}: |
+{pem}
+"""
+
+
+def _mirror_script(facts, o):
+    refs = [facts["crane_image"]] + [
+        f"{i['repo']}:{i['tag']}" for i in facts["images"]
+        if i.get("key") and (o["gui"] or i.get("performance", True))
+    ]
+    reg = o["private_registry"].rstrip("/")
+    lines = [
+        "#!/usr/bin/env bash",
+        "# Mirror the BlazeMeter images this private location needs into your",
+        "# private registry. Engines are amd64-only; --platform matters on ARM hosts.",
+        f"# Location: {facts.get('harbor_name')} ({facts['harbor_id']}), "
+        f"source: {facts.get('images_source')}",
+        "set -euo pipefail",
+        "",
+    ]
+    for ref in refs:
+        name = ref.rsplit("/", 1)[-1]
+        lines += [
+            f"docker pull --platform linux/amd64 {ref}",
+            f"docker tag {ref} {reg}/{name}",
+            f"docker push {reg}/{name}",
+            "",
+        ]
+    return "\n".join(lines)
 
 
 def _security_context(o):
@@ -162,6 +254,21 @@ def generate(facts, options):
             "            - secretRef:\n                name: blazemeter-secret\n"
             if o["use_secret"] else ""
         ),
+        "SCHEDULING_BLOCK": _scheduling_block(o),
+        "VOLUME_MOUNTS_BLOCK": (
+            "          volumeMounts:\n"
+            f"            - name: cacerts\n"
+            f"              mountPath: {CA_MOUNT_PATH}\n"
+            f"              readOnly: true\n"
+            if o["ca_bundle"] else ""
+        ),
+        "VOLUMES_BLOCK": (
+            "      volumes:\n"
+            f"        - name: cacerts\n"
+            f"          configMap:\n"
+            f"            name: {CA_CONFIGMAP}\n"
+            if o["ca_bundle"] else ""
+        ),
     }
 
     out = {
@@ -176,13 +283,17 @@ def generate(facts, options):
     if o["cluster_rbac"]:
         out["bzm_clusterrole.yaml"] = _tpl("clusterrole.yaml").substitute(sub)
         out["bzm_clusterrolebinding.yaml"] = _tpl("clusterrolebinding.yaml").substitute(sub)
+    if o["ca_bundle"]:
+        out["bzm_cacerts.yaml"] = _ca_configmap(facts, o)
+    if o["private_registry"]:
+        out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
     out["README.md"] = _readme(facts, o, out)
     return out
 
 
 APPLY_ORDER = [
     "bzm_serviceaccount.yaml", "bzm_configmap.yaml", "bzm_secret.yaml",
-    "bzm_role.yaml", "bzm_rolebinding.yaml",
+    "bzm_cacerts.yaml", "bzm_role.yaml", "bzm_rolebinding.yaml",
     "bzm_clusterrole.yaml", "bzm_clusterrolebinding.yaml",
     "bzm_deployment.yaml",
 ]
@@ -201,7 +312,9 @@ def _readme(facts, o, files):
         ]
         mirror = (
             "\n## Mirror these images into "
-            f"`{o['private_registry']}` first\n\n```\n" + "\n".join(imgs) + "\n```\n"
+            f"`{o['private_registry']}` first\n\nRun the included "
+            "`bzm-opl-image-mirror.sh` (docker pull/tag/push, forced linux/amd64), "
+            "or mirror manually:\n\n```\n" + "\n".join(imgs) + "\n```\n"
         )
     return f"""# BlazeMeter OPL -- generated manifests
 

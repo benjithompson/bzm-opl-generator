@@ -6,7 +6,8 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pyyaml", "pytest"]
+test = ["pyyaml", "pytest", "httpx"]
+ui = ["fastapi>=0.110", "uvicorn>=0.27"]
 
 [project.scripts]
 bzm-opl-gen = "bzm_opl_gen.cli:main"
@@ -19,4 +20,4 @@ build-backend = "setuptools.build_meta"
 include = ["bzm_opl_gen*"]
 
 [tool.setuptools.package-data]
-bzm_opl_gen = ["templates/*.yaml"]
+bzm_opl_gen = ["templates/*.yaml", "profiles/*.json", "ui_dist/**/*"]

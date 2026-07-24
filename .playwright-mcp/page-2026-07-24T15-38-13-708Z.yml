@@ -1,0 +1,414 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - heading "BlazeMeter OPL Generator" [level=1] [ref=e6]
+      - generic [ref=e7]: private-location Kubernetes / OpenShift manifests, from your real account
+      - generic [ref=e104]: ben.thompson@perforce.com · key 54b3cc11…
+  - main [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]:
+          - generic [ref=e12]: ✓
+          - generic [ref=e13]:
+            - heading "Connect" [level=2] [ref=e14]
+            - paragraph [ref=e15]: API key stays on this machine; only used server-side.
+        - paragraph [ref=e105]: Connected as ben.thompson@perforce.com
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: "2"
+          - generic [ref=e27]:
+            - heading "Private location" [level=2] [ref=e28]
+            - paragraph [ref=e29]: The BlazeMeter location (harbor) these manifests deploy an agent for.
+        - generic [ref=e30]:
+          - generic [ref=e31]:
+            - text: Account
+            - combobox "Account" [ref=e32]:
+              - option "BlazeData (514413)"
+              - option "BlazeMeter SE Demo (291446)" [selected]
+              - option "GKE PC Account (1798215)"
+              - option "PERFORCE (1002130)"
+              - option "POC_USAA (2188915)"
+              - option "T-Mobile (284907)"
+          - textbox "filter 100 locations…" [ref=e112]
+          - generic [ref=e33]:
+            - button "MPA_GCEperformance · 1 slot · 2 agent(s)" [ref=e113]:
+              - text: MPA_GCE
+              - generic [ref=e114]: performance · 1 slot · 2 agent(s)
+            - button "Lokesh - OPLmockServices, sv-bridge · 50 slots · 1 agent(s)" [ref=e115]:
+              - text: Lokesh - OPL
+              - generic [ref=e116]: mockServices, sv-bridge · 50 slots · 1 agent(s)
+            - button "GCEperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 1 agent(s)" [ref=e117]:
+              - text: GCE
+              - generic [ref=e118]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 1 agent(s)
+            - button "MPA_ConvertproxyRecorder · 1 slot · 5 agent(s)" [ref=e119]:
+              - text: MPA_Convert
+              - generic [ref=e120]: proxyRecorder · 1 slot · 5 agent(s)
+            - button "RafaTempmockServices · 1 slot · 0 agent(s)" [ref=e121]:
+              - text: RafaTemp
+              - generic [ref=e122]: mockServices · 1 slot · 0 agent(s)
+            - button "nonBlazeBroadcomGCEperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)" [ref=e123]:
+              - text: nonBlazeBroadcomGCE
+              - generic [ref=e124]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)
+            - button "BlazeVMperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)" [ref=e125]:
+              - text: BlazeVM
+              - generic [ref=e126]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)
+            - button "Ralphperformance · 1 slot · 2 agent(s)" [ref=e127]:
+              - text: Ralph
+              - generic [ref=e128]: performance · 1 slot · 2 agent(s)
+            - button "SWAperformance · 5 slots · 1 agent(s)" [ref=e129]:
+              - text: SWA
+              - generic [ref=e130]: performance · 5 slots · 1 agent(s)
+            - button "BlazemeterSEDemoperformance, functionalGui, firefox:default, chrome:default… · 12 slots · 1 agent(s)" [ref=e131]:
+              - text: BlazemeterSEDemo
+              - generic [ref=e132]: performance, functionalGui, firefox:default, chrome:default… · 12 slots · 1 agent(s)
+            - button "OPL-SteveBperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e133]:
+              - text: OPL-SteveB
+              - generic [ref=e134]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "testperformance · 1 slot · 1 agent(s)" [ref=e135]:
+              - text: test
+              - generic [ref=e136]: performance · 1 slot · 1 agent(s)
+            - button "testperformance · 1 slot · 1 agent(s)" [ref=e137]:
+              - text: test
+              - generic [ref=e138]: performance · 1 slot · 1 agent(s)
+            - button "Las Vegas Data CentermockServices, functionalGui, sv-bridge, tdm… · 15 slots · 0 agent(s)" [ref=e139]:
+              - text: Las Vegas Data Center
+              - generic [ref=e140]: mockServices, functionalGui, sv-bridge, tdm… · 15 slots · 0 agent(s)
+            - button "MatthewA-BlaseVSE-LabmockServices, sv-bridge · 5 slots · 5 agent(s)" [ref=e141]:
+              - text: MatthewA-BlaseVSE-Lab
+              - generic [ref=e142]: mockServices, sv-bridge · 5 slots · 5 agent(s)
+            - button "MainMac_1performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e143]:
+              - text: MainMac_1
+              - generic [ref=e144]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "TIAA-CHARLOTTE-A-K8-CLUSTER-1performance, functionalGui, firefox:default, chrome:default… · 10 slots · 1 agent(s)" [ref=e145]:
+              - text: TIAA-CHARLOTTE-A-K8-CLUSTER-1
+              - generic [ref=e146]: performance, functionalGui, firefox:default, chrome:default… · 10 slots · 1 agent(s)
+            - button "Lab_mac1performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 2 agent(s)" [ref=e147]:
+              - text: Lab_mac1
+              - generic [ref=e148]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 2 agent(s)
+            - button "lklkperformance · 1 slot · 1 agent(s)" [ref=e149]:
+              - text: lklk
+              - generic [ref=e150]: performance · 1 slot · 1 agent(s)
+            - button "FakeOneForDemoperformance, functionalApi, proxyRecorder, functionalGui… · 12 slots · 2 agent(s)" [ref=e151]:
+              - text: FakeOneForDemo
+              - generic [ref=e152]: performance, functionalApi, proxyRecorder, functionalGui… · 12 slots · 2 agent(s)
+            - button "ESD-Dev-OPLsperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)" [ref=e153]:
+              - text: ESD-Dev-OPLs
+              - generic [ref=e154]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 2 agent(s)
+            - button "private_pandaproxyRecorder, mockServices · 5 slots · 1 agent(s)" [ref=e155]:
+              - text: private_panda
+              - generic [ref=e156]: proxyRecorder, mockServices · 5 slots · 1 agent(s)
+            - button "DevTest-GCP-OPL-2sv-bridge · 1 slot · 1 agent(s)" [ref=e157]:
+              - text: DevTest-GCP-OPL-2
+              - generic [ref=e158]: sv-bridge · 1 slot · 1 agent(s)
+            - button "BlazeVSE01mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e159]:
+              - text: BlazeVSE01
+              - generic [ref=e160]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "DevTest-GCP-OPL-3sv-bridge · 1 slot · 1 agent(s)" [ref=e161]:
+              - text: DevTest-GCP-OPL-3
+              - generic [ref=e162]: sv-bridge · 1 slot · 1 agent(s)
+            - button "BlazeVSE00mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e163]:
+              - text: BlazeVSE00
+              - generic [ref=e164]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "BGCP-BlazeVSE01mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e165]:
+              - text: BGCP-BlazeVSE01
+              - generic [ref=e166]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "BCP-Blaze-km02performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e167]:
+              - text: BCP-Blaze-km02
+              - generic [ref=e168]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "BCP-OPL-KM01mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e169]:
+              - text: BCP-OPL-KM01
+              - generic [ref=e170]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "BGCP-BlazeVSE02mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e171]:
+              - text: BGCP-BlazeVSE02
+              - generic [ref=e172]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "broadcom-oplperformance, functionalApi, proxyRecorder, mockServices… · 1 slot · 0 agent(s)" [ref=e173]:
+              - text: broadcom-opl
+              - generic [ref=e174]: performance, functionalApi, proxyRecorder, mockServices… · 1 slot · 0 agent(s)
+            - button "alexp-demo-OPLperformance, functionalApi, proxyRecorder, mockServices… · 20 slots · 1 agent(s)" [ref=e175]:
+              - text: alexp-demo-OPL
+              - generic [ref=e176]: performance, functionalApi, proxyRecorder, mockServices… · 20 slots · 1 agent(s)
+            - button "alexp-bcom-opl1performance, functionalApi, mockServices, functionalGui… · 10 slots · 1 agent(s)" [ref=e177]:
+              - text: alexp-bcom-opl1
+              - generic [ref=e178]: performance, functionalApi, mockServices, functionalGui… · 10 slots · 1 agent(s)
+            - button "Helloperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 1 agent(s)" [ref=e179]:
+              - text: Hello
+              - generic [ref=e180]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 1 agent(s)
+            - button "Mimiperformance, functionalApi, mockServices, functionalGui… · 4 slots · 1 agent(s)" [ref=e181]:
+              - text: Mimi
+              - generic [ref=e182]: performance, functionalApi, mockServices, functionalGui… · 4 slots · 1 agent(s)
+            - button "LazyDaffodilfunctionalGui, firefox:default, chrome:default · 5 slots · 1 agent(s)" [ref=e183]:
+              - text: LazyDaffodil
+              - generic [ref=e184]: functionalGui, firefox:default, chrome:default · 5 slots · 1 agent(s)
+            - button "WinOPL-lvntest021329functionalGui, firefox:default, chrome:default · 5 slots · 0 agent(s)" [ref=e185]:
+              - text: WinOPL-lvntest021329
+              - generic [ref=e186]: functionalGui, firefox:default, chrome:default · 5 slots · 0 agent(s)
+            - button "Manju-Harbar-SINGLEperformance, functionalApi, proxyRecorder, mockServices · 1 slot · 4 agent(s)" [ref=e187]:
+              - text: Manju-Harbar-SINGLE
+              - generic [ref=e188]: performance, functionalApi, proxyRecorder, mockServices · 1 slot · 4 agent(s)
+            - button "Manju-MultimockServices, sv-bridge, tdm · 4 slots · 1 agent(s)" [ref=e189]:
+              - text: Manju-Multi
+              - generic [ref=e190]: mockServices, sv-bridge, tdm · 4 slots · 1 agent(s)
+            - button "blazevsetestmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e191]:
+              - text: blazevsetest
+              - generic [ref=e192]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "test oplmockServices, sv-bridge · 5 slots · 0 agent(s)" [ref=e193]:
+              - text: test opl
+              - generic [ref=e194]: mockServices, sv-bridge · 5 slots · 0 agent(s)
+            - button "trainer-linux-dockermockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e195]:
+              - text: trainer-linux-docker
+              - generic [ref=e196]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "demo oplperformance, mockServices, functionalGui, chrome:default · 5 slots · 1 agent(s)" [ref=e197]:
+              - text: demo opl
+              - generic [ref=e198]: performance, mockServices, functionalGui, chrome:default · 5 slots · 1 agent(s)
+            - button "DBankDemo Hostperformance, mockServices, functionalGui, tdm… · 5 slots · 1 agent(s)" [ref=e199]:
+              - text: DBankDemo Host
+              - generic [ref=e200]: performance, mockServices, functionalGui, tdm… · 5 slots · 1 agent(s)
+            - button "Dev-Lab-withTDOperformance, mockServices, functionalGui, dataPublisher… · 5 slots · 1 agent(s)" [ref=e201]:
+              - text: Dev-Lab-withTDO
+              - generic [ref=e202]: performance, mockServices, functionalGui, dataPublisher… · 5 slots · 1 agent(s)
+            - button "Keith Home Networkperformance, functionalGui, dataPublisher, firefox:default… · 5 slots · 1 agent(s)" [ref=e203]:
+              - text: Keith Home Network
+              - generic [ref=e204]: performance, functionalGui, dataPublisher, firefox:default… · 5 slots · 1 agent(s)
+            - button "Windowsperformance, mockServices, functionalGui, dataPublisher… · 5 slots · 1 agent(s)" [ref=e205]:
+              - text: Windows
+              - generic [ref=e206]: performance, mockServices, functionalGui, dataPublisher… · 5 slots · 1 agent(s)
+            - button "MPA-HOME-OPLperformance, mockServices, functionalGui, firefox:default… · 3 slots · 1 agent(s)" [ref=e207]:
+              - text: MPA-HOME-OPL
+              - generic [ref=e208]: performance, mockServices, functionalGui, firefox:default… · 3 slots · 1 agent(s)
+            - button "Asia LocationfunctionalGui, firefox:default, chrome:default, MicrosoftEdge:default… · 5 slots · 1 agent(s)" [ref=e209]:
+              - text: Asia Location
+              - generic [ref=e210]: functionalGui, firefox:default, chrome:default, MicrosoftEdge:default… · 5 slots · 1 agent(s)
+            - button "Mock Service PLmockServices, sv-bridge · 5 slots · 0 agent(s)" [ref=e211]:
+              - text: Mock Service PL
+              - generic [ref=e212]: mockServices, sv-bridge · 5 slots · 0 agent(s)
+            - button "aws-opl1performance, functionalApi, proxyRecorder, mockServices… · 6 slots · 1 agent(s)" [ref=e213]:
+              - text: aws-opl1
+              - generic [ref=e214]: performance, functionalApi, proxyRecorder, mockServices… · 6 slots · 1 agent(s)
+            - button "Performance PLperformance · 5 slots · 2 agent(s)" [ref=e215]:
+              - text: Performance PL
+              - generic [ref=e216]: performance · 5 slots · 2 agent(s)
+            - button "Functional PLfunctionalApi, functionalGui, firefox:default, chrome:default… · 5 slots · 1 agent(s)" [ref=e217]:
+              - text: Functional PL
+              - generic [ref=e218]: functionalApi, functionalGui, firefox:default, chrome:default… · 5 slots · 1 agent(s)
+            - button "WinOPLTestperformance, functionalApi, mockServices · 5 slots · 1 agent(s)" [ref=e219]:
+              - text: WinOPLTest
+              - generic [ref=e220]: performance, functionalApi, mockServices · 5 slots · 1 agent(s)
+            - button "OPL-Aperformance, mockServices, functionalGui, sv-bridge… · 5 slots · 0 agent(s)" [ref=e221]:
+              - text: OPL-A
+              - generic [ref=e222]: performance, mockServices, functionalGui, sv-bridge… · 5 slots · 0 agent(s)
+            - button "OPL-Bperformance, functionalApi, mockServices, functionalGui… · 5 slots · 0 agent(s)" [ref=e223]:
+              - text: OPL-B
+              - generic [ref=e224]: performance, functionalApi, mockServices, functionalGui… · 5 slots · 0 agent(s)
+            - button "My-private-locationperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 0 agent(s)" [ref=e225]:
+              - text: My-private-location
+              - generic [ref=e226]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 0 agent(s)
+            - button "testperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 3 agent(s)" [ref=e227]:
+              - text: test
+              - generic [ref=e228]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 3 agent(s)
+            - button "Demo3performance · 5 slots · 2 agent(s)" [ref=e229]:
+              - text: Demo3
+              - generic [ref=e230]: performance · 5 slots · 2 agent(s)
+            - button "Demo-locationperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 0 agent(s)" [ref=e231]:
+              - text: Demo-location
+              - generic [ref=e232]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 0 agent(s)
+            - button "My-Laptopperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e233]:
+              - text: My-Laptop
+              - generic [ref=e234]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "PrivatemockServices · 1 slot · 1 agent(s)" [ref=e235]:
+              - text: Private
+              - generic [ref=e236]: mockServices · 1 slot · 1 agent(s)
+            - button "GCP Locationsv-bridge · 5 slots · 1 agent(s)" [ref=e237]:
+              - text: GCP Location
+              - generic [ref=e238]: sv-bridge · 5 slots · 1 agent(s)
+            - button "bvantari-newoplperformance, functionalApi, proxyRecorder, mockServices · 5 slots · 1 agent(s)" [ref=e239]:
+              - text: bvantari-newopl
+              - generic [ref=e240]: performance, functionalApi, proxyRecorder, mockServices · 5 slots · 1 agent(s)
+            - button "bvantari-mqoplperformance, functionalApi, proxyRecorder, mockServices · 5 slots · 1 agent(s)" [ref=e241]:
+              - text: bvantari-mqopl
+              - generic [ref=e242]: performance, functionalApi, proxyRecorder, mockServices · 5 slots · 1 agent(s)
+            - button "bvantari-mqOPL1performance, mockServices · 5 slots · 1 agent(s)" [ref=e243]:
+              - text: bvantari-mqOPL1
+              - generic [ref=e244]: performance, mockServices · 5 slots · 1 agent(s)
+            - button "SVENV_BCPsv-bridge · 1 slot · 1 agent(s)" [ref=e245]:
+              - text: SVENV_BCP
+              - generic [ref=e246]: sv-bridge · 1 slot · 1 agent(s)
+            - button "BCP_OPLperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e247]:
+              - text: BCP_OPL
+              - generic [ref=e248]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "demoperformance · 1 slot · 1 agent(s)" [ref=e249]:
+              - text: demo
+              - generic [ref=e250]: performance · 1 slot · 1 agent(s)
+            - button "demoJuneperformance, mockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e251]:
+              - text: demoJune
+              - generic [ref=e252]: performance, mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "AWSperformance, functionalApi, proxyRecorder, mockServices… · 10 slots · 4 agent(s)" [ref=e253]:
+              - text: AWS
+              - generic [ref=e254]: performance, functionalApi, proxyRecorder, mockServices… · 10 slots · 4 agent(s)
+            - button "MacBook M1performance, mockServices, functionalGui, firefox:default… · 10 slots · 0 agent(s)" [ref=e255]:
+              - text: MacBook M1
+              - generic [ref=e256]: performance, mockServices, functionalGui, firefox:default… · 10 slots · 0 agent(s)
+            - button "AWS SVperformance, mockServices, functionalGui, firefox:default… · 10 slots · 1 agent(s)" [ref=e257]:
+              - text: AWS SV
+              - generic [ref=e258]: performance, mockServices, functionalGui, firefox:default… · 10 slots · 1 agent(s)
+            - button "MQ POL 3mockServices · 5 slots · 1 agent(s)" [ref=e259]:
+              - text: MQ POL 3
+              - generic [ref=e260]: mockServices · 5 slots · 1 agent(s)
+            - button "Bens Linuxperformance · 100 slots · 1 agent(s)" [ref=e261]:
+              - text: Bens Linux
+              - generic [ref=e262]: performance · 100 slots · 1 agent(s)
+            - button "Tiago OPLperformance, proxyRecorder, mockServices, functionalGui… · 5 slots · 2 agent(s)" [ref=e263]:
+              - text: Tiago OPL
+              - generic [ref=e264]: performance, proxyRecorder, mockServices, functionalGui… · 5 slots · 2 agent(s)
+            - button "gcp-demo-blazemockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e265]:
+              - text: gcp-demo-blaze
+              - generic [ref=e266]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "GCP TDM (ma601572)tdm · 5 slots · 1 agent(s)" [ref=e267]:
+              - text: GCP TDM (ma601572)
+              - generic [ref=e268]: tdm · 5 slots · 1 agent(s)
+            - button "Bug Hunt Private Locationperformance, proxyRecorder, secretsPrivateVault, mockServices… · 4 slots · 1 agent(s)" [ref=e269]:
+              - text: Bug Hunt Private Location
+              - generic [ref=e270]: performance, proxyRecorder, secretsPrivateVault, mockServices… · 4 slots · 1 agent(s)
+            - button "GCP-OPLperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e271]:
+              - text: GCP-OPL
+              - generic [ref=e272]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "AEB OPLperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e273]:
+              - text: AEB OPL
+              - generic [ref=e274]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "blazevse-locationmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e275]:
+              - text: blazevse-location
+              - generic [ref=e276]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "teatermockServices, sv-bridge · 5 slots · 0 agent(s)" [ref=e277]:
+              - text: teater
+              - generic [ref=e278]: mockServices, sv-bridge · 5 slots · 0 agent(s)
+            - button "MSv5_OPLmockServices, sv-bridge · 5 slots · 0 agent(s)" [ref=e279]:
+              - text: MSv5_OPL
+              - generic [ref=e280]: mockServices, sv-bridge · 5 slots · 0 agent(s)
+            - button "lvntest021554-MockServicesmockServices · 5 slots · 0 agent(s)" [ref=e281]:
+              - text: lvntest021554-MockServices
+              - generic [ref=e282]: mockServices · 5 slots · 0 agent(s)
+            - button "Lokesh's Test Private LocationmockServices · 5 slots · 0 agent(s)" [ref=e283]:
+              - text: Lokesh's Test Private Location
+              - generic [ref=e284]: mockServices · 5 slots · 0 agent(s)
+            - button "Fred-OPLmockServices · 5 slots · 1 agent(s)" [ref=e285]:
+              - text: Fred-OPL
+              - generic [ref=e286]: mockServices · 5 slots · 1 agent(s)
+            - button "Koustubh-OPLmockServices · 1 slot · 1 agent(s)" [ref=e287]:
+              - text: Koustubh-OPL
+              - generic [ref=e288]: mockServices · 1 slot · 1 agent(s)
+            - button "TestEnv1performance, proxyRecorder, secretsPrivateVault, mockServices… · 4 slots · 2 agent(s)" [ref=e289]:
+              - text: TestEnv1
+              - generic [ref=e290]: performance, proxyRecorder, secretsPrivateVault, mockServices… · 4 slots · 2 agent(s)
+            - button "demosv-bridge · 1 slot · 2 agent(s)" [ref=e291]:
+              - text: demo
+              - generic [ref=e292]: sv-bridge · 1 slot · 2 agent(s)
+            - button "DevCloudmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e293]:
+              - text: DevCloud
+              - generic [ref=e294]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "Petr's MacmockServices, functionalGui, sv-bridge, firefox:default… · 5 slots · 1 agent(s)" [ref=e295]:
+              - text: Petr's Mac
+              - generic [ref=e296]: mockServices, functionalGui, sv-bridge, firefox:default… · 5 slots · 1 agent(s)
+            - button "Broadcom cloudmockServices · 5 slots · 1 agent(s)" [ref=e297]:
+              - text: Broadcom cloud
+              - generic [ref=e298]: mockServices · 5 slots · 1 agent(s)
+            - button "My OPLperformance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)" [ref=e299]:
+              - text: My OPL
+              - generic [ref=e300]: performance, functionalApi, proxyRecorder, mockServices… · 5 slots · 1 agent(s)
+            - button "TestEnv11mockServices · 1 slot · 1 agent(s)" [ref=e301]:
+              - text: TestEnv11
+              - generic [ref=e302]: mockServices · 1 slot · 1 agent(s)
+            - button "RC-envmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e303]:
+              - text: RC-env
+              - generic [ref=e304]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "Test LocationmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e305]:
+              - text: Test Location
+              - generic [ref=e306]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "BlazeVSE-BevmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e307]:
+              - text: BlazeVSE-Bev
+              - generic [ref=e308]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "Sample Private Location DemomockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e309]:
+              - text: Sample Private Location Demo
+              - generic [ref=e310]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+            - button "SE Lab-SV VSE DEMOmockServices, sv-bridge · 5 slots · 1 agent(s)" [ref=e311]:
+              - text: SE Lab-SV VSE DEMO
+              - generic [ref=e312]: mockServices, sv-bridge · 5 slots · 1 agent(s)
+          - button "+ New location" [ref=e34]
+      - generic [ref=e35]:
+        - generic [ref=e36]:
+          - generic [ref=e37]: "3"
+          - generic [ref=e38]:
+            - heading "Agent (ship)" [level=2] [ref=e39]
+            - paragraph [ref=e40]: The agent identity this deployment runs as; its AUTH_TOKEN is fetched automatically on download.
+        - generic [ref=e42]:
+          - generic [ref=e44]:
+            - text: Create an agent
+            - textbox "Create an agent" [ref=e45]:
+              - /placeholder: e.g. k8s-prod-cluster
+          - button "Create" [disabled] [ref=e46]
+      - generic [ref=e47]:
+        - generic [ref=e48]:
+          - generic [ref=e49]: "4"
+          - generic [ref=e50]:
+            - heading "Configure" [level=2] [ref=e51]
+            - paragraph [ref=e52]: Everything re-renders the preview live. Presets give a starting point.
+        - generic [ref=e53]:
+          - generic [ref=e54]:
+            - generic [ref=e55]:
+              - text: Start from preset
+              - combobox "Start from preset" [ref=e56]:
+                - option "—" [selected]
+                - option "k8s-vanilla"
+                - option "openshift-private-registry"
+                - option "openshift-restricted"
+            - button "Export profile" [ref=e57]
+            - generic [ref=e58] [cursor=pointer]: Import profile
+          - generic [ref=e59]:
+            - generic [ref=e60]:
+              - text: Platform
+              - combobox "Platform" [ref=e61]:
+                - option "OpenShift (SCC-friendly)" [selected]
+                - option "Kubernetes (pinned UID)"
+            - generic [ref=e62]:
+              - text: Namespace
+              - textbox "Namespace" [ref=e63]: blazemeter
+            - generic [ref=e64]:
+              - text: Service type
+              - combobox "Service type NODEPORT is BlazeMeter's default but often disallowed" [ref=e65]:
+                - option "CLUSTERIP" [selected]
+                - option "NODEPORT"
+              - text: NODEPORT is BlazeMeter's default but often disallowed
+          - generic [ref=e66]:
+            - generic [ref=e67] [cursor=pointer]:
+              - checkbox "AUTH_TOKEN in a Secret uncheck = simplified ConfigMap variant" [checked] [ref=e68]
+              - generic [ref=e69]:
+                - text: AUTH_TOKEN in a Secret
+                - generic [ref=e70]: uncheck = simplified ConfigMap variant
+            - generic [ref=e71] [cursor=pointer]:
+              - checkbox "Read-only nodes ClusterRole optional; not needed for perf tests" [ref=e72]
+              - generic [ref=e73]:
+                - text: Read-only nodes ClusterRole
+                - generic [ref=e74]: optional; not needed for perf tests
+            - generic [ref=e75] [cursor=pointer]:
+              - checkbox "Include GUI/mock images for functionalGui / mockServices locations" [ref=e76]
+              - generic [ref=e77]:
+                - text: Include GUI/mock images
+                - generic [ref=e78]: for functionalGui / mockServices locations
+          - group [ref=e79]:
+            - generic "Private registry" [ref=e80] [cursor=pointer]
+          - group [ref=e81]:
+            - 'generic "Egress: proxy & corporate CA" [ref=e82] [cursor=pointer]'
+          - group [ref=e83]:
+            - generic "Scheduling & engine sizing" [ref=e84] [cursor=pointer]
+      - generic [ref=e85]:
+        - generic [ref=e86]:
+          - generic [ref=e87]: "5"
+          - heading "Download & verify" [level=2] [ref=e89]
+        - generic [ref=e90]:
+          - generic [ref=e91]:
+            - button "⬇ Download bundle (.zip)" [disabled] [ref=e92]
+            - generic [ref=e93]: manifests + README; AUTH_TOKEN fetched on download
+          - generic [ref=e96] [cursor=pointer]:
+            - checkbox "Watch agent status polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats" [ref=e97]
+            - generic [ref=e98]:
+              - text: Watch agent status
+              - generic [ref=e99]: polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats
+    - generic [ref=e100]: pick a location & agent to preview manifests

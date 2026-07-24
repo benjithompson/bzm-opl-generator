@@ -104,6 +104,59 @@ def test_cluster_rbac_optional():
     assert "get, list, watch" in files["bzm_clusterrole.yaml"] or "verbs: [get, list, watch]" in files["bzm_clusterrole.yaml"]
 
 
+def test_tolerations_node_selector_in_pod_and_configmap():
+    tol = [{"key": "lifecycle", "operator": "Equal", "value": "spot", "effect": "NoSchedule"}]
+    files = gen.generate(FACTS, {"namespace": "ns1", "tolerations": tol,
+                                 "node_selector": {"pool": "loadtest"}})
+    _all_yaml_parse(files)
+    d = yaml.safe_load(files["bzm_deployment.yaml"])
+    spec = d["spec"]["template"]["spec"]
+    assert spec["tolerations"] == tol
+    assert spec["nodeSelector"] == {"pool": "loadtest"}
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert json.loads(cm["KUBERNETES_TOLERATIONS_JSON"]) == tol
+    assert json.loads(cm["KUBERNETES_NODE_SELECTOR_JSON"]) == {"pool": "loadtest"}
+
+
+def test_ca_bundle_configmap_mount_and_envs():
+    pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle": pem})
+    _all_yaml_parse(files)
+    assert "bzm_cacerts.yaml" in files
+    cacm = yaml.safe_load(files["bzm_cacerts.yaml"])
+    assert cacm["data"]["ca-bundle.crt"].strip() == pem
+    d = yaml.safe_load(files["bzm_deployment.yaml"])
+    spec = d["spec"]["template"]["spec"]
+    assert spec["volumes"][0]["configMap"]["name"] == "blazemeter-cacerts"
+    assert spec["containers"][0]["volumeMounts"][0]["mountPath"] == "/var/cm"
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["REQUESTS_CA_BUNDLE"] == "/var/cm/ca-bundle.crt"
+    assert cm["KUBERNETES_CA_BUNDLE_MOUNT"] == (
+        "REQUESTS_CA_BUNDLE=blazemeter-cacerts=ca-bundle.crt:"
+        "AWS_CA_BUNDLE=blazemeter-cacerts=ca-bundle.crt")
+
+
+def test_engine_resource_limits():
+    files = gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "2",
+                                 "engine_mem_limit": "8Gi",
+                                 "engine_ephemeral_limit_mb": 40960})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "2"
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "8Gi"
+    assert cm["KUBERNETES_LIMITS_EPHEMERAL_STORAGE"] == "40960"
+
+
+def test_mirror_script_with_private_registry():
+    files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": "reg.local/bzm"})
+    sh = files["bzm-opl-image-mirror.sh"]
+    assert sh.startswith("#!/usr/bin/env bash")
+    assert "docker pull --platform linux/amd64 gcr.io/verdant-bulwark-278/blazemeter/v4:2.4.444-reduced" in sh
+    assert "docker push reg.local/bzm/crane:3.7.55" in sh
+    assert "service-mock" not in sh  # performance-only by default
+    files2 = gen.generate(FACTS, {"namespace": "ns1"})
+    assert "bzm-opl-image-mirror.sh" not in files2
+
+
 def test_multi_ship_requires_ship_id():
     facts = dict(FACTS, ships=FACTS["ships"] * 2)
     with pytest.raises(ValueError):

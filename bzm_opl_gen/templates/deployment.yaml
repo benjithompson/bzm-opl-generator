@@ -25,7 +25,7 @@ spec:
         ship_id: "${SHIP_ID}"
     spec:
       serviceAccountName: crane
-${PULL_SECRETS_BLOCK}      restartPolicy: Always
+${SCHEDULING_BLOCK}${PULL_SECRETS_BLOCK}      restartPolicy: Always
       terminationGracePeriodSeconds: 30
       securityContext:
         seccompProfile:
@@ -64,4 +64,4 @@ ${SECURITY_CONTEXT_BLOCK}
           envFrom:
             - configMapRef:
                 name: blazemeter-configmap
-${SECRET_REF_BLOCK}
+${SECRET_REF_BLOCK}${VOLUME_MOUNTS_BLOCK}${VOLUMES_BLOCK}

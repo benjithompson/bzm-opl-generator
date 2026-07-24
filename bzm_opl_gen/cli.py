@@ -110,6 +110,17 @@ def cmd_generate(a):
         opts["cluster_rbac"] = True
     if a.gui:
         opts["gui"] = True
+    if a.tolerations:
+        opts["tolerations"] = json.loads(a.tolerations)
+    if a.node_selector:
+        opts["node_selector"] = json.loads(a.node_selector)
+    if a.ca_bundle:
+        with open(a.ca_bundle) as fh:
+            opts["ca_bundle"] = fh.read()
+    for key in ("engine_cpu_limit", "engine_mem_limit"):
+        v = getattr(a, key, None)
+        if v is not None:
+            opts[key] = v
     if a.api_key and not opts.get("auth_token"):
         ship_id = opts.get("ship_id") or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
         if ship_id:
@@ -160,6 +171,15 @@ def cmd_livetest(a):
                       cluster=a.cluster, timeout=a.timeout, keep=a.keep,
                       facts=f, local_registry=a.local_registry)
     sys.exit(0 if ok else 1)
+
+
+def cmd_ui(a):
+    try:
+        from . import server
+    except ImportError:
+        sys.exit("UI dependencies missing -- pip install 'bzm-opl-gen[ui]'")
+    print(f"bzm-opl-gen ui -> http://127.0.0.1:{a.port}  (Ctrl-C to stop)")
+    server.main(port=a.port, open_browser=not a.no_browser, api_key_path=a.api_key)
 
 
 def main():
@@ -213,6 +233,12 @@ def main():
     g.add_argument("--pull-secret", dest="pull_secret")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
     g.add_argument("--no-secret", action="store_true", help="AUTH_TOKEN in ConfigMap")
+    g.add_argument("--tolerations", help='JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
+    g.add_argument("--node-selector", dest="node_selector", help='JSON object, e.g. \'{"pool":"loadtest"}\'')
+    g.add_argument("--ca-bundle", dest="ca_bundle", metavar="PEM_FILE",
+                   help="corporate CA bundle to mount into crane + engines")
+    g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
+    g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("--gui", action="store_true", help="include GUI-functional images")
     g.add_argument("-o", "--output", default="out")
@@ -244,6 +270,12 @@ def main():
                         "into it, and make minikube trust it (generate manifests "
                         "with --private-registry host.minikube.internal:PORT)")
     t.set_defaults(fn=cmd_livetest)
+
+    u = sub.add_parser("ui", help="start the local web UI")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--api-key", help="preload this api-key.json")
+    u.add_argument("--no-browser", action="store_true")
+    u.set_defaults(fn=cmd_ui)
 
     a = p.parse_args()
     a.fn(a)
