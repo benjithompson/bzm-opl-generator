@@ -3,6 +3,7 @@
 import json
 import os
 from string import Template
+from urllib.parse import quote
 
 from .facts import select_images
 
@@ -18,12 +19,19 @@ DEFAULT_OPTIONS = {
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
-    "proxy": None,                   # {"http": ..., "https": ..., "no_proxy": ...}
+    # {"http", "https", "no_proxy", "username", "password"} -- credentials are
+    # embedded in the proxy URL (user:pass@host, per BlazeMeter docs) and the
+    # URL moves into the Secret when use_secret is on.
+    "proxy": None,
     "run_as_user": 1337,             # k8s platform only (openshift: SCC assigns)
     # Real-cluster scheduling / trust / sizing (all optional):
     "tolerations": None,             # k8s toleration list -> crane pod + engines
     "node_selector": None,           # {"label": "value"} -> crane pod + engines
-    "ca_bundle": None,               # PEM text -> ConfigMap mounted into crane
+    # CA trust -- pick ONE mode:
+    "ca_bundle": None,               # inline PEM -> generator creates the ConfigMap
+    "ca_existing_configmap": None,   # name of a ConfigMap the platform team owns/rotates
+    "ca_configmap_key": None,        # bundle file key within it (default ca-bundle.crt)
+    "ca_openshift_inject": False,    # labeled empty CM; OpenShift injects cluster trust
     "engine_cpu_limit": None,        # e.g. "2" -> KUBERNETES_RESOURCES_LIMITS_CPU
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
@@ -33,6 +41,53 @@ DEFAULT_OPTIONS = {
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
 CA_CONFIGMAP = "blazemeter-cacerts"
+
+
+def _ca_cfg(o):
+    """Resolve the CA-trust mode to {cm, key, mode} or None.
+
+    Ownership model:
+      existing -- the platform/security team owns and rotates a trust-bundle
+                  ConfigMap in the namespace (e.g. written by trust-manager);
+                  we only reference it.
+      inline   -- the app team owns the PEM; the generator creates the ConfigMap.
+      inject   -- OpenShift-only: we emit an empty ConfigMap labeled
+                  config.openshift.io/inject-trusted-cabundle=true and the
+                  cluster network operator injects ca-bundle.crt into it.
+    """
+    modes = [("inline", bool(o["ca_bundle"])),
+             ("existing", bool(o["ca_existing_configmap"])),
+             ("inject", bool(o["ca_openshift_inject"]))]
+    active = [m for m, on in modes if on]
+    if len(active) > 1:
+        raise ValueError("choose one CA mode: ca_bundle (inline PEM) | "
+                         "ca_existing_configmap | ca_openshift_inject")
+    if not active:
+        return None
+    mode = active[0]
+    if mode == "existing":
+        return {"cm": o["ca_existing_configmap"],
+                "key": o["ca_configmap_key"] or CA_FILENAME, "mode": mode}
+    # inline + inject both use our own ConfigMap; inject's key is fixed to
+    # ca-bundle.crt (the key OpenShift writes into labeled ConfigMaps).
+    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
+
+
+def _proxy_url(url, p):
+    """Embed credentials in the proxy URL (http://user:pass@host:port) --
+    BlazeMeter has no separate proxy-auth env vars; the URL carries them."""
+    user = p.get("username")
+    if not url or not user:
+        return url
+    userinfo = quote(user, safe="")
+    if p.get("password"):
+        userinfo += ":" + quote(p["password"], safe="")
+    scheme, sep, rest = url.partition("://")
+    return f"{scheme}{sep}{userinfo}@{rest}" if sep else f"{userinfo}@{url}"
+
+
+def _proxy_has_creds(o):
+    return bool(o["proxy"] and o["proxy"].get("username"))
 
 
 def _tpl(name):
@@ -105,10 +160,16 @@ def _configmap(facts, o):
         ]
     if o["proxy"]:
         p = o["proxy"]
-        if p.get("http"):
-            lines.append(f"  HTTP_PROXY: {p['http']}")
-        if p.get("https"):
-            lines.append(f"  HTTPS_PROXY: {p['https']}")
+        if _proxy_has_creds(o) and o["use_secret"]:
+            lines.append("  # HTTP(S)_PROXY embed credentials -> kept in blazemeter-secret.")
+        else:
+            if _proxy_has_creds(o):
+                lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
+                lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
+            if p.get("http"):
+                lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
+            if p.get("https"):
+                lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
         lines.append(f"  NO_PROXY: {p.get('no_proxy', 'kubernetes.default,127.0.0.1,localhost')}")
     if o["tolerations"]:
         lines += [
@@ -125,13 +186,23 @@ def _configmap(facts, o):
         lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_request_mb']}\"")
     if o["engine_ephemeral_limit_mb"]:
         lines.append(f"  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_limit_mb']}\"")
-    if o["ca_bundle"]:
+    ca = _ca_cfg(o)
+    if ca:
+        ca_comment = {
+            "inline": "  # Corporate CA bundle (generator-created ConfigMap).",
+            "existing": f"  # CA bundle from existing ConfigMap '{ca['cm']}' -- the platform",
+            "inject": "  # OpenShift cluster trust bundle (operator-injected ConfigMap).",
+        }[ca["mode"]]
+        lines.append(ca_comment)
+        if ca["mode"] == "existing":
+            lines.append("  # team owns and rotates it; these manifests only reference it.")
+        path = f"{CA_MOUNT_PATH}/{ca['key']}"
         lines += [
-            "  # Corporate CA bundle: mounted into crane; engines get the same",
-            "  # ConfigMap mounted via KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmap=file).",
-            f"  REQUESTS_CA_BUNDLE: {CA_MOUNT_PATH}/{CA_FILENAME}",
-            f"  AWS_CA_BUNDLE: {CA_MOUNT_PATH}/{CA_FILENAME}",
-            f"  KUBERNETES_CA_BUNDLE_MOUNT: \"REQUESTS_CA_BUNDLE={CA_CONFIGMAP}={CA_FILENAME}:AWS_CA_BUNDLE={CA_CONFIGMAP}={CA_FILENAME}\"",
+            "  # Mounted into crane; engines get the same ConfigMap mounted via",
+            "  # KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).",
+            f"  REQUESTS_CA_BUNDLE: {path}",
+            f"  AWS_CA_BUNDLE: {path}",
+            f"  KUBERNETES_CA_BUNDLE_MOUNT: \"REQUESTS_CA_BUNDLE={ca['cm']}={ca['key']}:AWS_CA_BUNDLE={ca['cm']}={ca['key']}\"",
         ]
     return "\n".join(lines) + "\n"
 
@@ -155,6 +226,19 @@ def _scheduling_block(o):
 
 
 def _ca_configmap(facts, o):
+    ca = _ca_cfg(o)
+    if ca["mode"] == "inject":
+        return f"""kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {CA_CONFIGMAP}
+  namespace: {o['namespace']}
+  labels:
+    # OpenShift's network operator injects the cluster-wide trust bundle
+    # (proxy/custom CAs configured at cluster level) as ca-bundle.crt.
+    # Nobody hand-manages PEMs; rotation is the cluster's job.
+    config.openshift.io/inject-trusted-cabundle: "true"
+"""
     pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
     return f"""kind: ConfigMap
 apiVersion: v1
@@ -165,6 +249,18 @@ data:
   {CA_FILENAME}: |
 {pem}
 """
+
+
+def _proxy_secret_block(o):
+    if not (_proxy_has_creds(o) and o["use_secret"]):
+        return ""
+    p = o["proxy"]
+    lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
+    if p.get("http"):
+        lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
+    if p.get("https"):
+        lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
+    return "\n".join(lines) + "\n"
 
 
 def _mirror_script(facts, o):
@@ -236,11 +332,13 @@ def generate(facts, options):
                 f"({[s['id'] for s in ships]})"
             )
 
+    ca = _ca_cfg(o)
     sub = {
         "NAMESPACE": o["namespace"],
         "HARBOR_ID": facts["harbor_id"],
         "SHIP_ID": o["ship_id"],
         "AUTH_TOKEN": o["auth_token"],
+        "PROXY_SECRET_BLOCK": _proxy_secret_block(o),
         "CRANE_IMAGE": _crane_image(facts, o),
         "PULL_SECRETS_BLOCK": (
             f"      imagePullSecrets:\n        - name: {o['pull_secret']}\n"
@@ -257,14 +355,14 @@ def generate(facts, options):
             f"            - name: cacerts\n"
             f"              mountPath: {CA_MOUNT_PATH}\n"
             f"              readOnly: true\n"
-            if o["ca_bundle"] else ""
+            if ca else ""
         ),
         "VOLUMES_BLOCK": (
             "      volumes:\n"
             f"        - name: cacerts\n"
             f"          configMap:\n"
-            f"            name: {CA_CONFIGMAP}\n"
-            if o["ca_bundle"] else ""
+            f"            name: {ca['cm']}\n"
+            if ca else ""
         ),
     }
 
@@ -280,7 +378,7 @@ def generate(facts, options):
     if o["cluster_rbac"]:
         out["bzm_clusterrole.yaml"] = _tpl("clusterrole.yaml").substitute(sub)
         out["bzm_clusterrolebinding.yaml"] = _tpl("clusterrolebinding.yaml").substitute(sub)
-    if o["ca_bundle"]:
+    if ca and ca["mode"] in ("inline", "inject"):
         out["bzm_cacerts.yaml"] = _ca_configmap(facts, o)
     if o["private_registry"]:
         out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)

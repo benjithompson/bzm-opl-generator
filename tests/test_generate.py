@@ -146,6 +146,72 @@ def test_ca_bundle_configmap_mount_and_envs():
         "AWS_CA_BUNDLE=blazemeter-cacerts=ca-bundle.crt")
 
 
+def test_ca_existing_configmap_referenced_not_created():
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "ca_existing_configmap": "corp-trust",
+                                 "ca_configmap_key": "trust.pem"})
+    _all_yaml_parse(files)
+    assert "bzm_cacerts.yaml" not in files  # platform team owns the ConfigMap
+    d = yaml.safe_load(files["bzm_deployment.yaml"])
+    spec = d["spec"]["template"]["spec"]
+    assert spec["volumes"][0]["configMap"]["name"] == "corp-trust"
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["REQUESTS_CA_BUNDLE"] == "/var/cm/trust.pem"
+    assert cm["KUBERNETES_CA_BUNDLE_MOUNT"] == (
+        "REQUESTS_CA_BUNDLE=corp-trust=trust.pem:AWS_CA_BUNDLE=corp-trust=trust.pem")
+
+
+def test_ca_openshift_inject():
+    files = gen.generate(FACTS, {"namespace": "ns1", "ca_openshift_inject": True})
+    _all_yaml_parse(files)
+    cacm = yaml.safe_load(files["bzm_cacerts.yaml"])
+    assert cacm["metadata"]["labels"]["config.openshift.io/inject-trusted-cabundle"] == "true"
+    assert "data" not in cacm  # the cluster operator fills in ca-bundle.crt
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["REQUESTS_CA_BUNDLE"] == "/var/cm/ca-bundle.crt"
+
+
+def test_ca_modes_mutually_exclusive():
+    with pytest.raises(ValueError):
+        gen.generate(FACTS, {"namespace": "ns1", "ca_bundle": "PEM",
+                             "ca_existing_configmap": "corp-trust"})
+
+
+def test_proxy_plain_in_configmap():
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "proxy": {"http": "http://proxy:3128",
+                                           "https": "http://proxy:3128"}})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["HTTP_PROXY"] == "http://proxy:3128"
+    assert cm["NO_PROXY"] == "kubernetes.default,127.0.0.1,localhost"
+    assert "HTTP_PROXY" not in files["bzm_secret.yaml"]
+
+
+def test_proxy_credentials_move_to_secret():
+    files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "tok",
+                                 "proxy": {"http": "http://proxy:3128",
+                                           "https": "http://proxy:3128",
+                                           "username": "user@corp",
+                                           "password": "p:ss@w"}})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert "HTTP_PROXY" not in cm          # creds never land in the ConfigMap
+    assert cm["NO_PROXY"] == "kubernetes.default,127.0.0.1,localhost"
+    sec = yaml.safe_load(files["bzm_secret.yaml"])["stringData"]
+    assert sec["HTTP_PROXY"] == "http://user%40corp:p%3Ass%40w@proxy:3128"
+    assert sec["HTTPS_PROXY"] == "http://user%40corp:p%3Ass%40w@proxy:3128"
+
+
+def test_proxy_credentials_no_secret_warns_in_configmap():
+    files = gen.generate(FACTS, {"namespace": "ns1", "use_secret": False,
+                                 "auth_token": "tok",
+                                 "proxy": {"http": "http://proxy:3128",
+                                           "username": "u", "password": "p"}})
+    cm_text = files["bzm_configmap.yaml"]
+    assert "WARNING: proxy credentials" in cm_text
+    cm = yaml.safe_load(cm_text)["data"]
+    assert cm["HTTP_PROXY"] == "http://u:p@proxy:3128"
+
+
 def test_engine_resource_limits():
     files = gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "2",
                                  "engine_mem_limit": "8Gi",

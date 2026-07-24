@@ -102,7 +102,8 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
-| `proxy` | – | HTTP(S)_PROXY / NO_PROXY env |
+| `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
+| `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
 
 Images are selected automatically from the location's enabled funcIds:
 performance engines always ship; browser/grid (functionalGui), mock-service

@@ -40,6 +40,7 @@ export default function App() {
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
+  type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -162,6 +163,25 @@ export default function App() {
   };
 
   const openshift = options.platform === "openshift";
+
+  const proxyOpt = (options.proxy ?? {}) as Record<string, string | undefined>;
+  const setProxy = (k: string, v: string) => {
+    const p = { ...proxyOpt, [k]: v || undefined };
+    set("proxy", Object.values(p).some(Boolean) ? p : null);
+  };
+
+  // CA trust is one-of: existing ConfigMap | inline PEM | OpenShift injection.
+  const caMode: CaMode = options.ca_existing_configmap != null ? "existing"
+    : options.ca_bundle != null ? "inline"
+    : options.ca_openshift_inject ? "inject" : "none";
+  const setCaMode = (m: CaMode) => setOptions((o) => ({
+    ...o,
+    ca_existing_configmap: m === "existing" ? (o.ca_existing_configmap ?? "") : null,
+    ca_configmap_key: m === "existing" ? o.ca_configmap_key : null,
+    ca_bundle: m === "inline" ? (o.ca_bundle ?? "") : null,
+    ca_openshift_inject: m === "inject",
+  }));
+
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
 
@@ -482,38 +502,99 @@ export default function App() {
               </details>
 
               <details className="border border-slate-200 rounded-md"
-                open={!!(options.proxy || options.ca_bundle)}>
+                open={!!options.proxy}>
                 <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
-                  Egress: proxy & corporate CA
+                  HTTP(S) proxy
                 </summary>
                 <div className="p-3 pt-1 space-y-2">
                   <div className="grid grid-cols-2 gap-2">
                     <Field label="HTTP proxy">
                       <TextInput mono placeholder="http://proxy:3128"
-                        value={String((options.proxy as Record<string, string>)?.http ?? "")}
-                        onChange={(v) => set("proxy", v || (options.proxy as Record<string, string>)?.https
-                          ? { ...(options.proxy as object), http: v || undefined } : null)} />
+                        value={String(proxyOpt.http ?? "")}
+                        onChange={(v) => setProxy("http", v)} />
                     </Field>
                     <Field label="HTTPS proxy">
                       <TextInput mono placeholder="http://proxy:3128"
-                        value={String((options.proxy as Record<string, string>)?.https ?? "")}
-                        onChange={(v) => set("proxy", v || (options.proxy as Record<string, string>)?.http
-                          ? { ...(options.proxy as object), https: v || undefined } : null)} />
+                        value={String(proxyOpt.https ?? "")}
+                        onChange={(v) => setProxy("https", v)} />
+                    </Field>
+                    <Field label="Username" hint="optional — proxy auth">
+                      <TextInput mono value={String(proxyOpt.username ?? "")}
+                        onChange={(v) => setProxy("username", v)} />
+                    </Field>
+                    <Field label="Password">
+                      <TextInput mono value={String(proxyOpt.password ?? "")}
+                        onChange={(v) => setProxy("password", v)} />
                     </Field>
                   </div>
                   <Field label="NO_PROXY">
                     <TextInput mono placeholder="kubernetes.default,127.0.0.1,localhost"
-                      value={String((options.proxy as Record<string, string>)?.no_proxy ?? "")}
-                      onChange={(v) => options.proxy &&
-                        set("proxy", { ...(options.proxy as object), no_proxy: v })} />
+                      value={String(proxyOpt.no_proxy ?? "")}
+                      onChange={(v) => setProxy("no_proxy", v)} />
                   </Field>
-                  <Field label="CA bundle (PEM)"
-                    hint="mounted into crane + engines via KUBERNETES_CA_BUNDLE_MOUNT (TLS-intercepting proxies)">
-                    <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
-                      placeholder="-----BEGIN CERTIFICATE-----"
-                      value={String(options.ca_bundle ?? "")}
-                      onChange={(e) => set("ca_bundle", e.target.value || null)} />
-                  </Field>
+                  <p className="text-[11px] text-slate-400">
+                    BlazeMeter has no separate proxy-auth env vars — credentials are
+                    URL-encoded into the proxy URL (user:pass@host). With
+                    "AUTH_TOKEN in a Secret" on, the credentialed proxy URLs move
+                    into the Secret instead of the ConfigMap.
+                  </p>
+                </div>
+              </details>
+
+              <details className="border border-slate-200 rounded-md"
+                open={caMode !== "none"}>
+                <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
+                  Custom CA trust (TLS interception)
+                </summary>
+                <div className="p-3 pt-1 space-y-2">
+                  <div className="space-y-1.5 text-sm">
+                    {([
+                      ["none", "None", "cluster trusts BlazeMeter's public certs already"],
+                      ["existing", "Reference an existing ConfigMap (recommended)",
+                        "your platform/security team owns and rotates the trust bundle (e.g. via trust-manager); manifests only reference it"],
+                      ["inline", "Paste PEM — generator creates the ConfigMap",
+                        "you own the bundle; rotation means regenerating and re-applying"],
+                      ["inject", "OpenShift cluster trust injection",
+                        "empty ConfigMap labeled inject-trusted-cabundle; the cluster injects and rotates ca-bundle.crt — OpenShift only"],
+                    ] as [CaMode, string, string][]).map(([m, label, hint]) => (
+                      <label key={m} className="flex items-start gap-2 cursor-pointer select-none">
+                        <input type="radio" name="ca-mode" className="mt-1 accent-bzm"
+                          checked={caMode === m} onChange={() => setCaMode(m)} />
+                        <span>{label}
+                          <span className="block text-[11px] text-slate-400">{hint}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {caMode === "existing" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Field label="ConfigMap name">
+                        <TextInput mono placeholder="corp-trust-bundle"
+                          value={String(options.ca_existing_configmap ?? "")}
+                          onChange={(v) => set("ca_existing_configmap", v)} />
+                      </Field>
+                      <Field label="Bundle key" hint="file key inside the ConfigMap">
+                        <TextInput mono placeholder="ca-bundle.crt"
+                          value={String(options.ca_configmap_key ?? "")}
+                          onChange={(v) => set("ca_configmap_key", v || null)} />
+                      </Field>
+                    </div>
+                  )}
+                  {caMode === "inline" && (
+                    <Field label="CA bundle (PEM)">
+                      <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
+                        placeholder="-----BEGIN CERTIFICATE-----"
+                        value={String(options.ca_bundle ?? "")}
+                        onChange={(e) => set("ca_bundle", e.target.value)} />
+                    </Field>
+                  )}
+                  {caMode !== "none" && (
+                    <p className="text-[11px] text-slate-400">
+                      Mounted read-only at /var/cm in crane; engines get the same
+                      ConfigMap via KUBERNETES_CA_BUNDLE_MOUNT, and
+                      REQUESTS_CA_BUNDLE / AWS_CA_BUNDLE point at it.
+                    </p>
+                  )}
                 </div>
               </details>
 

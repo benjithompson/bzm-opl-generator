@@ -115,6 +115,22 @@ def cmd_generate(a):
     if a.ca_bundle:
         with open(a.ca_bundle) as fh:
             opts["ca_bundle"] = fh.read()
+    if a.ca_configmap:
+        name, _, key = a.ca_configmap.partition(":")
+        opts["ca_existing_configmap"] = name
+        if key:
+            opts["ca_configmap_key"] = key
+    if a.ca_openshift_inject:
+        opts["ca_openshift_inject"] = True
+    proxy = dict(opts.get("proxy") or {})
+    for flag, key in (("proxy_http", "http"), ("proxy_https", "https"),
+                      ("no_proxy", "no_proxy"), ("proxy_user", "username"),
+                      ("proxy_pass", "password")):
+        v = getattr(a, flag, None)
+        if v is not None:
+            proxy[key] = v
+    if proxy:
+        opts["proxy"] = proxy
     for key in ("engine_cpu_limit", "engine_mem_limit"):
         v = getattr(a, key, None)
         if v is not None:
@@ -235,7 +251,25 @@ def main():
     g.add_argument("--tolerations", help='JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
     g.add_argument("--node-selector", dest="node_selector", help='JSON object, e.g. \'{"pool":"loadtest"}\'')
     g.add_argument("--ca-bundle", dest="ca_bundle", metavar="PEM_FILE",
-                   help="corporate CA bundle to mount into crane + engines")
+                   help="inline CA mode: PEM file -> generator creates the ConfigMap")
+    g.add_argument("--ca-configmap", dest="ca_configmap", metavar="NAME[:KEY]",
+                   help="reference an existing trust-bundle ConfigMap the platform "
+                        "team owns (key defaults to ca-bundle.crt)")
+    g.add_argument("--ca-openshift-inject", dest="ca_openshift_inject",
+                   action="store_true",
+                   help="OpenShift: emit a labeled ConfigMap; the cluster injects "
+                        "its trust bundle (no PEM handling)")
+    g.add_argument("--proxy-http", dest="proxy_http", metavar="URL",
+                   help="HTTP_PROXY, e.g. http://proxy:3128")
+    g.add_argument("--proxy-https", dest="proxy_https", metavar="URL",
+                   help="HTTPS_PROXY (http:// or https:// URL)")
+    g.add_argument("--no-proxy", dest="no_proxy", metavar="LIST",
+                   help="NO_PROXY comma list (default kubernetes.default,127.0.0.1,localhost)")
+    g.add_argument("--proxy-user", dest="proxy_user",
+                   help="optional proxy username -- embedded in the proxy URL")
+    g.add_argument("--proxy-pass", dest="proxy_pass",
+                   help="optional proxy password -- embedded in the proxy URL; "
+                        "lands in the Secret unless --no-secret")
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
