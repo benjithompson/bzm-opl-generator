@@ -67,6 +67,12 @@ bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
 #     (starts a registry:2 container, mirrors the location's images into it,
 #      starts minikube trusting it, deploys, verifies agent online, tears down)
 
+# 3c. …and the proxy + custom-CA path, on top of it. --local-proxy needs no
+#     generate flags: it regenerates out/ from out/profile.json with the
+#     proxy env + the proxy's own CA once the container is up.
+bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
+    --cluster minikube --local-registry 5001 --local-proxy
+
 # 4. live-test: deploy + verify the agent reports online in BlazeMeter
 bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
     --cluster kind          # disposable smoke cluster
@@ -105,6 +111,11 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
 | `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
 
+`generate` also writes `out/profile.json` — the fully resolved options, minus
+`auth_token` (re-fetched from the API, so the file is safe to commit or hand
+over). Replay it with `generate --profile out/profile.json`; `livetest
+--local-proxy` reads it to re-render the manifests with the rig's proxy and CA.
+
 Images are selected automatically from the location's enabled funcIds:
 performance engines always ship; browser/grid (functionalGui), mock-service
 (mockServices), SV bridge (sv-bridge), and recorder (proxyRecorder) images only
@@ -118,6 +129,77 @@ pull, egress to `*.blazemeter.com`, and credentials. `--keep` skips teardown;
 `--cluster kind` creates/deletes a disposable `bzm-opl-test` cluster (crane
 comes online; engines won't fit laptop resources — use `--cluster current`
 against a real cluster for full engine validation).
+
+### Reproducing the hard customer environments locally
+
+Two optional rigs turn a laptop into the awkward network a customer has, and
+are torn down with the cluster.
+
+| flag | container | what it proves |
+|---|---|---|
+| `--local-registry [PORT]` (5001) | `registry:2`, published on the host, pulled via `host.minikube.internal` | air-gapped pulls: `DOCKER_REGISTRY`, `IMAGE_OVERRIDES`, auto-update off |
+| `--local-proxy` | `mitmproxy`, joined to the cluster's own docker network | proxy egress **and** custom CA trust |
+
+`--local-proxy` is deliberately hostile: mitmproxy terminates TLS with its own
+CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDLE`
+/ CA ConfigMap actually lands in the crane process. The rig
+
+1. starts the cluster, then mitmdump (authenticated by default —
+   `--proxy-auth user:pass`, or `none` for an open proxy) **on the cluster's
+   docker network**, addressed by container IP,
+2. reads the mitm CA out of the container and appends it to the public roots,
+3. CONNECTs through the proxy from inside the node and requires the attempt to
+   appear in the proxy's *own* log before going further,
+4. **regenerates** `out/` from `out/profile.json` with `proxy` + inline
+   `ca_bundle` merged in (so the manifests under test are generator output, not
+   a hand-patched Deployment),
+5. deploys, waits for the agent to come online, and then requires
+   `blazemeter.com` lines in the proxy log — online *without* them means the
+   agent bypassed the proxy, which fails the test.
+
+### What a pass actually proves
+
+"Agent online" is a weak claim on its own — plenty of wrong configurations still
+reach it. The run therefore also:
+
+- **blackholes the public registries** on the node (`127.0.0.1 gcr.io`, plus a
+  purge of cached copies) whenever `--local-registry` is on, so an image
+  `IMAGE_OVERRIDES` forgot to rewrite is an ImagePullBackOff here rather than a
+  silent fallback that only breaks in the customer's air-gapped cluster;
+- **runs a negative control first** — the same deploy with the CA stripped,
+  required to fail with `CERTIFICATE_VERIFY_FAILED` before the real run is
+  trusted. A rig that cannot fail proves nothing. Skip with
+  `--skip-negative-control` (saves ~2 min);
+- **reads the deployed objects back** and checks the generator's promises:
+  `AUTH_TOKEN` not in the ConfigMap, proxy credentials not readable there,
+  `AUTO_KUBERNETES_UPDATE=false` under a private registry, `IMAGE_OVERRIDES`
+  covering every image the location's funcIds need, every running image coming
+  from the private registry, and the CA bundle actually present and parseable
+  *inside the crane pod* (not merely mounted);
+- **reads the proxy log** for what online-ness cannot show: any `407` (the
+  embedded credentials were rejected) and any Kubernetes API traffic that
+  `NO_PROXY` should have kept out. Lines the negative control produced are
+  excluded from both checks.
+
+Any of these failing turns a green run red, with the specific claim printed.
+
+Why the CONNECT probe, and why the cluster network rather than a published port: a host
+port belongs to whatever already claimed it (an ssh tunnel, a stray Java
+process), and the node then reaches *that* instead. The symptom is a plausible
+lie — the agent gets `403 Forbidden` from a proxy that was never yours, while
+your proxy's log stays empty.
+
+Notes: the CA bundle is mitm CA + public roots, because replacing the trust
+store outright is not what a corporate bundle does. Image pulls come from the
+kubelet, which ignores the pod's proxy env — that's why the registry rig is
+reachable directly. mitmproxy is pinned to `11.1.3`; 12+ dies with SIGILL on
+Apple-silicon VMs. The CA ConfigMap is applied `--server-side`: a real bundle
+overruns the 256KB cap on kubectl's last-applied-configuration annotation.
+
+Not covered by either rig: proof that egress *cannot* leave except through the
+proxy (needs `--cni=calico` + a default-deny egress NetworkPolicy), and CA
+propagation into engine pods, which only a real test run on the location
+exercises.
 
 ## Layout
 
@@ -135,13 +217,14 @@ tests/           offline unit tests (fixture facts)
 
 ## Roadmap / not yet covered
 
-- CA-bundle mount + `KUBERNETES_CA_BUNDLE_MOUNT` (air-gapped TLS interception)
 - Istio/nginx service-virtualization ingress env sets
-- Tolerations / nodeSelector for crane + engines
 - External Secrets Operator / CSI secret-store variants
-- Engine resource override envs (`KUBERNETES_RESOURCES_*`)
-- funcIds-driven image selection (auto `--gui` when location has functionalGui)
-- `livetest --cluster minikube` target (today: current | kind)
+- Proof that egress *can't* bypass the proxy (`--cni=calico` + default-deny
+  egress NetworkPolicy); today the proxy log proves it was used, not that it
+  was the only way out
+- CA propagation into *engine* pods — `KUBERNETES_CA_BUNDLE_MOUNT` is generated
+  and crane-online proves crane's own trust, but only a real test run on the
+  location exercises the engines
 
 References: [help.blazemeter.com — private locations](https://help.blazemeter.com/docs/guide/private-locations-install-blazemeter-agent-for-kubernetes.html),
 [agent env variables](https://help.blazemeter.com/docs/guide/private-locations-blazemeter-agent-environment-variables.html),

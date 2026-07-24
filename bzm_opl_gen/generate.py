@@ -383,7 +383,30 @@ def generate(facts, options):
     if o["private_registry"]:
         out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
     out["README.md"] = _readme(facts, o, out)
+    out[PROFILE_FILE] = _profile_json(o)
     return out
+
+
+PROFILE_FILE = "profile.json"
+
+
+def _profile_json(o):
+    """The resolved options, replayable with `generate --profile`. AUTH_TOKEN is
+    left out on purpose -- it is re-fetched from the API, so this file can be
+    committed or handed over without leaking the agent credential."""
+    return json.dumps({k: v for k, v in sorted(o.items()) if k != "auth_token"},
+                      indent=2) + "\n"
+
+
+def load_profile(outdir):
+    """Read back the profile.json generate() wrote next to the manifests."""
+    path = os.path.join(outdir, PROFILE_FILE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found -- regenerate the manifests with a current "
+            f"bzm-opl-gen so the options can be replayed")
+    with open(path) as f:
+        return json.load(f)
 
 
 APPLY_ORDER = [
@@ -399,6 +422,14 @@ def _readme(facts, o, files):
     apply_lines = "\n".join(
         f"{cli} -n {o['namespace']} apply -f {f}" for f in APPLY_ORDER if f in files
     )
+    # Client-side apply copies the object into the last-applied-configuration
+    # annotation, which the API server caps at 256KB. Corporate bundles that
+    # include the public roots run right into it.
+    big_ca = ""
+    if o["ca_bundle"] and len(o["ca_bundle"]) > 200_000:
+        big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
+                  f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
+                  f"stores a copy in an annotation, which is capped at 256KB.\n")
     mirror = ""
     if o["private_registry"]:
         imgs = [facts["crane_image"]] + [
@@ -422,7 +453,7 @@ def _readme(facts, o, files):
 ```
 {apply_lines}
 ```
-
+{big_ca}
 ## Verify
 
 ```

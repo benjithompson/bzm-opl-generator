@@ -181,15 +181,51 @@ def _docker(args, dry):
         subprocess.run(cmd, check=True)
 
 
+def _regenerator(client, facts, a, ship_id):
+    """Re-render the manifests in place with extra generate() options merged
+    onto the ones they were built from (out/profile.json). Used by
+    --local-proxy, whose CA and address only exist once the rig is up."""
+    def regenerate(overlay):
+        opts = gen_mod.load_profile(a.manifests)
+        opts.update(overlay)
+        opts["namespace"] = a.namespace
+        opts["ship_id"] = opts.get("ship_id") or ship_id
+        opts["auth_token"] = client.auth_token(facts["harbor_id"], opts["ship_id"])
+        written = gen_mod.write(gen_mod.generate(facts, opts), a.manifests)
+        print(f"regenerated {len(written)} files in {a.manifests}/ with "
+              f"proxy + CA trust: " + ", ".join(written))
+    return regenerate
+
+
 def cmd_livetest(a):
     f = facts_mod.load(a.facts)
     client = api.BzmClient(a.api_key)
     ship_id = a.ship_id or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
     if not ship_id:
         sys.exit(f"--ship-id required (location has {len(f['ships'])} ships)")
+    # The options the manifests were rendered from -- lets livetest check the
+    # deployed objects against what was asked for. Absent on hand-made dirs.
+    try:
+        opts = gen_mod.load_profile(a.manifests)
+    except FileNotFoundError:
+        opts = None
+        print(f"note: no {a.manifests}/profile.json -- skipping the read-back "
+              f"configuration checks (regenerate to enable them)")
+    proxy_user = proxy_pass = None
+    regenerate = None
+    if a.local_proxy:
+        if a.cluster not in ("minikube", "kind"):
+            sys.exit("--local-proxy needs --cluster minikube|kind (the proxy "
+                     "joins that cluster's docker network)")
+        if a.proxy_auth and a.proxy_auth.lower() != "none":
+            proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
+        regenerate = _regenerator(client, f, a, ship_id)
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
                       cluster=a.cluster, timeout=a.timeout, keep=a.keep,
-                      facts=f, local_registry=a.local_registry)
+                      facts=f, local_registry=a.local_registry,
+                      local_proxy=a.local_proxy, proxy_user=proxy_user,
+                      proxy_pass=proxy_pass, regenerate=regenerate, opts=opts,
+                      negative_control_check=not a.skip_negative_control)
     sys.exit(0 if ok else 1)
 
 
@@ -313,6 +349,20 @@ def main():
                    help="start a registry:2 container, mirror the location's images "
                         "into it, and make minikube trust it (generate manifests "
                         "with --private-registry host.minikube.internal:PORT)")
+    t.add_argument("--local-proxy", action="store_true",
+                   help="start a mitmproxy container on the cluster's docker "
+                        "network -- an HTTP proxy that also terminates TLS with "
+                        "its own CA -- regenerate the manifests (from "
+                        "out/profile.json) with HTTP(S)_PROXY + that CA, and "
+                        "require the agent's blazemeter.com traffic to show up "
+                        "in the proxy log. minikube/kind only")
+    t.add_argument("--skip-negative-control", action="store_true",
+                   help="with --local-proxy, skip the pre-run deploy that strips "
+                        "the CA and must fail (saves ~2 min, at the cost of not "
+                        "knowing whether the rig can fail at all)")
+    t.add_argument("--proxy-auth", metavar="USER:PASS", default="bzm:s3cr3t",
+                   help="credentials the local proxy demands ('none' for an open "
+                        "proxy); they get URL-encoded into HTTP(S)_PROXY")
     t.set_defaults(fn=cmd_livetest)
 
     u = sub.add_parser("ui", help="start the local web UI")
