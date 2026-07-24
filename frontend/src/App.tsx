@@ -451,11 +451,15 @@ export default function App() {
                   hint="optional; not needed for perf tests"
                   checked={Boolean(options.cluster_rbac)}
                   onChange={(v) => set("cluster_rbac", v)} />
-                <Check label="Include GUI/mock images"
-                  hint="for functionalGui / mockServices locations"
-                  checked={Boolean(options.gui)}
-                  onChange={(v) => set("gui", v)} />
               </div>
+              {facts && (
+                <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+                  Images are selected automatically from the location's enabled
+                  features ({facts.func_ids?.join(", ") || "performance"}) —
+                  performance engines always; browser/grid, mock-service, SV and
+                  recorder images only when that feature is on.
+                </p>
+              )}
 
               <details className="border border-slate-200 rounded-md" open={!!options.private_registry}>
                 <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-slate-700">
@@ -468,7 +472,8 @@ export default function App() {
                       onChange={(v) => set("private_registry", v || null)} />
                   </Field>
                   <div className="grid grid-cols-2 gap-2">
-                    <Field label="imagePullSecret name (crane image)">
+                    <Field label="imagePullSecret name"
+                      hint="existing docker-registry Secret in the namespace; lets the kubelet pull the crane image from your registry">
                       <TextInput mono value={String(options.pull_secret ?? "")}
                         onChange={(v) => set("pull_secret", v || null)} />
                     </Field>

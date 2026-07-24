@@ -29,11 +29,13 @@ FACTS = {
     "crane_image": "gcr.io/verdant-bulwark-278/blazemeter/crane:3.7.55",
     "images": [
         {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4",
-         "tag": "2.4.444-reduced", "performance": True},
+         "tag": "2.4.444-reduced", "category": "performance"},
         {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm",
-         "tag": "1.7.112", "performance": True},
+         "tag": "1.7.112", "category": "performance"},
         {"key": "blazemeter/service-mock:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/service-mock",
-         "tag": "1.0", "performance": False, "excluded_reason": "mock services"},
+         "tag": "1.0", "category": "mock"},
+        {"key": "blazemeter/doduo:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/doduo",
+         "tag": "2.1", "category": "gui"},
     ],
     "images_source": "test fixture",
 }
@@ -83,10 +85,18 @@ def test_private_registry_overrides_from_facts():
     assert "imagePullSecrets" in d and "pullsec" in d
 
 
-def test_gui_includes_non_performance():
-    files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": "reg.local", "gui": True})
+def test_images_follow_location_funcids():
+    gui_facts = dict(FACTS, func_ids=["performance", "functionalGui", "chrome:default"])
+    files = gen.generate(gui_facts, {"namespace": "ns1", "private_registry": "reg.local"})
     ov = json.loads(yaml.safe_load(files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
-    assert "blazemeter/service-mock:latest" in ov
+    assert "blazemeter/doduo:latest" in ov          # gui feature -> gui images
+    assert "taurus-cloud:latest" in ov              # gui tests still need engines
+    assert "blazemeter/service-mock:latest" not in ov  # mocks not enabled
+
+    mock_facts = dict(FACTS, func_ids=["mockServices"])
+    files = gen.generate(mock_facts, {"namespace": "ns1", "private_registry": "reg.local"})
+    ov = json.loads(yaml.safe_load(files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    assert set(ov) == {"blazemeter/service-mock:latest"}
 
 
 def test_k8s_platform_sets_runasuser():

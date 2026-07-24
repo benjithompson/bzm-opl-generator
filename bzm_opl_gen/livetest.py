@@ -80,13 +80,13 @@ def ensure_registry(port):
               "-p", f"{port}:5000", "registry:2"])
 
 
-def mirror_images(facts, port, arch="linux/amd64", gui=False):
+def mirror_images(facts, port, arch="linux/amd64"):
     """Pull the location's images (amd64 -- what the engines are built for),
     push into the local registry under the names generate() writes into
     IMAGE_OVERRIDES / the crane Deployment."""
+    from .facts import select_images
     refs = [facts["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}" for i in facts["images"]
-        if i.get("key") and (gui or i.get("performance", True))
+        f"{i['repo']}:{i['tag']}" for i in select_images(facts)
     ]
     for ref in refs:
         name = ref.rsplit("/", 1)[-1]

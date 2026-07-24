@@ -103,7 +103,11 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY env |
-| `gui` | `false` | include GUI-functional/mock images in overrides |
+
+Images are selected automatically from the location's enabled funcIds:
+performance engines always ship; browser/grid (functionalGui), mock-service
+(mockServices), SV bridge (sv-bridge), and recorder (proxyRecorder) images only
+when that feature is enabled on the location. `images --all` lists everything.
 
 ## Live test
 

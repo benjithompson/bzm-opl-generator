@@ -108,8 +108,6 @@ def cmd_generate(a):
         opts["use_secret"] = False
     if a.cluster_rbac:
         opts["cluster_rbac"] = True
-    if a.gui:
-        opts["gui"] = True
     if a.tolerations:
         opts["tolerations"] = json.loads(a.tolerations)
     if a.node_selector:
@@ -138,8 +136,8 @@ def cmd_images(a):
         client = api.BzmClient(a.api_key)
         f = facts_mod.gather(client, a.harbor_id)
     imgs = [f["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}" for i in f["images"]
-        if i.get("key") and (a.all or i.get("performance", True))
+        f"{i['repo']}:{i['tag']}"
+        for i in facts_mod.select_images(f, all_images=a.all)
     ]
     for ref in imgs:
         print(ref)
@@ -241,7 +239,6 @@ def main():
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
-    g.add_argument("--gui", action="store_true", help="include GUI-functional images")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)
 

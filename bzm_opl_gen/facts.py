@@ -10,33 +10,63 @@ rather than from the customer's cluster team:
 
 import json
 
-# Image classification: substring -> reason it is NOT needed for pure
-# performance testing.
-NON_PERFORMANCE = {
-    "doduo": "grid proxy (GUI functional / Selenium)",
-    "charmander": "browser image (GUI functional)",
-    "service-mock": "mock services",
-    "mock-pc-service": "mock services",
-    "sv-bridge": "service virtualization",
-    "proxy-recorder": "proxy recorder",
-    "group-gateway": "mock services gateway",
+# Image classification: substring -> functional category. Anything unmatched
+# is a core performance/engine image.
+IMAGE_CATEGORY = {
+    "doduo": "gui",            # grid proxy (GUI functional / Selenium)
+    "charmander": "gui",       # browser image (GUI functional)
+    "service-mock": "mock",
+    "mock-pc-service": "mock",
+    "group-gateway": "mock",   # mock services gateway
+    "sv-bridge": "sv",         # service virtualization bridge
+    "proxy-recorder": "recorder",
 }
+
+# Location funcIds -> image categories that functionality needs.
+# (browser-version funcIds like "chrome:default" ride along with functionalGui;
+# tdm/dataPublisher/delphix need no engine images of their own.)
+CATEGORY_BY_FUNC = {
+    "performance": {"performance"},
+    "functionalApi": {"performance"},          # API tests run in the taurus engine
+    "functionalGui": {"performance", "gui"},
+    "mockServices": {"mock"},
+    "sv-bridge": {"sv"},
+    "proxyRecorder": {"recorder"},
+}
+
+
+def image_category(ref):
+    for key, cat in IMAGE_CATEGORY.items():
+        if key in ref:
+            return cat
+    return "performance"
+
+
+def needed_categories(func_ids):
+    needed = set()
+    for f in func_ids or []:
+        needed |= CATEGORY_BY_FUNC.get(f, set())
+    return needed or {"performance"}
+
+
+def select_images(facts, all_images=False):
+    """The images this location actually needs, based on its enabled funcIds."""
+    needed = needed_categories(facts.get("func_ids"))
+    return [
+        i for i in facts["images"]
+        if i.get("key") and (all_images or image_category(i["repo"]) in needed)
+    ]
 
 # Fallback catalogue when no agent has run yet (no inventory to read).
 # Keys are the local tags crane expects; repos are under gcr.io/verdant-bulwark-278.
 FALLBACK_IMAGES = [
-    {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "performance": True},
-    {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "performance": True},
+    {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},
+    {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "category": "performance"},
 ]
 
 CRANE_REPO = "gcr.io/verdant-bulwark-278/blazemeter/crane"
 
 
-def _classify(ref):
-    for key, why in NON_PERFORMANCE.items():
-        if key in ref:
-            return why
-    return None
 
 
 def gather(client, harbor_id):
@@ -73,15 +103,14 @@ def gather(client, harbor_id):
                 "repo": repo,
                 "tag": tag,
                 "size_mb": round((img.get("Size") or 0) / 1e6),
-                "performance": _classify(gcr[0]) is None,
-                "excluded_reason": _classify(gcr[0]),
+                "category": image_category(gcr[0]),
             }
             if repo == CRANE_REPO:
                 facts["crane_image"] = f"{repo}:{tag}"
             else:
                 facts["images"].append(entry)
     if not facts["images"]:
-        facts["images"] = [dict(i, size_mb=None, excluded_reason=None) for i in FALLBACK_IMAGES]
+        facts["images"] = [dict(i, size_mb=None) for i in FALLBACK_IMAGES]
         facts["images_source"] = "fallback-catalogue (no agent inventory yet)"
     else:
         facts["images_source"] = "live agent inventory"

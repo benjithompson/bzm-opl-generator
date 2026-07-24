@@ -4,6 +4,8 @@ import json
 import os
 from string import Template
 
+from .facts import select_images
+
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 DEFAULT_OPTIONS = {
@@ -17,7 +19,6 @@ DEFAULT_OPTIONS = {
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
     "proxy": None,                   # {"http": ..., "https": ..., "no_proxy": ...}
-    "gui": False,                    # include GUI-functional images in overrides
     "run_as_user": 1337,             # k8s platform only (openshift: SCC assigns)
     # Real-cluster scheduling / trust / sizing (all optional):
     "tolerations": None,             # k8s toleration list -> crane pod + engines
@@ -39,14 +40,11 @@ def _tpl(name):
         return Template(f.read())
 
 
-def _image_overrides(facts, registry, gui):
-    """Build crane IMAGE_OVERRIDES JSON from account facts."""
+def _image_overrides(facts, registry):
+    """Build crane IMAGE_OVERRIDES JSON from account facts. Which images are
+    included follows the location's enabled funcIds (facts.select_images)."""
     entries = {}
-    for img in facts["images"]:
-        if not img.get("key"):
-            continue
-        if not gui and not img.get("performance", True):
-            continue
+    for img in select_images(facts):
         name = img["repo"].rsplit("/", 1)[-1]
         entries[img["key"]] = f"{registry.rstrip('/')}/{name}:{img['tag']}"
     return entries
@@ -83,7 +81,7 @@ def _configmap(facts, o):
         "  RUN_HEALTH_WEB_SERVICE: 'true'",
     ]
     if o["private_registry"]:
-        overrides = _image_overrides(facts, o["private_registry"], o["gui"])
+        overrides = _image_overrides(facts, o["private_registry"])
         lines += [
             "  # Private registry: images resolved from the account's live agent",
             f"  # inventory ({facts.get('images_source', 'unknown')}).",
@@ -171,8 +169,7 @@ data:
 
 def _mirror_script(facts, o):
     refs = [facts["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}" for i in facts["images"]
-        if i.get("key") and (o["gui"] or i.get("performance", True))
+        f"{i['repo']}:{i['tag']}" for i in select_images(facts)
     ]
     reg = o["private_registry"].rstrip("/")
     lines = [
@@ -307,8 +304,7 @@ def _readme(facts, o, files):
     mirror = ""
     if o["private_registry"]:
         imgs = [facts["crane_image"]] + [
-            f"{i['repo']}:{i['tag']}" for i in facts["images"]
-            if i.get("key") and (o["gui"] or i.get("performance", True))
+            f"{i['repo']}:{i['tag']}" for i in select_images(facts)
         ]
         mirror = (
             "\n## Mirror these images into "
