@@ -6,6 +6,7 @@ import {
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, Section, TextInput,
 } from "./components";
+import { Preview } from "./Preview";
 
 const FUNC_ID_CHOICES = ["performance", "functionalApi", "functionalGui", "mockServices"];
 
@@ -179,7 +180,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-screen-2xl mx-auto p-6 grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <main className="max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-5">
           {/* 1 · Connect */}
           <Section n={1} title="Connect" done={!!who}
@@ -581,39 +582,8 @@ export default function App() {
           </Section>
         </div>
 
-        {/* preview pane */}
-        <div className="xl:sticky xl:top-16 self-start">
-          <div className="bg-slate-900 rounded-xl shadow-lg overflow-hidden min-h-[400px]">
-            <div className="flex items-center gap-1 px-3 pt-2 pb-0 overflow-x-auto">
-              {files.map((f) => (
-                <button key={f.name}
-                  className={`px-2.5 py-1.5 text-xs rounded-t-md whitespace-nowrap font-mono ${f.name === activeFile ? "bg-slate-800 text-white" : "text-slate-400 hover:text-slate-200"}`}
-                  onClick={() => setActiveFile(f.name)}>
-                  {f.name}
-                </button>
-              ))}
-              {files.length === 0 && (
-                <span className="text-slate-500 text-sm px-2 py-3">
-                  {genErr ? "" : "pick a location & agent to preview manifests"}
-                </span>
-              )}
-            </div>
-            {genErr && <p className="text-red-400 text-xs px-4 py-2">{genErr}</p>}
-            {activeFile && (
-              <div className="relative">
-                <button
-                  className="absolute right-3 top-2 text-xs text-slate-400 hover:text-white border border-slate-600 rounded px-2 py-0.5"
-                  onClick={() => {
-                    const f = files.find((x) => x.name === activeFile);
-                    if (f) navigator.clipboard.writeText(f.content);
-                  }}>copy</button>
-                <pre className="text-[11.5px] leading-relaxed text-slate-100 p-4 pt-3 overflow-auto max-h-[80vh] font-mono">
-                  {files.find((f) => f.name === activeFile)?.content}
-                </pre>
-              </div>
-            )}
-          </div>
-        </div>
+        <Preview files={files} activeFile={activeFile}
+          setActiveFile={setActiveFile} genErr={genErr} />
       </main>
     </div>
   );
