@@ -448,6 +448,82 @@ def check_admission(facts, opts, cluster):
                   f"(a cluster-wide default may still apply)")]
 
 
+# -- service virtualization ---------------------------------------------------
+
+# Crane writes `ingressClassName: nginx` on the Ingress it creates per virtual
+# service and BlazeMeter exposes no env to change it, so the name is ours to
+# check, not to configure. It matches the `nginx` sv_ingress value only by
+# coincidence -- keep the two apart so renaming either does not silently change
+# which branch below runs.
+CRANE_INGRESS_CLASS = "nginx"
+SV_INGRESS_VIA_GATEWAY = "istio"
+OPENSHIFT_ROUTE_CONTROLLER = "openshift.io/ingress-to-route"
+
+
+def check_ingress_class(facts, opts, cluster):
+    """Will anything claim the Ingress crane creates for a virtual service?
+
+    With no IngressClass named `nginx` no controller adopts it, no route is
+    created, and the endpoint BlazeMeter publishes returns 503 -- while the
+    virtual service itself is healthy and serving in-cluster. Nothing in the
+    deploy fails, so a preflight is the only place this is visible. On
+    OpenShift the only shipped class is `openshift-default`, which makes that
+    the default outcome there rather than an unlucky one.
+    """
+    ingress = opts.get("sv_ingress")
+    if not ingress:
+        return []                     # not an SV deployment; nothing to say
+    if ingress == SV_INGRESS_VIA_GATEWAY:
+        # istio publishes through a Gateway/VirtualService pair; no Ingress is
+        # created at all, so a missing IngressClass says nothing about it.
+        return [Check("sv ingress class", PASS,
+                      f"sv_ingress={ingress} routes through a Gateway / "
+                      f"VirtualService, not an IngressClass")]
+    if ingress != CRANE_INGRESS_CLASS:
+        # generate() rejects anything but nginx/istio, so this only shows up for
+        # a hand-written profile. Say so rather than checking a class name that
+        # such a deployment may never ask for.
+        return [Check("sv ingress class", WARN,
+                      f"unrecognised sv_ingress={ingress}; expected "
+                      f"'{CRANE_INGRESS_CLASS}' or '{SV_INGRESS_VIA_GATEWAY}', "
+                      f"so the ingress path is unverified")]
+
+    classes = cluster.get("ingressclasses")
+    if classes is None:
+        # Older cluster_data, or an API server that does not serve the kind.
+        return [Check("sv ingress class", WARN,
+                      f"IngressClasses could not be read, so the "
+                      f"'{CRANE_INGRESS_CLASS}' class crane requires is "
+                      f"unverified")]
+    by_name = {c.get("metadata", {}).get("name"): c for c in classes}
+    mine = by_name.get(CRANE_INGRESS_CLASS)
+    if mine is None:
+        existing = ", ".join(sorted(n for n in by_name if n)) or "none at all"
+        return [Check("sv ingress class", FAIL,
+                      f"no IngressClass named '{CRANE_INGRESS_CLASS}' -- crane "
+                      f"hardcodes ingressClassName: {CRANE_INGRESS_CLASS} on the "
+                      f"Ingress it creates per virtual service and BlazeMeter has "
+                      f"no env to change it, so nothing claims it: the published "
+                      f"endpoint returns 503 while the virtual service stays "
+                      f"healthy and serving in-cluster. IngressClasses present: "
+                      f"{existing}. Install an nginx ingress controller, or have "
+                      f"a cluster-admin create an IngressClass named "
+                      f"'{CRANE_INGRESS_CLASS}'")]
+    controller = (mine.get("spec") or {}).get("controller") or "?"
+    detail = (f"IngressClass '{CRANE_INGRESS_CLASS}' exists (controller "
+              f"{controller}) to claim the Ingress crane creates")
+    if controller == OPENSHIFT_ROUTE_CONTROLLER:
+        # Verified live: crane's Ingress backend uses port.number 8080 while the
+        # Service it created exposes port 80, and this controller resolves the
+        # backend against spec.ports[].port -- so it logs
+        # IncompleteIngressToRouteRules and creates no Route.
+        detail += (f"; note that this controller resolves the backend port "
+                   f"against the Service's port 80 and crane writes 8080, so it "
+                   f"reports IncompleteIngressToRouteRules and creates no Route "
+                   f"(upstream defect -- see README)")
+    return [Check("sv ingress class", PASS, detail)]
+
+
 # -- egress -------------------------------------------------------------------
 
 def egress_targets(opts):
@@ -496,6 +572,10 @@ def gather_cluster(cli, namespace):
         by_kind.setdefault(item.get("kind"), []).append(item)
     return {
         "nodes": livetest.kget(cli, None, "nodes").get("items", []),
+        # Cluster-scoped like nodes, but kept its own get: kget reports a failed
+        # command as {}, so folding the kinds into one call would lose the nodes
+        # too on a cluster whose API server does not serve IngressClass.
+        "ingressclasses": livetest.kget(cli, None, "ingressclass").get("items", []),
         "limitranges": by_kind["LimitRange"],
         "quotas": by_kind["ResourceQuota"],
         "namespace": livetest.kget(cli, None, "ns", namespace),
@@ -572,7 +652,8 @@ def _oneshot_curl(cli, namespace, targets, opts):
 # Every check takes the same (facts, opts, cluster) so adding one is a single
 # edit here, not a new argument order to remember.
 CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
-          check_limitrange, check_resourcequota, check_admission, check_egress)
+          check_limitrange, check_resourcequota, check_admission,
+          check_ingress_class, check_egress)
 
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):

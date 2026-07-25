@@ -161,6 +161,40 @@ OpenShift the built-in class is
 `openshift-default`, so a stock cluster returns **503** for the advertised
 endpoint until an `nginx` IngressClass exists or a real nginx controller is
 installed — the virtual service is healthy and serving in-cluster either way.
+`doctor` preflights the class (see [Preflight](#preflight-doctor)) and **FAILs
+before you deploy**, listing the classes the cluster does have, rather than
+leaving you to find the 503 afterwards.
+
+### The `nginx` IngressClass on OpenShift
+
+Crane writes `ingressClassName: nginx` on every Ingress it creates and
+BlazeMeter exposes no environment variable to change it, so the name is not
+something the generator can adapt. OpenShift ships one class,
+`openshift-default` (controller `openshift.io/ingress-to-route`), so you need
+either a real nginx ingress controller, or a one-time alias from a
+cluster-admin:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+spec:
+  controller: openshift.io/ingress-to-route
+```
+
+That object is cluster-scoped, but it is **not** part of the agent's RBAC — it
+is applied once by an admin and the deployment itself stays namespaced.
+
+> **Known upstream defect — the alias alone is not enough today.** Crane creates
+> the Service as `port: 80, name: "8080", targetPort: 8080` but writes the
+> Ingress backend as `port.number: 8080`, and Kubernetes resolves a backend's
+> `port.number` against the Service's `spec.ports[].port` (80). The
+> ingress-to-route controller therefore reports
+> `IncompleteIngressToRouteRules: No valid target port for backend service …`
+> and creates no Route. Patching the Ingress to `port.number: 80` works
+> immediately and serves end-to-end — but crane recreates the Ingress with 8080
+> on every virtual-service deploy, so there is no durable fix on our side.
 
 `service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
 alongside `sv_ingress`. NODEPORT makes crane resolve its address from the
@@ -247,6 +281,7 @@ registry, proxy/CA — so it checks the deployment you actually generated.
 | limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size, or none exists and none is emitted |
 | resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults |
 | admission | `pod-security…/enforce=restricted` on `platform: k8s` — crane passes, but the engine pods it spawns get the security-context envs only on the openshift path | no PSA label; OpenShift namespace with no `sa.scc.uid-range` |
+| sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](#the-nginx-ingressclass-on-openshift)) | the IngressClasses could not be read |
 | egress | `a.blazemeter.com` (or the private registry) unreachable from the namespace | it could not be probed at all |
 
 Exit status is non-zero on any FAIL. Egress is probed from the crane pod when
