@@ -230,7 +230,8 @@ def cmd_livetest(a):
                       local_proxy=a.local_proxy, proxy_user=proxy_user,
                       proxy_pass=proxy_pass, regenerate=regenerate, opts=opts,
                       negative_control_check=not a.skip_negative_control,
-                      contain_egress=a.contain_egress)
+                      contain_egress=a.contain_egress, run_test=a.run_test,
+                      engine_cpu=a.engine_cpu, engine_mem=a.engine_mem)
     sys.exit(0 if ok else 1)
 
 
@@ -361,6 +362,17 @@ def main():
                         "out/profile.json) with HTTP(S)_PROXY + that CA, and "
                         "require the agent's blazemeter.com traffic to show up "
                         "in the proxy log. minikube/kind only")
+    t.add_argument("--run-test", dest="run_test", metavar="TEST_ID",
+                   help="after the agent is online, run this existing BlazeMeter "
+                        "test on the location so crane actually spawns an engine, "
+                        "then check the engine's image, CA mount and proxy env. "
+                        "The test's locations are repointed at the private "
+                        "location and restored afterwards")
+    t.add_argument("--engine-cpu", default="1",
+                   help="engine CPU limit while running --run-test (default 1; "
+                        "the documented 2 CPU / 8Gi will not schedule on a laptop)")
+    t.add_argument("--engine-mem", default="4Gi",
+                   help="engine memory limit while running --run-test (default 4Gi)")
     t.add_argument("--contain-egress", action="store_true",
                    help="with --local-proxy: start minikube with calico and apply "
                         "a default-deny egress NetworkPolicy (DNS + apiserver + "
