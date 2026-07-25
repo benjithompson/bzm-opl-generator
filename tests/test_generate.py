@@ -306,6 +306,17 @@ def test_engine_size_helper():
     assert gen.engine_size(dict(gen.DEFAULT_OPTIONS)) == (2000, 8 * 1024 ** 3)
 
 
+def test_crane_resources_come_from_the_constants():
+    """The LimitRange max and doctor's capacity maths are both computed from
+    CRANE_*_LIMIT; the deployment must be the same numbers, not a second copy."""
+    d = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1"})["bzm_deployment.yaml"])
+    res = d["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert res["limits"]["cpu"] == gen.CRANE_CPU_LIMIT
+    assert res["limits"]["memory"] == gen.CRANE_MEM_LIMIT
+    assert res["requests"]["cpu"] == gen.CRANE_CPU_REQUEST
+    assert res["requests"]["memory"] == gen.CRANE_MEM_REQUEST
+
+
 def test_readme_documents_limitrange_and_applies_it():
     files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
     readme = files["README.md"]

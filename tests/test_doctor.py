@@ -96,11 +96,11 @@ def test_facts_gather_threads_per_engine_absent_is_none():
 # -- check_location ---------------------------------------------------------
 
 def test_location_ok():
-    assert _statuses(doctor.check_location(FACTS)) == {doctor.PASS}
+    assert _statuses(doctor.check_location(FACTS, {}, {})) == {doctor.PASS}
 
 
 def test_location_missing_threads_per_engine_fails():
-    c = _find(doctor.check_location({**FACTS, "threads_per_engine": None}),
+    c = _find(doctor.check_location({**FACTS, "threads_per_engine": None}, {}, {}),
               "threadsPerEngine")
     assert c.status == doctor.FAIL
     assert "403" in c.detail            # what the customer actually sees
@@ -108,7 +108,7 @@ def test_location_missing_threads_per_engine_fails():
 
 @pytest.mark.parametrize("slots", [None, 0])
 def test_location_without_slots_fails(slots):
-    c = _find(doctor.check_location({**FACTS, "slots": slots}), "slots")
+    c = _find(doctor.check_location({**FACTS, "slots": slots}, {}, {}), "slots")
     assert c.status == doctor.FAIL
 
 
@@ -124,22 +124,20 @@ def test_location_without_slots_fails(slots):
     (500, {"engine_cpu_limit": "4", "engine_mem_limit": "2Gi"}, doctor.WARN),
 ])
 def test_threads_per_engine_verdicts(threads, opts, status):
-    checks = doctor.check_threads_per_engine({**FACTS, "threads_per_engine": threads},
-                                             opts)
+    checks = doctor.check_threads_per_engine({**FACTS, "threads_per_engine": threads}, opts, {})
     assert [c.status for c in checks] == [status]
 
 
 def test_threads_per_engine_names_the_arithmetic():
     c = doctor.check_threads_per_engine(
         {**FACTS, "threads_per_engine": 500},
-        {"engine_cpu_limit": "1", "engine_mem_limit": "4Gi"})[0]
+        {"engine_cpu_limit": "1", "engine_mem_limit": "4Gi"}, {})[0]
     assert "250" in c.detail and "500" in c.detail
 
 
 def test_threads_per_engine_silent_when_unset():
     """check_location already FAILs on this; don't say it twice."""
-    assert doctor.check_threads_per_engine({**FACTS, "threads_per_engine": None},
-                                           {}) == []
+    assert doctor.check_threads_per_engine({**FACTS, "threads_per_engine": None}, {}, {}) == []
 
 
 # -- eligible_nodes ---------------------------------------------------------
@@ -169,7 +167,7 @@ def test_eligible_nodes(node, opts, eligible):
 # -- check_capacity ---------------------------------------------------------
 
 def test_capacity_ok_on_a_real_cluster():
-    checks = doctor.check_capacity(FACTS, {}, [_big("a"), _big("b")])
+    checks = doctor.check_capacity(FACTS, {}, {"nodes": [_big("a"), _big("b")]})
     assert _statuses(checks) == {doctor.PASS}
     # allocatable is an upper bound, not free space -- say so.
     assert any("allocatable" in c.detail for c in checks)
@@ -177,7 +175,7 @@ def test_capacity_ok_on_a_real_cluster():
 
 def test_capacity_per_node_fit_fails_when_no_node_holds_one_engine():
     """A pod is not splittable: three 5.8Gi nodes cannot run one 8Gi engine."""
-    checks = doctor.check_capacity(FACTS, {}, [_node("n1"), _node("n2"), _node("n3")])
+    checks = doctor.check_capacity(FACTS, {}, {"nodes": [_node("n1"), _node("n2"), _node("n3")]})
     fit = _find(checks, "per-node")
     assert fit.status == doctor.FAIL
     assert "8Gi" in fit.detail
@@ -186,7 +184,7 @@ def test_capacity_per_node_fit_fails_when_no_node_holds_one_engine():
 def test_capacity_aggregate_fails_and_counts_engines():
     nodes = [_node("n1", cpu="4", mem="8Gi", disk="500Gi"),
              _node("n2", cpu="4", mem="8Gi", disk="500Gi")]
-    checks = doctor.check_capacity({**FACTS, "slots": 5}, {}, nodes)
+    checks = doctor.check_capacity({**FACTS, "slots": 5}, {}, {"nodes": nodes})
     assert _find(checks, "per-node").status == doctor.PASS
     agg = _find(checks, "aggregate")
     assert agg.status == doctor.FAIL
@@ -199,9 +197,9 @@ def test_capacity_uses_the_configured_engine_size():
     """Sized down for a laptop, one engine fits the same node that cannot hold
     a documented 2 CPU / 8Gi one."""
     opts = {"engine_cpu_limit": "1", "engine_mem_limit": "4Gi"}
-    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, opts, [_node()]),
+    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, opts, {"nodes": [_node()]}),
                  "per-node").status == doctor.PASS
-    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, {}, [_node()]),
+    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, {}, {"nodes": [_node()]}),
                  "per-node").status == doctor.FAIL
 
 
@@ -209,18 +207,16 @@ def test_capacity_aggregate_spends_cranes_own_share():
     """Crane runs in the same namespace: a 5.8Gi node cannot hold both crane
     (2Gi) and a 4Gi engine, even though the engine alone fits."""
     opts = {"engine_cpu_limit": "1", "engine_mem_limit": "4Gi"}
-    agg = _find(doctor.check_capacity({**FACTS, "slots": 1}, opts, [_node()]),
+    agg = _find(doctor.check_capacity({**FACTS, "slots": 1}, opts, {"nodes": [_node()]}),
                 "aggregate")
     assert agg.status == doctor.FAIL
     # Two of those nodes leave room once crane is paid for.
-    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, opts,
-                                       [_node("n1"), _node("n2")]),
+    assert _find(doctor.check_capacity({**FACTS, "slots": 1}, opts, {"nodes": [_node("n1"), _node("n2")]}),
                  "aggregate").status == doctor.PASS
 
 
 def test_capacity_fails_when_the_selector_matches_nothing():
-    checks = doctor.check_capacity(FACTS, {"node_selector": {"pool": "loadtest"}},
-                                   [_big("a")])
+    checks = doctor.check_capacity(FACTS, {"node_selector": {"pool": "loadtest"}}, {"nodes": [_big("a")]})
     assert doctor.FAIL in _statuses(checks)
     assert any("pool" in c.detail for c in checks)
 
@@ -228,7 +224,7 @@ def test_capacity_fails_when_the_selector_matches_nothing():
 def test_capacity_says_allocatable_is_an_upper_bound():
     """The verdict must not read as 'there is room' -- allocatable counts what
     other workloads already hold."""
-    checks = doctor.check_capacity(FACTS, {}, [_big("a")])
+    checks = doctor.check_capacity(FACTS, {}, {"nodes": [_big("a")]})
     assert any("upper bound" in c.detail for c in checks)
     assert all("not free" in c.detail or "upper bound" in c.detail
                for c in checks)
@@ -237,47 +233,47 @@ def test_capacity_says_allocatable_is_an_upper_bound():
 # -- check_disk -------------------------------------------------------------
 
 def test_disk_warns_on_a_laptop_node():
-    c = doctor.check_disk(FACTS, [_node()])[0]
+    c = doctor.check_disk(FACTS, {}, {"nodes": [_node()]})[0]
     assert c.status == doctor.WARN
     assert "60" in c.detail and "40" in c.detail       # total and /tmp
 
 
 def test_disk_ok_on_a_real_node():
-    assert doctor.check_disk(FACTS, [_big("a")])[0].status == doctor.PASS
+    assert doctor.check_disk(FACTS, {}, {"nodes": [_big("a")]})[0].status == doctor.PASS
 
 
 def test_disk_warns_when_the_cluster_cannot_hold_every_slot():
     nodes = [_node("n1", disk="100G"), _node("n2", disk="100G")]
-    c = doctor.check_disk({**FACTS, "slots": 5}, nodes)[0]
+    c = doctor.check_disk({**FACTS, "slots": 5}, {}, {"nodes": nodes})[0]
     assert c.status == doctor.WARN
     assert "2" in c.detail                              # one engine per node
 
 
 def test_disk_ignores_ineligible_nodes():
     nodes = [_big("a"), _node("cordoned", disk="1Gi", unschedulable=True)]
-    assert doctor.check_disk(FACTS, nodes, {})[0].status == doctor.PASS
+    assert doctor.check_disk(FACTS, {}, {"nodes": nodes})[0].status == doctor.PASS
 
 
 # -- check_limitrange -------------------------------------------------------
 
 def test_limitrange_absent_warns_about_cranes_defaults():
-    c = doctor.check_limitrange({}, [])[0]
+    c = doctor.check_limitrange(FACTS, {}, {"limitranges": []})[0]
     assert c.status == doctor.WARN
     assert "250m" in c.detail and "256Mi" in c.detail
 
 
 def test_limitrange_absent_is_fine_when_we_emit_one():
-    assert doctor.check_limitrange({"emit_limitrange": True}, [])[0].status == doctor.PASS
+    assert doctor.check_limitrange(FACTS, {"emit_limitrange": True}, {"limitranges": []})[0].status == doctor.PASS
 
 
 def test_limitrange_matching_passes():
-    assert _statuses(doctor.check_limitrange({}, [LR_MATCHING])) == {doctor.PASS}
+    assert _statuses(doctor.check_limitrange(FACTS, {}, {"limitranges": [LR_MATCHING]})) == {doctor.PASS}
 
 
 def test_limitrange_max_below_engine_fails():
     lr = {"metadata": {"name": "team-caps"},
           "spec": {"limits": [{"type": "Container", "max": {"cpu": "1", "memory": "2Gi"}}]}}
-    c = doctor.check_limitrange({}, [lr])[0]
+    c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
     assert c.status == doctor.FAIL
     assert "team-caps" in c.detail                      # name the object
 
@@ -288,7 +284,7 @@ def test_limitrange_min_above_the_stamped_request_fails():
     a namespace that insists on 1 CPU minimum rejects every engine pod."""
     lr = {"metadata": {"name": "floor"},
           "spec": {"limits": [{"type": "Container", "min": {"cpu": "1", "memory": "1Gi"}}]}}
-    c = doctor.check_limitrange({}, [lr])[0]
+    c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
     assert c.status == doctor.FAIL
     assert "min cpu" in c.detail and "250m" in c.detail
 
@@ -299,7 +295,7 @@ def test_limitrange_ratio_tighter_than_the_engines_own_gap_fails():
     lr = {"metadata": {"name": "ratio"},
           "spec": {"limits": [{"type": "Container",
                                "maxLimitRequestRatio": {"cpu": "4", "memory": "4"}}]}}
-    c = doctor.check_limitrange({}, [lr])[0]
+    c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
     assert c.status == doctor.FAIL
     assert "maxLimitRequestRatio" in c.detail
 
@@ -308,13 +304,13 @@ def test_limitrange_ratio_wide_enough_passes():
     lr = {"metadata": {"name": "ratio"},
           "spec": {"limits": [{"type": "Container",
                                "maxLimitRequestRatio": {"cpu": "16", "memory": "64"}}]}}
-    assert _statuses(doctor.check_limitrange({}, [lr])) == {doctor.PASS}
+    assert _statuses(doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})) == {doctor.PASS}
 
 
 def test_limitrange_absent_does_not_promise_a_fix_it_cannot_deliver():
     """Crane stamps the engine's requests explicitly, so no LimitRange can raise
     them -- the WARN must not tell a customer that emitting one would."""
-    detail = doctor.check_limitrange({}, [])[0].detail
+    detail = doctor.check_limitrange(FACTS, {}, {"limitranges": []})[0].detail
     assert "cannot override" in detail
 
 
@@ -323,7 +319,7 @@ def test_limitrange_conflicting_defaults_warn():
           "spec": {"limits": [{"type": "Container",
                                "defaultRequest": {"cpu": "500m", "memory": "1Gi"},
                                "default": {"cpu": "1", "memory": "2Gi"}}]}}
-    checks = doctor.check_limitrange({}, [lr])
+    checks = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})
     assert doctor.WARN in _statuses(checks)
     assert any("platform-defaults" in c.detail for c in checks)
 
@@ -334,7 +330,7 @@ def test_limitrange_max_measured_against_the_configured_engine():
                                "default": {"cpu": "1", "memory": "4Gi"},
                                "defaultRequest": {"cpu": "1", "memory": "4Gi"}}]}}
     opts = {"engine_cpu_limit": "1", "engine_mem_limit": "4Gi"}
-    assert _statuses(doctor.check_limitrange(opts, [lr])) == {doctor.PASS}
+    assert _statuses(doctor.check_limitrange(FACTS, opts, {"limitranges": [lr]})) == {doctor.PASS}
 
 
 # -- check_resourcequota ----------------------------------------------------
@@ -345,13 +341,13 @@ def _quota(name="team-quota", hard=None, used=None):
 
 
 def test_resourcequota_absent_passes():
-    assert _statuses(doctor.check_resourcequota(FACTS, {}, [])) == {doctor.PASS}
+    assert _statuses(doctor.check_resourcequota(FACTS, {}, {"quotas": []})) == {doctor.PASS}
 
 
 def test_resourcequota_with_room_passes():
     q = _quota(hard={"limits.cpu": "20", "limits.memory": "80Gi", "pods": "50"},
                used={"limits.cpu": "2", "limits.memory": "4Gi", "pods": "3"})
-    checks = doctor.check_resourcequota(FACTS, {}, [q], [LR_MATCHING])
+    checks = doctor.check_resourcequota(FACTS, {}, {"quotas": [q], "limitranges": [LR_MATCHING]})
     assert _statuses(checks) == {doctor.PASS}
 
 
@@ -359,7 +355,7 @@ def test_resourcequota_too_small_for_the_concurrency_fails():
     """slots=2 needs 4 CPU / 16Gi of quota headroom."""
     q = _quota(hard={"limits.cpu": "4", "limits.memory": "8Gi"},
                used={"limits.cpu": "1", "limits.memory": "2Gi"})
-    checks = doctor.check_resourcequota(FACTS, {}, [q], [LR_MATCHING])
+    checks = doctor.check_resourcequota(FACTS, {}, {"quotas": [q], "limitranges": [LR_MATCHING]})
     fails = [c for c in checks if c.status == doctor.FAIL]
     assert fails and all("team-quota" in c.detail for c in fails)
     assert any("limits.memory" in c.detail for c in fails)
@@ -367,13 +363,13 @@ def test_resourcequota_too_small_for_the_concurrency_fails():
 
 def test_resourcequota_pod_count_includes_crane():
     q = _quota(hard={"pods": "2"}, used={"pods": "0"})      # 2 engines + crane = 3
-    checks = doctor.check_resourcequota(FACTS, {}, [q], [LR_MATCHING])
+    checks = doctor.check_resourcequota(FACTS, {}, {"quotas": [q], "limitranges": [LR_MATCHING]})
     assert any(c.status == doctor.FAIL and "pods" in c.detail for c in checks)
 
 
 def test_resourcequota_counts_the_cpu_alias_as_requests():
     q = _quota(hard={"cpu": "3"}, used={"cpu": "0"})        # alias of requests.cpu
-    checks = doctor.check_resourcequota(FACTS, {}, [q], [LR_MATCHING])
+    checks = doctor.check_resourcequota(FACTS, {}, {"quotas": [q], "limitranges": [LR_MATCHING]})
     assert any(c.status == doctor.FAIL for c in checks)
 
 
@@ -382,7 +378,7 @@ def test_resourcequota_without_a_limitrange_warns_about_explicit_requests():
     resource -- and crane sets no requests on the engines it spawns."""
     q = _quota(hard={"requests.cpu": "40", "requests.memory": "160Gi"},
                used={"requests.cpu": "0", "requests.memory": "0"})
-    checks = doctor.check_resourcequota(FACTS, {}, [q], [])
+    checks = doctor.check_resourcequota(FACTS, {}, {"quotas": [q], "limitranges": []})
     warn = [c for c in checks if c.status == doctor.WARN]
     assert warn and any("LimitRange" in c.detail for c in warn)
 
@@ -391,24 +387,26 @@ def test_resourcequota_without_a_limitrange_warns_about_explicit_requests():
 
 def test_admission_k8s_restricted_fails_on_the_engine_pods():
     ns = {"metadata": {"labels": {"pod-security.kubernetes.io/enforce": "restricted"}}}
-    c = doctor.check_admission({"platform": "k8s"}, ns)[0]
+    c = doctor.check_admission(FACTS, {"platform": "k8s"}, {"namespace": ns})[0]
     assert c.status == doctor.FAIL
     assert "engine" in c.detail
 
 
 def test_admission_k8s_baseline_passes():
-    assert doctor.check_admission({"platform": "k8s"}, NS_BASELINE)[0].status == doctor.PASS
+    assert doctor.check_admission(FACTS, {"platform": "k8s"}, {"namespace": NS_BASELINE})[0].status == doctor.PASS
 
 
 def test_admission_k8s_unlabelled_warns():
-    c = doctor.check_admission({"platform": "k8s"}, {"metadata": {"labels": {}}})[0]
+    c = doctor.check_admission(FACTS, {"platform": "k8s"},
+                               {"namespace": {"metadata": {"labels": {}}}})[0]
     assert c.status == doctor.WARN
 
 
 def test_admission_openshift_needs_a_uid_range():
     ns = {"metadata": {"annotations": {"openshift.io/sa.scc.uid-range": "1000700000/10000"}}}
-    assert doctor.check_admission({"platform": "openshift"}, ns)[0].status == doctor.PASS
-    c = doctor.check_admission({"platform": "openshift"}, {"metadata": {}})[0]
+    assert doctor.check_admission(FACTS, {"platform": "openshift"}, {"namespace": ns})[0].status == doctor.PASS
+    c = doctor.check_admission(FACTS, {"platform": "openshift"},
+                               {"namespace": {"metadata": {}}})[0]
     assert c.status == doctor.WARN
     assert "INHERIT_RUNNING_USER_AND_GROUP" in c.detail
 
@@ -434,7 +432,7 @@ def test_egress_targets_include_the_private_registry():
     (None, doctor.WARN, None),          # could not probe -- never a false FAIL
 ])
 def test_egress_verdicts(rc, status, marker):
-    c = doctor.check_egress({doctor.API_PROBE_URL: rc})[0]
+    c = doctor.check_egress(FACTS, {}, {"probes": {doctor.API_PROBE_URL: rc}})[0]
     assert c.status == status
     assert doctor.API_PROBE_URL in c.detail
     if marker:
@@ -442,69 +440,109 @@ def test_egress_verdicts(rc, status, marker):
 
 
 def test_egress_without_probes_warns():
-    assert doctor.check_egress(None)[0].status == doctor.WARN
+    assert doctor.check_egress(FACTS, {}, {"probes": None})[0].status == doctor.WARN
 
 
-def test_probe_egress_uses_the_crane_pod(monkeypatch):
-    from bzm_opl_gen import livetest
+def _crane(monkeypatch, deployed, output=""):
+    monkeypatch.setattr(doctor.livetest, "kget",
+                        lambda cli, ns, kind, name=None: {"x": 1} if deployed else {})
     seen = []
-    monkeypatch.setattr(doctor, "_crane_deployed", lambda cli, ns: True)
-    monkeypatch.setattr(livetest, "_crane_exec",
-                        lambda cli, ns, sh: seen.append(sh) or "rc=0")
+    monkeypatch.setattr(doctor.livetest, "_crane_exec",
+                        lambda cli, ns, sh: seen.append(sh) or output)
+    return seen
+
+
+def test_probe_egress_uses_one_exec_for_every_target(monkeypatch):
+    """One shell for all the probes: each exec is a spawn plus the round trips
+    to resolve deploy -> pod, and the 20s timeouts would stack serially."""
+    targets = doctor.egress_targets({"ca_bundle": "PEM"})
+    seen = _crane(monkeypatch, True,
+                  "\n".join(f"{t} rc=0" for t in targets))
     probes = doctor.probe_egress("kubectl", "ns1", {"ca_bundle": "PEM"})
-    assert probes[doctor.API_PROBE_URL] == 0
-    assert set(probes) == set(doctor.egress_targets({"ca_bundle": "PEM"}))
+    assert probes == {t: 0 for t in targets}
+    assert len(seen) == 1
     # The CA the profile configures has to be the one curl verifies against.
     assert '--cacert "$REQUESTS_CA_BUNDLE"' in seen[0]
 
 
-def test_probe_egress_reports_a_failed_exec_as_unknown(monkeypatch):
-    """crane_curl returns -1 when the exec itself never ran (pod not ready,
-    no shell). That is 'we could not look', not 'BlazeMeter is unreachable'."""
-    from bzm_opl_gen import livetest
-    monkeypatch.setattr(doctor, "_crane_deployed", lambda cli, ns: True)
-    monkeypatch.setattr(livetest, "_crane_exec", lambda cli, ns, sh: "")
+def test_curl_script_retries_each_probe_once():
+    """A pod's first DNS lookup can fail before CoreDNS answers for it -- seen
+    live, two of three hosts returning rc=6 and all three passing on a rerun.
+    A doctor that FAILs on that is reporting something it cannot reproduce."""
+    script = doctor._curl_script(["https://x/"])
+    assert script.count("curl") == 2
+    assert "sleep 2" in script
+    # The one-shot pod also has to wait for `kubectl run -i` to attach, or the
+    # first lines are written to nobody.
+    assert doctor._curl_script(["https://x/"], settle=2).startswith("sleep 2")
+
+
+def test_probe_egress_reports_a_target_with_no_rc_line_as_unknown(monkeypatch):
+    """The exec never ran, or one curl produced nothing: 'we could not look',
+    not 'BlazeMeter is unreachable'."""
+    _crane(monkeypatch, True, "")
     assert set(doctor.probe_egress("kubectl", "ns1", {}).values()) == {None}
+
+
+def test_probe_egress_mixes_known_and_unknown_targets(monkeypatch):
+    targets = doctor.egress_targets({})
+    _crane(monkeypatch, True, f"{targets[0]} rc=7")
+    probes = doctor.probe_egress("kubectl", "ns1", {})
+    assert probes[targets[0]] == 7
+    assert all(probes[t] is None for t in targets[1:])
 
 
 def test_probe_egress_cannot_honour_a_ca_without_crane(monkeypatch):
     """A bare curl pod has no trust bundle; report 'unknown', not 'broken'."""
-    monkeypatch.setattr(doctor, "_crane_deployed", lambda cli, ns: False)
+    _crane(monkeypatch, False)
     probes = doctor.probe_egress("kubectl", "ns1", {"ca_bundle": "PEM"})
     assert set(probes.values()) == {None}
 
 
-def test_probe_egress_falls_back_to_a_one_shot_pod(monkeypatch):
-    monkeypatch.setattr(doctor, "_crane_deployed", lambda cli, ns: False)
-    monkeypatch.setattr(doctor, "_oneshot_curl", lambda cli, ns, args, opts: 7)
+def test_probe_egress_falls_back_to_one_shot_pod(monkeypatch):
+    """One throwaway pod for all targets -- not one image pull and schedule
+    per URL."""
+    _crane(monkeypatch, False)
+    pods = []
+    monkeypatch.setattr(doctor, "_oneshot_curl",
+                        lambda cli, ns, targets, opts: pods.append(targets)
+                        or {t: 7 for t in targets})
     assert set(doctor.probe_egress("kubectl", "ns1", {}).values()) == {7}
+    assert len(pods) == 1
 
 
 # -- gather_cluster ---------------------------------------------------------
 
-def test_gather_cluster_shape(monkeypatch):
-    payloads = {"nodes": {"items": [_big("a")]},
-                "limitrange": {"items": [LR_MATCHING]},
-                "resourcequota": {"items": []},
-                "ns": NS_BASELINE}
+QUOTA_ITEM = {"kind": "ResourceQuota", "metadata": {"name": "q"},
+              "status": {"hard": {}, "used": {}}}
 
-    def fake_run(cmd, **kw):
-        kind = next(k for k in payloads if k in cmd)
-        return type("R", (), {"returncode": 0, "stdout": json.dumps(payloads[kind])})()
 
-    monkeypatch.setattr(doctor.subprocess, "run", fake_run)
+def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
+    """LimitRanges and ResourceQuotas come back from a single `get` -- one API
+    round trip instead of two -- so the shape has to be split by kind."""
+    calls = []
+
+    def fake_kget(cli, namespace, kind, name=None):
+        calls.append((namespace, kind, name))
+        if kind == "nodes":
+            return {"items": [_big("a")]}
+        if kind == "ns":
+            return NS_BASELINE
+        return {"items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM]}
+
+    monkeypatch.setattr(doctor.livetest, "kget", fake_kget)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
-    assert data["limitranges"] == [LR_MATCHING]
-    assert data["quotas"] == []
+    assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
+    assert data["quotas"] == [QUOTA_ITEM]
     assert data["namespace"] == NS_BASELINE
+    assert ("ns1", "limitrange,resourcequota", None) in calls
 
 
 def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     """`get ns` fails on a namespace that does not exist yet -- that is the
     normal pre-flight case, not a crash."""
-    monkeypatch.setattr(doctor.subprocess, "run",
-                        lambda cmd, **kw: type("R", (), {"returncode": 1, "stdout": ""})())
+    monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data == {"nodes": [], "limitranges": [], "quotas": [], "namespace": {}}
 

@@ -52,20 +52,37 @@ DEFAULT_OPTIONS = {
 # has not pinned engine limits.
 ENGINE_DEFAULT_CPU = "2"
 ENGINE_DEFAULT_MEM = "8Gi"
+# ...and on disk, per concurrent engine (the docs quote decimal GB).
+ENGINE_DISK_GB = 60
+ENGINE_TMP_GB = 40
 
-# Crane's own container limits, from templates/deployment.yaml -- keep in step
-# with it. Crane shares the namespace, so a LimitRange max below these would get
-# the crane pod itself rejected by the LimitRanger admission plugin.
+# Crane's own container resources, substituted into templates/deployment.yaml so
+# these are the single source. The limits matter beyond that pod: crane shares
+# the namespace, so a LimitRange max below them would get the crane pod itself
+# rejected by the LimitRanger, and doctor spends them out of node capacity.
+# Values are the official helm-crane chart's resourcesCrane.
+CRANE_CPU_REQUEST = "250m"
+CRANE_MEM_REQUEST = "512Mi"
 CRANE_CPU_LIMIT = "1"
 CRANE_MEM_LIMIT = "2Gi"
+
+# What crane stamps on the engine pods it spawns, explicitly. A LimitRange
+# cannot override it -- defaultRequest only fills fields a pod leaves unset --
+# so this is what the scheduler packs engines by, whatever their limits say.
+ENGINE_STAMPED_REQUEST_CPU = "250m"
+ENGINE_STAMPED_REQUEST_MEM = "256Mi"
 
 LIMITRANGE_FILE = "bzm_limitrange.yaml"
 
 
 def _quantity(o, key, default, parse):
     """Parse an engine quantity option, naming the option in the error --
-    quantity's own message only carries the bad value."""
-    value = o.get(key) or default
+    quantity's own message only carries the bad value. `default` is returned
+    as-is when the option is unset, so a caller with an already-parsed fallback
+    does not have to format it back into a string for re-parsing."""
+    value = o.get(key)
+    if not value:
+        return parse(default) if isinstance(default, str) else default
     try:
         return parse(value)
     except ValueError as e:
@@ -83,8 +100,8 @@ def engine_requests(o):
     """(cpu_millicores, mem_bytes) engines should *request* -- their limits
     unless the customer deliberately overcommits."""
     cpu_limit, mem_limit = engine_size(o)
-    cpu = _quantity(o, "engine_cpu_request", format_cpu(cpu_limit), parse_cpu)
-    mem = _quantity(o, "engine_mem_request", format_memory(mem_limit), parse_memory)
+    cpu = _quantity(o, "engine_cpu_request", cpu_limit, parse_cpu)
+    mem = _quantity(o, "engine_mem_request", mem_limit, parse_memory)
     # k8s rejects a pod whose request exceeds its limit outright.
     if cpu > cpu_limit:
         raise ValueError(f"engine_cpu_request ({o['engine_cpu_request']}) exceeds "
@@ -104,38 +121,19 @@ def _limitrange_max(o):
             max(mem_limit, parse_memory(CRANE_MEM_LIMIT)))
 
 
-def _limitrange(o):
-    """Namespace ceiling and defaults for pods that declare no resources.
-
-    CPU and memory only: KUBERNETES_REQUESTS_EPHEMERAL_STORAGE /
-    KUBERNETES_LIMITS_EPHEMERAL_STORAGE already exist as agent envs, so
-    ephemeral storage is not the gap this addresses.
-    """
+def _limitrange_sub(o):
+    """Substitutions for templates/limitrange.yaml."""
     cpu_limit, mem_limit = engine_size(o)
     cpu_req, mem_req = engine_requests(o)
     max_cpu, max_mem = _limitrange_max(o)
-    return f"""apiVersion: v1
-kind: LimitRange
-metadata:
-  name: blazemeter-engine-sizing
-  namespace: {o['namespace']}
-spec:
-  limits:
-    # max is the part that binds the engine: it is enforced at admission, so an
-    # engine sized above it is rejected outright. defaultRequest/default only
-    # reach pods that declare nothing -- the taurus engine declares its own
-    # requests (250m/256Mi) and is untouched by them.
-    - type: Container
-      defaultRequest:
-        cpu: "{format_cpu(cpu_req)}"
-        memory: "{format_memory(mem_req)}"
-      default:
-        cpu: "{format_cpu(cpu_limit)}"
-        memory: "{format_memory(mem_limit)}"
-      max:
-        cpu: "{format_cpu(max_cpu)}"
-        memory: "{format_memory(max_mem)}"
-"""
+    return {"NAMESPACE": o["namespace"],
+            "ENGINE_CPU_REQUEST": format_cpu(cpu_req),
+            "ENGINE_MEM_REQUEST": format_memory(mem_req),
+            "ENGINE_CPU_LIMIT": format_cpu(cpu_limit),
+            "ENGINE_MEM_LIMIT": format_memory(mem_limit),
+            "LIMITRANGE_MAX_CPU": format_cpu(max_cpu),
+            "LIMITRANGE_MAX_MEM": format_memory(max_mem)}
+
 
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
@@ -183,6 +181,23 @@ def proxy_url(url, p):
         userinfo += ":" + quote(p["password"], safe="")
     scheme, sep, rest = url.partition("://")
     return f"{scheme}{sep}{userinfo}@{rest}" if sep else f"{userinfo}@{url}"
+
+
+DEFAULT_NO_PROXY = "kubernetes.default,127.0.0.1,localhost"
+
+
+def proxy_env(o):
+    """The proxy environment a pod needs, as {NAME: value}, credentials already
+    embedded in the URLs. One builder for the three places that need it: the
+    ConfigMap, the Secret, and doctor's probe pod."""
+    p = o.get("proxy") or {}
+    env = {}
+    for name, key in (("HTTP_PROXY", "http"), ("HTTPS_PROXY", "https")):
+        if p.get(key):
+            env[name] = proxy_url(p[key], p)
+    if p:
+        env["NO_PROXY"] = p.get("no_proxy", DEFAULT_NO_PROXY)
+    return env
 
 
 def _proxy_has_creds(o):
@@ -265,11 +280,9 @@ def _configmap(facts, o):
             if _proxy_has_creds(o):
                 lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
                 lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
-            if p.get("http"):
-                lines.append(f"  HTTP_PROXY: \"{proxy_url(p['http'], p)}\"")
-            if p.get("https"):
-                lines.append(f"  HTTPS_PROXY: \"{proxy_url(p['https'], p)}\"")
-        lines.append(f"  NO_PROXY: {p.get('no_proxy', 'kubernetes.default,127.0.0.1,localhost')}")
+            lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items()
+                      if k != "NO_PROXY"]
+        lines.append(f"  NO_PROXY: {proxy_env(o)['NO_PROXY']}")
     if o["tolerations"]:
         lines += [
             "  # Engines inherit the crane pod's tolerations via this env.",
@@ -353,12 +366,8 @@ data:
 def _proxy_secret_block(o):
     if not (_proxy_has_creds(o) and o["use_secret"]):
         return ""
-    p = o["proxy"]
     lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
-    if p.get("http"):
-        lines.append(f"  HTTP_PROXY: \"{proxy_url(p['http'], p)}\"")
-    if p.get("https"):
-        lines.append(f"  HTTPS_PROXY: \"{proxy_url(p['https'], p)}\"")
+    lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
     return "\n".join(lines) + "\n"
 
 
@@ -446,6 +455,10 @@ def generate(facts, options):
             if o["pull_secret"] else ""
         ),
         "SECURITY_CONTEXT_BLOCK": _security_context(o),
+        "CRANE_CPU_REQUEST": CRANE_CPU_REQUEST,
+        "CRANE_MEM_REQUEST": CRANE_MEM_REQUEST,
+        "CRANE_CPU_LIMIT": CRANE_CPU_LIMIT,
+        "CRANE_MEM_LIMIT": CRANE_MEM_LIMIT,
         "SECRET_REF_BLOCK": (
             "            - secretRef:\n                name: blazemeter-secret\n"
             if o["use_secret"] else ""
@@ -475,7 +488,7 @@ def generate(facts, options):
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
     if o["emit_limitrange"]:
-        out[LIMITRANGE_FILE] = _limitrange(o)
+        out[LIMITRANGE_FILE] = _tpl("limitrange.yaml").substitute(_limitrange_sub(o))
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -545,7 +558,7 @@ def _readme(facts, o, files):
 
 Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
 `KUBERNETES_RESOURCES_LIMITS_MEMORY`. It also sets the engine's **requests**, to
-250m / 256Mi -- roughly an eighth of what the engine is allowed to use. The
+{ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM} -- roughly an eighth of what the engine is allowed to use. The
 scheduler packs nodes on requests, so on a busy node the run competes for CPU it
 was never given, and the numbers the test reports are wrong rather than merely
 slow.
@@ -604,8 +617,9 @@ add a mutating admission policy that rewrites the engine pod's requests --
 Then confirm the agent shows **online** in BlazeMeter (Settings -> Private Locations),
 or run the generator's live test: `bzm-opl-gen livetest ...`
 
-Engines need **2 CPU + 8Gi RAM + 60GB disk (40GB /tmp)** per concurrent engine.
+Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
 Egress required to *.blazemeter.com and the image registry.
+Check the target cluster against that with `bzm-opl-gen doctor`.
 {limitrange}"""
 
 

@@ -23,6 +23,7 @@ Cluster targets:
                Docker Desktop's Rosetta emulation (works, but engines are slow)
 """
 
+import functools
 import glob
 import json
 import os
@@ -56,8 +57,10 @@ def _run(cmd, check=True, capture=False):
                           capture_output=capture)
 
 
+@functools.cache
 def cli_tool():
-    """oc if available (OpenShift-friendly), else kubectl."""
+    """oc if available (OpenShift-friendly), else kubectl. Cached: which one is
+    on PATH cannot change mid-run, and run() asks several times."""
     for c in ("oc", "kubectl"):
         try:
             subprocess.run([c, "version", "--client"], capture_output=True, check=True)
@@ -601,11 +604,13 @@ def engine_request_gap(pod):
                  if k in lim and k in req and req[k] != lim[k]]
         if short:
             touched = LIMIT_RANGER_ANNOTATION in (pod["metadata"].get("annotations") or {})
+            note = "" if touched else (
+                f" (no {LIMIT_RANGER_ANNOTATION} annotation on the pod: a "
+                f"namespace LimitRange did not and cannot change them)")
             return (f"engine {c.get('name')} requests {dict(req)} against limits "
                     f"{dict(lim)} -- the scheduler packs on requests, so engines "
                     f"pack {'; '.join(short)} tighter than they run. Crane sets "
-                    f"these explicitly"
-                    f"{'' if touched else ' (no ' + LIMIT_RANGER_ANNOTATION + ' annotation on the pod: a namespace LimitRange did not and cannot change them)'}")
+                    f"these explicitly{note}")
     return None
 
 
@@ -626,10 +631,18 @@ def wait_master_done(client, master_id, timeout=900, poll=20):
     return last
 
 
-def _kget(cli, namespace, kind, name):
-    out = subprocess.run([cli, "-n", namespace, "get", kind, name, "-o", "json"],
-                         capture_output=True, text=True)
-    return json.loads(out.stdout) if out.returncode == 0 else {}
+def kget(cli, namespace, kind, name=None):
+    """`get -o json` -> parsed object, {} when it is not there. Omit `name` for
+    the whole kind (a list, under "items"); a namespace that does not exist yet
+    is the normal preflight case, not an error."""
+    cmd = [cli, "get", kind, "-o", "json"]
+    if name:
+        cmd.insert(3, name)
+    if namespace:
+        cmd[1:1] = ["-n", namespace]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    return json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else {}
+
 
 
 def assert_live_config(cli, namespace, facts, opts):
@@ -638,7 +651,7 @@ def assert_live_config(cli, namespace, facts, opts):
     the same as one that is configured correctly."""
     from .facts import select_images
     fails = []
-    cm = _kget(cli, namespace, "configmap", "blazemeter-configmap").get("data", {})
+    cm = kget(cli, namespace, "configmap", "blazemeter-configmap").get("data", {})
     if not cm:
         return ["blazemeter-configmap not found in the cluster"]
 

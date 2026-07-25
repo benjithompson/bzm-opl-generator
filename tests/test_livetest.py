@@ -84,7 +84,7 @@ def test_apply_switches_to_server_side_for_big_manifests(tmp_path, monkeypatch):
 def _live(monkeypatch, cm_data, images=(), ca_certs="2"):
     """Stand in for a deployed cluster: ConfigMap contents, running images, and
     what the crane pod sees at the CA path."""
-    monkeypatch.setattr(livetest, "_kget", lambda *a, **k: {"data": cm_data})
+    monkeypatch.setattr(livetest, "kget", lambda *a, **k: {"data": cm_data})
     monkeypatch.setattr(livetest, "_pod_images", lambda *a: list(images))
     monkeypatch.setattr(livetest, "_crane_exec", lambda *a: ca_certs)
 
@@ -210,7 +210,8 @@ def test_policy_enforced_detects_calico(monkeypatch):
     assert not livetest.policy_enforced()
 
 
-def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True):
+def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True,
+                resources=None, annotations=None):
     env = []
     mounts = []
     if ca:
@@ -221,10 +222,11 @@ def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True):
                        "subPath": "ca-bundle.crt"})
     if proxy:
         env.append({"name": "HTTPS_PROXY", "value": "http://bzm:s3cr3t@1.2.3.4:8080"})
-    return {"metadata": {"name": "engine-abc"},
+    return {"metadata": {"name": "engine-abc", "annotations": annotations or {}},
             "status": {"phase": "Running"},
-            "spec": {"containers": [{"image": image, "env": env,
-                                     "volumeMounts": mounts}]}}
+            "spec": {"containers": [{"name": "ctr", "image": image, "env": env,
+                                     "volumeMounts": mounts,
+                                     "resources": resources or {}}]}}
 
 
 ENGINE_OPTS = {"private_registry": "reg:5001", "ca_bundle": CA_PEM,
@@ -253,11 +255,9 @@ def test_engine_config_catches_missing_proxy_env():
 
 
 def _sized_pod(requests, limits, annotations=None):
-    """The shape a real run returns: crane's own values on the engine container."""
-    return {"metadata": {"name": "r-v4-abc", "annotations": annotations or {}},
-            "spec": {"containers": [{"name": "ctr", "image": "v4:1",
-                                     "resources": {"requests": requests,
-                                                   "limits": limits}}]}}
+    """A real engine pod, sized as crane sizes it."""
+    return _engine_pod(resources={"requests": requests, "limits": limits},
+                       annotations=annotations)
 
 
 def test_engine_request_gap_is_what_a_real_run_returns():
