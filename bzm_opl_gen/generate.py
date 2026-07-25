@@ -37,9 +37,12 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
-    # There is no KUBERNETES_RESOURCES_REQUESTS_* env in the agent reference, so
-    # engine cpu/memory *requests* can only be set namespace-wide, by a
-    # LimitRange we emit. Opt-in: it applies to every pod in the namespace.
+    # A namespace LimitRange: caps what any pod in the namespace may ask for,
+    # and supplies requests/limits to the ones that declare none. It does NOT
+    # fix the taurus engine -- crane sets that pod's requests explicitly, and
+    # defaultRequest only fills fields a pod leaves unset (verified on a live
+    # run: the engine pod comes back with no limit-ranger annotation). Opt-in,
+    # because it applies to every pod in the namespace.
     "emit_limitrange": False,
     "engine_cpu_request": None,      # defaults to engine_cpu_limit
     "engine_mem_request": None,      # defaults to engine_mem_limit
@@ -76,7 +79,7 @@ def engine_size(o):
             _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
 
 
-def _engine_requests(o):
+def engine_requests(o):
     """(cpu_millicores, mem_bytes) engines should *request* -- their limits
     unless the customer deliberately overcommits."""
     cpu_limit, mem_limit = engine_size(o)
@@ -92,17 +95,25 @@ def _engine_requests(o):
     return cpu, mem
 
 
+def _limitrange_max(o):
+    """The namespace ceiling: the engine size, but never below crane's own
+    limits -- crane shares the namespace, and a max under them would have the
+    LimitRanger reject the crane pod itself."""
+    cpu_limit, mem_limit = engine_size(o)
+    return (max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT)),
+            max(mem_limit, parse_memory(CRANE_MEM_LIMIT)))
+
+
 def _limitrange(o):
-    """Namespace default requests for engine pods.
+    """Namespace ceiling and defaults for pods that declare no resources.
 
     CPU and memory only: KUBERNETES_REQUESTS_EPHEMERAL_STORAGE /
     KUBERNETES_LIMITS_EPHEMERAL_STORAGE already exist as agent envs, so
-    ephemeral storage is not the gap this closes.
+    ephemeral storage is not the gap this addresses.
     """
     cpu_limit, mem_limit = engine_size(o)
-    cpu_req, mem_req = _engine_requests(o)
-    max_cpu = max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT))
-    max_mem = max(mem_limit, parse_memory(CRANE_MEM_LIMIT))
+    cpu_req, mem_req = engine_requests(o)
+    max_cpu, max_mem = _limitrange_max(o)
     return f"""apiVersion: v1
 kind: LimitRange
 metadata:
@@ -110,9 +121,10 @@ metadata:
   namespace: {o['namespace']}
 spec:
   limits:
-    # Crane sets engine *limits* from KUBERNETES_RESOURCES_LIMITS_CPU/MEMORY;
-    # it has no requests equivalent, so without this the scheduler packs
-    # engines at crane's 250m/256Mi defaults.
+    # max is the part that binds the engine: it is enforced at admission, so an
+    # engine sized above it is rejected outright. defaultRequest/default only
+    # reach pods that declare nothing -- the taurus engine declares its own
+    # requests (250m/256Mi) and is untouched by them.
     - type: Container
       defaultRequest:
         cpu: "{format_cpu(cpu_req)}"
@@ -160,7 +172,7 @@ def _ca_cfg(o):
     return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
 
 
-def _proxy_url(url, p):
+def proxy_url(url, p):
     """Embed credentials in the proxy URL (http://user:pass@host:port) --
     BlazeMeter has no separate proxy-auth env vars; the URL carries them."""
     user = p.get("username")
@@ -254,9 +266,9 @@ def _configmap(facts, o):
                 lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
                 lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
             if p.get("http"):
-                lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
+                lines.append(f"  HTTP_PROXY: \"{proxy_url(p['http'], p)}\"")
             if p.get("https"):
-                lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
+                lines.append(f"  HTTPS_PROXY: \"{proxy_url(p['https'], p)}\"")
         lines.append(f"  NO_PROXY: {p.get('no_proxy', 'kubernetes.default,127.0.0.1,localhost')}")
     if o["tolerations"]:
         lines += [
@@ -344,9 +356,9 @@ def _proxy_secret_block(o):
     p = o["proxy"]
     lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
     if p.get("http"):
-        lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
+        lines.append(f"  HTTP_PROXY: \"{proxy_url(p['http'], p)}\"")
     if p.get("https"):
-        lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
+        lines.append(f"  HTTPS_PROXY: \"{proxy_url(p['https'], p)}\"")
     return "\n".join(lines) + "\n"
 
 
@@ -419,7 +431,7 @@ def generate(facts, options):
                 f"({[s['id'] for s in ships]})"
             )
 
-    _engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
+    engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
 
     ca = _ca_cfg(o)
     sub = {
@@ -526,22 +538,37 @@ def _readme(facts, o, files):
                   f"stores a copy in an annotation, which is capped at 256KB.\n")
     limitrange = ""
     if o["emit_limitrange"]:
-        cpu_req, mem_req = _engine_requests(o)
+        cpu_req, mem_req = engine_requests(o)
+        max_cpu, max_mem = _limitrange_max(o)
         limitrange = f"""
 ## Engine sizing (`bzm_limitrange.yaml`)
 
 Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
-`KUBERNETES_RESOURCES_LIMITS_MEMORY`. The agent env reference has no requests
-equivalent, so engine pods keep crane's default **requests** of 250m / 256Mi --
-roughly an eighth of what an engine actually uses. The scheduler packs nodes on
-requests, so on a busy node the run competes for CPU it was never given, and the
-numbers the test reports are wrong rather than merely slow.
+`KUBERNETES_RESOURCES_LIMITS_MEMORY`. It also sets the engine's **requests**, to
+250m / 256Mi -- roughly an eighth of what the engine is allowed to use. The
+scheduler packs nodes on requests, so on a busy node the run competes for CPU it
+was never given, and the numbers the test reports are wrong rather than merely
+slow.
 
-This LimitRange sets the namespace `defaultRequest` to
-**{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** so engines request what
-they are limited to. It is namespace-wide: if `{o['namespace']}` also runs other
-workloads, containers that set no requests of their own get these defaults too --
-give the private location its own namespace if that is a problem.
+**This file does not fix that**, and nothing in these manifests can: a
+LimitRange's `defaultRequest` only fills in fields a pod leaves unset, and crane
+sets the engine's requests explicitly. What this file does do:
+
+- `max` **{format_cpu(max_cpu)} CPU / {format_memory(max_mem)}** is enforced at
+  admission -- a pod above it is rejected, so nothing in the namespace can be
+  sized past the engine (raised where needed to clear crane's own limits, or the
+  crane pod would be rejected in its own namespace).
+- `defaultRequest` **{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** and
+  the matching `default` reach every pod in the namespace that declares no
+  resources of its own -- including crane's per-run job pods, which otherwise
+  schedule as best-effort.
+
+It is namespace-wide, so other workloads in `{o['namespace']}` get those
+defaults too. Give the private location its own namespace if that is a problem.
+
+To size engines honestly today, give the location nodes it does not share, or
+add a mutating admission policy that rewrites the engine pod's requests --
+`bzm-opl-gen livetest --run-test` prints the live gap under `ENGINE SIZING:`.
 """
     mirror = ""
     if o["private_registry"]:

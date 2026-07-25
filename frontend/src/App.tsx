@@ -720,9 +720,9 @@ export default function App() {
                     </div>
                   )}
                   <Check label="Emit a namespace LimitRange (bzm_limitrange.yaml)"
-                    hint="The agent envs set engine limits only — without this, engine pods
-                          request crane's 250m/256Mi and the scheduler packs them eight to a
-                          node's worth. Applies namespace-wide."
+                    hint="Caps the namespace at the engine size and gives pods that declare
+                          no resources a sensible default. It cannot change the taurus engine
+                          itself — crane sets that pod's requests to 250m/256Mi explicitly."
                     checked={!!options.emit_limitrange}
                     onChange={(v) => set("emit_limitrange", v)} />
                   <p className="text-[11px] text-slate-400">

@@ -311,8 +311,12 @@ def test_readme_documents_limitrange_and_applies_it():
     readme = files["README.md"]
     assert "apply -f bzm_limitrange.yaml" in readme
     assert "KUBERNETES_RESOURCES_LIMITS_CPU" in readme
-    assert "250m" in readme                 # crane's request default engines inherit
+    assert "250m" in readme                 # the requests crane stamps on engines
     assert "namespace" in readme
+    # The README must not promise the one thing this object cannot do: crane
+    # sets the engine's requests explicitly, so defaultRequest never reaches it.
+    assert "does not fix that" in readme
+    assert "only fills in fields a pod leaves unset" in readme
     plain = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
     assert "bzm_limitrange.yaml" not in plain
 

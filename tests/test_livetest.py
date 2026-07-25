@@ -252,6 +252,38 @@ def test_engine_config_catches_missing_proxy_env():
     assert any("bypassing the customer's proxy" in f for f in fails)
 
 
+def _sized_pod(requests, limits, annotations=None):
+    """The shape a real run returns: crane's own values on the engine container."""
+    return {"metadata": {"name": "r-v4-abc", "annotations": annotations or {}},
+            "spec": {"containers": [{"name": "ctr", "image": "v4:1",
+                                     "resources": {"requests": requests,
+                                                   "limits": limits}}]}}
+
+
+def test_engine_request_gap_is_what_a_real_run_returns():
+    """Observed on a live run: limits 1/4Gi from our envs, requests 250m/256Mi
+    from crane -- and no limit-ranger annotation, so the LimitRange we emit did
+    not touch the pod and could not have."""
+    pod = _sized_pod({"cpu": "250m", "memory": "256Mi"},
+                     {"cpu": "1", "memory": "4Gi"})
+    gap = livetest.engine_request_gap(pod)
+    assert "250m" in gap and "cpu" in gap and "memory" in gap
+    assert "cannot change them" in gap
+
+
+def test_engine_request_gap_silent_when_requests_match_limits():
+    assert livetest.engine_request_gap(
+        _sized_pod({"cpu": "1", "memory": "4Gi"}, {"cpu": "1", "memory": "4Gi"})) is None
+
+
+def test_engine_request_gap_notes_when_a_limitrange_did_act():
+    """Crane's test-job pods declare nothing, so the LimitRanger does fill them
+    in and stamps the annotation -- don't blame the LimitRange then."""
+    pod = _sized_pod({"cpu": "250m", "memory": "256Mi"}, {"cpu": "1", "memory": "4Gi"},
+                     annotations={livetest.LIMIT_RANGER_ANNOTATION: "set: cpu request"})
+    assert "cannot change them" not in livetest.engine_request_gap(pod)
+
+
 def test_engine_pods_excludes_crane(monkeypatch):
     items = {"items": [{"metadata": {"name": "crane-7d9-abc"}},
                        {"metadata": {"name": "taurus-cloud-xyz"}}]}

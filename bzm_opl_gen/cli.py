@@ -236,7 +236,11 @@ def cmd_livetest(a):
         print(f"note: no {a.manifests}/profile.json -- skipping the read-back "
               f"configuration checks (regenerate to enable them)")
     proxy_user = proxy_pass = None
-    regenerate = None
+    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
+    # the engine sizing); the callback needs a profile to merge onto, so it is
+    # only available when one was found.
+    regenerate = (_regenerator(client, f, a, ship_id)
+                  if opts is not None and (a.local_proxy or a.run_test) else None)
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
         sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "
                  "the policy denies everything except DNS, the apiserver, and "
@@ -247,7 +251,6 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
-        regenerate = _regenerator(client, f, a, ship_id)
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
                       cluster=a.cluster, timeout=a.timeout, keep=a.keep,
                       facts=f, local_registry=a.local_registry,
@@ -351,10 +354,10 @@ def main():
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
     g.add_argument("--limitrange", action="store_true",
-                   help="emit bzm_limitrange.yaml, a namespace LimitRange whose "
-                        "defaultRequest matches the engine size -- the only way "
-                        "to set engine *requests* (the agent envs cover limits "
-                        "only, so engines otherwise schedule at 250m/256Mi)")
+                   help="emit bzm_limitrange.yaml: a namespace ceiling at the "
+                        "engine size, plus requests/limits for pods that declare "
+                        "none. It does NOT change the taurus engine, whose "
+                        "requests crane sets itself (250m/256Mi)")
     g.add_argument("--engine-cpu-request", dest="engine_cpu_request",
                    help="LimitRange defaultRequest CPU (default: the CPU limit)")
     g.add_argument("--engine-mem-request", dest="engine_mem_request",

@@ -117,7 +117,7 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
 | `engine_cpu_limit` / `engine_mem_limit` | – (documented 2 / 8Gi) | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` — the limits crane stamps on every engine it spawns |
-| `emit_limitrange` | `false` | emit `bzm_limitrange.yaml`, a namespace LimitRange whose `defaultRequest` matches the engine size — the only lever for engine **requests** (see below) |
+| `emit_limitrange` | `false` | emit `bzm_limitrange.yaml`: a namespace `max` at the engine size plus defaults for pods that declare no resources. It does **not** change the taurus engine — see below |
 | `engine_cpu_request` / `engine_mem_request` | – (= the limits) | override that `defaultRequest`; must not exceed the limits |
 | `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
 
@@ -131,29 +131,41 @@ performance engines always ship; browser/grid (functionalGui), mock-service
 (mockServices), SV bridge (sv-bridge), and recorder (proxyRecorder) images only
 when that feature is enabled on the location. `images --all` lists everything.
 
-### Engine requests, and why they need a LimitRange
+### Engine requests: the gap, and what a LimitRange can and cannot do
 
 The agent env reference exposes engine **limits** only —
-`KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY`. There is no requests equivalent,
-so an engine pod that crane creates carries crane's own defaults of **250m /
-256Mi** as its requests, whatever its limits say. The scheduler packs nodes on
+`KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY`. Crane nonetheless sets the engine
+pod's **requests**, to a fixed **250m / 256Mi**. The scheduler packs nodes on
 requests, so it will put roughly eight engines where two fit — and a run that
 competes for CPU it was never given reports numbers that are wrong, not merely
 slow.
 
-The only lever is namespace-wide, and it is ours to emit: `generate
---limitrange` writes `bzm_limitrange.yaml`, a `LimitRange` whose
-`defaultRequest` matches the engine size. Two things follow from it being
-namespace-wide:
+**A LimitRange cannot fix this, and neither can anything else in these
+manifests.** `defaultRequest` only fills in fields a pod leaves unset, and crane
+sets them explicitly. Verified on a live run: the engine pod comes back with
+`requests 250m/256Mi`, `limits 1/4Gi` and **no `kubernetes.io/limit-ranger`
+annotation** at all, while crane's per-run job pods — which declare nothing — do
+carry one and get the defaults. `livetest --run-test` prints the live gap under
+`ENGINE SIZING:`.
 
-- Other workloads in the namespace that set no requests get these defaults too.
-  Give the private location its own namespace if that matters.
-- Its `max` is raised to cover crane's own limits (1 CPU / 2Gi) when the engines
-  are configured smaller — a `max` below them would have the LimitRanger
-  admission plugin reject the crane pod in its own namespace.
+`generate --limitrange` is still worth emitting for what it does do:
+
+- `max` is enforced at admission, so nothing in the namespace can be sized past
+  the engine. It is raised to cover crane's own limits (1 CPU / 2Gi) when the
+  engines are configured smaller — a `max` below them would have the LimitRanger
+  reject the crane pod in its own namespace.
+- `defaultRequest` / `default` reach every pod in the namespace that declares no
+  resources, including crane's per-run job pods, which otherwise schedule as
+  best-effort.
+
+It is namespace-wide, so other workloads get those defaults too — give the
+private location its own namespace if that matters. To size engines honestly
+today, give the location nodes it does not share, or add a mutating admission
+policy that rewrites the engine pod's requests.
 
 `doctor` reports what the target namespace already has: an existing LimitRange
-whose defaults would win, or none at all.
+whose `max`/`min`/`maxLimitRequestRatio` would reject the engine, defaults that
+would collide with ours, or no LimitRange at all.
 
 ## Preflight (`doctor`)
 

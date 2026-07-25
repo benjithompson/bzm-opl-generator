@@ -56,7 +56,7 @@ def _run(cmd, check=True, capture=False):
                           capture_output=capture)
 
 
-def _cli_for(manifest_dir):
+def cli_tool():
     """oc if available (OpenShift-friendly), else kubectl."""
     for c in ("oc", "kubectl"):
         try:
@@ -366,7 +366,7 @@ def _apiserver_targets(cli):
 CURL_DNS, CURL_BLOCKED = 6, (7, 28)
 
 
-def _crane_curl(cli, namespace, args):
+def crane_curl(cli, namespace, args):
     """Run curl inside the crane pod and return its exit code. curl rather than
     python: /usr/local/bin/python3 in the crane image is a crane-agent shim, not
     an interpreter."""
@@ -385,9 +385,9 @@ def assert_egress_contained(cli, namespace, host="a.blazemeter.com"):
     on its own is equally consistent with a policy so tight that nothing works,
     which would pass a containment check while proving nothing.
     """
-    direct = _crane_curl(cli, namespace,
+    direct = crane_curl(cli, namespace,
                          f"-s -o /dev/null --max-time 6 --noproxy '*' https://{host}/")
-    proxied = _crane_curl(cli, namespace,
+    proxied = crane_curl(cli, namespace,
                           f'-s -o /dev/null --max-time 20 --cacert "$REQUESTS_CA_BUNDLE" '
                           f"https://{host}/api/v4/web/version")
     print(f"  egress probes from the crane pod: direct rc={direct}, "
@@ -519,6 +519,9 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
             return [f"crane never created an engine pod for master {master_id} "
                     f"-- RBAC, resources, or IMAGE_OVERRIDES for the engine"]
         fails = assert_engine_config(pod, opts)
+        gap = engine_request_gap(pod)
+        if gap:
+            print("  ENGINE SIZING: " + gap)
         status = wait_master_done(client, master_id, run_timeout)
         if status != "ENDED":
             fails.append(f"the run finished as {status}, not ENDED -- the engine "
@@ -572,6 +575,38 @@ def assert_engine_config(pod, opts):
             fails.append("engine pod has no HTTPS_PROXY -- engines would egress "
                          "directly, bypassing the customer's proxy")
     return fails
+
+
+LIMIT_RANGER_ANNOTATION = "kubernetes.io/limit-ranger"
+
+
+def engine_request_gap(pod):
+    """The gap between what an engine is limited to and what it asks the
+    scheduler for, or None when there is none.
+
+    Reported, not asserted: nothing in the manifests can close it. Crane sets
+    the engine's requests *explicitly* (250m/256Mi observed on a real run), and
+    a LimitRange's defaultRequest only fills fields a pod leaves unset -- the
+    engine pod comes back with no kubernetes.io/limit-ranger annotation at all,
+    while crane's own test-job pods, which declare nothing, do get one. The
+    scheduler packs nodes on requests, so this is what decides how many engines
+    land on a node, whatever the limits say.
+    """
+    for c in pod["spec"].get("containers", []):
+        res = c.get("resources") or {}
+        req, lim = res.get("requests") or {}, res.get("limits") or {}
+        if not lim:
+            continue
+        short = [k for k in ("cpu", "memory")
+                 if k in lim and k in req and req[k] != lim[k]]
+        if short:
+            touched = LIMIT_RANGER_ANNOTATION in (pod["metadata"].get("annotations") or {})
+            return (f"engine {c.get('name')} requests {dict(req)} against limits "
+                    f"{dict(lim)} -- the scheduler packs on requests, so engines "
+                    f"pack {'; '.join(short)} tighter than they run. Crane sets "
+                    f"these explicitly"
+                    f"{'' if touched else ' (no ' + LIMIT_RANGER_ANNOTATION + ' annotation on the pod: a namespace LimitRange did not and cannot change them)'}")
+    return None
 
 
 def wait_master_done(client, master_id, timeout=900, poll=20):
@@ -688,7 +723,7 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
     if os.path.exists(stale):
         os.remove(stale)          # else deploy() re-applies the previous render
-    cli = _cli_for(manifest_dir)
+    cli = cli_tool()
     _run([cli, "-n", namespace, "delete", "cm", CA_CONFIGMAP, "--ignore-not-found"],
          check=False, capture=True)
     deploy(manifest_dir, namespace, cluster)
@@ -719,7 +754,7 @@ def _apply(cli, namespace, path):
 
 def deploy(manifest_dir, namespace, cluster="current", insecure_registry=None):
     ensure_cluster(cluster, insecure_registry)
-    cli = _cli_for(manifest_dir)
+    cli = cli_tool()
     _run([cli, "get", "ns", namespace], check=False)
     _run([cli, "create", "ns", namespace], check=False)
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
@@ -751,7 +786,7 @@ def teardown(manifest_dir, namespace, cluster="current"):
     if cluster == "minikube":
         _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
         return
-    cli = _cli_for(manifest_dir)
+    cli = cli_tool()
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
 
@@ -803,7 +838,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             overlay = {**proxy_overlay(host, PROXY_PORT, ca_pem,
                                        proxy_user, proxy_pass), **engine_overlay}
             if contain_egress:
-                apply_egress_policy(_cli_for(manifest_dir), namespace, host,
+                apply_egress_policy(cli_tool(), namespace, host,
                                     manifest_dir)
             if negative_control_check and not negative_control(
                     regenerate, overlay, manifest_dir, namespace, cluster):
@@ -831,14 +866,14 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                 why = ("agent online via the MITM proxy -- proxy env and CA "
                        "trust both in force")
         if ok:
-            fails = assert_live_config(_cli_for(manifest_dir), namespace,
+            fails = assert_live_config(cli_tool(), namespace,
                                        facts, opts or {})
             if local_proxy:
                 fails += proxy_log_failures(marks)
             if contain_egress:
-                fails += assert_egress_contained(_cli_for(manifest_dir), namespace)
+                fails += assert_egress_contained(cli_tool(), namespace)
             if run_test:
-                fails += run_engine_test(client, _cli_for(manifest_dir), namespace,
+                fails += run_engine_test(client, cli_tool(), namespace,
                                          run_test, harbor_id, opts or {})
             for f in fails:
                 print("  CONFIG FAILURE: " + f)

@@ -24,7 +24,7 @@ import subprocess
 from . import livetest
 from .api import DEFAULT_THREADS_PER_ENGINE
 from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, ENGINE_DEFAULT_CPU,
-                       ENGINE_DEFAULT_MEM, _proxy_url, engine_size)
+                       ENGINE_DEFAULT_MEM, engine_size, proxy_url)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -36,12 +36,16 @@ ENGINE_DISK_GB = 60
 ENGINE_TMP_GB = 40
 GB = 10 ** 9                     # the docs quote decimal GB, not GiB
 
-# Crane's built-in pod defaults -- what engines request when nothing else says
-# otherwise. Wildly below a real engine, which is why a LimitRange matters.
-CRANE_DEFAULT_CPU = "250m"
-CRANE_DEFAULT_MEM = "256Mi"
+# What crane stamps on the engine pods it spawns, explicitly -- an eighth of a
+# real engine, and not something a LimitRange can override (defaultRequest only
+# fills fields a pod leaves unset). Confirmed on a live run.
+ENGINE_STAMPED_REQUEST_CPU = "250m"
+ENGINE_STAMPED_REQUEST_MEM = "256Mi"
 
 API_PROBE_URL = "https://a.blazemeter.com/api/v4/web/version"
+# Engines upload results and artifacts to hosts crane itself never contacts, so
+# an egress rule shaped around crane alone passes here and still fails a run.
+ENGINE_PROBE_URLS = ("https://data.blazemeter.com/", "https://storage.blazemeter.com/")
 CURL_IMAGE = "curlimages/curl:8.11.1"
 
 
@@ -92,7 +96,7 @@ def check_threads_per_engine(facts, opts):
     base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
     ratio = min(cpu / base_cpu, mem / base_mem)
     supported = int(DEFAULT_THREADS_PER_ENGINE * ratio)
-    size = f"{format_cpu(cpu)} CPU / {format_memory(mem)}"
+    size = _engine_str(cpu, mem)
     if tpe > supported:
         return [Check("threadsPerEngine vs engine size", WARN,
                       f"{tpe} threads on a {size} engine; that size supports about "
@@ -148,16 +152,16 @@ def eligible_nodes(nodes, opts):
     return out
 
 
-def _allocatable(node, allocated=None):
-    """(cpu_millicores, mem_bytes) schedulable on a node, optionally minus what
-    is already requested there."""
+def _allocatable(node):
+    """(cpu_millicores, mem_bytes) the node advertises as schedulable. Not what
+    is free -- that needs every pod's requests summed per node, a much bigger
+    read than a preflight should do."""
     alloc = node.get("status", {}).get("allocatable", {})
-    cpu, mem = parse_cpu(alloc.get("cpu", "0")), parse_memory(alloc.get("memory", "0"))
-    used = (allocated or {}).get(node["metadata"]["name"])
-    if used:
-        cpu -= parse_cpu(used[0])
-        mem -= parse_memory(used[1])
-    return max(cpu, 0), max(mem, 0)
+    return parse_cpu(alloc.get("cpu", "0")), parse_memory(alloc.get("memory", "0"))
+
+
+def _engine_str(cpu, mem):
+    return f"{format_cpu(cpu)} CPU / {format_memory(mem)}"
 
 
 def _scope(opts):
@@ -171,7 +175,7 @@ def _scope(opts):
 
 # -- capacity -----------------------------------------------------------------
 
-def check_capacity(facts, opts, nodes, allocated=None):
+def check_capacity(facts, opts, nodes):
     """slots x engine size vs what the eligible nodes can hold.
 
     Two checks, because they fail differently: a pod is not splittable across
@@ -180,14 +184,14 @@ def check_capacity(facts, opts, nodes, allocated=None):
     """
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
-    want = f"{format_cpu(cpu)} CPU / {format_memory(mem)}"
+    want = _engine_str(cpu, mem)
     nodes = eligible_nodes(nodes, opts)
     if not nodes:
         return [Check("capacity: eligible nodes", FAIL,
                       f"no Ready, schedulable node matches {_scope(opts)} -- "
                       f"engines have nowhere to run")]
 
-    sizes = {n["metadata"]["name"]: _allocatable(n, allocated) for n in nodes}
+    sizes = {n["metadata"]["name"]: _allocatable(n) for n in nodes}
     fits = [name for name, (c, m) in sizes.items() if c >= cpu and m >= mem]
     biggest = max(sizes.items(), key=lambda kv: (kv[1][1], kv[1][0]))
     checks = []
@@ -197,18 +201,23 @@ def check_capacity(facts, opts, nodes, allocated=None):
                             f"{want} engine (allocatable, not free)"))
     else:
         checks.append(Check("capacity: per-node fit", FAIL,
-                            f"no eligible node has {want} allocatable -- the "
-                            f"largest is {biggest[0]} with "
+                            f"no eligible node has {want} allocatable (an upper "
+                            f"bound -- other workloads already use part of it); "
+                            f"the largest is {biggest[0]} with "
                             f"{format_cpu(biggest[1][0])} CPU / "
                             f"{human_memory(biggest[1][1])}. An engine is one pod; "
                             f"it cannot be split across nodes"))
 
-    tot_cpu = sum(c for c, _ in sizes.values())
-    tot_mem = sum(m for _, m in sizes.values())
+    # Crane occupies the namespace alongside the engines; the quota check counts
+    # its pod, so the capacity maths has to spend its share too.
+    crane_cpu, crane_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
+    tot_cpu = max(sum(c for c, _ in sizes.values()) - crane_cpu, 0)
+    tot_mem = max(sum(m for _, m in sizes.values()) - crane_mem, 0)
     holds = min(tot_cpu // cpu, tot_mem // mem)
-    total = (f"{len(nodes)} eligible node(s) total {format_cpu(tot_cpu)} CPU / "
-             f"{human_memory(tot_mem)} allocatable -- an upper bound, other "
-             f"workloads already use part of it")
+    total = (f"{len(nodes)} eligible node(s) leave {format_cpu(tot_cpu)} CPU / "
+             f"{human_memory(tot_mem)} after crane's own "
+             f"{_engine_str(crane_cpu, crane_mem)} -- an upper bound, other "
+             f"workloads already use part of the rest")
     if holds < slots:
         checks.append(Check("capacity: aggregate", FAIL,
                             f"slots={slots} needs {format_cpu(cpu * slots)} CPU / "
@@ -260,25 +269,26 @@ _LR_TYPES = ("Container", "Pod")
 
 
 def check_limitrange(opts, limitranges):
-    """An existing LimitRange either rejects the engine pod outright (max below
-    the engine size -- the LimitRanger admission plugin) or silently rewrites
-    its requests (default/defaultRequest). Both change what the scheduler is
-    asked for, and neither shows up in the manifests."""
+    """An existing LimitRange can reject the engine pod outright -- max below
+    its limits, min above the requests crane stamps, or a maxLimitRequestRatio
+    tighter than the gap between the two -- and can rewrite the resources of any
+    pod in the namespace that declares none. Neither shows up in the manifests."""
     cpu, mem = engine_size(opts)
     if not limitranges:
         if opts.get("emit_limitrange"):
             return [Check("limitrange", PASS,
                           "none in the namespace; the generated "
-                          "bzm_limitrange.yaml supplies the engine defaults")]
-        # Crane sets engine *limits* but has no requests env, so with no
-        # LimitRange the scheduler packs engines at its tiny built-in defaults
-        # and the node is oversubscribed before anything looks wrong.
+                          "bzm_limitrange.yaml caps it at the engine size")]
+        # No LimitRange means no ceiling on the namespace either -- and the
+        # engines are already scheduling small (see the detail), which nothing
+        # here can change.
         return [Check("limitrange", WARN,
                       f"no LimitRange in the namespace and the profile does not "
-                      f"emit one -- engine pods request crane's defaults "
-                      f"({CRANE_DEFAULT_CPU}/{CRANE_DEFAULT_MEM}), not "
-                      f"{format_cpu(cpu)}/{format_memory(mem)}, so the scheduler "
-                      f"overcommits the nodes. Regenerate with emit_limitrange")]
+                      f"emit one, so nothing caps what the namespace may ask "
+                      f"for. Separately, engine pods request "
+                      f"{ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} "
+                      f"rather than {_engine_str(cpu, mem)} because crane sets "
+                      f"that explicitly -- a LimitRange cannot override it")]
 
     checks = []
     for lr in limitranges:
@@ -293,6 +303,27 @@ def check_limitrange(opts, limitranges):
             if mx.get("memory") and parse_memory(mx["memory"]) < mem:
                 blocking.append(f"max memory {mx['memory']} < engine "
                                 f"{format_memory(mem)}")
+            # min rejects from below just as max does from above, and the engine
+            # requests what crane stamps (250m/256Mi), not its limits.
+            mn = item.get("min") or {}
+            if mn.get("cpu") and parse_cpu(mn["cpu"]) > parse_cpu(ENGINE_STAMPED_REQUEST_CPU):
+                blocking.append(f"min cpu {mn['cpu']} > the "
+                                f"{ENGINE_STAMPED_REQUEST_CPU} crane requests")
+            if mn.get("memory") and parse_memory(mn["memory"]) > parse_memory(ENGINE_STAMPED_REQUEST_MEM):
+                blocking.append(f"min memory {mn['memory']} > the "
+                                f"{ENGINE_STAMPED_REQUEST_MEM} crane requests")
+            # An engine's own limit/request ratio is large precisely because
+            # crane requests so little of what it limits.
+            ratio = item.get("maxLimitRequestRatio") or {}
+            for key, stamped, limit in (
+                    ("cpu", ENGINE_STAMPED_REQUEST_CPU, format_cpu(cpu)),
+                    ("memory", ENGINE_STAMPED_REQUEST_MEM, format_memory(mem))):
+                parse = parse_cpu if key == "cpu" else parse_memory
+                engine_ratio = parse(limit) / parse(stamped)
+                if ratio.get(key) and engine_ratio > float(ratio[key]):
+                    blocking.append(f"maxLimitRequestRatio {key} {ratio[key]} < the "
+                                    f"engine's own {engine_ratio:.0f}x "
+                                    f"({stamped} requested, {limit} limit)")
             for field in ("defaultRequest", "default"):
                 d = item.get(field) or {}
                 if d.get("cpu") and parse_cpu(d["cpu"]) != cpu:
@@ -305,18 +336,19 @@ def check_limitrange(opts, limitranges):
                                 f"admission: {'; '.join(blocking)} (crane itself "
                                 f"needs {CRANE_CPU_LIMIT}/{CRANE_MEM_LIMIT})"))
         if conflicts:
-            # Two LimitRanges in a namespace both apply; the API server takes
-            # the most restrictive value, so ours does not simply win.
+            # Every LimitRange in the namespace is enforced, but when more than
+            # one supplies defaults there is no defined winner -- so ours does
+            # not simply take over from this one.
             checks.append(Check(f"limitrange {name} defaults", WARN,
                                 f"LimitRange '{name}' sets {', '.join(conflicts)} "
-                                f"against an engine of {format_cpu(cpu)}/"
-                                f"{format_memory(mem)} -- applying our "
-                                f"bzm_limitrange.yaml too leaves whichever value "
-                                f"is more restrictive in force"))
+                                f"against an engine of {_engine_str(cpu, mem)} "
+                                f"-- adding our bzm_limitrange.yaml gives the "
+                                f"namespace two sources of defaults with no "
+                                f"defined winner; drop one"))
         if not blocking and not conflicts:
             checks.append(Check(f"limitrange {name}", PASS,
                                 f"LimitRange '{name}' is compatible with a "
-                                f"{format_cpu(cpu)}/{format_memory(mem)} engine"))
+                                f"{_engine_str(cpu, mem)} engine"))
     return checks
 
 
@@ -432,7 +464,7 @@ def check_admission(opts, namespace_obj):
 
 def egress_targets(opts):
     """What has to be reachable from inside the namespace before a run works."""
-    targets = [API_PROBE_URL]
+    targets = [API_PROBE_URL, *ENGINE_PROBE_URLS]
     reg = opts.get("private_registry")
     if reg:
         targets.append(f"https://{reg.split('/')[0]}/v2/")
@@ -464,10 +496,6 @@ def check_egress(probes):
 
 
 # -- impure layer -------------------------------------------------------------
-
-def _cli(cli=None):
-    return cli or livetest._cli_for(None)
-
 
 def _kjson(cmd):
     """kubectl/oc -o json -> parsed object, {} when the object is not there.
@@ -511,9 +539,9 @@ def probe_egress(cli, namespace, opts):
     targets = egress_targets(opts)
     if _crane_deployed(cli, namespace):
         ca = ' --cacert "$REQUESTS_CA_BUNDLE"' if _ca_configured(opts) else ""
-        # _crane_curl's -1 means the exec never produced an rc line at all --
+        # crane_curl's -1 means the exec never produced an rc line at all --
         # unknown, not unreachable.
-        rcs = {t: livetest._crane_curl(
+        rcs = {t: livetest.crane_curl(
             cli, namespace, f"-s -o /dev/null --max-time 20{ca} {t}")
             for t in targets}
         return {t: (None if rc < 0 else rc) for t, rc in rcs.items()}
@@ -532,7 +560,7 @@ def _oneshot_curl(cli, namespace, args, opts):
     for name, key in (("HTTP_PROXY", "http"), ("HTTPS_PROXY", "https"),
                       ("NO_PROXY", "no_proxy")):
         if p.get(key):
-            value = _proxy_url(p[key], p) if key != "no_proxy" else p[key]
+            value = proxy_url(p[key], p) if key != "no_proxy" else p[key]
             env += ["--env", f"{name}={value}"]
     out = subprocess.run(
         [cli, "-n", namespace, "run", f"bzm-doctor-{os.getpid()}", "--rm", "-i",
@@ -551,7 +579,7 @@ def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):
     opts = dict(opts or {})
     namespace = namespace or opts.get("namespace") or "blazemeter"
     if cluster_data is None or probes is None:
-        cli = _cli(cli)
+        cli = cli or livetest.cli_tool()
     if cluster_data is None:
         cluster_data = gather_cluster(cli, namespace)
     if probes is None:
