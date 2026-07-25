@@ -40,12 +40,12 @@ ${SECURITY_CONTEXT_BLOCK}
           # 2 CPU + 8Gi RAM each -- size worker nodes accordingly.
           resources:
             requests:
-              cpu: 250m
-              memory: 512Mi
+              cpu: ${CRANE_CPU_REQUEST}
+              memory: ${CRANE_MEM_REQUEST}
               ephemeral-storage: 100Mi
             limits:
-              cpu: "1"
-              memory: 2Gi
+              cpu: "${CRANE_CPU_LIMIT}"
+              memory: ${CRANE_MEM_LIMIT}
               ephemeral-storage: 1Gi
           livenessProbe:
             failureThreshold: 3

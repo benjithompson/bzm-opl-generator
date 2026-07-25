@@ -6,6 +6,7 @@ from string import Template
 from urllib.parse import quote
 
 from .facts import select_images
+from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
@@ -36,7 +37,103 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
+    # A namespace LimitRange: caps what any pod in the namespace may ask for,
+    # and supplies requests/limits to the ones that declare none. It does NOT
+    # fix the taurus engine -- crane sets that pod's requests explicitly, and
+    # defaultRequest only fills fields a pod leaves unset (verified on a live
+    # run: the engine pod comes back with no limit-ranger annotation). Opt-in,
+    # because it applies to every pod in the namespace.
+    "emit_limitrange": False,
+    "engine_cpu_request": None,      # defaults to engine_cpu_limit
+    "engine_mem_request": None,      # defaults to engine_mem_limit
 }
+
+# BlazeMeter's documented engine footprint -- the fallback when the customer
+# has not pinned engine limits.
+ENGINE_DEFAULT_CPU = "2"
+ENGINE_DEFAULT_MEM = "8Gi"
+# ...and on disk, per concurrent engine (the docs quote decimal GB).
+ENGINE_DISK_GB = 60
+ENGINE_TMP_GB = 40
+
+# Crane's own container resources, substituted into templates/deployment.yaml so
+# these are the single source. The limits matter beyond that pod: crane shares
+# the namespace, so a LimitRange max below them would get the crane pod itself
+# rejected by the LimitRanger, and doctor spends them out of node capacity.
+# Values are the official helm-crane chart's resourcesCrane.
+CRANE_CPU_REQUEST = "250m"
+CRANE_MEM_REQUEST = "512Mi"
+CRANE_CPU_LIMIT = "1"
+CRANE_MEM_LIMIT = "2Gi"
+
+# What crane stamps on the engine pods it spawns, explicitly. A LimitRange
+# cannot override it -- defaultRequest only fills fields a pod leaves unset --
+# so this is what the scheduler packs engines by, whatever their limits say.
+ENGINE_STAMPED_REQUEST_CPU = "250m"
+ENGINE_STAMPED_REQUEST_MEM = "256Mi"
+
+LIMITRANGE_FILE = "bzm_limitrange.yaml"
+
+
+def _quantity(o, key, default, parse):
+    """Parse an engine quantity option, naming the option in the error --
+    quantity's own message only carries the bad value. `default` is returned
+    as-is when the option is unset, so a caller with an already-parsed fallback
+    does not have to format it back into a string for re-parsing."""
+    value = o.get(key)
+    if not value:
+        return parse(default) if isinstance(default, str) else default
+    try:
+        return parse(value)
+    except ValueError as e:
+        raise ValueError(f"{key}: {e}") from None
+
+
+def engine_size(o):
+    """(cpu_millicores, mem_bytes) one engine actually claims. doctor.py imports
+    this to compare the claim against what a node can hold."""
+    return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
+            _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
+
+
+def engine_requests(o):
+    """(cpu_millicores, mem_bytes) engines should *request* -- their limits
+    unless the customer deliberately overcommits."""
+    cpu_limit, mem_limit = engine_size(o)
+    cpu = _quantity(o, "engine_cpu_request", cpu_limit, parse_cpu)
+    mem = _quantity(o, "engine_mem_request", mem_limit, parse_memory)
+    # k8s rejects a pod whose request exceeds its limit outright.
+    if cpu > cpu_limit:
+        raise ValueError(f"engine_cpu_request ({o['engine_cpu_request']}) exceeds "
+                         f"engine_cpu_limit ({format_cpu(cpu_limit)})")
+    if mem > mem_limit:
+        raise ValueError(f"engine_mem_request ({o['engine_mem_request']}) exceeds "
+                         f"engine_mem_limit ({format_memory(mem_limit)})")
+    return cpu, mem
+
+
+def _limitrange_max(o):
+    """The namespace ceiling: the engine size, but never below crane's own
+    limits -- crane shares the namespace, and a max under them would have the
+    LimitRanger reject the crane pod itself."""
+    cpu_limit, mem_limit = engine_size(o)
+    return (max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT)),
+            max(mem_limit, parse_memory(CRANE_MEM_LIMIT)))
+
+
+def _limitrange_sub(o):
+    """Substitutions for templates/limitrange.yaml."""
+    cpu_limit, mem_limit = engine_size(o)
+    cpu_req, mem_req = engine_requests(o)
+    max_cpu, max_mem = _limitrange_max(o)
+    return {"NAMESPACE": o["namespace"],
+            "ENGINE_CPU_REQUEST": format_cpu(cpu_req),
+            "ENGINE_MEM_REQUEST": format_memory(mem_req),
+            "ENGINE_CPU_LIMIT": format_cpu(cpu_limit),
+            "ENGINE_MEM_LIMIT": format_memory(mem_limit),
+            "LIMITRANGE_MAX_CPU": format_cpu(max_cpu),
+            "LIMITRANGE_MAX_MEM": format_memory(max_mem)}
+
 
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
@@ -73,7 +170,7 @@ def _ca_cfg(o):
     return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
 
 
-def _proxy_url(url, p):
+def proxy_url(url, p):
     """Embed credentials in the proxy URL (http://user:pass@host:port) --
     BlazeMeter has no separate proxy-auth env vars; the URL carries them."""
     user = p.get("username")
@@ -84,6 +181,23 @@ def _proxy_url(url, p):
         userinfo += ":" + quote(p["password"], safe="")
     scheme, sep, rest = url.partition("://")
     return f"{scheme}{sep}{userinfo}@{rest}" if sep else f"{userinfo}@{url}"
+
+
+DEFAULT_NO_PROXY = "kubernetes.default,127.0.0.1,localhost"
+
+
+def proxy_env(o):
+    """The proxy environment a pod needs, as {NAME: value}, credentials already
+    embedded in the URLs. One builder for the three places that need it: the
+    ConfigMap, the Secret, and doctor's probe pod."""
+    p = o.get("proxy") or {}
+    env = {}
+    for name, key in (("HTTP_PROXY", "http"), ("HTTPS_PROXY", "https")):
+        if p.get(key):
+            env[name] = proxy_url(p[key], p)
+    if p:
+        env["NO_PROXY"] = p.get("no_proxy", DEFAULT_NO_PROXY)
+    return env
 
 
 def _proxy_has_creds(o):
@@ -166,11 +280,9 @@ def _configmap(facts, o):
             if _proxy_has_creds(o):
                 lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
                 lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
-            if p.get("http"):
-                lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
-            if p.get("https"):
-                lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
-        lines.append(f"  NO_PROXY: {p.get('no_proxy', 'kubernetes.default,127.0.0.1,localhost')}")
+            lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items()
+                      if k != "NO_PROXY"]
+        lines.append(f"  NO_PROXY: {proxy_env(o)['NO_PROXY']}")
     if o["tolerations"]:
         lines += [
             "  # Engines inherit the crane pod's tolerations via this env.",
@@ -254,12 +366,8 @@ data:
 def _proxy_secret_block(o):
     if not (_proxy_has_creds(o) and o["use_secret"]):
         return ""
-    p = o["proxy"]
     lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
-    if p.get("http"):
-        lines.append(f"  HTTP_PROXY: \"{_proxy_url(p['http'], p)}\"")
-    if p.get("https"):
-        lines.append(f"  HTTPS_PROXY: \"{_proxy_url(p['https'], p)}\"")
+    lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
     return "\n".join(lines) + "\n"
 
 
@@ -332,6 +440,8 @@ def generate(facts, options):
                 f"({[s['id'] for s in ships]})"
             )
 
+    engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
+
     ca = _ca_cfg(o)
     sub = {
         "NAMESPACE": o["namespace"],
@@ -345,6 +455,10 @@ def generate(facts, options):
             if o["pull_secret"] else ""
         ),
         "SECURITY_CONTEXT_BLOCK": _security_context(o),
+        "CRANE_CPU_REQUEST": CRANE_CPU_REQUEST,
+        "CRANE_MEM_REQUEST": CRANE_MEM_REQUEST,
+        "CRANE_CPU_LIMIT": CRANE_CPU_LIMIT,
+        "CRANE_MEM_LIMIT": CRANE_MEM_LIMIT,
         "SECRET_REF_BLOCK": (
             "            - secretRef:\n                name: blazemeter-secret\n"
             if o["use_secret"] else ""
@@ -373,6 +487,8 @@ def generate(facts, options):
         "bzm_rolebinding.yaml": _tpl("rolebinding.yaml").substitute(sub),
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
+    if o["emit_limitrange"]:
+        out[LIMITRANGE_FILE] = _tpl("limitrange.yaml").substitute(_limitrange_sub(o))
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -410,7 +526,10 @@ def load_profile(outdir):
 
 
 APPLY_ORDER = [
-    "bzm_serviceaccount.yaml", "bzm_configmap.yaml", "bzm_secret.yaml",
+    "bzm_serviceaccount.yaml", "bzm_configmap.yaml",
+    # Before the deployment: engines must not schedule before the defaults exist.
+    LIMITRANGE_FILE,
+    "bzm_secret.yaml",
     "bzm_cacerts.yaml", "bzm_role.yaml", "bzm_rolebinding.yaml",
     "bzm_clusterrole.yaml", "bzm_clusterrolebinding.yaml",
     "bzm_deployment.yaml",
@@ -430,6 +549,40 @@ def _readme(facts, o, files):
         big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
                   f"stores a copy in an annotation, which is capped at 256KB.\n")
+    limitrange = ""
+    if o["emit_limitrange"]:
+        cpu_req, mem_req = engine_requests(o)
+        max_cpu, max_mem = _limitrange_max(o)
+        limitrange = f"""
+## Engine sizing (`bzm_limitrange.yaml`)
+
+Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
+`KUBERNETES_RESOURCES_LIMITS_MEMORY`. It also sets the engine's **requests**, to
+{ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM} -- roughly an eighth of what the engine is allowed to use. The
+scheduler packs nodes on requests, so on a busy node the run competes for CPU it
+was never given, and the numbers the test reports are wrong rather than merely
+slow.
+
+**This file does not fix that**, and nothing in these manifests can: a
+LimitRange's `defaultRequest` only fills in fields a pod leaves unset, and crane
+sets the engine's requests explicitly. What this file does do:
+
+- `max` **{format_cpu(max_cpu)} CPU / {format_memory(max_mem)}** is enforced at
+  admission -- a pod above it is rejected, so nothing in the namespace can be
+  sized past the engine (raised where needed to clear crane's own limits, or the
+  crane pod would be rejected in its own namespace).
+- `defaultRequest` **{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** and
+  the matching `default` reach every pod in the namespace that declares no
+  resources of its own -- including crane's per-run job pods, which otherwise
+  schedule as best-effort.
+
+It is namespace-wide, so other workloads in `{o['namespace']}` get those
+defaults too. Give the private location its own namespace if that is a problem.
+
+To size engines honestly today, give the location nodes it does not share, or
+add a mutating admission policy that rewrites the engine pod's requests --
+`bzm-opl-gen livetest --run-test` prints the live gap under `ENGINE SIZING:`.
+"""
     mirror = ""
     if o["private_registry"]:
         imgs = [facts["crane_image"]] + [
@@ -464,9 +617,10 @@ def _readme(facts, o, files):
 Then confirm the agent shows **online** in BlazeMeter (Settings -> Private Locations),
 or run the generator's live test: `bzm-opl-gen livetest ...`
 
-Engines need **2 CPU + 8Gi RAM + 60GB disk (40GB /tmp)** per concurrent engine.
+Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
 Egress required to *.blazemeter.com and the image registry.
-"""
+Check the target cluster against that with `bzm-opl-gen doctor`.
+{limitrange}"""
 
 
 def write(files, outdir):

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: blazemeter-engine-sizing
+  namespace: ${NAMESPACE}
+spec:
+  limits:
+    # max is the part that binds the engine: it is enforced at admission, so an
+    # engine sized above it is rejected outright. defaultRequest/default only
+    # reach pods that declare nothing -- the taurus engine declares its own
+    # requests and is untouched by them.
+    #
+    # CPU and memory only: KUBERNETES_REQUESTS_EPHEMERAL_STORAGE /
+    # KUBERNETES_LIMITS_EPHEMERAL_STORAGE already exist as agent envs, so
+    # ephemeral storage is not the gap this addresses.
+    - type: Container
+      defaultRequest:
+        cpu: "${ENGINE_CPU_REQUEST}"
+        memory: "${ENGINE_MEM_REQUEST}"
+      default:
+        cpu: "${ENGINE_CPU_LIMIT}"
+        memory: "${ENGINE_MEM_LIMIT}"
+      max:
+        cpu: "${LIMITRANGE_MAX_CPU}"
+        memory: "${LIMITRANGE_MAX_MEM}"

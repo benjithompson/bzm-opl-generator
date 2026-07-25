@@ -84,7 +84,7 @@ def test_apply_switches_to_server_side_for_big_manifests(tmp_path, monkeypatch):
 def _live(monkeypatch, cm_data, images=(), ca_certs="2"):
     """Stand in for a deployed cluster: ConfigMap contents, running images, and
     what the crane pod sees at the CA path."""
-    monkeypatch.setattr(livetest, "_kget", lambda *a, **k: {"data": cm_data})
+    monkeypatch.setattr(livetest, "kget", lambda *a, **k: {"data": cm_data})
     monkeypatch.setattr(livetest, "_pod_images", lambda *a: list(images))
     monkeypatch.setattr(livetest, "_crane_exec", lambda *a: ca_certs)
 
@@ -210,7 +210,8 @@ def test_policy_enforced_detects_calico(monkeypatch):
     assert not livetest.policy_enforced()
 
 
-def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True):
+def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True,
+                resources=None, annotations=None):
     env = []
     mounts = []
     if ca:
@@ -221,10 +222,11 @@ def _engine_pod(image="reg:5001/v4:1", ca=True, proxy=True):
                        "subPath": "ca-bundle.crt"})
     if proxy:
         env.append({"name": "HTTPS_PROXY", "value": "http://bzm:s3cr3t@1.2.3.4:8080"})
-    return {"metadata": {"name": "engine-abc"},
+    return {"metadata": {"name": "engine-abc", "annotations": annotations or {}},
             "status": {"phase": "Running"},
-            "spec": {"containers": [{"image": image, "env": env,
-                                     "volumeMounts": mounts}]}}
+            "spec": {"containers": [{"name": "ctr", "image": image, "env": env,
+                                     "volumeMounts": mounts,
+                                     "resources": resources or {}}]}}
 
 
 ENGINE_OPTS = {"private_registry": "reg:5001", "ca_bundle": CA_PEM,
@@ -250,6 +252,36 @@ def test_engine_config_catches_missing_ca_propagation():
 def test_engine_config_catches_missing_proxy_env():
     fails = livetest.assert_engine_config(_engine_pod(proxy=False), ENGINE_OPTS)
     assert any("bypassing the customer's proxy" in f for f in fails)
+
+
+def _sized_pod(requests, limits, annotations=None):
+    """A real engine pod, sized as crane sizes it."""
+    return _engine_pod(resources={"requests": requests, "limits": limits},
+                       annotations=annotations)
+
+
+def test_engine_request_gap_is_what_a_real_run_returns():
+    """Observed on a live run: limits 1/4Gi from our envs, requests 250m/256Mi
+    from crane -- and no limit-ranger annotation, so the LimitRange we emit did
+    not touch the pod and could not have."""
+    pod = _sized_pod({"cpu": "250m", "memory": "256Mi"},
+                     {"cpu": "1", "memory": "4Gi"})
+    gap = livetest.engine_request_gap(pod)
+    assert "250m" in gap and "cpu" in gap and "memory" in gap
+    assert "cannot change them" in gap
+
+
+def test_engine_request_gap_silent_when_requests_match_limits():
+    assert livetest.engine_request_gap(
+        _sized_pod({"cpu": "1", "memory": "4Gi"}, {"cpu": "1", "memory": "4Gi"})) is None
+
+
+def test_engine_request_gap_notes_when_a_limitrange_did_act():
+    """Crane's test-job pods declare nothing, so the LimitRanger does fill them
+    in and stamps the annotation -- don't blame the LimitRange then."""
+    pod = _sized_pod({"cpu": "250m", "memory": "256Mi"}, {"cpu": "1", "memory": "4Gi"},
+                     annotations={livetest.LIMIT_RANGER_ANNOTATION: "set: cpu request"})
+    assert "cannot change them" not in livetest.engine_request_gap(pod)
 
 
 def test_engine_pods_excludes_crane(monkeypatch):

@@ -98,6 +98,20 @@ to go in the test. Don't "fix" it in the generator.
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;
   `PATCH /tests/{id}` silently drops `executions` for one.
+- The emitted LimitRange's `max` is raised to cover **crane's own** limits
+  (1 CPU / 2Gi) when engines are configured smaller. A `max` pinned to the
+  engine size gets the crane pod rejected in its own namespace — verified
+  against a real API server, not theory. Don't "tighten" it back.
+- **`bzm_limitrange.yaml` does not change engine requests, and cannot.** Crane
+  sets the engine pod's requests explicitly to 250m/256Mi; a LimitRange's
+  `defaultRequest` only fills fields a pod leaves unset. Proven on a live run:
+  the `r-v4-*` engine pod comes back with no `kubernetes.io/limit-ranger`
+  annotation, while crane's `test-job-*` pods (which declare nothing) do carry
+  one. Issue #2 was filed on the opposite assumption — don't re-add the claim.
+  `livetest --run-test` prints the live gap as `ENGINE SIZING:`.
+- `doctor` measures capacity against node **allocatable**, deliberately: what is
+  actually free needs every pod's requests summed per node, which is a much
+  bigger read for a preflight. Say "upper bound" in any detail string you add.
 
 ## Conventions
 
