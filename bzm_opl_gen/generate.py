@@ -6,6 +6,7 @@ from string import Template
 from urllib.parse import quote
 
 from .facts import select_images
+from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
@@ -36,7 +37,93 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
+    # There is no KUBERNETES_RESOURCES_REQUESTS_* env in the agent reference, so
+    # engine cpu/memory *requests* can only be set namespace-wide, by a
+    # LimitRange we emit. Opt-in: it applies to every pod in the namespace.
+    "emit_limitrange": False,
+    "engine_cpu_request": None,      # defaults to engine_cpu_limit
+    "engine_mem_request": None,      # defaults to engine_mem_limit
 }
+
+# BlazeMeter's documented engine footprint -- the fallback when the customer
+# has not pinned engine limits.
+ENGINE_DEFAULT_CPU = "2"
+ENGINE_DEFAULT_MEM = "8Gi"
+
+# Crane's own container limits, from templates/deployment.yaml -- keep in step
+# with it. Crane shares the namespace, so a LimitRange max below these would get
+# the crane pod itself rejected by the LimitRanger admission plugin.
+CRANE_CPU_LIMIT = "1"
+CRANE_MEM_LIMIT = "2Gi"
+
+LIMITRANGE_FILE = "bzm_limitrange.yaml"
+
+
+def _quantity(o, key, default, parse):
+    """Parse an engine quantity option, naming the option in the error --
+    quantity's own message only carries the bad value."""
+    value = o.get(key) or default
+    try:
+        return parse(value)
+    except ValueError as e:
+        raise ValueError(f"{key}: {e}") from None
+
+
+def engine_size(o):
+    """(cpu_millicores, mem_bytes) one engine actually claims. doctor.py imports
+    this to compare the claim against what a node can hold."""
+    return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
+            _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
+
+
+def _engine_requests(o):
+    """(cpu_millicores, mem_bytes) engines should *request* -- their limits
+    unless the customer deliberately overcommits."""
+    cpu_limit, mem_limit = engine_size(o)
+    cpu = _quantity(o, "engine_cpu_request", format_cpu(cpu_limit), parse_cpu)
+    mem = _quantity(o, "engine_mem_request", format_memory(mem_limit), parse_memory)
+    # k8s rejects a pod whose request exceeds its limit outright.
+    if cpu > cpu_limit:
+        raise ValueError(f"engine_cpu_request ({o['engine_cpu_request']}) exceeds "
+                         f"engine_cpu_limit ({format_cpu(cpu_limit)})")
+    if mem > mem_limit:
+        raise ValueError(f"engine_mem_request ({o['engine_mem_request']}) exceeds "
+                         f"engine_mem_limit ({format_memory(mem_limit)})")
+    return cpu, mem
+
+
+def _limitrange(o):
+    """Namespace default requests for engine pods.
+
+    CPU and memory only: KUBERNETES_REQUESTS_EPHEMERAL_STORAGE /
+    KUBERNETES_LIMITS_EPHEMERAL_STORAGE already exist as agent envs, so
+    ephemeral storage is not the gap this closes.
+    """
+    cpu_limit, mem_limit = engine_size(o)
+    cpu_req, mem_req = _engine_requests(o)
+    max_cpu = max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT))
+    max_mem = max(mem_limit, parse_memory(CRANE_MEM_LIMIT))
+    return f"""apiVersion: v1
+kind: LimitRange
+metadata:
+  name: blazemeter-engine-sizing
+  namespace: {o['namespace']}
+spec:
+  limits:
+    # Crane sets engine *limits* from KUBERNETES_RESOURCES_LIMITS_CPU/MEMORY;
+    # it has no requests equivalent, so without this the scheduler packs
+    # engines at crane's 250m/256Mi defaults.
+    - type: Container
+      defaultRequest:
+        cpu: "{format_cpu(cpu_req)}"
+        memory: "{format_memory(mem_req)}"
+      default:
+        cpu: "{format_cpu(cpu_limit)}"
+        memory: "{format_memory(mem_limit)}"
+      max:
+        cpu: "{format_cpu(max_cpu)}"
+        memory: "{format_memory(max_mem)}"
+"""
 
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
@@ -332,6 +419,8 @@ def generate(facts, options):
                 f"({[s['id'] for s in ships]})"
             )
 
+    _engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
+
     ca = _ca_cfg(o)
     sub = {
         "NAMESPACE": o["namespace"],
@@ -373,6 +462,8 @@ def generate(facts, options):
         "bzm_rolebinding.yaml": _tpl("rolebinding.yaml").substitute(sub),
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
+    if o["emit_limitrange"]:
+        out[LIMITRANGE_FILE] = _limitrange(o)
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -410,7 +501,10 @@ def load_profile(outdir):
 
 
 APPLY_ORDER = [
-    "bzm_serviceaccount.yaml", "bzm_configmap.yaml", "bzm_secret.yaml",
+    "bzm_serviceaccount.yaml", "bzm_configmap.yaml",
+    # Before the deployment: engines must not schedule before the defaults exist.
+    LIMITRANGE_FILE,
+    "bzm_secret.yaml",
     "bzm_cacerts.yaml", "bzm_role.yaml", "bzm_rolebinding.yaml",
     "bzm_clusterrole.yaml", "bzm_clusterrolebinding.yaml",
     "bzm_deployment.yaml",
@@ -430,6 +524,25 @@ def _readme(facts, o, files):
         big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
                   f"stores a copy in an annotation, which is capped at 256KB.\n")
+    limitrange = ""
+    if o["emit_limitrange"]:
+        cpu_req, mem_req = _engine_requests(o)
+        limitrange = f"""
+## Engine sizing (`bzm_limitrange.yaml`)
+
+Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
+`KUBERNETES_RESOURCES_LIMITS_MEMORY`. The agent env reference has no requests
+equivalent, so engine pods keep crane's default **requests** of 250m / 256Mi --
+roughly an eighth of what an engine actually uses. The scheduler packs nodes on
+requests, so on a busy node the run competes for CPU it was never given, and the
+numbers the test reports are wrong rather than merely slow.
+
+This LimitRange sets the namespace `defaultRequest` to
+**{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** so engines request what
+they are limited to. It is namespace-wide: if `{o['namespace']}` also runs other
+workloads, containers that set no requests of their own get these defaults too --
+give the private location its own namespace if that is a problem.
+"""
     mirror = ""
     if o["private_registry"]:
         imgs = [facts["crane_image"]] + [
@@ -466,7 +579,7 @@ or run the generator's live test: `bzm-opl-gen livetest ...`
 
 Engines need **2 CPU + 8Gi RAM + 60GB disk (40GB /tmp)** per concurrent engine.
 Egress required to *.blazemeter.com and the image registry.
-"""
+{limitrange}"""
 
 
 def write(files, outdir):

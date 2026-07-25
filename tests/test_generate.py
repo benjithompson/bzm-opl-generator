@@ -222,6 +222,111 @@ def test_engine_resource_limits():
     assert cm["KUBERNETES_LIMITS_EPHEMERAL_STORAGE"] == "40960"
 
 
+def _limitrange(files):
+    return yaml.safe_load(files["bzm_limitrange.yaml"])["spec"]["limits"][0]
+
+
+def test_limitrange_absent_by_default():
+    files = gen.generate(FACTS, {"namespace": "ns1"})
+    assert "bzm_limitrange.yaml" not in files
+
+
+def test_limitrange_default_request_matches_engine_limits():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
+                                 "engine_cpu_limit": "4", "engine_mem_limit": "16Gi"})
+    _all_yaml_parse(files)
+    lr = yaml.safe_load(files["bzm_limitrange.yaml"])
+    assert lr["kind"] == "LimitRange"
+    assert lr["metadata"]["namespace"] == "ns1"
+    item = lr["spec"]["limits"][0]
+    assert item["type"] == "Container"
+    # The headline behaviour: engines request what they are limited to, instead
+    # of crane's 250m/256Mi defaults.
+    assert item["defaultRequest"] == {"cpu": "4", "memory": "16Gi"}
+    assert item["default"] == {"cpu": "4", "memory": "16Gi"}
+    # ephemeral-storage has its own agent envs -- deliberately not covered here
+    assert "ephemeral-storage" not in item["defaultRequest"]
+
+
+def test_limitrange_explicit_requests_honoured():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
+                                 "engine_cpu_limit": "4", "engine_mem_limit": "16Gi",
+                                 "engine_cpu_request": "2", "engine_mem_request": "8Gi"})
+    _all_yaml_parse(files)
+    item = _limitrange(files)
+    assert item["defaultRequest"] == {"cpu": "2", "memory": "8Gi"}
+    assert item["default"] == {"cpu": "4", "memory": "16Gi"}
+
+
+def test_limitrange_uses_documented_engine_size_when_unset():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
+    _all_yaml_parse(files)
+    item = _limitrange(files)
+    assert item["defaultRequest"] == {"cpu": "2", "memory": "8Gi"}
+    assert item["default"] == {"cpu": "2", "memory": "8Gi"}
+    assert item["max"] == {"cpu": "2", "memory": "8Gi"}
+
+
+def test_limitrange_max_not_below_crane_own_limits():
+    # Crane runs in the same namespace; a max under its own limits would get the
+    # crane pod rejected by LimitRanger.
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
+                                 "engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"})
+    _all_yaml_parse(files)
+    item = _limitrange(files)
+    assert item["max"] == {"cpu": "1", "memory": "2Gi"}
+    assert item["default"] == {"cpu": "500m", "memory": "1Gi"}
+
+
+def test_limitrange_applied_before_deployment():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
+    order = [f for f in gen.APPLY_ORDER if f in files]
+    assert order.index("bzm_limitrange.yaml") < order.index("bzm_deployment.yaml")
+
+
+def test_engine_request_above_limit_rejected():
+    with pytest.raises(ValueError, match="engine_cpu_request"):
+        gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "1",
+                             "engine_cpu_request": "2"})
+    with pytest.raises(ValueError, match="engine_mem_request"):
+        gen.generate(FACTS, {"namespace": "ns1", "engine_mem_limit": "1Gi",
+                             "engine_mem_request": "2Gi"})
+
+
+def test_unparseable_engine_quantity_rejected():
+    with pytest.raises(ValueError, match="engine_mem_limit"):
+        gen.generate(FACTS, {"namespace": "ns1", "engine_mem_limit": "8 gigs"})
+    with pytest.raises(ValueError, match="engine_cpu_limit"):
+        gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "two"})
+
+
+def test_engine_size_helper():
+    o = {**gen.DEFAULT_OPTIONS, "engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"}
+    assert gen.engine_size(o) == (500, 1024 ** 3)
+    assert gen.engine_size(dict(gen.DEFAULT_OPTIONS)) == (2000, 8 * 1024 ** 3)
+
+
+def test_readme_documents_limitrange_and_applies_it():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
+    readme = files["README.md"]
+    assert "apply -f bzm_limitrange.yaml" in readme
+    assert "KUBERNETES_RESOURCES_LIMITS_CPU" in readme
+    assert "250m" in readme                 # crane's request default engines inherit
+    assert "namespace" in readme
+    plain = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
+    assert "bzm_limitrange.yaml" not in plain
+
+
+def test_profile_json_round_trips_new_options():
+    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
+                                 "engine_cpu_request": "1"})
+    prof = json.loads(files[gen.PROFILE_FILE])
+    assert prof["emit_limitrange"] is True
+    assert prof["engine_cpu_request"] == "1"
+    assert prof["engine_mem_request"] is None
+    assert "auth_token" not in prof
+
+
 def test_mirror_script_with_private_registry():
     files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": "reg.local/bzm"})
     sh = files["bzm-opl-image-mirror.sh"]

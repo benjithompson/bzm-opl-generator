@@ -76,6 +76,10 @@ def gather(client, harbor_id):
         "harbor_name": harbor.get("name"),
         "func_ids": harbor.get("funcIds", []),
         "slots": harbor.get("slots"),
+        # Max threads one engine will run. Null on a location created via the
+        # API (POST ignores it) -- and then every test start 403s, so the
+        # doctor treats it as a hard failure rather than a detail.
+        "threads_per_engine": harbor.get("threadsPerEngine"),
         "ships": [],
         "images": [],
         "crane_image": None,  # set from inventory if an agent is live

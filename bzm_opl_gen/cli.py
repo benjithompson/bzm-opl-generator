@@ -6,6 +6,7 @@ Subcommands:
   create-ship create an agent (ship) in a location, print id + AUTH_TOKEN
   facts       query the account, write facts.json (harbor, ships, images, features)
   generate    render manifests from facts + customer parameters
+  doctor      preflight a cluster: can it schedule the location's concurrency?
   images      list / pull / mirror the images the location actually needs
   livetest    apply manifests to a cluster and verify the agent comes online
 """
@@ -15,7 +16,7 @@ import json
 import subprocess
 import sys
 
-from . import api, facts as facts_mod, generate as gen_mod, livetest
+from . import api, doctor, facts as facts_mod, generate as gen_mod, livetest
 
 
 def _resolve_account(client, a):
@@ -137,10 +138,13 @@ def cmd_generate(a):
             proxy[key] = v
     if proxy:
         opts["proxy"] = proxy
-    for key in ("engine_cpu_limit", "engine_mem_limit"):
+    for key in ("engine_cpu_limit", "engine_mem_limit",
+                "engine_cpu_request", "engine_mem_request"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
+    if a.limitrange:
+        opts["emit_limitrange"] = True
     if a.api_key and not opts.get("auth_token"):
         ship_id = opts.get("ship_id") or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
         if ship_id:
@@ -150,6 +154,26 @@ def cmd_generate(a):
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
+
+
+def cmd_doctor(a):
+    """Preflight the cluster against the location's advertised concurrency."""
+    if a.harbor_id:
+        if not a.api_key:
+            sys.exit("--harbor-id needs --api-key (or drop both and use --facts)")
+        f = facts_mod.gather(api.BzmClient(a.api_key), a.harbor_id)
+    else:
+        f = facts_mod.load(a.facts)
+    # The generated profile is what the checks measure against -- engine size,
+    # nodeSelector, registry, proxy/CA. Without it we can only assume defaults.
+    try:
+        opts = gen_mod.load_profile(a.manifests)
+    except FileNotFoundError:
+        opts = {}
+        print(f"note: no {a.manifests}/profile.json -- checking against the "
+              f"documented engine size and no scheduling constraints")
+    checks = doctor.run(f, opts, a.namespace)
+    sys.exit(1 if doctor.has_failures(checks) else 0)
 
 
 def cmd_images(a):
@@ -326,9 +350,30 @@ def main():
                         "lands in the Secret unless --no-secret")
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
+    g.add_argument("--limitrange", action="store_true",
+                   help="emit bzm_limitrange.yaml, a namespace LimitRange whose "
+                        "defaultRequest matches the engine size -- the only way "
+                        "to set engine *requests* (the agent envs cover limits "
+                        "only, so engines otherwise schedule at 250m/256Mi)")
+    g.add_argument("--engine-cpu-request", dest="engine_cpu_request",
+                   help="LimitRange defaultRequest CPU (default: the CPU limit)")
+    g.add_argument("--engine-mem-request", dest="engine_mem_request",
+                   help="LimitRange defaultRequest memory (default: the memory limit)")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)
+
+    d = sub.add_parser("doctor", help="can this cluster run the location's concurrency?")
+    d.add_argument("--api-key", help="required with --harbor-id (facts are "
+                                     "gathered live); otherwise --facts is read")
+    d.add_argument("--harbor-id", help="gather facts from the API instead of --facts")
+    d.add_argument("--facts", default="facts.json")
+    d.add_argument("--manifests", default="out",
+                   help="directory holding profile.json -- the options the "
+                        "checks measure the cluster against")
+    d.add_argument("-n", "--namespace",
+                   help="target namespace (default: the profile's)")
+    d.set_defaults(fn=cmd_doctor)
 
     i = sub.add_parser("images", help="list/pull/mirror the location's images")
     i.add_argument("--facts")

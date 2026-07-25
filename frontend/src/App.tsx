@@ -211,7 +211,8 @@ export default function App() {
       proxy: g.proxy || !!options.proxy,
       ca: g.ca || caMode !== "none",
       sched: g.sched || !!(options.tolerations || options.node_selector),
-      sizing: g.sizing || !!(options.engine_cpu_limit || options.engine_mem_limit),
+      sizing: g.sizing || !!(options.engine_cpu_limit || options.engine_mem_limit
+        || options.emit_limitrange),
       security: g.security || options.use_secret === false || !!options.cluster_rbac ||
         (options.service_type != null && options.service_type !== "CLUSTERIP"),
     }));
@@ -231,7 +232,8 @@ export default function App() {
       if (id === "registry") Object.assign(w, { private_registry: null, pull_secret: null, registry_auth: false });
       if (id === "proxy") w.proxy = null;
       if (id === "sched") Object.assign(w, { tolerations: null, node_selector: null });
-      if (id === "sizing") Object.assign(w, { engine_cpu_limit: null, engine_mem_limit: null });
+      if (id === "sizing") Object.assign(w, { engine_cpu_limit: null, engine_mem_limit: null,
+        emit_limitrange: false });
       if (id === "security") Object.assign(w, { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" });
       return w;
     });
@@ -717,6 +719,12 @@ export default function App() {
                       </Field>
                     </div>
                   )}
+                  <Check label="Emit a namespace LimitRange (bzm_limitrange.yaml)"
+                    hint="The agent envs set engine limits only — without this, engine pods
+                          request crane's 250m/256Mi and the scheduler packs them eight to a
+                          node's worth. Applies namespace-wide."
+                    checked={!!options.emit_limitrange}
+                    onChange={(v) => set("emit_limitrange", v)} />
                   <p className="text-[11px] text-slate-400">
                     Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
                     Size worker nodes for slots × engine size.
