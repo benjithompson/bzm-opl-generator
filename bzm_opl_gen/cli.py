@@ -107,7 +107,8 @@ def cmd_generate(a):
         with open(a.profile) as fh:
             opts.update(json.load(fh))
     for key in ("platform", "namespace", "ship_id", "auth_token",
-                "private_registry", "pull_secret", "service_type"):
+                "private_registry", "pull_secret", "service_type",
+                "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
@@ -328,6 +329,15 @@ def main():
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
+    g.add_argument("--sv-ingress", dest="sv_ingress", choices=["nginx", "istio"],
+                   help="service virtualization: ingress controller to publish "
+                        "virtual services through (required for a mockServices location)")
+    g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",
+                   help="wildcard domain your ingress controller serves, e.g. apps.example.com")
+    g.add_argument("--sv-tls-secret", dest="sv_tls_secret", metavar="NAME",
+                   help="wildcard TLS secret in the agent namespace; required even for HTTP")
+    g.add_argument("--sv-istio-gateway", dest="sv_istio_gateway", metavar="NAME",
+                   help="istio only, optional: reuse this Gateway instead of one per service")
     g.add_argument("--no-secret", action="store_true", help="AUTH_TOKEN in ConfigMap")
     g.add_argument("--tolerations", help='JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
     g.add_argument("--node-selector", dest="node_selector", help='JSON object, e.g. \'{"pool":"loadtest"}\'')

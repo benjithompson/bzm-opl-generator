@@ -93,8 +93,13 @@ def test_images_follow_location_funcids():
     assert "taurus-cloud:latest" in ov              # gui tests still need engines
     assert "blazemeter/service-mock:latest" not in ov  # mocks not enabled
 
+    # A mockServices location will not generate without ingress options -- see
+    # test_sv_location_without_ingress_refuses.
     mock_facts = dict(FACTS, func_ids=["mockServices"])
-    files = gen.generate(mock_facts, {"namespace": "ns1", "private_registry": "reg.local"})
+    files = gen.generate(mock_facts, {"namespace": "ns1", "private_registry": "reg.local",
+                                      "sv_ingress": "nginx",
+                                      "sv_subdomain": "apps.example.com",
+                                      "sv_tls_secret": "wildcard-tls"})
     ov = json.loads(yaml.safe_load(files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
     assert set(ov) == {"blazemeter/service-mock:latest"}
 
@@ -359,3 +364,91 @@ def test_multi_ship_requires_ship_id():
         gen.generate(facts, {"namespace": "ns1"})
     files = gen.generate(facts, {"namespace": "ns1", "ship_id": "explicit"})
     assert yaml.safe_load(files["bzm_configmap.yaml"])["data"]["SHIP_ID"] == "explicit"
+
+
+# -- service virtualization ------------------------------------------------
+# Each of these mirrors a failure seen on a real cluster: a mockServices
+# location generated without ingress options deploys and then hangs at
+# WAITING_FOR_DOMAIN, so the generator refuses instead.
+
+SV_FACTS = dict(FACTS, func_ids=["mockServices"])
+SV_OPTS = {"namespace": "ns1", "sv_ingress": "nginx",
+           "sv_subdomain": "apps.example.com", "sv_tls_secret": "wildcard-tls"}
+
+
+def test_sv_location_without_ingress_refuses():
+    with pytest.raises(ValueError, match="WAITING_FOR_DOMAIN"):
+        gen.generate(SV_FACTS, {"namespace": "ns1"})
+
+
+def test_sv_bridge_funcid_also_requires_ingress():
+    """sv-bridge fronts the mocks, so it needs the same wiring as mockServices."""
+    bridge = dict(FACTS, func_ids=["performance", "sv-bridge"])
+    with pytest.raises(ValueError, match="sv-bridge"):
+        gen.generate(bridge, {"namespace": "ns1"})
+    data = yaml.safe_load(
+        gen.generate(bridge, SV_OPTS)["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+
+
+def test_sv_ingress_requires_subdomain_and_tls_secret():
+    with pytest.raises(ValueError, match="sv_subdomain and sv_tls_secret"):
+        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx"})
+    # The TLS secret is mandatory even though the virtual service is HTTP.
+    with pytest.raises(ValueError, match="sv_tls_secret"):
+        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx",
+                                "sv_subdomain": "apps.example.com"})
+
+
+def test_sv_ingress_rejects_nodeport():
+    with pytest.raises(ValueError, match="cluster-scoped"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+
+
+def test_sv_nginx_configmap_envs():
+    data = yaml.safe_load(gen.generate(SV_FACTS, SV_OPTS)["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+    assert data["KUBERNETES_WEB_EXPOSE_SUB_DOMAIN"] == "apps.example.com"
+    assert data["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wildcard-tls"
+    assert data["KUBERNETES_SERVICE_USE_TYPE"] == "CLUSTERIP"
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
+
+
+def test_sv_nginx_role_grants_modern_ingress_group():
+    files = gen.generate(SV_FACTS, SV_OPTS)
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    groups = {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+    assert "ingresses" in groups["networking.k8s.io"]
+    assert "networking.istio.io" not in groups
+    # No ClusterRole needed for the ingress path -- that is its whole point.
+    assert "bzm_clusterrole.yaml" not in files
+
+
+def test_sv_istio_adds_gateway_rbac_and_optional_gateway_name():
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="istio"))
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    groups = {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+    assert set(groups["networking.istio.io"]) == {"gateways", "virtualservices"}
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "ISTIO"
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data  # unset -> gateway per service
+    named = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="istio",
+                                        sv_istio_gateway="bzm-gateway"))
+    assert yaml.safe_load(named["bzm_configmap.yaml"])["data"][
+        "KUBERNETES_ISTIO_GATEWAY_NAME"] == "bzm-gateway"
+
+
+def test_legacy_extensions_ingress_grant_removed():
+    """Ingress left extensions/v1beta1 in k8s 1.22; the old grant was inert."""
+    role = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1"})["bzm_role.yaml"])
+    for rule in role["rules"]:
+        if "extensions" in rule["apiGroups"]:
+            assert "ingresses" not in rule["resources"]
+
+
+def test_performance_location_emits_no_sv_config():
+    files = gen.generate(FACTS, {"namespace": "ns1"})
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert not [k for k in data if k.startswith("KUBERNETES_WEB_EXPOSE")]
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    assert "networking.k8s.io" not in {g for r in role["rules"] for g in r["apiGroups"]}

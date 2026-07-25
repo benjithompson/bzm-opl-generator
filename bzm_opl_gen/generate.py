@@ -20,6 +20,13 @@ DEFAULT_OPTIONS = {
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
+    # Service virtualization ingress. Only meaningful for a location whose
+    # funcIds include mockServices; see _sv_cfg for why all three are required
+    # together and why NODEPORT is rejected alongside them.
+    "sv_ingress": None,              # None | "nginx" | "istio"
+    "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
+    "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
+    "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
     # {"http", "https", "no_proxy", "username", "password"} -- credentials are
     # embedded in the proxy URL (user:pass@host, per BlazeMeter docs) and the
     # URL moves into the Secret when use_secret is on.
@@ -139,6 +146,62 @@ CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
 CA_CONFIGMAP = "blazemeter-cacerts"
 
+# The funcIds BlazeMeter puts on a location that serves virtual services. Both
+# need the same ingress wiring: mockServices runs the mocks, sv-bridge fronts
+# them, and either alone is enough to make the ingress options mandatory.
+SV_FUNC_IDS = ("mockServices", "sv-bridge")
+SV_INGRESS_TYPES = ("nginx", "istio")
+
+
+def _sv_cfg(facts, o):
+    """Resolve the service-virtualization ingress options, or None.
+
+    Every branch here failed on a real cluster first, so the errors name the
+    fix rather than the rule:
+
+    - A mockServices location generated without these options deploys happily
+      and then hangs forever. Crane has no domain to hand the virtual service,
+      so tracking sits at WAITING_FOR_DOMAIN with no error, the mock never
+      initialises, and the pod looks healthy at 1/1. Refusing to generate is
+      the only signal the customer gets in time.
+    - The TLS secret is required even when the virtual service speaks plain
+      HTTP; without it crane crash-loops on `ValidationError: TLS secret name
+      is empty`.
+    - NODEPORT makes crane resolve the address from the Node object, which is
+      cluster-scoped and so ungrantable by a namespaced Role. The ingress path
+      exists precisely to avoid needing that, so the combination is refused.
+    """
+    ingress = o["sv_ingress"]
+    sv_funcs = [f for f in (facts.get("func_ids") or []) if f in SV_FUNC_IDS]
+    if not ingress:
+        if sv_funcs:
+            raise ValueError(
+                f"location advertises funcId(s) {', '.join(sv_funcs)} but no "
+                "service-virtualization ingress was configured. Pass sv_ingress "
+                f"({'|'.join(SV_INGRESS_TYPES)}) + sv_subdomain + sv_tls_secret, "
+                "or virtual services will deploy and stall at WAITING_FOR_DOMAIN."
+            )
+        return None
+    if ingress not in SV_INGRESS_TYPES:
+        raise ValueError(f"sv_ingress must be one of {SV_INGRESS_TYPES}, got {ingress!r}")
+    missing = [n for n, v in (("sv_subdomain", o["sv_subdomain"]),
+                              ("sv_tls_secret", o["sv_tls_secret"])) if not v]
+    if missing:
+        raise ValueError(
+            f"sv_ingress={ingress} also requires {' and '.join(missing)}. "
+            "The TLS secret is mandatory even for HTTP virtual services -- crane "
+            "refuses to start without it."
+        )
+    if o["service_type"] != "CLUSTERIP":
+        raise ValueError(
+            f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
+            f"{o['service_type']}. NODEPORT makes crane read the cluster-scoped "
+            "Node object to build an address, which a namespaced Role cannot grant."
+        )
+    return {"type": ingress, "subdomain": o["sv_subdomain"],
+            "tls_secret": o["sv_tls_secret"],
+            "istio_gateway": o["sv_istio_gateway"]}
+
 
 def _ca_cfg(o):
     """Resolve the CA-trust mode to {cm, key, mode} or None.
@@ -249,6 +312,25 @@ def _configmap(facts, o):
         f"  KUBERNETES_SERVICE_USE_TYPE: {o['service_type']}",
         "  RUN_HEALTH_WEB_SERVICE: 'true'",
     ]
+    sv = _sv_cfg(facts, o)
+    if sv:
+        lines += [
+            "  # Service virtualization ingress. The endpoint crane advertises is",
+            "  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain",
+            "  # must be the wildcard domain your ingress controller already serves.",
+            f"  KUBERNETES_WEB_EXPOSE_TYPE: {sv['type'].upper()}",
+            f"  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {sv['subdomain']}",
+            "  # Required even for HTTP virtual services -- crane validates it at",
+            "  # startup and crash-loops when it is empty.",
+            f"  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {sv['tls_secret']}",
+        ]
+        if sv["type"] == "istio":
+            lines.append(
+                f"  KUBERNETES_ISTIO_GATEWAY_NAME: {sv['istio_gateway']}"
+                if sv["istio_gateway"] else
+                "  # KUBERNETES_ISTIO_GATEWAY_NAME unset: crane creates a"
+                " Gateway per virtual service."
+            )
     if o["private_registry"]:
         overrides = _image_overrides(facts, o["private_registry"])
         lines += [
@@ -427,6 +509,29 @@ def _crane_image(facts, o):
     return f"{o['private_registry'].rstrip('/')}/crane:{tag}"
 
 
+def _sv_rbac_block(sv):
+    """Namespaced Role rules crane needs to publish a virtual service.
+
+    Deliberately namespaced: this is the whole reason the ingress path is
+    preferred over NODEPORT, which would need cluster-scoped node reads.
+    """
+    if not sv:
+        return ""
+    rules = [
+        "  # Service virtualization: crane publishes one Ingress per virtual service.",
+        "  - apiGroups: [networking.k8s.io]",
+        "    resources: [ingresses]",
+        "    verbs: [get, list, watch, create, update, patch, delete, deletecollection]",
+    ]
+    if sv["type"] == "istio":
+        rules += [
+            "  - apiGroups: [networking.istio.io]",
+            "    resources: [gateways, virtualservices]",
+            "    verbs: [get, list, watch, create, update, patch, delete, deletecollection]",
+        ]
+    return "\n".join(rules) + "\n"
+
+
 def generate(facts, options):
     """Return {filename: content}. options overrides DEFAULT_OPTIONS."""
     o = {**DEFAULT_OPTIONS, **options}
@@ -443,7 +548,9 @@ def generate(facts, options):
     engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
 
     ca = _ca_cfg(o)
+    sv = _sv_cfg(facts, o)
     sub = {
+        "SV_RBAC_BLOCK": _sv_rbac_block(sv),
         "NAMESPACE": o["namespace"],
         "HARBOR_ID": facts["harbor_id"],
         "SHIP_ID": o["ship_id"],

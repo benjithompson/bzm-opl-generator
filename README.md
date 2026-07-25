@@ -115,16 +115,70 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
+| `sv_ingress` | – | `nginx` \| `istio` — **required** for a `mockServices` location; see [Service virtualization](#service-virtualization) |
+| `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
+| `sv_tls_secret` | – | wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** |
+| `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service |
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
 | `engine_cpu_limit` / `engine_mem_limit` | – (documented 2 / 8Gi) | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` — the limits crane stamps on every engine it spawns |
 | `emit_limitrange` | `false` | emit `bzm_limitrange.yaml`: a namespace `max` at the engine size plus defaults for pods that declare no resources. It does **not** change the taurus engine — see below |
 | `engine_cpu_request` / `engine_mem_request` | – (= the limits) | override that `defaultRequest`; must not exceed the limits |
 | `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
 
+## Service virtualization
+
+A location whose funcIds include `mockServices` needs an ingress before any
+virtual service will work. The generator refuses to render without one, because
+the failure is otherwise invisible: the manifests apply cleanly, the agent goes
+`idle`, the mock pod runs `1/1` — and every deploy hangs at
+`WAITING_FOR_DOMAIN` forever with no error, because crane has no domain to hand
+the service.
+
+```
+bzm-opl-gen generate --facts facts.json --api-key api-key.json \
+    --namespace my-sv --sv-ingress nginx \
+    --sv-subdomain apps.example.com --sv-tls-secret wildcard-credential
+```
+
+**Mandatory** — all three together:
+
+| what | why |
+|---|---|
+| `--sv-ingress nginx\|istio` | one at a time; the controller must already be installed |
+| `--sv-subdomain` | endpoints become `<service>-<port>-<namespace>.<subdomain>` |
+| `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP |
+
+**Optional:** `--sv-istio-gateway` reuses one Gateway instead of creating one
+per virtual service.
+
+**Provided by you, not generated** — the agent namespace needs a wildcard TLS
+secret for `*.<subdomain>`; with `--sv-istio-gateway`, that Gateway must already
+exist (the generator names it, it does not create it); and the cluster needs an
+IngressClass matching what crane requests (it asks for `nginx`). The per-service
+Ingress is **not** something you apply: crane creates one `ing-<service>-<port>`
+per virtual service at deploy time, which is why the RBAC above matters. On
+OpenShift the built-in class is
+`openshift-default`, so a stock cluster returns **503** for the advertised
+endpoint until an `nginx` IngressClass exists or a real nginx controller is
+installed — the virtual service is healthy and serving in-cluster either way.
+
+`service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
+alongside `sv_ingress`. NODEPORT makes crane resolve its address from the
+cluster-scoped **Node** object, which a namespaced Role cannot grant; denied, it
+silently falls back to `127.0.0.1` and stalls. Using an ingress is what keeps
+the whole deployment inside namespaced RBAC — no ClusterRole required.
+
 `generate` also writes `out/profile.json` — the fully resolved options, minus
 `auth_token` (re-fetched from the API, so the file is safe to commit or hand
 over). Replay it with `generate --profile out/profile.json`; `livetest
 --local-proxy` reads it to re-render the manifests with the rig's proxy and CA.
+
+> **Re-generating against a live agent:** `--api-key` fetches the AUTH_TOKEN,
+> and that endpoint **issues a new token and invalidates the previous one**. If
+> an agent is already running for that ship, either re-apply the whole bundle
+> (Secret included) or pass `--auth-token <existing>` instead. A crane left with
+> a stale token does not report an auth error — it logs `404` on
+> `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship.
 
 Images are selected automatically from the location's enabled funcIds:
 performance engines always ship; browser/grid (functionalGui), mock-service

@@ -13,10 +13,14 @@ rules:
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
+  # No `ingresses` here on purpose: Ingress has lived only in networking.k8s.io
+  # since k8s 1.22, so listing it under extensions grants nothing. The real
+  # grant is in the service-virtualization block below, when SV is enabled.
   - apiGroups: [extensions, apps, ""]
     resources: [pods, services, endpoints, daemonsets, "pods/*", pods/exec,
-                deployments, replicasets, ingresses, deployments/scale]
+                deployments, replicasets, deployments/scale]
     verbs: [get, list, watch, create, update, patch, delete, deletecollection]
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [watch, get, list, create, update, patch, delete, deletecollection]
+${SV_RBAC_BLOCK}

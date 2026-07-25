@@ -201,10 +201,17 @@ export default function App() {
   // Toggle-to-enable option groups: OFF hides the fields AND wipes their
   // options, so nothing hidden ever reaches the manifests. Auto-flips on when
   // a preset/import brings values in.
-  type GroupId = "registry" | "proxy" | "ca" | "sched" | "sizing" | "security";
+  type GroupId = "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
   const [grpOn, setGrpOn] = useState<Record<GroupId, boolean>>({
-    registry: false, proxy: false, ca: false, sched: false, sizing: false, security: false,
+    registry: false, proxy: false, ca: false, sched: false, sizing: false,
+    security: false, sv: false,
   });
+  // An SV location cannot be generated without this group: the manifests would
+  // apply cleanly and then stall at WAITING_FOR_DOMAIN, so the backend refuses.
+  // Surface it as required rather than letting the user find out later. Keep the
+  // funcId list in step with SV_FUNC_IDS in generate.py.
+  const svRequired = !!facts?.func_ids?.some(
+    (f) => f === "mockServices" || f === "sv-bridge");
   useEffect(() => {
     setGrpOn((g) => ({
       registry: g.registry || !!(options.private_registry || options.pull_secret || options.registry_auth),
@@ -215,8 +222,27 @@ export default function App() {
         || options.emit_limitrange),
       security: g.security || options.use_secret === false || !!options.cluster_rbac ||
         (options.service_type != null && options.service_type !== "CLUSTERIP"),
+      sv: g.sv || !!options.sv_ingress || svRequired,
     }));
-  }, [options, caMode]);
+  }, [options, caMode, svRequired]);
+  // Keep the SV options self-consistent however they arrived -- an imported
+  // profile sets them without ever calling flipGroup, and opening the panel via
+  // svRequired goes through setGrpOn, so neither path would otherwise seed
+  // sv_ingress (leaving the select showing "NGINX" off the ?? fallback while
+  // state stayed null) or clear a NODEPORT the SV path cannot use.
+  useEffect(() => {
+    setOptions((o) => {
+      const seedIngress = svRequired && !o.sv_ingress;
+      const clearNodePort = (seedIngress || !!o.sv_ingress)
+        && o.service_type != null && o.service_type !== "CLUSTERIP";
+      if (!seedIngress && !clearNodePort) return o;
+      return {
+        ...o,
+        ...(seedIngress ? { sv_ingress: "nginx" } : {}),
+        ...(clearNodePort ? { service_type: "CLUSTERIP" } : {}),
+      };
+    });
+  }, [svRequired, options.sv_ingress, options.service_type]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
@@ -224,6 +250,12 @@ export default function App() {
       if (id === "sizing" && sizePreset === "custom") {
         const d = ENGINE_SIZES.find((s) => s.id === "standard")!;
         setOptions((o) => ({ ...o, engine_cpu_limit: d.cpu, engine_mem_limit: d.mem }));
+      }
+      // The ingress path only works on CLUSTERIP; NODEPORT would send crane to
+      // the cluster-scoped Node object instead.
+      if (id === "sv") {
+        setOptions((o) => ({ ...o, sv_ingress: o.sv_ingress || "nginx",
+          service_type: "CLUSTERIP" }));
       }
       return;
     }
@@ -235,10 +267,26 @@ export default function App() {
       if (id === "sizing") Object.assign(w, { engine_cpu_limit: null, engine_mem_limit: null,
         emit_limitrange: false });
       if (id === "security") Object.assign(w, { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" });
+      if (id === "sv") Object.assign(w, { sv_ingress: null, sv_subdomain: null,
+        sv_tls_secret: null, sv_istio_gateway: null });
       return w;
     });
   };
   const namespaceOk = !!String(options.namespace ?? "").trim();
+  // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
+  // once SV is on (the secret even for plain HTTP, because crane validates it at
+  // startup), the ingress itself is mandatory for an SV location, and NODEPORT
+  // is incompatible because it sends crane to the cluster-scoped Node object.
+  // Absent service_type means the backend default (CLUSTERIP), so only an
+  // explicit NODEPORT is a conflict -- same `!= null` treatment the group
+  // toggles above use.
+  const svNodePortConflict = options.service_type != null
+    && options.service_type !== "CLUSTERIP";
+  const svOk = (options.sv_ingress
+    ? !!String(options.sv_subdomain ?? "").trim()
+      && !!String(options.sv_tls_secret ?? "").trim()
+      && !svNodePortConflict
+    : !svRequired);
 
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
@@ -753,13 +801,79 @@ export default function App() {
                       checked={Boolean(options.cluster_rbac)}
                       onChange={(v) => set("cluster_rbac", v)} />
                   </div>
-                  <Field label="Service type" hint="NODEPORT is BlazeMeter's default but often disallowed">
-                    <select className={inputCls} value={String(options.service_type)}
+                  <Field label="Service type"
+                    hint={options.sv_ingress
+                      ? "locked to CLUSTERIP: service virtualization reaches pods through the ingress, and NODEPORT would need cluster-scoped node access"
+                      : "NODEPORT is BlazeMeter's default but often disallowed"}>
+                    <select className={inputCls}
+                      value={String(options.service_type ?? "CLUSTERIP")}
                       onChange={(e) => set("service_type", e.target.value)}>
                       <option value="CLUSTERIP">CLUSTERIP</option>
-                      <option value="NODEPORT">NODEPORT</option>
+                      {/* Offering NODEPORT while SV is on would only lead to a
+                          blocked download; make the bad state unreachable. */}
+                      {!options.sv_ingress && <option value="NODEPORT">NODEPORT</option>}
                     </select>
                   </Field>
+                </div>
+                )}
+              </div>
+
+              <div className="px-3 py-2.5">
+                <div className="flex items-center gap-3">
+                  <Switch on={grpOn.sv} onChange={(v) => flipGroup("sv", v)} />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-medium ${grpOn.sv ? "text-slate-900" : "text-slate-500"}`}>
+                      Service virtualization
+                      {svRequired && (
+                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-bzm">
+                          required
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px] text-slate-400 truncate">
+                      {svRequired
+                        ? "this location runs mockServices — virtual services need an ingress"
+                        : "only for locations with the mockServices feature"}
+                    </p>
+                  </div>
+                </div>
+                {grpOn.sv && (
+                <div className="mt-3 pl-12 space-y-2">
+                  <Field label="Ingress controller"
+                    hint="must already be installed and serving the wildcard domain below">
+                    <select className={inputCls} value={String(options.sv_ingress ?? "nginx")}
+                      onChange={(e) => set("sv_ingress", e.target.value)}>
+                      <option value="nginx">NGINX</option>
+                      <option value="istio">Istio</option>
+                    </select>
+                  </Field>
+                  <Field label="Wildcard domain"
+                    hint="endpoints become <service>-<port>-<namespace>.<domain>">
+                    <TextInput mono placeholder="apps.example.com"
+                      value={String(options.sv_subdomain ?? "")}
+                      onChange={(v) => set("sv_subdomain", v || null)} />
+                  </Field>
+                  <Field label="Wildcard TLS secret"
+                    hint="in the agent namespace; required even for HTTP virtual services">
+                    <TextInput mono placeholder="wildcard-credential"
+                      value={String(options.sv_tls_secret ?? "")}
+                      onChange={(v) => set("sv_tls_secret", v || null)} />
+                  </Field>
+                  {options.sv_ingress === "istio" && (
+                    <Field label="Istio Gateway name (optional)"
+                      hint="leave empty and crane creates a Gateway per virtual service">
+                      <TextInput mono placeholder="bzm-gateway"
+                        value={String(options.sv_istio_gateway ?? "")}
+                        onChange={(v) => set("sv_istio_gateway", v || null)} />
+                    </Field>
+                  )}
+                  {!svOk && (
+                    <p className="text-[11px] text-amber-700">
+                      {svNodePortConflict
+                        ? "Service type must be CLUSTERIP — NODEPORT sends crane to the cluster-scoped Node object, which namespaced RBAC cannot grant."
+                        : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
+                    </p>
+                  )}
                 </div>
                 )}
               </div>
@@ -795,7 +909,7 @@ export default function App() {
           <Section n={5} title="Download & verify">
             <div className="space-y-3">
               <div className="flex gap-2 items-center">
-                <Button disabled={!facts || !shipId || !!genErr}
+                <Button disabled={!facts || !shipId || !!genErr || !svOk}
                   onClick={() => {
                     setDlErr(null);
                     downloadZip(facts!, { ...options, ship_id: shipId })
