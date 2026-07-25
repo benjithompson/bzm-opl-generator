@@ -247,6 +247,26 @@ come from the generated envs.
 Engines mount the bundle as a file (`/var/cm/ca-bundle.crt`, subPath) where
 crane mounts the directory — the check accepts both.
 
+**Use a script that makes real requests.** A dummy-sampler script still reports
+hundreds of samples with plausible response times, so the run summary cannot
+tell load generation from none — and none of the engine's egress gets exercised.
+`api.create_smoke_test()` builds a 1-VU/1-min Taurus test against a real URL for
+exactly this. Note its location goes in the uploaded YAML: for a taurus-script
+test, `PATCH /tests/{id}` silently drops `executions`, because the script *is*
+the load configuration (`point_test_at_location` returns `None` for such tests
+rather than pretending the repoint worked).
+
+**Engines do not proxy their sampler traffic.** With real requests the rig shows
+engine→BlazeMeter going through the proxy (`data.blazemeter.com`,
+`storage.blazemeter.com`) while engine→SUT does not appear there at all: JMeter
+ignores `HTTP(S)_PROXY`, which is an env-var convention of HTTP libraries, not
+of the JVM. The manifests cannot fix this — a customer whose SUT is only
+reachable through the corporate proxy has to put the proxy in the *test*
+(taurus `modules.jmeter.properties` with `http.proxyHost`/`http.proxyPort`, or
+JMeter's `-H`/`-P`). Worth saying out loud in a customer conversation, because
+crane coming online and results uploading look like proof that "the proxy
+works".
+
 Why the CONNECT probe, and why the cluster network rather than a published port: a host
 port belongs to whatever already claimed it (an ssh tunnel, a stray Java
 process), and the node then reaches *that* instead. The symptom is a plausible

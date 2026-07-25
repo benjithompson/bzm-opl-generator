@@ -27,6 +27,7 @@ import glob
 import json
 import os
 import platform
+import re
 import subprocess
 import time
 
@@ -458,14 +459,56 @@ def engine_proxy_evidence(before):
             f"{' / '.join(ENGINE_UPLOAD_HOSTS)} flows) -- engines egress around it"]
 
 
+def sut_hosts_via_proxy():
+    """Hosts other than BlazeMeter's that the proxy was asked to reach -- i.e.
+    the engine's traffic to the system under test.
+
+    Reported, not asserted: a customer's SUT is often internal and legitimately
+    in NO_PROXY. What it answers is whether the engine honours the proxy for its
+    own sampler traffic, which propagating HTTPS_PROXY into the env does not."""
+    out = subprocess.run(["docker", "logs", PROXY_NAME], capture_output=True, text=True)
+    hosts = set()
+    for line in (out.stdout + out.stderr).splitlines():
+        m = re.search(r"server connect ([^:\s]+):\d+", line)
+        if m and not m.group(1).endswith("blazemeter.com"):
+            hosts.add(m.group(1))
+    return sorted(hosts)
+
+
+def assert_engine_did_work(client, master_id):
+    """Did the engine actually generate load? A dummy-sampler script reaches
+    ENDED without a single request leaving the pod, so 'ENDED' alone says
+    nothing about whether the engine can drive traffic in this environment."""
+    try:
+        s = client.master_summary(master_id) or {}
+    except Exception as e:
+        return [f"could not read the run summary for master {master_id}: {e}"]
+    summary = (s.get("summary") or [{}])[0] if isinstance(s.get("summary"), list) else s
+    hits = summary.get("hits") or summary.get("samples") or 0
+    avg = summary.get("avg") or summary.get("avgResponseTime")
+    errors = summary.get("failed") or summary.get("errorsCount") or 0
+    print(f"  run summary: {hits} samples, avg {avg}ms, {errors} failed")
+    if not hits:
+        return [f"the run produced no samples -- the engine never issued a "
+                f"request, so nothing about its egress was exercised"]
+    if errors and errors >= hits:
+        return [f"every one of the {hits} samples failed -- the engine could not "
+                f"reach the target from inside the cluster"]
+    return []
+
+
 def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
                     engine_timeout=420, run_timeout=900):
     """Start a real BlazeMeter test on the location so crane actually spawns an
     engine, then check what that engine was given. The test's own locations are
     repointed at the private location and restored afterwards."""
     before = client.point_test_at_location(test_id, harbor_id)
-    print(f"test {test_id} repointed at harbor-{harbor_id} "
-          f"(original locations saved for restore)")
+    if before:
+        print(f"test {test_id} repointed at harbor-{harbor_id} "
+              f"(original locations saved for restore)")
+    else:
+        print(f"test {test_id} carries its locations in its script -- left as is; "
+              f"it must already target harbor-{harbor_id}")
     before_upload = engine_upload_marks()
     master_id = None
     try:
@@ -482,6 +525,10 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
                          f"did not complete and report back to BlazeMeter")
         if opts.get("proxy"):
             fails += engine_proxy_evidence(before_upload)
+        fails += assert_engine_did_work(client, master_id)
+        if opts.get("proxy"):
+            print(f"  non-BlazeMeter hosts the engine reached via the proxy: "
+                  f"{sut_hosts_via_proxy() or '(none -- sampler traffic did not use it)'}")
         return fails
     finally:
         if master_id:
@@ -489,8 +536,9 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
                 client.stop_master(master_id)
             except Exception:
                 pass                      # already finished; nothing to stop
-        client.update_test(test_id, before)
-        print(f"restored the original locations on test {test_id}")
+        if before:
+            client.update_test(test_id, before)
+            print(f"restored the original locations on test {test_id}")
 
 
 def assert_engine_config(pod, opts):

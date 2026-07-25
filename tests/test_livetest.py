@@ -273,6 +273,39 @@ def test_engine_proxy_evidence(monkeypatch):
     assert livetest.engine_proxy_evidence(before) == []
 
 
+class _FakeClient:
+    def __init__(self, summary):
+        self._s = summary
+
+    def master_summary(self, master_id):
+        return {"summary": [self._s]}
+
+
+@pytest.mark.parametrize("summary,ok,marker", [
+    ({"hits": 41, "avg": 431.0, "failed": 0}, True, None),
+    ({"hits": 0, "avg": None, "failed": 0}, False, "never issued a request"),
+    ({"hits": 1, "avg": 120145.0, "failed": 1}, False, "could not reach the target"),
+])
+def test_engine_did_work_verdicts(summary, ok, marker):
+    fails = livetest.assert_engine_did_work(_FakeClient(summary), 1)
+    assert (fails == []) is ok
+    if marker:
+        assert any(marker in f for f in fails)
+
+
+def test_point_test_at_location_skips_script_driven_tests(monkeypatch):
+    """A taurus-script test keeps its locations in the YAML; patching executions
+    is silently ignored, so the rig must not claim it repointed anything."""
+    from bzm_opl_gen import api
+    patched = []
+    monkeypatch.setattr(api.BzmClient, "test", lambda self, tid: {"executions": None})
+    monkeypatch.setattr(api.BzmClient, "update_test",
+                        lambda self, tid, body: patched.append(body))
+    c = api.BzmClient.__new__(api.BzmClient)
+    assert c.point_test_at_location(1, "abc") is None
+    assert patched == []
+
+
 def test_point_test_at_location_returns_original(monkeypatch):
     """The rig must be able to put the customer's test back the way it was."""
     from bzm_opl_gen import api

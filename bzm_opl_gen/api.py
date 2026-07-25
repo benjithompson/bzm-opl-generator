@@ -52,6 +52,27 @@ class BzmClient:
             raise BzmApiError(f"{method} {path} -> API error: {parsed['error']}")
         return parsed["result"]
 
+    def _upload(self, path, filename, content):
+        """multipart/form-data POST -- the file endpoints do not take JSON."""
+        boundary = "----bzmoplgen" + base64.b32encode(filename.encode()).decode().strip("=")
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode() + content.encode() + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(API_BASE + path, data=body, method="POST")
+        req.add_header("Authorization", "Basic " + self._auth)
+        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                parsed = json.loads(r.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            raise BzmApiError(f"POST {path} -> HTTP {e.code}: "
+                              f"{e.read().decode(errors='replace')[:300]}") from e
+        if parsed.get("error"):
+            raise BzmApiError(f"POST {path} -> API error: {parsed['error']}")
+        return parsed.get("result")
+
     def get(self, path):
         return self._request("GET", path)
 
@@ -124,8 +145,14 @@ class BzmClient:
     def point_test_at_location(self, test_id, harbor_id, concurrency=1):
         """Repoint a test's executions at a private location, returning the
         previous executions so the caller can put them back. BlazeMeter keys
-        private locations as 'harbor-<harborId>'."""
+        private locations as 'harbor-<harborId>'.
+
+        Returns None for a taurus-script test, whose locations live in the
+        uploaded YAML: patching executions there is silently ignored, so
+        pretending it worked would be a lie the caller acts on."""
         t = self.test(test_id)
+        if not t.get("executions"):
+            return None
         before = {"executions": t.get("executions"),
                   "overrideExecutions": t.get("overrideExecutions")}
         loc = {f"harbor-{harbor_id}": concurrency}
@@ -144,6 +171,54 @@ class BzmClient:
             "overrideExecutions": repoint(before["overrideExecutions"]),
         })
         return before
+
+    # A 1-VU Taurus scenario that makes real HTTP requests. A dummy-sampler
+    # script exercises none of the engine's egress, so it cannot show whether
+    # engines can reach a target at all -- or whether they honour the proxy.
+    SMOKE_SCRIPT = """execution:
+- concurrency: 1
+  hold-for: 60s
+  ramp-up: 0s
+  scenario: opl-smoke
+  locations:
+    harbor-{harbor_id}: 1
+scenarios:
+  opl-smoke:
+    think-time: 1s
+    requests:
+    - url: {url}
+      label: home
+"""
+
+    def create_smoke_test(self, project_id, harbor_id, name, url="https://blazedemo.com/",
+                          filename="opl-smoke.yml"):
+        """Create a runnable 1-VU/1-min Taurus test on a private location.
+
+        The location goes in the YAML, not in the test's `executions`: for a
+        taurus-script test the API silently drops an executions PATCH, because
+        the script is the load configuration."""
+        t = self.post("/tests", {
+            "name": name,
+            "projectId": project_id,
+            "configuration": {"type": "taurus", "scriptType": "taurus",
+                              "testMode": "script", "executionType": "taurusCloud",
+                              "enableLoadConfiguration": True, "filename": filename},
+        })
+        test_id = t["id"]
+        self.upload_test_file(test_id, filename,
+                              self.SMOKE_SCRIPT.format(url=url, harbor_id=harbor_id))
+        return test_id
+
+    def upload_test_file(self, test_id, filename, content):
+        return self._upload(f"/tests/{test_id}/files", filename, content)
+
+    def delete_test(self, test_id):
+        return self.delete(f"/tests/{test_id}")
+
+    def master_summary(self, master_id):
+        """Aggregate report for the run -- how many samples the engine actually
+        produced. 'ENDED' alone does not distinguish real work from no work."""
+        return self.get(f"/masters/{master_id}/reports/main/summary")
 
     def start_test(self, test_id):
         """Returns the master (report) id of the run."""
