@@ -64,3 +64,36 @@ def test_sv_constants_are_served_from_the_generator():
 
 def test_api_requires_key():
     assert client.get("/api/accounts").status_code == 401
+
+
+def _served(monkeypatch, **kw):
+    """Run main() without actually serving, and report what it asked for."""
+    import uvicorn
+    calls = {}
+    monkeypatch.setattr(uvicorn, "run",
+                        lambda app, **k: calls.update(app=app, **k))
+    server.main(open_browser=False, **kw)
+    return calls
+
+
+def test_ui_binds_loopback_unless_told_otherwise(monkeypatch, capsys):
+    """The default has to stay 127.0.0.1: this server holds a BzmClient in
+    process memory, so anything that can reach it can act as the API key."""
+    assert _served(monkeypatch)["host"] == "127.0.0.1"
+    assert "reachable" not in capsys.readouterr().out
+
+
+def test_ui_warns_when_the_bind_leaves_this_machine(monkeypatch, capsys):
+    """Widening the bind is a real exposure, and the one irreversible thing
+    behind it is the download button: fetching an AUTH_TOKEN rotates it, so a
+    stray click leaves a running agent stuck on a token that no longer works.
+    Say so at startup, where it is still cheap to reconsider."""
+    assert _served(monkeypatch, host="0.0.0.0")["host"] == "0.0.0.0"
+    warning = capsys.readouterr().out
+    assert "reachable" in warning and "AUTH_TOKEN" in warning
+
+
+def test_ui_dev_mode_binds_the_same_host(monkeypatch):
+    """--dev reloads through an import string, a second uvicorn.run call that
+    used to hardcode its own host -- an easy place for the flag to go missing."""
+    assert _served(monkeypatch, host="0.0.0.0", dev=True)["host"] == "0.0.0.0"
