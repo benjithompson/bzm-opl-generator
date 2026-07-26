@@ -58,10 +58,28 @@ jobs:
           print(f"{whl}: {len(names)} entries, package data present")
           PY
 
+      # Notes come from CHANGELOG.md, not from commit subjects: they are for
+      # the person upgrading, and nobody writes those by accident. The footer
+      # is appended to every release so install instructions stay identical.
+      - name: assemble release notes
+        run: |
+          python - <<'PY' > notes.md
+          import os, re, sys
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          text = open("CHANGELOG.md").read()
+          m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+                        text, re.M | re.S)
+          if not m or not m.group(1).strip():
+              sys.exit(f"CHANGELOG.md has no entry for {version} -- add one before tagging")
+          print(m.group(1).strip())
+          PY
+          cat .github/release-footer.md >> notes.md
+          echo "--- notes.md ---"; cat notes.md
+
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
               --title "$GITHUB_REF_NAME" \
-              --generate-notes
+              --notes-file notes.md

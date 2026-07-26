@@ -86,16 +86,26 @@ Users install from a GitHub Release, not from git — the repo is private, so a
 `pip install git+https://…` needs credentials that `gh release download`
 handles for them.
 
+On a PR like anything else: bump `version` in `pyproject.toml`, and move your
+entries from `## [Unreleased]` into a new `## [x.y.z] — YYYY-MM-DD` section of
+`CHANGELOG.md`. Then tag:
+
 ```
-# bump `version` in pyproject.toml first, on a PR like anything else
 git tag v0.1.1 && git push origin v0.1.1
 ```
 
-`.github/workflows/release.yml` then runs the offline suite, builds the wheel,
-checks it actually carries the templates/profiles/UI bundle, and publishes it
-with generated notes. The tag must match `pyproject.toml`'s version or the job
-fails before building — the tag is what users pin to, so the two disagreeing is
-worse than no release.
+`.github/workflows/release.yml` runs the offline suite, builds the wheel,
+checks it carries the templates/profiles/UI bundle, and publishes it. It
+refuses to release if:
+
+- the tag disagrees with `pyproject.toml`'s version — the tag is what users
+  pin to, so the two disagreeing is worse than no release;
+- `CHANGELOG.md` has no section for that version.
+
+Release notes are the CHANGELOG section plus `.github/release-footer.md`,
+which carries the install instructions so every release reads the same. Notes
+are never generated from commit subjects: they're for the person upgrading,
+and nobody writes those by accident.
 
 ## Where things are documented
 
