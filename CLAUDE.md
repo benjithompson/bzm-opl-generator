@@ -14,7 +14,9 @@ minutes. Add one whenever you add a live check.
 The run must end **`N passed`** with nothing skipped. `tests/test_server.py`
 skips its whole module when `fastapi` is missing, so a venv built without the
 optional extra reports a clean pass while testing none of the HTTP layer — it
-went unnoticed for a while. Fix it with `.venv/bin/pip install -e ".[ui]"`.
+went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
+is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
+optional deps import rather than trusting a green run.
 
 **Live rig (`bzm-opl-gen livetest`)** — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
@@ -62,9 +64,11 @@ kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube stat
   purge), so a missing `IMAGE_OVERRIDES` key fails here instead of silently
   falling back to the public registry.
 - **`--local-proxy`** runs mitmproxy **on the cluster's docker network**, never
-  published to a host port — port 8080 on this Mac is taken, and the node then
-  reaches that instead and gets its 403 while our proxy's log stays empty. A
-  CONNECT probe requires the attempt to appear in our own log before proceeding.
+  published to a host port. Publishing it makes the rig silently wrong whenever
+  something else already owns that port — 8080 is a popular one — because the
+  node then reaches *that* service, gets its 403, and our proxy's log stays
+  empty. A CONNECT probe requires the attempt to appear in our own log before
+  proceeding.
 - **Negative control** deploys CA-stripped first and requires
   `CERTIFICATE_VERIFY_FAILED`. Keep it on unless iterating (`--skip-negative-control`).
 - **`--contain-egress`** needs calico; minikube's default CNI accepts
@@ -82,17 +86,29 @@ library convention, not a JVM one), so engine→SUT goes direct and fails under
 `--contain-egress` while results still upload. Not a manifest bug; the proxy has
 to go in the test. Don't "fix" it in the generator.
 
-## Environment (this machine)
+## Local environment
 
-- Docker is **colima**, not Docker Desktop. `colima ssh -- df -h /` before a run:
-  a full VM disk makes minikube fail with `RSRC_DOCKER_STORAGE`. `docker image
-  prune -a --filter until=168h` filters on image *build* date, not last use — it
-  will delete BlazeMeter images pulled the same day.
-- arm64: BlazeMeter images are amd64-only and run under Rosetta. Engines are
-  slow; size them down (`--engine-cpu 1 --engine-mem 4Gi`) or they stay Pending.
-- Pin `mitmproxy:11.1.3`; 12+ dies with SIGILL on Apple-silicon VMs.
-- `minikube -p bzm-opl-test` is disposable — the rig deletes and recreates it
-  freely. Anything else running in docker (e.g. a saleor stack) is the user's.
+Run `bzm-opl-gen toolcheck --cluster minikube --local-registry 5001
+--local-proxy` first — it reports the active docker daemon, free disk, and
+missing tools for whatever setup you actually have. The rest of this section is
+the classes of problem it can't fix for you.
+
+- **Docker provider varies and it matters for disk.** Whatever runs the daemon,
+  a full disk makes minikube fail with `RSRC_DOCKER_STORAGE`, which never
+  mentions disk. Which number binds depends on the provider: a preallocated VM
+  disk (colima, Lima, Minikube's own VM) is bounded by the VM's `df`; a sparse
+  disk image on the host (Docker Desktop) is bounded by host free space.
+  `toolcheck` picks the right one; `docker context ls` tells you what you're on.
+- **Pruning by age deletes images you still need.** `docker image prune -a
+  --filter until=168h` filters on image *build* date, not last use — BlazeMeter
+  images are old enough to be deleted the day you pull them.
+- **arm64:** BlazeMeter images are amd64-only and run under whatever x86
+  emulation your docker runtime provides. Engines are slow; size them down
+  (`--engine-cpu 1 --engine-mem 4Gi`) or they stay Pending.
+- **Pin `mitmproxy:11.1.3`**; 12+ dies with SIGILL on arm64 VMs.
+- `minikube -p bzm-opl-test` is disposable — the rig deletes and recreates that
+  profile freely, and touches only its own named containers. Whatever else you
+  have running in docker is left alone.
 
 ## Generator details that bite
 

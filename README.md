@@ -38,6 +38,36 @@ bzm-opl-gen ui                              # opens the web UI
 Upgrade later with `pipx reinstall bzm-opl-gen`. Working on the code instead?
 `pipx install -e ".[ui]"` from a checkout tracks your edits live.
 
+### Credentials
+
+Everything that talks to BlazeMeter takes `--api-key path/to/api-key.json` — a
+BlazeMeter API key (Settings → API Keys) as JSON:
+
+```
+cp examples/api-key.example.json api-key.json   # then fill in id + secret
+```
+
+```json
+{ "id": "<api key id>", "secret": "<api key secret>" }
+```
+
+`api-key*.json` is gitignored. The key needs read access to the account whose
+location you're generating for, and write access only for the commands that
+create things (`create-location`, `create-ship`, `livetest`).
+
+## Try it without an account
+
+The generator itself only needs a facts file, so a checked-in sample gets you
+to real manifests with no BlazeMeter access at all:
+
+```
+bzm-opl-gen generate --facts examples/facts.example.json --namespace demo -o out/
+```
+
+Edit `examples/facts.example.json` to see the account facts drive the output —
+drop `"performance"` from `func_ids`, or add `"functionalGui"`, and watch which
+images land in `IMAGE_OVERRIDES`.
+
 ## Quick start
 
 ```
@@ -88,7 +118,33 @@ bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
 ```
 
 Run without installing: `python3 -m bzm_opl_gen ...` from the repo root.
-No runtime dependencies for the CLI (stdlib only); tests need `pip install -e .[test]`.
+No runtime dependencies for the CLI (stdlib only).
+
+## Working on the code
+
+```
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest tests -q          # ~1s, no cluster, must end "N passed"
+```
+
+`[dev]` is `[test]` + `[ui]`. Install one of those alone and
+`tests/test_server.py` import-skips itself, so the run still says *passed*
+while testing none of the HTTP layer — CI asserts the optional deps are
+importable for exactly that reason.
+
+The offline suite fakes every cluster and API response the live rig exercises,
+so add an offline counterpart whenever you add a live check.
+
+Before a live run, preflight your own machine — it beats finding out four
+minutes in:
+
+```
+bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy
+```
+
+Full contributor guide in [CONTRIBUTING.md](CONTRIBUTING.md); the live rig's
+internals, the account it runs against, and the environment trap behind each
+flag are in [CLAUDE.md](CLAUDE.md).
 
 ## Web UI
 
@@ -387,6 +443,23 @@ Capacity is measured against node **allocatable**, which is an upper bound:
 other workloads already hold part of it. A doctor pass means "nothing here
 stops a test", not "there is headroom".
 
+### Your machine (`toolcheck`)
+
+`doctor` asks whether a cluster can run the location. `toolcheck` asks the
+question that comes first when you're driving the live rig: does this
+workstation have what `livetest` shells out to?
+
+```
+bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy
+```
+
+It checks only what the flags you passed will actually use — kubectl/oc, the
+docker daemon, kind/minikube, the host port `--local-registry` publishes on,
+free space on the docker VM, and whether the pinned rig images are cached.
+On arm64 it warns that BlazeMeter's amd64-only images run under emulation and
+that engines need sizing down. Exits non-zero on anything that would stop the
+run before it deploys.
+
 ## Live test
 
 Success = the BlazeMeter API reports the ship with a **fresh heartbeat** and
@@ -541,7 +614,7 @@ Notes: the CA bundle is mitm CA + public roots, because replacing the trust
 store outright is not what a corporate bundle does. Image pulls come from the
 kubelet, which ignores the pod's proxy env — that's why the registry rig is
 reachable directly. mitmproxy is pinned to `11.1.3`; 12+ dies with SIGILL on
-Apple-silicon VMs. The CA ConfigMap is applied `--server-side`: a real bundle
+arm64 VMs. The CA ConfigMap is applied `--server-side`: a real bundle
 overruns the 256KB cap on kubectl's last-applied-configuration annotation.
 
 Not covered by either rig: proof that egress *cannot* leave except through the
@@ -556,13 +629,16 @@ bzm_opl_gen/
   api.py         BlazeMeter API client (stdlib)
   facts.py       account fact gathering + image classification
   generate.py    manifest rendering (templates/ + per-option assembly)
-  doctor.py      preflight checks (pure verdicts over fetched cluster JSON)
+  doctor.py      cluster preflight (pure verdicts over fetched cluster JSON)
+  workstation.py workstation preflight for the live rig (`toolcheck`)
   quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
   livetest.py    deploy, poll-until-online, teardown
-  cli.py         subcommands: facts | generate | doctor | images | livetest
+  cli.py         subcommands: facts | generate | doctor | toolcheck | images
+                              | livetest
   templates/     per-CRD best-practice templates
   profiles/      scenario presets (standard | private-registry | proxy-ca)
 tests/           offline unit tests (fixture facts)
+examples/        sample facts + api-key placeholder (the no-account path)
 ```
 
 ## Roadmap / not yet covered

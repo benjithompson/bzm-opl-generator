@@ -1,5 +1,8 @@
 # credentials -- never commit
 api-key*.json
+# ...except the placeholder. Exact path, so a real key dropped next to it
+# (examples/api-key.json) is still ignored.
+!examples/api-key.example.json
 *.env
 kubeconfig*.yaml
 kubeconfig*.yml

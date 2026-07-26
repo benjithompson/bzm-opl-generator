@@ -6,8 +6,12 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pyyaml", "pytest", "httpx"]
+# fastapi belongs in `test`, not just `ui`: tests/test_server.py importorskips
+# it, so a venv without it reports a clean pass while testing none of the HTTP
+# layer. `dev` is the one to install from a checkout.
+test = ["pyyaml", "pytest", "httpx", "fastapi>=0.110"]
 ui = ["fastapi>=0.110", "uvicorn>=0.27"]
+dev = ["pyyaml", "pytest", "httpx", "fastapi>=0.110", "uvicorn>=0.27"]
 
 [project.scripts]
 bzm-opl-gen = "bzm_opl_gen.cli:main"

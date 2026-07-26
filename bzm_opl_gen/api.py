@@ -30,8 +30,22 @@ def parse_auth_token(docker_command):
 
 class BzmClient:
     def __init__(self, api_key_path):
-        with open(api_key_path) as f:
-            d = json.load(f)
+        try:
+            with open(api_key_path) as f:
+                d = json.load(f)
+        except FileNotFoundError:
+            raise SystemExit(
+                f"no API key file at '{api_key_path}'. It is a JSON object with "
+                f'the id and secret of a BlazeMeter API key:\n'
+                f'  {{"id": "...", "secret": "..."}}\n'
+                f"Create the key under Settings -> API Keys in BlazeMeter, then:\n"
+                f"  cp examples/api-key.example.json {api_key_path}   # and fill it in")
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"API key file '{api_key_path}' is not valid JSON: {e}")
+        if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
+            raise SystemExit(
+                f"API key file '{api_key_path}' needs both \"id\" and \"secret\" "
+                f"(see examples/api-key.example.json)")
         self._auth = base64.b64encode(f"{d['id']}:{d['secret']}".encode()).decode()
 
     def _request(self, method, path, body=None):
