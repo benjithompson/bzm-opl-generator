@@ -69,7 +69,18 @@ export const api = {
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */
-export type SvConstants = { func_ids: string[]; ingress_types: string[] };
+export interface SvBackend {
+  group: string;
+  resources: string[];
+  /** What crane publishes with it — "Ingress", "Gateway + VirtualService", … */
+  creates: string;
+  via_ingress_class: boolean;
+}
+export type SvConstants = {
+  func_ids: string[];
+  ingress_types: string[];
+  backends: Record<string, SvBackend>;
+};
 
 /** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
  *  that used to live here is how sv-bridge went missing from the create form.

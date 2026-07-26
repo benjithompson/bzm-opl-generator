@@ -23,13 +23,16 @@ type SvOwner = "you" | "bundle" | "none";
 type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
 type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
 
-// Per-backend prerequisites, from README "Which one to pick" (every row of that
-// table was measured on a live cluster) and generate.SV_INGRESS_BACKENDS. Only
-// the *set* of backends is served (/api/sv-constants); this is per-backend prose
-// that cannot be derived from it, so a backend added on the Python side and not
-// here renders no list at all rather than nginx's advice, which would be wrong
-// in the direction that costs an afternoon.
-const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq; role: ReactNode }> = {
+// Per-backend prerequisites, from README "Which one to pick" -- every row of
+// that table was measured on a live cluster. Editorial, and so kept here: what
+// a controller demands of *you* is not in generate.py to be served. The Role
+// row is the opposite -- mechanical -- and comes from /api/sv-constants rather
+// than a copy here, which is why it is absent below.
+//
+// A backend added on the Python side and not here renders no prose at all
+// rather than nginx's advice, which would be wrong in the direction that costs
+// an afternoon.
+const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
   nginx: {
     controller: { own: "you", text: () => (
       <>An ingress controller already serving the wildcard domain, registering an{" "}
@@ -41,8 +44,6 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq; role: Re
       <>A Secret <code>{c.secret}</code> in namespace <code>{c.ns}</code> with a
       wildcard certificate for <code>*.{c.dom}</code> — crane's Ingress references it.</>
     ) },
-    role: <>a Role on <code>networking.k8s.io/ingresses</code>; crane publishes one
-      Ingress per virtual service</>,
   },
   istio: {
     controller: { own: "you", text: () => (
@@ -57,9 +58,6 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq; role: Re
       name stays mandatory (crane crash-loops without it), and an HTTPS virtual
       service terminates TLS in the mock pod itself.</>
     ) },
-    role: <>a Role on <code>networking.istio.io</code> <code>gateways</code> +{" "}
-      <code>virtualservices</code>; crane publishes a Gateway + VirtualService per
-      virtual service</>,
   },
   contour: {
     controller: { own: "you", text: () => (
@@ -71,8 +69,6 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq; role: Re
       wildcard certificate for <code>*.{c.dom}</code> — crane's HTTPProxy carries
       it as <code>tls.secretName</code> and Contour validates it.</>
     ) },
-    role: <>a Role on <code>projectcontour.io/httpproxies</code>; crane publishes
-      one HTTPProxy per virtual service</>,
   },
   openshift: {
     controller: { own: "none", text: () => (
@@ -84,10 +80,6 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq; role: Re
       <code>Allow</code> at the router, so nothing reads <code>{c.secret}</code>.
       The name stays mandatory; crane validates it at startup.</>
     ) },
-    role: <>a Role on <code>route.openshift.io</code> <code>routes</code> +{" "}
-      <code>routes/custom-host</code>; crane publishes one Route per virtual
-      service, and sets <code>spec.host</code>, which OpenShift gates behind that
-      second grant</>,
   },
 };
 
@@ -129,6 +121,14 @@ const KIND_CHOICES: [DeployKind, string, string][] = [
   ["performance", "Performance agent", "load & functional tests — engines on demand"],
   ["sv", "Service-virtualization agent", "virtual services / mocks — needs an ingress"],
 ];
+
+// Said in the location list, in the callout under it, and in the kind picker.
+// One string because the coupling is one fact -- three near-copies is how the
+// list ends up claiming something the callout no longer does.
+const KIND_COUPLING =
+  "mocks and load engines share a namespace, a slot budget and a restart "
+  + "lifecycle, so redeploying the performance agent takes the virtual "
+  + "services down with it";
 
 // How a location's own funcIds are labelled in the list. "both" is the case
 // worth naming: it deploys as one agent whichever kind you picked.
@@ -179,7 +179,7 @@ export default function App() {
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
-    { func_ids: [], ingress_types: [] });
+    { func_ids: [], ingress_types: [], backends: {} });
   type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
@@ -311,6 +311,18 @@ export default function App() {
 
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
+  // Clearing a field whose key is absent from DEFAULT_OPTIONS has to *remove*
+  // it, not null it: generate() spreads the options over the defaults and
+  // profile.json dumps whatever survives, so an explicit null adds a key that
+  // was never there and the bundle stops being byte-identical to one generated
+  // without the field. Every other `v || null` field in this form is safe only
+  // because its key already has a default to overwrite.
+  const setOptional = useCallback((k: string, v: string) =>
+    setOptions((o) => {
+      if (v) return { ...o, [k]: v };
+      const { [k]: _dropped, ...rest } = o;
+      return rest;
+    }), []);
 
   const applyProfile = (name: string) => {
     const p = profiles.find((x) => x.name === name);
@@ -502,6 +514,9 @@ export default function App() {
     gateway: String(options.sv_istio_gateway ?? "").trim(),
   };
   const svBackend = SV_PREREQS[String(options.sv_ingress ?? "")];
+  // Served, not derived from SV_PREREQS: what the Role grants is generate.py's
+  // to state, and the two can disagree only if one of them is a copy.
+  const svRbac = svConst.backends[String(options.sv_ingress ?? "")];
 
   // -- sv-expose -------------------------------------------------------------
   // Renders the pair that actually routes, from the mocks running in the
@@ -657,10 +672,9 @@ export default function App() {
                   ))}
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  One agent per kind. An agent serving both puts mocks and load
-                  engines in one namespace, on one slot budget, with one restart
-                  lifecycle. This only picks defaults — any location below still
-                  works for either.
+                  One agent per kind — with one agent serving both,{" "}
+                  {KIND_COUPLING}. This only picks defaults; any location below
+                  still works for either.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -693,9 +707,7 @@ export default function App() {
                       const [label, cls] = LOC_KIND_BADGE[k];
                       return (
                         <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${cls}`}
-                          title={k === "both"
-                            ? "one agent for both kinds: shared namespace, slot budget and restart lifecycle"
-                            : undefined}>
+                        >
                           {label}
                         </span>
                       );
@@ -704,6 +716,14 @@ export default function App() {
                       {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                       {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
                     </span>
+                    {/* Said here rather than left to the badge's tooltip: this
+                        is where the location is being chosen, and a tooltip is
+                        invisible on touch and to the keyboard. */}
+                    {locKind(l) === "both" && (
+                      <span className="block text-[11px] text-amber-700 mt-0.5">
+                        one agent for both — {KIND_COUPLING}
+                      </span>
+                    )}
                   </button>
                 ))}
                 {who && filteredLocs.length === 0 && (
@@ -712,11 +732,9 @@ export default function App() {
               {location && locKind(location) === "both" && (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                   <b>{location.name}</b> carries both performance and
-                  service-virtualization features, so one agent serves both:
-                  mocks and load engines share a namespace, a slot budget and a
-                  restart lifecycle, and redeploying the performance agent takes
-                  the virtual services down with it. You can still generate for
-                  it — a location per kind is what avoids the coupling.
+                  service-virtualization features, so one agent serves both:{" "}
+                  {KIND_COUPLING}. You can still generate for it — a location
+                  per kind is what avoids the coupling.
                 </p>
               )}
               <ErrorMsg msg={locErr} />
@@ -1228,9 +1246,18 @@ export default function App() {
                                instead.</>}
                         </PrereqItem>
                       )}
-                      {svBackend && (
-                        <PrereqItem own="bundle">{svBackend.role}. Namespaced only —
-                          no ClusterRole.</PrereqItem>
+                      {/* The one row that is mechanical rather than editorial,
+                          so it is read off generate.SV_INGRESS_BACKENDS via
+                          /api/sv-constants. A Role restated by hand here would
+                          go stale silently -- a wrong one reads as plausible
+                          right up until the virtual service stalls. */}
+                      {svRbac && (
+                        <PrereqItem own="bundle">
+                          a Role on <code>{svRbac.group}</code>{" "}
+                          <code>{svRbac.resources.join(", ")}</code>; crane publishes
+                          one {svRbac.creates} per virtual service. Namespaced only —
+                          no ClusterRole.
+                        </PrereqItem>
                       )}
                       <PrereqItem own="bundle">
                         <code>KUBERNETES_WEB_EXPOSE_TYPE</code> /{" "}
@@ -1335,7 +1362,7 @@ export default function App() {
                 hint="the class put on the Ingress we own — defaults to nginx; on OpenShift use openshift-default and no nginx alias is needed. Saved into the profile, so the CLI picks it up too.">
                 <TextInput mono placeholder="nginx"
                   value={String(options.sv_ingress_class ?? "")}
-                  onChange={(v) => set("sv_ingress_class", v || null)} />
+                  onChange={(v) => setOptional("sv_ingress_class", v)} />
               </Field>
               <div className="flex gap-2 items-center">
                 <Button disabled={!svExposeReady || svExposeBusy}

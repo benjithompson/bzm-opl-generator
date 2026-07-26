@@ -62,6 +62,24 @@ def test_sv_constants_are_served_from_the_generator():
     assert "ingress_types" not in client.get("/api/option-defaults").json()
 
 
+def test_sv_constants_carry_what_each_backend_publishes():
+    """The UI tells the user which Role the bundle grants and what crane creates
+    with it. That is SV_INGRESS_BACKENDS -- restating it in TypeScript is the
+    same duplication the funcId list was just deleted for, and it would go stale
+    silently, because a wrong Role reads as plausible right up until the virtual
+    service stalls."""
+    from bzm_opl_gen import generate as gen_mod
+    backends = client.get("/api/sv-constants").json()["backends"]
+    assert set(backends) == set(gen_mod.SV_INGRESS_TYPES)
+    for name, b in gen_mod.SV_INGRESS_BACKENDS.items():
+        assert backends[name] == {"group": b.group, "resources": list(b.resources),
+                                  "creates": b.creates,
+                                  "via_ingress_class": b.via_ingress_class}
+    # routes/custom-host is the one nobody would guess: OpenShift gates
+    # spec.host behind it, and crane sets spec.host.
+    assert "routes/custom-host" in backends["openshift"]["resources"]
+
+
 def test_func_id_choices_cover_the_whole_generator_vocabulary():
     """A location whose funcId the UI never offers can only be created from the
     CLI or the BlazeMeter web app -- which is what happened to sv-bridge while

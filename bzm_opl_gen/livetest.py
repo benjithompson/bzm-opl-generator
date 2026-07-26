@@ -980,7 +980,15 @@ def sv_read(namespace, timeout=15):
         # build that prints there.
         err = (out.stderr or out.stdout or "").strip()
         return SvClusterRead(_sv_read_reason(err), [], err)
-    pods = json.loads(out.stdout or "{}").get("items", [])
+    try:
+        pods = json.loads(out.stdout or "{}").get("items", [])
+    except ValueError:
+        # A zero exit whose output will not parse -- a wrapper or plugin that
+        # printed before the JSON. Rare, but this answers a browser, and
+        # /api/sv-expose promises no bare errors, so it is an unreadable
+        # cluster like any other rather than a traceback.
+        return SvClusterRead(SV_READ_NO_CONTEXT, [],
+                             (out.stdout or "").strip())
     mocks = _sv_mocks(pods)
     return SvClusterRead(SV_READ_OK if mocks else SV_READ_NO_MOCKS, mocks, "")
 

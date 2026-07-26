@@ -513,6 +513,18 @@ def test_sv_read_separates_a_readable_namespace_with_no_virtual_services(monkeyp
     assert read.status == livetest.SV_READ_NO_MOCKS and read.mocks == []
 
 
+def test_sv_read_survives_a_zero_exit_that_is_not_json(monkeypatch):
+    """A wrapper or kubectl plugin that prints to stdout before the JSON leaves
+    a successful exit whose output will not parse. sv_read exists to answer a
+    browser, which /api/sv-expose promises never to hand a bare error, so this
+    has to come back as an unreadable cluster rather than an exception."""
+    _fake_kubectl(monkeypatch, stdout="Kubeconfig user entry is using deprecated API\n")
+    read = livetest.sv_read("ns1")
+    assert read.status == livetest.SV_READ_NO_CONTEXT
+    assert read.mocks == []
+    assert "deprecated" in read.detail        # the raw output travels with it
+
+
 def test_sv_read_does_not_hang_on_an_unreachable_api_server(monkeypatch):
     """kubectl keeps retrying an unreachable server rather than failing, and an
     HTTP request from the browser cannot wait it out."""

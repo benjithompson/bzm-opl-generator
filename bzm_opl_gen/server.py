@@ -234,8 +234,14 @@ SV_READ_MESSAGES = {
     livetest.SV_READ_NO_CLI:
         "No kubectl or oc on this machine, so the namespace cannot be read "
         "from here. Nothing else in this tool needs one.",
+    # One message for several causes -- no kubeconfig, no current context, a
+    # server that refused, one that never answered, output that would not
+    # parse. The way forward is the same for all of them, and the raw reason
+    # travels alongside as `detail`; what it must not do is name only one of
+    # them, which reads as false to anyone whose context is fine but slow.
     livetest.SV_READ_NO_CONTEXT:
-        "kubectl/oc is installed, but no configured context reached a cluster.",
+        "kubectl/oc is installed, but no cluster could be read -- no context "
+        "is configured, or the one that is did not answer.",
     livetest.SV_READ_DENIED:
         "The cluster refused the read -- this context is not allowed to list "
         "pods in that namespace.",
@@ -357,7 +363,15 @@ def sv_constants():
     step by hand.
     """
     return {"func_ids": list(gen_mod.SV_FUNC_IDS),
-            "ingress_types": list(gen_mod.SV_INGRESS_TYPES)}
+            "ingress_types": list(gen_mod.SV_INGRESS_TYPES),
+            # What each backend publishes, so the UI can name the Role the
+            # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
+            # -- which is mechanical, unlike the prose around it.
+            "backends": {name: {"group": b.group,
+                                "resources": list(b.resources),
+                                "creates": b.creates,
+                                "via_ingress_class": b.via_ingress_class}
+                         for name, b in gen_mod.SV_INGRESS_BACKENDS.items()}}
 
 
 # -- SPA ----------------------------------------------------------------------
