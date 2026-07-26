@@ -138,7 +138,9 @@ the classes of problem it can't fix for you.
 
 - Comments explain *why*, especially where a non-obvious environment fact drove
   the code. Match the existing density; don't narrate the obvious.
-- A git hook blocks pushing to `main`. Commit on a branch, push that, and ask
-  the user to fast-forward main themselves.
+- Never push to `main`. Commit on a branch, push that, open a PR. `.githooks/`
+  holds a pre-push guard, but it only applies where someone ran
+  `git config core.hooksPath .githooks` — assume it is *not* active and don't
+  rely on it to catch you.
 - Creating or starting anything in the BlazeMeter account is a real write —
   confirm with the user first unless they already named the artifact to use.

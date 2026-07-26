@@ -62,7 +62,16 @@ Live runs touch a real account, so:
 
 ## Pull requests
 
-A git hook blocks pushing to `main`. Commit on a branch, push that, open a PR.
+Everything lands on `main` through a PR. Enable the guard once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-push` then refuses a push whose target is `main` and tells you
+what to do instead. It is client-side, so it catches the reflex `git push` from
+a branch you forgot you were on — not a determined `--no-verify`. Treat it as a
+seatbelt, not a lock.
 
 - Comments explain **why**, especially where a non-obvious environment fact
   drove the code. Match the surrounding density; don't narrate the obvious.
