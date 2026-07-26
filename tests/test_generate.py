@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 from bzm_opl_gen.api import BzmApiError, parse_auth_token  # noqa: E402
 
@@ -598,3 +599,42 @@ def test_sv_publish_cfg_keeps_tls_optional_unlike_generate():
     cfg = gen.sv_publish_cfg({"sv_subdomain": "apps.example.com"})
     assert cfg.tls_secret is None
     assert cfg.ingress_class == gen.SV_EXPOSE_DEFAULT_INGRESS_CLASS
+
+
+# --- contributor onboarding: the no-account path ------------------------------
+
+EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "examples")
+
+
+def test_missing_facts_file_points_at_the_sample():
+    """Used to be a bare FileNotFoundError from cmd_generate's first line."""
+    with pytest.raises(SystemExit) as e:
+        facts_mod.load("/nonexistent/facts.json")
+    msg = str(e.value)
+    assert "examples/facts.example.json" in msg and "bzm-opl-gen facts" in msg
+
+
+def test_malformed_facts_file(tmp_path):
+    p = tmp_path / "facts.json"
+    p.write_text("{oops")
+    with pytest.raises(SystemExit, match="not valid JSON"):
+        facts_mod.load(str(p))
+
+
+def test_example_facts_generate_without_an_account():
+    """`generate --facts examples/facts.example.json` is the first thing a
+    contributor without a BlazeMeter key can run; keep the sample in step with
+    what the generator reads out of it."""
+    f = facts_mod.load(os.path.join(EXAMPLES, "facts.example.json"))
+    files = gen.generate(f, {"namespace": "demo"})
+    _all_yaml_parse(files)
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])
+    assert cm["data"]["HARBOR_ID"] == f["harbor_id"]
+    assert cm["data"]["SHIP_ID"] == f["ships"][0]["id"]   # single ship, auto
+
+
+def test_example_facts_have_threads_per_engine():
+    """Null threadsPerEngine is a hard doctor failure; the sample must not
+    teach the shape that fails preflight."""
+    f = facts_mod.load(os.path.join(EXAMPLES, "facts.example.json"))
+    assert f["threads_per_engine"]

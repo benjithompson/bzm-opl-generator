@@ -129,5 +129,15 @@ def save(facts, path):
 
 
 def load(path):
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        raise SystemExit(
+            f"no facts file at '{path}'. Gather one from the account:\n"
+            f"  bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>\n"
+            f"or drive the generator off the checked-in sample, no account needed:\n"
+            f"  bzm-opl-gen generate --facts examples/facts.example.json "
+            f"--namespace demo -o out/")
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"facts file '{path}' is not valid JSON: {e}")

@@ -1,0 +1,39 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor declared in pyproject; 3.13 catches stdlib drift.
+        python-version: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: pip install -e ".[dev]"
+
+      # tests/test_server.py importorskips fastapi, so a missing optional dep
+      # turns into a clean-looking pass that tested none of the HTTP layer.
+      # Fail here instead, where the cause is obvious.
+      - name: optional test deps are actually importable
+        run: python -c "import fastapi, yaml, httpx"
+
+      - run: pytest tests -q
+
+      # The no-account path a new contributor takes first. Also proves the
+      # sample facts file still matches what the generator expects.
+      - name: generate from the checked-in sample facts
+        run: |
+          python -m bzm_opl_gen generate \
+              --facts examples/facts.example.json \
+              --namespace ci-demo -o "$RUNNER_TEMP/out"
+          test -s "$RUNNER_TEMP/out/bzm_deployment.yaml"

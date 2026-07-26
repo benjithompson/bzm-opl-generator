@@ -38,6 +38,36 @@ bzm-opl-gen ui                              # opens the web UI
 Upgrade later with `pipx reinstall bzm-opl-gen`. Working on the code instead?
 `pipx install -e ".[ui]"` from a checkout tracks your edits live.
 
+### Credentials
+
+Everything that talks to BlazeMeter takes `--api-key path/to/api-key.json` — a
+BlazeMeter API key (Settings → API Keys) as JSON:
+
+```
+cp examples/api-key.example.json api-key.json   # then fill in id + secret
+```
+
+```json
+{ "id": "<api key id>", "secret": "<api key secret>" }
+```
+
+`api-key*.json` is gitignored. The key needs read access to the account whose
+location you're generating for, and write access only for the commands that
+create things (`create-location`, `create-ship`, `livetest`).
+
+## Try it without an account
+
+The generator itself only needs a facts file, so a checked-in sample gets you
+to real manifests with no BlazeMeter access at all:
+
+```
+bzm-opl-gen generate --facts examples/facts.example.json --namespace demo -o out/
+```
+
+Edit `examples/facts.example.json` to see the account facts drive the output —
+drop `"performance"` from `func_ids`, or add `"functionalGui"`, and watch which
+images land in `IMAGE_OVERRIDES`.
+
 ## Quick start
 
 ```
@@ -88,7 +118,24 @@ bzm-opl-gen livetest --api-key api-key.json --namespace my-project \
 ```
 
 Run without installing: `python3 -m bzm_opl_gen ...` from the repo root.
-No runtime dependencies for the CLI (stdlib only); tests need `pip install -e .[test]`.
+No runtime dependencies for the CLI (stdlib only).
+
+## Working on the code
+
+```
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest tests -q          # ~1s, no cluster, must end "N passed"
+```
+
+`[dev]` is `[test]` + `[ui]`. Install one of those alone and
+`tests/test_server.py` import-skips itself, so the run still says *passed*
+while testing none of the HTTP layer — CI asserts the optional deps are
+importable for exactly that reason.
+
+The offline suite fakes every cluster and API response the live rig exercises,
+so add an offline counterpart whenever you add a live check. Anything beyond
+that — the live rig, the account it runs against, and the environment traps
+behind each flag — is in [CLAUDE.md](CLAUDE.md).
 
 ## Web UI
 
@@ -563,6 +610,7 @@ bzm_opl_gen/
   templates/     per-CRD best-practice templates
   profiles/      scenario presets (standard | private-registry | proxy-ca)
 tests/           offline unit tests (fixture facts)
+examples/        sample facts + api-key placeholder (the no-account path)
 ```
 
 ## Roadmap / not yet covered
