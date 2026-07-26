@@ -35,6 +35,12 @@ anything that breaks.
 - **Web UI: every funcId a location can be created with** is served from the
   generator rather than copied into the frontend, so `sv-bridge` (and
   `proxyRecorder`) can be selected at last — the hardcoded list omitted both.
+- **`ui --host`** — bind the web UI to something other than loopback, for when
+  the machine running it is not the machine you are sitting at. The default is
+  unchanged (`127.0.0.1`) and a widened bind warns at startup: the server holds
+  your API key in process memory, and downloading a bundle rotates the
+  AUTH_TOKEN out from under any agent already running for that ship. An SSH
+  tunnel to the default bind does the same job without exposing the listener.
 
 ## [0.1.0] — 2026-07-26
 
