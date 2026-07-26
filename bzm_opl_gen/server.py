@@ -1,9 +1,15 @@
 """Local web UI backend: a thin JSON API over api.py / facts.py / generate.py.
 
 Run with `bzm-opl-gen ui` (requires `pip install bzm-opl-gen[ui]`). Serves the
-prebuilt SPA from ui_dist/ and the API under /api. Single-user, local-only by
-design: binds 127.0.0.1, holds one BzmClient in process memory. The API key
-secret never leaves this machine and is never echoed back to the browser.
+prebuilt SPA from ui_dist/ and the API under /api. Single-user by design: it
+holds one BzmClient in process memory, so reaching the page is equivalent to
+holding the API key. The secret itself never leaves this machine and is never
+echoed back to the browser.
+
+Binds 127.0.0.1 by default for that reason. `--host` widens it for the case
+where the machine running this is not the machine you are sitting at, and warns
+on the way out; an SSH tunnel to the default bind is the safer shape and costs
+nothing extra.
 """
 
 import io
@@ -261,8 +267,32 @@ else:
                 "api_docs": "/api/docs"}
 
 
-def main(port=8765, open_browser=True, api_key_path=None, dev=False):
+LOOPBACK = ("127.0.0.1", "::1", "localhost")
+
+# Said at startup rather than left to the README: by the time the bind is wrong
+# the page is already reachable, and the expensive mistake behind it is not
+# reading manifests -- it is the download button, which fetches an AUTH_TOKEN
+# and thereby rotates it, leaving any agent already running for that ship on a
+# token the API no longer accepts (it logs 404 on /ships/<id>/status and sits
+# at 0/1, which reads like a deleted ship).
+EXPOSED_WARNING = """\
+!! bzm-opl-gen ui is bound to {host}, so it is reachable from outside this
+!! machine. Anyone who reaches it can act as your BlazeMeter API key -- and
+!! downloading a bundle fetches an AUTH_TOKEN, which ROTATES it and breaks
+!! whatever agent is already running for that ship.
+!! Prefer the default 127.0.0.1 plus an SSH tunnel:
+!!   ssh -L {port}:127.0.0.1:{port} <this-machine>
+"""
+
+
+def main(port=8765, open_browser=True, api_key_path=None, dev=False,
+         host="127.0.0.1"):
     import uvicorn
+    if host not in LOOPBACK:
+        # flush: redirected stdout is block-buffered, and a warning that only
+        # materialises when the process exits is no warning at all -- this is
+        # the one line that has to arrive before the port is open.
+        print(EXPOSED_WARNING.format(host=host, port=port), flush=True)
     if api_key_path:
         _state["client"] = api.BzmClient(api_key_path)
         with open(api_key_path) as fh:
@@ -276,8 +306,8 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False):
         # so pass the key via env for /api/key/detect to find.
         if api_key_path:
             os.environ["BZM_API_KEY_FILE"] = os.path.abspath(api_key_path)
-        uvicorn.run("bzm_opl_gen.server:app", host="127.0.0.1", port=port,
+        uvicorn.run("bzm_opl_gen.server:app", host=host, port=port,
                     reload=True, reload_dirs=[os.path.dirname(__file__)],
                     log_level="info")
     else:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning")

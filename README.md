@@ -171,6 +171,21 @@ pip install -e .[ui]
 bzm-opl-gen ui          # opens http://127.0.0.1:8765
 ```
 
+**It binds this machine only, on purpose.** The server holds your API key in
+process memory, so reaching the page is equivalent to holding the key — and the
+download button fetches an AUTH_TOKEN, which *rotates* it and leaves any agent
+already running for that ship on a token the API no longer accepts. To use it
+from another device, prefer a tunnel to the default bind, which keeps the
+listener local and lets your existing SSH auth decide who gets in:
+
+```
+ssh -L 8765:127.0.0.1:8765 you@that-machine     # then open http://127.0.0.1:8765
+```
+
+`--host` widens the bind when you really do want the server itself listening
+elsewhere (`--host 0.0.0.0`, or a specific interface address). It warns at
+startup, and it is the wrong tool on any network you do not control.
+
 Single page: Connect (key stays local) → pick/create location & agent →
 configure (presets, private registry, proxy/CA, tolerations/nodeSelector,
 engine sizing) → live manifest preview → download zip (AUTH_TOKEN fetched on

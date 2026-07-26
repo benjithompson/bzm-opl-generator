@@ -306,9 +306,13 @@ def cmd_ui(a):
         from . import server
     except ImportError:
         sys.exit("UI dependencies missing -- pip install 'bzm-opl-gen[ui]'")
-    print(f"bzm-opl-gen ui -> http://127.0.0.1:{a.port}  (Ctrl-C to stop)")
+    # 0.0.0.0 is what was asked for, not somewhere to point a browser -- print
+    # an address that resolves.
+    shown = "127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host
+    print(f"bzm-opl-gen ui -> http://{shown}:{a.port}  (Ctrl-C to stop)",
+          flush=True)
     server.main(port=a.port, open_browser=not a.no_browser, api_key_path=a.api_key,
-                dev=a.dev)
+                dev=a.dev, host=a.host)
 
 
 def main():
@@ -513,6 +517,11 @@ def main():
 
     u = sub.add_parser("ui", help="start the local web UI")
     u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--host", default="127.0.0.1",
+                   help="interface to bind (default 127.0.0.1, this machine "
+                        "only). Widening it makes the page -- and so your API "
+                        "key -- reachable from the network; an SSH tunnel to "
+                        "the default is usually the better answer")
     u.add_argument("--api-key", help="preload this api-key.json")
     u.add_argument("--no-browser", action="store_true")
     u.add_argument("--dev", action="store_true",
