@@ -14,7 +14,9 @@ minutes. Add one whenever you add a live check.
 The run must end **`N passed`** with nothing skipped. `tests/test_server.py`
 skips its whole module when `fastapi` is missing, so a venv built without the
 optional extra reports a clean pass while testing none of the HTTP layer — it
-went unnoticed for a while. Fix it with `.venv/bin/pip install -e ".[ui]"`.
+went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
+is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
+optional deps import rather than trusting a green run.
 
 **Live rig (`bzm-opl-gen livetest`)** — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
@@ -84,10 +86,16 @@ to go in the test. Don't "fix" it in the generator.
 
 ## Environment (this machine)
 
-- Docker is **colima**, not Docker Desktop. `colima ssh -- df -h /` before a run:
-  a full VM disk makes minikube fail with `RSRC_DOCKER_STORAGE`. `docker image
-  prune -a --filter until=168h` filters on image *build* date, not last use — it
-  will delete BlazeMeter images pulled the same day.
+- Docker is **Docker Desktop** here now (context `desktop-linux`; colima is no
+  longer installed) — this line said colima for a long while, so check
+  `docker context ls` rather than trusting it. `bzm-opl-gen toolcheck` reports
+  the active daemon and the free space that matters: colima preallocates a
+  fixed VM disk, so its own `colima ssh -- df -h /` binds, while Docker
+  Desktop's disk is a sparse file that grows into the host filesystem. Either
+  one filling up makes minikube fail with `RSRC_DOCKER_STORAGE`, which does not
+  mention disk. `docker image prune -a --filter until=168h` filters on image
+  *build* date, not last use — it will delete BlazeMeter images pulled the
+  same day.
 - arm64: BlazeMeter images are amd64-only and run under Rosetta. Engines are
   slow; size them down (`--engine-cpu 1 --engine-mem 4Gi`) or they stay Pending.
 - Pin `mitmproxy:11.1.3`; 12+ dies with SIGILL on Apple-silicon VMs.
