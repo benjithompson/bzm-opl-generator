@@ -260,14 +260,17 @@ def _sv_expose_command(x: SvExposeIn):
     downloaded. Every option is on the command line instead, so the suggestion
     runs from any directory.
     """
-    cmd = ["bzm-opl-gen", "sv-expose", "--manifests", shlex.quote(""),
-           "--namespace", shlex.quote(x.namespace)]
+    cmd = ["bzm-opl-gen", "sv-expose", "--manifests", "",
+           "--namespace", x.namespace]
     for flag, value in (("--sv-subdomain", x.sv_subdomain),
                         ("--sv-tls-secret", x.sv_tls_secret),
                         ("--ingress-class", x.sv_ingress_class)):
         if value:
-            cmd += [flag, shlex.quote(value)]
-    return " ".join(cmd)
+            cmd += [flag, value]
+    # shlex.join quotes what needs it and nothing else -- quoting per element
+    # on the way in means a flag added without it emits a command that will not
+    # run, and nothing here would catch that.
+    return shlex.join(cmd)
 
 
 @app.post("/api/sv-expose")
@@ -292,8 +295,12 @@ def sv_expose_render(x: SvExposeIn):
     read = livetest.sv_read(x.namespace)
     if read.status != livetest.SV_READ_OK:
         return {"status": read.status, "mocks": [], "files": [],
-                "message": SV_READ_MESSAGES[read.status], "detail": read.detail,
-                "command": command}
+                # .get, not [], because livetest owns the set of reasons: a
+                # fifth one added there would otherwise 500 the single endpoint
+                # whose whole contract is that it never hands back a bare
+                # error. The raw detail is a worse message, not a broken page.
+                "message": SV_READ_MESSAGES.get(read.status, read.detail),
+                "detail": read.detail, "command": command}
     return {
         "status": read.status,
         "mocks": read.mocks,
@@ -366,11 +373,12 @@ def sv_constants():
             "ingress_types": list(gen_mod.SV_INGRESS_TYPES),
             # What each backend publishes, so the UI can name the Role the
             # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
-            # -- which is mechanical, unlike the prose around it.
+            # -- which is mechanical, unlike the prose around it. Only the
+            # three fields the UI renders; via_ingress_class is doctor's, and
+            # serving it here would be a field nothing reads.
             "backends": {name: {"group": b.group,
                                 "resources": list(b.resources),
-                                "creates": b.creates,
-                                "via_ingress_class": b.via_ingress_class}
+                                "creates": b.creates}
                          for name, b in gen_mod.SV_INGRESS_BACKENDS.items()}}
 
 

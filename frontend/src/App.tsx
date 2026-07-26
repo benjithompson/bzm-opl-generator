@@ -1,12 +1,14 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, Account, AgentStatus, Facts, GeneratedFile, KeyCandidate,
-  FuncIdChoice, Location, Options, Ship, SvConstants, SvExposeOut, Workspace,
+  api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
+  FuncIdChoice, KeyCandidate, Location, Options, Ship, SvConstants, SvExposeIn,
+  SvExposeOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
+import { SvCtx, SvPrereqs } from "./SvPrereqs";
 
 // Display names only. The set of values is served from generate.SV_INGRESS_TYPES
 // -- an unlabelled backend falls back to its raw name and still appears, which
@@ -15,89 +17,6 @@ const SV_INGRESS_LABELS: Record<string, string> = {
   nginx: "NGINX", istio: "Istio", contour: "Contour", openshift: "OpenShift Route",
 };
 
-// Who owns each thing a virtual service needs. "you" is the one that bites: the
-// bundle *names* these objects and never creates them, and a missing one fails
-// silently -- the manifests apply, the agent goes idle, the mock pod runs 1/1,
-// and the endpoint simply never answers.
-type SvOwner = "you" | "bundle" | "none";
-type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
-type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
-
-// Per-backend prerequisites, from README "Which one to pick" -- every row of
-// that table was measured on a live cluster. Editorial, and so kept here: what
-// a controller demands of *you* is not in generate.py to be served. The Role
-// row is the opposite -- mechanical -- and comes from /api/sv-constants rather
-// than a copy here, which is why it is absent below.
-//
-// A backend added on the Python side and not here renders no prose at all
-// rather than nginx's advice, which would be wrong in the direction that costs
-// an afternoon.
-const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
-  nginx: {
-    controller: { own: "you", text: () => (
-      <>An ingress controller already serving the wildcard domain, registering an{" "}
-      <code>IngressClass</code> named <code>nginx</code>. Crane writes{" "}
-      <code>ingressClassName: nginx</code> and offers no env var to change it, so
-      nothing else will claim its Ingress.</>
-    ) },
-    tls: { own: "you", text: (c) => (
-      <>A Secret <code>{c.secret}</code> in namespace <code>{c.ns}</code> with a
-      wildcard certificate for <code>*.{c.dom}</code> — crane's Ingress references it.</>
-    ) },
-  },
-  istio: {
-    controller: { own: "you", text: () => (
-      <>Istio installed, with an ingress gateway already serving the wildcard
-      domain. No <code>IngressClass</code> is involved — Istio registers none.</>
-    ) },
-    // Inert, but only on istio: crane writes the :443 server as PASSTHROUGH.
-    tls: { own: "none", text: (c) => (
-      <>Nothing to create — crane writes the <code>:443</code> server as{" "}
-      <code>tls.mode: PASSTHROUGH</code> with no <code>credentialName</code>, so{" "}
-      <code>{c.secret}</code> is never read and need not exist or be valid. The
-      name stays mandatory (crane crash-loops without it), and an HTTPS virtual
-      service terminates TLS in the mock pod itself.</>
-    ) },
-  },
-  contour: {
-    controller: { own: "you", text: () => (
-      <>Contour installed and already serving the wildcard domain. No{" "}
-      <code>IngressClass</code> is involved — Contour registers none.</>
-    ) },
-    tls: { own: "you", text: (c) => (
-      <>A Secret <code>{c.secret}</code> in namespace <code>{c.ns}</code> with a
-      wildcard certificate for <code>*.{c.dom}</code> — crane's HTTPProxy carries
-      it as <code>tls.secretName</code> and Contour validates it.</>
-    ) },
-  },
-  openshift: {
-    controller: { own: "none", text: () => (
-      <>Nothing to install — the cluster router already serves the domain, and no{" "}
-      <code>IngressClass</code> is involved.</>
-    ) },
-    tls: { own: "none", text: (c) => (
-      <>Not referenced — crane's Route terminates <code>edge</code>/
-      <code>Allow</code> at the router, so nothing reads <code>{c.secret}</code>.
-      The name stays mandatory; crane validates it at startup.</>
-    ) },
-  },
-};
-
-function PrereqItem({ own, children }: { own: SvOwner; children: ReactNode }) {
-  const badge = {
-    you: ["you create", "bg-amber-50 text-amber-700 border-amber-200"],
-    bundle: ["in the bundle", "bg-slate-100 text-slate-500 border-slate-200"],
-    none: ["nothing to do", "bg-slate-50 text-slate-400 border-slate-200"],
-  }[own];
-  return (
-    <li className="flex gap-2 items-baseline">
-      <span className={`shrink-0 w-[74px] text-center rounded border px-1 py-px text-[10px] font-medium ${badge[1]}`}>
-        {badge[0]}
-      </span>
-      <span className="text-[11px] text-slate-500">{children}</span>
-    </li>
-  );
-}
 
 // Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
 // to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
@@ -196,10 +115,12 @@ export default function App() {
   const [svExpose, setSvExpose] = useState<SvExposeOut | null>(null);
   const [svExposeBusy, setSvExposeBusy] = useState(false);
   const [svExposeErr, setSvExposeErr] = useState<string | null>(null);
-  // Mirrors the rendered file names for the preview effect below, which must
-  // not take svExpose as a dependency -- that would re-POST /api/generate every
-  // time the namespace is read.
-  const svFilesRef = useRef<GeneratedFile[]>([]);
+  // The preview effect below must not take svExpose as a dependency -- that
+  // would re-POST /api/generate every time the namespace is read. Synced here
+  // on every render rather than beside each setSvExpose, so adding a fifth
+  // place that sets it cannot leave the two out of step.
+  const svExposeRef = useRef(svExpose);
+  svExposeRef.current = svExpose;
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -290,7 +211,7 @@ export default function App() {
         // edit -- otherwise reading the namespace, then typing, yanks the pane
         // back to the first manifest.
         setActiveFile((a) => (a && (r.files.some((f) => f.name === a)
-          || svFilesRef.current.some((f) => f.name === a))
+          || (svExposeRef.current?.files ?? []).some((f) => f.name === a))
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
@@ -487,7 +408,13 @@ export default function App() {
     if (k === "sv") flipGroup("sv", true);
   };
 
-  const namespaceOk = !!String(options.namespace ?? "").trim();
+  // One way to read a text option. Written out per-site, the `.trim()` was
+  // getting forgotten -- an ingress name pasted with a trailing space missed
+  // the SV_PREREQS lookup and the panel silently lost its prose.
+  const txt = useCallback(
+    (k: string) => String(options[k] ?? "").trim(), [options]);
+
+  const namespaceOk = !!txt("namespace");
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
   // once SV is on (the secret even for plain HTTP, because crane validates it at
   // startup), the ingress itself is mandatory for an SV location, and NODEPORT
@@ -498,9 +425,7 @@ export default function App() {
   const svNodePortConflict = options.service_type != null
     && options.service_type !== "CLUSTERIP";
   const svOk = (options.sv_ingress
-    ? !!String(options.sv_subdomain ?? "").trim()
-      && !!String(options.sv_tls_secret ?? "").trim()
-      && !svNodePortConflict
+    ? !!txt("sv_subdomain") && !!txt("sv_tls_secret") && !svNodePortConflict
     : !svRequired);
   // What the prerequisite list and the endpoint host are rendered against. The
   // list shows from the moment the group is on, so a field still empty renders
@@ -508,56 +433,52 @@ export default function App() {
   // for real, which is the point -- the host below is meant to be pasted into a
   // browser after the first virtual service deploys.
   const svCtx: SvCtx = {
-    ns: String(options.namespace ?? "").trim() || "<namespace>",
-    dom: String(options.sv_subdomain ?? "").trim() || "<domain>",
-    secret: String(options.sv_tls_secret ?? "").trim() || "<tls-secret>",
-    gateway: String(options.sv_istio_gateway ?? "").trim(),
+    ns: txt("namespace") || "<namespace>",
+    dom: txt("sv_subdomain") || "<domain>",
+    secret: txt("sv_tls_secret") || "<tls-secret>",
+    gateway: txt("sv_istio_gateway"),
   };
-  const svBackend = SV_PREREQS[String(options.sv_ingress ?? "")];
-  // Served, not derived from SV_PREREQS: what the Role grants is generate.py's
-  // to state, and the two can disagree only if one of them is a copy.
-  const svRbac = svConst.backends[String(options.sv_ingress ?? "")];
+  // Served, not restated here: what the Role grants is generate.py's to state,
+  // and the two can disagree only if one of them is a copy.
+  const svRbac = svConst.backends[txt("sv_ingress")];
 
   // -- sv-expose -------------------------------------------------------------
   // Renders the pair that actually routes, from the mocks running in the
   // namespace. The server answers 200 with a reason whenever it cannot read the
   // cluster, so the only thing caught here is a genuinely broken request.
-  const svExposeReady = !!String(options.sv_subdomain ?? "").trim()
-    && !!String(options.namespace ?? "").trim();
+  const svExposeReady = !!txt("sv_subdomain") && namespaceOk;
+  // The exact request, derived rather than assembled at the call site: the
+  // staleness effect below depends on it, so a field added here cannot be
+  // forgotten there.
+  const svExposeReq: SvExposeIn = useMemo(() => ({
+    namespace: txt("namespace"),
+    sv_subdomain: txt("sv_subdomain") || null,
+    sv_tls_secret: txt("sv_tls_secret") || null,
+    sv_ingress_class: txt("sv_ingress_class") || null,
+  }), [txt]);
   // What was rendered is a snapshot of one namespace, taken with the values
   // that were on screen. Editing any of them makes it stale, and stale YAML in
   // the preview is worse than none -- it would still carry the old ingress
   // class or host while the fields say otherwise. Drop it and make them read
   // again.
   useEffect(() => {
-    setSvExpose(null); setSvExposeErr(null); svFilesRef.current = [];
-  }, [options.namespace, options.sv_subdomain, options.sv_tls_secret,
-      options.sv_ingress_class]);
+    setSvExpose(null); setSvExposeErr(null);
+  }, [svExposeReq]);
   const readSvExpose = async () => {
     setSvExposeBusy(true); setSvExposeErr(null);
     try {
-      const r = await api.svExpose({
-        namespace: String(options.namespace ?? ""),
-        sv_subdomain: (options.sv_subdomain as string) ?? null,
-        sv_tls_secret: (options.sv_tls_secret as string) ?? null,
-        sv_ingress_class: (options.sv_ingress_class as string) ?? null,
-      });
+      const r = await api.svExpose(svExposeReq);
       setSvExpose(r);
-      svFilesRef.current = r.files;
       if (r.files[0]) setActiveFile(r.files[0].name);
     } catch (e) {
-      setSvExpose(null); svFilesRef.current = [];
+      setSvExpose(null);
       setSvExposeErr(String((e as Error).message));
     } finally { setSvExposeBusy(false); }
   };
   const downloadSvExpose = () => {
     const f = svExpose?.files[0];
     if (!f) return;
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([f.content], { type: "text/yaml" }));
-    a.download = f.name;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    saveBlob(new Blob([f.content], { type: "text/yaml" }), f.name);
   };
   // Same pane as the manifests, per the preview being where generated YAML is
   // read in this app.
@@ -696,22 +617,18 @@ export default function App() {
                   placeholder={`filter ${locations.length} locations…`} />
               )}
               <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-                {filteredLocs.map((l) => (
+                {filteredLocs.map((l) => {
+                  const k = locKind(l);
+                  return (
                   <button key={l.id}
                     className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
                     onClick={() => setHarborId(l.id)}>
                     <span className="font-medium">{l.name}</span>
-                    {(() => {
-                      const k = locKind(l);
-                      if (!k) return null;
-                      const [label, cls] = LOC_KIND_BADGE[k];
-                      return (
-                        <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${cls}`}
-                        >
-                          {label}
-                        </span>
-                      );
-                    })()}
+                    {k && (
+                      <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
+                        {LOC_KIND_BADGE[k][0]}
+                      </span>
+                    )}
                     <span className="text-xs text-slate-400 ml-2">
                       {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                       {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
@@ -719,13 +636,14 @@ export default function App() {
                     {/* Said here rather than left to the badge's tooltip: this
                         is where the location is being chosen, and a tooltip is
                         invisible on touch and to the keyboard. */}
-                    {locKind(l) === "both" && (
+                    {k === "both" && (
                       <span className="block text-[11px] text-amber-700 mt-0.5">
                         one agent for both — {KIND_COUPLING}
                       </span>
                     )}
                   </button>
-                ))}
+                  );
+                })}
                 {who && filteredLocs.length === 0 && (
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
               </div>
@@ -1217,79 +1135,8 @@ export default function App() {
                         : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
                     </p>
                   )}
-                  {/* The bundle names objects it never creates, and the cluster
-                      that is missing one gives no error at all. Spell out both
-                      sides, per backend, while there is still time to fix it. */}
-                  <div className="rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 space-y-1.5">
-                    <p className="text-xs font-medium text-slate-600">
-                      What a virtual service needs, and who provides it
-                    </p>
-                    <ul className="space-y-1">
-                      {svBackend && (
-                        <>
-                          <PrereqItem own={svBackend.controller.own}>
-                            {svBackend.controller.text(svCtx)}
-                          </PrereqItem>
-                          <PrereqItem own={svBackend.tls.own}>
-                            {svBackend.tls.text(svCtx)}
-                          </PrereqItem>
-                        </>
-                      )}
-                      {options.sv_ingress === "istio" && (
-                        <PrereqItem own={svCtx.gateway ? "you" : "none"}>
-                          {svCtx.gateway
-                            ? <>Gateway <code>{svCtx.gateway}</code> must already exist —
-                               the bundle only names it
-                               (<code>KUBERNETES_ISTIO_GATEWAY_NAME</code>).</>
-                            : <>No Gateway to create — crane makes one per virtual
-                               service. Name one above to reuse a single Gateway
-                               instead.</>}
-                        </PrereqItem>
-                      )}
-                      {/* The one row that is mechanical rather than editorial,
-                          so it is read off generate.SV_INGRESS_BACKENDS via
-                          /api/sv-constants. A Role restated by hand here would
-                          go stale silently -- a wrong one reads as plausible
-                          right up until the virtual service stalls. */}
-                      {svRbac && (
-                        <PrereqItem own="bundle">
-                          a Role on <code>{svRbac.group}</code>{" "}
-                          <code>{svRbac.resources.join(", ")}</code>; crane publishes
-                          one {svRbac.creates} per virtual service. Namespaced only —
-                          no ClusterRole.
-                        </PrereqItem>
-                      )}
-                      <PrereqItem own="bundle">
-                        <code>KUBERNETES_WEB_EXPOSE_TYPE</code> /{" "}
-                        <code>_SUB_DOMAIN</code> / <code>_TLS_SECRET_NAME</code> in the
-                        agent ConfigMap — how crane learns what to publish, and where.
-                      </PrereqItem>
-                    </ul>
-                    <p className="text-[11px] text-slate-500">
-                      Once deployed, each virtual service is served at{" "}
-                      <code className="text-slate-700">
-                        &lt;service&gt;-&lt;port&gt;-{svCtx.ns}.{svCtx.dom}
-                      </code>{" "}
-                      — check that host. Miss one of the above and nothing errors:
-                      the manifests apply, the agent reports idle, the mock pod runs
-                      1/1, and the endpoint never answers.
-                    </p>
-                    {/* The nginx port defect belongs to that endpoint, so it is
-                        stated here rather than beside the backend select. */}
-                    {options.sv_ingress === "nginx" && (
-                      <p className="text-[11px] text-amber-700">
-                        On NGINX whether that host answers depends on the controller:
-                        crane's Ingress backend says port <code>8080</code> while the
-                        Service it creates publishes <code>80</code>, which by the
-                        Ingress spec resolves to nothing. <code>ingress-nginx</code>{" "}
-                        matches leniently and serves it (measured: 200); a strict
-                        controller builds no route and the host 503s while the mock
-                        stays healthy. If yours 503s, <code>bzm-opl-gen sv-expose</code>{" "}
-                        emits a Service + Ingress pair that resolves. Every other
-                        backend gets the port right.
-                      </p>
-                    )}
-                  </div>
+                  <SvPrereqs ingress={txt("sv_ingress")} ctx={svCtx}
+                    rbac={svRbac} />
                 </div>
                 )}
               </div>

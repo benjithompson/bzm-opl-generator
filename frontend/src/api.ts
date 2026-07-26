@@ -74,7 +74,6 @@ export interface SvBackend {
   resources: string[];
   /** What crane publishes with it — "Ingress", "Gateway + VirtualService", … */
   creates: string;
-  via_ingress_class: boolean;
 }
 export type SvConstants = {
   func_ids: string[];
@@ -113,6 +112,18 @@ export interface SvExposeOut {
   command: string;
 }
 
+/** Save a Blob to disk under `filename`. One copy, because the object-URL and
+ *  anchor dance is where the browser quirks live -- and the second caller
+ *  (sv-expose) is the one no test exercises, so a fix applied to only one of
+ *  two copies would go unnoticed there. */
+export function saveBlob(blob: Blob, filename: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 export async function downloadZip(facts: Facts, options: Options) {
   const r = await fetch("/api/generate/zip", {
     method: "POST",
@@ -120,10 +131,6 @@ export async function downloadZip(facts: Facts, options: Options) {
     body: JSON.stringify({ facts, options, fetch_token: true }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
-  const blob = await r.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  saveBlob(await r.blob(),
+    `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
 }

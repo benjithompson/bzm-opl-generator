@@ -73,8 +73,7 @@ def test_sv_constants_carry_what_each_backend_publishes():
     assert set(backends) == set(gen_mod.SV_INGRESS_TYPES)
     for name, b in gen_mod.SV_INGRESS_BACKENDS.items():
         assert backends[name] == {"group": b.group, "resources": list(b.resources),
-                                  "creates": b.creates,
-                                  "via_ingress_class": b.via_ingress_class}
+                                  "creates": b.creates}
     # routes/custom-host is the one nobody would guess: OpenShift gates
     # spec.host behind it, and crane sets spec.host.
     assert "routes/custom-host" in backends["openshift"]["resources"]
