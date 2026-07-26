@@ -158,19 +158,39 @@ already exist (the generator names it, it does not create it).
 
 ### Which one to pick
 
-**Pick anything but `nginx`.** This is not a matter of taste: crane ships a
-separate expose implementation per type, and only the `nginx` one has a bug that
-costs you an extra step. On OpenShift, use `openshift`.
+**Prefer anything but `nginx`.** Crane ships a separate expose implementation
+per type, and only the `nginx` one writes a port reference that is wrong by the
+Ingress spec. It happens to work on `ingress-nginx`, which forgives it — but it
+is working on tolerance no API guarantees, and it fails outright on a controller
+that follows the spec. On OpenShift, use `openshift`.
 
 | | `nginx` | `istio` | `contour` | `openshift` |
 |---|---|---|---|---|
 | crane creates | `networking.k8s.io` Ingress | `networking.istio.io` Gateway + VirtualService | `projectcontour.io` HTTPProxy | `route.openshift.io` Route |
-| backend port | `8080` — **wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct | `8080` — correct *for a Route* |
-| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** | **yes** | **yes** |
+| backend port | `8080` — **spec-wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct | `8080` — correct *for a Route* |
+| endpoint serves as-is | **depends on the controller** — see below | **yes** | **yes** | **yes** |
 | needs an `IngressClass` | yes, named `nginx` | no — none of these controllers registers one at all | no | no |
 | `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
 | Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
 | requires | – | – | – | `--platform openshift` |
+
+**Why nginx's row is a "depends".** Crane's Ingress backend says
+`port.number: 8080` while the Service crane created publishes `port: 80`
+(`targetPort: 8080`). The Kubernetes API defines `port.number` as the Service's
+`spec.ports[].port`, so by spec that reference resolves to nothing — but
+`ingress-nginx` matches leniently, accepting `Port`, `TargetPort` *or* `Name`,
+and the `targetPort` clause rescues it. Measured on a real controller:
+
+| controller | crane's `8080` | a bogus `9999` (control) |
+|---|---|---|
+| `ingress-nginx` v1.14.3, k8s 1.32 | **200** — tolerated | 503 |
+| OpenShift `ingress-to-route` | **503**, no Route created | 503 |
+
+So on a stock `ingress-nginx` cluster the endpoint works and
+[`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) is **not**
+needed. On a strict controller it 503s while the mock sits healthy at `1/1`.
+Controllers other than these two are untested and may go either way, which is
+the reason to prefer another backend rather than to rely on the tolerance.
 
 The `openshift` port deserves a note, because it looks like the nginx bug and is
 not. A **Route**'s `spec.port.targetPort` resolves against the Service's
@@ -211,20 +231,22 @@ env-var reference documents, creates no object at all and stalls at
 
 ### Reaching a virtual service from outside: `sv-expose`
 
-**Only needed with `--sv-ingress nginx`.** Every other backend routes correctly
-on its own and this section does not apply — including on OpenShift, where
-`--sv-ingress openshift` is the answer rather than this command. Reach for
-`sv-expose` when you are stuck on nginx: no service mesh, no Contour, and not
-OpenShift.
+**A fallback, and a narrow one.** Every backend other than `nginx` routes
+correctly on its own, and `nginx` itself works on `ingress-nginx` (see [Which one
+to pick](#which-one-to-pick)) — so most clusters never need this. What is left
+is the case where crane's Ingress is claimed by a controller strict enough to
+reject its port reference. On OpenShift, which is the strict controller in
+practice, `--sv-ingress openshift` is the better answer and this command is a
+last resort.
 
-Crane publishes its own Service and Ingress per virtual service, but **its
-Ingress does not work**: the backend says `port.number: 8080` while the Service
-crane created exposes `port: 80`, and Kubernetes resolves a backend against
-`spec.ports[].port`. No controller adopts it, so the endpoint BlazeMeter
-advertises returns **503** — while the mock is healthy and serving inside the
-cluster. On OpenShift there is a second reason: crane writes
-`ingressClassName: nginx` with no env to change it, and the only class shipped
-is `openshift-default`.
+Where it does apply, the cause is that crane's backend says
+`port.number: 8080` while the Service crane created exposes `port: 80`, and the
+Ingress spec resolves a backend against `spec.ports[].port`. A strict controller
+builds no route from it, so the endpoint BlazeMeter advertises returns **503** —
+while the mock is healthy and serving inside the cluster. On OpenShift there is a
+second, earlier reason: crane writes `ingressClassName: nginx` with no env to
+change it, and the only class shipped is `openshift-default`, so nothing claims
+the Ingress at all.
 
 Rather than patch objects crane rewrites on every deploy, emit a parallel pair
 that works, once the virtual services are deployed:
@@ -540,7 +562,9 @@ tests/           offline unit tests (fixture facts)
 
 ## Roadmap / not yet covered
 
-- Istio/nginx service-virtualization ingress env sets
+- SV expose backends beyond the four implemented — and the behaviour of crane's
+  nginx Ingress under controllers other than `ingress-nginx` and
+  `ingress-to-route` (Traefik, HAProxy, AWS LB Controller are untested)
 - External Secrets Operator / CSI secret-store variants
 - Multi-engine runs (the rig validates one engine pod, on one node)
 - Engine ephemeral-storage sizing under a real 40GB `/tmp` workload
