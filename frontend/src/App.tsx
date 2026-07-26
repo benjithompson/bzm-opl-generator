@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, Account, AgentStatus, Facts, GeneratedFile, KeyCandidate,
-  Location, Options, Ship, Workspace,
+  Location, Options, Ship, SvConstants, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
@@ -9,6 +9,13 @@ import {
 import { Preview } from "./Preview";
 
 const FUNC_ID_CHOICES = ["performance", "functionalApi", "functionalGui", "mockServices"];
+
+// Display names only. The set of values is served from generate.SV_INGRESS_TYPES
+// -- an unlabelled backend falls back to its raw name and still appears, which
+// is the failure mode worth having.
+const SV_INGRESS_LABELS: Record<string, string> = {
+  nginx: "NGINX", istio: "Istio", contour: "Contour", openshift: "OpenShift Route",
+};
 
 // Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
 // to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
@@ -49,6 +56,8 @@ export default function App() {
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
+  const [svConst, setSvConst] = useState<SvConstants>(
+    { func_ids: [], ingress_types: [] });
   type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
@@ -69,6 +78,7 @@ export default function App() {
       setDefaults(d);
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
+    api.svConstants().then(setSvConst).catch(() => {});
   }, []);
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
@@ -208,10 +218,11 @@ export default function App() {
   });
   // An SV location cannot be generated without this group: the manifests would
   // apply cleanly and then stall at WAITING_FOR_DOMAIN, so the backend refuses.
-  // Surface it as required rather than letting the user find out later. Keep the
-  // funcId list in step with SV_FUNC_IDS in generate.py.
+  // Surface it as required rather than letting the user find out later. The
+  // funcIds come from generate.SV_FUNC_IDS over /api/sv-constants rather than a
+  // copy here, so adding one cannot leave the UI silently disagreeing.
   const svRequired = !!facts?.func_ids?.some(
-    (f) => f === "mockServices" || f === "sv-bridge");
+    (f) => svConst.func_ids.includes(f));
   useEffect(() => {
     setGrpOn((g) => ({
       registry: g.registry || !!(options.private_registry || options.pull_secret || options.registry_auth),
@@ -858,12 +869,17 @@ export default function App() {
                     hint="must already be installed and serving the wildcard domain below">
                     <select className={inputCls} value={String(options.sv_ingress ?? "nginx")}
                       onChange={(e) => set("sv_ingress", e.target.value)}>
-                      <option value="nginx">NGINX</option>
-                      <option value="istio">Istio</option>
-                      <option value="contour">Contour</option>
-                      {options.platform === "openshift" && (
-                        <option value="openshift">OpenShift Route</option>
-                      )}
+                      {svConst.ingress_types
+                        // openshift publishes a route.openshift.io Route, which
+                        // a plain API server does not serve -- generate()
+                        // refuses the combination, so do not offer it.
+                        .filter((t) => t !== "openshift"
+                                       || options.platform === "openshift")
+                        .map((t) => (
+                          <option key={t} value={t}>
+                            {SV_INGRESS_LABELS[t] ?? t}
+                          </option>
+                        ))}
                     </select>
                   </Field>
                   {options.sv_ingress === "nginx" && (

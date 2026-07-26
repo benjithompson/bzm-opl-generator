@@ -62,7 +62,12 @@ export const api = {
       { facts, options, fetch_token: false }),
   profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
+  svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
 };
+
+/** Served rather than declared here: generate.py owns both lists, and a copy in
+ *  TypeScript is how a new expose backend goes missing from the picker. */
+export type SvConstants = { func_ids: string[]; ingress_types: string[] };
 
 export async function downloadZip(facts: Facts, options: Options) {
   const r = await fetch("/api/generate/zip", {

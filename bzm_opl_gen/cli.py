@@ -177,7 +177,8 @@ def cmd_sv_expose(a):
     if not mocks:
         sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
                  f"deploy the virtual service in BlazeMeter first, then re-run")
-    out = gen_mod.sv_expose(mocks, opts)
+    out = gen_mod.sv_expose(mocks, opts["namespace"],
+                            gen_mod.sv_publish_cfg(opts))
     with open(a.output, "w") as fh:
         fh.write(out)
     names = ", ".join(f"{m['name']}:{m['port']}" for m in mocks)

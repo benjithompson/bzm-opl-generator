@@ -519,7 +519,10 @@ EXPOSE_OPTS = {"namespace": "ns1", "sv_subdomain": "apps.example.com",
 
 
 def _expose_docs(mocks, opts):
-    return [d for d in yaml.safe_load_all(gen.sv_expose(mocks, opts)) if d]
+    """Goes through sv_publish_cfg the way the CLI does, so these exercise the
+    resolution as well as the rendering."""
+    return [d for d in yaml.safe_load_all(
+        gen.sv_expose(mocks, opts["namespace"], gen.sv_publish_cfg(opts))) if d]
 
 
 def test_sv_expose_service_port_equals_target_port():
@@ -583,6 +586,15 @@ def test_sv_expose_renders_every_mock():
         "bzm-sv-vs1svc2", "bzm-sv-vs9svc9"}
 
 
-def test_sv_expose_requires_a_subdomain():
+def test_sv_publish_cfg_requires_a_subdomain():
     with pytest.raises(ValueError, match="sv_subdomain"):
-        gen.sv_expose([SV_MOCK], {"namespace": "ns1"})
+        gen.sv_publish_cfg({"namespace": "ns1"})
+
+
+def test_sv_publish_cfg_keeps_tls_optional_unlike_generate():
+    """_sv_cfg refuses without a TLS secret because crane crash-loops on the
+    empty name. This Ingress is ours and never reaches crane, so a plain-HTTP
+    pair is a legitimate thing to ask for."""
+    cfg = gen.sv_publish_cfg({"sv_subdomain": "apps.example.com"})
+    assert cfg.tls_secret is None
+    assert cfg.ingress_class == gen.SV_EXPOSE_DEFAULT_INGRESS_CLASS

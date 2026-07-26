@@ -669,8 +669,41 @@ SV_POD_NAME_LABEL = "BZM_CONTAINER_NAME"
 SV_POD_HARBOR_LABEL = "BZM_HARBOR_ID"
 SV_POD_SHIP_LABEL = "BZM_SHIP_ID"
 
+# The class we put on the Ingress *we* own, when the caller names none. It is
+# `nginx` because that is the common cluster -- not because crane hardcodes the
+# same string on its own Ingress, which is a different fact with a different
+# owner (doctor.CRANE_INGRESS_CLASS). On OpenShift pass openshift-default.
+SV_EXPOSE_DEFAULT_INGRESS_CLASS = "nginx"
 
-def sv_expose(mocks, o):
+
+class SvPublish(collections.namedtuple(
+        "SvPublish", "subdomain tls_secret ingress_class")):
+    """Where `sv-expose` publishes: the wildcard host, an optional TLS secret,
+    and the IngressClass that should claim the Ingress."""
+    __slots__ = ()
+
+
+def sv_publish_cfg(o):
+    """Resolve a profile into the three fields `sv_expose` actually needs.
+
+    Deliberately not `_sv_cfg`. That validates what *crane* needs at generate
+    time, where the TLS secret is mandatory even for HTTP because crane
+    crash-loops without the name. This describes an Ingress we own and apply
+    ourselves: TLS is genuinely optional, and `ingress_class` is an sv-expose
+    argument that never reaches the agent at all.
+    """
+    subdomain = o.get("sv_subdomain")
+    if not subdomain:
+        raise ValueError(
+            "sv-expose needs sv_subdomain -- the endpoint host is "
+            "<mock>-<port>-<namespace>.<subdomain>. Generate the manifests with "
+            "--sv-subdomain so the profile carries it, or pass --sv-subdomain "
+            "here.")
+    return SvPublish(subdomain, o.get("sv_tls_secret"),
+                     o.get("sv_ingress_class") or SV_EXPOSE_DEFAULT_INGRESS_CLASS)
+
+
+def sv_expose(mocks, namespace, publish):
     """Render a Service + Ingress per deployed virtual service.
 
     Crane publishes its own pair, but the Ingress is unusable: its backend says
@@ -692,19 +725,16 @@ def sv_expose(mocks, o):
     from the pod rather than the profile because profile.json carries no
     harbor_id, and the pod is the authority on what crane actually stamped.
     """
-    if not o.get("sv_subdomain"):
-        raise ValueError("sv_expose needs sv_subdomain -- the endpoint host is "
-                         "<mock>-<port>-<namespace>.<subdomain>")
-    ns, docs = o["namespace"], []
+    ns, docs = namespace, []
     for m in mocks:
         name, port = m["name"], m["port"]
         obj = f"bzm-sv-{name}"
-        host = f"{name}-{port}-{ns}.{o['sv_subdomain']}"
+        host = f"{name}-{port}-{ns}.{publish.subdomain}"
         tls = ""
-        if o.get("sv_tls_secret"):
+        if publish.tls_secret:
             tls = ("  tls:\n"
                    f"    - hosts: [{host}]\n"
-                   f"      secretName: {o['sv_tls_secret']}\n")
+                   f"      secretName: {publish.tls_secret}\n")
         docs.append(
             "apiVersion: v1\n"
             "kind: Service\n"
@@ -723,7 +753,7 @@ def sv_expose(mocks, o):
             "kind: Ingress\n"
             f"metadata: {{ name: {obj}, namespace: {ns} }}\n"
             "spec:\n"
-            f"  ingressClassName: {o.get('sv_ingress_class') or 'nginx'}\n"
+            f"  ingressClassName: {publish.ingress_class}\n"
             f"{tls}"
             "  rules:\n"
             f"    - host: {host}\n"
