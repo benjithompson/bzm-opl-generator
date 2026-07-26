@@ -192,6 +192,11 @@ needed. On a strict controller it 503s while the mock sits healthy at `1/1`.
 Controllers other than these two are untested and may go either way, which is
 the reason to prefer another backend rather than to rely on the tolerance.
 
+To settle a controller you have not tested — before telling anyone whether they
+are affected — `kubectl apply -f docs/repro/nginx-ingress-port.yaml` reproduces
+the shapes without BlazeMeter or crane. The full write-up, suitable for filing
+against crane, is [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md).
+
 The `openshift` port deserves a note, because it looks like the nginx bug and is
 not. A **Route**'s `spec.port.targetPort` resolves against the Service's
 *targetPort*; an **Ingress** backend resolves against `spec.ports[].port`. Same
