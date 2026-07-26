@@ -7,6 +7,7 @@ Subcommands:
   facts       query the account, write facts.json (harbor, ships, images, features)
   generate    render manifests from facts + customer parameters
   doctor      preflight a cluster: can it schedule the location's concurrency?
+  sv-expose   emit a working Service+Ingress per deployed virtual service
   images      list / pull / mirror the images the location actually needs
   livetest    apply manifests to a cluster and verify the agent comes online
 """
@@ -155,6 +156,34 @@ def cmd_generate(a):
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
+
+
+def cmd_sv_expose(a):
+    """Emit a working Service+Ingress per deployed virtual service.
+
+    Runs after the virtual services are deployed, not at generate time: the
+    mocks are read off the running pods, because the v4 API exposes no
+    virtual-service endpoint and the pod carries the identity crane actually
+    used."""
+    opts = gen_mod.load_profile(a.manifests) if a.manifests else {}
+    for key in ("sv_subdomain", "sv_tls_secret", "namespace"):
+        v = getattr(a, key, None)
+        if v is not None:
+            opts[key] = v
+    opts["namespace"] = opts.get("namespace") or a.namespace
+    if a.ingress_class:
+        opts["sv_ingress_class"] = a.ingress_class
+    mocks = livetest.sv_mocks(livetest.cli_tool(), opts["namespace"],
+                              opts.get("harbor_id"))
+    if not mocks:
+        sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
+                 f"deploy the virtual service in BlazeMeter first, then re-run")
+    out = gen_mod.sv_expose(mocks, opts)
+    with open(a.output, "w") as fh:
+        fh.write(out)
+    names = ", ".join(f"{m['name']}:{m['port']}" for m in mocks)
+    print(f"wrote {a.output}: {len(mocks)} virtual service(s) -- {names}")
+    print(f"apply with: kubectl apply -n {opts['namespace']} -f {a.output}")
 
 
 def cmd_doctor(a):
@@ -375,6 +404,22 @@ def main():
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)
+
+    e = sub.add_parser("sv-expose",
+                       help="emit a working Service+Ingress per deployed virtual service")
+    e.add_argument("--manifests", default="out",
+                   help="directory holding profile.json -- supplies namespace, "
+                        "harbor/ship ids and the SV subdomain")
+    e.add_argument("-n", "--namespace", help="override the profile's namespace")
+    e.add_argument("--sv-subdomain", dest="sv_subdomain",
+                   help="override the profile's wildcard domain")
+    e.add_argument("--sv-tls-secret", dest="sv_tls_secret",
+                   help="override the profile's wildcard TLS secret")
+    e.add_argument("--ingress-class", dest="ingress_class",
+                   help="IngressClass to put on the Ingress. Defaults to nginx; "
+                        "on OpenShift use openshift-default and no alias is needed")
+    e.add_argument("-o", "--output", default="bzm_sv_expose.yaml")
+    e.set_defaults(fn=cmd_sv_expose)
 
     d = sub.add_parser("doctor", help="can this cluster run the location's concurrency?")
     d.add_argument("--api-key", help="required with --harbor-id (facts are "

@@ -152,49 +152,51 @@ bzm-opl-gen generate --facts facts.json --api-key api-key.json \
 per virtual service.
 
 **Provided by you, not generated** — the agent namespace needs a wildcard TLS
-secret for `*.<subdomain>`; with `--sv-istio-gateway`, that Gateway must already
-exist (the generator names it, it does not create it); and the cluster needs an
-IngressClass matching what crane requests (it asks for `nginx`). The per-service
-Ingress is **not** something you apply: crane creates one `ing-<service>-<port>`
-per virtual service at deploy time, which is why the RBAC above matters. On
-OpenShift the built-in class is
-`openshift-default`, so a stock cluster returns **503** for the advertised
-endpoint until an `nginx` IngressClass exists or a real nginx controller is
-installed — the virtual service is healthy and serving in-cluster either way.
-`doctor` preflights the class (see [Preflight](#preflight-doctor)) and **FAILs
-before you deploy**, listing the classes the cluster does have, rather than
-leaving you to find the 503 afterwards.
+secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
+already exist (the generator names it, it does not create it).
 
-### The `nginx` IngressClass on OpenShift
+### Reaching a virtual service from outside: `sv-expose`
 
-Crane writes `ingressClassName: nginx` on every Ingress it creates and
-BlazeMeter exposes no environment variable to change it, so the name is not
-something the generator can adapt. OpenShift ships one class,
-`openshift-default` (controller `openshift.io/ingress-to-route`), so you need
-either a real nginx ingress controller, or a one-time alias from a
-cluster-admin:
+Crane publishes its own Service and Ingress per virtual service, but **its
+Ingress does not work**: the backend says `port.number: 8080` while the Service
+crane created exposes `port: 80`, and Kubernetes resolves a backend against
+`spec.ports[].port`. No controller adopts it, so the endpoint BlazeMeter
+advertises returns **503** — while the mock is healthy and serving inside the
+cluster. On OpenShift there is a second reason: crane writes
+`ingressClassName: nginx` with no env to change it, and the only class shipped
+is `openshift-default`.
 
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: nginx
-spec:
-  controller: openshift.io/ingress-to-route
+Rather than patch objects crane rewrites on every deploy, emit a parallel pair
+that works, once the virtual services are deployed:
+
+```
+bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-default
+kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
 
-That object is cluster-scoped, but it is **not** part of the agent's RBAC — it
-is applied once by an admin and the deployment itself stays namespaced.
+It reads the deployed mocks off their pods — the v4 API exposes no
+virtual-service endpoint — and writes one Service + Ingress per mock:
 
-> **Known upstream defect — the alias alone is not enough today.** Crane creates
-> the Service as `port: 80, name: "8080", targetPort: 8080` but writes the
-> Ingress backend as `port.number: 8080`, and Kubernetes resolves a backend's
-> `port.number` against the Service's `spec.ports[].port` (80). The
-> ingress-to-route controller therefore reports
-> `IncompleteIngressToRouteRules: No valid target port for backend service …`
-> and creates no Route. Patching the Ingress to `port.number: 80` works
-> immediately and serves end-to-end — but crane recreates the Ingress with 8080
-> on every virtual-service deploy, so there is no durable fix on our side.
+- `port == targetPort`, so the backend reference resolves and the mismatch
+  never arises;
+- the Service selects the pod's **identity labels** (`BZM_CONTAINER_NAME`,
+  `BZM_HARBOR_ID`, `BZM_SHIP_ID`) rather than crane's Service name, which
+  carries a per-deploy hash — so the pair keeps working across redeploys
+  without being reapplied;
+- the host matches the endpoint BlazeMeter publishes, so the UI link keeps
+  working;
+- because you own this Ingress, `--ingress-class` names whatever class the
+  cluster actually has. On OpenShift that means `openshift-default` and **no
+  cluster-admin IngressClass alias is needed** — nothing here is cluster-scoped,
+  and no policy engine or admission webhook is involved.
+
+Crane's own Ingress is left alone; it stays unclaimed and creates no competing
+route. Re-run `sv-expose` after adding a virtual service; existing pairs are
+unaffected.
+
+`doctor` still preflights the `nginx` IngressClass (see
+[Preflight](#preflight-doctor)), which is what crane's own Ingress needs. If you
+publish with `sv-expose` and its `--ingress-class`, that check is advisory.
 
 `service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
 alongside `sv_ingress`. NODEPORT makes crane resolve its address from the

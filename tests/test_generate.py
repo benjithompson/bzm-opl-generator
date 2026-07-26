@@ -452,3 +452,84 @@ def test_performance_location_emits_no_sv_config():
     assert not [k for k in data if k.startswith("KUBERNETES_WEB_EXPOSE")]
     role = yaml.safe_load(files["bzm_role.yaml"])
     assert "networking.k8s.io" not in {g for r in role["rules"] for g in r["apiGroups"]}
+
+
+# -- sv_expose ---------------------------------------------------------------
+# Crane publishes its own Service+Ingress, but the Ingress backend says
+# port.number 8080 while its Service exposes port 80, so nothing claims it.
+# These render a parallel pair that resolves, without touching crane's.
+
+SV_MOCK = {"name": "vs1svc2", "port": 8080,
+           "harbor": "aaa111", "ship": "bbb222"}
+EXPOSE_OPTS = {"namespace": "ns1", "sv_subdomain": "apps.example.com",
+               "sv_tls_secret": "wildcard-tls"}
+
+
+def _expose_docs(mocks, opts):
+    return [d for d in yaml.safe_load_all(gen.sv_expose(mocks, opts)) if d]
+
+
+def test_sv_expose_service_port_equals_target_port():
+    """The mismatch that breaks crane's own pair: a backend's port.number is
+    resolved against the Service's spec.ports[].port."""
+    svc = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Service")
+    port = svc["spec"]["ports"][0]
+    assert port["port"] == port["targetPort"] == 8080
+    ing = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Ingress")
+    backend = ing["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]
+    assert backend["port"]["number"] == port["port"]
+    assert backend["name"] == svc["metadata"]["name"]
+
+
+def test_sv_expose_selects_identity_labels_not_cranes_hashed_service():
+    """Crane's Service names carry a per-deploy hash; the pod labels do not, so
+    the pair survives a redeploy."""
+    svc = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Service")
+    assert svc["spec"]["selector"] == {
+        "BZM_CONTAINER_NAME": "vs1svc2",
+        "BZM_HARBOR_ID": "aaa111",
+        "BZM_SHIP_ID": "bbb222"}
+
+
+def test_sv_expose_host_matches_the_endpoint_blazemeter_publishes():
+    ing = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Ingress")
+    host = "vs1svc2-8080-ns1.apps.example.com"
+    assert ing["spec"]["rules"][0]["host"] == host
+    assert ing["spec"]["tls"][0]["secretName"] == "wildcard-tls"
+    assert ing["spec"]["tls"][0]["hosts"] == [host]
+
+
+def test_sv_expose_ingress_class_is_overridable():
+    """We own this Ingress, so it can name whatever class the cluster has --
+    which is why OpenShift needs no `nginx` IngressClass alias."""
+    ing = next(d for d in _expose_docs(
+        [SV_MOCK], {**EXPOSE_OPTS, "sv_ingress_class": "openshift-default"})
+        if d["kind"] == "Ingress")
+    assert ing["spec"]["ingressClassName"] == "openshift-default"
+    plain = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+                 if d["kind"] == "Ingress")
+    assert plain["spec"]["ingressClassName"] == "nginx"
+
+
+def test_sv_expose_omits_tls_block_when_no_secret():
+    ing = next(d for d in _expose_docs(
+        [SV_MOCK], {"namespace": "ns1", "sv_subdomain": "apps.example.com"})
+        if d["kind"] == "Ingress")
+    assert "tls" not in ing["spec"]
+
+
+def test_sv_expose_renders_every_mock():
+    two = [SV_MOCK, {**SV_MOCK, "name": "vs9svc9", "port": 9090}]
+    docs = _expose_docs(two, EXPOSE_OPTS)
+    assert len(docs) == 4
+    assert {d["metadata"]["name"] for d in docs} == {
+        "bzm-sv-vs1svc2", "bzm-sv-vs9svc9"}
+
+
+def test_sv_expose_requires_a_subdomain():
+    with pytest.raises(ValueError, match="sv_subdomain"):
+        gen.sv_expose([SV_MOCK], {"namespace": "ns1"})

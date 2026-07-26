@@ -610,6 +610,84 @@ def generate(facts, options):
     return out
 
 
+# -- exposing a deployed virtual service --------------------------------------
+
+SV_EXPOSE_FILE = "bzm_sv_expose.yaml"
+# Crane stamps these on the mock pod. Unlike the Services it creates -- whose
+# names carry a per-deploy hash (crane-9f30e-..., crane-e69e2-...) -- these are
+# derived from the virtual service's identity and survive every redeploy, which
+# is what lets a Service of our own keep pointing at the right pod.
+SV_POD_NAME_LABEL = "BZM_CONTAINER_NAME"
+SV_POD_HARBOR_LABEL = "BZM_HARBOR_ID"
+SV_POD_SHIP_LABEL = "BZM_SHIP_ID"
+
+
+def sv_expose(mocks, o):
+    """Render a Service + Ingress per deployed virtual service.
+
+    Crane publishes its own pair, but the Ingress is unusable: its backend says
+    `port.number: 8080` while the Service it created exposes `port: 80`, and
+    Kubernetes resolves a backend against `spec.ports[].port`. Nothing claims
+    it, so the endpoint BlazeMeter advertises 503s while the mock serves
+    happily inside the cluster.
+
+    Rather than patch an object crane rewrites on every deploy, this emits a
+    parallel pair that sidesteps the mismatch: `port == targetPort`, and a
+    selector on the pod's identity labels rather than crane's hashed Service
+    name. Because we own the Ingress, `ingress_class` can name whatever class
+    the cluster actually has -- so OpenShift needs no `nginx` alias, and no
+    policy engine or admission webhook is involved. Crane's own Ingress is left
+    alone; it stays unclaimed and creates no competing route.
+
+    `mocks` is a list of {"name", "port", "harbor", "ship"} -- see
+    livetest.sv_mocks(), which reads them off the running pods. The ids come
+    from the pod rather than the profile because profile.json carries no
+    harbor_id, and the pod is the authority on what crane actually stamped.
+    """
+    if not o.get("sv_subdomain"):
+        raise ValueError("sv_expose needs sv_subdomain -- the endpoint host is "
+                         "<mock>-<port>-<namespace>.<subdomain>")
+    ns, docs = o["namespace"], []
+    for m in mocks:
+        name, port = m["name"], m["port"]
+        obj = f"bzm-sv-{name}"
+        host = f"{name}-{port}-{ns}.{o['sv_subdomain']}"
+        tls = ""
+        if o.get("sv_tls_secret"):
+            tls = ("  tls:\n"
+                   f"    - hosts: [{host}]\n"
+                   f"      secretName: {o['sv_tls_secret']}\n")
+        docs.append(
+            "apiVersion: v1\n"
+            "kind: Service\n"
+            f"metadata: {{ name: {obj}, namespace: {ns} }}\n"
+            "spec:\n"
+            "  selector:\n"
+            f"    {SV_POD_NAME_LABEL}: {name}\n"
+            f"    {SV_POD_HARBOR_LABEL}: \"{m['harbor']}\"\n"
+            f"    {SV_POD_SHIP_LABEL}: \"{m['ship']}\"\n"
+            "  ports:\n"
+            # port == targetPort is the whole point: it is what makes the
+            # Ingress backend below resolve.
+            f"    - {{ name: http, port: {port}, targetPort: {port}, protocol: TCP }}\n"
+            "---\n"
+            "apiVersion: networking.k8s.io/v1\n"
+            "kind: Ingress\n"
+            f"metadata: {{ name: {obj}, namespace: {ns} }}\n"
+            "spec:\n"
+            f"  ingressClassName: {o.get('sv_ingress_class') or 'nginx'}\n"
+            f"{tls}"
+            "  rules:\n"
+            f"    - host: {host}\n"
+            "      http:\n"
+            "        paths:\n"
+            "          - path: /\n"
+            "            pathType: Prefix\n"
+            "            backend:\n"
+            f"              service: {{ name: {obj}, port: {{ number: {port} }} }}\n")
+    return "---\n".join(docs)
+
+
 PROFILE_FILE = "profile.json"
 
 
