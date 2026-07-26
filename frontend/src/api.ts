@@ -63,11 +63,37 @@ export const api = {
   profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
+  svExpose: (body: SvExposeIn) => req<SvExposeOut>("POST", "/api/sv-expose", body),
 };
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */
 export type SvConstants = { func_ids: string[]; ingress_types: string[] };
+
+/** sv-expose reads the deployed mocks off a live namespace — the only call in
+ *  this client that needs a cluster, and the only one allowed to. Cluster
+ *  access is optional: an unreadable cluster is an "ok" HTTP response carrying
+ *  which of the four reasons it was, so the caller never has to guess from an
+ *  error string. `files` is the same shape /api/generate returns, so the same
+ *  preview pane renders it. */
+export type SvExposeStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
+export interface SvMock { name: string; port: number; harbor: string; ship: string }
+export interface SvExposeIn {
+  namespace: string;
+  sv_subdomain?: string | null;
+  sv_tls_secret?: string | null;
+  sv_ingress_class?: string | null;
+}
+export interface SvExposeOut {
+  status: SvExposeStatus;
+  mocks: SvMock[];
+  files: GeneratedFile[];
+  message: string;
+  detail: string;
+  /** The equivalent `bzm-opl-gen sv-expose …`, prefilled — the way forward
+   *  whenever this machine cannot reach the cluster. */
+  command: string;
+}
 
 export async function downloadZip(facts: Facts, options: Options) {
   const r = await fetch("/api/generate/zip", {
