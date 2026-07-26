@@ -146,7 +146,7 @@ bzm-opl-gen generate --facts facts.json --api-key api-key.json \
 |---|---|
 | `--sv-ingress nginx\|istio` | one at a time; the controller must already be installed |
 | `--sv-subdomain` | endpoints become `<service>-<port>-<namespace>.<subdomain>` |
-| `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP |
+| `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP, and even on istio, where nothing ever reads it (see below) |
 
 **Optional:** `--sv-istio-gateway` reuses one Gateway instead of creating one
 per virtual service.
@@ -155,7 +155,41 @@ per virtual service.
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
 already exist (the generator names it, it does not create it).
 
+### Which one to pick
+
+`istio` is the better path, and the difference is not a matter of taste — the
+`nginx` one ships with a bug that costs you an extra step.
+
+| | `nginx` | `istio` |
+|---|---|---|
+| crane creates | Service + `networking.k8s.io` Ingress | Service + `networking.istio.io` Gateway + VirtualService |
+| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** |
+| needs an `IngressClass` | yes, named `nginx` | no — routing is by Gateway, and Istio registers no IngressClass at all |
+| `--sv-tls-secret` | referenced by the Ingress | **never referenced** |
+
+The reason the istio path works is that crane's VirtualService names its
+destination without a port (`host: crane-<hash>-<harborId>`) and lets Istio
+resolve it against the Service's single port. The nginx path hardcodes
+`port.number: 8080` against a Service published on `80`, and that is the whole
+bug.
+
+The TLS secret is inert on istio because crane writes the `:443` server as
+`tls.mode: PASSTHROUGH` with no `credentialName`. Nothing loads a certificate,
+so the secret does not need to exist in `istio-system` and does not need to be
+valid — but crane still refuses to start without the *name*, so you must pass
+it. It also means an **HTTPS** virtual service on istio terminates TLS in the
+mock pod itself, not at the gateway.
+
+Verified end to end on minikube + Istio 1.30 (k8s 1.32): namespaced RBAC only,
+crane created both objects, and transactions returned `200` through
+`istio-ingressgateway` at the host BlazeMeter advertises. The `nodes ... is
+forbidden` warning in the crane log is expected and harmless here — unlike
+under `NODEPORT`, nothing on the istio path depends on that lookup.
+
 ### Reaching a virtual service from outside: `sv-expose`
+
+Only needed with `--sv-ingress nginx`. On istio crane's own objects route
+correctly and this section does not apply.
 
 Crane publishes its own Service and Ingress per virtual service, but **its
 Ingress does not work**: the backend says `port.number: 8080` while the Service
@@ -174,8 +208,10 @@ bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-defaul
 kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
 
-It reads the deployed mocks off their pods — the v4 API exposes no
-virtual-service endpoint — and writes one Service + Ingress per mock:
+It reads the deployed mocks off their pods rather than from the API — the
+virtual-service API is on a separate host (`mock.blazemeter.com/api/v1`, not
+`a.blazemeter.com/api/v4`) and does not report the harbor/ship labels crane
+actually stamped. It writes one Service + Ingress per mock:
 
 - `port == targetPort`, so the backend reference resolves and the mismatch
   never arises;

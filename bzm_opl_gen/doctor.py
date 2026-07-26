@@ -476,6 +476,9 @@ def check_ingress_class(facts, opts, cluster):
     if ingress == SV_INGRESS_VIA_GATEWAY:
         # istio publishes through a Gateway/VirtualService pair; no Ingress is
         # created at all, so a missing IngressClass says nothing about it.
+        # Verified on Istio 1.30: the default profile registers no IngressClass
+        # whatsoever, so treating "none found" as a failure here would fail
+        # every correctly-installed istio cluster.
         return [Check("sv ingress class", PASS,
                       f"sv_ingress={ingress} routes through a Gateway / "
                       f"VirtualService, not an IngressClass")]
