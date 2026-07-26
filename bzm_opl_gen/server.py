@@ -15,6 +15,7 @@ nothing extra.
 import io
 import json
 import os
+import shlex
 import time
 import zipfile
 from typing import Optional
@@ -24,7 +25,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import api, facts as facts_mod, generate as gen_mod
+from . import api, facts as facts_mod, generate as gen_mod, livetest
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -223,6 +224,102 @@ def generate_zip(g: GenerateIn):
         headers={"Content-Disposition": f'attachment; filename="bzm-opl-{ns}.zip"'})
 
 
+class SvExposeIn(BaseModel):
+    """Everything sv-expose needs and nothing else -- the namespace to read,
+    plus the three fields generate.sv_publish_cfg resolves."""
+    namespace: str = "blazemeter"
+    sv_subdomain: Optional[str] = None
+    sv_tls_secret: Optional[str] = None
+    sv_ingress_class: Optional[str] = None
+
+
+# What each unreadable cluster means, in the user's terms. The UI pairs these
+# with the CLI equivalent below; a reason without a way forward is the dead
+# panel this endpoint exists to avoid.
+SV_READ_MESSAGES = {
+    livetest.SV_READ_NO_CLI:
+        "No kubectl or oc on this machine, so the namespace cannot be read "
+        "from here. Nothing else in this tool needs one.",
+    # One message for several causes -- no kubeconfig, no current context, a
+    # server that refused, one that never answered, output that would not
+    # parse. The way forward is the same for all of them, and the raw reason
+    # travels alongside as `detail`; what it must not do is name only one of
+    # them, which reads as false to anyone whose context is fine but slow.
+    livetest.SV_READ_NO_CONTEXT:
+        "kubectl/oc is installed, but no cluster could be read -- no context "
+        "is configured, or the one that is did not answer.",
+    livetest.SV_READ_DENIED:
+        "The cluster refused the read -- this context is not allowed to list "
+        "pods in that namespace.",
+    livetest.SV_READ_NO_MOCKS:
+        "That namespace holds no virtual-service pods. Deploy the virtual "
+        "service in BlazeMeter first, then read it again.",
+}
+
+
+def _sv_expose_command(x: SvExposeIn):
+    """The `sv-expose` invocation equivalent to this request, to run wherever
+    the user does have cluster access.
+
+    `--manifests ''` on purpose: the flag defaults to `out/` and the CLI reads
+    profile.json from it, which is a file a browser user need never have
+    downloaded. Every option is on the command line instead, so the suggestion
+    runs from any directory.
+    """
+    cmd = ["bzm-opl-gen", "sv-expose", "--manifests", "",
+           "--namespace", x.namespace]
+    for flag, value in (("--sv-subdomain", x.sv_subdomain),
+                        ("--sv-tls-secret", x.sv_tls_secret),
+                        ("--ingress-class", x.sv_ingress_class)):
+        if value:
+            cmd += [flag, value]
+    # shlex.join quotes what needs it and nothing else -- quoting per element
+    # on the way in means a flag added without it emits a command that will not
+    # run, and nothing here would catch that.
+    return shlex.join(cmd)
+
+
+@app.post("/api/sv-expose")
+def sv_expose_render(x: SvExposeIn):
+    """Render the Service+Ingress pair for the virtual services deployed in a
+    namespace -- the `sv-expose` command, from the browser.
+
+    Reading a cluster is the only thing this server ever does beyond the
+    BlazeMeter API, and it is optional: an unreadable cluster comes back 200
+    with which of the four reasons applied and the command to run elsewhere,
+    never an HTTP error the browser can only print in red. The single 4xx is a
+    request that could not be rendered even with a cluster in reach.
+    """
+    publish_opts = {"sv_subdomain": x.sv_subdomain,
+                    "sv_tls_secret": x.sv_tls_secret,
+                    "sv_ingress_class": x.sv_ingress_class}
+    try:
+        publish = gen_mod.sv_publish_cfg(publish_opts)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    command = _sv_expose_command(x)
+    read = livetest.sv_read(x.namespace)
+    if read.status != livetest.SV_READ_OK:
+        return {"status": read.status, "mocks": [], "files": [],
+                # .get, not [], because livetest owns the set of reasons: a
+                # fifth one added there would otherwise 500 the single endpoint
+                # whose whole contract is that it never hands back a bare
+                # error. The raw detail is a worse message, not a broken page.
+                "message": SV_READ_MESSAGES.get(read.status, read.detail),
+                "detail": read.detail, "command": command}
+    return {
+        "status": read.status,
+        "mocks": read.mocks,
+        # Same shape as /api/generate, so the UI previews it in the same pane.
+        "files": [{"name": gen_mod.SV_EXPOSE_FILE,
+                   "content": gen_mod.sv_expose(read.mocks, x.namespace, publish)}],
+        "message": (f"{len(read.mocks)} virtual service(s) in {x.namespace}: "
+                    + ", ".join(f"{m['name']}:{m['port']}" for m in read.mocks)),
+        "detail": f"apply with: kubectl apply -n {x.namespace} -f {gen_mod.SV_EXPOSE_FILE}",
+        "command": command,
+    }
+
+
 # -- profiles -----------------------------------------------------------------
 
 @app.get("/api/profiles")
@@ -240,6 +337,33 @@ def option_defaults():
     return gen_mod.DEFAULT_OPTIONS
 
 
+# Display names only -- the vocabulary itself is facts.CATEGORY_BY_FUNC, which
+# already has to list every funcId to pick the right images. A funcId missing
+# from here is served under its raw name rather than dropped.
+FUNC_ID_LABELS = {
+    "performance": "Performance",
+    "functionalApi": "Functional API",
+    "functionalGui": "Functional GUI",
+    "mockServices": "Mock Services",
+    "sv-bridge": "SV bridge",
+    "proxyRecorder": "Proxy Recorder",
+}
+
+
+@app.get("/api/func-ids")
+def func_ids():
+    """The funcIds a location can be created with, in declaration order.
+
+    Served for the same reason as /api/sv-constants: the create-location form
+    used to hold its own list in TypeScript, and sv-bridge was missing from it,
+    so an SV-bridge location could only be made from the CLI or the BlazeMeter
+    web app. Derived from the facts layer so adding a funcId there -- which is
+    already required for its images to be selected -- is the only edit needed.
+    """
+    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f)}
+            for f in facts_mod.CATEGORY_BY_FUNC]
+
+
 @app.get("/api/sv-constants")
 def sv_constants():
     """The two service-virtualization enumerations the UI must not hardcode.
@@ -252,7 +376,16 @@ def sv_constants():
     step by hand.
     """
     return {"func_ids": list(gen_mod.SV_FUNC_IDS),
-            "ingress_types": list(gen_mod.SV_INGRESS_TYPES)}
+            "ingress_types": list(gen_mod.SV_INGRESS_TYPES),
+            # What each backend publishes, so the UI can name the Role the
+            # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
+            # -- which is mechanical, unlike the prose around it. Only the
+            # three fields the UI renders; via_ingress_class is doctor's, and
+            # serving it here would be a field nothing reads.
+            "backends": {name: {"group": b.group,
+                                "resources": list(b.resources),
+                                "creates": b.creates}
+                         for name, b in gen_mod.SV_INGRESS_BACKENDS.items()}}
 
 
 # -- SPA ----------------------------------------------------------------------

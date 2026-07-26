@@ -62,12 +62,67 @@ export const api = {
       { facts, options, fetch_token: false }),
   profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
+  funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
+  svExpose: (body: SvExposeIn) => req<SvExposeOut>("POST", "/api/sv-expose", body),
 };
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */
-export type SvConstants = { func_ids: string[]; ingress_types: string[] };
+export interface SvBackend {
+  group: string;
+  resources: string[];
+  /** What crane publishes with it — "Ingress", "Gateway + VirtualService", … */
+  creates: string;
+}
+export type SvConstants = {
+  func_ids: string[];
+  ingress_types: string[];
+  backends: Record<string, SvBackend>;
+};
+
+/** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
+ *  that used to live here is how sv-bridge went missing from the create form.
+ *  `label` falls back to the raw id server-side, so an unlabelled funcId is
+ *  offered rather than dropped. */
+export type FuncIdChoice = { id: string; label: string };
+
+/** sv-expose reads the deployed mocks off a live namespace — the only call in
+ *  this client that needs a cluster, and the only one allowed to. Cluster
+ *  access is optional: an unreadable cluster is an "ok" HTTP response carrying
+ *  which of the four reasons it was, so the caller never has to guess from an
+ *  error string. `files` is the same shape /api/generate returns, so the same
+ *  preview pane renders it. */
+export type SvExposeStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
+export interface SvMock { name: string; port: number; harbor: string; ship: string }
+export interface SvExposeIn {
+  namespace: string;
+  sv_subdomain?: string | null;
+  sv_tls_secret?: string | null;
+  sv_ingress_class?: string | null;
+}
+export interface SvExposeOut {
+  status: SvExposeStatus;
+  mocks: SvMock[];
+  files: GeneratedFile[];
+  message: string;
+  detail: string;
+  /** The equivalent `bzm-opl-gen sv-expose …`, prefilled — the way forward
+   *  whenever this machine cannot reach the cluster. */
+  command: string;
+}
+
+/** Save a Blob to disk under `filename`. One copy, because the object-URL and
+ *  anchor dance is where the browser quirks live -- and the second caller
+ *  (sv-expose) is the one no test exercises, so a fix applied to only one of
+ *  two copies would go unnoticed there. */
+export function saveBlob(blob: Blob, filename: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 
 export async function downloadZip(facts: Facts, options: Options) {
   const r = await fetch("/api/generate/zip", {
@@ -76,10 +131,6 @@ export async function downloadZip(facts: Facts, options: Options) {
     body: JSON.stringify({ facts, options, fetch_token: true }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
-  const blob = await r.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  saveBlob(await r.blob(),
+    `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
 }

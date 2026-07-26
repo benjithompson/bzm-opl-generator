@@ -27,6 +27,8 @@ build/
 
 # tooling debris
 .pag/
+# agent worktrees -- a checkout of this repo inside itself; never committable
+.claude/worktrees/
 .playwright-mcp/
 *.tsbuildinfo
 node_modules/

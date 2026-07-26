@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, Account, AgentStatus, Facts, GeneratedFile, KeyCandidate,
-  Location, Options, Ship, SvConstants, Workspace,
+  api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
+  FuncIdChoice, KeyCandidate, Location, Options, Ship, SvConstants, SvExposeIn,
+  SvExposeOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
-
-const FUNC_ID_CHOICES = ["performance", "functionalApi", "functionalGui", "mockServices"];
+import { SvCtx, SvPrereqs } from "./SvPrereqs";
 
 // Display names only. The set of values is served from generate.SV_INGRESS_TYPES
 // -- an unlabelled backend falls back to its raw name and still appears, which
@@ -17,6 +17,7 @@ const SV_INGRESS_LABELS: Record<string, string> = {
   nginx: "NGINX", istio: "Istio", contour: "Contour", openshift: "OpenShift Route",
 };
 
+
 // Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
 // to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
 const ENGINE_SIZES = [
@@ -24,6 +25,37 @@ const ENGINE_SIZES = [
   { id: "standard", cpu: "2", mem: "8Gi", label: "Standard — 2 CPU / 8Gi (BlazeMeter default)" },
   { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
 ];
+
+// What the bundle deploys. Performance and service virtualization want separate
+// agents: one agent serving both puts mocks and load engines in a single
+// namespace, on a single slot budget, with a single restart lifecycle, so
+// redeploying the performance agent takes the virtual services down with it.
+// The kind only seeds defaults -- it gates nothing, because accounts already
+// running a combined location have to keep working.
+type DeployKind = "performance" | "sv";
+const KIND_NAMESPACE: Record<DeployKind, string> = {
+  performance: "blazemeter", sv: "blazemeter-sv",
+};
+const KIND_CHOICES: [DeployKind, string, string][] = [
+  ["performance", "Performance agent", "load & functional tests — engines on demand"],
+  ["sv", "Service-virtualization agent", "virtual services / mocks — needs an ingress"],
+];
+
+// Said in the location list, in the callout under it, and in the kind picker.
+// One string because the coupling is one fact -- three near-copies is how the
+// list ends up claiming something the callout no longer does.
+const KIND_COUPLING =
+  "mocks and load engines share a namespace, a slot budget and a restart "
+  + "lifecycle, so redeploying the performance agent takes the virtual "
+  + "services down with it";
+
+// How a location's own funcIds are labelled in the list. "both" is the case
+// worth naming: it deploys as one agent whichever kind you picked.
+const LOC_KIND_BADGE: Record<"performance" | "sv" | "both", [string, string]> = {
+  performance: ["performance", "bg-slate-100 text-slate-600"],
+  sv: ["service virtualization", "bg-violet-100 text-violet-700"],
+  both: ["performance + SV", "bg-amber-100 text-amber-700"],
+};
 
 export default function App() {
   // -- connection ------------------------------------------------------------
@@ -44,9 +76,18 @@ export default function App() {
   const [locFilter, setLocFilter] = useState("");
   const [harborId, setHarborId] = useState<string | null>(null);
   const [showCreateLoc, setShowCreateLoc] = useState(false);
+  // Served from facts.CATEGORY_BY_FUNC over /api/func-ids, not listed here: the
+  // copy that used to live in this file omitted sv-bridge, so an SV-bridge
+  // location could not be created from the UI at all.
+  const [funcIdChoices, setFuncIdChoices] = useState<FuncIdChoice[]>([]);
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
+  // Picked before a location, and only ever a source of defaults -- nothing
+  // downstream reads it as a constraint. In particular svRequired stays derived
+  // from the selected location's funcIds, so an SV location chosen under the
+  // performance kind still demands an ingress.
+  const [kind, setKind] = useState<DeployKind>("performance");
 
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
@@ -57,7 +98,7 @@ export default function App() {
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
-    { func_ids: [], ingress_types: [] });
+    { func_ids: [], ingress_types: [], backends: {} });
   type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
@@ -67,6 +108,19 @@ export default function App() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
+
+  // -- sv-expose (the one thing here that reads a cluster) --------------------
+  // Deliberately only ever set by the button in step 6: no other part of this
+  // app may start depending on kubectl existing.
+  const [svExpose, setSvExpose] = useState<SvExposeOut | null>(null);
+  const [svExposeBusy, setSvExposeBusy] = useState(false);
+  const [svExposeErr, setSvExposeErr] = useState<string | null>(null);
+  // The preview effect below must not take svExpose as a dependency -- that
+  // would re-POST /api/generate every time the namespace is read. Synced here
+  // on every render rather than beside each setSvExpose, so adding a fifth
+  // place that sets it cannot leave the two out of step.
+  const svExposeRef = useRef(svExpose);
+  svExposeRef.current = svExpose;
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -79,6 +133,7 @@ export default function App() {
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
+    api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
   }, []);
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
@@ -112,6 +167,19 @@ export default function App() {
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
 
+  // Which agent a location's funcIds imply. SV membership is generate.SV_FUNC_IDS
+  // over /api/sv-constants; everything else -- performance, the functional
+  // suites, the recorder -- runs on a performance agent, so "not SV" is the test
+  // rather than a second list to keep in step. Nothing is claimed until that
+  // fetch lands, or every SV location would flash up labelled performance.
+  const locKind = useCallback((l: Location) => {
+    const ids = l.funcIds ?? [];
+    if (!svConst.func_ids.length || !ids.length) return null;
+    const sv = ids.some((f) => svConst.func_ids.includes(f));
+    const perf = ids.some((f) => !svConst.func_ids.includes(f));
+    return sv && perf ? "both" as const : sv ? "sv" as const : "performance" as const;
+  }, [svConst]);
+
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null);
     if (!harborId) return;
@@ -138,7 +206,13 @@ export default function App() {
         const r = await api.generate(facts, opts);
         setFiles(r.files);
         setGenErr(null);
-        setActiveFile((a) => (a && r.files.some((f) => f.name === a) ? a : r.files[0]?.name ?? null));
+        // bzm_sv_expose.yaml is previewed alongside these but is not one of
+        // them, so it has to survive the re-render that follows any option
+        // edit -- otherwise reading the namespace, then typing, yanks the pane
+        // back to the first manifest.
+        setActiveFile((a) => (a && (r.files.some((f) => f.name === a)
+          || (svExposeRef.current?.files ?? []).some((f) => f.name === a))
+          ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
   }, [facts, options, shipId]);
@@ -158,6 +232,18 @@ export default function App() {
 
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
+  // Clearing a field whose key is absent from DEFAULT_OPTIONS has to *remove*
+  // it, not null it: generate() spreads the options over the defaults and
+  // profile.json dumps whatever survives, so an explicit null adds a key that
+  // was never there and the bundle stops being byte-identical to one generated
+  // without the field. Every other `v || null` field in this form is safe only
+  // because its key already has a default to overwrite.
+  const setOptional = useCallback((k: string, v: string) =>
+    setOptions((o) => {
+      if (v) return { ...o, [k]: v };
+      const { [k]: _dropped, ...rest } = o;
+      return rest;
+    }), []);
 
   const applyProfile = (name: string) => {
     const p = profiles.find((x) => x.name === name);
@@ -298,7 +384,37 @@ export default function App() {
       return w;
     });
   };
-  const namespaceOk = !!String(options.namespace ?? "").trim();
+  // Seeding happens here rather than in an effect on `kind`: an effect would
+  // also fire when svConst arrives mid-session and undo a namespace the user had
+  // already typed, and would have to run once on mount -- which is exactly where
+  // the performance flow has to stay untouched.
+  const pickKind = (k: DeployKind) => {
+    setKind(k);
+    // The SV funcIds are whatever generate.SV_FUNC_IDS says they are; a second
+    // list here is what /api/sv-constants exists to prevent. Empty only in the
+    // window before that fetch lands, where the old seed is the safer answer.
+    setNewLoc((n) => ({ ...n, func_ids: k === "sv" && svConst.func_ids.length
+      ? [...svConst.func_ids] : ["performance"] }));
+    // Distinct namespaces are the point of the split, but only a namespace still
+    // holding a kind default gets rewritten -- anything typed outranks the seed.
+    setOptions((o) => {
+      const ns = String(o.namespace ?? "").trim();
+      const seeded = !ns || Object.values(KIND_NAMESPACE).includes(ns);
+      return seeded ? { ...o, namespace: KIND_NAMESPACE[k] } : o;
+    });
+    // Not flipped back off for the performance kind: that would wipe a domain
+    // and TLS secret already typed, and svRequired flips it straight back on for
+    // an SV location anyway.
+    if (k === "sv") flipGroup("sv", true);
+  };
+
+  // One way to read a text option. Written out per-site, the `.trim()` was
+  // getting forgotten -- an ingress name pasted with a trailing space missed
+  // the SV_PREREQS lookup and the panel silently lost its prose.
+  const txt = useCallback(
+    (k: string) => String(options[k] ?? "").trim(), [options]);
+
+  const namespaceOk = !!txt("namespace");
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
   // once SV is on (the secret even for plain HTTP, because crane validates it at
   // startup), the ingress itself is mandatory for an SV location, and NODEPORT
@@ -309,10 +425,66 @@ export default function App() {
   const svNodePortConflict = options.service_type != null
     && options.service_type !== "CLUSTERIP";
   const svOk = (options.sv_ingress
-    ? !!String(options.sv_subdomain ?? "").trim()
-      && !!String(options.sv_tls_secret ?? "").trim()
-      && !svNodePortConflict
+    ? !!txt("sv_subdomain") && !!txt("sv_tls_secret") && !svNodePortConflict
     : !svRequired);
+  // What the prerequisite list and the endpoint host are rendered against. The
+  // list shows from the moment the group is on, so a field still empty renders
+  // as its own placeholder rather than a gap; anything filled in is substituted
+  // for real, which is the point -- the host below is meant to be pasted into a
+  // browser after the first virtual service deploys.
+  const svCtx: SvCtx = {
+    ns: txt("namespace") || "<namespace>",
+    dom: txt("sv_subdomain") || "<domain>",
+    secret: txt("sv_tls_secret") || "<tls-secret>",
+    gateway: txt("sv_istio_gateway"),
+  };
+  // Served, not restated here: what the Role grants is generate.py's to state,
+  // and the two can disagree only if one of them is a copy.
+  const svRbac = svConst.backends[txt("sv_ingress")];
+
+  // -- sv-expose -------------------------------------------------------------
+  // Renders the pair that actually routes, from the mocks running in the
+  // namespace. The server answers 200 with a reason whenever it cannot read the
+  // cluster, so the only thing caught here is a genuinely broken request.
+  const svExposeReady = !!txt("sv_subdomain") && namespaceOk;
+  // The exact request, derived rather than assembled at the call site: the
+  // staleness effect below depends on it, so a field added here cannot be
+  // forgotten there.
+  const svExposeReq: SvExposeIn = useMemo(() => ({
+    namespace: txt("namespace"),
+    sv_subdomain: txt("sv_subdomain") || null,
+    sv_tls_secret: txt("sv_tls_secret") || null,
+    sv_ingress_class: txt("sv_ingress_class") || null,
+  }), [txt]);
+  // What was rendered is a snapshot of one namespace, taken with the values
+  // that were on screen. Editing any of them makes it stale, and stale YAML in
+  // the preview is worse than none -- it would still carry the old ingress
+  // class or host while the fields say otherwise. Drop it and make them read
+  // again.
+  useEffect(() => {
+    setSvExpose(null); setSvExposeErr(null);
+  }, [svExposeReq]);
+  const readSvExpose = async () => {
+    setSvExposeBusy(true); setSvExposeErr(null);
+    try {
+      const r = await api.svExpose(svExposeReq);
+      setSvExpose(r);
+      if (r.files[0]) setActiveFile(r.files[0].name);
+    } catch (e) {
+      setSvExpose(null);
+      setSvExposeErr(String((e as Error).message));
+    } finally { setSvExposeBusy(false); }
+  };
+  const downloadSvExpose = () => {
+    const f = svExpose?.files[0];
+    if (!f) return;
+    saveBlob(new Blob([f.content], { type: "text/yaml" }), f.name);
+  };
+  // Same pane as the manifests, per the preview being where generated YAML is
+  // read in this app.
+  const previewFiles = useMemo(
+    () => (svExpose?.files.length ? [...files, ...svExpose.files] : files),
+    [files, svExpose]);
 
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
@@ -405,6 +577,27 @@ export default function App() {
           <Section n={2} title="Private location" done={!!harborId}
             hint="The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests.">
             <div className="space-y-3">
+              <div>
+                <p className="text-xs font-medium text-slate-600 mb-1.5">
+                  What does this bundle deploy?
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {KIND_CHOICES.map(([k, label, hint]) => (
+                    <button key={k} onClick={() => pickKind(k)}
+                      className={`text-left px-3 py-2 rounded-md border text-sm ${k === kind ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}>
+                      {label}
+                      <span className="block text-[11px] font-normal text-slate-400">
+                        {hint}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  One agent per kind — with one agent serving both,{" "}
+                  {KIND_COUPLING}. This only picks defaults; any location below
+                  still works for either.
+                </p>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
                   <SearchSelect
@@ -424,20 +617,44 @@ export default function App() {
                   placeholder={`filter ${locations.length} locations…`} />
               )}
               <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-                {filteredLocs.map((l) => (
+                {filteredLocs.map((l) => {
+                  const k = locKind(l);
+                  return (
                   <button key={l.id}
                     className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
                     onClick={() => setHarborId(l.id)}>
                     <span className="font-medium">{l.name}</span>
+                    {k && (
+                      <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
+                        {LOC_KIND_BADGE[k][0]}
+                      </span>
+                    )}
                     <span className="text-xs text-slate-400 ml-2">
                       {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                       {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
                     </span>
+                    {/* Said here rather than left to the badge's tooltip: this
+                        is where the location is being chosen, and a tooltip is
+                        invisible on touch and to the keyboard. */}
+                    {k === "both" && (
+                      <span className="block text-[11px] text-amber-700 mt-0.5">
+                        one agent for both — {KIND_COUPLING}
+                      </span>
+                    )}
                   </button>
-                ))}
+                  );
+                })}
                 {who && filteredLocs.length === 0 && (
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
               </div>
+              {location && locKind(location) === "both" && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  <b>{location.name}</b> carries both performance and
+                  service-virtualization features, so one agent serves both:{" "}
+                  {KIND_COUPLING}. You can still generate for it — a location
+                  per kind is what avoids the coupling.
+                </p>
+              )}
               <ErrorMsg msg={locErr} />
               {!showCreateLoc ? (
                 <Button kind="ghost" onClick={() => setShowCreateLoc(true)} disabled={!who}>
@@ -450,13 +667,13 @@ export default function App() {
                       onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
                   <div className="flex gap-4 items-end">
                     <div className="flex gap-3 flex-wrap">
-                      {FUNC_ID_CHOICES.map((f) => (
-                        <Check key={f} label={f}
-                          checked={newLoc.func_ids.includes(f)}
+                      {funcIdChoices.map((c) => (
+                        <Check key={c.id} label={c.label}
+                          checked={newLoc.func_ids.includes(c.id)}
                           onChange={(on) => setNewLoc({
                             ...newLoc,
-                            func_ids: on ? [...newLoc.func_ids, f]
-                              : newLoc.func_ids.filter((x) => x !== f),
+                            func_ids: on ? [...newLoc.func_ids, c.id]
+                              : newLoc.func_ids.filter((x) => x !== c.id),
                           })} />
                       ))}
                     </div>
@@ -866,7 +1083,12 @@ export default function App() {
                 {grpOn.sv && (
                 <div className="mt-3 pl-12 space-y-2">
                   <Field label="Ingress controller"
-                    hint="must already be installed and serving the wildcard domain below">
+                    hint={options.sv_ingress === "openshift"
+                      // The cluster router is already there; telling an
+                      // OpenShift user to install a controller would contradict
+                      // the prerequisite list below.
+                      ? "the cluster router already serves the wildcard domain below"
+                      : "must already be installed and serving the wildcard domain below"}>
                     <select className={inputCls} value={String(options.sv_ingress ?? "nginx")}
                       onChange={(e) => set("sv_ingress", e.target.value)}>
                       {svConst.ingress_types
@@ -882,14 +1104,6 @@ export default function App() {
                         ))}
                     </select>
                   </Field>
-                  {options.sv_ingress === "nginx" && (
-                    <p className="text-[11px] text-amber-700">
-                      Crane’s NGINX Ingress points at port 8080 while the Service it
-                      creates publishes port 80, so the endpoint 503s — run{" "}
-                      <code>bzm-opl-gen sv-expose</code> afterwards. Every other option
-                      gets this right and needs no follow-up.
-                    </p>
-                  )}
                   <Field label="Wildcard domain"
                     hint="endpoints become <service>-<port>-<namespace>.<domain>">
                     <TextInput mono placeholder="apps.example.com"
@@ -898,7 +1112,9 @@ export default function App() {
                   </Field>
                   <Field label="Wildcard TLS secret"
                     hint={options.sv_ingress === "istio"
-                      ? "required even for HTTP — but crane writes the Istio Gateway as TLS PASSTHROUGH, so nothing ever reads this secret"
+                      // Why it is inert on istio is one line down, in the
+                      // prerequisite list, rather than said twice here.
+                      ? "required even for HTTP — though nothing on Istio ever reads it"
                       : "in the agent namespace; required even for HTTP virtual services"}>
                     <TextInput mono placeholder="wildcard-credential"
                       value={String(options.sv_tls_secret ?? "")}
@@ -919,6 +1135,8 @@ export default function App() {
                         : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
                     </p>
                   )}
+                  <SvPrereqs ingress={txt("sv_ingress")} ctx={svCtx}
+                    rbac={svRbac} />
                 </div>
                 )}
               </div>
@@ -982,9 +1200,85 @@ export default function App() {
               </div>
             </div>
           </Section>
+
+          {/* 6 · Expose virtual services */}
+          <Section n={6} title="Expose virtual services"
+            hint="Once the virtual services are deployed: reads them from the namespace with the kubectl/oc on THIS machine and renders the Service+Ingress pair that routes. Optional — nothing above needs a cluster.">
+            <div className="space-y-3">
+              <Field label="Ingress class"
+                hint="the class put on the Ingress we own — defaults to nginx; on OpenShift use openshift-default and no nginx alias is needed. Saved into the profile, so the CLI picks it up too.">
+                <TextInput mono placeholder="nginx"
+                  value={String(options.sv_ingress_class ?? "")}
+                  onChange={(v) => setOptional("sv_ingress_class", v)} />
+              </Field>
+              <div className="flex gap-2 items-center">
+                <Button disabled={!svExposeReady || svExposeBusy}
+                  onClick={readSvExpose}>
+                  {svExposeBusy ? "Reading namespace…" : "Read namespace & render"}
+                </Button>
+                <span className="text-xs text-slate-400">
+                  namespace <code>{String(options.namespace ?? "")}</code> via your
+                  current kube context
+                </span>
+              </div>
+              {!svExposeReady && (
+                <p className="text-[11px] text-amber-700">
+                  Set the wildcard domain in step 4 first — the endpoint host is
+                  &lt;service&gt;-&lt;port&gt;-&lt;namespace&gt;.&lt;domain&gt;, so
+                  there is nothing to route without it.
+                </p>
+              )}
+              <ErrorMsg msg={svExposeErr} />
+              {svExpose && (svExpose.status === "ok" ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-2">
+                  <p className="text-xs text-emerald-800">{svExpose.message}</p>
+                  <ul className="text-[11px] text-slate-600 font-mono space-y-0.5">
+                    {svExpose.mocks.map((m) => (
+                      <li key={m.name}>{`${m.name}:${m.port} → ${m.name}-${m.port}-${options.namespace}.${options.sv_subdomain}`}</li>
+                    ))}
+                  </ul>
+                  <div className="flex gap-2 items-center">
+                    <Button onClick={downloadSvExpose}>
+                      ⬇ Download {svExpose.files[0]?.name}
+                    </Button>
+                    <span className="text-xs text-slate-400">
+                      previewed on the right, alongside the manifests
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-mono break-all">
+                    {svExpose.detail}
+                  </p>
+                </div>
+              ) : (
+                // Never a dead panel: each reason says what happened, and all of
+                // them hand over the same command to run where the cluster IS
+                // reachable, prefilled with what is on screen.
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                  <p className="text-xs text-amber-800">{svExpose.message}</p>
+                  {svExpose.detail && (
+                    <p className="text-[11px] text-amber-700 font-mono break-all">
+                      {svExpose.detail}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-slate-600">
+                    Run this wherever you do have access to the cluster:
+                  </p>
+                  <div className="flex gap-2 items-start">
+                    <code className="grow min-w-0 text-[11px] font-mono bg-slate-900 text-slate-100 rounded px-2 py-1.5 break-all">
+                      {svExpose.command}
+                    </code>
+                    <Button kind="ghost"
+                      onClick={() => navigator.clipboard.writeText(svExpose.command)}>
+                      copy
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
         </div>
 
-        <Preview files={files} activeFile={activeFile}
+        <Preview files={previewFiles} activeFile={activeFile}
           setActiveFile={setActiveFile} genErr={genErr} />
       </main>
     </div>

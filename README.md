@@ -171,6 +171,44 @@ pip install -e .[ui]
 bzm-opl-gen ui          # opens http://127.0.0.1:8765
 ```
 
+Single page: Connect (key stays local) → choose what the bundle deploys →
+pick/create location & agent → configure (presets, private registry, proxy/CA,
+tolerations/nodeSelector, engine sizing) → live manifest preview → download zip
+(AUTH_TOKEN fetched on download) → watch the agent flip online. Profile JSON
+import/export round-trips with `generate --profile`. Frontend dev: `cd frontend
+&& npm install && npm run dev` (proxies /api to :8765); `npm run build`
+refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.
+
+**One agent per kind.** The first thing the page asks is whether this bundle
+deploys a *performance* agent or a *service-virtualization* agent. Deploy them
+separately: a single agent serving both puts virtual services and load engines
+in one namespace, on one slot budget, with one restart lifecycle — so
+redeploying the performance agent takes the virtual services down with it.
+Picking service virtualization seeds the create-location form with the SV
+funcIds, defaults the namespace to `blazemeter-sv` rather than `blazemeter`, and
+switches the SV options on. It is a recommendation, not a restriction: a
+location carrying both feature sets is labelled as such in the list and can
+still be selected and generated for, and the generator gained no new rejection —
+existing combined locations keep working.
+
+For a location with SV enabled, the page also names every prerequisite the
+bundle does *not* create (the wildcard TLS secret, an Istio Gateway when one is
+named, the controller itself) and what the chosen backend does with each, plus
+the endpoint host to check once it is applied — the same facts as
+[Service virtualization](#service-virtualization), against the namespace and
+domain actually configured.
+
+Once virtual services are deployed, the page runs
+[`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) too, rendering
+the Service+Ingress pair into the same preview. That is the one thing the UI
+does that needs a cluster, and it needs one only for that: reading the mocks
+uses whatever `kubectl`/`oc` context the machine running `bzm-opl-gen ui` has.
+There is often none, so an unreadable cluster is a normal answer rather than an
+error — it says which of *no CLI*, *no context*, *denied* or *no virtual
+services in that namespace* applied, and hands you the equivalent command,
+prefilled, to run where you do have access. Nothing else in the UI needs a
+cluster at all.
+
 **It binds this machine only, on purpose.** The server holds your API key in
 process memory, so reaching the page is equivalent to holding the key — and the
 download button fetches an AUTH_TOKEN, which *rotates* it and leaves any agent
@@ -185,14 +223,6 @@ ssh -L 8765:127.0.0.1:8765 you@that-machine     # then open http://127.0.0.1:876
 `--host` widens the bind when you really do want the server itself listening
 elsewhere (`--host 0.0.0.0`, or a specific interface address). It warns at
 startup, and it is the wrong tool on any network you do not control.
-
-Single page: Connect (key stays local) → pick/create location & agent →
-configure (presets, private registry, proxy/CA, tolerations/nodeSelector,
-engine sizing) → live manifest preview → download zip (AUTH_TOKEN fetched on
-download) → watch the agent flip online. Profile JSON import/export round-trips
-with `generate --profile`. Frontend dev: `cd frontend && npm install && npm run
-dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
-`bzm_opl_gen/ui_dist/`.
 
 ## Options (flags or `--profile` JSON)
 
@@ -349,6 +379,14 @@ that works, once the virtual services are deployed:
 bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-default
 kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
+
+The [web UI](#web-ui) runs the same thing from the browser, against the
+`kubectl`/`oc` context of the machine serving it, and tells you which reason
+applied when there is no cluster to read rather than failing. Setting the
+ingress class there also writes `sv_ingress_class` into the bundle's
+`profile.json`, so a later `sv-expose --manifests out/` picks it up without
+repeating the flag. It is not a `generate` option — nothing about it reaches the
+agent, and a bundle generated without it is byte-identical to before.
 
 It reads the deployed mocks off their pods rather than from the API — the
 virtual-service API is on a separate host (`mock.blazemeter.com/api/v1`, not
