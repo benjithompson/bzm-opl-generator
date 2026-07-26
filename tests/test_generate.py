@@ -453,7 +453,7 @@ def test_sv_contour_configmap_and_httpproxy_rbac():
     assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
 
 
-@pytest.mark.parametrize("ingress", ["istio", "contour"])
+@pytest.mark.parametrize("ingress", ["istio", "contour", "openshift"])
 def test_sv_ingress_rbac_is_not_granted_to_crd_based_types(ingress):
     """Crane's expose backends are separate implementations: only the nginx one
     creates an Ingress. Granting it elsewhere is dead permission, and this tool
@@ -461,6 +461,28 @@ def test_sv_ingress_rbac_is_not_granted_to_crd_based_types(ingress):
     each published its object with a Role carrying only its own API group."""
     groups = _role_groups(gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress=ingress)))
     assert "ingresses" not in groups.get("networking.k8s.io", [])
+
+
+def test_sv_openshift_route_rbac_includes_custom_host():
+    """Proven live on CRC: with `routes` alone crane's create is rejected 422
+    `spec.host: Forbidden: you do not have permission to set the host field of
+    the route`, no Route appears, and the virtual service stalls. OpenShift
+    gates spec.host behind a separate create on routes/custom-host."""
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, platform="openshift",
+                                        sv_ingress="openshift"))
+    groups = _role_groups(files)
+    assert groups["route.openshift.io"] == ["routes", "routes/custom-host"]
+    assert "networking.k8s.io" not in groups
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "OPENSHIFT"
+
+
+def test_sv_openshift_ingress_requires_the_openshift_platform():
+    """A Route only exists on OpenShift; asking for one on plain k8s would
+    deploy cleanly and then stall with nothing to create."""
+    with pytest.raises(ValueError, match="platform=openshift"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, platform="k8s",
+                                    sv_ingress="openshift"))
 
 
 def test_sv_istio_gateway_name_is_rejected_for_other_ingress_types():

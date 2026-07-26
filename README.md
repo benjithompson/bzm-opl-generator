@@ -115,7 +115,7 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
-| `sv_ingress` | – | `nginx` \| `istio` \| `contour` — **required** for a `mockServices` location; see [Service virtualization](#service-virtualization) |
+| `sv_ingress` | – | `nginx` \| `istio` \| `contour` \| `openshift` — **required** for a `mockServices` location; `openshift` needs `platform: openshift`; see [Service virtualization](#service-virtualization) |
 | `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
 | `sv_tls_secret` | – | wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** |
 | `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it |
@@ -144,7 +144,7 @@ bzm-opl-gen generate --facts facts.json --api-key api-key.json \
 
 | what | why |
 |---|---|
-| `--sv-ingress nginx\|istio\|contour` | one at a time; the controller must already be installed |
+| `--sv-ingress nginx\|istio\|contour\|openshift` | one at a time; the controller must already be installed (`openshift` needs no install — the cluster router is already there) |
 | `--sv-subdomain` | endpoints become `<service>-<port>-<namespace>.<subdomain>` |
 | `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP, and even on istio, where nothing ever reads it (see below) |
 
@@ -158,18 +158,34 @@ already exist (the generator names it, it does not create it).
 
 ### Which one to pick
 
-**Prefer `istio` or `contour`.** This is not a matter of taste: crane ships a
+**Pick anything but `nginx`.** This is not a matter of taste: crane ships a
 separate expose implementation per type, and only the `nginx` one has a bug that
-costs you an extra step.
+costs you an extra step. On OpenShift, use `openshift`.
 
-| | `nginx` | `istio` | `contour` |
-|---|---|---|---|
-| crane creates | `networking.k8s.io` Ingress | `networking.istio.io` Gateway + VirtualService | `projectcontour.io` HTTPProxy |
-| backend port | `8080` — **wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct |
-| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** | **yes** |
-| needs an `IngressClass` | yes, named `nginx` | no — neither controller registers one at all | no |
-| `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace |
-| Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` |
+| | `nginx` | `istio` | `contour` | `openshift` |
+|---|---|---|---|---|
+| crane creates | `networking.k8s.io` Ingress | `networking.istio.io` Gateway + VirtualService | `projectcontour.io` HTTPProxy | `route.openshift.io` Route |
+| backend port | `8080` — **wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct | `8080` — correct *for a Route* |
+| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** | **yes** | **yes** |
+| needs an `IngressClass` | yes, named `nginx` | no — none of these controllers registers one at all | no | no |
+| `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
+| Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
+| requires | – | – | – | `--platform openshift` |
+
+The `openshift` port deserves a note, because it looks like the nginx bug and is
+not. A **Route**'s `spec.port.targetPort` resolves against the Service's
+*targetPort*; an **Ingress** backend resolves against `spec.ports[].port`. Same
+number, opposite meaning — crane is correct in both places by the rules of the
+object it is writing, which is what makes the nginx case a real defect rather
+than a consistent misunderstanding.
+
+`routes/custom-host` in that Role is not padding. Crane sets `spec.host`, and
+OpenShift gates that field behind its own create: with `routes` alone the create
+comes back `422 spec.host: Forbidden: you do not have permission to set the host
+field of the route`, no Route appears, and the virtual service stalls while the
+mock pod sits healthy at `1/1`. Worth knowing that `oc auth can-i create
+routes/custom-host` answers **yes** whether or not the grant is present, so it
+cannot be used to check this — only a deploy tells the truth.
 
 Only the API group the chosen backend actually writes is granted — crane picks
 one implementation and never touches the others, so anything else would be
@@ -183,22 +199,23 @@ it. It also means an **HTTPS** virtual service on istio terminates TLS in the
 mock pod itself, not at the gateway. Contour is the opposite: its HTTPProxy
 carries `tls.secretName`, and Contour validates it.
 
-Both were verified end to end on minikube (k8s 1.32) with namespaced RBAC only —
-Istio 1.30.3 and Contour v1.33.5 — with real transactions returning `200` at the
-host BlazeMeter advertises. The `nodes ... is forbidden` warning in the crane log
-is expected and harmless on all three; only `NODEPORT` actually depends on that
-lookup.
+All three working paths were verified end to end with namespaced RBAC only and
+real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
+and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift Local. The
+`nodes ... is forbidden` warning in the crane log is expected and harmless on all
+of them; only `NODEPORT` actually depends on that lookup.
 
-Two other values exist in crane and are **not** offered here. `INGRESS`, which
-BlazeMeter's env-var reference documents, creates no object at all and stalls at
-`WAITING_FOR_DOMAIN`. `OPENSHIFT` is real but untested — if you are on OpenShift,
-see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) for the
-approach that is proven there.
+One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
+env-var reference documents, creates no object at all and stalls at
+`WAITING_FOR_DOMAIN`.
 
 ### Reaching a virtual service from outside: `sv-expose`
 
-Only needed with `--sv-ingress nginx`. On istio and contour crane's own objects
-route correctly and this section does not apply.
+**Only needed with `--sv-ingress nginx`.** Every other backend routes correctly
+on its own and this section does not apply — including on OpenShift, where
+`--sv-ingress openshift` is the answer rather than this command. Reach for
+`sv-expose` when you are stuck on nginx: no service mesh, no Contour, and not
+OpenShift.
 
 Crane publishes its own Service and Ingress per virtual service, but **its
 Ingress does not work**: the backend says `port.number: 8080` while the Service

@@ -153,10 +153,10 @@ CA_CONFIGMAP = "blazemeter-cacerts"
 SV_FUNC_IDS = ("mockServices", "sv-bridge")
 # Crane ships a separate web-expose implementation per value -- the agent binary
 # names five: kubernetes_{base,contour,istio,nginx,openshift}_web_expose_service.
-# Only three are offered. `base` is the shared parent, not a value; `openshift`
-# is real but untested here; and the `INGRESS` value BlazeMeter's env reference
-# documents creates no object at all and stalls at WAITING_FOR_DOMAIN.
-SV_INGRESS_TYPES = ("nginx", "istio", "contour")
+# All four real ones are offered; `base` is the shared parent, not a value. The
+# `INGRESS` value BlazeMeter's env reference documents is deliberately absent:
+# it creates no object at all and stalls at WAITING_FOR_DOMAIN.
+SV_INGRESS_TYPES = ("nginx", "istio", "contour", "openshift")
 
 
 class SvBackend(collections.namedtuple(
@@ -184,6 +184,14 @@ SV_INGRESS_BACKENDS = {
                        "Gateway + VirtualService", False),
     "contour": SvBackend("projectcontour.io", ["httpproxies"],
                          "HTTPProxy", False),
+    # routes/custom-host is not padding: OpenShift gates spec.host behind its
+    # own create, and crane sets spec.host. Without it the create comes back 422
+    # "you do not have permission to set the host field of the route", no Route
+    # appears, and the virtual service stalls with the mock pod healthy at 1/1.
+    # Proven by A/B on a live cluster -- and note `auth can-i create
+    # routes/custom-host` answers yes either way, so it cannot be used to check.
+    "openshift": SvBackend("route.openshift.io",
+                           ["routes", "routes/custom-host"], "Route", False),
 }
 
 
@@ -231,6 +239,13 @@ def _sv_cfg(facts, o):
             f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
             f"{o['service_type']}. NODEPORT makes crane read the cluster-scoped "
             "Node object to build an address, which a namespaced Role cannot grant."
+        )
+    if ingress == "openshift" and o["platform"] != "openshift":
+        raise ValueError(
+            f"sv_ingress=openshift requires platform=openshift, got "
+            f"{o['platform']}. That backend publishes a route.openshift.io "
+            "Route, which a plain Kubernetes API server does not serve -- the "
+            "agent would deploy cleanly and then stall with nothing to create."
         )
     if o["sv_istio_gateway"] and ingress != "istio":
         raise ValueError(

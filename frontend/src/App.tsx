@@ -235,23 +235,29 @@ export default function App() {
   // select's onChange: only crane's istio backend reads it, so generate() now
   // refuses outright, and an imported profile pairing it with another ingress
   // would hit that error with nothing in the UI to explain it.
+  // The openshift backend publishes a route.openshift.io Route, so switching the
+  // platform away from OpenShift strands sv_ingress on a value generate() now
+  // refuses -- and the option itself disappears from the select, leaving nothing
+  // on screen to explain the error. Fall back to nginx, which works anywhere.
   useEffect(() => {
     setOptions((o) => {
+      const strandedIngress =
+        o.sv_ingress === "openshift" && o.platform !== "openshift";
       const seedIngress = svRequired && !o.sv_ingress;
-      const ingress = seedIngress ? "nginx" : o.sv_ingress;
+      const ingress = seedIngress || strandedIngress ? "nginx" : o.sv_ingress;
       const clearNodePort = !!ingress
         && o.service_type != null && o.service_type !== "CLUSTERIP";
       const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
-      if (!seedIngress && !clearNodePort && !clearGateway) return o;
+      if (!seedIngress && !strandedIngress && !clearNodePort && !clearGateway) return o;
       return {
         ...o,
-        ...(seedIngress ? { sv_ingress: "nginx" } : {}),
+        ...(seedIngress || strandedIngress ? { sv_ingress: "nginx" } : {}),
         ...(clearNodePort ? { service_type: "CLUSTERIP" } : {}),
         ...(clearGateway ? { sv_istio_gateway: null } : {}),
       };
     });
   }, [svRequired, options.sv_ingress, options.service_type,
-      options.sv_istio_gateway]);
+      options.sv_istio_gateway, options.platform]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
@@ -855,14 +861,17 @@ export default function App() {
                       <option value="nginx">NGINX</option>
                       <option value="istio">Istio</option>
                       <option value="contour">Contour</option>
+                      {options.platform === "openshift" && (
+                        <option value="openshift">OpenShift Route</option>
+                      )}
                     </select>
                   </Field>
                   {options.sv_ingress === "nginx" && (
                     <p className="text-[11px] text-amber-700">
                       Crane’s NGINX Ingress points at port 8080 while the Service it
                       creates publishes port 80, so the endpoint 503s — run{" "}
-                      <code>bzm-opl-gen sv-expose</code> afterwards. Istio and Contour
-                      get this right and need no follow-up.
+                      <code>bzm-opl-gen sv-expose</code> afterwards. Every other option
+                      gets this right and needs no follow-up.
                     </p>
                   )}
                   <Field label="Wildcard domain"

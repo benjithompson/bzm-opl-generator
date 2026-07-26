@@ -451,12 +451,12 @@ def test_ingress_class_none_at_all_fails():
     assert c.status == doctor.FAIL
 
 
-@pytest.mark.parametrize("ingress", ["istio", "contour"])
+@pytest.mark.parametrize("ingress", ["istio", "contour", "openshift"])
 def test_ingress_class_crd_based_types_are_never_a_failure(ingress):
-    """istio routes through a Gateway/VirtualService and contour through an
-    HTTPProxy; neither creates an Ingress, and neither controller registers an
-    IngressClass at all -- so failing on 'none found' would fail every correct
-    install of both."""
+    """istio routes through a Gateway/VirtualService, contour through an
+    HTTPProxy, openshift through a Route; none creates an Ingress, and none of
+    those controllers registers an IngressClass -- so failing on 'none found'
+    would fail every correct install of all three."""
     checks = doctor.check_ingress_class(
         FACTS, {**SV_NGINX, "sv_ingress": ingress}, {"ingressclasses": []})
     assert _statuses(checks) == {doctor.PASS}
