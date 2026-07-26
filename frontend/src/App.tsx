@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, Account, AgentStatus, Facts, GeneratedFile, KeyCandidate,
-  Location, Options, Ship, SvConstants, Workspace,
+  FuncIdChoice, Location, Options, Ship, SvConstants, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
-
-const FUNC_ID_CHOICES = ["performance", "functionalApi", "functionalGui", "mockServices"];
 
 // Display names only. The set of values is served from generate.SV_INGRESS_TYPES
 // -- an unlabelled backend falls back to its raw name and still appears, which
@@ -44,6 +42,10 @@ export default function App() {
   const [locFilter, setLocFilter] = useState("");
   const [harborId, setHarborId] = useState<string | null>(null);
   const [showCreateLoc, setShowCreateLoc] = useState(false);
+  // Served from facts.CATEGORY_BY_FUNC over /api/func-ids, not listed here: the
+  // copy that used to live in this file omitted sv-bridge, so an SV-bridge
+  // location could not be created from the UI at all.
+  const [funcIdChoices, setFuncIdChoices] = useState<FuncIdChoice[]>([]);
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export default function App() {
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
+    api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
   }, []);
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
@@ -450,13 +453,13 @@ export default function App() {
                       onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
                   <div className="flex gap-4 items-end">
                     <div className="flex gap-3 flex-wrap">
-                      {FUNC_ID_CHOICES.map((f) => (
-                        <Check key={f} label={f}
-                          checked={newLoc.func_ids.includes(f)}
+                      {funcIdChoices.map((c) => (
+                        <Check key={c.id} label={c.label}
+                          checked={newLoc.func_ids.includes(c.id)}
                           onChange={(on) => setNewLoc({
                             ...newLoc,
-                            func_ids: on ? [...newLoc.func_ids, f]
-                              : newLoc.func_ids.filter((x) => x !== f),
+                            func_ids: on ? [...newLoc.func_ids, c.id]
+                              : newLoc.func_ids.filter((x) => x !== c.id),
                           })} />
                       ))}
                     </div>

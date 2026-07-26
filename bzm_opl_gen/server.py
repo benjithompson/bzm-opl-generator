@@ -234,6 +234,33 @@ def option_defaults():
     return gen_mod.DEFAULT_OPTIONS
 
 
+# Display names only -- the vocabulary itself is facts.CATEGORY_BY_FUNC, which
+# already has to list every funcId to pick the right images. A funcId missing
+# from here is served under its raw name rather than dropped.
+FUNC_ID_LABELS = {
+    "performance": "Performance",
+    "functionalApi": "Functional API",
+    "functionalGui": "Functional GUI",
+    "mockServices": "Mock Services",
+    "sv-bridge": "SV bridge",
+    "proxyRecorder": "Proxy Recorder",
+}
+
+
+@app.get("/api/func-ids")
+def func_ids():
+    """The funcIds a location can be created with, in declaration order.
+
+    Served for the same reason as /api/sv-constants: the create-location form
+    used to hold its own list in TypeScript, and sv-bridge was missing from it,
+    so an SV-bridge location could only be made from the CLI or the BlazeMeter
+    web app. Derived from the facts layer so adding a funcId there -- which is
+    already required for its images to be selected -- is the only edit needed.
+    """
+    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f)}
+            for f in facts_mod.CATEGORY_BY_FUNC]
+
+
 @app.get("/api/sv-constants")
 def sv_constants():
     """The two service-virtualization enumerations the UI must not hardcode.
