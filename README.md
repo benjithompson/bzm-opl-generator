@@ -133,9 +133,18 @@ while testing none of the HTTP layer — CI asserts the optional deps are
 importable for exactly that reason.
 
 The offline suite fakes every cluster and API response the live rig exercises,
-so add an offline counterpart whenever you add a live check. Anything beyond
-that — the live rig, the account it runs against, and the environment traps
-behind each flag — is in [CLAUDE.md](CLAUDE.md).
+so add an offline counterpart whenever you add a live check.
+
+Before a live run, preflight your own machine — it beats finding out four
+minutes in:
+
+```
+bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy
+```
+
+Full contributor guide in [CONTRIBUTING.md](CONTRIBUTING.md); the live rig's
+internals, the account it runs against, and the environment trap behind each
+flag are in [CLAUDE.md](CLAUDE.md).
 
 ## Web UI
 
@@ -434,6 +443,23 @@ Capacity is measured against node **allocatable**, which is an upper bound:
 other workloads already hold part of it. A doctor pass means "nothing here
 stops a test", not "there is headroom".
 
+### Your machine (`toolcheck`)
+
+`doctor` asks whether a cluster can run the location. `toolcheck` asks the
+question that comes first when you're driving the live rig: does this
+workstation have what `livetest` shells out to?
+
+```
+bzm-opl-gen toolcheck --cluster minikube --local-registry 5001 --local-proxy
+```
+
+It checks only what the flags you passed will actually use — kubectl/oc, the
+docker daemon, kind/minikube, the host port `--local-registry` publishes on,
+free space on the docker VM, and whether the pinned rig images are cached.
+On arm64 it warns that BlazeMeter's amd64-only images run under emulation and
+that engines need sizing down. Exits non-zero on anything that would stop the
+run before it deploys.
+
 ## Live test
 
 Success = the BlazeMeter API reports the ship with a **fresh heartbeat** and
@@ -603,10 +629,12 @@ bzm_opl_gen/
   api.py         BlazeMeter API client (stdlib)
   facts.py       account fact gathering + image classification
   generate.py    manifest rendering (templates/ + per-option assembly)
-  doctor.py      preflight checks (pure verdicts over fetched cluster JSON)
+  doctor.py      cluster preflight (pure verdicts over fetched cluster JSON)
+  workstation.py workstation preflight for the live rig (`toolcheck`)
   quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
   livetest.py    deploy, poll-until-online, teardown
-  cli.py         subcommands: facts | generate | doctor | images | livetest
+  cli.py         subcommands: facts | generate | doctor | toolcheck | images
+                              | livetest
   templates/     per-CRD best-practice templates
   profiles/      scenario presets (standard | private-registry | proxy-ca)
 tests/           offline unit tests (fixture facts)

@@ -37,6 +37,7 @@ from . import generate
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
 REGISTRY_NAME = "bzm-opl-registry"
+REGISTRY_IMAGE = "registry:2"
 # What the minikube node calls the host's registry. generate() manifests must
 # use this as --private-registry when livetesting with --local-registry.
 REGISTRY_CLUSTER_HOST = "host.minikube.internal"
@@ -125,7 +126,7 @@ def ensure_registry(port):
     if out.stdout.strip() != "true":
         _run(["docker", "rm", "-f", REGISTRY_NAME], check=False, capture=True)
         _run(["docker", "run", "-d", "--name", REGISTRY_NAME,
-              "-p", f"{port}:5000", "registry:2"])
+              "-p", f"{port}:5000", REGISTRY_IMAGE])
 
 
 def mirror_images(facts, port, arch="linux/amd64"):

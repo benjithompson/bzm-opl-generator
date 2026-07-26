@@ -17,7 +17,8 @@ import json
 import subprocess
 import sys
 
-from . import api, doctor, facts as facts_mod, generate as gen_mod, livetest
+from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
+               workstation)
 
 
 def _resolve_account(client, a):
@@ -203,6 +204,14 @@ def cmd_doctor(a):
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
     checks = doctor.run(f, opts, a.namespace)
+    sys.exit(1 if doctor.has_failures(checks) else 0)
+
+
+def cmd_toolcheck(a):
+    """Preflight the workstation against the rig flags you intend to pass."""
+    checks = workstation.run({"cluster": a.cluster,
+                              "local_registry": a.local_registry,
+                              "local_proxy": a.local_proxy})
     sys.exit(1 if doctor.has_failures(checks) else 0)
 
 
@@ -433,6 +442,17 @@ def main():
     d.add_argument("-n", "--namespace",
                    help="target namespace (default: the profile's)")
     d.set_defaults(fn=cmd_doctor)
+
+    w = sub.add_parser("toolcheck",
+                       help="does this workstation have what livetest shells "
+                            "out to? (run before a 12-20 minute rig run)")
+    w.add_argument("--cluster", choices=["current", "kind", "minikube"],
+                   default="current", help="the --cluster you intend to use")
+    w.add_argument("--local-registry", type=int, nargs="?", const=5001,
+                   metavar="PORT", help="check the registry rig too")
+    w.add_argument("--local-proxy", action="store_true",
+                   help="check the proxy rig too")
+    w.set_defaults(fn=cmd_toolcheck)
 
     i = sub.add_parser("images", help="list/pull/mirror the location's images")
     i.add_argument("--facts")
