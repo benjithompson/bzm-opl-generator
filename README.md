@@ -115,10 +115,10 @@ dev` (proxies /api to :8765); `npm run build` refreshes the shipped bundle in
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
-| `sv_ingress` | – | `nginx` \| `istio` — **required** for a `mockServices` location; see [Service virtualization](#service-virtualization) |
+| `sv_ingress` | – | `nginx` \| `istio` \| `contour` — **required** for a `mockServices` location; see [Service virtualization](#service-virtualization) |
 | `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
 | `sv_tls_secret` | – | wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** |
-| `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service |
+| `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it |
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
 | `engine_cpu_limit` / `engine_mem_limit` | – (documented 2 / 8Gi) | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` — the limits crane stamps on every engine it spawns |
 | `emit_limitrange` | `false` | emit `bzm_limitrange.yaml`: a namespace `max` at the engine size plus defaults for pods that declare no resources. It does **not** change the taurus engine — see below |
@@ -144,12 +144,13 @@ bzm-opl-gen generate --facts facts.json --api-key api-key.json \
 
 | what | why |
 |---|---|
-| `--sv-ingress nginx\|istio` | one at a time; the controller must already be installed |
+| `--sv-ingress nginx\|istio\|contour` | one at a time; the controller must already be installed |
 | `--sv-subdomain` | endpoints become `<service>-<port>-<namespace>.<subdomain>` |
 | `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP, and even on istio, where nothing ever reads it (see below) |
 
 **Optional:** `--sv-istio-gateway` reuses one Gateway instead of creating one
-per virtual service.
+per virtual service. It is rejected with any other `--sv-ingress`, because only
+crane's istio backend reads it — setting it elsewhere would silently do nothing.
 
 **Provided by you, not generated** — the agent namespace needs a wildcard TLS
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
@@ -157,39 +158,47 @@ already exist (the generator names it, it does not create it).
 
 ### Which one to pick
 
-`istio` is the better path, and the difference is not a matter of taste — the
-`nginx` one ships with a bug that costs you an extra step.
+**Prefer `istio` or `contour`.** This is not a matter of taste: crane ships a
+separate expose implementation per type, and only the `nginx` one has a bug that
+costs you an extra step.
 
-| | `nginx` | `istio` |
-|---|---|---|
-| crane creates | Service + `networking.k8s.io` Ingress | Service + `networking.istio.io` Gateway + VirtualService |
-| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** |
-| needs an `IngressClass` | yes, named `nginx` | no — routing is by Gateway, and Istio registers no IngressClass at all |
-| `--sv-tls-secret` | referenced by the Ingress | **never referenced** |
+| | `nginx` | `istio` | `contour` |
+|---|---|---|---|
+| crane creates | `networking.k8s.io` Ingress | `networking.istio.io` Gateway + VirtualService | `projectcontour.io` HTTPProxy |
+| backend port | `8080` — **wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct |
+| endpoint serves as-is | **no** — 503, see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) | **yes** | **yes** |
+| needs an `IngressClass` | yes, named `nginx` | no — neither controller registers one at all | no |
+| `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace |
+| Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` |
 
-The reason the istio path works is that crane's VirtualService names its
-destination without a port (`host: crane-<hash>-<harborId>`) and lets Istio
-resolve it against the Service's single port. The nginx path hardcodes
-`port.number: 8080` against a Service published on `80`, and that is the whole
-bug.
+Only the API group the chosen backend actually writes is granted — crane picks
+one implementation and never touches the others, so anything else would be
+permission that can only go unused.
 
 The TLS secret is inert on istio because crane writes the `:443` server as
 `tls.mode: PASSTHROUGH` with no `credentialName`. Nothing loads a certificate,
 so the secret does not need to exist in `istio-system` and does not need to be
 valid — but crane still refuses to start without the *name*, so you must pass
 it. It also means an **HTTPS** virtual service on istio terminates TLS in the
-mock pod itself, not at the gateway.
+mock pod itself, not at the gateway. Contour is the opposite: its HTTPProxy
+carries `tls.secretName`, and Contour validates it.
 
-Verified end to end on minikube + Istio 1.30 (k8s 1.32): namespaced RBAC only,
-crane created both objects, and transactions returned `200` through
-`istio-ingressgateway` at the host BlazeMeter advertises. The `nodes ... is
-forbidden` warning in the crane log is expected and harmless here — unlike
-under `NODEPORT`, nothing on the istio path depends on that lookup.
+Both were verified end to end on minikube (k8s 1.32) with namespaced RBAC only —
+Istio 1.30.3 and Contour v1.33.5 — with real transactions returning `200` at the
+host BlazeMeter advertises. The `nodes ... is forbidden` warning in the crane log
+is expected and harmless on all three; only `NODEPORT` actually depends on that
+lookup.
+
+Two other values exist in crane and are **not** offered here. `INGRESS`, which
+BlazeMeter's env-var reference documents, creates no object at all and stalls at
+`WAITING_FOR_DOMAIN`. `OPENSHIFT` is real but untested — if you are on OpenShift,
+see [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) for the
+approach that is proven there.
 
 ### Reaching a virtual service from outside: `sv-expose`
 
-Only needed with `--sv-ingress nginx`. On istio crane's own objects route
-correctly and this section does not apply.
+Only needed with `--sv-ingress nginx`. On istio and contour crane's own objects
+route correctly and this section does not apply.
 
 Crane publishes its own Service and Ingress per virtual service, but **its
 Ingress does not work**: the backend says `port.number: 8080` while the Service

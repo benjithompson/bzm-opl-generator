@@ -14,8 +14,9 @@ rules:
     resources: [pods, pods/log]
     verbs: [get, list]
   # No `ingresses` here on purpose: Ingress has lived only in networking.k8s.io
-  # since k8s 1.22, so listing it under extensions grants nothing. The real
-  # grant is in the service-virtualization block below, when SV is enabled.
+  # since k8s 1.22, so listing it under extensions grants nothing. When service
+  # virtualization is enabled the block below grants the one API group the
+  # configured expose backend actually writes -- Ingress, Gateway, or HTTPProxy.
   - apiGroups: [extensions, apps, ""]
     resources: [pods, services, endpoints, daemonsets, "pods/*", pods/exec,
                 deployments, replicasets, deployments/scale]

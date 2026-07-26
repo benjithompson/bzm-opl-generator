@@ -414,20 +414,24 @@ def test_sv_nginx_configmap_envs():
     assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
 
 
+def _role_groups(files):
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    return {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+
+
 def test_sv_nginx_role_grants_modern_ingress_group():
     files = gen.generate(SV_FACTS, SV_OPTS)
-    role = yaml.safe_load(files["bzm_role.yaml"])
-    groups = {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+    groups = _role_groups(files)
     assert "ingresses" in groups["networking.k8s.io"]
     assert "networking.istio.io" not in groups
+    assert "projectcontour.io" not in groups
     # No ClusterRole needed for the ingress path -- that is its whole point.
     assert "bzm_clusterrole.yaml" not in files
 
 
 def test_sv_istio_adds_gateway_rbac_and_optional_gateway_name():
     files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="istio"))
-    role = yaml.safe_load(files["bzm_role.yaml"])
-    groups = {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+    groups = _role_groups(files)
     assert set(groups["networking.istio.io"]) == {"gateways", "virtualservices"}
     data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
     assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "ISTIO"
@@ -436,6 +440,33 @@ def test_sv_istio_adds_gateway_rbac_and_optional_gateway_name():
                                         sv_istio_gateway="bzm-gateway"))
     assert yaml.safe_load(named["bzm_configmap.yaml"])["data"][
         "KUBERNETES_ISTIO_GATEWAY_NAME"] == "bzm-gateway"
+
+
+def test_sv_contour_configmap_and_httpproxy_rbac():
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="contour"))
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "CONTOUR"
+    assert data["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wildcard-tls"
+    # Verified live: crane creates one HTTPProxy per virtual service and nothing
+    # else in that group.
+    assert _role_groups(files)["projectcontour.io"] == ["httpproxies"]
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
+
+
+@pytest.mark.parametrize("ingress", ["istio", "contour"])
+def test_sv_ingress_rbac_is_not_granted_to_crd_based_types(ingress):
+    """Crane's expose backends are separate implementations: only the nginx one
+    creates an Ingress. Granting it elsewhere is dead permission, and this tool
+    exists to keep the Role to what is actually used. Confirmed live for both --
+    each published its object with a Role carrying only its own API group."""
+    groups = _role_groups(gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress=ingress)))
+    assert "ingresses" not in groups.get("networking.k8s.io", [])
+
+
+def test_sv_istio_gateway_name_is_rejected_for_other_ingress_types():
+    with pytest.raises(ValueError, match="sv_istio_gateway"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="contour",
+                                    sv_istio_gateway="bzm-gateway"))
 
 
 def test_legacy_extensions_ingress_grant_removed():

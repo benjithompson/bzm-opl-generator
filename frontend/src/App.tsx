@@ -230,19 +230,28 @@ export default function App() {
   // svRequired goes through setGrpOn, so neither path would otherwise seed
   // sv_ingress (leaving the select showing "NGINX" off the ?? fallback while
   // state stayed null) or clear a NODEPORT the SV path cannot use.
+  //
+  // Same reason a stale sv_istio_gateway is dropped here rather than only in the
+  // select's onChange: only crane's istio backend reads it, so generate() now
+  // refuses outright, and an imported profile pairing it with another ingress
+  // would hit that error with nothing in the UI to explain it.
   useEffect(() => {
     setOptions((o) => {
       const seedIngress = svRequired && !o.sv_ingress;
-      const clearNodePort = (seedIngress || !!o.sv_ingress)
+      const ingress = seedIngress ? "nginx" : o.sv_ingress;
+      const clearNodePort = !!ingress
         && o.service_type != null && o.service_type !== "CLUSTERIP";
-      if (!seedIngress && !clearNodePort) return o;
+      const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
+      if (!seedIngress && !clearNodePort && !clearGateway) return o;
       return {
         ...o,
         ...(seedIngress ? { sv_ingress: "nginx" } : {}),
         ...(clearNodePort ? { service_type: "CLUSTERIP" } : {}),
+        ...(clearGateway ? { sv_istio_gateway: null } : {}),
       };
     });
-  }, [svRequired, options.sv_ingress, options.service_type]);
+  }, [svRequired, options.sv_ingress, options.service_type,
+      options.sv_istio_gateway]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
@@ -845,8 +854,17 @@ export default function App() {
                       onChange={(e) => set("sv_ingress", e.target.value)}>
                       <option value="nginx">NGINX</option>
                       <option value="istio">Istio</option>
+                      <option value="contour">Contour</option>
                     </select>
                   </Field>
+                  {options.sv_ingress === "nginx" && (
+                    <p className="text-[11px] text-amber-700">
+                      Crane’s NGINX Ingress points at port 8080 while the Service it
+                      creates publishes port 80, so the endpoint 503s — run{" "}
+                      <code>bzm-opl-gen sv-expose</code> afterwards. Istio and Contour
+                      get this right and need no follow-up.
+                    </p>
+                  )}
                   <Field label="Wildcard domain"
                     hint="endpoints become <service>-<port>-<namespace>.<domain>">
                     <TextInput mono placeholder="apps.example.com"
@@ -854,7 +872,9 @@ export default function App() {
                       onChange={(v) => set("sv_subdomain", v || null)} />
                   </Field>
                   <Field label="Wildcard TLS secret"
-                    hint="in the agent namespace; required even for HTTP virtual services">
+                    hint={options.sv_ingress === "istio"
+                      ? "required even for HTTP — but crane writes the Istio Gateway as TLS PASSTHROUGH, so nothing ever reads this secret"
+                      : "in the agent namespace; required even for HTTP virtual services"}>
                     <TextInput mono placeholder="wildcard-credential"
                       value={String(options.sv_tls_secret ?? "")}
                       onChange={(v) => set("sv_tls_secret", v || null)} />

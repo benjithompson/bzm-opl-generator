@@ -358,7 +358,8 @@ def main():
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
-    g.add_argument("--sv-ingress", dest="sv_ingress", choices=["nginx", "istio"],
+    g.add_argument("--sv-ingress", dest="sv_ingress",
+                   choices=list(gen_mod.SV_INGRESS_TYPES),
                    help="service virtualization: ingress controller to publish "
                         "virtual services through (required for a mockServices location)")
     g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",

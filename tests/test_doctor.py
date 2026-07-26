@@ -451,21 +451,25 @@ def test_ingress_class_none_at_all_fails():
     assert c.status == doctor.FAIL
 
 
-def test_ingress_class_istio_is_never_a_failure():
-    """istio routes through a Gateway/VirtualService; no Ingress is created, so
-    no IngressClass is involved."""
+@pytest.mark.parametrize("ingress", ["istio", "contour"])
+def test_ingress_class_crd_based_types_are_never_a_failure(ingress):
+    """istio routes through a Gateway/VirtualService and contour through an
+    HTTPProxy; neither creates an Ingress, and neither controller registers an
+    IngressClass at all -- so failing on 'none found' would fail every correct
+    install of both."""
     checks = doctor.check_ingress_class(
-        FACTS, {**SV_NGINX, "sv_ingress": "istio"}, {"ingressclasses": []})
-    assert doctor.FAIL not in _statuses(checks)
+        FACTS, {**SV_NGINX, "sv_ingress": ingress}, {"ingressclasses": []})
+    assert _statuses(checks) == {doctor.PASS}
+    assert ingress in checks[0].detail
 
 
 def test_ingress_class_unrecognised_value_warns_rather_than_fails():
     """A hand-written profile can carry a value generate() would have rejected;
     checking nginx's class name against it would be a misleading FAIL."""
     checks = doctor.check_ingress_class(
-        FACTS, {**SV_NGINX, "sv_ingress": "contour"}, {"ingressclasses": []})
+        FACTS, {**SV_NGINX, "sv_ingress": "traefik"}, {"ingressclasses": []})
     assert _statuses(checks) == {doctor.WARN}
-    assert "contour" in checks[0].detail
+    assert "traefik" in checks[0].detail
 
 
 @pytest.mark.parametrize("cluster", [{}, {"ingressclasses": None}])

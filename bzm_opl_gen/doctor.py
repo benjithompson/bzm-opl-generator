@@ -27,7 +27,7 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       engine_size, proxy_env)
+                       SV_INGRESS_BACKENDS, engine_size, proxy_env)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -456,7 +456,6 @@ def check_admission(facts, opts, cluster):
 # coincidence -- keep the two apart so renaming either does not silently change
 # which branch below runs.
 CRANE_INGRESS_CLASS = "nginx"
-SV_INGRESS_VIA_GATEWAY = "istio"
 OPENSHIFT_ROUTE_CONTROLLER = "openshift.io/ingress-to-route"
 
 
@@ -473,23 +472,22 @@ def check_ingress_class(facts, opts, cluster):
     ingress = opts.get("sv_ingress")
     if not ingress:
         return []                     # not an SV deployment; nothing to say
-    if ingress == SV_INGRESS_VIA_GATEWAY:
-        # istio publishes through a Gateway/VirtualService pair; no Ingress is
-        # created at all, so a missing IngressClass says nothing about it.
-        # Verified on Istio 1.30: the default profile registers no IngressClass
-        # whatsoever, so treating "none found" as a failure here would fail
-        # every correctly-installed istio cluster.
-        return [Check("sv ingress class", PASS,
-                      f"sv_ingress={ingress} routes through a Gateway / "
-                      f"VirtualService, not an IngressClass")]
-    if ingress != CRANE_INGRESS_CLASS:
-        # generate() rejects anything but nginx/istio, so this only shows up for
-        # a hand-written profile. Say so rather than checking a class name that
-        # such a deployment may never ask for.
+    backend = SV_INGRESS_BACKENDS.get(ingress)
+    if backend is None:
+        # generate() rejects anything outside SV_INGRESS_TYPES, so this only
+        # shows up for a hand-written profile. Say so rather than checking a
+        # class name that such a deployment may never ask for.
+        known = "', '".join(SV_INGRESS_BACKENDS)
         return [Check("sv ingress class", WARN,
-                      f"unrecognised sv_ingress={ingress}; expected "
-                      f"'{CRANE_INGRESS_CLASS}' or '{SV_INGRESS_VIA_GATEWAY}', "
-                      f"so the ingress path is unverified")]
+                      f"unrecognised sv_ingress={ingress}; expected one of "
+                      f"'{known}', so the ingress path is unverified")]
+    if not backend.via_ingress_class:
+        # Verified on Istio 1.30 and Contour v1.33: neither registers an
+        # IngressClass, so treating "none found" as a failure here would fail
+        # every correctly-installed cluster of both.
+        return [Check("sv ingress class", PASS,
+                      f"sv_ingress={ingress} routes through the "
+                      f"{backend.creates} crane creates, not an IngressClass")]
 
     classes = cluster.get("ingressclasses")
     if classes is None:

@@ -1,5 +1,6 @@
 """Render deployable manifests from templates + facts + customer options."""
 
+import collections
 import json
 import os
 from string import Template
@@ -23,7 +24,7 @@ DEFAULT_OPTIONS = {
     # Service virtualization ingress. Only meaningful for a location whose
     # funcIds include mockServices; see _sv_cfg for why all three are required
     # together and why NODEPORT is rejected alongside them.
-    "sv_ingress": None,              # None | "nginx" | "istio"
+    "sv_ingress": None,              # None, or one of SV_INGRESS_TYPES
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
     "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
     "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
@@ -150,7 +151,40 @@ CA_CONFIGMAP = "blazemeter-cacerts"
 # need the same ingress wiring: mockServices runs the mocks, sv-bridge fronts
 # them, and either alone is enough to make the ingress options mandatory.
 SV_FUNC_IDS = ("mockServices", "sv-bridge")
-SV_INGRESS_TYPES = ("nginx", "istio")
+# Crane ships a separate web-expose implementation per value -- the agent binary
+# names five: kubernetes_{base,contour,istio,nginx,openshift}_web_expose_service.
+# Only three are offered. `base` is the shared parent, not a value; `openshift`
+# is real but untested here; and the `INGRESS` value BlazeMeter's env reference
+# documents creates no object at all and stalls at WAITING_FOR_DOMAIN.
+SV_INGRESS_TYPES = ("nginx", "istio", "contour")
+
+
+class SvBackend(collections.namedtuple(
+        "SvBackend", "group resources creates via_ingress_class")):
+    """One crane web-expose backend: the object it publishes, and so the single
+    API group the Role has to grant.
+
+    Crane selects one implementation from KUBERNETES_WEB_EXPOSE_TYPE and never
+    touches the others, so granting any other group is permission that can only
+    go unused. Verified live on minikube for istio and contour: with a Role
+    carrying only its own group, crane still published its object and the
+    virtual service served. nginx keeps `ingresses` because that is the group it
+    writes.
+
+    `via_ingress_class` records whether the published object is claimed by an
+    IngressClass, which is what doctor preflights -- neither Istio 1.30 nor
+    Contour v1.33 registers an IngressClass at all.
+    """
+    __slots__ = ()
+
+
+SV_INGRESS_BACKENDS = {
+    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True),
+    "istio": SvBackend("networking.istio.io", ["gateways", "virtualservices"],
+                       "Gateway + VirtualService", False),
+    "contour": SvBackend("projectcontour.io", ["httpproxies"],
+                         "HTTPProxy", False),
+}
 
 
 def _sv_cfg(facts, o):
@@ -197,6 +231,12 @@ def _sv_cfg(facts, o):
             f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
             f"{o['service_type']}. NODEPORT makes crane read the cluster-scoped "
             "Node object to build an address, which a namespaced Role cannot grant."
+        )
+    if o["sv_istio_gateway"] and ingress != "istio":
+        raise ValueError(
+            f"sv_istio_gateway is only meaningful with sv_ingress=istio, not "
+            f"{ingress}. Crane reads KUBERNETES_ISTIO_GATEWAY_NAME in the istio "
+            "backend alone, so setting it here would silently do nothing."
         )
     return {"type": ingress, "subdomain": o["sv_subdomain"],
             "tls_secret": o["sv_tls_secret"],
@@ -514,22 +554,22 @@ def _sv_rbac_block(sv):
 
     Deliberately namespaced: this is the whole reason the ingress path is
     preferred over NODEPORT, which would need cluster-scoped node reads.
+
+    Only the group the configured backend actually writes is granted. Crane
+    picks one implementation per KUBERNETES_WEB_EXPOSE_TYPE and never touches
+    the others, so granting `ingresses` on an istio or contour deployment is
+    permission that can only ever go unused.
     """
     if not sv:
         return ""
-    rules = [
-        "  # Service virtualization: crane publishes one Ingress per virtual service.",
-        "  - apiGroups: [networking.k8s.io]",
-        "    resources: [ingresses]",
+    backend = SV_INGRESS_BACKENDS[sv["type"]]
+    return "\n".join([
+        f"  # Service virtualization: crane publishes one {backend.creates}"
+        " per virtual service.",
+        f"  - apiGroups: [{backend.group}]",
+        f"    resources: [{', '.join(backend.resources)}]",
         "    verbs: [get, list, watch, create, update, patch, delete, deletecollection]",
-    ]
-    if sv["type"] == "istio":
-        rules += [
-            "  - apiGroups: [networking.istio.io]",
-            "    resources: [gateways, virtualservices]",
-            "    verbs: [get, list, watch, create, update, patch, delete, deletecollection]",
-        ]
-    return "\n".join(rules) + "\n"
+    ]) + "\n"
 
 
 def generate(facts, options):
