@@ -62,12 +62,19 @@ export const api = {
       { facts, options, fetch_token: false }),
   profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
+  funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
 };
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */
 export type SvConstants = { func_ids: string[]; ingress_types: string[] };
+
+/** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
+ *  that used to live here is how sv-bridge went missing from the create form.
+ *  `label` falls back to the raw id server-side, so an unlabelled funcId is
+ *  offered rather than dropped. */
+export type FuncIdChoice = { id: string; label: string };
 
 export async function downloadZip(facts: Facts, options: Options) {
   const r = await fetch("/api/generate/zip", {
