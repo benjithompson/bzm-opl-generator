@@ -370,3 +370,58 @@ def test_profile_json_roundtrip(tmp_path):
     again = gen.generate(FACTS, {**prof, "auth_token": "tok"})
     assert again["bzm_deployment.yaml"] == files["bzm_deployment.yaml"]
     assert json.loads(again[gen.PROFILE_FILE]) == prof
+
+
+# -- sv_mocks ---------------------------------------------------------------
+
+def _sv_pod(name, port, harbor="h1", ship="s1", extra=None):
+    labels = {gen.SV_POD_NAME_LABEL: name, gen.SV_POD_HARBOR_LABEL: harbor,
+              gen.SV_POD_SHIP_LABEL: ship} if name else {}
+    return {"metadata": {"labels": {**labels, **(extra or {})}},
+            "spec": {"containers": [
+                {"ports": [{"containerPort": port}] if port else []}]}}
+
+
+def _pods(monkeypatch, items):
+    monkeypatch.setattr(livetest, "kget",
+                        lambda cli, ns, kind, name=None: {"items": items})
+
+
+def test_sv_mocks_reads_identity_and_port_off_the_pods(monkeypatch):
+    """The offline counterpart to reading a live namespace: harbor and ship come
+    from the pod labels because profile.json carries neither."""
+    _pods(monkeypatch, [_sv_pod("vs2", 8080, "hA", "sA"),
+                        _sv_pod("vs1", 9000, "hA", "sA")])
+    assert livetest.sv_mocks("kubectl", "ns1") == [
+        {"name": "vs1", "port": 9000, "harbor": "hA", "ship": "sA"},
+        {"name": "vs2", "port": 8080, "harbor": "hA", "ship": "sA"},
+    ]
+
+
+def test_sv_mocks_ignores_pods_that_are_not_virtual_services(monkeypatch):
+    """crane itself, engines and test jobs share the namespace and carry no
+    BZM_CONTAINER_NAME label."""
+    _pods(monkeypatch, [_sv_pod(None, 5000, extra={"role": "role-crane"}),
+                        _sv_pod("vs1", 8080)])
+    assert [m["name"] for m in livetest.sv_mocks("kubectl", "ns1")] == ["vs1"]
+
+
+def test_sv_mocks_dedupes_a_mid_rollout_namespace(monkeypatch):
+    """Two pods for one mock while a redeploy rolls; emitting two Services with
+    the same selector would leave a duplicate object behind."""
+    _pods(monkeypatch, [_sv_pod("vs1", 8080), _sv_pod("vs1", 8080)])
+    assert len(livetest.sv_mocks("kubectl", "ns1")) == 1
+
+
+def test_sv_mocks_skips_a_labelled_pod_with_no_container_port(monkeypatch):
+    """Without a port there is nothing to point a Service at -- the pair would
+    be unroutable rather than merely wrong."""
+    _pods(monkeypatch, [_sv_pod("vs1", None)])
+    assert livetest.sv_mocks("kubectl", "ns1") == []
+
+
+def test_sv_mocks_is_empty_when_the_namespace_cannot_be_read(monkeypatch):
+    """kget reports a failed get as {} -- sv-expose then exits telling the user
+    to deploy first, rather than writing an empty manifest."""
+    monkeypatch.setattr(livetest, "kget", lambda *a, **k: {})
+    assert livetest.sv_mocks("kubectl", "ns1") == []

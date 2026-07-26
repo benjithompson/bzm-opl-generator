@@ -258,7 +258,10 @@ unaffected.
 
 `doctor` still preflights the `nginx` IngressClass (see
 [Preflight](#preflight-doctor)), which is what crane's own Ingress needs. If you
-publish with `sv-expose` and its `--ingress-class`, that check is advisory.
+publish with `sv-expose` and its `--ingress-class`, treat that **FAIL** as
+advisory — but note it is a real FAIL with a non-zero exit, because `doctor`
+reads only the profile and has no way to know you intend to run `sv-expose`. If
+that matters in CI, gate on the other checks or use a non-nginx `sv_ingress`.
 
 `service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
 alongside `sv_ingress`. NODEPORT makes crane resolve its address from the
@@ -345,7 +348,7 @@ registry, proxy/CA — so it checks the deployment you actually generated.
 | limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size, or none exists and none is emitted |
 | resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults |
 | admission | `pod-security…/enforce=restricted` on `platform: k8s` — crane passes, but the engine pods it spawns get the security-context envs only on the openshift path | no PSA label; OpenShift namespace with no `sa.scc.uid-range` |
-| sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](#the-nginx-ingressclass-on-openshift)) | the IngressClasses could not be read |
+| sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](#reaching-a-virtual-service-from-outside-sv-expose)) | the IngressClasses could not be read |
 | egress | `a.blazemeter.com` (or the private registry) unreachable from the namespace | it could not be probed at all |
 
 Exit status is non-zero on any FAIL. Egress is probed from the crane pod when

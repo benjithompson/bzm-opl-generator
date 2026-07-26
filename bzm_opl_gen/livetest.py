@@ -906,7 +906,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     return ok
 
 
-def sv_mocks(cli, namespace, harbor_id=None):
+def sv_mocks(cli, namespace):
     """Deployed virtual services in `namespace`, as
     [{"name", "port", "harbor", "ship"}].
 
@@ -927,8 +927,6 @@ def sv_mocks(cli, namespace, harbor_id=None):
         if not name:
             continue                      # crane itself, engines, test jobs
         harbor = labels.get(generate.SV_POD_HARBOR_LABEL)
-        if harbor_id and harbor != harbor_id:
-            continue
         ports = [p.get("containerPort")
                  for c in (pod.get("spec") or {}).get("containers") or []
                  for p in c.get("ports") or [] if p.get("containerPort")]

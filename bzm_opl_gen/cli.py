@@ -173,8 +173,7 @@ def cmd_sv_expose(a):
     opts["namespace"] = opts.get("namespace") or a.namespace
     if a.ingress_class:
         opts["sv_ingress_class"] = a.ingress_class
-    mocks = livetest.sv_mocks(livetest.cli_tool(), opts["namespace"],
-                              opts.get("harbor_id"))
+    mocks = livetest.sv_mocks(livetest.cli_tool(), opts["namespace"])
     if not mocks:
         sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
                  f"deploy the virtual service in BlazeMeter first, then re-run")
@@ -409,8 +408,8 @@ def main():
     e = sub.add_parser("sv-expose",
                        help="emit a working Service+Ingress per deployed virtual service")
     e.add_argument("--manifests", default="out",
-                   help="directory holding profile.json -- supplies namespace, "
-                        "harbor/ship ids and the SV subdomain")
+                   help="directory holding profile.json -- supplies the "
+                        "namespace, wildcard domain and TLS secret")
     e.add_argument("-n", "--namespace", help="override the profile's namespace")
     e.add_argument("--sv-subdomain", dest="sv_subdomain",
                    help="override the profile's wildcard domain")
@@ -419,7 +418,7 @@ def main():
     e.add_argument("--ingress-class", dest="ingress_class",
                    help="IngressClass to put on the Ingress. Defaults to nginx; "
                         "on OpenShift use openshift-default and no alias is needed")
-    e.add_argument("-o", "--output", default="bzm_sv_expose.yaml")
+    e.add_argument("-o", "--output", default=gen_mod.SV_EXPOSE_FILE)
     e.set_defaults(fn=cmd_sv_expose)
 
     d = sub.add_parser("doctor", help="can this cluster run the location's concurrency?")

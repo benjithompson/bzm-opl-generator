@@ -571,12 +571,19 @@ def gather_cluster(cli, namespace):
     by_kind = {"LimitRange": [], "ResourceQuota": []}
     for item in scoped:
         by_kind.setdefault(item.get("kind"), []).append(item)
+    # Cluster-scoped like nodes, but kept its own get: kget reports a failed
+    # command as {}, so folding the kinds into one call would lose the nodes too
+    # on a cluster whose API server does not serve IngressClass.
+    #
+    # "served the kind, has none" and "could not ask" are different answers and
+    # check_ingress_class reports them differently -- [] is a FAIL because we
+    # know nothing will claim crane's Ingress, None is a WARN because we did not
+    # look. `.get("items", [])` would collapse both to [], turning an unreadable
+    # cluster into a hard failure with a non-zero exit.
+    ingressclasses = livetest.kget(cli, None, "ingressclass")
     return {
         "nodes": livetest.kget(cli, None, "nodes").get("items", []),
-        # Cluster-scoped like nodes, but kept its own get: kget reports a failed
-        # command as {}, so folding the kinds into one call would lose the nodes
-        # too on a cluster whose API server does not serve IngressClass.
-        "ingressclasses": livetest.kget(cli, None, "ingressclass").get("items", []),
+        "ingressclasses": ingressclasses.get("items") if ingressclasses else None,
         "limitranges": by_kind["LimitRange"],
         "quotas": by_kind["ResourceQuota"],
         "namespace": livetest.kget(cli, None, "ns", namespace),

@@ -151,12 +151,6 @@ CA_CONFIGMAP = "blazemeter-cacerts"
 # need the same ingress wiring: mockServices runs the mocks, sv-bridge fronts
 # them, and either alone is enough to make the ingress options mandatory.
 SV_FUNC_IDS = ("mockServices", "sv-bridge")
-# Crane ships a separate web-expose implementation per value -- the agent binary
-# names five: kubernetes_{base,contour,istio,nginx,openshift}_web_expose_service.
-# All four real ones are offered; `base` is the shared parent, not a value. The
-# `INGRESS` value BlazeMeter's env reference documents is deliberately absent:
-# it creates no object at all and stalls at WAITING_FOR_DOMAIN.
-SV_INGRESS_TYPES = ("nginx", "istio", "contour", "openshift")
 
 
 class SvBackend(collections.namedtuple(
@@ -166,14 +160,14 @@ class SvBackend(collections.namedtuple(
 
     Crane selects one implementation from KUBERNETES_WEB_EXPOSE_TYPE and never
     touches the others, so granting any other group is permission that can only
-    go unused. Verified live on minikube for istio and contour: with a Role
+    go unused. Verified live for istio, contour and openshift: with a Role
     carrying only its own group, crane still published its object and the
     virtual service served. nginx keeps `ingresses` because that is the group it
     writes.
 
     `via_ingress_class` records whether the published object is claimed by an
-    IngressClass, which is what doctor preflights -- neither Istio 1.30 nor
-    Contour v1.33 registers an IngressClass at all.
+    IngressClass, which is what doctor preflights -- none of Istio 1.30, Contour
+    v1.33 or the OpenShift router registers an IngressClass at all.
     """
     __slots__ = ()
 
@@ -193,25 +187,24 @@ SV_INGRESS_BACKENDS = {
     "openshift": SvBackend("route.openshift.io",
                            ["routes", "routes/custom-host"], "Route", False),
 }
+# Derived, not a second list to keep in step. Crane's binary names five
+# implementations -- kubernetes_{base,contour,istio,nginx,openshift}_web_expose
+# _service -- and all four real ones are backends above; `base` is their shared
+# parent, not a value. The `INGRESS` value BlazeMeter's env reference documents
+# is deliberately absent: it creates no object at all and stalls at
+# WAITING_FOR_DOMAIN.
+SV_INGRESS_TYPES = tuple(SV_INGRESS_BACKENDS)
 
 
 def _sv_cfg(facts, o):
     """Resolve the service-virtualization ingress options, or None.
 
-    Every branch here failed on a real cluster first, so the errors name the
-    fix rather than the rule:
-
-    - A mockServices location generated without these options deploys happily
-      and then hangs forever. Crane has no domain to hand the virtual service,
-      so tracking sits at WAITING_FOR_DOMAIN with no error, the mock never
-      initialises, and the pod looks healthy at 1/1. Refusing to generate is
-      the only signal the customer gets in time.
-    - The TLS secret is required even when the virtual service speaks plain
-      HTTP; without it crane crash-loops on `ValidationError: TLS secret name
-      is empty`.
-    - NODEPORT makes crane resolve the address from the Node object, which is
-      cluster-scoped and so ungrantable by a namespaced Role. The ingress path
-      exists precisely to avoid needing that, so the combination is refused.
+    Each rejection below carries its own reason, because every one of these
+    combinations fails *silently* on a cluster: the manifests apply, the agent
+    reports idle, the mock pod sits at 1/1, and the virtual service never
+    becomes reachable. Refusing to generate is the only signal that arrives
+    before someone has spent an afternoon on it, so the errors name the fix
+    rather than restating the rule.
     """
     ingress = o["sv_ingress"]
     sv_funcs = [f for f in (facts.get("func_ids") or []) if f in SV_FUNC_IDS]

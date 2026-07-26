@@ -628,8 +628,28 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
-    assert data == {"nodes": [], "ingressclasses": [], "limitranges": [],
+    # ingressclasses is None, not []: kget reports a failed command as {}, and
+    # "could not ask" has to stay distinguishable from "asked, none exist".
+    assert data == {"nodes": [], "ingressclasses": None, "limitranges": [],
                     "quotas": [], "namespace": {}}
+
+
+@pytest.mark.parametrize("served,expected,status", [
+    ({"items": []}, [], doctor.FAIL),   # asked, cluster has none -> nothing claims it
+    ({}, None, doctor.WARN),            # kget's failure shape -> we did not look
+])
+def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
+        monkeypatch, served, expected, status):
+    """The two answers reach check_ingress_class as [] and None and it grades
+    them differently. Collapsing both to [] -- which `.get("items", [])` does --
+    turns a cluster whose API server does not serve IngressClass into a hard
+    FAIL with a non-zero exit, for something never actually checked."""
+    monkeypatch.setattr(doctor.livetest, "kget",
+                        lambda cli, ns, kind, name=None:
+                        served if kind == "ingressclass" else {})
+    data = doctor.gather_cluster("kubectl", "ns1")
+    assert data["ingressclasses"] == expected
+    assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
 
 
 # -- run() ------------------------------------------------------------------
