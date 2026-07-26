@@ -48,5 +48,19 @@ def test_profiles_and_defaults():
     assert r2.json()["platform"] == "openshift"
 
 
+def test_sv_constants_are_served_from_the_generator():
+    """The UI renders the ingress picker and decides the SV group is mandatory
+    from these. Served rather than copied into TypeScript, so a new backend
+    cannot be added to generate() and silently miss the picker."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/sv-constants").json()
+    assert body["func_ids"] == list(gen_mod.SV_FUNC_IDS)
+    assert body["ingress_types"] == list(gen_mod.SV_INGRESS_TYPES)
+    assert "openshift" in body["ingress_types"]     # the newest one reaches the UI
+    # Kept out of option-defaults: that response is spread into the options the
+    # UI submits, and these are not options.
+    assert "ingress_types" not in client.get("/api/option-defaults").json()
+
+
 def test_api_requires_key():
     assert client.get("/api/accounts").status_code == 401

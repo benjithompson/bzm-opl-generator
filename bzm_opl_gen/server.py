@@ -234,6 +234,21 @@ def option_defaults():
     return gen_mod.DEFAULT_OPTIONS
 
 
+@app.get("/api/sv-constants")
+def sv_constants():
+    """The two service-virtualization enumerations the UI must not hardcode.
+
+    Kept out of /api/option-defaults because that response is spread straight
+    into the options the UI submits, and these are not options. Serving them is
+    what stops a fifth expose backend from being added to generate() and
+    silently missing from the picker -- the funcId list in particular was
+    duplicated in TypeScript with a comment asking the next person to keep it in
+    step by hand.
+    """
+    return {"func_ids": list(gen_mod.SV_FUNC_IDS),
+            "ingress_types": list(gen_mod.SV_INGRESS_TYPES)}
+
+
 # -- SPA ----------------------------------------------------------------------
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")

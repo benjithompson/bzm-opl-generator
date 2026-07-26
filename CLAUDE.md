@@ -11,6 +11,11 @@ cluster, ~1s. Every check in the live rig has an offline counterpart that fakes
 the cluster/API response, so failure modes are covered without burning 15
 minutes. Add one whenever you add a live check.
 
+The run must end **`N passed`** with nothing skipped. `tests/test_server.py`
+skips its whole module when `fastapi` is missing, so a venv built without the
+optional extra reports a clean pass while testing none of the HTTP layer — it
+went unnoticed for a while. Fix it with `.venv/bin/pip install -e ".[ui]"`.
+
 **Live rig (`bzm-opl-gen livetest`)** — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
 Canonical full invocation:

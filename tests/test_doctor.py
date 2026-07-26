@@ -411,6 +411,85 @@ def test_admission_openshift_needs_a_uid_range():
     assert "INHERIT_RUNNING_USER_AND_GROUP" in c.detail
 
 
+# -- check_ingress_class ----------------------------------------------------
+
+SV_NGINX = {"sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
+            "sv_tls_secret": "wildcard-credential"}
+
+
+def _ingressclass(name, controller="k8s.io/ingress-nginx"):
+    return {"metadata": {"name": name}, "spec": {"controller": controller}}
+
+
+def test_ingress_class_silent_without_service_virtualization():
+    """A performance-only location creates no Ingress; don't judge the cluster
+    on something it never uses."""
+    assert doctor.check_ingress_class(FACTS, {}, {"ingressclasses": []}) == []
+
+
+def test_ingress_class_present_passes():
+    checks = doctor.check_ingress_class(
+        FACTS, SV_NGINX, {"ingressclasses": [_ingressclass("nginx"),
+                                             _ingressclass("traefik")]})
+    assert _statuses(checks) == {doctor.PASS}
+
+
+def test_ingress_class_missing_fails_and_names_what_does_exist():
+    """The OpenShift default: one class, called something else. Nothing in the
+    deploy fails -- the endpoint just 503s -- so the detail has to explain it."""
+    cluster = {"ingressclasses": [
+        _ingressclass("openshift-default", "openshift.io/ingress-to-route")]}
+    c = doctor.check_ingress_class(FACTS, SV_NGINX, cluster)[0]
+    assert c.status == doctor.FAIL
+    assert "openshift-default" in c.detail       # what the cluster has instead
+    assert "503" in c.detail
+    assert "hardcodes" in c.detail               # not a generator option
+
+
+def test_ingress_class_none_at_all_fails():
+    c = doctor.check_ingress_class(FACTS, SV_NGINX, {"ingressclasses": []})[0]
+    assert c.status == doctor.FAIL
+
+
+@pytest.mark.parametrize("ingress", ["istio", "contour", "openshift"])
+def test_ingress_class_crd_based_types_are_never_a_failure(ingress):
+    """istio routes through a Gateway/VirtualService, contour through an
+    HTTPProxy, openshift through a Route; none creates an Ingress, and none of
+    those controllers registers an IngressClass -- so failing on 'none found'
+    would fail every correct install of all three."""
+    checks = doctor.check_ingress_class(
+        FACTS, {**SV_NGINX, "sv_ingress": ingress}, {"ingressclasses": []})
+    assert _statuses(checks) == {doctor.PASS}
+    assert ingress in checks[0].detail
+
+
+def test_ingress_class_unrecognised_value_warns_rather_than_fails():
+    """A hand-written profile can carry a value generate() would have rejected;
+    checking nginx's class name against it would be a misleading FAIL."""
+    checks = doctor.check_ingress_class(
+        FACTS, {**SV_NGINX, "sv_ingress": "traefik"}, {"ingressclasses": []})
+    assert _statuses(checks) == {doctor.WARN}
+    assert "traefik" in checks[0].detail
+
+
+@pytest.mark.parametrize("cluster", [{}, {"ingressclasses": None}])
+def test_ingress_class_unreadable_warns_rather_than_fails(cluster):
+    """cluster_data from an older caller has no such key -- 'we could not look',
+    not 'the class is missing'."""
+    checks = doctor.check_ingress_class(FACTS, SV_NGINX, cluster)
+    assert _statuses(checks) == {doctor.WARN}
+
+
+def test_ingress_class_openshift_alias_says_the_route_still_will_not_be_made():
+    """Aliasing the name to the ingress-to-route controller satisfies the class
+    lookup but not the port mismatch behind it; a bare PASS would mislead."""
+    cluster = {"ingressclasses": [
+        _ingressclass("nginx", "openshift.io/ingress-to-route")]}
+    c = doctor.check_ingress_class(FACTS, SV_NGINX, cluster)[0]
+    assert c.status == doctor.PASS
+    assert "IncompleteIngressToRouteRules" in c.detail
+
+
 # -- egress -----------------------------------------------------------------
 
 def test_egress_targets_include_the_private_registry():
@@ -526,6 +605,8 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
         calls.append((namespace, kind, name))
         if kind == "nodes":
             return {"items": [_big("a")]}
+        if kind == "ingressclass":
+            return {"items": [_ingressclass("nginx")]}
         if kind == "ns":
             return NS_BASELINE
         return {"items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM]}
@@ -537,6 +618,9 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
     assert data["quotas"] == [QUOTA_ITEM]
     assert data["namespace"] == NS_BASELINE
     assert ("ns1", "limitrange,resourcequota", None) in calls
+    # IngressClass is cluster-scoped, so it is read like nodes are.
+    assert ("ingressclass" in [kind for _, kind, _ in calls])
+    assert [c["metadata"]["name"] for c in data["ingressclasses"]] == ["nginx"]
 
 
 def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
@@ -544,7 +628,28 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
-    assert data == {"nodes": [], "limitranges": [], "quotas": [], "namespace": {}}
+    # ingressclasses is None, not []: kget reports a failed command as {}, and
+    # "could not ask" has to stay distinguishable from "asked, none exist".
+    assert data == {"nodes": [], "ingressclasses": None, "limitranges": [],
+                    "quotas": [], "namespace": {}}
+
+
+@pytest.mark.parametrize("served,expected,status", [
+    ({"items": []}, [], doctor.FAIL),   # asked, cluster has none -> nothing claims it
+    ({}, None, doctor.WARN),            # kget's failure shape -> we did not look
+])
+def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
+        monkeypatch, served, expected, status):
+    """The two answers reach check_ingress_class as [] and None and it grades
+    them differently. Collapsing both to [] -- which `.get("items", [])` does --
+    turns a cluster whose API server does not serve IngressClass into a hard
+    FAIL with a non-zero exit, for something never actually checked."""
+    monkeypatch.setattr(doctor.livetest, "kget",
+                        lambda cli, ns, kind, name=None:
+                        served if kind == "ingressclass" else {})
+    data = doctor.gather_cluster("kubectl", "ns1")
+    assert data["ingressclasses"] == expected
+    assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
 
 
 # -- run() ------------------------------------------------------------------

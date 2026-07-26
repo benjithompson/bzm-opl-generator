@@ -1,5 +1,6 @@
 """Render deployable manifests from templates + facts + customer options."""
 
+import collections
 import json
 import os
 from string import Template
@@ -20,6 +21,13 @@ DEFAULT_OPTIONS = {
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
+    # Service virtualization ingress. Only meaningful for a location whose
+    # funcIds include mockServices; see _sv_cfg for why all three are required
+    # together and why NODEPORT is rejected alongside them.
+    "sv_ingress": None,              # None, or one of SV_INGRESS_TYPES
+    "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
+    "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
+    "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
     # {"http", "https", "no_proxy", "username", "password"} -- credentials are
     # embedded in the proxy URL (user:pass@host, per BlazeMeter docs) and the
     # URL moves into the Secret when use_secret is on.
@@ -139,6 +147,109 @@ CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
 CA_CONFIGMAP = "blazemeter-cacerts"
 
+# The funcIds BlazeMeter puts on a location that serves virtual services. Both
+# need the same ingress wiring: mockServices runs the mocks, sv-bridge fronts
+# them, and either alone is enough to make the ingress options mandatory.
+SV_FUNC_IDS = ("mockServices", "sv-bridge")
+
+
+class SvBackend(collections.namedtuple(
+        "SvBackend", "group resources creates via_ingress_class")):
+    """One crane web-expose backend: the object it publishes, and so the single
+    API group the Role has to grant.
+
+    Crane selects one implementation from KUBERNETES_WEB_EXPOSE_TYPE and never
+    touches the others, so granting any other group is permission that can only
+    go unused. Verified live for istio, contour and openshift: with a Role
+    carrying only its own group, crane still published its object and the
+    virtual service served. nginx keeps `ingresses` because that is the group it
+    writes.
+
+    `via_ingress_class` records whether the published object is claimed by an
+    IngressClass, which is what doctor preflights -- none of Istio 1.30, Contour
+    v1.33 or the OpenShift router registers an IngressClass at all.
+    """
+    __slots__ = ()
+
+
+SV_INGRESS_BACKENDS = {
+    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True),
+    "istio": SvBackend("networking.istio.io", ["gateways", "virtualservices"],
+                       "Gateway + VirtualService", False),
+    "contour": SvBackend("projectcontour.io", ["httpproxies"],
+                         "HTTPProxy", False),
+    # routes/custom-host is not padding: OpenShift gates spec.host behind its
+    # own create, and crane sets spec.host. Without it the create comes back 422
+    # "you do not have permission to set the host field of the route", no Route
+    # appears, and the virtual service stalls with the mock pod healthy at 1/1.
+    # Proven by A/B on a live cluster -- and note `auth can-i create
+    # routes/custom-host` answers yes either way, so it cannot be used to check.
+    "openshift": SvBackend("route.openshift.io",
+                           ["routes", "routes/custom-host"], "Route", False),
+}
+# Derived, not a second list to keep in step. Crane's binary names five
+# implementations -- kubernetes_{base,contour,istio,nginx,openshift}_web_expose
+# _service -- and all four real ones are backends above; `base` is their shared
+# parent, not a value. The `INGRESS` value BlazeMeter's env reference documents
+# is deliberately absent: it creates no object at all and stalls at
+# WAITING_FOR_DOMAIN.
+SV_INGRESS_TYPES = tuple(SV_INGRESS_BACKENDS)
+
+
+def _sv_cfg(facts, o):
+    """Resolve the service-virtualization ingress options, or None.
+
+    Each rejection below carries its own reason, because every one of these
+    combinations fails *silently* on a cluster: the manifests apply, the agent
+    reports idle, the mock pod sits at 1/1, and the virtual service never
+    becomes reachable. Refusing to generate is the only signal that arrives
+    before someone has spent an afternoon on it, so the errors name the fix
+    rather than restating the rule.
+    """
+    ingress = o["sv_ingress"]
+    sv_funcs = [f for f in (facts.get("func_ids") or []) if f in SV_FUNC_IDS]
+    if not ingress:
+        if sv_funcs:
+            raise ValueError(
+                f"location advertises funcId(s) {', '.join(sv_funcs)} but no "
+                "service-virtualization ingress was configured. Pass sv_ingress "
+                f"({'|'.join(SV_INGRESS_TYPES)}) + sv_subdomain + sv_tls_secret, "
+                "or virtual services will deploy and stall at WAITING_FOR_DOMAIN."
+            )
+        return None
+    if ingress not in SV_INGRESS_TYPES:
+        raise ValueError(f"sv_ingress must be one of {SV_INGRESS_TYPES}, got {ingress!r}")
+    missing = [n for n, v in (("sv_subdomain", o["sv_subdomain"]),
+                              ("sv_tls_secret", o["sv_tls_secret"])) if not v]
+    if missing:
+        raise ValueError(
+            f"sv_ingress={ingress} also requires {' and '.join(missing)}. "
+            "The TLS secret is mandatory even for HTTP virtual services -- crane "
+            "refuses to start without it."
+        )
+    if o["service_type"] != "CLUSTERIP":
+        raise ValueError(
+            f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
+            f"{o['service_type']}. NODEPORT makes crane read the cluster-scoped "
+            "Node object to build an address, which a namespaced Role cannot grant."
+        )
+    if ingress == "openshift" and o["platform"] != "openshift":
+        raise ValueError(
+            f"sv_ingress=openshift requires platform=openshift, got "
+            f"{o['platform']}. That backend publishes a route.openshift.io "
+            "Route, which a plain Kubernetes API server does not serve -- the "
+            "agent would deploy cleanly and then stall with nothing to create."
+        )
+    if o["sv_istio_gateway"] and ingress != "istio":
+        raise ValueError(
+            f"sv_istio_gateway is only meaningful with sv_ingress=istio, not "
+            f"{ingress}. Crane reads KUBERNETES_ISTIO_GATEWAY_NAME in the istio "
+            "backend alone, so setting it here would silently do nothing."
+        )
+    return {"type": ingress, "subdomain": o["sv_subdomain"],
+            "tls_secret": o["sv_tls_secret"],
+            "istio_gateway": o["sv_istio_gateway"]}
+
 
 def _ca_cfg(o):
     """Resolve the CA-trust mode to {cm, key, mode} or None.
@@ -249,6 +360,25 @@ def _configmap(facts, o):
         f"  KUBERNETES_SERVICE_USE_TYPE: {o['service_type']}",
         "  RUN_HEALTH_WEB_SERVICE: 'true'",
     ]
+    sv = _sv_cfg(facts, o)
+    if sv:
+        lines += [
+            "  # Service virtualization ingress. The endpoint crane advertises is",
+            "  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain",
+            "  # must be the wildcard domain your ingress controller already serves.",
+            f"  KUBERNETES_WEB_EXPOSE_TYPE: {sv['type'].upper()}",
+            f"  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {sv['subdomain']}",
+            "  # Required even for HTTP virtual services -- crane validates it at",
+            "  # startup and crash-loops when it is empty.",
+            f"  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {sv['tls_secret']}",
+        ]
+        if sv["type"] == "istio":
+            lines.append(
+                f"  KUBERNETES_ISTIO_GATEWAY_NAME: {sv['istio_gateway']}"
+                if sv["istio_gateway"] else
+                "  # KUBERNETES_ISTIO_GATEWAY_NAME unset: crane creates a"
+                " Gateway per virtual service."
+            )
     if o["private_registry"]:
         overrides = _image_overrides(facts, o["private_registry"])
         lines += [
@@ -427,6 +557,29 @@ def _crane_image(facts, o):
     return f"{o['private_registry'].rstrip('/')}/crane:{tag}"
 
 
+def _sv_rbac_block(sv):
+    """Namespaced Role rules crane needs to publish a virtual service.
+
+    Deliberately namespaced: this is the whole reason the ingress path is
+    preferred over NODEPORT, which would need cluster-scoped node reads.
+
+    Only the group the configured backend actually writes is granted. Crane
+    picks one implementation per KUBERNETES_WEB_EXPOSE_TYPE and never touches
+    the others, so granting `ingresses` on an istio or contour deployment is
+    permission that can only ever go unused.
+    """
+    if not sv:
+        return ""
+    backend = SV_INGRESS_BACKENDS[sv["type"]]
+    return "\n".join([
+        f"  # Service virtualization: crane publishes one {backend.creates}"
+        " per virtual service.",
+        f"  - apiGroups: [{backend.group}]",
+        f"    resources: [{', '.join(backend.resources)}]",
+        "    verbs: [get, list, watch, create, update, patch, delete, deletecollection]",
+    ]) + "\n"
+
+
 def generate(facts, options):
     """Return {filename: content}. options overrides DEFAULT_OPTIONS."""
     o = {**DEFAULT_OPTIONS, **options}
@@ -443,7 +596,9 @@ def generate(facts, options):
     engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
 
     ca = _ca_cfg(o)
+    sv = _sv_cfg(facts, o)
     sub = {
+        "SV_RBAC_BLOCK": _sv_rbac_block(sv),
         "NAMESPACE": o["namespace"],
         "HARBOR_ID": facts["harbor_id"],
         "SHIP_ID": o["ship_id"],
@@ -501,6 +656,114 @@ def generate(facts, options):
     out["README.md"] = _readme(facts, o, out)
     out[PROFILE_FILE] = _profile_json(o)
     return out
+
+
+# -- exposing a deployed virtual service --------------------------------------
+
+SV_EXPOSE_FILE = "bzm_sv_expose.yaml"
+# Crane stamps these on the mock pod. Unlike the Services it creates -- whose
+# names carry a per-deploy hash (crane-9f30e-..., crane-e69e2-...) -- these are
+# derived from the virtual service's identity and survive every redeploy, which
+# is what lets a Service of our own keep pointing at the right pod.
+SV_POD_NAME_LABEL = "BZM_CONTAINER_NAME"
+SV_POD_HARBOR_LABEL = "BZM_HARBOR_ID"
+SV_POD_SHIP_LABEL = "BZM_SHIP_ID"
+
+# The class we put on the Ingress *we* own, when the caller names none. It is
+# `nginx` because that is the common cluster -- not because crane hardcodes the
+# same string on its own Ingress, which is a different fact with a different
+# owner (doctor.CRANE_INGRESS_CLASS). On OpenShift pass openshift-default.
+SV_EXPOSE_DEFAULT_INGRESS_CLASS = "nginx"
+
+
+class SvPublish(collections.namedtuple(
+        "SvPublish", "subdomain tls_secret ingress_class")):
+    """Where `sv-expose` publishes: the wildcard host, an optional TLS secret,
+    and the IngressClass that should claim the Ingress."""
+    __slots__ = ()
+
+
+def sv_publish_cfg(o):
+    """Resolve a profile into the three fields `sv_expose` actually needs.
+
+    Deliberately not `_sv_cfg`. That validates what *crane* needs at generate
+    time, where the TLS secret is mandatory even for HTTP because crane
+    crash-loops without the name. This describes an Ingress we own and apply
+    ourselves: TLS is genuinely optional, and `ingress_class` is an sv-expose
+    argument that never reaches the agent at all.
+    """
+    subdomain = o.get("sv_subdomain")
+    if not subdomain:
+        raise ValueError(
+            "sv-expose needs sv_subdomain -- the endpoint host is "
+            "<mock>-<port>-<namespace>.<subdomain>. Generate the manifests with "
+            "--sv-subdomain so the profile carries it, or pass --sv-subdomain "
+            "here.")
+    return SvPublish(subdomain, o.get("sv_tls_secret"),
+                     o.get("sv_ingress_class") or SV_EXPOSE_DEFAULT_INGRESS_CLASS)
+
+
+def sv_expose(mocks, namespace, publish):
+    """Render a Service + Ingress per deployed virtual service.
+
+    Crane publishes its own pair, but the Ingress is unusable: its backend says
+    `port.number: 8080` while the Service it created exposes `port: 80`, and
+    Kubernetes resolves a backend against `spec.ports[].port`. Nothing claims
+    it, so the endpoint BlazeMeter advertises 503s while the mock serves
+    happily inside the cluster.
+
+    Rather than patch an object crane rewrites on every deploy, this emits a
+    parallel pair that sidesteps the mismatch: `port == targetPort`, and a
+    selector on the pod's identity labels rather than crane's hashed Service
+    name. Because we own the Ingress, `ingress_class` can name whatever class
+    the cluster actually has -- so OpenShift needs no `nginx` alias, and no
+    policy engine or admission webhook is involved. Crane's own Ingress is left
+    alone; it stays unclaimed and creates no competing route.
+
+    `mocks` is a list of {"name", "port", "harbor", "ship"} -- see
+    livetest.sv_mocks(), which reads them off the running pods. The ids come
+    from the pod rather than the profile because profile.json carries no
+    harbor_id, and the pod is the authority on what crane actually stamped.
+    """
+    ns, docs = namespace, []
+    for m in mocks:
+        name, port = m["name"], m["port"]
+        obj = f"bzm-sv-{name}"
+        host = f"{name}-{port}-{ns}.{publish.subdomain}"
+        tls = ""
+        if publish.tls_secret:
+            tls = ("  tls:\n"
+                   f"    - hosts: [{host}]\n"
+                   f"      secretName: {publish.tls_secret}\n")
+        docs.append(
+            "apiVersion: v1\n"
+            "kind: Service\n"
+            f"metadata: {{ name: {obj}, namespace: {ns} }}\n"
+            "spec:\n"
+            "  selector:\n"
+            f"    {SV_POD_NAME_LABEL}: {name}\n"
+            f"    {SV_POD_HARBOR_LABEL}: \"{m['harbor']}\"\n"
+            f"    {SV_POD_SHIP_LABEL}: \"{m['ship']}\"\n"
+            "  ports:\n"
+            # port == targetPort is the whole point: it is what makes the
+            # Ingress backend below resolve.
+            f"    - {{ name: http, port: {port}, targetPort: {port}, protocol: TCP }}\n"
+            "---\n"
+            "apiVersion: networking.k8s.io/v1\n"
+            "kind: Ingress\n"
+            f"metadata: {{ name: {obj}, namespace: {ns} }}\n"
+            "spec:\n"
+            f"  ingressClassName: {publish.ingress_class}\n"
+            f"{tls}"
+            "  rules:\n"
+            f"    - host: {host}\n"
+            "      http:\n"
+            "        paths:\n"
+            "          - path: /\n"
+            "            pathType: Prefix\n"
+            "            backend:\n"
+            f"              service: {{ name: {obj}, port: {{ number: {port} }} }}\n")
+    return "---\n".join(docs)
 
 
 PROFILE_FILE = "profile.json"

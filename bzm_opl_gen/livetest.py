@@ -32,6 +32,8 @@ import re
 import subprocess
 import time
 
+from . import generate
+
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
 REGISTRY_NAME = "bzm-opl-registry"
@@ -902,3 +904,33 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             if local_proxy:
                 _run(["docker", "rm", "-f", PROXY_NAME], check=False, capture=True)
     return ok
+
+
+def sv_mocks(cli, namespace):
+    """Deployed virtual services in `namespace`, as
+    [{"name", "port", "harbor", "ship"}].
+
+    Read off the pods rather than the BlazeMeter API. There *is* an API for this
+    -- GET https://mock.blazemeter.com/api/v1/workspaces/<ws>/service-mocks
+    returns containerName and endpoints -- but it lives on a different host to
+    the rest of the tool's calls, needs the workspace id (which facts.json does
+    not carry), and answers what BlazeMeter believes rather than what is running.
+    The pod is the deployed truth, and carries the harbor/ship ids that
+    profile.json omits. Deduped, because a mid-rollout namespace can hold two
+    pods for the same mock.
+    """
+    pods = kget(cli, namespace, "pods").get("items", [])
+    found = {}
+    for pod in pods:
+        labels = (pod.get("metadata") or {}).get("labels") or {}
+        name = labels.get(generate.SV_POD_NAME_LABEL)
+        if not name:
+            continue                      # crane itself, engines, test jobs
+        harbor = labels.get(generate.SV_POD_HARBOR_LABEL)
+        ports = [p.get("containerPort")
+                 for c in (pod.get("spec") or {}).get("containers") or []
+                 for p in c.get("ports") or [] if p.get("containerPort")]
+        if ports:
+            found[name] = {"name": name, "port": ports[0], "harbor": harbor,
+                           "ship": labels.get(generate.SV_POD_SHIP_LABEL)}
+    return [found[n] for n in sorted(found)]

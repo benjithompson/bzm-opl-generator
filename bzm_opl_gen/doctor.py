@@ -27,7 +27,7 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       engine_size, proxy_env)
+                       SV_INGRESS_BACKENDS, engine_size, proxy_env)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -448,6 +448,83 @@ def check_admission(facts, opts, cluster):
                   f"(a cluster-wide default may still apply)")]
 
 
+# -- service virtualization ---------------------------------------------------
+
+# Crane writes `ingressClassName: nginx` on the Ingress it creates per virtual
+# service and BlazeMeter exposes no env to change it, so the name is ours to
+# check, not to configure. It matches the `nginx` sv_ingress value only by
+# coincidence -- keep the two apart so renaming either does not silently change
+# which branch below runs.
+CRANE_INGRESS_CLASS = "nginx"
+OPENSHIFT_ROUTE_CONTROLLER = "openshift.io/ingress-to-route"
+
+
+def check_ingress_class(facts, opts, cluster):
+    """Will anything claim the Ingress crane creates for a virtual service?
+
+    With no IngressClass named `nginx` no controller adopts it, no route is
+    created, and the endpoint BlazeMeter publishes returns 503 -- while the
+    virtual service itself is healthy and serving in-cluster. Nothing in the
+    deploy fails, so a preflight is the only place this is visible. On
+    OpenShift the only shipped class is `openshift-default`, which makes that
+    the default outcome there rather than an unlucky one.
+    """
+    ingress = opts.get("sv_ingress")
+    if not ingress:
+        return []                     # not an SV deployment; nothing to say
+    backend = SV_INGRESS_BACKENDS.get(ingress)
+    if backend is None:
+        # generate() rejects anything outside SV_INGRESS_TYPES, so this only
+        # shows up for a hand-written profile. Say so rather than checking a
+        # class name that such a deployment may never ask for.
+        known = "', '".join(SV_INGRESS_BACKENDS)
+        return [Check("sv ingress class", WARN,
+                      f"unrecognised sv_ingress={ingress}; expected one of "
+                      f"'{known}', so the ingress path is unverified")]
+    if not backend.via_ingress_class:
+        # Verified on Istio 1.30 and Contour v1.33: neither registers an
+        # IngressClass, so treating "none found" as a failure here would fail
+        # every correctly-installed cluster of both.
+        return [Check("sv ingress class", PASS,
+                      f"sv_ingress={ingress} routes through the "
+                      f"{backend.creates} crane creates, not an IngressClass")]
+
+    classes = cluster.get("ingressclasses")
+    if classes is None:
+        # Older cluster_data, or an API server that does not serve the kind.
+        return [Check("sv ingress class", WARN,
+                      f"IngressClasses could not be read, so the "
+                      f"'{CRANE_INGRESS_CLASS}' class crane requires is "
+                      f"unverified")]
+    by_name = {c.get("metadata", {}).get("name"): c for c in classes}
+    mine = by_name.get(CRANE_INGRESS_CLASS)
+    if mine is None:
+        existing = ", ".join(sorted(n for n in by_name if n)) or "none at all"
+        return [Check("sv ingress class", FAIL,
+                      f"no IngressClass named '{CRANE_INGRESS_CLASS}' -- crane "
+                      f"hardcodes ingressClassName: {CRANE_INGRESS_CLASS} on the "
+                      f"Ingress it creates per virtual service and BlazeMeter has "
+                      f"no env to change it, so nothing claims it: the published "
+                      f"endpoint returns 503 while the virtual service stays "
+                      f"healthy and serving in-cluster. IngressClasses present: "
+                      f"{existing}. Install an nginx ingress controller, or have "
+                      f"a cluster-admin create an IngressClass named "
+                      f"'{CRANE_INGRESS_CLASS}'")]
+    controller = (mine.get("spec") or {}).get("controller") or "?"
+    detail = (f"IngressClass '{CRANE_INGRESS_CLASS}' exists (controller "
+              f"{controller}) to claim the Ingress crane creates")
+    if controller == OPENSHIFT_ROUTE_CONTROLLER:
+        # Verified live: crane's Ingress backend uses port.number 8080 while the
+        # Service it created exposes port 80, and this controller resolves the
+        # backend against spec.ports[].port -- so it logs
+        # IncompleteIngressToRouteRules and creates no Route.
+        detail += (f"; note that this controller resolves the backend port "
+                   f"against the Service's port 80 and crane writes 8080, so it "
+                   f"reports IncompleteIngressToRouteRules and creates no Route "
+                   f"(upstream defect -- see README)")
+    return [Check("sv ingress class", PASS, detail)]
+
+
 # -- egress -------------------------------------------------------------------
 
 def egress_targets(opts):
@@ -494,8 +571,19 @@ def gather_cluster(cli, namespace):
     by_kind = {"LimitRange": [], "ResourceQuota": []}
     for item in scoped:
         by_kind.setdefault(item.get("kind"), []).append(item)
+    # Cluster-scoped like nodes, but kept its own get: kget reports a failed
+    # command as {}, so folding the kinds into one call would lose the nodes too
+    # on a cluster whose API server does not serve IngressClass.
+    #
+    # "served the kind, has none" and "could not ask" are different answers and
+    # check_ingress_class reports them differently -- [] is a FAIL because we
+    # know nothing will claim crane's Ingress, None is a WARN because we did not
+    # look. `.get("items", [])` would collapse both to [], turning an unreadable
+    # cluster into a hard failure with a non-zero exit.
+    ingressclasses = livetest.kget(cli, None, "ingressclass")
     return {
         "nodes": livetest.kget(cli, None, "nodes").get("items", []),
+        "ingressclasses": ingressclasses.get("items") if ingressclasses else None,
         "limitranges": by_kind["LimitRange"],
         "quotas": by_kind["ResourceQuota"],
         "namespace": livetest.kget(cli, None, "ns", namespace),
@@ -572,7 +660,8 @@ def _oneshot_curl(cli, namespace, targets, opts):
 # Every check takes the same (facts, opts, cluster) so adding one is a single
 # edit here, not a new argument order to remember.
 CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
-          check_limitrange, check_resourcequota, check_admission, check_egress)
+          check_limitrange, check_resourcequota, check_admission,
+          check_ingress_class, check_egress)
 
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):

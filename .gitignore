@@ -1,6 +1,8 @@
 # credentials -- never commit
 api-key*.json
 *.env
+kubeconfig*.yaml
+kubeconfig*.yml
 
 # generated artifacts
 out/
@@ -21,6 +23,7 @@ build/
 .pytest_cache/
 
 # tooling debris
+.pag/
 .playwright-mcp/
 *.tsbuildinfo
 node_modules/

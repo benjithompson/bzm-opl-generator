@@ -93,8 +93,13 @@ def test_images_follow_location_funcids():
     assert "taurus-cloud:latest" in ov              # gui tests still need engines
     assert "blazemeter/service-mock:latest" not in ov  # mocks not enabled
 
+    # A mockServices location will not generate without ingress options -- see
+    # test_sv_location_without_ingress_refuses.
     mock_facts = dict(FACTS, func_ids=["mockServices"])
-    files = gen.generate(mock_facts, {"namespace": "ns1", "private_registry": "reg.local"})
+    files = gen.generate(mock_facts, {"namespace": "ns1", "private_registry": "reg.local",
+                                      "sv_ingress": "nginx",
+                                      "sv_subdomain": "apps.example.com",
+                                      "sv_tls_secret": "wildcard-tls"})
     ov = json.loads(yaml.safe_load(files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
     assert set(ov) == {"blazemeter/service-mock:latest"}
 
@@ -359,3 +364,237 @@ def test_multi_ship_requires_ship_id():
         gen.generate(facts, {"namespace": "ns1"})
     files = gen.generate(facts, {"namespace": "ns1", "ship_id": "explicit"})
     assert yaml.safe_load(files["bzm_configmap.yaml"])["data"]["SHIP_ID"] == "explicit"
+
+
+# -- service virtualization ------------------------------------------------
+# Each of these mirrors a failure seen on a real cluster: a mockServices
+# location generated without ingress options deploys and then hangs at
+# WAITING_FOR_DOMAIN, so the generator refuses instead.
+
+SV_FACTS = dict(FACTS, func_ids=["mockServices"])
+SV_OPTS = {"namespace": "ns1", "sv_ingress": "nginx",
+           "sv_subdomain": "apps.example.com", "sv_tls_secret": "wildcard-tls"}
+
+
+def test_sv_location_without_ingress_refuses():
+    with pytest.raises(ValueError, match="WAITING_FOR_DOMAIN"):
+        gen.generate(SV_FACTS, {"namespace": "ns1"})
+
+
+def test_sv_bridge_funcid_also_requires_ingress():
+    """sv-bridge fronts the mocks, so it needs the same wiring as mockServices."""
+    bridge = dict(FACTS, func_ids=["performance", "sv-bridge"])
+    with pytest.raises(ValueError, match="sv-bridge"):
+        gen.generate(bridge, {"namespace": "ns1"})
+    data = yaml.safe_load(
+        gen.generate(bridge, SV_OPTS)["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+
+
+def test_sv_ingress_requires_subdomain_and_tls_secret():
+    with pytest.raises(ValueError, match="sv_subdomain and sv_tls_secret"):
+        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx"})
+    # The TLS secret is mandatory even though the virtual service is HTTP.
+    with pytest.raises(ValueError, match="sv_tls_secret"):
+        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx",
+                                "sv_subdomain": "apps.example.com"})
+
+
+def test_sv_ingress_rejects_nodeport():
+    with pytest.raises(ValueError, match="cluster-scoped"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+
+
+def test_sv_nginx_configmap_envs():
+    data = yaml.safe_load(gen.generate(SV_FACTS, SV_OPTS)["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+    assert data["KUBERNETES_WEB_EXPOSE_SUB_DOMAIN"] == "apps.example.com"
+    assert data["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wildcard-tls"
+    assert data["KUBERNETES_SERVICE_USE_TYPE"] == "CLUSTERIP"
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
+
+
+def _role_groups(files):
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    return {g: r["resources"] for r in role["rules"] for g in r["apiGroups"]}
+
+
+def test_sv_nginx_role_grants_modern_ingress_group():
+    files = gen.generate(SV_FACTS, SV_OPTS)
+    groups = _role_groups(files)
+    assert "ingresses" in groups["networking.k8s.io"]
+    assert "networking.istio.io" not in groups
+    assert "projectcontour.io" not in groups
+    # No ClusterRole needed for the ingress path -- that is its whole point.
+    assert "bzm_clusterrole.yaml" not in files
+
+
+def test_sv_istio_adds_gateway_rbac_and_optional_gateway_name():
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="istio"))
+    groups = _role_groups(files)
+    assert set(groups["networking.istio.io"]) == {"gateways", "virtualservices"}
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "ISTIO"
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data  # unset -> gateway per service
+    named = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="istio",
+                                        sv_istio_gateway="bzm-gateway"))
+    assert yaml.safe_load(named["bzm_configmap.yaml"])["data"][
+        "KUBERNETES_ISTIO_GATEWAY_NAME"] == "bzm-gateway"
+
+
+def test_sv_contour_configmap_and_httpproxy_rbac():
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="contour"))
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "CONTOUR"
+    assert data["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wildcard-tls"
+    # Verified live: crane creates one HTTPProxy per virtual service and nothing
+    # else in that group.
+    assert _role_groups(files)["projectcontour.io"] == ["httpproxies"]
+    assert "KUBERNETES_ISTIO_GATEWAY_NAME" not in data
+
+
+@pytest.mark.parametrize("ingress", ["istio", "contour", "openshift"])
+def test_sv_ingress_rbac_is_not_granted_to_crd_based_types(ingress):
+    """Crane's expose backends are separate implementations: only the nginx one
+    creates an Ingress. Granting it elsewhere is dead permission, and this tool
+    exists to keep the Role to what is actually used. Confirmed live for both --
+    each published its object with a Role carrying only its own API group."""
+    groups = _role_groups(gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress=ingress)))
+    assert "ingresses" not in groups.get("networking.k8s.io", [])
+
+
+def test_sv_openshift_route_rbac_includes_custom_host():
+    """Proven live on CRC: with `routes` alone crane's create is rejected 422
+    `spec.host: Forbidden: you do not have permission to set the host field of
+    the route`, no Route appears, and the virtual service stalls. OpenShift
+    gates spec.host behind a separate create on routes/custom-host."""
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, platform="openshift",
+                                        sv_ingress="openshift"))
+    groups = _role_groups(files)
+    assert groups["route.openshift.io"] == ["routes", "routes/custom-host"]
+    assert "networking.k8s.io" not in groups
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "OPENSHIFT"
+
+
+def test_sv_openshift_ingress_requires_the_openshift_platform():
+    """A Route only exists on OpenShift; asking for one on plain k8s would
+    deploy cleanly and then stall with nothing to create."""
+    with pytest.raises(ValueError, match="platform=openshift"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, platform="k8s",
+                                    sv_ingress="openshift"))
+
+
+def test_sv_istio_gateway_name_is_rejected_for_other_ingress_types():
+    with pytest.raises(ValueError, match="sv_istio_gateway"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="contour",
+                                    sv_istio_gateway="bzm-gateway"))
+
+
+def test_legacy_extensions_ingress_grant_removed():
+    """Ingress left extensions/v1beta1 in k8s 1.22; the old grant was inert."""
+    role = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1"})["bzm_role.yaml"])
+    for rule in role["rules"]:
+        if "extensions" in rule["apiGroups"]:
+            assert "ingresses" not in rule["resources"]
+
+
+def test_performance_location_emits_no_sv_config():
+    files = gen.generate(FACTS, {"namespace": "ns1"})
+    data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert not [k for k in data if k.startswith("KUBERNETES_WEB_EXPOSE")]
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    assert "networking.k8s.io" not in {g for r in role["rules"] for g in r["apiGroups"]}
+
+
+# -- sv_expose ---------------------------------------------------------------
+# Crane publishes its own Service+Ingress, but the Ingress backend says
+# port.number 8080 while its Service exposes port 80, so nothing claims it.
+# These render a parallel pair that resolves, without touching crane's.
+
+SV_MOCK = {"name": "vs1svc2", "port": 8080,
+           "harbor": "aaa111", "ship": "bbb222"}
+EXPOSE_OPTS = {"namespace": "ns1", "sv_subdomain": "apps.example.com",
+               "sv_tls_secret": "wildcard-tls"}
+
+
+def _expose_docs(mocks, opts):
+    """Goes through sv_publish_cfg the way the CLI does, so these exercise the
+    resolution as well as the rendering."""
+    return [d for d in yaml.safe_load_all(
+        gen.sv_expose(mocks, opts["namespace"], gen.sv_publish_cfg(opts))) if d]
+
+
+def test_sv_expose_service_port_equals_target_port():
+    """The mismatch that breaks crane's own pair: a backend's port.number is
+    resolved against the Service's spec.ports[].port."""
+    svc = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Service")
+    port = svc["spec"]["ports"][0]
+    assert port["port"] == port["targetPort"] == 8080
+    ing = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Ingress")
+    backend = ing["spec"]["rules"][0]["http"]["paths"][0]["backend"]["service"]
+    assert backend["port"]["number"] == port["port"]
+    assert backend["name"] == svc["metadata"]["name"]
+
+
+def test_sv_expose_selects_identity_labels_not_cranes_hashed_service():
+    """Crane's Service names carry a per-deploy hash; the pod labels do not, so
+    the pair survives a redeploy."""
+    svc = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Service")
+    assert svc["spec"]["selector"] == {
+        "BZM_CONTAINER_NAME": "vs1svc2",
+        "BZM_HARBOR_ID": "aaa111",
+        "BZM_SHIP_ID": "bbb222"}
+
+
+def test_sv_expose_host_matches_the_endpoint_blazemeter_publishes():
+    ing = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+               if d["kind"] == "Ingress")
+    host = "vs1svc2-8080-ns1.apps.example.com"
+    assert ing["spec"]["rules"][0]["host"] == host
+    assert ing["spec"]["tls"][0]["secretName"] == "wildcard-tls"
+    assert ing["spec"]["tls"][0]["hosts"] == [host]
+
+
+def test_sv_expose_ingress_class_is_overridable():
+    """We own this Ingress, so it can name whatever class the cluster has --
+    which is why OpenShift needs no `nginx` IngressClass alias."""
+    ing = next(d for d in _expose_docs(
+        [SV_MOCK], {**EXPOSE_OPTS, "sv_ingress_class": "openshift-default"})
+        if d["kind"] == "Ingress")
+    assert ing["spec"]["ingressClassName"] == "openshift-default"
+    plain = next(d for d in _expose_docs([SV_MOCK], EXPOSE_OPTS)
+                 if d["kind"] == "Ingress")
+    assert plain["spec"]["ingressClassName"] == "nginx"
+
+
+def test_sv_expose_omits_tls_block_when_no_secret():
+    ing = next(d for d in _expose_docs(
+        [SV_MOCK], {"namespace": "ns1", "sv_subdomain": "apps.example.com"})
+        if d["kind"] == "Ingress")
+    assert "tls" not in ing["spec"]
+
+
+def test_sv_expose_renders_every_mock():
+    two = [SV_MOCK, {**SV_MOCK, "name": "vs9svc9", "port": 9090}]
+    docs = _expose_docs(two, EXPOSE_OPTS)
+    assert len(docs) == 4
+    assert {d["metadata"]["name"] for d in docs} == {
+        "bzm-sv-vs1svc2", "bzm-sv-vs9svc9"}
+
+
+def test_sv_publish_cfg_requires_a_subdomain():
+    with pytest.raises(ValueError, match="sv_subdomain"):
+        gen.sv_publish_cfg({"namespace": "ns1"})
+
+
+def test_sv_publish_cfg_keeps_tls_optional_unlike_generate():
+    """_sv_cfg refuses without a TLS secret because crane crash-loops on the
+    empty name. This Ingress is ours and never reaches crane, so a plain-HTTP
+    pair is a legitimate thing to ask for."""
+    cfg = gen.sv_publish_cfg({"sv_subdomain": "apps.example.com"})
+    assert cfg.tls_secret is None
+    assert cfg.ingress_class == gen.SV_EXPOSE_DEFAULT_INGRESS_CLASS
