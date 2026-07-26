@@ -614,7 +614,7 @@ Notes: the CA bundle is mitm CA + public roots, because replacing the trust
 store outright is not what a corporate bundle does. Image pulls come from the
 kubelet, which ignores the pod's proxy env — that's why the registry rig is
 reachable directly. mitmproxy is pinned to `11.1.3`; 12+ dies with SIGILL on
-Apple-silicon VMs. The CA ConfigMap is applied `--server-side`: a real bundle
+arm64 VMs. The CA ConfigMap is applied `--server-side`: a real bundle
 overruns the 256KB cap on kubectl's last-applied-configuration annotation.
 
 Not covered by either rig: proof that egress *cannot* leave except through the

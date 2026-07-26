@@ -19,8 +19,9 @@ Cluster targets:
                won't fit laptop resources, but crane-online still validates
                the deployment itself)
   minikube  -- create/reuse a disposable minikube profile (docker driver).
-               On Apple Silicon the BlazeMeter images are amd64-only: enable
-               Docker Desktop's Rosetta emulation (works, but engines are slow)
+               On arm64 the BlazeMeter images are amd64-only: your docker
+               runtime's x86 emulation has to be on (works, but engines are
+               slow)
 """
 
 import functools
@@ -43,8 +44,8 @@ REGISTRY_IMAGE = "registry:2"
 REGISTRY_CLUSTER_HOST = "host.minikube.internal"
 
 PROXY_NAME = "bzm-opl-proxy"
-# mitmproxy >= 12 dies with SIGILL on Apple-silicon VMs (colima/VZ, Docker
-# Desktop); 11.1.3 is the newest tag that runs there. Pin it.
+# mitmproxy >= 12 dies with SIGILL on arm64 VMs, whichever docker runtime hosts
+# them; 11.1.3 is the newest tag that runs there. Pin it.
 PROXY_IMAGE = "mitmproxy/mitmproxy:11.1.3"
 PROXY_CA_PATH = "/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem"
 PROXY_PORT = 8080               # mitmdump's default; container-internal only
@@ -82,8 +83,8 @@ def ensure_kind():
 
 def ensure_minikube(insecure_registry=None, cni=None):
     if platform.machine() in ("arm64", "aarch64"):
-        print("note: BlazeMeter images are amd64-only -- Docker Desktop's Rosetta "
-              "emulation must be enabled for pods to run on this machine")
+        print("note: BlazeMeter images are amd64-only -- your docker runtime's "
+              "x86 emulation must be enabled for pods to run on this host")
     st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
                          "--format", "{{.Host}}"], capture_output=True, text=True)
     running = st.stdout.strip() == "Running"

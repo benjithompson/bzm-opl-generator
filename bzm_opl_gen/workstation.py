@@ -51,12 +51,15 @@ def _port_busy(port):
 
 
 def _free_gb():
-    """Free space the docker VM can still grow into, and where that number
-    came from. The two providers need different questions asked:
+    """Free space docker can still grow into, and where that number came from.
 
-    colima preallocates a fixed VM disk, so the host having room says nothing
-    -- the VM's own df is the binding number. Docker Desktop's disk is a sparse
-    file on the host filesystem, so host free space is.
+    Which number binds depends on how the provider stores its disk, not on
+    which provider it is. A preallocated VM disk (colima and friends) is capped
+    regardless of host free space, so the VM's own df is the answer; a sparse
+    disk image on the host filesystem (Docker Desktop, and the default for most
+    others) grows until the host fills, so host free space is. Host free space
+    is the fallback because it is right for every provider we can't interrogate
+    directly -- and it is never an *under*-estimate of the constraint.
     """
     if shutil.which("colima"):
         r = subprocess.run(["colima", "ssh", "--", "df", "-Pk", "/"],
@@ -143,7 +146,7 @@ def check_docker(opts, env):
     if not env["docker_running"]:
         return [Check("docker", FAIL,
                       f"{env['docker']} present but the daemon is unreachable "
-                      f"-- start it (colima start, or Docker Desktop)")]
+                      f"-- start whatever provides it on this host")]
     ctx = f", daemon '{env['docker_context']}'" if env["docker_context"] else ""
     return [Check("docker", PASS, f"{env['docker']}{ctx}")]
 
@@ -187,7 +190,7 @@ def check_registry_port(opts, env):
 
 def check_rig_images(opts, env):
     """Both are pinned. mitmproxy in particular: >= 12 dies with SIGILL on
-    Apple-silicon VMs, so a cached `latest` is not a substitute."""
+    arm64 VMs, so a cached `latest` is not a substitute."""
     out = []
     wanted = []
     if opts.get("local_proxy"):
