@@ -115,6 +115,29 @@ const ENGINE_SIZES = [
   { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
 ];
 
+// What the bundle deploys. Performance and service virtualization want separate
+// agents: one agent serving both puts mocks and load engines in a single
+// namespace, on a single slot budget, with a single restart lifecycle, so
+// redeploying the performance agent takes the virtual services down with it.
+// The kind only seeds defaults -- it gates nothing, because accounts already
+// running a combined location have to keep working.
+type DeployKind = "performance" | "sv";
+const KIND_NAMESPACE: Record<DeployKind, string> = {
+  performance: "blazemeter", sv: "blazemeter-sv",
+};
+const KIND_CHOICES: [DeployKind, string, string][] = [
+  ["performance", "Performance agent", "load & functional tests — engines on demand"],
+  ["sv", "Service-virtualization agent", "virtual services / mocks — needs an ingress"],
+];
+
+// How a location's own funcIds are labelled in the list. "both" is the case
+// worth naming: it deploys as one agent whichever kind you picked.
+const LOC_KIND_BADGE: Record<"performance" | "sv" | "both", [string, string]> = {
+  performance: ["performance", "bg-slate-100 text-slate-600"],
+  sv: ["service virtualization", "bg-violet-100 text-violet-700"],
+  both: ["performance + SV", "bg-amber-100 text-amber-700"],
+};
+
 export default function App() {
   // -- connection ------------------------------------------------------------
   const [candidates, setCandidates] = useState<KeyCandidate[]>([]);
@@ -141,6 +164,11 @@ export default function App() {
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
+  // Picked before a location, and only ever a source of defaults -- nothing
+  // downstream reads it as a constraint. In particular svRequired stays derived
+  // from the selected location's funcIds, so an SV location chosen under the
+  // performance kind still demands an ingress.
+  const [kind, setKind] = useState<DeployKind>("performance");
 
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
@@ -206,6 +234,19 @@ export default function App() {
   const location = useMemo(
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
+
+  // Which agent a location's funcIds imply. SV membership is generate.SV_FUNC_IDS
+  // over /api/sv-constants; everything else -- performance, the functional
+  // suites, the recorder -- runs on a performance agent, so "not SV" is the test
+  // rather than a second list to keep in step. Nothing is claimed until that
+  // fetch lands, or every SV location would flash up labelled performance.
+  const locKind = useCallback((l: Location) => {
+    const ids = l.funcIds ?? [];
+    if (!svConst.func_ids.length || !ids.length) return null;
+    const sv = ids.some((f) => svConst.func_ids.includes(f));
+    const perf = ids.some((f) => !svConst.func_ids.includes(f));
+    return sv && perf ? "both" as const : sv ? "sv" as const : "performance" as const;
+  }, [svConst]);
 
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null);
@@ -393,6 +434,30 @@ export default function App() {
       return w;
     });
   };
+  // Seeding happens here rather than in an effect on `kind`: an effect would
+  // also fire when svConst arrives mid-session and undo a namespace the user had
+  // already typed, and would have to run once on mount -- which is exactly where
+  // the performance flow has to stay untouched.
+  const pickKind = (k: DeployKind) => {
+    setKind(k);
+    // The SV funcIds are whatever generate.SV_FUNC_IDS says they are; a second
+    // list here is what /api/sv-constants exists to prevent. Empty only in the
+    // window before that fetch lands, where the old seed is the safer answer.
+    setNewLoc((n) => ({ ...n, func_ids: k === "sv" && svConst.func_ids.length
+      ? [...svConst.func_ids] : ["performance"] }));
+    // Distinct namespaces are the point of the split, but only a namespace still
+    // holding a kind default gets rewritten -- anything typed outranks the seed.
+    setOptions((o) => {
+      const ns = String(o.namespace ?? "").trim();
+      const seeded = !ns || Object.values(KIND_NAMESPACE).includes(ns);
+      return seeded ? { ...o, namespace: KIND_NAMESPACE[k] } : o;
+    });
+    // Not flipped back off for the performance kind: that would wipe a domain
+    // and TLS secret already typed, and svRequired flips it straight back on for
+    // an SV location anyway.
+    if (k === "sv") flipGroup("sv", true);
+  };
+
   const namespaceOk = !!String(options.namespace ?? "").trim();
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
   // once SV is on (the secret even for plain HTTP, because crane validates it at
@@ -512,6 +577,28 @@ export default function App() {
           <Section n={2} title="Private location" done={!!harborId}
             hint="The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests.">
             <div className="space-y-3">
+              <div>
+                <p className="text-xs font-medium text-slate-600 mb-1.5">
+                  What does this bundle deploy?
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  {KIND_CHOICES.map(([k, label, hint]) => (
+                    <button key={k} onClick={() => pickKind(k)}
+                      className={`text-left px-3 py-2 rounded-md border text-sm ${k === kind ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}>
+                      {label}
+                      <span className="block text-[11px] font-normal text-slate-400">
+                        {hint}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  One agent per kind. An agent serving both puts mocks and load
+                  engines in one namespace, on one slot budget, with one restart
+                  lifecycle. This only picks defaults — any location below still
+                  works for either.
+                </p>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
                   <SearchSelect
@@ -536,6 +623,19 @@ export default function App() {
                     className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
                     onClick={() => setHarborId(l.id)}>
                     <span className="font-medium">{l.name}</span>
+                    {(() => {
+                      const k = locKind(l);
+                      if (!k) return null;
+                      const [label, cls] = LOC_KIND_BADGE[k];
+                      return (
+                        <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${cls}`}
+                          title={k === "both"
+                            ? "one agent for both kinds: shared namespace, slot budget and restart lifecycle"
+                            : undefined}>
+                          {label}
+                        </span>
+                      );
+                    })()}
                     <span className="text-xs text-slate-400 ml-2">
                       {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                       {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
@@ -545,6 +645,16 @@ export default function App() {
                 {who && filteredLocs.length === 0 && (
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
               </div>
+              {location && locKind(location) === "both" && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                  <b>{location.name}</b> carries both performance and
+                  service-virtualization features, so one agent serves both:
+                  mocks and load engines share a namespace, a slot budget and a
+                  restart lifecycle, and redeploying the performance agent takes
+                  the virtual services down with it. You can still generate for
+                  it — a location per kind is what avoids the coupling.
+                </p>
+              )}
               <ErrorMsg msg={locErr} />
               {!showCreateLoc ? (
                 <Button kind="ghost" onClick={() => setShowCreateLoc(true)} disabled={!who}>
