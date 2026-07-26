@@ -1,0 +1,25 @@
+#!/bin/sh
+# Block direct pushes to main -- changes go through a pull request.
+#
+# This is client-side and therefore advisory: it catches the reflex `git push`
+# from a branch you forgot you were on, not a determined `--no-verify`. Real
+# enforcement is a GitHub ruleset on main, which needs a paid plan for a
+# private repo (see CONTRIBUTING.md).
+#
+# Enable it once per clone:  git config core.hooksPath .githooks
+
+protected="main"
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+    case "$remote_ref" in
+        "refs/heads/$protected")
+            echo "pre-push: refusing to push straight to '$protected'." >&2
+            echo "  Commit on a branch and open a PR:" >&2
+            echo "    git switch -c my-change && git push -u origin my-change" >&2
+            echo "    gh pr create" >&2
+            exit 1
+            ;;
+    esac
+done
+
+exit 0

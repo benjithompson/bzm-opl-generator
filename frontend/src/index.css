@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bzm: #0696d7;
+  --color-bzm-dark: #056a99;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800;
+}

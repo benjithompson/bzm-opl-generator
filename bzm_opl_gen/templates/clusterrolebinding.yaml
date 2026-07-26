@@ -1,0 +1,6 @@
+# OPTIONAL -- only apply alongside clusterrole. See that file for rationale.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: cluster-role-binding-crane }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: cluster-role-crane }
+subjects: [{ kind: ServiceAccount, name: crane, namespace: ${NAMESPACE} }]

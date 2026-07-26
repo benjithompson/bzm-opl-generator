@@ -1,0 +1,32 @@
+# credentials -- never commit
+api-key*.json
+# ...except the placeholder. Exact path, so a real key dropped next to it
+# (examples/api-key.json) is still ignored.
+!examples/api-key.example.json
+*.env
+kubeconfig*.yaml
+kubeconfig*.yml
+
+# generated artifacts
+out/
+facts.json
+
+# python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+
+# os/ide
+.DS_Store
+.vscode/
+.idea/
+.pytest_cache/
+
+# tooling debris
+.pag/
+.playwright-mcp/
+*.tsbuildinfo
+node_modules/

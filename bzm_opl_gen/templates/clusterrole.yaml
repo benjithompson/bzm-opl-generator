@@ -1,0 +1,19 @@
+# OPTIONAL -- cluster-scoped. Not required to run performance tests, and not
+# required for service virtualization over an ingress (see sv_ingress, which
+# exists so this file can stay unapplied).
+#
+# For performance, crane uses node reads for capacity awareness only: without
+# them it logs a "forbidden: nodes" warning and proceeds.
+#
+# The one case where it is NOT merely a warning is KUBERNETES_SERVICE_USE_TYPE
+# NODEPORT, where crane resolves the advertised address from the Node. Denied,
+# it silently falls back to 127.0.0.1 -- a virtual service then stalls at
+# WAITING_FOR_DOMAIN indefinitely rather than failing. Prefer the ingress path
+# over granting this.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: cluster-role-crane }
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]

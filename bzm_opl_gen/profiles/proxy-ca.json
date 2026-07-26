@@ -1,0 +1,8 @@
+{
+  "proxy": {
+    "http": "http://<PROXY_HOST>:3128",
+    "https": "http://<PROXY_HOST>:3128",
+    "no_proxy": "kubernetes.default,127.0.0.1,localhost"
+  },
+  "ca_existing_configmap": "<YOUR_TRUST_BUNDLE_CONFIGMAP>"
+}

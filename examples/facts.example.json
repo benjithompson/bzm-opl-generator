@@ -1,0 +1,50 @@
+{
+  "harbor_id": "0a1b2c3d4e5f60718293a4b5",
+  "harbor_name": "Example Private Location",
+  "func_ids": [
+    "performance"
+  ],
+  "slots": 2,
+  "threads_per_engine": 50,
+  "ships": [
+    {
+      "id": "6c5b4a39281706f5e4d3c2b1",
+      "name": "example-k8s-agent",
+      "state": "idle",
+      "installed_version": "3.7.55",
+      "last_heartbeat": 1750000000
+    }
+  ],
+  "crane_image": "gcr.io/verdant-bulwark-278/blazemeter/crane:3.7.55",
+  "images": [
+    {
+      "key": "taurus-cloud:latest",
+      "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4",
+      "tag": "2.4.444-reduced",
+      "size_mb": 2140,
+      "category": "performance"
+    },
+    {
+      "key": "apm-image:latest",
+      "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm",
+      "tag": "1.7.112",
+      "size_mb": 310,
+      "category": "performance"
+    },
+    {
+      "key": "blazemeter/service-mock:latest",
+      "repo": "gcr.io/verdant-bulwark-278/blazemeter/service-mock",
+      "tag": "1.0",
+      "size_mb": 480,
+      "category": "mock"
+    },
+    {
+      "key": "blazemeter/doduo:latest",
+      "repo": "gcr.io/verdant-bulwark-278/blazemeter/doduo",
+      "tag": "2.1",
+      "size_mb": 690,
+      "category": "gui"
+    }
+  ],
+  "images_source": "example file (hand-written, not a live agent inventory)"
+}

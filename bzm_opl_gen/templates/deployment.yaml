@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crane
+  namespace: ${NAMESPACE}
+  labels:
+    role: role-crane
+    harbor_id: "${HARBOR_ID}"
+    ship_id: "${SHIP_ID}"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      role: role-crane
+      harbor_id: "${HARBOR_ID}"
+      ship_id: "${SHIP_ID}"
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        role: role-crane
+        harbor_id: "${HARBOR_ID}"
+        ship_id: "${SHIP_ID}"
+    spec:
+      serviceAccountName: crane
+${SCHEDULING_BLOCK}${PULL_SECRETS_BLOCK}      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bzm-crane-${SHIP_ID}
+          image: "${CRANE_IMAGE}"
+          imagePullPolicy: Always
+${SECURITY_CONTEXT_BLOCK}
+          # Crane is the lightweight always-running orchestrator; values per the
+          # official helm-crane chart (resourcesCrane). Engines it spawns need
+          # 2 CPU + 8Gi RAM each -- size worker nodes accordingly.
+          resources:
+            requests:
+              cpu: ${CRANE_CPU_REQUEST}
+              memory: ${CRANE_MEM_REQUEST}
+              ephemeral-storage: 100Mi
+            limits:
+              cpu: "${CRANE_CPU_LIMIT}"
+              memory: ${CRANE_MEM_LIMIT}
+              ephemeral-storage: 1Gi
+          livenessProbe:
+            failureThreshold: 3
+            httpGet: { path: /healtz, port: 5000, scheme: HTTP }
+            initialDelaySeconds: 300
+            periodSeconds: 15
+            successThreshold: 1
+            timeoutSeconds: 10
+          readinessProbe:
+            failureThreshold: 3
+            httpGet: { path: /healtz, port: 5000, scheme: HTTP }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            successThreshold: 1
+            timeoutSeconds: 10
+          envFrom:
+            - configMapRef:
+                name: blazemeter-configmap
+${SECRET_REF_BLOCK}${VOLUME_MOUNTS_BLOCK}${VOLUMES_BLOCK}

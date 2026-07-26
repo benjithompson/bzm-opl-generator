@@ -1,0 +1,129 @@
+# Reproduction for docs/crane-nginx-ingress-port.md -- does a given ingress
+# controller route crane's Ingress, whose backend port matches nothing the
+# Service publishes?
+#
+# No BlazeMeter account and no crane needed: this reconstructs the object shapes
+# crane creates, so it can be pointed at any controller in minutes. Run it before
+# telling a customer their controller is or isn't affected -- ingress-nginx and
+# OpenShift's ingress-to-route disagree, and others are untested.
+#
+#   kubectl apply -f docs/repro/nginx-ingress-port.yaml
+#   kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 18080:80 &
+#   for h in crane fixed bogus; do
+#     printf '%-6s %s\n' "$h" \
+#       "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $h.test" http://127.0.0.1:18080/)"
+#   done
+#
+# Expected: bogus is ALWAYS 503 -- it is the control, and if it returns anything
+# else the rig is not actually reaching the controller and the other two results
+# mean nothing. fixed is always 200. `crane` is the answer you came for: 200 =
+# this controller tolerates the bad port, 503 = it is strict and the customer
+# needs a different --sv-ingress (or sv-expose).
+#
+# Measured 2026-07-26: ingress-nginx v1.14.3 on k8s 1.32 -> crane 200 (tolerant);
+# OpenShift ingress-to-route -> crane 503 (strict, and it logs
+# IncompleteIngressToRouteRules).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nginx-porttest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock
+  namespace: nginx-porttest
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mock}
+  template:
+    metadata:
+      labels: {app: mock}
+    spec:
+      containers:
+        - name: web
+          # Unprivileged so it listens on 8080 without root, matching the mock
+          # pod's port and staying deployable under a restricted PSA namespace.
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports:
+            - containerPort: 8080
+---
+# Crane's Service shape exactly: published port 80, port *named* "8080",
+# targetPort 8080. The three values a controller might match a backend against
+# are deliberately all different, so the result identifies which one it used.
+apiVersion: v1
+kind: Service
+metadata:
+  name: crane-shaped
+  namespace: nginx-porttest
+spec:
+  selector: {app: mock}
+  ports:
+    - name: "8080"
+      port: 80
+      targetPort: 8080
+---
+# A -- what crane writes. Spec says number resolves against `port` (80), so by
+# spec this is dangling; ingress-nginx rescues it via its targetPort clause.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: crane-8080
+  namespace: nginx-porttest
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: crane.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: crane-shaped
+                port:
+                  number: 8080
+---
+# B -- the proposed crane fix. Portable: 200 on both controllers tested.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fixed-80
+  namespace: nginx-porttest
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: fixed.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: crane-shaped
+                port:
+                  number: 80
+---
+# C -- control. Matches no port, name or targetPort on the Service, so a
+# controller that resolves backends at all must fail it. Without this, a
+# tolerant-looking 200 on A cannot be distinguished from a rig that is not
+# reaching the controller in the first place.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bogus-9999
+  namespace: nginx-porttest
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: bogus.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: crane-shaped
+                port:
+                  number: 9999
