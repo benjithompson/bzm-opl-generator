@@ -11,6 +11,31 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **Web UI: pick what the bundle deploys** — a performance agent or a
+  service-virtualization agent — before choosing a location. The SV kind seeds
+  the create-location funcIds, defaults the namespace to `blazemeter-sv`, and
+  turns the SV options on; locations are labelled with the kind their funcIds
+  imply, and one carrying both is flagged with the namespace/slot/lifecycle
+  coupling it brings. Advisory only — any location can still be generated for
+  either kind, and the generator gained no new rejection.
+- **Web UI: the SV prerequisites the bundle does not create** — wildcard TLS
+  secret, Istio Gateway, the controller — now say who provides each one and what
+  the chosen backend actually does with it, alongside the endpoint host to check
+  after applying. Previously README-only, while the failure it prevents is
+  silent: manifests apply, agent goes idle, mock runs 1/1, every deploy hangs at
+  `WAITING_FOR_DOMAIN`.
+- **Web UI: `sv-expose` from the browser**, rendering the Service+Ingress pair
+  into the same preview, with the ingress class settable for the first time
+  outside the CLI. Reading the cluster is optional and the only thing in the UI
+  that needs one: no CLI, no context, denied and no-virtual-services are
+  reported as distinct outcomes, each with the equivalent command prefilled to
+  run elsewhere.
+- **Web UI: every funcId a location can be created with** is served from the
+  generator rather than copied into the frontend, so `sv-bridge` (and
+  `proxyRecorder`) can be selected at last — the hardcoded list omitted both.
+
 ## [0.1.0] — 2026-07-26
 
 First packaged release.
