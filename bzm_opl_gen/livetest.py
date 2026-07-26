@@ -24,6 +24,7 @@ Cluster targets:
                slow)
 """
 
+import collections
 import functools
 import glob
 import json
@@ -921,7 +922,10 @@ def sv_mocks(cli, namespace):
     profile.json omits. Deduped, because a mid-rollout namespace can hold two
     pods for the same mock.
     """
-    pods = kget(cli, namespace, "pods").get("items", [])
+    return _sv_mocks(kget(cli, namespace, "pods").get("items", []))
+
+
+def _sv_mocks(pods):
     found = {}
     for pod in pods:
         labels = (pod.get("metadata") or {}).get("labels") or {}
@@ -936,3 +940,66 @@ def sv_mocks(cli, namespace):
             found[name] = {"name": name, "port": ports[0], "harbor": harbor,
                            "ship": labels.get(generate.SV_POD_SHIP_LABEL)}
     return [found[n] for n in sorted(found)]
+
+
+# Why a namespace could not be read, as far as the two CLIs let it be told
+# apart. kget() flattens every failure to {}, which is right for its callers --
+# they are mid-livetest, where a working cluster is a precondition. The web UI
+# is the opposite case: it is API-only by design and plenty of the people
+# running it have no kubecontext at all, so it has to say which of these it was
+# instead of showing a dead panel.
+SV_READ_OK = "ok"
+SV_READ_NO_CLI = "no_cli"
+SV_READ_NO_CONTEXT = "no_context"
+SV_READ_DENIED = "denied"
+SV_READ_NO_MOCKS = "no_mocks"
+
+SvClusterRead = collections.namedtuple("SvClusterRead", "status mocks detail")
+
+
+def sv_read(namespace, timeout=15):
+    """sv_mocks() for a caller that may have no cluster: the same read, plus
+    which way it failed.
+
+    `timeout` exists because an unreachable API server makes kubectl retry
+    rather than fail, and a browser request cannot wait it out; the CLI has no
+    such deadline because a person watching a terminal can Ctrl-C.
+    """
+    try:
+        cli = cli_tool()
+    except RuntimeError as e:
+        return SvClusterRead(SV_READ_NO_CLI, [], str(e))
+    cmd = [cli, "get", "pods", "-n", namespace, "-o", "json"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return SvClusterRead(SV_READ_NO_CONTEXT, [],
+                             f"{cli} did not answer within {timeout}s")
+    if out.returncode != 0:
+        # stderr carries the diagnosis; fall back to stdout for the rare tool
+        # build that prints there.
+        err = (out.stderr or out.stdout or "").strip()
+        return SvClusterRead(_sv_read_reason(err), [], err)
+    pods = json.loads(out.stdout or "{}").get("items", [])
+    mocks = _sv_mocks(pods)
+    return SvClusterRead(SV_READ_OK if mocks else SV_READ_NO_MOCKS, mocks, "")
+
+
+def _sv_read_reason(stderr):
+    """Classify a failed `get pods` by what the tool printed. There is no
+    machine-readable form of this -- kubectl and oc exit 1 for all of it -- so
+    the message is the only signal."""
+    e = stderr.lower()
+    if "forbidden" in e or "unauthorized" in e or "must be logged in" in e:
+        # Authenticated but not permitted, or no longer authenticated: either
+        # way the fix is credentials, not a different namespace.
+        return SV_READ_DENIED
+    if "not found" in e or "notfound" in e:
+        # `namespaces "x" not found`. A namespace that is not there answers the
+        # same question as an empty one -- nothing is deployed to expose yet.
+        return SV_READ_NO_MOCKS
+    # Everything else -- no kubeconfig, no current context, connection refused,
+    # DNS failure, a cluster address that has moved. One reason rather than
+    # five, because the way forward is identical and the raw message travels
+    # alongside as the detail.
+    return SV_READ_NO_CONTEXT

@@ -9,6 +9,7 @@ secret never leaves this machine and is never echoed back to the browser.
 import io
 import json
 import os
+import shlex
 import time
 import zipfile
 from typing import Optional
@@ -18,7 +19,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import api, facts as facts_mod, generate as gen_mod
+from . import api, facts as facts_mod, generate as gen_mod, livetest
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -215,6 +216,89 @@ def generate_zip(g: GenerateIn):
     return Response(
         buf.getvalue(), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="bzm-opl-{ns}.zip"'})
+
+
+class SvExposeIn(BaseModel):
+    """Everything sv-expose needs and nothing else -- the namespace to read,
+    plus the three fields generate.sv_publish_cfg resolves."""
+    namespace: str = "blazemeter"
+    sv_subdomain: Optional[str] = None
+    sv_tls_secret: Optional[str] = None
+    sv_ingress_class: Optional[str] = None
+
+
+# What each unreadable cluster means, in the user's terms. The UI pairs these
+# with the CLI equivalent below; a reason without a way forward is the dead
+# panel this endpoint exists to avoid.
+SV_READ_MESSAGES = {
+    livetest.SV_READ_NO_CLI:
+        "No kubectl or oc on this machine, so the namespace cannot be read "
+        "from here. Nothing else in this tool needs one.",
+    livetest.SV_READ_NO_CONTEXT:
+        "kubectl/oc is installed, but no configured context reached a cluster.",
+    livetest.SV_READ_DENIED:
+        "The cluster refused the read -- this context is not allowed to list "
+        "pods in that namespace.",
+    livetest.SV_READ_NO_MOCKS:
+        "That namespace holds no virtual-service pods. Deploy the virtual "
+        "service in BlazeMeter first, then read it again.",
+}
+
+
+def _sv_expose_command(x: SvExposeIn):
+    """The `sv-expose` invocation equivalent to this request, to run wherever
+    the user does have cluster access.
+
+    `--manifests ''` on purpose: the flag defaults to `out/` and the CLI reads
+    profile.json from it, which is a file a browser user need never have
+    downloaded. Every option is on the command line instead, so the suggestion
+    runs from any directory.
+    """
+    cmd = ["bzm-opl-gen", "sv-expose", "--manifests", shlex.quote(""),
+           "--namespace", shlex.quote(x.namespace)]
+    for flag, value in (("--sv-subdomain", x.sv_subdomain),
+                        ("--sv-tls-secret", x.sv_tls_secret),
+                        ("--ingress-class", x.sv_ingress_class)):
+        if value:
+            cmd += [flag, shlex.quote(value)]
+    return " ".join(cmd)
+
+
+@app.post("/api/sv-expose")
+def sv_expose_render(x: SvExposeIn):
+    """Render the Service+Ingress pair for the virtual services deployed in a
+    namespace -- the `sv-expose` command, from the browser.
+
+    Reading a cluster is the only thing this server ever does beyond the
+    BlazeMeter API, and it is optional: an unreadable cluster comes back 200
+    with which of the four reasons applied and the command to run elsewhere,
+    never an HTTP error the browser can only print in red. The single 4xx is a
+    request that could not be rendered even with a cluster in reach.
+    """
+    publish_opts = {"sv_subdomain": x.sv_subdomain,
+                    "sv_tls_secret": x.sv_tls_secret,
+                    "sv_ingress_class": x.sv_ingress_class}
+    try:
+        publish = gen_mod.sv_publish_cfg(publish_opts)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    command = _sv_expose_command(x)
+    read = livetest.sv_read(x.namespace)
+    if read.status != livetest.SV_READ_OK:
+        return {"status": read.status, "mocks": [], "files": [],
+                "message": SV_READ_MESSAGES[read.status], "detail": read.detail,
+                "command": command}
+    return {
+        "status": read.status,
+        "mocks": read.mocks,
+        # Same shape as /api/generate, so the UI previews it in the same pane.
+        "files": [{"name": gen_mod.SV_EXPOSE_FILE,
+                   "content": gen_mod.sv_expose(read.mocks, x.namespace, publish)}],
+        "message": (f"{len(read.mocks)} virtual service(s) in {x.namespace}: "
+                    + ", ".join(f"{m['name']}:{m['port']}" for m in read.mocks)),
+        "detail": f"apply with: kubectl apply -n {x.namespace} -f {gen_mod.SV_EXPOSE_FILE}",
+        "command": command,
+    }
 
 
 # -- profiles -----------------------------------------------------------------

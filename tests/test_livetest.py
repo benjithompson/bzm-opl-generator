@@ -3,6 +3,7 @@ and the profile.json round-trip it replays through."""
 
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -425,3 +426,102 @@ def test_sv_mocks_is_empty_when_the_namespace_cannot_be_read(monkeypatch):
     to deploy first, rather than writing an empty manifest."""
     monkeypatch.setattr(livetest, "kget", lambda *a, **k: {})
     assert livetest.sv_mocks("kubectl", "ns1") == []
+
+
+# -- sv_read: the same namespace, plus why it could not be read ---------------
+# sv_mocks() reports every failure as "no mocks", which is enough for its
+# callers: they are mid-livetest, where a cluster is a precondition. The UI
+# calls sv_read instead -- plenty of people running it have no kubecontext at
+# all, and have to be told which of the reasons applied.
+
+def _fake_kubectl(monkeypatch, *, tools=("kubectl",), rc=0, stdout="", stderr=""):
+    """Stand in for the kubectl/oc binary. `tools` is what exists on PATH --
+    anything else raises FileNotFoundError, exactly as subprocess does."""
+    livetest.cli_tool.cache_clear()
+
+    def run(cmd, *a, **kw):
+        if cmd[0] not in tools:
+            raise FileNotFoundError(cmd[0])
+        if cmd[1:3] == ["version", "--client"]:
+            return subprocess.CompletedProcess(cmd, 0, "v1.32.0", "")
+        return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
+
+    monkeypatch.setattr(livetest.subprocess, "run", run)
+
+
+@pytest.fixture(autouse=True)
+def _uncached_cli_tool():
+    """cli_tool() memoises which binary is on PATH for the life of the process;
+    a test that fakes PATH must not leak that answer into the next one."""
+    livetest.cli_tool.cache_clear()
+    yield
+    livetest.cli_tool.cache_clear()
+
+
+def test_sv_read_returns_the_mocks_when_the_namespace_can_be_read(monkeypatch):
+    _fake_kubectl(monkeypatch, stdout=json.dumps(
+        {"items": [_sv_pod("vs1", 8080, "hA", "sA")]}))
+    read = livetest.sv_read("ns1")
+    assert read.status == livetest.SV_READ_OK
+    assert read.mocks == [{"name": "vs1", "port": 8080, "harbor": "hA",
+                           "ship": "sA"}]
+
+
+def test_sv_read_reports_a_missing_cli_rather_than_an_empty_namespace(monkeypatch):
+    _fake_kubectl(monkeypatch, tools=())
+    read = livetest.sv_read("ns1")
+    assert read.status == livetest.SV_READ_NO_CLI
+    assert read.mocks == [] and "kubectl" in read.detail
+
+
+@pytest.mark.parametrize("stderr, status", [
+    # kubectl with no kubeconfig at all, and with one whose server is gone.
+    ("The connection to the server localhost:8080 was refused - did you "
+     "specify the right host or port?", livetest.SV_READ_NO_CONTEXT),
+    ("error: current-context is not set", livetest.SV_READ_NO_CONTEXT),
+    ("Unable to connect to the server: dial tcp: lookup api.example.com: "
+     "no such host", livetest.SV_READ_NO_CONTEXT),
+    # oc's wording for the same thing.
+    ("error: Missing or incomplete configuration info.",
+     livetest.SV_READ_NO_CONTEXT),
+    # Authenticated but not allowed, and no longer authenticated at all.
+    ('Error from server (Forbidden): pods is forbidden: User "dev" cannot '
+     'list resource "pods" in API group "" in the namespace "ns1"',
+     livetest.SV_READ_DENIED),
+    ("error: You must be logged in to the server (Unauthorized)",
+     livetest.SV_READ_DENIED),
+    # A namespace that is not there answers the same question as an empty one:
+    # nothing is deployed to expose.
+    ('Error from server (NotFound): namespaces "ns1" not found',
+     livetest.SV_READ_NO_MOCKS),
+])
+def test_sv_read_tells_the_failures_apart_by_what_the_cli_printed(
+        monkeypatch, stderr, status):
+    _fake_kubectl(monkeypatch, rc=1, stderr=stderr)
+    read = livetest.sv_read("ns1")
+    assert read.status == status
+    assert read.detail == stderr        # the raw message travels with it
+
+
+def test_sv_read_separates_a_readable_namespace_with_no_virtual_services(monkeypatch):
+    """crane and its engines share the namespace and carry none of the mock
+    labels, so a healthy agent with nothing deployed reads as no_mocks -- a
+    different thing to say than "denied" or "no cluster"."""
+    _fake_kubectl(monkeypatch, stdout=json.dumps(
+        {"items": [_sv_pod(None, 5000, extra={"role": "role-crane"})]}))
+    read = livetest.sv_read("ns1")
+    assert read.status == livetest.SV_READ_NO_MOCKS and read.mocks == []
+
+
+def test_sv_read_does_not_hang_on_an_unreachable_api_server(monkeypatch):
+    """kubectl keeps retrying an unreachable server rather than failing, and an
+    HTTP request from the browser cannot wait it out."""
+    def run(cmd, *a, **kw):
+        if cmd[1:3] == ["version", "--client"]:
+            return subprocess.CompletedProcess(cmd, 0, "v1.32.0", "")
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 15))
+
+    monkeypatch.setattr(livetest.subprocess, "run", run)
+    read = livetest.sv_read("ns1", timeout=3)
+    assert read.status == livetest.SV_READ_NO_CONTEXT
+    assert "3s" in read.detail
