@@ -8,29 +8,22 @@
 // Nothing here validates. The ids are opaque, there is no account to check them
 // against, and a format guess would only ever reject input that was correct.
 // The fields say what each value is instead, so a wrong paste is visible.
-import { Field, inputCls, TextInput } from "../components";
-import { FuncIdChoice } from "../api";
+//
+// Identity only. What the location *runs* is declared once, in the Configure
+// step -- asking it here as well made one fact two questions in two
+// vocabularies (funcIds here, features there).
+import { Field, TextInput } from "../components";
 
 export function ManualSource(props: {
   harborId: string;
   shipId: string;
   authToken: string;
-  funcIds: string[];
-  /** Served vocabulary — the same list the create-location form uses, so a new
-   *  funcId becomes selectable here without an edit. */
-  choices: FuncIdChoice[];
   guiIncomplete: boolean;
   privateRegistry: boolean;
   onHarborId: (v: string) => void;
   onShipId: (v: string) => void;
   onAuthToken: (v: string) => void;
-  onFuncIds: (v: string[]) => void;
 }) {
-  const toggle = (id: string) =>
-    props.onFuncIds(props.funcIds.includes(id)
-      ? props.funcIds.filter((f) => f !== id)
-      : [...props.funcIds, id]);
-
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
@@ -57,28 +50,6 @@ export function ManualSource(props: {
           value={props.authToken} onChange={props.onAuthToken} />
       </Field>
 
-      <div>
-        <span className="text-xs font-medium text-slate-600">Location features</span>
-        <p className="text-[11px] text-slate-400 mb-1">
-          What the location is enabled for. This decides which images the bundle
-          names — connected, it is read from the account.
-        </p>
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {props.choices.map((c) => (
-            <label key={c.id} className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
-              <input type="checkbox" className="accent-bzm"
-                checked={props.funcIds.includes(c.id)}
-                onChange={() => toggle(c.id)} />
-              {c.label}
-            </label>
-          ))}
-        </div>
-        {props.funcIds.length === 0 && (
-          <p className="text-[11px] text-amber-700 mt-1">
-            Nothing selected — the bundle falls back to performance images.
-          </p>
-        )}
-      </div>
 
       {/* The one gap manual entry cannot close, surfaced where it bites: a
           private registry. Against the public registry a missing key just

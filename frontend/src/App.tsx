@@ -431,8 +431,30 @@ export default function App() {
   // every manifest, so suggesting on a manual switch would make looking at a
   // feature change the bundle -- the one thing a view is not allowed to do. It
   // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
+  // Manual mode declares the location's funcIds through the feature buttons, so
+  // it needs to know which funcIds a feature stands for. Only the ones that
+  // change the images are offered -- the rest generate the same bundle.
+  const imageFuncs = useMemo(
+    () => new Set(funcIdChoices.filter((c) => c.changes_images).map((c) => c.id)),
+    [funcIdChoices]);
+  const featureFuncs = useCallback(
+    (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
+      .filter((x) => imageFuncs.has(x)),
+    [features, imageFuncs]);
+  const labelOf = useCallback(
+    (id: string) => funcIdChoices.find((c) => c.id === id)?.label ?? id,
+    [funcIdChoices]);
+
   const pickFeature = useCallback((id: string, suggestNs = false) => {
     setFeature(id);
+    // Manual mode has no account to read funcIds from, so the feature buttons
+    // are the declaration: picking one sets what the location runs. Connected,
+    // the account already said, and this stays a view.
+    if (sourceMode === "manual") {
+      const f = features.find((x) => x.id === id);
+      const primary = (f?.func_ids ?? []).find((x) => imageFuncs.has(x));
+      if (primary) setManual((m) => ({ ...m, func_ids: [primary] }));
+    }
     const f = features.find((x) => x.id === id);
     if (!f || !suggestNs) return;
     setOptions((o) => {
@@ -441,7 +463,7 @@ export default function App() {
       // /api/generate for options that did not change.
       return ns == null ? o : { ...o, namespace: ns };
     });
-  }, [features]);
+  }, [features, sourceMode, imageFuncs]);
 
   // Which feature a location opens on, from its funcIds. Keyed on the harbor
   // rather than on `facts`, which is refetched after creating an agent: that
@@ -657,14 +679,11 @@ export default function App() {
                   harborId={manual.harbor_id}
                   shipId={manual.ship_id}
                   authToken={raw("auth_token")}
-                  funcIds={manual.func_ids}
-                  choices={funcIdChoices.filter((c) => c.changes_images)}
                   guiIncomplete={guiIncomplete}
                   privateRegistry={!!options.private_registry}
                   onHarborId={(v) => setManual((m) => ({ ...m, harbor_id: v }))}
                   onShipId={(v) => setManual((m) => ({ ...m, ship_id: v }))}
-                  onAuthToken={(v) => set("auth_token", v || null)}
-                  onFuncIds={(v) => setManual((m) => ({ ...m, func_ids: v }))} />
+                  onAuthToken={(v) => set("auth_token", v || null)} />
               ) : !sourceOpen ? (
                 /* Settled: say what was chosen, and offer the way back. */
                 <div className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
@@ -993,7 +1012,9 @@ export default function App() {
               {features.length > 0 && (
                 <div>
                   <p className="text-xs font-medium text-slate-600 mb-1.5">
-                    Which feature are you configuring?
+                    {sourceMode === "manual"
+                      ? "What does this location run?"
+                      : "Which feature are you configuring?"}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     {features.map((f) => (
@@ -1014,11 +1035,47 @@ export default function App() {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    A view, not a scope — the manifests come from the location's
-                    own features either way. Anything you set under one feature
-                    stays set, and stays in the bundle, while you look at another.
-                  </p>
+                  {/* Connected, this is a view over a fact the account already
+                      settled. Manually there is no account, so the same buttons
+                      are the declaration -- which is why the sentence under them
+                      has to change with the mode rather than claim both. */}
+                  {sourceMode === "manual" ? (
+                    <>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Declared here, not read from an account — it decides which
+                        images the bundle names.
+                      </p>
+                      {/* Refinements, not a second copy of the question above: a
+                          feature can stand for several funcIds that name
+                          different images, and without these manual mode could
+                          not ask for the grid proxy or the recorder at all. Only
+                          shown when the chosen feature has more than one. */}
+                      {featureFuncs(feature).length > 1 && (
+                        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                          {featureFuncs(feature).slice(1).map((id) => (
+                            <label key={id}
+                              className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+                              <input type="checkbox" className="accent-bzm"
+                                checked={manual.func_ids.includes(id)}
+                                onChange={() => setManual((m) => ({
+                                  ...m,
+                                  func_ids: m.func_ids.includes(id)
+                                    ? m.func_ids.filter((x) => x !== id)
+                                    : [...m.func_ids, id],
+                                }))} />
+                              also runs {labelOf(id)}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      A view, not a scope — the manifests come from the location's
+                      own features either way. Anything you set under one feature
+                      stays set, and stays in the bundle, while you look at another.
+                    </p>
+                  )}
                   {locUnclaimed.length > 0 && (
                     <p className="text-[11px] text-slate-500 mt-1">
                       This location also runs{" "}
