@@ -172,6 +172,15 @@ the classes of problem it can't fix for you.
   and token so a bundle can be produced for an account nobody here can reach.
   Nothing downstream learns which way the facts arrived — keep it that way, and
   add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+- **A Kubernetes agent reports its images as bare keys** -- `taurus-cloud:latest`,
+  `torero:4.6.182` -- with no registry and `Size: 0`, i.e. crane's configured
+  image set rather than what is on the node. Docker agents report
+  registry-qualified tags instead. `gather()` handled only the Docker shape, so
+  every k8s agent -- the kind this tool generates for -- silently produced no
+  inventory and fell through to the catalogue; that is how `torero` and
+  `richrach` stayed missing from a performance bundle. `repo_for_key()` resolves
+  the bare form. Reading it properly also pins exact tags (`crane:3.7.55`,
+  `torero:4.6.182`) where the catalogue could only say `latest`.
 - **`FALLBACK_IMAGES` was read off live inventories, not derived from the keys.**
   Keys do not reliably match their repo — `taurus-cloud`→`v4` and
   `apm-image`→`apm` in the table, `blazemeter`→`v3` and `secrets-image`→`secrets`

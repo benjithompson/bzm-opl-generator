@@ -87,15 +87,21 @@ def test_no_validation_of_the_ids():
 
 # -- the image catalogue ------------------------------------------------------
 
+# The performance set is four, not two: torero and richrach were missing until a
+# live Kubernetes agent was read properly. Neither is pulled by an ordinary run,
+# but crane lists both for a performance-only location.
+PERF_KEYS = {"taurus-cloud:latest", "apm-image:latest",
+             "torero:latest", "richrach:latest"}
+
+
 @pytest.mark.parametrize("func_ids,expect_keys", [
-    (["performance"], {"taurus-cloud:latest", "apm-image:latest"}),
-    (["functionalApi"], {"taurus-cloud:latest", "apm-image:latest"}),
+    (["performance"], PERF_KEYS),
+    (["functionalApi"], PERF_KEYS),
     (["mockServices"], {"blazemeter/service-mock:latest",
                         "blazemeter/group-gateway:latest",
                         "blazemeter/mock-pc-service:latest"}),
     (["proxyRecorder"], {"blazemeter/proxy-recorder:latest"}),
-    (["functionalGui"], {"taurus-cloud:latest", "apm-image:latest",
-                         "blazemeter/doduo:latest"}),
+    (["functionalGui"], PERF_KEYS | {"blazemeter/doduo:latest"}),
 ])
 def test_every_selectable_feature_names_its_images(func_ids, expect_keys):
     """A feature whose category the catalogue does not cover produces an empty
@@ -191,3 +197,74 @@ def test_helm_format_still_refuses_a_mock_location():
     with pytest.raises(ValueError, match="performance testing only"):
         _gen(f, output_format="helm", sv_ingress="nginx",
              sv_subdomain="apps.example.com", sv_tls_secret="wc")
+
+
+# -- reading a real agent's inventory -----------------------------------------
+
+def _ship(images):
+    return {"id": "S1", "name": "a", "state": "idle", "installedVersion": "3.7.55",
+            "lastHeartBeat": 0,
+            "hostInfo": {"containerManager": {"info": {"images": images}}}}
+
+
+class _FakeClient:
+    def __init__(self, ships):
+        self._ships = ships
+
+    def private_location(self, harbor_id):
+        return {"id": harbor_id, "name": "L", "funcIds": ["performance"],
+                "slots": 1, "threadsPerEngine": 500, "ships": self._ships}
+
+
+def test_kubernetes_agent_inventory_is_read():
+    """A Kubernetes agent reports bare keys with no registry and Size 0 --
+    `taurus-cloud:latest`, not `gcr.io/.../v4:2.4.444`. Only the Docker shape
+    used to be handled, so every k8s agent produced no inventory at all and
+    fell through to the catalogue: `images_source` could never say otherwise
+    for the very agents this tool generates."""
+    f = facts_mod.gather(_FakeClient([_ship([
+        {"RepoTags": ["taurus-cloud:latest"], "Size": 0},
+        {"RepoTags": ["torero:4.6.182"], "Size": 0},
+        {"RepoTags": ["blazemeter/crane:3.7.55"], "Size": 0},
+    ])]), "H1")
+    assert f["images_source"] == "live agent inventory"
+    by_key = {i["key"]: i for i in f["images"]}
+    # The key names the image; the repo has to be looked up, and does not match.
+    assert by_key["taurus-cloud:latest"]["repo"].endswith("/v4")
+    # An exact version, where the catalogue could only have said `latest`.
+    assert by_key["torero:4.6.182"]["tag"] == "4.6.182"
+    # crane is pulled out of the list and pinned, not left floating.
+    assert f["crane_image"].endswith("/crane:3.7.55")
+    assert "crane" not in by_key
+
+
+def test_docker_agent_inventory_still_read():
+    """The Docker shape is registry-qualified and carries the key alongside."""
+    f = facts_mod.gather(_FakeClient([_ship([
+        {"RepoTags": ["gcr.io/verdant-bulwark-278/blazemeter/v4:2.4.444",
+                      "taurus-cloud:latest"], "Size": 7_900_000_000},
+    ])]), "H1")
+    assert f["images_source"] == "live agent inventory"
+    img = f["images"][0]
+    assert img["key"] == "taurus-cloud:latest"
+    assert img["tag"] == "2.4.444" and img["size_mb"] == 7900
+
+
+def test_no_inventory_still_falls_back():
+    f = facts_mod.gather(_FakeClient([_ship([])]), "H1")
+    assert f["images_source"].startswith("fallback-catalogue")
+    assert len(f["images"]) == len(facts_mod.FALLBACK_IMAGES)
+
+
+def test_key_to_repo_covers_the_irregular_names():
+    """Four keys do not name their own repo and cannot be derived. The rest
+    follow the regular rule, which is what lets an unknown key still resolve."""
+    r = facts_mod.repo_for_key
+    assert r("taurus-cloud:latest").endswith("/v4")
+    assert r("apm-image:latest").endswith("/apm")
+    assert r("blazemeter:latest").endswith("/v3")
+    assert r("secrets-image:latest").endswith("/secrets")
+    # regular, including one nobody has added to the catalogue yet
+    assert r("torero:4.6.182").endswith("/torero")
+    assert r("blazemeter/service-mock:latest").endswith("/service-mock")
+    assert r("not-invented-yet:9").endswith("/not-invented-yet")

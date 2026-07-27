@@ -91,6 +91,14 @@ FALLBACK_IMAGES = [
     # performance: the taurus engine and its APM sidecar.
     {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},
     {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "category": "performance"},
+    # Also in crane's image set for a performance-only location -- found by
+    # reading what a live Kubernetes agent reports, which is where the two
+    # below had been missing from. Neither is pulled by an ordinary
+    # performance run (a full test on CRC fetched only crane and v4), but
+    # crane may ask for them, and a key it cannot find in a sealed cluster is
+    # an ImagePullBackOff mid-test rather than a warning.
+    {"key": "torero:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/torero", "tag": "latest", "category": "performance"},
+    {"key": "richrach:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/richrach", "tag": "latest", "category": "performance"},
     # mock services.
     {"key": "blazemeter/service-mock:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/service-mock", "tag": "latest", "category": "mock"},
     {"key": "blazemeter/group-gateway:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/group-gateway", "tag": "latest", "category": "mock"},
@@ -111,6 +119,33 @@ FALLBACK_IMAGES = [
 ]
 
 CRANE_REPO = "gcr.io/verdant-bulwark-278/blazemeter/crane"
+BLAZEMETER_PROJECT = "gcr.io/verdant-bulwark-278/blazemeter"
+
+# Crane's image keys mostly name their own repo, but not always, and the
+# exceptions cannot be derived -- `taurus-cloud` lives at `v4`, `blazemeter` at
+# `v3`. The catalogue above carries the ones it lists; these are the rest,
+# observed in live inventories across the account.
+KEY_REPO_EXCEPTIONS = {
+    "blazemeter": "v3",
+    "secrets-image": "secrets",
+}
+
+
+def repo_for_key(key):
+    """The repo a crane image key resolves to.
+
+    A Kubernetes agent reports its images as bare keys -- `taurus-cloud:latest`,
+    `torero:4.6.182` -- with no registry to read the repo off, so it has to be
+    looked up. Known keys come from the catalogue, then the exceptions, and
+    anything else follows the regular rule (`<name>` -> `blazemeter/<name>`),
+    which is what every key added since has done.
+    """
+    name = key.split(":", 1)[0]
+    for i in FALLBACK_IMAGES:
+        if i["key"].split(":", 1)[0] == name:
+            return i["repo"]
+    name = name.rsplit("/", 1)[-1]
+    return f"{BLAZEMETER_PROJECT}/{KEY_REPO_EXCEPTIONS.get(name, name)}"
 
 
 
@@ -142,22 +177,45 @@ def gather(client, harbor_id):
         info = (ship.get("hostInfo") or {}).get("containerManager", {}).get("info", {})
         for img in info.get("images", []):
             tags = img.get("RepoTags") or []
+            # Two shapes, because the two container managers report differently:
+            #
+            #   Docker      ['gcr.io/.../blazemeter/v4:2.4.444', 'taurus-cloud:latest']
+            #               -- registry-qualified, so the repo is read off it.
+            #   Kubernetes  ['taurus-cloud:latest']
+            #               -- the bare key only, and Size 0. This is crane's
+            #               configured image set rather than a listing of what
+            #               is on the node, so the repo has to be looked up.
+            #
+            # Only the Docker shape used to be handled, which meant every
+            # Kubernetes agent -- the kind this tool generates for -- silently
+            # produced no inventory at all and fell through to the catalogue.
             gcr = [t for t in tags if t.startswith("gcr.io/")]
-            local = [t for t in tags if not t.startswith("gcr.io/") and t.endswith(":latest")]
-            if not gcr or gcr[0] in seen:
+            local = [t for t in tags if not t.startswith("gcr.io/")]
+            if gcr:
+                ref = gcr[0]
+                key = next((t for t in local if t.endswith(":latest")), None)
+                repo, tag = ref.rsplit(":", 1)
+            elif local:
+                key = local[0]
+                repo, tag = repo_for_key(key), key.rsplit(":", 1)[-1]
+                ref = f"{repo}:{tag}"
+            else:
                 continue
-            seen.add(gcr[0])
-            repo, tag = gcr[0].rsplit(":", 1)
+            if ref in seen:
+                continue
+            seen.add(ref)
             entry = {
-                "key": local[0] if local else None,  # crane's IMAGE_OVERRIDES key
+                "key": key,                          # crane's IMAGE_OVERRIDES key
                 "repo": repo,
                 "tag": tag,
-                "size_mb": round((img.get("Size") or 0) / 1e6),
-                "category": image_category(gcr[0]),
+                # Kubernetes reports 0 for every image; None says "unknown"
+                # rather than claiming an empty image.
+                "size_mb": round(img["Size"] / 1e6) if img.get("Size") else None,
+                "category": image_category(repo),
             }
             if repo == CRANE_REPO:
-                facts["crane_image"] = f"{repo}:{tag}"
-            else:
+                facts["crane_image"] = ref
+            elif entry["key"]:
                 facts["images"].append(entry)
     if not facts["images"]:
         facts["images"] = [dict(i, size_mb=None) for i in FALLBACK_IMAGES]
