@@ -168,7 +168,10 @@ def test_sv_expose_renders_the_deployed_mocks(fake_cluster):
     assert body["status"] == "ok"
     # Only the mock pod; crane's own pod carries none of the identity labels.
     assert body["mocks"] == [{"name": "vs1svc2", "port": 8080,
-                              "harbor": "aaa111", "ship": "bbb222"}]
+                              "harbor": "aaa111", "ship": "bbb222",
+                              # Carried so the UI never rebuilds this string --
+                              # it is the same host the Ingress below routes.
+                              "host": "vs1svc2-8080-ns1.apps.example.com"}]
     assert [f["name"] for f in body["files"]] == [gen_mod.SV_EXPOSE_FILE]
     yamls = list(yaml.safe_load_all(body["files"][0]["content"]))
     assert [d["kind"] for d in yamls] == ["Service", "Ingress"]

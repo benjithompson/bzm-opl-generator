@@ -1,9 +1,8 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
-  SvMocksOut,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, SvConstants, SvExposeIn,
-  SvExposeOut, Workspace,
+  SvExposeOut, SvMocksOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
@@ -113,7 +112,11 @@ export default function App() {
   const [genErr, setGenErr] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [status, setStatus] = useState<AgentStatus | null>(null);
-  const [svMocks, setSvMocks] = useState<SvMocksOut | null>(null);
+  // Carries the namespace it was read from: the field can be edited between
+  // polls, and labelling these rows with a namespace they did not come from
+  // is the same staleness the sv-expose block below refuses to show.
+  const [svMocks, setSvMocks] =
+    useState<{ ns: string; read: SvMocksOut } | null>(null);
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
 
@@ -239,17 +242,19 @@ export default function App() {
   useEffect(() => {
     if (!polling || !harborId || !shipId) return;
     let live = true;
-    const tick = async () => {
+    const tick = () => {
       const { on, ns, dom } = svWatchRef.current;
-      // Started together rather than awaited in turn, so the virtual-service
-      // read never delays the answer the panel is actually built around.
-      const [s, m] = await Promise.allSettled([
-        api.status(harborId, shipId),
-        on && ns ? api.svMocks(ns, dom) : Promise.resolve(null),
-      ]);
-      if (!live) return;
-      if (s.status === "fulfilled") setStatus(s.value);   // else keep the last
-      if (m.status === "fulfilled") setSvMocks(m.value);
+      // Each request applies as it lands, rather than the pair being awaited
+      // together: sv_read waits up to 15s on a cluster that never answers (it
+      // has to -- kubectl retries an unreachable API server rather than
+      // failing), which on a 10s poll would otherwise hold the heartbeat behind
+      // a hung cluster. Failures keep the last good value, as before.
+      api.status(harborId, shipId)
+        .then((s) => { if (live) setStatus(s); }).catch(() => {});
+      if (on && ns) {
+        api.svMocks(ns, dom)
+          .then((m) => { if (live) setSvMocks({ ns, read: m }); }).catch(() => {});
+      }
     };
     tick();
     const t = window.setInterval(tick, 10000);
@@ -1221,14 +1226,14 @@ export default function App() {
                     became reachable, which is the part of an SV deploy that
                     actually stalls. Only for an SV deployment -- the
                     performance panel is exactly as it was. */}
-                {polling && !!options.sv_ingress && svMocks && (
+                {polling && !!txt("sv_ingress") && svMocks && (
                   <div className="mt-3">
                     <p className="text-xs font-medium text-slate-600 mb-1">
-                      Virtual services in {svCtx.ns}
+                      Virtual services in {svMocks.ns}
                     </p>
-                    {svMocks.mocks.length > 0 ? (
+                    {svMocks.read.mocks.length > 0 ? (
                       <ul className="space-y-0.5">
-                        {svMocks.mocks.map((m: SvMocksOut["mocks"][number]) => (
+                        {svMocks.read.mocks.map((m) => (
                           <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
                             <span className="font-medium text-slate-700">{m.name}</span>
                             <span className="text-slate-400">:{m.port}</span>
@@ -1241,7 +1246,7 @@ export default function App() {
                     ) : (
                       // "Nothing deployed" and "cannot look" are different
                       // answers, and the second must not read as the first.
-                      <p className="text-[11px] text-slate-400">{svMocks.message}</p>
+                      <p className="text-[11px] text-slate-400">{svMocks.read.message}</p>
                     )}
                   </div>
                 )}
@@ -1282,7 +1287,7 @@ export default function App() {
                   <p className="text-xs text-emerald-800">{svExpose.message}</p>
                   <ul className="text-[11px] text-slate-600 font-mono space-y-0.5">
                     {svExpose.mocks.map((m) => (
-                      <li key={m.name}>{`${m.name}:${m.port} → ${m.name}-${m.port}-${options.namespace}.${options.sv_subdomain}`}</li>
+                      <li key={m.name}>{`${m.name}:${m.port} → ${m.host ?? "(set a wildcard domain)"}`}</li>
                     ))}
                   </ul>
                   <div className="flex gap-2 items-center">

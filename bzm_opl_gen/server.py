@@ -236,6 +236,18 @@ class SvExposeIn(BaseModel):
 # What each unreadable cluster means, in the user's terms. The UI pairs these
 # with the CLI equivalent below; a reason without a way forward is the dead
 # panel this endpoint exists to avoid.
+def _sv_read_message(read):
+    """The sentence shown for an unreadable cluster.
+
+    Shared by both endpoints that do this read: they answer the same question
+    about the same failure, and a message that differed between them would be
+    the UI contradicting itself. `.get`, not `[]`, because livetest owns the set
+    of reasons -- a fifth one should degrade to the raw detail, not 500 the one
+    endpoint whose contract is that it never returns a bare error.
+    """
+    return SV_READ_MESSAGES.get(read.status, read.detail)
+
+
 SV_READ_MESSAGES = {
     livetest.SV_READ_NO_CLI:
         "No kubectl or oc on this machine, so the namespace cannot be read "
@@ -301,15 +313,15 @@ def sv_expose_render(x: SvExposeIn):
     read = livetest.sv_read(x.namespace)
     if read.status != livetest.SV_READ_OK:
         return {"status": read.status, "mocks": [], "files": [],
-                # .get, not [], because livetest owns the set of reasons: a
-                # fifth one added there would otherwise 500 the single endpoint
-                # whose whole contract is that it never hands back a bare
-                # error. The raw detail is a worse message, not a broken page.
-                "message": SV_READ_MESSAGES.get(read.status, read.detail),
+                "message": _sv_read_message(read),
                 "detail": read.detail, "command": command}
     return {
         "status": read.status,
-        "mocks": read.mocks,
+        # host alongside each mock so the UI never rebuilds it: the same string
+        # the Ingress below routes, and the one a person is told to try.
+        "mocks": [dict(m, host=gen_mod.sv_endpoint_host(
+            m["name"], m["port"], x.namespace, publish.subdomain))
+            for m in read.mocks],
         # Same shape as /api/generate, so the UI previews it in the same pane.
         "files": [{"name": gen_mod.SV_EXPOSE_FILE,
                    "content": gen_mod.sv_expose(read.mocks, x.namespace, publish)}],
@@ -341,8 +353,7 @@ def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
                    "host": gen_mod.sv_endpoint_host(
                        m["name"], m["port"], namespace, sv_subdomain)}
                   for m in read.mocks],
-        "message": SV_READ_MESSAGES.get(read.status, read.detail),
-        "detail": read.detail,
+        "message": _sv_read_message(read),
     }
 
 

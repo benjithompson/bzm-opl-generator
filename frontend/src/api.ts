@@ -97,16 +97,19 @@ export type FuncIdChoice = { id: string; label: string };
  *  error string. `files` is the same shape /api/generate returns, so the same
  *  preview pane renders it. */
 export type SvExposeStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
-export interface SvMock { name: string; port: number; harbor: string; ship: string }
+/** A deployed virtual service and the host it answers at. `host` is null until
+ *  a wildcard domain is configured. Built by the generator and carried here, so
+ *  no caller rebuilds the string the Ingress actually routes. */
+export interface SvEndpoint { name: string; port: number; host: string | null }
+export interface SvMock extends SvEndpoint { harbor: string; ship: string }
 
 /** What is deployed right now, for the watch panel. Shares the four
  *  unreachable-cluster reasons with sv-expose, because it is the same read --
  *  `host` is null until a wildcard domain is configured. */
 export interface SvMocksOut {
   status: SvExposeStatus;
-  mocks: { name: string; port: number; host: string | null }[];
+  mocks: SvEndpoint[];
   message: string;
-  detail: string;
 }
 export interface SvExposeIn {
   namespace: string;

@@ -13,6 +13,13 @@ anything that breaks.
 
 ### Added
 
+- **Web UI: the deployed virtual services, beside the heartbeat** — while
+  watching an SV deployment, each one is listed with the endpoint host it
+  publishes, refreshed on the existing poll. The agent reports idle whether or
+  not its virtual services ever became reachable, so a deploy stalled at
+  `WAITING_FOR_DOMAIN` used to look identical to a healthy one. Needs a
+  kubecontext like `sv-expose` does; without one the panel still watches the
+  heartbeat and says why the list is absent.
 - **Web UI: pick what the bundle deploys** — a performance agent or a
   service-virtualization agent — before choosing a location. The SV kind seeds
   the create-location funcIds, defaults the namespace to `blazemeter-sv`, and
