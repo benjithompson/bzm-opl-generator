@@ -64,7 +64,6 @@ export const api = {
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
-  svExpose: (body: SvExposeIn) => req<SvExposeOut>("POST", "/api/sv-expose", body),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
@@ -92,24 +91,20 @@ export type SvConstants = {
  *  offered rather than dropped. */
 export type FuncIdChoice = { id: string; label: string };
 
-/** sv-expose reads the deployed mocks off a live namespace — the only call in
- *  this client that needs a cluster, and the only one allowed to. Cluster
- *  access is optional: an unreadable cluster is an "ok" HTTP response carrying
- *  which of the four reasons it was, so the caller never has to guess from an
- *  error string. `files` is the same shape /api/generate returns, so the same
- *  preview pane renders it. */
-export type SvExposeStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
+/** How reading the namespace ended. The watch panel is the only thing in this
+ *  client that needs a cluster, and the only one allowed to: cluster access is
+ *  optional, so an unreadable one is an "ok" HTTP response carrying which of
+ *  the four reasons it was, and the caller never has to guess from an error
+ *  string. */
+export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
 /** A deployed virtual service and the host it answers at. `host` is null until
  *  a wildcard domain is configured. Built by the generator and carried here, so
- *  no caller rebuilds the string the Ingress actually routes. */
+ *  no caller rebuilds the string the endpoint is published at. */
 export interface SvEndpoint { name: string; port: number; host: string | null }
-export interface SvMock extends SvEndpoint { harbor: string; ship: string }
 
-/** What is deployed right now, for the watch panel. Shares the four
- *  unreachable-cluster reasons with sv-expose, because it is the same read --
- *  `host` is null until a wildcard domain is configured. */
+/** What is deployed right now, for the watch panel. */
 export interface SvMocksOut {
-  status: SvExposeStatus;
+  status: SvReadStatus;
   mocks: SvEndpoint[];
   message: string;
 }
@@ -129,27 +124,9 @@ export interface SvCheckOut {
   /** The raw reason, for the cases where the sentence above is not enough. */
   detail: string;
 }
-export interface SvExposeIn {
-  namespace: string;
-  sv_subdomain?: string | null;
-  sv_tls_secret?: string | null;
-  sv_ingress_class?: string | null;
-}
-export interface SvExposeOut {
-  status: SvExposeStatus;
-  mocks: SvMock[];
-  files: GeneratedFile[];
-  message: string;
-  detail: string;
-  /** The equivalent `bzm-opl-gen sv-expose …`, prefilled — the way forward
-   *  whenever this machine cannot reach the cluster. */
-  command: string;
-}
-
-/** Save a Blob to disk under `filename`. One copy, because the object-URL and
- *  anchor dance is where the browser quirks live -- and the second caller
- *  (sv-expose) is the one no test exercises, so a fix applied to only one of
- *  two copies would go unnoticed there. */
+/** Save a Blob to disk under `filename`. Named rather than inlined into
+ *  downloadZip because the object-URL and anchor dance is where the browser
+ *  quirks live, and it is worth having one place to fix them. */
 export function saveBlob(blob: Blob, filename: string) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
