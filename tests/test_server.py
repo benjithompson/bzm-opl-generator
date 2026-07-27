@@ -105,6 +105,53 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
     assert {"id": "tdm", "label": "tdm"} in body
 
 
+def test_features_are_served_with_a_label_and_a_suggested_namespace():
+    """The configure step shows one feature's options at a time and offers this
+    list. Served rather than written in TypeScript for the same reason as the
+    funcId choices: functional testing, secrets and API monitoring are expected
+    to follow, and a feature has to become selectable by being added here."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/features").json()
+    assert [f["id"] for f in body] == [f["id"] for f in server.FEATURES]
+    assert body[0]["id"] == "performance"       # the common case is the default
+    for f in body:
+        assert f["label"] and f["namespace"] and f["func_ids"]
+    sv = next(f for f in body if f["id"] == "sv")
+    # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
+    # second list -- the same reason /api/sv-constants exists.
+    assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
+    # Distinct namespaces are the point of suggesting one per feature: sharing a
+    # namespace is what makes redeploying one agent take the other's pods down.
+    assert len({f["namespace"] for f in body}) == len(body)
+
+
+def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
+    """The end-to-end shape of adding a feature: one entry here, plus a tag on
+    whichever option groups it owns. Nothing in the frontend enumerates
+    features, so this is the whole of the backend half."""
+    monkeypatch.setattr(server, "FEATURES", server.FEATURES + [
+        {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
+         "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
+    body = client.get("/api/features").json()
+    assert body[-1] == {"id": "secrets", "label": "Private vault",
+                        "hint": "secrets from a vault",
+                        "namespace": "blazemeter-vault",
+                        "func_ids": ["secretsPrivateVault"]}
+
+
+def test_every_modelled_func_id_belongs_to_a_feature():
+    """A funcId the facts layer models but no feature claims would leave a
+    location carrying only that one with no feature to start on. The reverse is
+    deliberately allowed: a feature may claim a funcId that needs no images of
+    its own (tdm and delphix are already in that position), and the funcIds the
+    tool does not model at all stay unclaimed -- the selector reads those as no
+    signal rather than as an error."""
+    from bzm_opl_gen import facts as facts_mod
+    claimed = {f for feat in server.FEATURES for f in feat["func_ids"]}
+    assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
+    assert "tdm" not in claimed
+
+
 def test_create_location_forwards_every_selected_func_id(monkeypatch):
     """The funcIds the form submits must reach the API verbatim -- for several
     of them the UI is the only way in short of the BlazeMeter web app."""

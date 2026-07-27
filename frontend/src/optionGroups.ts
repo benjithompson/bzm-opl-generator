@@ -10,7 +10,7 @@
 // Nothing in this file imports React: it is plain data in, plain data out,
 // which is what makes optionGroups.test.ts possible without a DOM.
 
-import { Options } from "./api";
+import { Feature, Options } from "./api";
 
 export type GroupId =
   "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
@@ -32,6 +32,13 @@ export interface OptionGroup {
    *  who reads two lifecycle functions. The list is also what a later view can
    *  use to say "set, but not currently shown". */
   keys: string[];
+  /** The ids of the served features this group belongs to (see Feature in
+   *  api.ts). Empty means every deployment needs it whatever is being
+   *  configured -- registry, proxy, CA trust, scheduling -- and such a group is
+   *  never hidden, so it can never be the reason a download is blocked off
+   *  screen. This tag is the whole frontend half of adding a feature: the list
+   *  of features itself is served, never enumerated here. */
+  features: string[];
   /** Does this config already mean the group is on? Runs on every option
    *  change, including the ones a preset or an imported profile brings in. */
   detect: (o: Options) => boolean;
@@ -88,6 +95,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "registry",
     title: "Private registry",
     hint: "mirror images into your own registry (air-gapped)",
+    features: [],
     keys: ["private_registry", "pull_secret", "registry_auth"],
     detect: (o) => !!(o.private_registry || o.pull_secret || o.registry_auth),
     enable: () => ({}),
@@ -97,6 +105,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "proxy",
     title: "HTTP(S) proxy",
     hint: "egress via a corporate proxy, optional authentication",
+    features: [],
     keys: ["proxy"],
     detect: (o) => !!o.proxy,
     enable: () => ({}),
@@ -106,6 +115,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "ca",
     title: "Custom CA trust",
     hint: "TLS-intercepting proxy / private CAs — mounted into crane + engines",
+    features: [],
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
     detect: (o) => caModeOf(o) !== "none",
     // On lands on the recommended mode rather than on no mode at all, which
@@ -117,6 +127,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "sched",
     title: "Scheduling",
     hint: "tolerations + nodeSelector for crane & engines",
+    features: [],
     keys: ["tolerations", "node_selector"],
     detect: (o) => !!(o.tolerations || o.node_selector),
     enable: () => ({}),
@@ -126,6 +137,9 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "sizing",
     title: "Engine sizing",
     hint: "CPU / memory limits for load engines (default 2 CPU / 8Gi)",
+    // The only group that is about engines: a location running mocks alone
+    // never starts one, so this is off screen while service virtualization is.
+    features: ["performance"],
     keys: ["engine_cpu_limit", "engine_mem_limit", "emit_limitrange"],
     detect: (o) => !!(o.engine_cpu_limit || o.engine_mem_limit || o.emit_limitrange),
     // Seeded only when the two limits are not already a known shape: opening
@@ -142,6 +156,11 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "security",
     title: "Security & RBAC",
     hint: "defaults: token in a Secret, CLUSTERIP, no cluster RBAC",
+    // Untagged deliberately, though it shares service_type with SV below: how
+    // the auth token is stored and whether the bundle asks for cluster RBAC are
+    // questions every deployment answers, and hiding the field that the SV
+    // group's own NODEPORT error points at would be the worst of both.
+    features: [],
     // service_type is shared with the SV group below.
     keys: ["use_secret", "cluster_rbac", "service_type"],
     // Absent service_type means the backend default (CLUSTERIP), so only an
@@ -157,6 +176,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     title: "Service virtualization",
     hint: "only for locations with the mockServices feature",
     requiredHint: "this location runs mockServices — virtual services need an ingress",
+    features: ["sv"],
     // service_type is written here and owned by Security too; see the note on
     // `disable` for why only one of the two directions restores it.
     keys: ["sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway",
@@ -195,4 +215,130 @@ export function detectGroups(
     required: Partial<GroupFlags> = {}): GroupFlags {
   return Object.fromEntries(OPTION_GROUPS.map((g) =>
     [g.id, prev[g.id] || g.detect(o) || !!required[g.id]])) as GroupFlags;
+}
+
+// -- the feature view --------------------------------------------------------
+// The configure step shows one feature at a time, chosen from the list
+// /api/features serves. Nothing here enumerates features: a group names the
+// feature ids it belongs to, and labels, suggested namespaces and which funcIds
+// mean which feature are all read off the served vocabulary. Adding functional
+// testing, secrets or API monitoring is then a backend entry plus a tag above.
+//
+// The selector is a VIEW, not a scope. One crane is deployed for the selected
+// location and that location's funcIds decide what ships, so nothing below
+// writes or clears an option -- every function here is a selection over the
+// declarations. suggestNamespace is the single exception, and it hands back a
+// string for the caller to apply only when the field still holds a suggestion.
+
+/** What a group with no features is attributed to, in one place because the row
+ *  and any future summary must not word it differently. */
+export const ANY_DEPLOYMENT = "any deployment";
+
+/** How a group's attribution reads. An id the vocabulary has not named falls
+ *  back to the id itself -- the same choice /api/func-ids makes -- so a group
+ *  tagged with a feature this backend does not serve is still attributed rather
+ *  than silently unlabelled. */
+export function appliesTo(g: OptionGroup, features: Feature[]): string {
+  if (!g.features.length) return ANY_DEPLOYMENT;
+  return g.features
+    .map((id) => features.find((f) => f.id === id)?.label ?? id).join(" · ");
+}
+
+/** The groups on screen while `feature` is being configured: its own, plus the
+ *  ones that apply to any deployment. `null` -- nothing chosen yet, or the
+ *  vocabulary fetch failed -- shows everything: a view that cannot be chosen
+ *  must not take options off the page. */
+export function visibleGroups(
+    feature: string | null, groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
+  if (!feature) return groups;
+  return groups.filter((g) => !g.features.length || g.features.includes(feature));
+}
+
+export function hiddenGroups(
+    feature: string | null, groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
+  const shown = new Set(visibleGroups(feature, groups));
+  return groups.filter((g) => !shown.has(g));
+}
+
+/** Groups holding configuration while off screen. Reported near the preview:
+ *  what a hidden group owns still ships, and the point of the view being a view
+ *  is that it never quietly drops it. `detect` is the test rather than the
+ *  toggle state, because a group switched on with nothing in it adds nothing to
+ *  the manifests and saying otherwise would be noise. */
+export function setButHidden(
+    o: Options, feature: string | null,
+    groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
+  return hiddenGroups(feature, groups).filter((g) => g.detect(o));
+}
+
+/** A group whose configuration blocks the download while being off screen. */
+export interface Blocker {
+  group: OptionGroup;
+  /** The feature to switch the view to. */
+  feature: string;
+  label: string;
+}
+
+/** Why the download is blocked when the reason is not on screen -- the failure
+ *  this view is meant to remove is a disabled button whose cause is elsewhere
+ *  on the page. `incomplete` is the caller's own validation (only it knows an
+ *  SV location needs a domain and a TLS secret); this says which of those
+ *  groups are hidden and which feature to switch to for each. A group that
+ *  applies to any deployment is never hidden, so it can never appear here. */
+export function hiddenBlockers(
+    incomplete: GroupId[], feature: string | null, features: Feature[],
+    groups: OptionGroup[] = OPTION_GROUPS): Blocker[] {
+  return hiddenGroups(feature, groups)
+    .filter((g) => incomplete.includes(g.id))
+    .map((g) => ({
+      group: g,
+      // Non-empty: an untagged group is visible under every feature, so it was
+      // already filtered out above.
+      feature: g.features[0],
+      label: features.find((f) => f.id === g.features[0])?.label ?? g.features[0],
+    }));
+}
+
+/** The features a location's funcIds carry, in served order. funcIds the tool
+ *  does not model (tdm, dataPublisher, delphix, secretsPrivateVault) match no
+ *  feature and are simply not a signal -- never an error, and never a reason to
+ *  leave the selector empty. */
+export function featuresOf(
+    funcIds: string[] | undefined, features: Feature[]): string[] {
+  return features
+    .filter((f) => (funcIds ?? []).some((id) => f.func_ids.includes(id)))
+    .map((f) => f.id);
+}
+
+/** The funcIds a location has that no served feature claims. Named on screen
+ *  rather than dropped: the tool models five funcIds and accounts already carry
+ *  more, and "this location also runs X, which there are no options for" is a
+ *  truthful thing to say where silence reads as coverage. */
+export function unclaimedFuncIds(
+    funcIds: string[] | undefined, features: Feature[]): string[] {
+  return (funcIds ?? []).filter(
+    (id) => !features.some((f) => f.func_ids.includes(id)));
+}
+
+/** Which feature to open a location on: the first served feature its funcIds
+ *  carry, else the first served feature. A location carrying both therefore
+ *  starts on the first -- performance, the common case -- and is routed to the
+ *  other by the download-button block if that is where the missing settings
+ *  are. `null` only before the vocabulary lands. */
+export function startFeature(
+    funcIds: string[] | undefined, features: Feature[]): string | null {
+  return featuresOf(funcIds, features)[0] ?? features[0]?.id ?? null;
+}
+
+/** The namespace to suggest as the view moves to `feature`, or null to leave
+ *  the field alone. Suggested only while it still holds a namespace some
+ *  feature suggested (or nothing at all): a name that was typed outranks any
+ *  suggestion, and returning the value it already has would be a state write
+ *  that re-POSTs the preview for no change. Which names count as suggestions is
+ *  read off the served vocabulary, so a feature added later brings its own. */
+export function suggestNamespace(
+    current: string, feature: Feature, features: Feature[]): string | null {
+  const ns = current.trim();
+  const suggested = !ns || features.some((f) => f.namespace === ns);
+  return suggested && ns !== feature.namespace ? feature.namespace : null;
 }
