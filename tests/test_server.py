@@ -107,6 +107,20 @@ def test_manual_facts_generate_without_a_token_fetch():
     assert "bzm_deployment.yaml" in names and "bzm_secret.yaml" in names
 
 
+def test_func_ids_mark_which_ones_change_the_images():
+    """The create-location form needs every funcId; the manual form needs only
+    the ones that change the answer. Both read this one response, so the
+    distinction is served rather than re-derived in TypeScript."""
+    rows = client.get("/api/func-ids").json()
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["performance"]["changes_images"] is True
+    assert by_id["functionalApi"]["changes_images"] is False
+    # Still offered -- creating a location with it is a real, different thing.
+    assert "functionalApi" in by_id
+    for f in ("mockServices", "proxyRecorder", "functionalGui"):
+        assert by_id[f]["changes_images"] is True
+
+
 def test_option_defaults_carry_the_output_format():
     """The UI seeds its options from this response, so a format missing from
     DEFAULT_OPTIONS is a segment that starts blank."""
@@ -182,7 +196,11 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
     from bzm_opl_gen import facts as facts_mod
     monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
     body = client.get("/api/func-ids").json()
-    assert {"id": "tdm", "label": "tdm"} in body
+    # Matched on id/label rather than the whole row: the row carries other
+    # fields, and what this pins is that an unlabelled funcId is still offered
+    # under its raw name.
+    assert {"id": "tdm", "label": "tdm"} in [
+        {"id": r["id"], "label": r["label"]} for r in body]
 
 
 def test_features_are_served_with_a_label_and_a_suggested_namespace():

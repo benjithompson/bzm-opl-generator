@@ -486,8 +486,17 @@ def func_ids():
     used to hold its own list in TypeScript, and whatever was missing from that
     copy could not be selected from the UI at all. Derived from the facts layer so adding a funcId there -- which is
     already required for its images to be selected -- is the only edit needed.
+
+    `changes_images` marks the ones worth offering where a funcId's only job is
+    to pick images -- the manual-entry form. functionalApi and performance both
+    mean "the taurus engine", so offering both there is a choice that cannot
+    change the output. Served rather than filtered in TypeScript for the same
+    reason the list itself is: a copy in the frontend is how the vocabulary and
+    the thing it describes drift apart.
     """
-    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f)}
+    distinct = set(facts_mod.image_distinct_funcs())
+    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f),
+             "changes_images": f in distinct}
             for f in facts_mod.CATEGORY_BY_FUNC]
 
 

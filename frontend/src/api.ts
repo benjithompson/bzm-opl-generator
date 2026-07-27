@@ -98,8 +98,14 @@ export type SvConstants = {
 /** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
  *  that used to live here is how sv-bridge went missing from the create form.
  *  `label` falls back to the raw id server-side, so an unlabelled funcId is
- *  offered rather than dropped. */
-export type FuncIdChoice = { id: string; label: string };
+ *  offered rather than dropped.
+ *
+ *  `changes_images` is false for a funcId that needs the same images as one
+ *  already offered -- functionalApi is "the taurus engine", exactly as
+ *  performance is. Creating a location keeps the full list, because BlazeMeter
+ *  distinguishes them there; the manual form, where the only thing a funcId
+ *  does is pick images, offers only the ones that change the answer. */
+export type FuncIdChoice = { id: string; label: string; changes_images: boolean };
 
 /** How reading the namespace ended. The watch panel is the only thing in this
  *  client that needs a cluster, and the only one allowed to: cluster access is

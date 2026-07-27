@@ -40,6 +40,29 @@ def image_category(ref):
     return "performance"
 
 
+def image_distinct_funcs():
+    """The funcIds worth offering when the only thing the choice decides is
+    which images the bundle names.
+
+    Two funcIds needing the same image categories generate byte-identical
+    manifests, so offering both is a choice with no consequence: `functionalApi`
+    and `performance` are both "runs in the taurus engine". Declaration order
+    picks the representative, which is why `performance` is listed first.
+
+    Creating a *location* is a different question and keeps the full vocabulary
+    -- BlazeMeter does distinguish them there, and a location created without
+    functionalApi cannot run functional API tests. Only the manual-entry form,
+    where funcIds exist purely to select images, uses this reduced list.
+    """
+    seen, out = set(), []
+    for func, cats in CATEGORY_BY_FUNC.items():
+        key = frozenset(cats)
+        if key not in seen:
+            seen.add(key)
+            out.append(func)
+    return out
+
+
 def needed_categories(func_ids):
     needed = set()
     for f in func_ids or []:

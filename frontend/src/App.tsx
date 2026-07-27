@@ -648,12 +648,17 @@ export default function App() {
                 ]} />
 
               {sourceMode === "manual" ? (
+                /* `choices` is filtered to the funcIds that change which images
+                   the bundle names: here a funcId's only job is to pick images,
+                   and functionalApi picks exactly what performance does. The
+                   create-location form above still offers the full vocabulary,
+                   because BlazeMeter does distinguish them when creating one. */
                 <ManualSource
                   harborId={manual.harbor_id}
                   shipId={manual.ship_id}
                   authToken={raw("auth_token")}
                   funcIds={manual.func_ids}
-                  choices={funcIdChoices}
+                  choices={funcIdChoices.filter((c) => c.changes_images)}
                   guiIncomplete={guiIncomplete}
                   privateRegistry={!!options.private_registry}
                   onHarborId={(v) => setManual((m) => ({ ...m, harbor_id: v }))}

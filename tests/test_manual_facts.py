@@ -119,6 +119,42 @@ def test_catalogue_covers_every_category_the_funcid_vocabulary_can_ask_for():
     assert want <= have, f"no fallback images for {want - have}"
 
 
+def test_alias_funcids_are_not_offered_where_they_change_nothing():
+    """functionalApi and performance are both "the taurus engine", so the manual
+    form offers one of them -- a choice that cannot change the output is noise.
+    Creating a location is a different question and keeps the full vocabulary."""
+    offered = facts_mod.image_distinct_funcs()
+    assert "performance" in offered
+    assert "functionalApi" not in offered
+    # ...and it is genuinely an alias, not merely hidden.
+    assert (facts_mod.needed_categories(["functionalApi"])
+            == facts_mod.needed_categories(["performance"]))
+    # The ones that do change the images all survive.
+    for f in ("mockServices", "proxyRecorder", "functionalGui"):
+        assert f in offered, f
+
+
+def test_image_distinct_funcs_keeps_one_per_category_set():
+    """Derived, not a hand-kept exclusion list: a funcId added with a new
+    category set is offered automatically, and one added as an alias is not."""
+    seen = set()
+    for f in facts_mod.image_distinct_funcs():
+        cats = frozenset(facts_mod.CATEGORY_BY_FUNC[f])
+        assert cats not in seen, f"{f} duplicates a category set already offered"
+        seen.add(cats)
+    assert seen == {frozenset(c) for c in facts_mod.CATEGORY_BY_FUNC.values()}
+
+
+def test_dropping_the_alias_does_not_change_what_generates():
+    """The reason it is safe to hide: picking performance produces exactly what
+    picking functionalApi would have."""
+    a = _gen(facts_mod.manual(H, S, func_ids=["performance"]),
+             private_registry="reg.io/bzm")
+    b = _gen(facts_mod.manual(H, S, func_ids=["functionalApi"]),
+             private_registry="reg.io/bzm")
+    assert _cm(a)["IMAGE_OVERRIDES"] == _cm(b)["IMAGE_OVERRIDES"]
+
+
 def test_gui_browser_images_are_the_known_gap():
     """Not an oversight: the account carries a version-pinned repo per browser
     build and only a live inventory names the one a location uses."""
