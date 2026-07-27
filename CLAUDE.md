@@ -167,6 +167,21 @@ the classes of problem it can't fix for you.
   actually free needs every pod's requests summed per node, which is a much
   bigger read for a preflight. Say "upper bound" in any detail string you add.
 
+- **`facts.manual()` is the same shape `gather()` returns, on purpose.** The UI's
+  manual mode and `facts --manual` build facts from a typed harbor id, ship id
+  and token so a bundle can be produced for an account nobody here can reach.
+  Nothing downstream learns which way the facts arrived — keep it that way, and
+  add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+- **`FALLBACK_IMAGES` was read off live inventories, not derived from the keys.**
+  Four keys do not match their repo (`taurus-cloud`→`v4`, `blazemeter`→`v3`,
+  `apm-image`→`apm`, `secrets-image`→`secrets`), so a "tidy-up" that regularises
+  them produces repos that do not exist. `test_manual_facts.py` asserts the
+  catalogue covers every category `CATEGORY_BY_FUNC` can ask for — a new funcId
+  needing a new category fails there rather than on a sealed cluster.
+- GUI browser images are the one gap and cannot be closed: the account carries
+  60+ version-pinned `charmander/*` repos and only a live agent says which one a
+  location uses. `facts.gui_images_incomplete()` flags it; don't invent a default.
+
 ## Conventions
 
 - Comments explain *why*, especially where a non-obvious environment fact drove

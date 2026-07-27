@@ -95,11 +95,31 @@ def cmd_create_ship(a):
 
 
 def cmd_facts(a):
-    client = api.BzmClient(a.api_key)
-    f = facts_mod.gather(client, a.harbor_id)
+    """Gather facts from the account, or -- with --manual -- build them from the
+    three values BlazeMeter shows on the agent, for a customer whose account
+    nobody here can reach."""
+    if a.manual:
+        if not a.ship_id:
+            sys.exit("--manual needs --ship-id: it is what identifies this agent "
+                     "to BlazeMeter, and the API is not there to look it up")
+        f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
+    else:
+        if not a.api_key:
+            sys.exit("facts needs --api-key, or --manual --ship-id to build them "
+                     "from values you already have")
+        f = facts_mod.gather(api.BzmClient(a.api_key), a.harbor_id)
     facts_mod.save(f, a.output)
-    print(f"wrote {a.output}: location '{f['harbor_name']}' funcIds={f['func_ids']} "
-          f"ships={len(f['ships'])} images={len(f['images'])} ({f['images_source']})")
+    # Manual facts carry no location name -- nothing knows it -- so fall back to
+    # the id rather than printing "location 'None'".
+    print(f"wrote {a.output}: location '{f['harbor_name'] or f['harbor_id']}' "
+          f"funcIds={f['func_ids']} ships={len(f['ships'])} "
+          f"images={len(f['images'])} ({f['images_source']})")
+    if facts_mod.gui_images_incomplete(f):
+        print("note: functionalGui needs a version-pinned browser image "
+              "(charmander/chrome_*, firefox_*, ...) that no catalogue can pick "
+              "for you. Fine against the public registry; for a private one, add "
+              "the key to IMAGE_OVERRIDES by hand or gather facts with an API key.",
+              file=sys.stderr)
 
 
 def cmd_generate(a):
@@ -362,8 +382,16 @@ def main():
     cs.set_defaults(fn=cmd_create_ship)
 
     f = sub.add_parser("facts", help="gather account facts -> facts.json")
-    f.add_argument("--api-key", required=True)
+    f.add_argument("--api-key")
     f.add_argument("--harbor-id", required=True)
+    f.add_argument("--manual", action="store_true",
+                   help="build facts from --harbor-id + --ship-id without an API "
+                        "key, for a location whose account you cannot reach. "
+                        "Images come from the built-in catalogue")
+    f.add_argument("--ship-id", dest="ship_id", help="required with --manual")
+    f.add_argument("--func-ids", dest="func_ids", nargs="+", default=["performance"],
+                   help="with --manual: the location's features, which decide "
+                        "which images the bundle names (default: performance)")
     f.add_argument("-o", "--output", default="facts.json")
     f.set_defaults(fn=cmd_facts)
 

@@ -74,6 +74,39 @@ def test_generate_helm_rejects_service_virtualization_400():
     assert "performance testing only" in r.json()["detail"]
 
 
+def test_manual_facts_need_no_api_key():
+    """The whole point: this mode exists for an account nobody here can reach,
+    so requiring a key would defeat it. Every other /api route 401s."""
+    r = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]})
+    assert r.status_code == 200
+    f = r.json()["facts"]
+    assert f["harbor_id"] == "H1"
+    assert f["ships"][0]["id"] == "S1"
+    assert f["images_source"] == "manual entry (no account access)"
+    assert r.json()["gui_images_incomplete"] is False
+
+
+def test_manual_facts_flag_the_gui_image_gap():
+    r = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["functionalGui"]})
+    assert r.json()["gui_images_incomplete"] is True
+
+
+def test_manual_facts_generate_without_a_token_fetch():
+    """The UI posts fetch_token=false in this mode -- the token was typed, and a
+    key left over from an earlier connect must not be asked for one belonging to
+    somebody else's agent."""
+    facts = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]}).json()["facts"]
+    r = client.post("/api/generate", json={
+        "facts": facts, "fetch_token": False,
+        "options": {"namespace": "cust", "auth_token": "TOK", "ship_id": "S1"}})
+    assert r.status_code == 200
+    names = [f["name"] for f in r.json()["files"]]
+    assert "bzm_deployment.yaml" in names and "bzm_secret.yaml" in names
+
+
 def test_option_defaults_carry_the_output_format():
     """The UI seeds its options from this response, so a format missing from
     DEFAULT_OPTIONS is a segment that starts blank."""

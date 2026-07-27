@@ -1,12 +1,13 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, Account, AgentStatus, Facts, Feature, GeneratedFile,
+  ManualFactsOut,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, SvCheckOut, SvConstants,
   SvMocksOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section,
-  SegmentedControl, Switch, TextInput,
+  SegmentedControl, SubSection, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
 import { SvCtx } from "./SvPrereqs";
@@ -21,6 +22,7 @@ import {
   setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 import { CaGroup } from "./groups/CaGroup";
+import { ManualSource } from "./groups/ManualSource";
 import { GroupRow } from "./groups/GroupRow";
 import { ProxyGroup } from "./groups/ProxyGroup";
 import { RegistryGroup } from "./groups/RegistryGroup";
@@ -77,6 +79,19 @@ export default function App() {
   const [newShipName, setNewShipName] = useState("");
   const [shipErr, setShipErr] = useState<string | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
+
+  // -- where the three account values come from -------------------------------
+  // "connect" reads them from the account; "manual" takes them typed in, for a
+  // customer whose account (and cluster) nobody here can reach. Everything
+  // downstream consumes `facts` + shipId + options.auth_token and never learns
+  // which way they arrived -- that is the whole point of manual facts being the
+  // same shape gather() returns.
+  const [sourceMode, setSourceMode] = useState<"connect" | "manual">("connect");
+  const [manual, setManual] = useState({ harbor_id: "", ship_id: "", func_ids: ["performance"] });
+  const [guiIncomplete, setGuiIncomplete] = useState(false);
+  // Collapsed once the source is settled: three steps' worth of pickers is
+  // noise while you are configuring, and the summary says what was chosen.
+  const [sourceOpen, setSourceOpen] = useState(true);
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
@@ -257,6 +272,50 @@ export default function App() {
 
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
+
+  // Settled means: an agent is chosen and its facts are in. Collapsing then
+  // keeps three steps of pickers from sitting above the configuration for the
+  // rest of the session; "Change" reopens it.
+  useEffect(() => {
+    if (sourceMode === "connect" && facts && shipId) setSourceOpen(false);
+  }, [sourceMode, facts, shipId]);
+
+  // Manual facts are rebuilt from the typed values rather than held separately,
+  // so there is one `facts` for the rest of the page whichever mode is on.
+  // Debounced for the same reason the preview is: this runs on every keystroke.
+  const manualTimer = useRef<number>();
+  useEffect(() => {
+    if (sourceMode !== "manual") return;
+    if (!manual.harbor_id.trim() || !manual.ship_id.trim()) {
+      setFacts(null); setShipId(null); return;
+    }
+    window.clearTimeout(manualTimer.current);
+    manualTimer.current = window.setTimeout(() => {
+      api.manualFacts({
+        harbor_id: manual.harbor_id.trim(),
+        ship_id: manual.ship_id.trim(),
+        func_ids: manual.func_ids,
+      }).then((r: ManualFactsOut) => {
+        setFacts(r.facts);
+        setShipId(r.facts.ships[0].id);
+        setGuiIncomplete(r.gui_images_incomplete);
+      }).catch((e) => setGenErr(String(e.message)));
+    }, 250);
+  }, [sourceMode, manual]);
+
+  // Switching modes drops what the other one established. Leaving a connected
+  // location's facts in place while manual fields are on screen is how the
+  // preview ends up describing an agent nobody is looking at.
+  const switchMode = (m: string) => {
+    const mode = m as "connect" | "manual";
+    if (mode === sourceMode) return;
+    setSourceMode(mode);
+    setFacts(null); setShipId(null); setStatus(null); setGenErr(null);
+    setSourceOpen(true);
+    // The token is fetched on download when connected, and typed when not --
+    // so it must not survive the switch either way.
+    set("auth_token", null);
+  };
 
   const applyProfile = (name: string) => {
     const p = profiles.find((x) => x.name === name);
@@ -570,8 +629,52 @@ export default function App() {
 
       <main className="max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="space-y-5">
-          {/* 1 · Connect */}
-          <Section n={1} title="Connect" done={!!who}
+          {/* 1 · Where the harbor id, ship id and token come from.
+              Three steps folded into one: connected they are picked from the
+              account, manually they are typed. Both end at the same three
+              values, so they belong in one place rather than three that only
+              one mode ever uses. */}
+          <Section n={1} title="Agent details" done={!!facts && !!shipId}
+            hint="harbor_id, ship_id and AUTH_TOKEN — read from your account, or entered by hand.">
+            <div className="space-y-3">
+              <SegmentedControl
+                value={sourceMode}
+                onChange={switchMode}
+                options={[
+                  { value: "connect", label: "Connect to BlazeMeter",
+                    hint: "Pick a location and agent; the token is fetched on download." },
+                  { value: "manual", label: "Enter values manually",
+                    hint: "For an account you cannot reach — generation only, nothing is checked." },
+                ]} />
+
+              {sourceMode === "manual" ? (
+                <ManualSource
+                  harborId={manual.harbor_id}
+                  shipId={manual.ship_id}
+                  authToken={raw("auth_token")}
+                  funcIds={manual.func_ids}
+                  choices={funcIdChoices}
+                  guiIncomplete={guiIncomplete}
+                  privateRegistry={!!options.private_registry}
+                  onHarborId={(v) => setManual((m) => ({ ...m, harbor_id: v }))}
+                  onShipId={(v) => setManual((m) => ({ ...m, ship_id: v }))}
+                  onAuthToken={(v) => set("auth_token", v || null)}
+                  onFuncIds={(v) => setManual((m) => ({ ...m, func_ids: v }))} />
+              ) : !sourceOpen ? (
+                /* Settled: say what was chosen, and offer the way back. */
+                <div className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs text-slate-600 grow">
+                    <b>{locations.find((l) => l.id === harborId)?.name ?? harborId}</b>
+                    {" · agent "}<code>{shipId}</code>
+                    <span className="block text-slate-400">
+                      {who?.email} · images: {facts?.images_source}
+                    </span>
+                  </p>
+                  <Button kind="ghost" onClick={() => setSourceOpen(true)}>Change</Button>
+                </div>
+              ) : (
+              <>
+          <SubSection title="Connect" done={!!who}
             hint="API key stays on this machine; only used server-side.">
             {!who ? (
               <div className="space-y-3">
@@ -635,13 +738,13 @@ export default function App() {
             ) : (
               <p className="text-sm text-emerald-700">Connected as {who.email}</p>
             )}
-          </Section>
+          </SubSection>
 
           {/* 2 · Location */}
           {/* Picking and creating are one-of, and the hint says which you are
               in: with both on screen at once it was never obvious which half
               of the step you were meant to fill in. */}
-          <Section n={2} title="Private location" done={!!harborId}
+          <SubSection title="Private location" done={!!harborId}
             hint={showCreateLoc
               ? "Creating a new location — the existing ones are hidden until you create or cancel. Cancel keeps whatever you had selected."
               : "The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests."}>
@@ -764,12 +867,12 @@ export default function App() {
                 </div>
               )}
             </div>
-          </Section>
+          </SubSection>
 
           {/* 3 · Agent */}
           {/* Same one-of as step 2, and it matters more here: the two paths have
               different consequences, so the hint names the one you are in. */}
-          <Section n={3} title="Agent (ship)" done={!!shipId}
+          <SubSection title="Agent (ship)" done={!!shipId}
             hint={creatingShip
               ? "Creating a new agent identity (new ship_id + AUTH_TOKEN, same harbor) — what a new deployment needs. The token is fetched automatically on download."
               : "Reusing an identity means replacing the install it is already running. The location's existing agents are below; creating a new one instead is free."}>
@@ -850,10 +953,14 @@ export default function App() {
                 </p>
               )}
             </div>
+          </SubSection>
+              </>
+              )}
+            </div>
           </Section>
 
-          {/* 4 · Configure */}
-          <Section n={4} title="Configure"
+          {/* 2 · Configure */}
+          <Section n={2} title="Configure"
             hint="Everything re-renders the preview live. Presets give a starting point.">
             <div className="space-y-4">
               <div className="flex gap-2 items-center flex-wrap">
@@ -986,8 +1093,8 @@ export default function App() {
             </div>
           </Section>
 
-          {/* 5 · Download & verify */}
-          <Section n={5} title="Download & verify">
+          {/* 3 · Download & verify */}
+          <Section n={3} title="Download & verify">
             <div className="space-y-3">
               <SegmentedControl
                 label="Output format"
@@ -1010,7 +1117,8 @@ export default function App() {
                 <Button disabled={!facts || !shipId || !!genErr || !svOk}
                   onClick={() => {
                     setDlErr(null);
-                    downloadZip(facts!, { ...options, ship_id: shipId })
+                    downloadZip(facts!, { ...options, ship_id: shipId },
+                                sourceMode === "connect")
                       .catch((e) => setDlErr(String(e.message)));
                   }}>
                   ⬇ Download bundle (.zip)
@@ -1020,7 +1128,9 @@ export default function App() {
                     ? "helm/ + bzm-opl-values.yaml + README"
                     : "manifests + README"}
                   {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
-                  AUTH_TOKEN fetched on download
+                  {sourceMode === "connect"
+                    ? " AUTH_TOKEN fetched on download"
+                    : " AUTH_TOKEN as entered above"}
                 </span>
               </div>
               {/* Why the button is disabled, when the reason is not on screen.
@@ -1042,6 +1152,18 @@ export default function App() {
               ))}
               <ErrorMsg msg={dlErr} />
               <div className="border-t border-slate-100 pt-3">
+                {sourceMode === "manual" ? (
+                  /* Watching needs the API this mode exists to do without. Said
+                     plainly, with the way to get it, rather than a dead
+                     checkbox. */
+                  <p className="text-xs text-slate-500">
+                    Agent status needs an API key — switch to
+                    {" "}<b>Connect to BlazeMeter</b> above to watch this agent
+                    come online, or check Settings → Private Locations in
+                    BlazeMeter after applying.
+                  </p>
+                ) : (
+                <>
                 <div className="flex items-center gap-3">
                   <Check label="Watch agent status" checked={polling} onChange={setPolling}
                     hint="polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats" />
@@ -1110,6 +1232,8 @@ export default function App() {
                       <p className="text-[11px] text-slate-400">{svMocks.read.message}</p>
                     )}
                   </div>
+                )}
+                </>
                 )}
               </div>
             </div>

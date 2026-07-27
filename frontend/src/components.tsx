@@ -90,6 +90,25 @@ export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) =
   );
 }
 
+/** A step within a numbered Section -- same heading shape, no number of its
+ *  own. Used where several former steps were folded into one. */
+export function SubSection(props: {
+  title: string; hint?: string; done?: boolean; children: ReactNode;
+}) {
+  return (
+    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
+      <div className="flex items-baseline gap-2 mb-2">
+        <span className={"text-xs " + (props.done ? "text-emerald-600" : "text-slate-400")}>
+          {props.done ? "✓" : "○"}
+        </span>
+        <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
+      </div>
+      {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+      {props.children}
+    </div>
+  );
+}
+
 export interface SegmentOption {
   value: string;
   label: string;

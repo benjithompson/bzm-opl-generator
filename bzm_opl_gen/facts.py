@@ -55,11 +55,35 @@ def select_images(facts, all_images=False):
         if i.get("key") and (all_images or image_category(i["repo"]) in needed)
     ]
 
-# Fallback catalogue when no agent has run yet (no inventory to read).
-# Keys are the local tags crane expects; repos are under gcr.io/verdant-bulwark-278.
+# Fallback catalogue when there is no agent inventory to read -- either no agent
+# has run yet, or nobody has account access at all (see `manual`).
+#
+# Keys are the local tags crane resolves IMAGE_OVERRIDES by; repos are what the
+# account actually reports. Most keys map to a repo of the same name, but four
+# do not -- taurus-cloud is `v4`, blazemeter is `v3`, apm-image is `apm`,
+# secrets-image is `secrets` -- so this is a table read off live inventories
+# across the account rather than a naming rule.
 FALLBACK_IMAGES = [
+    # performance: the taurus engine and its APM sidecar.
     {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},
     {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "category": "performance"},
+    # mock services.
+    {"key": "blazemeter/service-mock:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/service-mock", "tag": "latest", "category": "mock"},
+    {"key": "blazemeter/group-gateway:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/group-gateway", "tag": "latest", "category": "mock"},
+    # Not observed live in the account this table was read from, but the key ->
+    # repo shape is the regular one every other `blazemeter/<name>:latest` key
+    # follows. Listed because omitting it is the silent failure (crane falls
+    # back to the public registry for a key it cannot find).
+    {"key": "blazemeter/mock-pc-service:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/mock-pc-service", "tag": "latest", "category": "mock"},
+    # proxy recorder.
+    {"key": "blazemeter/proxy-recorder:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/proxy-recorder", "tag": "latest", "category": "recorder"},
+    # GUI functional: the grid proxy. The browser images (charmander/chrome_*,
+    # firefox_*, microsoftedge_*, safari_*) are deliberately absent -- the
+    # account carries 60+ version-pinned repos and which one a location needs
+    # comes from its browser funcIds, so there is no defensible default. A GUI
+    # location bound for a private registry needs a live inventory; see
+    # `gui_images_incomplete`.
+    {"key": "blazemeter/doduo:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/doduo", "tag": "latest", "category": "gui"},
 ]
 
 CRANE_REPO = "gcr.io/verdant-bulwark-278/blazemeter/crane"
@@ -119,6 +143,55 @@ def gather(client, harbor_id):
     if not facts["crane_image"]:
         facts["crane_image"] = f"{CRANE_REPO}:latest"
     return facts
+
+
+MANUAL_SOURCE = "manual entry (no account access)"
+
+
+def gui_images_incomplete(facts):
+    """True when this bundle needs GUI browser images that no catalogue can
+    supply -- a functionalGui location built without a live agent inventory.
+
+    Separate from generation because it is a caveat, not an error: the manifests
+    are correct for everything else, and crane resolves a missing key against
+    the public registry. That is fine until the cluster is genuinely sealed,
+    which is exactly when a private registry is in play -- so callers surface
+    this alongside the private-registry options rather than refusing."""
+    return bool(
+        facts.get("images_source") == MANUAL_SOURCE
+        and "gui" in needed_categories(facts.get("func_ids")))
+
+
+def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
+    """Facts for someone who has the three values BlazeMeter shows them and no
+    API access at all -- generating for a customer's cluster from their harbor
+    id, ship id and token.
+
+    Deliberately the same shape `gather` returns, so nothing downstream has to
+    know which way the facts arrived. What cannot be known is filled from the
+    documented defaults rather than left blank: the image catalogue above, and
+    crane on `:latest`, which is what a location with no live agent reports
+    anyway.
+
+    No validation, by design. The ids are opaque to us, the token is only ever
+    written into a Secret, and the whole point is to produce manifests for an
+    account nobody here can reach -- so there is nothing to check them against,
+    and a check that could only ever be a guess would reject correct input.
+    """
+    return {
+        "harbor_id": harbor_id,
+        "harbor_name": harbor_name or None,
+        "func_ids": list(func_ids or ["performance"]),
+        # Unknown without the API, and only doctor reads them -- it reports
+        # "unknown" rather than passing a check it could not make.
+        "slots": None,
+        "threads_per_engine": None,
+        "ships": [{"id": ship_id, "name": None, "state": None,
+                   "installed_version": None, "last_heartbeat": None}],
+        "images": [dict(i, size_mb=None) for i in FALLBACK_IMAGES],
+        "images_source": MANUAL_SOURCE,
+        "crane_image": f"{CRANE_REPO}:latest",
+    }
 
 
 def save(facts, path):

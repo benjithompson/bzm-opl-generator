@@ -168,6 +168,32 @@ def get_facts(harbor_id: str):
     return _wrap(facts_mod.gather, _client(), harbor_id)
 
 
+class ManualFactsIn(BaseModel):
+    harbor_id: str
+    ship_id: str
+    func_ids: list = ["performance"]
+
+
+@app.post("/api/facts/manual")
+def manual_facts(m: ManualFactsIn):
+    """Facts from the three values BlazeMeter shows on the agent, with no API
+    key involved -- the case where you are producing manifests for a customer's
+    cluster and have access to neither their account nor their cluster.
+
+    Deliberately not behind _client(): requiring a key here would defeat the
+    point. It reads nothing and writes nothing; it only fills in the shape
+    `gather` would have returned.
+
+    The ids are not validated. There is nothing here to validate them against,
+    and a guess at their format would reject input that is correct.
+    """
+    facts = facts_mod.manual(m.harbor_id, m.ship_id, func_ids=m.func_ids)
+    return {"facts": facts,
+            # The one caveat worth carrying to the caller rather than leaving
+            # it to notice: no catalogue can name a location's browser images.
+            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
+
+
 @app.get("/api/status")
 def agent_status(harbor_id: str, ship_id: str):
     harbor = _wrap(_client().private_location, harbor_id)

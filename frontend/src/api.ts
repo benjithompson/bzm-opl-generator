@@ -17,6 +17,11 @@ export interface Facts {
   images: object[]; images_source?: string; crane_image?: string;
 }
 export interface GeneratedFile { name: string; content: string }
+/** Manual facts, plus the one thing no catalogue can supply. `func_ids`
+ *  including functionalGui means the bundle needs a version-pinned browser
+ *  image (charmander/chrome_*, firefox_*, …) that only a live agent inventory
+ *  names -- harmless against the public registry, a gap against a private one. */
+export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;
   installed_version?: string; online: boolean;
@@ -55,6 +60,10 @@ export const api = {
   createShip: (harborId: string, name: string) =>
     req<{ ship: Ship }>("POST", "/api/ships", { harbor_id: harborId, name }),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
+  /** Facts from the three values BlazeMeter shows on the agent, with no API key.
+   *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */
+  manualFacts: (body: { harbor_id: string; ship_id: string; func_ids: string[] }) =>
+    req<ManualFactsOut>("POST", "/api/facts/manual", body),
   status: (harborId: string, shipId: string) =>
     req<AgentStatus>("GET", `/api/status?harbor_id=${harborId}&ship_id=${shipId}`),
   generate: (facts: Facts, options: Options) =>
@@ -156,11 +165,15 @@ export function saveBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-export async function downloadZip(facts: Facts, options: Options) {
+/** `fetchToken` pulls AUTH_TOKEN from the API on the way out, which is what the
+ *  connected flow relies on. It must be off for manually-entered facts: the
+ *  token is already in `options`, and a stale key left over from an earlier
+ *  connect would otherwise be asked for a token for someone else's agent. */
+export async function downloadZip(facts: Facts, options: Options, fetchToken = true) {
   const r = await fetch("/api/generate/zip", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facts, options, fetch_token: true }),
+    body: JSON.stringify({ facts, options, fetch_token: fetchToken }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
   saveBlob(await r.blob(),

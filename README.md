@@ -73,6 +73,38 @@ cp examples/api-key.example.json api-key.json   # then fill in id + secret
 location you're generating for, and write access only for the commands that
 create things (`create-location`, `create-ship`, `livetest`).
 
+## Generating for an account you cannot reach
+
+The three values BlazeMeter shows on an agent — **harbor id**, **ship id** and
+**AUTH_TOKEN** — are enough to render every manifest, because everything else
+has a documented default. That covers the case this tool otherwise could not:
+producing a customer's deployment when you have access to neither their
+BlazeMeter account nor their cluster.
+
+In the web UI, switch step 1 to **Enter values manually**. On the CLI:
+
+```
+bzm-opl-gen facts --manual --harbor-id <HARBOR_ID> --ship-id <SHIP_ID> \
+    --func-ids performance
+bzm-opl-gen generate --auth-token <AUTH_TOKEN> --namespace their-ns -o out/
+```
+
+Nothing is validated and nothing is sent to BlazeMeter — there is no account
+here to check against, and a guess at the id format would only reject input that
+was correct. What you lose by not connecting:
+
+- the crane image tag floats on `latest` instead of being pinned to what the
+  account advertises;
+- `IMAGE_OVERRIDES` comes from the built-in catalogue rather than a live agent's
+  inventory. It covers performance, mock services and the proxy recorder
+  completely. **GUI browser images it cannot cover**: BlazeMeter carries a
+  version-pinned repo per browser build (`charmander/chrome_128…`,
+  `firefox_128.0`, …) and only a running agent reports which one a location
+  uses. Harmless against the public registry; for a private one, add that key by
+  hand. The UI and CLI both say so when it applies;
+- `doctor` has no slots/threadsPerEngine to check concurrency against;
+- the agent-status watch needs an API key, so it is unavailable.
+
 ## Try it without an account
 
 The generator itself only needs a facts file, so a checked-in sample gets you
