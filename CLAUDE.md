@@ -173,9 +173,10 @@ the classes of problem it can't fix for you.
   Nothing downstream learns which way the facts arrived — keep it that way, and
   add to `FALLBACK_IMAGES` rather than special-casing the manual path.
 - **`FALLBACK_IMAGES` was read off live inventories, not derived from the keys.**
-  Four keys do not match their repo (`taurus-cloud`→`v4`, `blazemeter`→`v3`,
-  `apm-image`→`apm`, `secrets-image`→`secrets`), so a "tidy-up" that regularises
-  them produces repos that do not exist. `test_manual_facts.py` asserts the
+  Keys do not reliably match their repo — `taurus-cloud`→`v4` and
+  `apm-image`→`apm` in the table, `blazemeter`→`v3` and `secrets-image`→`secrets`
+  elsewhere in the account — so a "tidy-up" that regularises them produces repos
+  that do not exist. `test_manual_facts.py` asserts the
   catalogue covers every category `CATEGORY_BY_FUNC` can ask for — a new funcId
   needing a new category fails there rather than on a sealed cluster.
 - GUI browser images are the one gap and cannot be closed: the account carries

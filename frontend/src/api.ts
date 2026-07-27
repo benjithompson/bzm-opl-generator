@@ -17,10 +17,9 @@ export interface Facts {
   images: object[]; images_source?: string; crane_image?: string;
 }
 export interface GeneratedFile { name: string; content: string }
-/** Manual facts, plus the one thing no catalogue can supply. `func_ids`
- *  including functionalGui means the bundle needs a version-pinned browser
- *  image (charmander/chrome_*, firefox_*, …) that only a live agent inventory
- *  names -- harmless against the public registry, a gap against a private one. */
+/** Manual facts, plus the one thing no catalogue can supply: a GUI location
+ *  needs a version-pinned browser image that only a live agent inventory names.
+ *  Served as a flag so the page does not have to re-derive it. */
 export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;

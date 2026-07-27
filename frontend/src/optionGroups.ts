@@ -332,14 +332,9 @@ export function unclaimedFuncIds(
     (id) => !features.some((f) => f.func_ids.includes(id)));
 }
 
-/** Which feature to open a location on: the first served feature its funcIds
- *  carry, else the first served feature. A location carrying both therefore
- *  starts on the first -- performance, the common case -- and is routed to the
- *  other by the download-button block if that is where the missing settings
- *  are. `null` only before the vocabulary lands. */
 /** Features to show as unavailable, given what the location runs. Empty
- *  whenever the question cannot be answered, which is three distinct cases and
- *  all of them mean "say nothing" rather than "say no":
+ *  whenever the question cannot be answered, and every such case means "say
+ *  nothing" rather than "say no":
  *
  *   - `known` false — manual entry declares the location's features rather than
  *     reading them, so nothing there is ever unavailable; and before a location
@@ -358,6 +353,11 @@ export function unavailableFeatures(
   return features.map((f) => f.id).filter((id) => !locFeatures.includes(id));
 }
 
+/** Which feature to open a location on: the first served feature its funcIds
+ *  carry, else the first served feature. A location carrying both therefore
+ *  starts on the first -- performance, the common case -- and is routed to the
+ *  other by the download-button block if that is where the missing settings
+ *  are. `null` only before the vocabulary lands. */
 export function startFeature(
     funcIds: string[] | undefined, features: Feature[]): string | null {
   return featuresOf(funcIds, features)[0] ?? features[0]?.id ?? null;

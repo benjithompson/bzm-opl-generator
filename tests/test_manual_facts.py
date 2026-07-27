@@ -38,7 +38,7 @@ def _gen(f, **opts):
 def test_manual_facts_match_the_shape_gather_returns():
     """Same keys, so every consumer downstream is indifferent to the source."""
     m = facts_mod.manual(H, S)
-    assert set(m) == set(FACTS) | {"slots", "threads_per_engine"} - set()
+    assert set(m) == set(FACTS) | {"slots", "threads_per_engine"}
     for key in ("harbor_id", "func_ids", "ships", "images", "images_source",
                 "crane_image"):
         assert key in m, key
@@ -169,8 +169,8 @@ def test_gui_browser_images_are_the_known_gap():
 
 def test_fallback_catalogue_repos_are_all_under_the_blazemeter_project():
     """These were read off live inventories rather than derived from the keys --
-    four of them (v4, v3, apm, secrets) do not match their key name, so a typo
-    here is a repo that does not exist."""
+    taurus-cloud is `v4` and apm-image is `apm`, so a repo guessed from its key
+    is one that does not exist."""
     for i in facts_mod.FALLBACK_IMAGES:
         assert i["repo"].startswith("gcr.io/verdant-bulwark-278/blazemeter/"), i
         assert i["key"] and i["tag"] and i["category"]

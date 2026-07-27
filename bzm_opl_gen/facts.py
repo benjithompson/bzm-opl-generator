@@ -82,10 +82,11 @@ def select_images(facts, all_images=False):
 # has run yet, or nobody has account access at all (see `manual`).
 #
 # Keys are the local tags crane resolves IMAGE_OVERRIDES by; repos are what the
-# account actually reports. Most keys map to a repo of the same name, but four
-# do not -- taurus-cloud is `v4`, blazemeter is `v3`, apm-image is `apm`,
-# secrets-image is `secrets` -- so this is a table read off live inventories
-# across the account rather than a naming rule.
+# account actually reports. Most keys map to a repo of the same name, but not
+# all -- taurus-cloud is `v4` and apm-image is `apm` here, and the account has
+# others in the same shape (blazemeter is `v3`, secrets-image is `secrets`).
+# So this is a table read off live agent inventories, not a naming rule: derive
+# a repo from its key and you get one that does not exist.
 FALLBACK_IMAGES = [
     # performance: the taurus engine and its APM sidecar.
     {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},

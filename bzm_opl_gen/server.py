@@ -189,8 +189,8 @@ def manual_facts(m: ManualFactsIn):
     """
     facts = facts_mod.manual(m.harbor_id, m.ship_id, func_ids=m.func_ids)
     return {"facts": facts,
-            # The one caveat worth carrying to the caller rather than leaving
-            # it to notice: no catalogue can name a location's browser images.
+            # Carried rather than left for the caller to notice -- see
+            # facts.gui_images_incomplete for what it means.
             "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
 
 
