@@ -320,6 +320,32 @@ def sv_expose_render(x: SvExposeIn):
     }
 
 
+@app.get("/api/sv-mocks")
+def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
+    """What is deployed in `namespace`, and the host each one answers at.
+
+    The same cluster read as /api/sv-expose without the rendering, because this
+    one rides the UI's existing status poll: the agent reports idle whether or
+    not its virtual services ever became reachable, so a deploy stalled at
+    WAITING_FOR_DOMAIN looks identical to a healthy one in the watch panel.
+
+    Always 200, for the same reason as /api/sv-expose and one more: a poll that
+    401s or 500s every ten seconds either fills the console or gets swallowed by
+    the caller's catch and silently reads as "nothing deployed", which is the
+    one answer this must never fake.
+    """
+    read = livetest.sv_read(namespace)
+    return {
+        "status": read.status,
+        "mocks": [{"name": m["name"], "port": m["port"],
+                   "host": gen_mod.sv_endpoint_host(
+                       m["name"], m["port"], namespace, sv_subdomain)}
+                  for m in read.mocks],
+        "message": SV_READ_MESSAGES.get(read.status, read.detail),
+        "detail": read.detail,
+    }
+
+
 # -- profiles -----------------------------------------------------------------
 
 @app.get("/api/profiles")

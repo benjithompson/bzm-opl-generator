@@ -297,3 +297,54 @@ def test_ui_dev_mode_binds_the_same_host(monkeypatch):
     """--dev reloads through an import string, a second uvicorn.run call that
     used to hardcode its own host -- an easy place for the flag to go missing."""
     assert _served(monkeypatch, host="0.0.0.0", dev=True)["host"] == "0.0.0.0"
+
+
+# -- the deployed virtual services, alongside the heartbeat --------------------
+# The agent reports idle whether or not its virtual services ever became
+# reachable, so a stall is invisible in the watch panel. This is the same
+# cluster read as /api/sv-expose, minus the rendering: it answers what is
+# deployed and at which host, cheaply enough to sit on the existing 10s poll.
+
+def test_sv_mocks_lists_what_is_deployed_and_where_it_answers(fake_cluster):
+    fake_cluster(stdout=SV_PODS)
+    body = client.get("/api/sv-mocks",
+                      params={"namespace": "ns1",
+                              "sv_subdomain": "apps.example.com"}).json()
+    assert body["status"] == "ok"
+    # The host is the one BlazeMeter advertises, so it can be pasted straight
+    # into a browser -- and it is built by the generator, not restated here.
+    assert body["mocks"] == [{"name": "vs1svc2", "port": 8080,
+                              "host": "vs1svc2-8080-ns1.apps.example.com"}]
+
+
+def test_sv_mocks_separates_deployed_nothing_from_cannot_look(fake_cluster):
+    """An empty namespace and an unreadable cluster are different answers: one
+    says the virtual service has not deployed yet, the other says this machine
+    cannot tell you either way. The watch panel has to say which."""
+    fake_cluster(stdout=json.dumps({"items": []}))
+    empty = client.get("/api/sv-mocks", params={"namespace": "ns1"}).json()
+    assert empty["status"] == "no_mocks" and empty["mocks"] == []
+    assert empty["message"]
+
+    fake_cluster(tools=())
+    blind = client.get("/api/sv-mocks", params={"namespace": "ns1"}).json()
+    assert blind["status"] == "no_cli" and blind["mocks"] == []
+    assert "kubectl" in blind["message"] or "oc" in blind["message"]
+
+
+def test_sv_mocks_without_a_subdomain_still_lists_the_mocks(fake_cluster):
+    """The subdomain lives in the options, and the panel polls whether or not
+    one is set yet. Losing the host is fine; losing the list is not."""
+    fake_cluster(stdout=SV_PODS)
+    body = client.get("/api/sv-mocks", params={"namespace": "ns1"}).json()
+    assert [m["name"] for m in body["mocks"]] == ["vs1svc2"]
+    assert body["mocks"][0]["host"] is None
+
+
+def test_sv_mocks_never_errors_the_poll(fake_cluster):
+    """It rides the status poll, which keeps the last good answer on failure.
+    A 4xx/5xx here would either spam the console every 10s or, worse, be
+    swallowed and read as 'no virtual services'."""
+    fake_cluster(rc=1, stderr="error: current-context is not set")
+    r = client.get("/api/sv-mocks", params={"namespace": "ns1"})
+    assert r.status_code == 200 and r.json()["status"] == "no_context"

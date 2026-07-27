@@ -65,6 +65,9 @@ export const api = {
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   svExpose: (body: SvExposeIn) => req<SvExposeOut>("POST", "/api/sv-expose", body),
+  svMocks: (namespace: string, subdomain: string) =>
+    req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
+      subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
 };
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
@@ -95,6 +98,16 @@ export type FuncIdChoice = { id: string; label: string };
  *  preview pane renders it. */
 export type SvExposeStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
 export interface SvMock { name: string; port: number; harbor: string; ship: string }
+
+/** What is deployed right now, for the watch panel. Shares the four
+ *  unreachable-cluster reasons with sv-expose, because it is the same read --
+ *  `host` is null until a wildcard domain is configured. */
+export interface SvMocksOut {
+  status: SvExposeStatus;
+  mocks: { name: string; port: number; host: string | null }[];
+  message: string;
+  detail: string;
+}
 export interface SvExposeIn {
   namespace: string;
   sv_subdomain?: string | null;

@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
+  SvMocksOut,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, SvConstants, SvExposeIn,
   SvExposeOut, Workspace,
 } from "./api";
@@ -101,11 +102,18 @@ export default function App() {
     { func_ids: [], ingress_types: [], backends: {} });
   type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
+  // One way to read a text option. Written out per-site, the `.trim()` was
+  // getting forgotten -- an ingress name pasted with a trailing space missed
+  // the SV_PREREQS lookup and the panel silently lost its prose.
+  const txt = useCallback(
+    (k: string) => String(options[k] ?? "").trim(), [options]);
+
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [svMocks, setSvMocks] = useState<SvMocksOut | null>(null);
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
 
@@ -217,13 +225,31 @@ export default function App() {
     }, 250);
   }, [facts, options, shipId]);
 
-  // agent status polling
+  // agent status polling. An SV deployment also reads the namespace on the same
+  // tick: the agent reports idle whether or not its virtual services ever
+  // became reachable, so the heartbeat alone stays green through a deploy
+  // stalled at WAITING_FOR_DOMAIN.
+  //
+  // The SV parameters travel by ref, not by dependency: they come from options,
+  // and depending on them would tear down and restart the interval on every
+  // keystroke in the namespace field.
+  const svWatchRef = useRef({ on: false, ns: "", dom: "" });
+  svWatchRef.current = { on: !!txt("sv_ingress"), ns: txt("namespace"),
+                         dom: txt("sv_subdomain") };
   useEffect(() => {
     if (!polling || !harborId || !shipId) return;
     let live = true;
     const tick = async () => {
-      try { const s = await api.status(harborId, shipId); if (live) setStatus(s); }
-      catch { /* keep last */ }
+      const { on, ns, dom } = svWatchRef.current;
+      // Started together rather than awaited in turn, so the virtual-service
+      // read never delays the answer the panel is actually built around.
+      const [s, m] = await Promise.allSettled([
+        api.status(harborId, shipId),
+        on && ns ? api.svMocks(ns, dom) : Promise.resolve(null),
+      ]);
+      if (!live) return;
+      if (s.status === "fulfilled") setStatus(s.value);   // else keep the last
+      if (m.status === "fulfilled") setSvMocks(m.value);
     };
     tick();
     const t = window.setInterval(tick, 10000);
@@ -407,12 +433,6 @@ export default function App() {
     // an SV location anyway.
     if (k === "sv") flipGroup("sv", true);
   };
-
-  // One way to read a text option. Written out per-site, the `.trim()` was
-  // getting forgotten -- an ingress name pasted with a trailing space missed
-  // the SV_PREREQS lookup and the panel silently lost its prose.
-  const txt = useCallback(
-    (k: string) => String(options[k] ?? "").trim(), [options]);
 
   const namespaceOk = !!txt("namespace");
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
@@ -1197,6 +1217,34 @@ export default function App() {
                     </span>
                   )}
                 </div>
+                {/* An idle agent says nothing about whether its virtual services
+                    became reachable, which is the part of an SV deploy that
+                    actually stalls. Only for an SV deployment -- the
+                    performance panel is exactly as it was. */}
+                {polling && !!options.sv_ingress && svMocks && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-slate-600 mb-1">
+                      Virtual services in {svCtx.ns}
+                    </p>
+                    {svMocks.mocks.length > 0 ? (
+                      <ul className="space-y-0.5">
+                        {svMocks.mocks.map((m: SvMocksOut["mocks"][number]) => (
+                          <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
+                            <span className="font-medium text-slate-700">{m.name}</span>
+                            <span className="text-slate-400">:{m.port}</span>
+                            {m.host
+                              ? <> — <code className="text-slate-700">{m.host}</code></>
+                              : <> — set a wildcard domain to get the endpoint host</>}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      // "Nothing deployed" and "cannot look" are different
+                      // answers, and the second must not read as the first.
+                      <p className="text-[11px] text-slate-400">{svMocks.message}</p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </Section>
