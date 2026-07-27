@@ -273,9 +273,15 @@ def test_mirror_script_is_self_contained():
     # Says where credentials are and are not needed, and names the login.
     assert "Pulling needs no credentials" in sh
     assert "docker login reg.corp.com" in sh
-    # The push probe runs before the first pull.
-    assert sh.index("push access") < sh.index("docker pull")
+    # crane is mirrored first: it is ~86MB against the engine's ~3.5GB, so a
+    # registry that refuses the push costs one small image rather than the lot.
+    assert sh.index("crane:") < sh.index("v4:")
+    # A refused push says what to do about it, and stops rather than continuing.
+    assert "docker login reg.corp.com" in sh
     assert "exit 1" in sh
+    # No synthetic probe image: `docker rmi` is local-only, so anything pushed
+    # to check access would stay in the customer's registry for good.
+    assert "probe" not in sh.lower()
     # bash strict mode, so a mid-way failure stops rather than pushing garbage.
     assert "set -euo pipefail" in sh
 
@@ -323,8 +329,12 @@ def test_mirror_script_with_private_registry():
     files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": "reg.local/bzm"})
     sh = files["bzm-opl-image-mirror.sh"]
     assert sh.startswith("#!/usr/bin/env bash")
-    assert "docker pull --platform linux/amd64 gcr.io/verdant-bulwark-278/blazemeter/v4:2.4.444-reduced" in sh
-    assert "docker push reg.local/bzm/crane:3.7.55" in sh
+    # Every image is pulled amd64 (engines are amd64-only) and retagged into the
+    # destination. The commands live in a shell function now, so this asserts the
+    # refs reach the script rather than the exact line shape.
+    assert "--platform linux/amd64" in sh
+    assert "gcr.io/verdant-bulwark-278/blazemeter/v4:2.4.444-reduced" in sh
+    assert "reg.local/bzm/crane:3.7.55" in sh
     assert "service-mock" not in sh  # performance-only by default
     files2 = gen.generate(FACTS, {"namespace": "ns1"})
     assert "bzm-opl-image-mirror.sh" not in files2

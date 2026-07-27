@@ -92,12 +92,10 @@ export default function App() {
   // which way they arrived -- that is the whole point of manual facts being the
   // same shape gather() returns.
   const [sourceMode, setSourceMode] = useState<"connect" | "manual">("connect");
-  // func_ids starts empty rather than ["performance"]: the starting-feature
-  // effect calls pickFeature on mount, and in manual mode that seeds it from the
-  // served vocabulary. A literal funcId here would be the frontend copy this
-  // repo has been bitten by.
-  const [manual, setManual] = useState<{ harbor_id: string; ship_id: string; func_ids: string[] }>(
-    { harbor_id: "", ship_id: "", func_ids: [] });
+  // Identity only. What the location runs is derived from the selected feature
+  // (manualFuncIds below) rather than stored: it was state with two writers that
+  // disagreed on the miss case, and it is a pure function of `feature`.
+  const [manual, setManual] = useState({ harbor_id: "", ship_id: "" });
   // Collapsed once the source is settled: three steps' worth of pickers is
   // noise while you are configuring, and the summary says what was chosen.
   const [sourceOpen, setSourceOpen] = useState(true);
@@ -293,6 +291,26 @@ export default function App() {
     if (sourceMode === "connect" && facts && shipId) setSourceOpen(false);
   }, [sourceMode, facts, shipId]);
 
+  // Manual mode declares the location's funcIds through the feature buttons, so
+  // it needs to know which funcIds a feature stands for. Only the ones that
+  // change the images are offered -- the rest generate the same bundle.
+  const imageFuncs = useMemo(
+    () => new Set(funcIdChoices.filter((c) => c.changes_images).map((c) => c.id)),
+    [funcIdChoices]);
+  /** The funcId a feature declares when it is the manual-mode declaration: the
+   *  first of the ones it claims that changes the images. */
+  const primaryFuncOf = useCallback(
+    (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
+      .find((x) => imageFuncs.has(x)),
+    [features, imageFuncs]);
+  // What manual mode declares the location runs: the selected feature's primary
+  // funcId. No literal funcId in TypeScript -- it comes from the served
+  // vocabulary via primaryFuncOf.
+  const manualFuncIds = useMemo(() => {
+    const primary = primaryFuncOf(feature);
+    return primary ? [primary] : [];
+  }, [primaryFuncOf, feature]);
+
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
   // Debounced for the same reason the preview is: this runs on every keystroke.
@@ -307,13 +325,13 @@ export default function App() {
       api.manualFacts({
         harbor_id: manual.harbor_id.trim(),
         ship_id: manual.ship_id.trim(),
-        func_ids: manual.func_ids,
+        func_ids: manualFuncIds,
       }).then((r: ManualFactsOut) => {
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
       }).catch((e) => setGenErr(String(e.message)));
     }, 250);
-  }, [sourceMode, manual]);
+  }, [sourceMode, manual, manualFuncIds]);
 
   // Switching modes drops what the other one established. Leaving a connected
   // location's facts in place while manual fields are on screen is how the
@@ -324,8 +342,6 @@ export default function App() {
     setSourceMode(mode);
     setFacts(null); setShipId(null); setStatus(null); setGenErr(null);
     setSourceOpen(true);
-    const primary = mode === "manual" ? primaryFuncOf(feature) : undefined;
-    setManual((m) => ({ ...m, func_ids: primary ? [primary] : [] }));
     // The token is fetched on download when connected, and typed when not --
     // so it must not survive the switch either way.
     set("auth_token", null);
@@ -440,28 +456,13 @@ export default function App() {
   // every manifest, so suggesting on a manual switch would make looking at a
   // feature change the bundle -- the one thing a view is not allowed to do. It
   // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
-  // Manual mode declares the location's funcIds through the feature buttons, so
-  // it needs to know which funcIds a feature stands for. Only the ones that
-  // change the images are offered -- the rest generate the same bundle.
-  const imageFuncs = useMemo(
-    () => new Set(funcIdChoices.filter((c) => c.changes_images).map((c) => c.id)),
-    [funcIdChoices]);
-  /** The funcId a feature declares when it is the manual-mode declaration: the
-   *  first of the ones it claims that changes the images. */
-  const primaryFuncOf = useCallback(
-    (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
-      .find((x) => imageFuncs.has(x)),
-    [features, imageFuncs]);
+
   const pickFeature = useCallback((id: string, suggestNs = false) => {
     setFeature(id);
-    // Manual mode has no account to read funcIds from, so the feature buttons
-    // are the declaration: picking one sets what the location runs. Connected,
-    // the account already said, and this stays a view.
+    // In manual mode the feature buttons are the declaration rather than a
+    // view -- but nothing is written here: manualFuncIds derives it from
+    // `feature`, so selecting one is the whole action.
     const f = features.find((x) => x.id === id);
-    if (sourceMode === "manual") {
-      const primary = primaryFuncOf(id);
-      if (primary) setManual((m) => ({ ...m, func_ids: [primary] }));
-    }
     if (!f || !suggestNs) return;
     setOptions((o) => {
       const ns = suggestNamespace(String(o.namespace ?? ""), f, features);
@@ -469,7 +470,7 @@ export default function App() {
       // /api/generate for options that did not change.
       return ns == null ? o : { ...o, namespace: ns };
     });
-  }, [features, sourceMode, primaryFuncOf]);
+  }, [features]);
 
   // Which feature a location opens on, from its funcIds. Keyed on the harbor
   // rather than on `facts`, which is refetched after creating an agent: that
