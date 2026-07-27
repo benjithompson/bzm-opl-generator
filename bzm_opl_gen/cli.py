@@ -108,7 +108,7 @@ def cmd_generate(a):
     if a.profile:
         with open(a.profile) as fh:
             opts.update(json.load(fh))
-    for key in ("platform", "namespace", "ship_id", "auth_token",
+    for key in ("platform", "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
                 "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
         v = getattr(a, key, None)
@@ -274,6 +274,16 @@ def cmd_livetest(a):
         opts = None
         print(f"note: no {a.manifests}/profile.json -- skipping the read-back "
               f"configuration checks (regenerate to enable them)")
+    # The rig applies YAML with kubectl and reads it back object by object, so a
+    # chart bundle has nothing at the top level for it to apply. Say so here
+    # rather than letting the glob come back empty and the agent never appear.
+    if opts and opts.get("output_format") == "helm":
+        sys.exit(
+            f"{a.manifests}/ holds a Helm chart, and livetest deploys manifests "
+            f"with kubectl. Re-generate that directory with --format manifests "
+            f"(the two render the same objects), or install the chart yourself "
+            f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
+            f"logs -l role=role-crane -f")
     proxy_user = proxy_pass = None
     # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
     # the engine sizing); the callback needs a profile to merge onto, so it is
@@ -364,6 +374,12 @@ def main():
     g.add_argument("--facts", default="facts.json")
     g.add_argument("--api-key", help="fetch AUTH_TOKEN from the API if not given")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
+    g.add_argument("--format", dest="output_format",
+                   choices=list(gen_mod.OUTPUT_FORMATS),
+                   help="manifests (default): flat YAML to kubectl apply. "
+                        "helm: a chart in helm/ with values.yaml filled in from "
+                        "the account. Both render the same objects; helm covers "
+                        "performance testing only")
     g.add_argument("--platform", choices=["openshift", "k8s"])
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")

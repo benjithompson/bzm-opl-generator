@@ -5,7 +5,8 @@ import {
   SvMocksOut, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section,
+  SegmentedControl, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
 import { SvCtx } from "./SvPrereqs";
@@ -408,6 +409,22 @@ export default function App() {
   // toggles above use.
   const svNodePortConflict = options.service_type != null
     && options.service_type !== "CLUSTERIP";
+  // What the bundle is: flat YAML to kubectl apply, or the chart with a values
+  // overlay. Both render the same objects -- the choice is how you install and
+  // upgrade -- except that the chart is performance-only, so an SV location is
+  // held to manifests and the segment says why instead of disappearing.
+  const format = String(options.output_format ?? "manifests");
+  const helmBlocked = svRequired
+    ? "Not for this location — service virtualization needs an ingress, its RBAC "
+      + "and a TLS secret, which this chart does not carry."
+    : undefined;
+  // A location can turn out to be an SV one after the format was picked, and an
+  // imported profile can arrive already set to helm. Fall back rather than
+  // leaving a disabled segment selected and every generate call failing.
+  useEffect(() => {
+    if (svRequired && options.output_format === "helm") set("output_format", "manifests");
+  }, [svRequired, options.output_format, set]);
+
   const svOk = (options.sv_ingress
     ? !!txt("sv_subdomain") && !!txt("sv_tls_secret") && !svNodePortConflict
     : !svRequired);
@@ -973,6 +990,23 @@ export default function App() {
           {/* 5 · Download & verify */}
           <Section n={5} title="Download & verify">
             <div className="space-y-3">
+              <SegmentedControl
+                label="Output format"
+                value={format}
+                onChange={(v) => set("output_format", v)}
+                options={[
+                  {
+                    value: "manifests",
+                    label: "Kubernetes manifests",
+                    hint: "Flat YAML you kubectl apply. Live-testable with bzm-opl-gen livetest.",
+                  },
+                  {
+                    value: "helm",
+                    label: "Helm chart",
+                    hint: "The chart plus a values overlay from this account. helm install / upgrade.",
+                    disabledReason: helmBlocked,
+                  },
+                ]} />
               <div className="flex gap-2 items-center">
                 <Button disabled={!facts || !shipId || !!genErr || !svOk}
                   onClick={() => {
@@ -983,7 +1017,10 @@ export default function App() {
                   ⬇ Download bundle (.zip)
                 </Button>
                 <span className="text-xs text-slate-400">
-                  manifests + README{options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
+                  {format === "helm"
+                    ? "helm/ + bzm-opl-values.yaml + README"
+                    : "manifests + README"}
+                  {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
                   AUTH_TOKEN fetched on download
                 </span>
               </div>

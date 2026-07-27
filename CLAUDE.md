@@ -18,6 +18,16 @@ went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
 is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
 optional deps import rather than trusting a green run.
 
+**Helm parity (`python tests/helm_parity.py`)** — renders 17 option
+combinations as both `--format manifests` and `--format helm` and requires the
+same objects out of each. Deliberately *not* a pytest module: it shells out to
+`helm`, and a test that skips when a binary is missing is the fastapi problem
+again. It has its own CI job. Every judgement in `templates/*.yaml` had to be
+restated in Go templates, and nothing else notices one being restated slightly
+differently. Its offline counterpart is `tests/test_helm.py`, which covers
+everything decided in Python (the values overlay, the refusals) and needs no
+helm. Add to both when you touch either side.
+
 **Live rig (`bzm-opl-gen livetest`)** — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
 Canonical full invocation:
@@ -124,6 +134,17 @@ the classes of problem it can't fix for you.
 - `generate` writes `out/profile.json` (resolved options minus `auth_token`);
   `livetest` re-renders from it, so manifests under test stay generator output
   rather than hand-patched YAML.
+- **The chart is copied, never re-rendered.** `--format helm` walks
+  `templates/helm/` and emits it verbatim, so anything added there ships in every
+  generated bundle — including files `package-data` would drop. Its globs do not
+  recurse and `*` does not match a leading dot, which is why `.helmignore` and
+  each directory are named explicitly in `pyproject.toml`; the release workflow
+  asserts the wheel carries them, because a missing chart file fails at generate
+  time on an installed copy and never in a checkout.
+- `--format helm` refuses a service-virtualization location, and `livetest`
+  refuses a chart directory. Both are one-line guards over silent failures —
+  a chart without the ingress stalls at `WAITING_FOR_DOMAIN`, and the rig's
+  `*.yaml` glob would come back empty.
 - CA bundles exceed the 256KB cap on kubectl's last-applied-configuration
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;

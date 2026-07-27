@@ -35,6 +35,51 @@ def test_generate_zip_mirror_script_executable():
     assert "bzm-opl/bzm_configmap.yaml" in z.namelist()
 
 
+def test_generate_preview_helm_format():
+    """The preview leads with the values overlay -- the only file in a chart
+    bundle that came from the account, and so the one worth reading first."""
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"},
+        "fetch_token": False})
+    assert r.status_code == 200
+    names = [f["name"] for f in r.json()["files"]]
+    assert names[0] == "bzm-opl-values.yaml"
+    assert "helm/templates/deployment.yaml" in names
+    assert "bzm_deployment.yaml" not in names
+
+
+def test_generate_zip_helm_keeps_the_chart_directory():
+    """Names carry directories in this format, and a zip that flattened them
+    would download as a pile of files no helm command can install."""
+    r = client.post("/api/generate/zip", json={
+        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"},
+        "fetch_token": False})
+    assert r.status_code == 200
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert "bzm-opl/helm/Chart.yaml" in names
+    assert "bzm-opl/helm/templates/deployment.yaml" in names
+    assert "bzm-opl/bzm-opl-values.yaml" in names
+
+
+def test_generate_helm_rejects_service_virtualization_400():
+    """The UI disables the segment for an SV location; this is the other half --
+    an imported profile can arrive set to helm."""
+    facts = dict(FACTS, func_ids=["mockServices"])
+    r = client.post("/api/generate", json={
+        "facts": facts, "fetch_token": False,
+        "options": {"namespace": "ns1", "output_format": "helm",
+                    "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
+                    "sv_tls_secret": "wildcard"}})
+    assert r.status_code == 400
+    assert "performance testing only" in r.json()["detail"]
+
+
+def test_option_defaults_carry_the_output_format():
+    """The UI seeds its options from this response, so a format missing from
+    DEFAULT_OPTIONS is a segment that starts blank."""
+    assert client.get("/api/option-defaults").json()["output_format"] == "manifests"
+
+
 def test_generate_invalid_options_400():
     facts = dict(FACTS, ships=FACTS["ships"] * 2)    # ambiguous ship
     r = client.post("/api/generate", json={

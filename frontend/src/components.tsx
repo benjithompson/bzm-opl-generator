@@ -90,6 +90,67 @@ export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) =
   );
 }
 
+export interface SegmentOption {
+  value: string;
+  label: string;
+  /** One line under the label, always visible -- these are choices someone
+   *  makes once and needs to understand, not toggles they flip while reading. */
+  hint?: string;
+  /** Set to explain why the segment cannot be picked. A disabled segment stays
+   *  visible and says why: hiding it would leave "where did the Helm option go"
+   *  as the user's problem to solve. */
+  disabledReason?: string;
+}
+
+/** An exclusive choice between two or three named alternatives, where both are
+ *  legitimate and the difference is worth a sentence. A Switch would imply one
+ *  of them is "off". */
+export function SegmentedControl(props: {
+  value: string;
+  onChange: (v: string) => void;
+  options: SegmentOption[];
+  label?: string;
+}) {
+  return (
+    <div>
+      {props.label && (
+        <span className="text-xs font-medium text-slate-600">{props.label}</span>
+      )}
+      <div role="radiogroup" aria-label={props.label}
+        className="mt-1 grid gap-2" style={{
+          gridTemplateColumns: `repeat(${props.options.length}, minmax(0, 1fr))`,
+        }}>
+        {props.options.map((o) => {
+          const on = o.value === props.value;
+          const off = !!o.disabledReason;
+          return (
+            <button key={o.value} role="radio" aria-checked={on} disabled={off}
+              title={o.disabledReason}
+              onClick={() => props.onChange(o.value)}
+              className={"text-left rounded-md border px-3 py-2 transition-colors " +
+                (off
+                  ? "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed"
+                  : on
+                    ? "border-bzm bg-bzm/5 text-slate-900"
+                    : "border-slate-300 text-slate-600 hover:bg-slate-50")}>
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                <span aria-hidden className={"inline-block w-3 h-3 rounded-full border " +
+                  (on ? "border-[4px] border-bzm" : "border-slate-300")} />
+                {o.label}
+              </span>
+              {(o.disabledReason ?? o.hint) && (
+                <span className="block text-[11px] leading-snug mt-0.5 pl-[18px]">
+                  {o.disabledReason ?? o.hint}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export interface SelectOption {
   value: string | number;
   label: string;

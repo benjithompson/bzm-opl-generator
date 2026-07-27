@@ -239,6 +239,7 @@ startup, and it is the wrong tool on any network you do not control.
 | Option | Default | Meaning |
 |---|---|---|
 | `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON); `k8s` = pinned runAsUser 1337 |
+| `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay — see [Helm](#helm-output-format) |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified) |
 | `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, disables auto-update, rewrites crane image |
 | `pull_secret` | – | imagePullSecrets name for the crane image |
@@ -253,6 +254,50 @@ startup, and it is the wrong tool on any network you do not control.
 | `emit_limitrange` | `false` | emit `bzm_limitrange.yaml`: a namespace `max` at the engine size plus defaults for pods that declare no resources. It does **not** change the taurus engine — see below |
 | `engine_cpu_request` / `engine_mem_request` | – (= the limits) | override that `defaultRequest`; must not exceed the limits |
 | `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
+
+## Helm output format
+
+`--format helm` emits the same deployment as a chart instead of flat manifests:
+
+```
+bzm-opl-gen generate --format helm --namespace my-project \
+    --api-key api-key.json -o out/
+
+helm install crane ./out/helm -n my-project --create-namespace \
+    -f out/bzm-opl-values.yaml
+```
+
+`out/helm/` is the chart, byte-identical for every customer.
+`out/bzm-opl-values.yaml` is the overlay, and the only file generated from the
+account. It is an overlay rather than a rewritten `helm/values.yaml` on purpose:
+the chart's own values file holds defaults the generator does not own — crane's
+resources, the probe timings — and writing a complete file would mean restating
+them where they could drift. Re-generating replaces the overlay and leaves the
+chart untouched. `helm show values ./out/helm` documents every key.
+
+Both formats render **the same objects** — same ConfigMap data, RBAC rules,
+LimitRange, container spec — so the choice is about how you install and upgrade,
+not about what ends up in the cluster. `tests/helm_parity.py` renders 17 option
+combinations both ways and requires them to agree; it runs as its own CI job
+because it is the one check that needs the `helm` binary.
+
+Two things differ, both deliberate:
+
+- **Service virtualization is not supported.** Publishing a virtual service
+  needs an ingress backend, the RBAC for whichever one it is, and a wildcard TLS
+  secret. `--format helm` refuses an SV location rather than emitting a chart
+  that would deploy, report idle, and stall at `WAITING_FOR_DOMAIN`. Use
+  `--format manifests`, or the upstream
+  [Blazemeter/helm-crane](https://github.com/Blazemeter/helm-crane) chart.
+- **`livetest` does not take a chart directory.** The rig applies YAML with
+  kubectl and reads it back object by object; it exits with that message rather
+  than globbing an empty top level. Re-generate as manifests to live-test, then
+  ship whichever format you prefer — parity is what makes that safe.
+
+The chart is also usable on its own, without generating anything — see
+`bzm_opl_gen/templates/helm/README.md`. Standalone it floats the crane image tag
+on `latest` and needs `imageOverrides` written by hand for a private registry;
+generating fills both in from the account, which is the main reason to.
 
 ## Service virtualization
 

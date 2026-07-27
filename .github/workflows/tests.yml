@@ -38,6 +38,40 @@ jobs:
               --namespace ci-demo -o "$RUNNER_TEMP/out"
           test -s "$RUNNER_TEMP/out/bzm_deployment.yaml"
 
+      # Same path in the other format. The chart is copied out of package data,
+      # so this is also what catches a chart file that never shipped.
+      - name: generate the chart from the same sample facts
+        run: |
+          python -m bzm_opl_gen generate --format helm \
+              --facts examples/facts.example.json \
+              --namespace ci-demo -o "$RUNNER_TEMP/chart"
+          test -s "$RUNNER_TEMP/chart/bzm-opl-values.yaml"
+          test -s "$RUNNER_TEMP/chart/helm/templates/deployment.yaml"
+          test -s "$RUNNER_TEMP/chart/helm/.helmignore"
+
+  # `--format helm` renders the same objects as `--format manifests`. Its own
+  # job because it is the one check that needs the helm binary, and the offline
+  # suite must not: a suite that skips when a tool is missing reports a clean
+  # pass having tested nothing (the fastapi lesson, one job up).
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: azure/setup-helm@v4
+
+      - run: pip install -e ".[dev]"
+
+      - name: the chart lints on its own
+        run: |
+          helm lint --strict bzm_opl_gen/templates/helm \
+              --set harborId=h --set shipId=s --set-string authToken=t
+
+      - name: helm and manifests render the same objects
+        run: python tests/helm_parity.py
+
   # The web UI. Separate from the python job rather than bolted onto its
   # matrix: it shares no toolchain with it, and running it twice over two
   # python versions would say nothing new. The suite is the option-group
