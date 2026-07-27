@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { Options } from "./api";
+import { Feature, Options } from "./api";
 import {
-  allGroupsOff, detectGroups, ENGINE_SIZES, GROUP_BY_ID, GroupId, OPTION_GROUPS,
+  allGroupsOff, ANY_DEPLOYMENT, appliesTo, detectGroups, ENGINE_SIZES,
+  featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
+  OPTION_GROUPS, OptionGroup,
+  setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 
 // The lifecycle of a group is data in, data out -- a detect over the options, a
@@ -219,5 +222,280 @@ describe("switching a group on", () => {
         ca_existing_configmap: "corp", ca_configmap_key: "k",
         ca_bundle: null, ca_openshift_inject: false,
       });
+  });
+});
+
+// -- the feature view ---------------------------------------------------------
+// One feature is configured at a time, chosen from a list /api/features serves.
+// Nothing in the frontend enumerates features: groups tag themselves with the
+// feature ids they belong to, and everything else -- labels, suggested
+// namespaces, which funcIds mean which feature -- is read off the served list.
+// So the vocabulary below is a fixture standing in for that response, and the
+// "a feature was added" tests extend it exactly the way server.py would.
+
+const PERF: Feature = {
+  id: "performance", label: "Performance & functional testing",
+  hint: "load and functional tests", namespace: "blazemeter",
+  func_ids: ["performance", "functionalApi", "functionalGui", "proxyRecorder"],
+};
+const SV: Feature = {
+  id: "sv", label: "Service virtualization", hint: "virtual services",
+  namespace: "blazemeter-sv", func_ids: ["mockServices"],
+};
+const FEATURES = [PERF, SV];
+/** Added the way a real new feature is: one entry in the served vocabulary, and
+ *  no frontend edit at all until some group wants to be tagged with it. */
+const SECRETS: Feature = {
+  id: "secrets", label: "Private vault", hint: "secrets from a vault",
+  namespace: "blazemeter-vault", func_ids: ["secretsPrivateVault"],
+};
+/** funcIds the tool does not model. Real locations carry them today. */
+const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
+
+const ids = (gs: OptionGroup[]) => gs.map((g) => g.id);
+/** The groups no feature owns -- registry, proxy, CA, scheduling: they apply to
+ *  any deployment, so they are on screen whatever is being configured. */
+const UNIVERSAL = ids(OPTION_GROUPS.filter((g) => !g.features.length));
+
+describe("group attribution", () => {
+  it("tags every group with features the served vocabulary knows", () => {
+    for (const g of OPTION_GROUPS) {
+      for (const f of g.features) expect(FEATURES.map((x) => x.id)).toContain(f);
+    }
+  });
+
+  it("says which feature a group belongs to, or that it applies to any", () => {
+    expect(appliesTo(GROUP_BY_ID.sv, FEATURES)).toBe(SV.label);
+    expect(appliesTo(GROUP_BY_ID.sizing, FEATURES)).toBe(PERF.label);
+    expect(appliesTo(GROUP_BY_ID.proxy, FEATURES)).toBe(ANY_DEPLOYMENT);
+  });
+
+  it("falls back to the raw id for a feature the vocabulary has not named", () => {
+    // The same deliberate failure mode as the funcId labels: an unlabelled
+    // feature is shown under its id rather than leaving a group unattributed.
+    expect(appliesTo(GROUP_BY_ID.sv, [])).toBe("sv");
+  });
+});
+
+describe("which groups are in view", () => {
+  it("shows a feature's own groups plus the ones that apply to any", () => {
+    // sv is the last declaration, so its view is the universal groups then it.
+    expect(ids(visibleGroups("sv"))).toEqual([...UNIVERSAL, "sv"]);
+    expect(ids(visibleGroups("performance"))).toContain("sizing");
+    expect(ids(visibleGroups("performance"))).not.toContain("sv");
+    expect(ids(visibleGroups("sv"))).not.toContain("sizing");
+  });
+
+  it("keeps the declaration order, so the form does not reshuffle", () => {
+    const shown = ids(visibleGroups("performance"));
+    expect(shown).toEqual(ids(OPTION_GROUPS).filter((id) => shown.includes(id)));
+  });
+
+  it("shows the any-deployment groups for a feature no group is tagged with", () => {
+    // What a newly added feature looks like before anything is tagged with it:
+    // the registry/proxy/CA/scheduling options, and nothing claimed falsely.
+    expect(ids(visibleGroups(SECRETS.id))).toEqual(UNIVERSAL);
+  });
+
+  it("hides nothing until a feature is chosen", () => {
+    // The vocabulary is fetched; a failed or pending fetch must not take
+    // options off the page.
+    expect(ids(visibleGroups(null))).toEqual(ids(OPTION_GROUPS));
+  });
+
+  it("is a selection, not a patch -- the options are never touched", () => {
+    // The selector is a view, not a scope: narrowing it may not change what the
+    // manifests contain, so none of these may write an option. A frozen input
+    // makes an attempt throw rather than pass silently.
+    const frozen = Object.freeze({ ...FULL });
+    expect(() => {
+      visibleGroups("sv");
+      setButHidden(frozen, "sv");
+      hiddenBlockers([GROUP_BY_ID.sv], "performance");
+    }).not.toThrow();
+    expect(frozen).toEqual(FULL);
+  });
+});
+
+describe("set but not in view", () => {
+  it("reports a group configured under another feature", () => {
+    // FULL has every group's fields set, so viewing performance leaves the SV
+    // ingress set and off screen -- exactly what must not ship invisibly.
+    expect(ids(setButHidden(FULL, "performance"))).toEqual(["sv"]);
+    expect(ids(setButHidden(FULL, "sv"))).toEqual(["sizing"]);
+  });
+
+  it("reports nothing when the hidden groups hold nothing", () => {
+    expect(setButHidden({ namespace: "blazemeter" }, "performance")).toEqual([]);
+  });
+
+  it("never reports a group that is on screen", () => {
+    for (const f of [...FEATURES, SECRETS]) {
+      const shown = new Set(ids(visibleGroups(f.id)));
+      for (const g of setButHidden(FULL, f.id)) expect(shown.has(g.id)).toBe(false);
+    }
+  });
+
+  it("reports every group when a feature owning them is not in view", () => {
+    // A feature with no groups of its own still hides the other features':
+    // both tagged groups are set in FULL and neither is on screen.
+    expect(ids(setButHidden(FULL, SECRETS.id))).toEqual(["sizing", "sv"]);
+  });
+});
+
+describe("required but not in view", () => {
+  const unfinished = incompleteGroups({ sv_ingress: "nginx" }, {});
+
+  it("is the unfinished groups the current view is hiding", () => {
+    // Which groups are unfinished is each group's own rule; this only says
+    // whether the reason is even on screen.
+    expect(hiddenBlockers(unfinished, "performance")).toEqual([GROUP_BY_ID.sv]);
+  });
+
+  it("says nothing when the group needing attention is on screen", () => {
+    // Then the group renders its own error, which is where it belongs.
+    expect(hiddenBlockers(unfinished, "sv")).toEqual([]);
+  });
+
+  it("says nothing when nothing is incomplete", () => {
+    expect(hiddenBlockers([], "performance")).toEqual([]);
+  });
+
+  it("never blocks on a group that applies to any deployment", () => {
+    // It cannot be off screen, so it can never be the hidden reason.
+    expect(hiddenBlockers([GROUP_BY_ID.registry, GROUP_BY_ID.proxy], "sv"))
+      .toEqual([]);
+  });
+
+  it("labels the switch from the served vocabulary, like every other row", () => {
+    // One label lookup, so the button and the "also in this bundle" line
+    // beside it cannot disagree about what a group is called.
+    const [g] = hiddenBlockers(unfinished, "performance");
+    expect(appliesTo(g, FEATURES)).toBe(SV.label);
+    expect(appliesTo(g, [])).toBe("sv");     // unnamed feature falls back
+  });
+});
+
+describe("which feature a location starts on", () => {
+  it("picks the feature its funcIds carry", () => {
+    expect(startFeature(["mockServices"], FEATURES)).toBe("sv");
+    expect(startFeature(["functionalGui"], FEATURES)).toBe("performance");
+  });
+
+  it("picks the first served feature for a location carrying both", () => {
+    // Deliberate: a location doing both is a performance location that also
+    // serves mocks, and the download-button block routes to the SV settings
+    // when they are what is missing.
+    expect(startFeature(["mockServices", "performance"], FEATURES)).toBe("performance");
+    expect(featuresOf(["mockServices", "performance"], FEATURES))
+      .toEqual(["performance", "sv"]);
+  });
+
+  it("is not broken by a funcId the tool does not model", () => {
+    // Real locations carry tdm/dataPublisher/delphix today. An unmodelled
+    // funcId claims no feature: alongside a modelled one it is ignored, and
+    // alone it leaves the default rather than an empty selector.
+    expect(startFeature([...UNMODELLED, "mockServices"], FEATURES)).toBe("sv");
+    expect(startFeature(UNMODELLED, FEATURES)).toBe("performance");
+    expect(featuresOf(UNMODELLED, FEATURES)).toEqual([]);
+    // …and they are nameable, so the page can say what it has no options for
+    // rather than pretending the location is only what it models.
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FEATURES))
+      .toEqual(UNMODELLED);
+    expect(unclaimedFuncIds(["performance", "mockServices"], FEATURES)).toEqual([]);
+    expect(startFeature([], FEATURES)).toBe("performance");
+    expect(startFeature(undefined, FEATURES)).toBe("performance");
+  });
+
+  it("offers a feature added to the vocabulary, with no change here", () => {
+    // The acceptance test of "adding a feature is a backend change": the
+    // vocabulary gains an entry and the location starts on it.
+    const served = [...FEATURES, SECRETS];
+    expect(startFeature(["secretsPrivateVault"], served)).toBe("secrets");
+    expect(featuresOf(["secretsPrivateVault", "performance"], served))
+      .toEqual(["performance", "secrets"]);
+  });
+
+  it("claims nothing when the vocabulary has not arrived", () => {
+    expect(startFeature(["performance"], [])).toBe(null);
+  });
+});
+
+describe("the suggested namespace", () => {
+  it("suggests the feature's namespace when the field is empty", () => {
+    expect(suggestNamespace("", SV, FEATURES)).toBe("blazemeter-sv");
+    expect(suggestNamespace("   ", SV, FEATURES)).toBe("blazemeter-sv");
+  });
+
+  it("replaces a namespace another feature suggested", () => {
+    expect(suggestNamespace("blazemeter", SV, FEATURES)).toBe("blazemeter-sv");
+    expect(suggestNamespace("blazemeter-sv", PERF, FEATURES)).toBe("blazemeter");
+  });
+
+  it("never overwrites something typed", () => {
+    expect(suggestNamespace("bzm-prod", SV, FEATURES)).toBe(null);
+    expect(suggestNamespace("blazemeter2", SV, FEATURES)).toBe(null);
+  });
+
+  it("suggests nothing when the namespace is already the suggestion", () => {
+    // Same value back would still be a state write, and every option change
+    // re-POSTs the preview.
+    expect(suggestNamespace("blazemeter-sv", SV, FEATURES)).toBe(null);
+    expect(suggestNamespace(" blazemeter-sv ", SV, FEATURES)).toBe(null);
+  });
+
+  it("counts a namespace suggested by a feature added later", () => {
+    // The rule is "still holding a suggested value", read off the served list
+    // -- not a list of names in the frontend, which is what would go stale.
+    const served = [...FEATURES, SECRETS];
+    expect(suggestNamespace("blazemeter-vault", SV, served)).toBe("blazemeter-sv");
+    expect(suggestNamespace("blazemeter", SECRETS, served)).toBe("blazemeter-vault");
+  });
+});
+
+
+// -- completeness is the group's own business ---------------------------------
+// The download used to be gated by a rule the page held about one group. That
+// is the promise "adding a feature needs no frontend change" quietly breaking:
+// the second feature with required options would need its own check in App, its
+// own entry in the incomplete list, and its own arm on the download guard.
+
+describe("a group declares whether its own configuration is finished", () => {
+  const sv = GROUP_BY_ID.sv;
+
+  it("is complete when it is not in use at all", () => {
+    expect(sv.incomplete?.({}, false)).toBe(false);
+  });
+
+  it("is incomplete once an ingress is chosen without a domain and secret", () => {
+    expect(sv.incomplete?.({ sv_ingress: "nginx" }, false)).toBe(true);
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "apps.x.com" }, false)).toBe(true);
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "apps.x.com",
+        sv_tls_secret: "wild" }, false)).toBe(false);
+  });
+
+  it("is incomplete when the location requires it and nothing is set", () => {
+    expect(sv.incomplete?.({}, true)).toBe(true);
+  });
+
+  it("counts NODEPORT as incomplete -- generate() refuses that pairing", () => {
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "a.b", sv_tls_secret: "w",
+        service_type: "NODEPORT" }, false)).toBe(true);
+  });
+
+  it("groups with no completeness rule never block", () => {
+    for (const g of OPTION_GROUPS.filter((x) => x.id !== "sv")) {
+      expect(g.incomplete).toBeUndefined();
+    }
+  });
+
+  it("incompleteGroups derives the list rather than being handed one", () => {
+    expect(incompleteGroups({ sv_ingress: "nginx" }, { sv: false })
+      .map((g) => g.id)).toEqual(["sv"]);
+    expect(incompleteGroups({}, { sv: false })).toEqual([]);
+    expect(incompleteGroups({}, { sv: true }).map((g) => g.id)).toEqual(["sv"]);
   });
 });

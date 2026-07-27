@@ -464,6 +464,50 @@ def func_ids():
             for f in facts_mod.CATEGORY_BY_FUNC]
 
 
+# The features a bundle can be configured for. The UI shows one feature's
+# options at a time and builds its selector from this list, so a feature becomes
+# offered by being added here -- the frontend enumerates nothing. The other half
+# of adding one is tagging whichever option groups it owns with its `id`; a
+# feature no group is tagged with is still selectable and shows the groups that
+# apply to any deployment (registry, proxy, CA trust, scheduling).
+#
+# `func_ids` is how a location's funcIds pick the feature to start on. Locations
+# carry funcIds no feature claims (tdm, dataPublisher, delphix,
+# secretsPrivateVault); those are no signal rather than an error, which is what
+# lets this list model less than the account does.
+#
+# `namespace` is a suggestion, applied only while the field still holds one --
+# a namespace per feature is what keeps redeploying one agent from taking the
+# other's pods down with it, and typing over it has to win.
+FEATURES = [
+    {
+        "id": "performance",
+        "label": "Performance & functional testing",
+        "hint": "load and functional tests -- engines started on demand",
+        "namespace": "blazemeter",
+        # Every non-SV funcId the facts layer models: the recorder and the
+        # functional suites all run on this agent, so they configure as it.
+        "func_ids": ["performance", "functionalApi", "functionalGui",
+                     "proxyRecorder"],
+    },
+    {
+        "id": "sv",
+        "label": "Service virtualization",
+        "hint": "virtual services / mocks -- needs an ingress",
+        "namespace": "blazemeter-sv",
+        # Which funcIds mean SV is generate.SV_FUNC_IDS', the same list
+        # /api/sv-constants serves and _sv_cfg validates against.
+        "func_ids": list(gen_mod.SV_FUNC_IDS),
+    },
+]
+
+
+@app.get("/api/features")
+def features():
+    """The features the configure step can be pointed at, in selector order."""
+    return FEATURES
+
+
 @app.get("/api/sv-constants")
 def sv_constants():
     """The two service-virtualization enumerations the UI must not hardcode.

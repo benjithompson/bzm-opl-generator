@@ -1,4 +1,6 @@
 import io
+import os
+import re
 import zipfile
 
 import pytest
@@ -103,6 +105,53 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
     monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
     body = client.get("/api/func-ids").json()
     assert {"id": "tdm", "label": "tdm"} in body
+
+
+def test_features_are_served_with_a_label_and_a_suggested_namespace():
+    """The configure step shows one feature's options at a time and offers this
+    list. Served rather than written in TypeScript for the same reason as the
+    funcId choices: functional testing, secrets and API monitoring are expected
+    to follow, and a feature has to become selectable by being added here."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/features").json()
+    assert [f["id"] for f in body] == [f["id"] for f in server.FEATURES]
+    assert body[0]["id"] == "performance"       # the common case is the default
+    for f in body:
+        assert f["label"] and f["namespace"] and f["func_ids"]
+    sv = next(f for f in body if f["id"] == "sv")
+    # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
+    # second list -- the same reason /api/sv-constants exists.
+    assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
+    # Distinct namespaces are the point of suggesting one per feature: sharing a
+    # namespace is what makes redeploying one agent take the other's pods down.
+    assert len({f["namespace"] for f in body}) == len(body)
+
+
+def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
+    """The end-to-end shape of adding a feature: one entry here, plus a tag on
+    whichever option groups it owns. Nothing in the frontend enumerates
+    features, so this is the whole of the backend half."""
+    monkeypatch.setattr(server, "FEATURES", server.FEATURES + [
+        {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
+         "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
+    body = client.get("/api/features").json()
+    assert body[-1] == {"id": "secrets", "label": "Private vault",
+                        "hint": "secrets from a vault",
+                        "namespace": "blazemeter-vault",
+                        "func_ids": ["secretsPrivateVault"]}
+
+
+def test_every_modelled_func_id_belongs_to_a_feature():
+    """A funcId the facts layer models but no feature claims would leave a
+    location carrying only that one with no feature to start on. The reverse is
+    deliberately allowed: a feature may claim a funcId that needs no images of
+    its own (tdm and delphix are already in that position), and the funcIds the
+    tool does not model at all stay unclaimed -- the selector reads those as no
+    signal rather than as an error."""
+    from bzm_opl_gen import facts as facts_mod
+    claimed = {f for feat in server.FEATURES for f in feat["func_ids"]}
+    assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
+    assert "tdm" not in claimed
 
 
 def test_create_location_forwards_every_selected_func_id(monkeypatch):
@@ -449,3 +498,24 @@ def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
     install(200)
     body = client.get("/api/sv-check", params={"host": "h.example.com"}).json()
     assert body["status"] == "ok" and body["code"] == 200
+
+
+def test_group_tags_name_features_the_server_actually_serves():
+    """The frontend tags each option group with the feature ids it belongs to,
+    and those ids are the join between the two halves. Nothing else checks it:
+    the vitest suite tags against its own fixture, so renaming a served id
+    passes both suites green and silently empties a feature's options in the
+    browser. Read the tags out of the source rather than duplicating them."""
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "frontend", "src", "optionGroups.ts")
+    with open(src) as fh:
+        text = fh.read()
+    tagged = {i for line in text.splitlines() if "features:" in line
+              for i in re.findall(r'"([^"]+)"', line)}
+    served = {f["id"] for f in client.get("/api/features").json()}
+    assert tagged, "no group tags found -- has the declaration shape changed?"
+    assert tagged <= served, (
+        f"option groups tag features the server does not serve: "
+        f"{sorted(tagged - served)}. Either the id was renamed in "
+        f"server.FEATURES, or the tag is a typo -- the group's options would "
+        f"never appear.")

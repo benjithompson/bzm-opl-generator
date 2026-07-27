@@ -63,6 +63,7 @@ export const api = {
   profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
+  features: () => req<Feature[]>("GET", "/api/features"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
@@ -97,6 +98,26 @@ export type FuncIdChoice = { id: string; label: string };
  *  the four reasons it was, and the caller never has to guess from an error
  *  string. */
 export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
+
+/** One feature the configure step can be pointed at, from /api/features. The
+ *  list is served for the same reason as the two above -- functional testing,
+ *  secrets and API monitoring are expected to follow, and a feature has to
+ *  become selectable by being added to the vocabulary, not by an edit here.
+ *  Option groups tag themselves with `id` (see optionGroups.ts); nothing in the
+ *  frontend enumerates the features themselves. */
+export interface Feature {
+  id: string;
+  label: string;
+  hint?: string;
+  /** Suggested, never forced: applied only while the namespace field still
+   *  holds a namespace some feature suggested. Served with the label so the
+   *  suggestion extends with the vocabulary. */
+  namespace: string;
+  /** The location funcIds that mean a location has this feature. A location's
+   *  funcIds may include ones no feature claims -- that is not an error. */
+  func_ids: string[];
+}
+
 /** A deployed virtual service and the host it answers at. `host` is null until
  *  a wildcard domain is configured. Built by the generator and carried here, so
  *  no caller rebuilds the string the endpoint is published at. */

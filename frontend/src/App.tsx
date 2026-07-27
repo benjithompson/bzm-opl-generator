@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, Account, AgentStatus, Facts, GeneratedFile,
+  api, downloadZip, Account, AgentStatus, Facts, Feature, GeneratedFile,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, SvCheckOut, SvConstants,
   SvMocksOut, Workspace,
 } from "./api";
@@ -10,11 +10,14 @@ import {
 import { Preview } from "./Preview";
 import { SvCtx } from "./SvPrereqs";
 // The option groups of step 4: one declaration each (title, hint, the option
-// keys it owns, and its detect/enable/disable), plus a body per group. This
-// file only wires them -- what a group *is* lives in optionGroups.ts.
+// keys it owns, the features it belongs to, and its detect/enable/disable),
+// plus a body per group. This file only wires them -- what a group *is*, and
+// which of them a feature puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
-  GROUP_BY_ID, GroupFlags, GroupId, OPTION_GROUPS,
+  allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
+  enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
+  incompleteGroups,
+  setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 import { CaGroup } from "./groups/CaGroup";
 import { GroupRow } from "./groups/GroupRow";
@@ -25,36 +28,20 @@ import { SecurityGroup } from "./groups/SecurityGroup";
 import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 
-// What the bundle deploys. Performance and service virtualization want separate
-// agents: one agent serving both puts mocks and load engines in a single
-// namespace, on a single slot budget, with a single restart lifecycle, so
-// redeploying the performance agent takes the virtual services down with it.
-// The kind only seeds defaults -- it gates nothing, because accounts already
-// running a combined location have to keep working.
-type DeployKind = "performance" | "sv";
-const KIND_NAMESPACE: Record<DeployKind, string> = {
-  performance: "blazemeter", sv: "blazemeter-sv",
-};
-const KIND_CHOICES: [DeployKind, string, string][] = [
-  ["performance", "Performance agent", "load & functional tests — engines on demand"],
-  ["sv", "Service-virtualization agent", "virtual services / mocks — needs an ingress"],
-];
-
-// Said in the location list, in the callout under it, and in the kind picker.
-// One string because the coupling is one fact -- three near-copies is how the
-// list ends up claiming something the callout no longer does.
+// Why performance and service virtualization want separate agents, and so
+// separate namespaces: one agent serving both puts mocks and load engines in a
+// single namespace, on a single slot budget, with a single restart lifecycle.
+// Said in the location list, in the callout under it, and beside the suggested
+// namespace in step 4. One string because the coupling is one fact -- three
+// near-copies is how the list ends up claiming something the callout no longer
+// does. It gates nothing: accounts already running a combined location have to
+// keep working, and the feature selector is a view over one such location's
+// options rather than a choice of what to deploy.
 const KIND_COUPLING =
   "mocks and load engines share a namespace, a slot budget and a restart "
   + "lifecycle, so redeploying the performance agent takes the virtual "
   + "services down with it";
 
-// How a location's own funcIds are labelled in the list. "both" is the case
-// worth naming: it deploys as one agent whichever kind you picked.
-const LOC_KIND_BADGE: Record<"performance" | "sv" | "both", [string, string]> = {
-  performance: ["performance", "bg-slate-100 text-slate-600"],
-  sv: ["service virtualization", "bg-violet-100 text-violet-700"],
-  both: ["performance + SV", "bg-amber-100 text-amber-700"],
-};
 
 export default function App() {
   // -- connection ------------------------------------------------------------
@@ -82,11 +69,6 @@ export default function App() {
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
-  // Picked before a location, and only ever a source of defaults -- nothing
-  // downstream reads it as a constraint. In particular svRequired stays derived
-  // from the selected location's funcIds, so an SV location chosen under the
-  // performance kind still demands an ingress.
-  const [kind, setKind] = useState<DeployKind>("performance");
 
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
@@ -100,6 +82,14 @@ export default function App() {
   const [svConst, setSvConst] = useState<SvConstants>(
     { func_ids: [], ingress_types: [], backends: {} });
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
+  // The feature being configured, and the vocabulary it is chosen from. A view
+  // over the options, never a scope: one crane is deployed for the selected
+  // location and that location's funcIds decide what the manifests contain, so
+  // this only decides what is on screen. The list is served (/api/features) so
+  // that adding a feature is a backend entry plus a tag on the groups it owns;
+  // null until it lands, which hides nothing.
+  const [features, setFeatures] = useState<Feature[]>([]);
+  const [feature, setFeature] = useState<string | null>(null);
   // One way to read a text option. Written out per-site, the `.trim()` was
   // getting forgotten -- an ingress name pasted with a trailing space missed
   // the SV_PREREQS lookup and the panel silently lost its prose.
@@ -142,6 +132,7 @@ export default function App() {
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
+    api.features().then(setFeatures).catch(() => {});
   }, []);
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
@@ -180,13 +171,11 @@ export default function App() {
   // suites, the recorder -- runs on a performance agent, so "not SV" is the test
   // rather than a second list to keep in step. Nothing is claimed until that
   // fetch lands, or every SV location would flash up labelled performance.
-  const locKind = useCallback((l: Location) => {
-    const ids = l.funcIds ?? [];
-    if (!svConst.func_ids.length || !ids.length) return null;
-    const sv = ids.some((f) => svConst.func_ids.includes(f));
-    const perf = ids.some((f) => !svConst.func_ids.includes(f));
-    return sv && perf ? "both" as const : sv ? "sv" as const : "performance" as const;
-  }, [svConst]);
+  // Both the badge here and the view in step 4 come from featuresOf, so a
+  // location cannot be called one thing in the list and another below it.
+  const locLabels = useCallback((l: Location) =>
+    featuresOf(l.funcIds, features).map(
+      (id) => features.find((f) => f.id === id)?.label ?? id), [features]);
 
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
@@ -267,18 +256,6 @@ export default function App() {
 
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
-  // Clearing a field whose key is absent from DEFAULT_OPTIONS has to *remove*
-  // it, not null it: generate() spreads the options over the defaults and
-  // profile.json dumps whatever survives, so an explicit null adds a key that
-  // was never there and the bundle stops being byte-identical to one generated
-  // without the field. Every other `v || null` field in this form is safe only
-  // because its key already has a default to overwrite.
-  const setOptional = useCallback((k: string, v: string) =>
-    setOptions((o) => {
-      if (v) return { ...o, [k]: v };
-      const { [k]: _dropped, ...rest } = o;
-      return rest;
-    }), []);
 
   const applyProfile = (name: string) => {
     const p = profiles.find((x) => x.name === name);
@@ -382,29 +359,44 @@ export default function App() {
       return Object.keys(patch).length ? { ...o, ...patch } : o;
     });
   };
-  // Seeding happens here rather than in an effect on `kind`: an effect would
-  // also fire when svConst arrives mid-session and undo a namespace the user had
-  // already typed, and would have to run once on mount -- which is exactly where
-  // the performance flow has to stay untouched.
-  const pickKind = (k: DeployKind) => {
-    setKind(k);
-    // The SV funcIds are whatever generate.SV_FUNC_IDS says they are; a second
-    // list here is what /api/sv-constants exists to prevent. Empty only in the
-    // window before that fetch lands, where the old seed is the safer answer.
-    setNewLoc((n) => ({ ...n, func_ids: k === "sv" && svConst.func_ids.length
-      ? [...svConst.func_ids] : ["performance"] }));
-    // Distinct namespaces are the point of the split, but only a namespace still
-    // holding a kind default gets rewritten -- anything typed outranks the seed.
+  // Moving the view. The only option it may write is the namespace, and only
+  // while that still holds one a feature suggested -- everything else stays
+  // exactly as it is, because narrowing a view must not change what the bundle
+  // generates. No group is flipped on or off here for the same reason.
+  //
+  // A function rather than an effect on `feature`: an effect would also fire
+  // when the vocabulary lands mid-session and rewrite a namespace already typed.
+  // `suggestNs` is opt-in and only the location effect passes it. Switching the
+  // view by hand must not touch the namespace: the namespace is generated into
+  // every manifest, so suggesting on a manual switch would make looking at a
+  // feature change the bundle -- the one thing a view is not allowed to do. It
+  // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
+  const pickFeature = useCallback((id: string, suggestNs = false) => {
+    setFeature(id);
+    const f = features.find((x) => x.id === id);
+    if (!f || !suggestNs) return;
     setOptions((o) => {
-      const ns = String(o.namespace ?? "").trim();
-      const seeded = !ns || Object.values(KIND_NAMESPACE).includes(ns);
-      return seeded ? { ...o, namespace: KIND_NAMESPACE[k] } : o;
+      const ns = suggestNamespace(String(o.namespace ?? ""), f, features);
+      // Same object when there is nothing to suggest: a fresh identity re-POSTs
+      // /api/generate for options that did not change.
+      return ns == null ? o : { ...o, namespace: ns };
     });
-    // Not flipped back off for the performance kind: that would wipe a domain
-    // and TLS secret already typed, and svRequired flips it straight back on for
-    // an SV location anyway.
-    if (k === "sv") flipGroup("sv", true);
-  };
+  }, [features]);
+
+  // Which feature a location opens on, from its funcIds. Keyed on the harbor
+  // rather than on `facts`, which is refetched after creating an agent: that
+  // must not yank the view back from wherever the user moved it. `feature` is
+  // read but deliberately not a dependency -- depending on it would re-force
+  // the starting feature every time the user chose a different one.
+  useEffect(() => {
+    if (!features.length) return;
+    // facts is cleared while the next location's are fetched. Falling back to
+    // the default in that gap would flip the view (and the suggested namespace)
+    // to performance and back for every SV location picked.
+    if (!facts) { if (!feature) pickFeature(features[0].id, true); return; }
+    const start = startFeature(facts.func_ids, features);
+    if (start) pickFeature(start, true);
+  }, [facts?.harbor_id, features, pickFeature]);
 
   const namespaceOk = !!txt("namespace");
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
@@ -433,6 +425,22 @@ export default function App() {
   // Served, not restated here: what the Role grants is generate.py's to state,
   // and the two can disagree only if one of them is a copy.
   const svRbac = svConst.backends[txt("sv_ingress")];
+
+  // -- what the current view is not showing ----------------------------------
+  // The features this location carries, and the ones it carries that the tool
+  // has no options for. Locations already run tdm/dataPublisher/delphix; naming
+  // them is the honest version of a selector that quietly models five funcIds.
+  const locFeatures = featuresOf(facts?.func_ids, features);
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
+  // Configured, off screen, and still in the bundle -- reported beside the
+  // preview, which is where "what is in this bundle" is read.
+  const hiddenSet = setButHidden(options, feature);
+  // Which groups are in use but not finished. Each group declares its own rule,
+  // so a feature gaining required options later needs nothing here. Whether the
+  // reason is on screen is what decides between the group showing its own error
+  // and the download button having to explain itself.
+  const incomplete = incompleteGroups(options, { sv: svRequired });
+  const blockers = hiddenBlockers(incomplete, feature);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -622,27 +630,6 @@ export default function App() {
               ? "Creating a new location — the existing ones are hidden until you create or cancel. Cancel keeps whatever you had selected."
               : "The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests."}>
             <div className="space-y-3">
-              <div>
-                <p className="text-xs font-medium text-slate-600 mb-1.5">
-                  What does this bundle deploy?
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {KIND_CHOICES.map(([k, label, hint]) => (
-                    <button key={k} onClick={() => pickKind(k)}
-                      className={`text-left px-3 py-2 rounded-md border text-sm ${k === kind ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}>
-                      {label}
-                      <span className="block text-[11px] font-normal text-slate-400">
-                        {hint}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  One agent per kind — with one agent serving both,{" "}
-                  {KIND_COUPLING}. This only picks defaults; any location below
-                  still works for either.
-                </p>
-              </div>
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
                   <SearchSelect
@@ -668,17 +655,18 @@ export default function App() {
                   )}
                   <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
                     {filteredLocs.map((l) => {
-                      const k = locKind(l);
+                      const labels = locLabels(l);
                       return (
                       <button key={l.id}
                         className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
                         onClick={() => setHarborId(l.id)}>
                         <span className="font-medium">{l.name}</span>
-                        {k && (
-                          <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
-                            {LOC_KIND_BADGE[k][0]}
+                        {labels.map((label) => (
+                          <span key={label}
+                            className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 bg-slate-100 text-slate-600">
+                            {label}
                           </span>
-                        )}
+                        ))}
                         <span className="text-xs text-slate-400 ml-2">
                           {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                           {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
@@ -686,7 +674,7 @@ export default function App() {
                         {/* Said here rather than left to the badge's tooltip: this
                             is where the location is being chosen, and a tooltip is
                             invisible on touch and to the keyboard. */}
-                        {k === "both" && (
+                        {labels.length > 1 && (
                           <span className="block text-[11px] text-amber-700 mt-0.5">
                             one agent for both — {KIND_COUPLING}
                           </span>
@@ -697,7 +685,7 @@ export default function App() {
                     {who && filteredLocs.length === 0 && (
                       <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
                   </div>
-                  {location && locKind(location) === "both" && (
+                  {location && locLabels(location).length > 1 && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                       <b>{location.name}</b> carries both performance and
                       service-virtualization features, so one agent serves both:{" "}
@@ -870,6 +858,50 @@ export default function App() {
                 </label>
               </div>
 
+              {/* The feature in view. Served list, so a feature added to the
+                  backend vocabulary appears here with nothing changed in this
+                  file -- and one with no group tagged to it still shows the
+                  any-deployment groups rather than an empty step. */}
+              {features.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-600 mb-1.5">
+                    Which feature are you configuring?
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {features.map((f) => (
+                      <button key={f.id} onClick={() => pickFeature(f.id)}
+                        className={`text-left px-3 py-2 rounded-md border text-sm ${f.id === feature ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}>
+                        {f.label}
+                        {/* Which features the location actually runs, without
+                            hiding the others: the view is not a scope, and an
+                            option set under either still ships. */}
+                        {locFeatures.includes(f.id) && (
+                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5">
+                            this location
+                          </span>
+                        )}
+                        <span className="block text-[11px] font-normal text-slate-400">
+                          {f.hint}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    A view, not a scope — the manifests come from the location's
+                    own features either way. Anything you set under one feature
+                    stays set, and stays in the bundle, while you look at another.
+                  </p>
+                  {locUnclaimed.length > 0 && (
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      This location also runs{" "}
+                      <span className="font-mono">{locUnclaimed.join(", ")}</span>{" "}
+                      — there are no options here for those; nothing about them
+                      is generated or removed.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <label className="block">
                 <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
                   Namespace
@@ -884,7 +916,9 @@ export default function App() {
                   {namespaceOk && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-sm">✓</span>}
                 </div>
                 <span className="text-[11px] text-slate-400">
-                  the only required setting — every group below is optional
+                  the only required setting — every group below is optional. One
+                  is suggested per feature, because {KIND_COUPLING}; anything
+                  you type here outranks the suggestion.
                 </span>
               </label>
               {facts && (
@@ -896,10 +930,15 @@ export default function App() {
                 </p>
               )}
 
+              {/* Only the groups the feature in view owns, plus the ones that
+                  apply to any deployment. A hidden group keeps its options --
+                  nothing here calls disable -- so the manifests are the same
+                  whichever feature is being looked at. */}
               <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
-                {OPTION_GROUPS.map((g) => (
+                {visibleGroups(feature).map((g) => (
                   <GroupRow key={g.id} group={g} on={grpOn[g.id]}
                     required={!!grpRequired[g.id]}
+                    applies={appliesTo(g, features)}
                     onFlip={(v) => flipGroup(g.id, v)}>
                     {groupBody[g.id]}
                   </GroupRow>
@@ -948,6 +987,23 @@ export default function App() {
                   AUTH_TOKEN fetched on download
                 </span>
               </div>
+              {/* Why the button is disabled, when the reason is not on screen.
+                  A disabled button whose cause is somewhere else on the page is
+                  the failure the feature view is meant to remove, so the block
+                  names the feature and offers the switch to it. A group in view
+                  is absent from `blockers` -- it shows its own error. */}
+              {blockers.map((g) => (
+                <div key={g.id}
+                  className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-800 grow">
+                    <b>{appliesTo(g, features)}</b> is not finished, and its
+                    settings are not in view: {g.requiredHint ?? g.hint}.
+                  </p>
+                  <Button kind="ghost" onClick={() => pickFeature(g.features[0])}>
+                    Configure {appliesTo(g, features)}
+                  </Button>
+                </div>
+              ))}
               <ErrorMsg msg={dlErr} />
               <div className="border-t border-slate-100 pt-3">
                 <div className="flex items-center gap-3">
@@ -1024,8 +1080,36 @@ export default function App() {
           </Section>
         </div>
 
-        <Preview files={files} activeFile={activeFile}
-          setActiveFile={setActiveFile} genErr={genErr} />
+        <div className="space-y-2">
+          {/* What is in the bundle from a feature that is not in view. Here
+              rather than in step 4 because this is where "what does this bundle
+              contain" is read, and the answer is more than the step above is
+              currently showing. Each is a way back to it. */}
+          {hiddenSet.length > 0 && (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-[11px] text-slate-600">
+                <b>Also in this bundle</b>, set while configuring another
+                feature:{" "}
+                {hiddenSet.map((g, i) => (
+                  <span key={g.id}>
+                    {i > 0 && ", "}
+                    <button className="text-bzm hover:underline font-medium"
+                      onClick={() => pickFeature(g.features[0])}>
+                      {g.title}
+                    </button>
+                    <span className="text-slate-400">
+                      {" "}({appliesTo(g, features)})
+                    </span>
+                  </span>
+                ))}
+                . These still generate — the feature above is only what is on
+                screen.
+              </p>
+            </div>
+          )}
+          <Preview files={files} activeFile={activeFile}
+            setActiveFile={setActiveFile} genErr={genErr} />
+        </div>
       </main>
     </div>
   );
