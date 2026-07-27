@@ -1,8 +1,8 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
+  api, downloadZip, Account, AgentStatus, Facts, GeneratedFile,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, SvCheckOut, SvConstants,
-  SvExposeIn, SvExposeOut, SvMocksOut, Workspace,
+  SvMocksOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
@@ -116,7 +116,7 @@ export default function App() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   // Carries the namespace it was read from: the field can be edited between
   // polls, and labelling these rows with a namespace they did not come from
-  // is the same staleness the sv-expose block below refuses to show.
+  // would vouch for virtual services nobody looked for.
   const [svMocks, setSvMocks] =
     useState<{ ns: string; read: SvMocksOut } | null>(null);
   // Endpoint checks, keyed by the host that was probed rather than by row
@@ -128,19 +128,6 @@ export default function App() {
     useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
-
-  // -- sv-expose (the one thing here that reads a cluster) --------------------
-  // Deliberately only ever set by the button in step 6: no other part of this
-  // app may start depending on kubectl existing.
-  const [svExpose, setSvExpose] = useState<SvExposeOut | null>(null);
-  const [svExposeBusy, setSvExposeBusy] = useState(false);
-  const [svExposeErr, setSvExposeErr] = useState<string | null>(null);
-  // The preview effect below must not take svExpose as a dependency -- that
-  // would re-POST /api/generate every time the namespace is read. Synced here
-  // on every render rather than beside each setSvExpose, so adding a fifth
-  // place that sets it cannot leave the two out of step.
-  const svExposeRef = useRef(svExpose);
-  svExposeRef.current = svExpose;
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -226,12 +213,10 @@ export default function App() {
         const r = await api.generate(facts, opts);
         setFiles(r.files);
         setGenErr(null);
-        // bzm_sv_expose.yaml is previewed alongside these but is not one of
-        // them, so it has to survive the re-render that follows any option
-        // edit -- otherwise reading the namespace, then typing, yanks the pane
-        // back to the first manifest.
-        setActiveFile((a) => (a && (r.files.some((f) => f.name === a)
-          || (svExposeRef.current?.files ?? []).some((f) => f.name === a))
+        // Keep the open file open across the re-render every option edit
+        // causes; fall back to the first manifest only once the one being read
+        // stops being generated at all.
+        setActiveFile((a) => (a && r.files.some((f) => f.name === a)
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
@@ -443,7 +428,7 @@ export default function App() {
   // A Running mock pod says nothing about whether anything routes to it: where
   // the controller rejects crane's Ingress the endpoint 503s while the pod is
   // healthy. The scheme follows the TLS secret, because that is what decides
-  // whether the pair rendered in step 6 terminates TLS -- probing the other one
+  // whether the published endpoint terminates TLS -- probing the other one
   // answers a question nobody asked.
   const svScheme = txt("sv_tls_secret") ? "https" as const : "http" as const;
   // Nothing renders off the promise: the row goes busy, the status poll behind
@@ -459,55 +444,12 @@ export default function App() {
     }
   };
   // How the result reads. A 503 is amber, not red: the check worked and this is
-  // its answer -- the one the sv-expose step below exists for. Anything else
-  // that answered routed, so only a probe that got no status line is red.
+  // its answer -- the one `bzm-opl-gen sv-expose` exists to fix, which the
+  // message names. Anything else that answered routed, so only a probe that got
+  // no status line is red.
   const svCheckTone = (r: SvCheckOut) =>
     r.status !== "ok" ? "text-red-600"
       : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
-
-  // -- sv-expose -------------------------------------------------------------
-  // Renders the pair that actually routes, from the mocks running in the
-  // namespace. The server answers 200 with a reason whenever it cannot read the
-  // cluster, so the only thing caught here is a genuinely broken request.
-  const svExposeReady = !!txt("sv_subdomain") && namespaceOk;
-  // The exact request, derived rather than assembled at the call site: the
-  // staleness effect below depends on it, so a field added here cannot be
-  // forgotten there.
-  const svExposeReq: SvExposeIn = useMemo(() => ({
-    namespace: txt("namespace"),
-    sv_subdomain: txt("sv_subdomain") || null,
-    sv_tls_secret: txt("sv_tls_secret") || null,
-    sv_ingress_class: txt("sv_ingress_class") || null,
-  }), [txt]);
-  // What was rendered is a snapshot of one namespace, taken with the values
-  // that were on screen. Editing any of them makes it stale, and stale YAML in
-  // the preview is worse than none -- it would still carry the old ingress
-  // class or host while the fields say otherwise. Drop it and make them read
-  // again.
-  useEffect(() => {
-    setSvExpose(null); setSvExposeErr(null);
-  }, [svExposeReq]);
-  const readSvExpose = async () => {
-    setSvExposeBusy(true); setSvExposeErr(null);
-    try {
-      const r = await api.svExpose(svExposeReq);
-      setSvExpose(r);
-      if (r.files[0]) setActiveFile(r.files[0].name);
-    } catch (e) {
-      setSvExpose(null);
-      setSvExposeErr(String((e as Error).message));
-    } finally { setSvExposeBusy(false); }
-  };
-  const downloadSvExpose = () => {
-    const f = svExpose?.files[0];
-    if (!f) return;
-    saveBlob(new Blob([f.content], { type: "text/yaml" }), f.name);
-  };
-  // Same pane as the manifests, per the preview being where generated YAML is
-  // read in this app.
-  const previewFiles = useMemo(
-    () => (svExpose?.files.length ? [...files, ...svExpose.files] : files),
-    [files, svExpose]);
 
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
@@ -1025,85 +967,9 @@ export default function App() {
               </div>
             </div>
           </Section>
-
-          {/* 6 · Expose virtual services */}
-          <Section n={6} title="Expose virtual services"
-            hint="Once the virtual services are deployed: reads them from the namespace with the kubectl/oc on THIS machine and renders the Service+Ingress pair that routes. Optional — nothing above needs a cluster.">
-            <div className="space-y-3">
-              <Field label="Ingress class"
-                hint="the class put on the Ingress we own — defaults to nginx; on OpenShift use openshift-default and no nginx alias is needed. Saved into the profile, so the CLI picks it up too.">
-                <TextInput mono placeholder="nginx"
-                  value={String(options.sv_ingress_class ?? "")}
-                  onChange={(v) => setOptional("sv_ingress_class", v)} />
-              </Field>
-              <div className="flex gap-2 items-center">
-                <Button disabled={!svExposeReady || svExposeBusy}
-                  onClick={readSvExpose}>
-                  {svExposeBusy ? "Reading namespace…" : "Read namespace & render"}
-                </Button>
-                <span className="text-xs text-slate-400">
-                  namespace <code>{String(options.namespace ?? "")}</code> via your
-                  current kube context
-                </span>
-              </div>
-              {!svExposeReady && (
-                <p className="text-[11px] text-amber-700">
-                  Set the wildcard domain in step 4 first — the endpoint host is
-                  &lt;service&gt;-&lt;port&gt;-&lt;namespace&gt;.&lt;domain&gt;, so
-                  there is nothing to route without it.
-                </p>
-              )}
-              <ErrorMsg msg={svExposeErr} />
-              {svExpose && (svExpose.status === "ok" ? (
-                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-2">
-                  <p className="text-xs text-emerald-800">{svExpose.message}</p>
-                  <ul className="text-[11px] text-slate-600 font-mono space-y-0.5">
-                    {svExpose.mocks.map((m) => (
-                      <li key={m.name}>{`${m.name}:${m.port} → ${m.host ?? "(set a wildcard domain)"}`}</li>
-                    ))}
-                  </ul>
-                  <div className="flex gap-2 items-center">
-                    <Button onClick={downloadSvExpose}>
-                      ⬇ Download {svExpose.files[0]?.name}
-                    </Button>
-                    <span className="text-xs text-slate-400">
-                      previewed on the right, alongside the manifests
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 font-mono break-all">
-                    {svExpose.detail}
-                  </p>
-                </div>
-              ) : (
-                // Never a dead panel: each reason says what happened, and all of
-                // them hand over the same command to run where the cluster IS
-                // reachable, prefilled with what is on screen.
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
-                  <p className="text-xs text-amber-800">{svExpose.message}</p>
-                  {svExpose.detail && (
-                    <p className="text-[11px] text-amber-700 font-mono break-all">
-                      {svExpose.detail}
-                    </p>
-                  )}
-                  <p className="text-[11px] text-slate-600">
-                    Run this wherever you do have access to the cluster:
-                  </p>
-                  <div className="flex gap-2 items-start">
-                    <code className="grow min-w-0 text-[11px] font-mono bg-slate-900 text-slate-100 rounded px-2 py-1.5 break-all">
-                      {svExpose.command}
-                    </code>
-                    <Button kind="ghost"
-                      onClick={() => navigator.clipboard.writeText(svExpose.command)}>
-                      copy
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Section>
         </div>
 
-        <Preview files={previewFiles} activeFile={activeFile}
+        <Preview files={files} activeFile={activeFile}
           setActiveFile={setActiveFile} genErr={genErr} />
       </main>
     </div>
