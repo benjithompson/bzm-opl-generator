@@ -699,6 +699,15 @@ def _helm_values(facts, o):
         ]
     lines += [
         "",
+        "# Left to the chart's default (on here, off with a private registry).",
+        "# Set false if you will manage this release with `helm upgrade`: left on,",
+        "# crane takes ownership of its own Deployment and the next upgrade fails",
+        "# on a field-ownership conflict. See autoUpdate in the chart's values.yaml",
+        "# for what that costs either way.",
+        "autoUpdate:",
+    ]
+    lines += [
+        "",
         f"clusterRbac: {'true' if o['cluster_rbac'] else 'false'}",
         "serviceAccount:",
         "  create: true",
@@ -754,15 +763,20 @@ def _helm_values(facts, o):
     ]
     if o["emit_limitrange"]:
         max_cpu, max_mem = _limitrange_max(o)
+        # maxCpu/maxMemory are deliberately NOT pinned here. The chart derives
+        # them from the engine size, raised to clear crane's own limits; pinning
+        # the value computed at generate time makes the LimitRange
+        # self-inconsistent the moment anyone raises the engine size, and the
+        # API server rejects it ("default request value 6Gi is greater than max
+        # value 4Gi"). Verified on a live cluster -- the upgrade fails, and the
+        # release is left half-applied.
         lines += [
-            f"  # Raised to clear crane's own limits ({CRANE_CPU_LIMIT} / {CRANE_MEM_LIMIT}) where the",
-            "  # engine is smaller -- a max under them rejects the crane pod.",
-            f"  maxCpu: {_yq(format_cpu(max_cpu))}",
-            f"  maxMemory: {_yq(format_memory(max_mem))}",
+            f"  # max is derived: {format_cpu(max_cpu)} CPU / {format_memory(max_mem)} for this engine size,",
+            f"  # never below crane's own limits ({CRANE_CPU_LIMIT} / {CRANE_MEM_LIMIT}) or the crane pod is",
+            "  # rejected in its own namespace. Set maxCpu/maxMemory only to raise",
+            "  # it further -- the chart refuses a value below what it derives.",
             f"  # requests default to the limits: {format_cpu(cpu_req)} / {format_memory(mem_req)}",
         ]
-    else:
-        lines += ['  maxCpu: ""', '  maxMemory: ""']
     lines.append("")
     if o["proxy"]:
         env = proxy_env(o)
@@ -851,9 +865,28 @@ Locations).
 
 ## Upgrade
 
+**Set `autoUpdate: false` in `{HELM_VALUES_FILE}` if you intend to manage this
+release with Helm.** Then upgrades are ordinary:
+
 ```
 helm upgrade crane ./{CHART_DIR} -n {ns} -f {HELM_VALUES_FILE}
 ```
+
+Left on -- the default, matching the manifests -- crane takes over its own
+Deployment within seconds of install: it rewrites `.spec.template.spec.
+containers[].image` to the version BlazeMeter currently ships, and
+`.spec.strategy` from `Recreate` to `RollingUpdate`. Helm applies server-side, so
+the next `helm upgrade` fails on a field-ownership conflict, half-applied.
+`--force-conflicts` does not rescue it: Helm never declares
+`strategy.rollingUpdate`, so crane's copy survives next to the forced
+`type: Recreate` and the API server rejects the combination. With auto-update on,
+changing anything means `helm uninstall` + `helm install`, not an upgrade.
+
+All of the above was observed on a live cluster, not inferred from the docs.
+
+The tradeoff for turning it off: the agent stops upgrading itself, so keeping it
+current becomes your job -- re-generate to pick up a newer tag. An agent that
+falls far enough behind stops being supported.
 
 `harbor_id` and `ship_id` are part of the Deployment's selector and selectors
 are immutable, so repointing this install at a *different* agent needs

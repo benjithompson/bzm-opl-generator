@@ -121,9 +121,42 @@ defaults to the pods that declare nothing, including crane's per-run job pods.
 It applies to **every** pod in the namespace, which is why it is off by default;
 give the location its own namespace if that matters.
 
-`max` is raised where needed to clear crane's own limits. A `max` pinned to a
-smaller engine size gets the crane pod rejected in its own namespace — the chart
-refuses to render that.
+`max` is derived: the larger of the engine limit and crane's own. Leave
+`limitRange.maxCpu` / `maxMemory` unset unless you want to raise it further —
+the chart refuses a value below what it derives, because both ways of being
+under it fail. Below crane, the crane pod is rejected in its own namespace.
+Below the engine, the LimitRange contradicts itself: `default` is the engine
+size, and the API server rejects a `default` above `max` at apply time, so a
+`helm upgrade --set engine.memoryLimit=...` against a pinned `max` fails
+mid-release with the ConfigMap already updated.
+
+## Upgrading, and crane's self-update
+
+**Set `autoUpdate: false` if you manage this release with Helm.** Then
+`helm upgrade` behaves normally, and a configuration-only change still rolls the
+pod (the Deployment carries checksums of the ConfigMap and Secret).
+
+Left on — the default — crane takes ownership of its own Deployment within
+seconds of install, as field manager `OpenAPI-Generator`. It rewrites the
+container image to the version BlazeMeter currently ships, and `.spec.strategy`
+from `Recreate` to `RollingUpdate{maxSurge: 1}`. Helm applies server-side, so the
+next `helm upgrade` fails on a field-ownership conflict having already applied
+the ConfigMap.
+
+`--force-conflicts` does not rescue it. This chart never declares
+`strategy.rollingUpdate`, so crane's copy survives beside the forced
+`type: Recreate` and the API server rejects the pair:
+
+```
+Deployment.apps "crane" is invalid: spec.strategy.rollingUpdate: Forbidden:
+may not be specified when strategy `type` is 'Recreate'
+```
+
+With auto-update on, changing anything is `helm uninstall` + `helm install`.
+
+All of this was observed on a live cluster. The cost of turning it off is that
+keeping the agent current becomes your job — re-generate, or bump `image.tag` —
+and an agent that falls far enough behind loses support.
 
 To size engines honestly today: give the location nodes it does not share, or
 add a mutating admission policy that rewrites the engine pod's requests.

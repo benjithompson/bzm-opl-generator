@@ -186,21 +186,46 @@ def test_ca_modes_map_to_the_charts_vocabulary(opts, mode, extra):
         assert v["caBundle"][k] == want
 
 
-def test_limitrange_max_clears_cranes_own_limits():
-    """The same rule the manifests encode: a max under crane's limits gets the
-    crane pod rejected in its own namespace."""
-    v, _ = _values(engine_cpu_limit="500m", engine_mem_limit="1Gi",
-                   emit_limitrange=True)
-    assert v["limitRange"]["enabled"] is True
-    assert v["limitRange"]["maxCpu"] == gen.CRANE_CPU_LIMIT
-    assert v["limitRange"]["maxMemory"] == gen.CRANE_MEM_LIMIT
+def test_overlay_never_pins_the_limitrange_max():
+    """Regression, found by installing for real.
+
+    The overlay used to carry the max computed at generate time. The chart
+    derives `default` from the engine size at render time, so the moment anyone
+    raised the engine -- `helm upgrade --set engine.memoryLimit=6Gi` -- the two
+    disagreed and the API server rejected the LimitRange ("default request value
+    6Gi is greater than max value 4Gi"), mid-upgrade, with the ConfigMap already
+    applied. Leaving it to the chart keeps the object self-consistent under any
+    override.
+    """
+    for over in ({"emit_limitrange": True},
+                 {"emit_limitrange": True, "engine_cpu_limit": "500m",
+                  "engine_mem_limit": "1Gi"},
+                 {"emit_limitrange": True, "engine_cpu_limit": "4",
+                  "engine_mem_limit": "16Gi"}):
+        v, _ = _values(**over)
+        assert v["limitRange"]["enabled"] is True
+        assert "maxCpu" not in v["limitRange"], over
+        assert "maxMemory" not in v["limitRange"], over
 
 
-def test_limitrange_max_follows_a_bigger_engine():
-    v, _ = _values(engine_cpu_limit="4", engine_mem_limit="16Gi",
-                   emit_limitrange=True)
-    assert v["limitRange"]["maxCpu"] == "4"
-    assert v["limitRange"]["maxMemory"] == "16Gi"
+def test_limitrange_derivation_is_still_documented_in_the_overlay():
+    """Not pinned, but the reader should still see what it will be -- the
+    numbers are why someone opened the file."""
+    _, files = _values(engine_cpu_limit="4", engine_mem_limit="16Gi",
+                       emit_limitrange=True)
+    text = files[gen.HELM_VALUES_FILE]
+    assert "max is derived: 4 CPU / 16Gi" in text
+
+
+def test_auto_update_is_left_to_the_chart():
+    """A Helm-managed release usually wants autoUpdate false -- crane otherwise
+    takes ownership of its own Deployment and the next upgrade conflicts -- but
+    that changes how the customer's agent gets upgraded, so the overlay offers
+    the key and does not decide it."""
+    v, files = _values()
+    assert "autoUpdate" in v
+    assert v["autoUpdate"] is None
+    assert "helm upgrade" in files[gen.HELM_VALUES_FILE]
 
 
 def test_engine_sizing_is_passed_through_unresolved():
@@ -255,6 +280,22 @@ def test_bad_engine_size_is_still_caught_in_helm_format():
 
 
 # -- the bundle a chart install actually needs --------------------------------
+
+def test_readme_does_not_promise_force_conflicts_fixes_the_upgrade():
+    """It does not, and the earlier draft of this README said it did.
+
+    Forcing hands back only the fields Helm declares; crane's
+    `strategy.rollingUpdate` is not one, and it survives beside the forced
+    `type: Recreate` for the API server to reject.
+    """
+    readme = gen.generate(FACTS, BASE)["README.md"]
+    assert "autoUpdate: false" in readme
+    assert "--force-conflicts` does not rescue" in readme or \
+           "--force-conflicts does not rescue" in readme
+    # The plain upgrade command must not carry the flag as if it were the fix.
+    upgrade = [l for l in readme.splitlines() if l.startswith("helm upgrade")]
+    assert upgrade and not any("--force-conflicts" in l for l in upgrade)
+
 
 def test_readme_names_the_overlay_in_its_install_command():
     files = gen.generate(FACTS, BASE)

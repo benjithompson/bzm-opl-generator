@@ -26,9 +26,9 @@ data:
   {{- if .Values.privateRegistry }}
   DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
   IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
-  # Auto-update pulls from BlazeMeter's public registry -- disabled for
-  # private-registry clusters. Upgrade = re-mirror + bump tags.
-  AUTO_KUBERNETES_UPDATE: 'false'
+  # Auto-update pulls from BlazeMeter's public registry, so it defaults off for
+  # a private-registry cluster: upgrading is re-mirror + bump tags.
+  AUTO_KUBERNETES_UPDATE: {{ include "bzm-opl.autoUpdate" . | squote }}
   {{- if .Values.registryAuth }}
   # Crane-side auth for engine image pulls (or use image.pullSecret plus a
   # cluster pull secret, and leave these unset -- a password here is readable by
@@ -39,7 +39,10 @@ data:
   {{- end }}
   {{- else }}
   DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
-  AUTO_KUBERNETES_UPDATE: 'true'
+  # On: crane rewrites its own Deployment's image when BlazeMeter ships a newer
+  # agent, which is also why `helm upgrade` needs --force-conflicts here. See
+  # autoUpdate in values.yaml.
+  AUTO_KUBERNETES_UPDATE: {{ include "bzm-opl.autoUpdate" . | squote }}
   {{- end }}
   {{- if .Values.proxy.enabled }}
   {{- if include "bzm-opl.proxyInSecret" . }}

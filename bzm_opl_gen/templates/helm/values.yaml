@@ -75,6 +75,26 @@ imageOverrides: {}
 # cluster pull secret instead -- do not put a real password in a ConfigMap.
 registryAuth: false
 
+# Does crane update itself when BlazeMeter ships a newer agent? Unset follows
+# privateRegistry -- off when set (a sealed cluster cannot pull a newer image
+# anyway), on otherwise.
+#
+# SET THIS FALSE IF YOU MANAGE THIS RELEASE WITH HELM. Left on, crane takes
+# ownership of its own Deployment within seconds of install (field manager
+# "OpenAPI-Generator"): it rewrites the container image to whatever version
+# BlazeMeter currently ships, and `.spec.strategy` from Recreate to
+# RollingUpdate. Helm applies server-side, so the next `helm upgrade` fails on a
+# field-ownership conflict having already applied the ConfigMap.
+#
+# --force-conflicts does not rescue that: the chart never declares
+# `strategy.rollingUpdate`, so crane's copy survives beside the forced
+# `type: Recreate` and the API server rejects the pair. With auto-update on,
+# changing anything means uninstall + install. Verified on a live cluster.
+#
+# The tradeoff for false: the agent stops upgrading itself, so keeping it
+# current is your job, and one that falls far enough behind loses support.
+autoUpdate:
+
 # -- RBAC ---------------------------------------------------------------------
 
 # Cluster-scoped node reads. Not needed for performance testing: without them

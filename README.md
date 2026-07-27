@@ -281,6 +281,21 @@ not about what ends up in the cluster. `tests/helm_parity.py` renders 17 option
 combinations both ways and requires them to agree; it runs as its own CI job
 because it is the one check that needs the `helm` binary.
 
+### Managing the release with Helm
+
+Set `autoUpdate: false` in the overlay if you intend to run `helm upgrade`.
+Left on (the default, matching the manifests), crane takes ownership of its own
+Deployment within seconds of install — rewriting the image to the version
+BlazeMeter currently ships and `.spec.strategy` from `Recreate` to
+`RollingUpdate` — and Helm's server-side apply then fails the next upgrade on a
+field-ownership conflict, half-applied. `--force-conflicts` does not rescue it,
+because the chart never declares `strategy.rollingUpdate` and crane's copy
+survives beside the forced `type: Recreate`. With auto-update on, changing
+anything means uninstall + install.
+
+Turning it off makes upgrades ordinary and leaves keeping the agent current to
+you. Both behaviours were confirmed against a live cluster and a real agent.
+
 Two things differ, both deliberate:
 
 - **Service virtualization is not supported.** Publishing a virtual service

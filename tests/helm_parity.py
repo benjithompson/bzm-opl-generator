@@ -155,6 +155,52 @@ def compare(name, opts):
     return diffs
 
 
+def overrides_stay_consistent():
+    """A generated bundle must survive `--set` on top of it.
+
+    The overlay is a file people edit and a base people override at install
+    time, so the chart has to re-derive anything that depends on the engine
+    size. It did not: the overlay pinned the LimitRange max, and
+    `--set engine.memoryLimit=6Gi` produced `default: 6Gi` against `max: 4Gi`,
+    which the API server rejects -- found by running a real `helm upgrade`,
+    which failed with the ConfigMap already applied.
+    """
+    opts = {**COMMON, "platform": "k8s", "engine_cpu_limit": "1",
+            "engine_mem_limit": "4Gi", "emit_limitrange": True}
+    outdir = tempfile.mkdtemp(prefix="bzm-parity-override-")
+    problems = []
+    try:
+        gen.write(gen.generate(FACTS, {**opts, "output_format": "helm"}), outdir)
+        chart = os.path.join(outdir, gen.CHART_DIR)
+        values = os.path.join(outdir, gen.HELM_VALUES_FILE)
+        for cpu, mem in (("2", "6Gi"), ("4", "16Gi"), ("500m", "1Gi")):
+            r = subprocess.run(
+                [HELM, "template", "crane", chart, "-n", opts["namespace"],
+                 "-f", values, "--set", f"engine.cpuLimit={cpu}",
+                 "--set", f"engine.memoryLimit={mem}"],
+                capture_output=True, text=True)
+            if r.returncode:
+                problems.append(f"--set engine={cpu}/{mem}: render failed: "
+                                f"{(r.stderr or '').strip()[:200]}")
+                continue
+            lr = _by_kind(yaml.safe_load_all(r.stdout)).get("LimitRange")
+            if not lr:
+                problems.append(f"--set engine={cpu}/{mem}: no LimitRange rendered")
+                continue
+            lim = lr["spec"]["limits"][0]
+            for field in ("default", "defaultRequest"):
+                for res in ("cpu", "memory"):
+                    parse = gen.parse_cpu if res == "cpu" else gen.parse_memory
+                    if parse(lim[field][res]) > parse(lim["max"][res]):
+                        problems.append(
+                            f"--set engine={cpu}/{mem}: {field}.{res}="
+                            f"{lim[field][res]} exceeds max.{res}={lim['max'][res]}"
+                            " -- the API server rejects this at apply time")
+    finally:
+        shutil.rmtree(outdir, ignore_errors=True)
+    return problems
+
+
 def main():
     if not shutil.which(HELM):
         sys.exit(f"{HELM} not found -- install helm, or set HELM=/path/to/helm")
@@ -174,10 +220,21 @@ def main():
                 print(f"     {d}")
         else:
             print(f"ok   {name}")
+
+    problems = overrides_stay_consistent()
+    if problems:
+        failed += 1
+        print("FAIL overrides-on-a-generated-bundle")
+        for p in problems:
+            print(f"     {p}")
+    else:
+        print("ok   overrides-on-a-generated-bundle")
+
     print()
     if failed:
-        sys.exit(f"{failed} of {len(CASES)} cases differ between the two formats")
-    print(f"{len(CASES)} cases: helm and manifests render the same objects")
+        sys.exit(f"{failed} check(s) failed")
+    print(f"{len(CASES)} cases: helm and manifests render the same objects, "
+          f"and a generated bundle survives --set")
 
 
 if __name__ == "__main__":

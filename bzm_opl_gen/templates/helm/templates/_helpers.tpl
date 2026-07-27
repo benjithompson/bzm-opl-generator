@@ -133,26 +133,34 @@ is scheduled onto a node that cannot actually give it that.
 {{- default (include "bzm-opl.engineMemoryLimit" .) .Values.engine.memoryRequest -}}
 {{- end -}}
 
-{{- define "bzm-opl.limitRangeMaxCpu" -}}
-{{- if .Values.limitRange.maxCpu -}}
-{{- .Values.limitRange.maxCpu -}}
-{{- else -}}
+{{/*
+The floor the namespace ceiling must clear: whichever is bigger of the engine
+and crane. Below the engine, the LimitRange contradicts itself -- `default` is
+the engine size, and a `default` above `max` is rejected by the API server at
+apply time rather than ignored. Below crane, the crane pod is rejected in its
+own namespace. Split out from the two helpers below so the validation and the
+value it validates cannot compute it differently.
+*/}}
+{{- define "bzm-opl.limitRangeFloorCpu" -}}
 {{- $engine := include "bzm-opl.engineCpuLimit" . -}}
 {{- $crane := .Values.crane.resources.limits.cpu | toString -}}
 {{- if gt (int64 (include "bzm-opl.cpuMillis" $engine)) (int64 (include "bzm-opl.cpuMillis" $crane)) -}}
 {{- $engine -}}{{- else -}}{{- $crane -}}{{- end -}}
 {{- end -}}
-{{- end -}}
 
-{{- define "bzm-opl.limitRangeMaxMemory" -}}
-{{- if .Values.limitRange.maxMemory -}}
-{{- .Values.limitRange.maxMemory -}}
-{{- else -}}
+{{- define "bzm-opl.limitRangeFloorMemory" -}}
 {{- $engine := include "bzm-opl.engineMemoryLimit" . -}}
 {{- $crane := .Values.crane.resources.limits.memory | toString -}}
 {{- if gt (int64 (include "bzm-opl.memBytes" $engine)) (int64 (include "bzm-opl.memBytes" $crane)) -}}
 {{- $engine -}}{{- else -}}{{- $crane -}}{{- end -}}
 {{- end -}}
+
+{{- define "bzm-opl.limitRangeMaxCpu" -}}
+{{- default (include "bzm-opl.limitRangeFloorCpu" .) .Values.limitRange.maxCpu -}}
+{{- end -}}
+
+{{- define "bzm-opl.limitRangeMaxMemory" -}}
+{{- default (include "bzm-opl.limitRangeFloorMemory" .) .Values.limitRange.maxMemory -}}
 {{- end -}}
 
 {{/*
@@ -174,6 +182,27 @@ credentials can take.
 Secret is in play, the ConfigMap otherwise. */}}
 {{- define "bzm-opl.proxyInSecret" -}}
 {{- if and .Values.proxy.enabled (include "bzm-opl.proxyHasCreds" .) .Values.useSecret (not .Values.existingSecret) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Whether crane updates itself. Unset follows the registry: a sealed location
+cannot pull a newer image anyway, so auto-update is off there and on otherwise.
+
+Worth setting explicitly when Helm manages this release. With auto-update on,
+crane rewrites its own Deployment's `.image` (and `.spec.strategy.type`) as
+field manager `OpenAPI-Generator`, and Helm applies server-side -- so the next
+`helm upgrade` fails on a field-ownership conflict rather than a diff. Observed
+on a live cluster, not inferred. Turning it off leaves Helm the only writer, at
+the cost of upgrading the agent being your job.
+*/}}
+{{- define "bzm-opl.autoUpdate" -}}
+{{- if kindIs "bool" .Values.autoUpdate -}}
+{{- .Values.autoUpdate | toString -}}
+{{- else if .Values.privateRegistry -}}
+false
+{{- else -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{- define "bzm-opl.caEnabled" -}}
@@ -239,11 +268,21 @@ on it, so each message names the fix.
 {{- fail (printf "engine.memoryRequest (%s) exceeds engine.memoryLimit (%s) -- Kubernetes rejects such a pod outright" (include "bzm-opl.engineMemoryRequest" .) (include "bzm-opl.engineMemoryLimit" .)) -}}
 {{- end -}}
 {{- if .Values.limitRange.enabled -}}
-{{- if lt (int64 (include "bzm-opl.cpuMillis" (include "bzm-opl.limitRangeMaxCpu" .))) (int64 (include "bzm-opl.cpuMillis" .Values.crane.resources.limits.cpu)) -}}
-{{- fail (printf "limitRange.maxCpu (%s) is below crane's own CPU limit (%s). Crane shares the namespace the LimitRange applies to, so the LimitRanger would reject the crane pod at admission and the agent would never start" (include "bzm-opl.limitRangeMaxCpu" .) (.Values.crane.resources.limits.cpu | toString)) -}}
+{{/*
+Only reachable when maxCpu/maxMemory are set by hand -- unset, they derive from
+this same floor. The API server catches the engine half of this too, but only at
+apply time: `helm upgrade --set engine.memoryLimit=6Gi` against a max pinned at
+4Gi fails mid-release with "default request value 6Gi is greater than max value
+4Gi", having already applied the ConfigMap. Failing the render keeps that from
+being a half-applied release.
+*/}}
+{{- $floorCpu := include "bzm-opl.limitRangeFloorCpu" . -}}
+{{- if lt (int64 (include "bzm-opl.cpuMillis" (include "bzm-opl.limitRangeMaxCpu" .))) (int64 (include "bzm-opl.cpuMillis" $floorCpu)) -}}
+{{- fail (printf "limitRange.maxCpu (%s) is below %s, the larger of the engine limit (%s) and crane's own (%s). A max under the engine makes the LimitRange contradict itself -- its `default` is the engine size, and the API server rejects a default above max. A max under crane gets the crane pod rejected in its own namespace. Leave maxCpu unset to derive it" (include "bzm-opl.limitRangeMaxCpu" .) $floorCpu (include "bzm-opl.engineCpuLimit" .) (.Values.crane.resources.limits.cpu | toString)) -}}
 {{- end -}}
-{{- if lt (int64 (include "bzm-opl.memBytes" (include "bzm-opl.limitRangeMaxMemory" .))) (int64 (include "bzm-opl.memBytes" .Values.crane.resources.limits.memory)) -}}
-{{- fail (printf "limitRange.maxMemory (%s) is below crane's own memory limit (%s). Crane shares the namespace the LimitRange applies to, so the LimitRanger would reject the crane pod at admission and the agent would never start" (include "bzm-opl.limitRangeMaxMemory" .) (.Values.crane.resources.limits.memory | toString)) -}}
+{{- $floorMem := include "bzm-opl.limitRangeFloorMemory" . -}}
+{{- if lt (int64 (include "bzm-opl.memBytes" (include "bzm-opl.limitRangeMaxMemory" .))) (int64 (include "bzm-opl.memBytes" $floorMem)) -}}
+{{- fail (printf "limitRange.maxMemory (%s) is below %s, the larger of the engine limit (%s) and crane's own (%s). A max under the engine makes the LimitRange contradict itself -- its `default` is the engine size, and the API server rejects a default above max. A max under crane gets the crane pod rejected in its own namespace. Leave maxMemory unset to derive it" (include "bzm-opl.limitRangeMaxMemory" .) $floorMem (include "bzm-opl.engineMemoryLimit" .) (.Values.crane.resources.limits.memory | toString)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
