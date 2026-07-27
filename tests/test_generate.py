@@ -638,3 +638,18 @@ def test_example_facts_have_threads_per_engine():
     teach the shape that fails preflight."""
     f = facts_mod.load(os.path.join(EXAMPLES, "facts.example.json"))
     assert f["threads_per_engine"]
+
+
+def test_endpoint_host_is_built_in_one_place():
+    """The host BlazeMeter advertises is <mock>-<port>-<namespace>.<domain>.
+    sv-expose puts it on an Ingress and the watch panel shows it to a human; a
+    second copy of the formula would let those two disagree about the one
+    string the whole feature is judged by."""
+    host = gen.sv_endpoint_host("vs1", 8080, "ns1", "apps.example.com")
+    assert host == "vs1-8080-ns1.apps.example.com"
+    # No subdomain means there is no host to show yet, not a broken one.
+    assert gen.sv_endpoint_host("vs1", 8080, "ns1", None) is None
+    # ...and sv-expose's Ingress must use exactly that.
+    out = gen.sv_expose([{"name": "vs1", "port": 8080, "harbor": "h", "ship": "s"}],
+                        "ns1", gen.SvPublish("apps.example.com", None, "nginx"))
+    assert f"host: {host}" in out

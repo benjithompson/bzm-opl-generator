@@ -198,6 +198,14 @@ the endpoint host to check once it is applied — the same facts as
 [Service virtualization](#service-virtualization), against the namespace and
 domain actually configured.
 
+While watching the agent, an SV deployment also lists the virtual services
+deployed in the namespace and the endpoint host each publishes. That is the part
+the heartbeat cannot tell you: the agent reports idle whether or not any of them
+became reachable, so a deploy stalled at `WAITING_FOR_DOMAIN` reads as healthy
+until you look at the hosts. It uses the same optional cluster read as below —
+without a kubecontext the heartbeat still works and the list says why it is
+absent.
+
 Once virtual services are deployed, the page runs
 [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) too, rendering
 the Service+Ingress pair into the same preview. That is the one thing the UI

@@ -703,6 +703,18 @@ def sv_publish_cfg(o):
                      o.get("sv_ingress_class") or SV_EXPOSE_DEFAULT_INGRESS_CLASS)
 
 
+def sv_endpoint_host(name, port, namespace, subdomain):
+    """The host BlazeMeter advertises for a deployed virtual service, or None
+    when no wildcard domain is configured yet.
+
+    One function because two callers are judged by this exact string: sv_expose
+    puts it on the Ingress it emits, and the UI shows it to someone who is about
+    to paste it into a browser. A second copy of the formula would let the route
+    that exists and the host a human is told to try drift apart.
+    """
+    return f"{name}-{port}-{namespace}.{subdomain}" if subdomain else None
+
+
 def sv_expose(mocks, namespace, publish):
     """Render a Service + Ingress per deployed virtual service.
 
@@ -729,7 +741,7 @@ def sv_expose(mocks, namespace, publish):
     for m in mocks:
         name, port = m["name"], m["port"]
         obj = f"bzm-sv-{name}"
-        host = f"{name}-{port}-{ns}.{publish.subdomain}"
+        host = sv_endpoint_host(name, port, ns, publish.subdomain)
         tls = ""
         if publish.tls_secret:
             tls = ("  tls:\n"
