@@ -1,0 +1,17 @@
+{{- if .Values.clusterRbac }}
+# OPTIONAL -- only rendered alongside clusterrole.yaml. See that file.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bzm-opl.clusterRoleBindingName" . }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bzm-opl.clusterRoleName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bzm-opl.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

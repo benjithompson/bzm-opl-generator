@@ -24,4 +24,8 @@ build-backend = "setuptools.build_meta"
 include = ["bzm_opl_gen*"]
 
 [tool.setuptools.package-data]
-bzm_opl_gen = ["templates/*.yaml", "profiles/*.json", "ui_dist/**/*"]
+# templates/helm is the Helm packaging of the same manifests. Its files are
+# listed separately because generate.py's `templates/*.yaml` glob does not
+# recurse, and the chart's own templates are .tpl/.txt/.helmignore besides.
+bzm_opl_gen = ["templates/*.yaml", "templates/helm/*", "templates/helm/templates/*",
+               "profiles/*.json", "ui_dist/**/*"]

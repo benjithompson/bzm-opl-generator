@@ -1,0 +1,109 @@
+{{- include "bzm-opl.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bzm-opl.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "bzm-opl.selectorLabels" . | nindent 6 }}
+  # Recreate, not RollingUpdate: two cranes for the same ship would both claim
+  # the agent against BlazeMeter.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "bzm-opl.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Roll the pod when the agent's configuration changes. Crane reads its
+        # env once at startup, so without these a `helm upgrade` that only
+        # touches the ConfigMap leaves the old settings running.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if and .Values.useSecret (not .Values.existingSecret) }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "bzm-opl.serviceAccountName" . }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecret }}
+      imagePullSecrets:
+        - name: {{ . }}
+      {{- end }}
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bzm-crane-{{ .Values.shipId }}
+          image: {{ include "bzm-opl.craneImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- if eq .Values.platform "openshift" }}
+            # restricted-v2 SCC assigns an in-range UID; leave runAsUser unset
+            # for portability.
+            runAsNonRoot: true
+            {{- else }}
+            runAsNonRoot: true
+            runAsUser: {{ .Values.runAsUser }}
+            runAsGroup: {{ .Values.runAsUser }}
+            {{- end }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          # Crane is the lightweight always-running orchestrator; values per the
+          # official helm-crane chart (resourcesCrane). The engines it spawns
+          # need {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} each -- size worker nodes for those,
+          # not for this pod.
+          resources:
+            {{- toYaml .Values.crane.resources | nindent 12 }}
+          {{- if .Values.probes.enabled }}
+          livenessProbe:
+            httpGet: { path: /healtz, port: 5000, scheme: HTTP }
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healtz, port: 5000, scheme: HTTP }
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "bzm-opl.configMapName" . }}
+            {{- if .Values.useSecret }}
+            - secretRef:
+                name: {{ include "bzm-opl.secretName" . }}
+            {{- end }}
+          {{- if include "bzm-opl.caEnabled" . }}
+          volumeMounts:
+            # A directory mount, deliberately. Engines mount the same ConfigMap
+            # as a single file (subPath) via KUBERNETES_CA_BUNDLE_MOUNT; crane
+            # wants the directory.
+            - name: cacerts
+              mountPath: {{ .Values.caBundle.mountPath }}
+              readOnly: true
+          {{- end }}
+      {{- if include "bzm-opl.caEnabled" . }}
+      volumes:
+        - name: cacerts
+          configMap:
+            name: {{ include "bzm-opl.caConfigMapName" . }}
+      {{- end }}

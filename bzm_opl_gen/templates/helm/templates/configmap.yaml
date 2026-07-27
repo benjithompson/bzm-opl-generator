@@ -1,0 +1,97 @@
+{{- include "bzm-opl.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bzm-opl.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+data:
+  HARBOR_ID: {{ .Values.harborId | quote }}
+  SHIP_ID: {{ .Values.shipId | quote }}
+  {{- if not .Values.useSecret }}
+  # Simplified: AUTH_TOKEN in the ConfigMap, readable by anyone who can read
+  # ConfigMaps. Hardened option: useSecret=true.
+  AUTH_TOKEN: {{ .Values.authToken | quote }}
+  {{- end }}
+  CONTAINER_MANAGER_TYPE: KUBERNETES
+  {{- if eq .Values.platform "openshift" }}
+  # OpenShift non-privileged path: engines inherit crane's SCC-assigned UID:GID
+  # and drop all capabilities, so spawned engine pods also pass restricted-v2.
+  INHERIT_RUNNING_USER_AND_GROUP: 'true'
+  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{"drop": ["ALL"]}'
+  {{- end }}
+  KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType }}
+  RUN_HEALTH_WEB_SERVICE: 'true'
+  {{- if .Values.privateRegistry }}
+  DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
+  IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
+  # Auto-update pulls from BlazeMeter's public registry -- disabled for
+  # private-registry clusters. Upgrade = re-mirror + bump tags.
+  AUTO_KUBERNETES_UPDATE: 'false'
+  {{- if .Values.registryAuth }}
+  # Crane-side auth for engine image pulls (or use image.pullSecret plus a
+  # cluster pull secret, and leave these unset -- a password here is readable by
+  # anyone who can read ConfigMaps):
+  # DOCKER_REGISTRY_USERNAME: <user>
+  # DOCKER_REGISTRY_PASSWORD: <password>
+  # DOCKER_REGISTRY_EMAIL: <email>
+  {{- end }}
+  {{- else }}
+  DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
+  AUTO_KUBERNETES_UPDATE: 'true'
+  {{- end }}
+  {{- if .Values.proxy.enabled }}
+  {{- if include "bzm-opl.proxyInSecret" . }}
+  # HTTP(S)_PROXY embed credentials -> kept in {{ include "bzm-opl.secretName" . }}.
+  {{- else }}
+  {{- if include "bzm-opl.proxyHasCreds" . }}
+  # WARNING: the proxy credentials below are plaintext -- anyone who can read
+  # ConfigMaps sees them. Set useSecret=true to move them into the Secret.
+  {{- end }}
+  {{- with .Values.proxy.http }}
+  HTTP_PROXY: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.proxy.https }}
+  HTTPS_PROXY: {{ . | quote }}
+  {{- end }}
+  {{- end }}
+  NO_PROXY: {{ .Values.proxy.noProxy | quote }}
+  {{- end }}
+  {{- with .Values.tolerations }}
+  # Engines inherit the crane pod's tolerations via this env.
+  KUBERNETES_TOLERATIONS_JSON: {{ toJson . | squote }}
+  {{- end }}
+  {{- with .Values.nodeSelector }}
+  KUBERNETES_NODE_SELECTOR_JSON: {{ toJson . | squote }}
+  {{- end }}
+  {{- with .Values.engine.cpuLimit }}
+  KUBERNETES_RESOURCES_LIMITS_CPU: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.engine.memoryLimit }}
+  KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.engine.ephemeralRequestMb }}
+  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.engine.ephemeralLimitMb }}
+  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: {{ . | quote }}
+  {{- end }}
+  {{- if include "bzm-opl.caEnabled" . }}
+  {{- $cm := include "bzm-opl.caConfigMapName" . }}
+  {{- $key := .Values.caBundle.key }}
+  {{- $path := printf "%s/%s" (trimSuffix "/" .Values.caBundle.mountPath) $key }}
+  {{- if eq .Values.caBundle.mode "existing" }}
+  # CA bundle from existing ConfigMap '{{ $cm }}' -- the platform team owns and
+  # rotates it; this chart only references it.
+  {{- else if eq .Values.caBundle.mode "openshiftInject" }}
+  # OpenShift cluster trust bundle (operator-injected ConfigMap).
+  {{- else }}
+  # Corporate CA bundle (ConfigMap created by this chart).
+  {{- end }}
+  # Mounted into crane as a directory; engines get the same ConfigMap mounted as
+  # a file via KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).
+  REQUESTS_CA_BUNDLE: {{ $path }}
+  AWS_CA_BUNDLE: {{ $path }}
+  KUBERNETES_CA_BUNDLE_MOUNT: {{ printf "REQUESTS_CA_BUNDLE=%s=%s:AWS_CA_BUNDLE=%s=%s" $cm $key $cm $key | quote }}
+  {{- end }}

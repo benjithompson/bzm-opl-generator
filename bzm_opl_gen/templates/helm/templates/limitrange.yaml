@@ -1,0 +1,32 @@
+{{- if .Values.limitRange.enabled }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: blazemeter-engine-sizing
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+spec:
+  limits:
+    # max is the part that binds the engine: it is enforced at admission, so an
+    # engine sized above it is rejected outright. defaultRequest/default only
+    # reach pods that declare nothing -- the taurus engine declares its own
+    # requests and is untouched by them.
+    #
+    # CPU and memory only: KUBERNETES_REQUESTS_EPHEMERAL_STORAGE /
+    # KUBERNETES_LIMITS_EPHEMERAL_STORAGE already exist as agent envs, so
+    # ephemeral storage is not the gap this addresses.
+    #
+    # Helm installs a LimitRange ahead of a Deployment, so the defaults are in
+    # place before crane can schedule anything.
+    - type: Container
+      defaultRequest:
+        cpu: {{ include "bzm-opl.engineCpuRequest" . | quote }}
+        memory: {{ include "bzm-opl.engineMemoryRequest" . | quote }}
+      default:
+        cpu: {{ include "bzm-opl.engineCpuLimit" . | quote }}
+        memory: {{ include "bzm-opl.engineMemoryLimit" . | quote }}
+      max:
+        cpu: {{ include "bzm-opl.limitRangeMaxCpu" . | quote }}
+        memory: {{ include "bzm-opl.limitRangeMaxMemory" . | quote }}
+{{- end }}
