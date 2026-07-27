@@ -12,11 +12,17 @@ on the way out; an SSH tunnel to the default bind is the safer shape and costs
 nothing extra.
 """
 
+import http.client
 import io
 import json
 import os
+import re
 import shlex
+import socket
+import ssl
 import time
+import urllib.error
+import urllib.request
 import zipfile
 from typing import Optional
 
@@ -355,6 +361,138 @@ def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
                   for m in read.mocks],
         "message": _sv_read_message(read),
     }
+
+
+# -- does the published endpoint answer? --------------------------------------
+# The list above is pods, and a Running pod says nothing about whether anything
+# routes to it: crane's nginx Ingress backend names port 8080 while the Service
+# it created exposes port 80, so a strict controller builds no route and the
+# published endpoint 503s while the mock serves happily inside the cluster.
+# That 503 is the finding, not a failure of the check.
+
+SV_CHECK_OK = "ok"
+SV_CHECK_DNS = "dns"
+SV_CHECK_REFUSED = "refused"
+SV_CHECK_TLS = "tls"
+SV_CHECK_TIMEOUT = "timeout"
+SV_CHECK_ERROR = "error"
+
+# Deliberately under the watch panel's 10s poll: this runs inside that panel, so
+# a deadline longer than the interval would leave answers landing against a list
+# that has already been replaced, and a hung endpoint holding a worker thread
+# across two ticks. Nothing legitimate needs longer -- a controller that routes
+# answers in milliseconds, and the 503 this exists to catch is written by the
+# controller itself without ever reaching a backend. 5s leaves room for one slow
+# DNS lookup and still returns well inside the tick.
+SV_CHECK_TIMEOUT_S = 5
+
+# What BlazeMeter publishes is <name>-<port>-<namespace>.<domain>, plus an
+# optional port. Anything else is refused rather than fetched: this string
+# arrives from the browser, and a URL carrying a path, credentials or a second
+# word would turn a reachability probe into a general-purpose fetcher aimed by
+# whatever loaded the page.
+_SV_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+(:\d+)?$")
+
+SV_CHECK_MESSAGES = {
+    SV_CHECK_DNS:
+        "That host does not resolve from this machine. The wildcard domain has "
+        "to point at the ingress controller before anything can reach the "
+        "endpoint -- including BlazeMeter.",
+    SV_CHECK_REFUSED:
+        "The host resolves but nothing accepted a connection. What it resolves "
+        "to is not the ingress controller, or the controller is not listening "
+        "on this scheme's port.",
+    # One message for the whole handshake, because the two causes look the same
+    # from here and the raw reason (CERTIFICATE_VERIFY_FAILED vs
+    # WRONG_VERSION_NUMBER) travels alongside as the detail.
+    SV_CHECK_TLS:
+        "Something answered but the TLS handshake failed: either the "
+        "certificate served for that host is not one this machine trusts -- "
+        "usual where the router serves the cluster's own CA -- or nothing "
+        "there speaks TLS at all, in which case check over http.",
+    SV_CHECK_TIMEOUT:
+        f"No answer within {SV_CHECK_TIMEOUT_S}s. The connection is being "
+        "accepted and never replied to, which is a network in between rather "
+        "than the virtual service.",
+}
+
+# The one status code with a diagnosis attached, because on this endpoint it has
+# exactly one cause and a command that fixes it.
+SV_CHECK_503 = (
+    "HTTP 503 -- the endpoint is published but nothing routes to it, while the "
+    "mock pod itself is healthy. That is this cluster rejecting crane's Ingress: "
+    "its backend names port 8080 where the Service crane created exposes port "
+    "80. Run `bzm-opl-gen sv-expose` (step 6 below) to publish a Service+Ingress "
+    "pair that does route.")
+
+
+def _sv_check_reason(err):
+    """Classify a probe that never got a status line, in the same terms as
+    livetest._sv_read_reason: by inspecting what came back, because these four
+    have four different fixes and "could not connect" has none."""
+    e = getattr(err, "reason", err)      # URLError wraps; a read timeout does not
+    if isinstance(e, ssl.SSLError):
+        # CERTIFICATE_VERIFY_FAILED and the rest of the handshake failures.
+        # First, because SSLError is itself an OSError like the two below.
+        return SV_CHECK_TLS
+    if isinstance(e, socket.gaierror):
+        return SV_CHECK_DNS
+    # Both names, not one: socket.timeout only became an alias of TimeoutError
+    # in 3.10, and this package supports 3.9, where they are separate classes
+    # and matching on either alone silently drops half the timeouts.
+    if isinstance(e, (TimeoutError, socket.timeout)):
+        return SV_CHECK_TIMEOUT
+    if isinstance(e, ConnectionRefusedError):
+        return SV_CHECK_REFUSED
+    # Reset connections, a proxy that hung up, an http.client parse failure.
+    # One bucket rather than a fifth guess, with the raw reason alongside.
+    return SV_CHECK_ERROR
+
+
+@app.get("/api/sv-check")
+def sv_check(host: str, scheme: str = "http"):
+    """Ask whether the endpoint a deployed virtual service publishes answers.
+
+    `host` is the string /api/sv-mocks handed the panel, passed back rather than
+    rebuilt here: what gets probed has to be what the row displays and what
+    BlazeMeter advertises, or a green tick would be vouching for an address
+    nobody was given.
+
+    Answers 200 whatever happened, for the same reason the cluster reads do: an
+    endpoint that does not answer is the expected finding of this button, not a
+    broken request. The two 4xx cases are inputs that are not an endpoint at all.
+
+    Declared `def`, not `async def`, so FastAPI runs it on a worker thread --
+    a probe waiting out its deadline must not stop the status poll behind it.
+    """
+    if scheme not in ("http", "https"):
+        raise HTTPException(400, f"scheme must be http or https, not {scheme!r}")
+    if not _SV_HOST_RE.match(host or ""):
+        raise HTTPException(400, f"not an endpoint host: {host!r}")
+    url = f"{scheme}://{host}/"
+    try:
+        # Redirects are followed, as they would be by the browser this is
+        # standing in for -- so a router configured to redirect http to https is
+        # reported by what the https leg said, including its certificate. The
+        # 503 this exists to catch is written by the controller directly and
+        # never redirects, so the diagnosis below is unaffected either way.
+        with urllib.request.urlopen(url, timeout=SV_CHECK_TIMEOUT_S) as r:
+            code, detail = r.status, ""
+    except urllib.error.HTTPError as e:
+        # Not an error here: a status line means something routed to this host
+        # and replied, which is the whole question. 503 included -- especially.
+        code, detail = e.code, str(e)
+    except (OSError, http.client.HTTPException) as e:
+        # OSError covers URLError and everything it wraps, plus a bare
+        # TimeoutError from a read that stalls after the connect succeeded.
+        status = _sv_check_reason(e)
+        detail = str(e) or repr(e)
+        return {"status": status, "code": None, "url": url, "detail": detail,
+                "message": SV_CHECK_MESSAGES.get(status)
+                or f"The endpoint could not be reached: {detail}"}
+    return {"status": SV_CHECK_OK, "code": code, "url": url, "detail": detail,
+            "message": SV_CHECK_503 if code == 503
+            else f"HTTP {code} -- the endpoint answered."}
 
 
 # -- profiles -----------------------------------------------------------------

@@ -352,3 +352,199 @@ def test_sv_mocks_never_errors_the_poll(fake_cluster):
     fake_cluster(rc=1, stderr="error: current-context is not set")
     r = client.get("/api/sv-mocks", params={"namespace": "ns1"})
     assert r.status_code == 200 and r.json()["status"] == "no_context"
+
+
+# -- does the endpoint answer? -------------------------------------------------
+# The listed mocks are running pods, which says nothing about whether anything
+# routes to them -- crane's nginx Ingress names a port its own Service does not
+# expose, so the published endpoint 503s while the pod is healthy. This is the
+# only outbound HTTP request the server makes that is not the BlazeMeter API,
+# and every test of it fakes that request: a real one would pass or fail on
+# whatever DNS answered that day, and the failure kinds below cannot be
+# provoked from a machine that may have no network at all.
+
+import socket  # noqa: E402
+import ssl  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+
+
+class _FakeResponse:
+    """The little of http.client.HTTPResponse that the probe touches."""
+
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _no_real_network(monkeypatch):
+    """Nothing in this module reaches the network, and a test that starts to
+    must say so rather than depend on the host it happened to hit."""
+    def refuse(*a, **kw):
+        raise AssertionError("a test made a real HTTP request")
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+
+
+@pytest.fixture
+def fake_endpoint(monkeypatch):
+    """Stand in for the virtual service's endpoint. Yields (install, calls):
+    `install` takes a status code to answer with or an exception to raise, and
+    `calls` records what the probe asked for, so the URL and the deadline are
+    assertable rather than taken on trust."""
+    calls = []
+
+    def install(answer):
+        def urlopen(req, timeout=None, **kw):
+            calls.append({"url": getattr(req, "full_url", req), "timeout": timeout})
+            if isinstance(answer, Exception):
+                raise answer
+            return _FakeResponse(answer)
+        monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    return install, calls
+
+
+def test_sv_check_reports_the_status_code_when_the_endpoint_answers(fake_endpoint):
+    install, calls = fake_endpoint
+    install(200)
+    body = client.get("/api/sv-check",
+                      params={"host": "vs1-8080-ns1.apps.example.com"}).json()
+    assert body["status"] == "ok" and body["code"] == 200
+    assert "200" in body["message"]
+    assert calls[0]["url"] == "http://vs1-8080-ns1.apps.example.com/"
+
+
+def test_sv_check_probes_the_host_the_panel_already_shows(fake_cluster, fake_endpoint):
+    """The one string that must not be rebuilt: what is checked has to be what
+    the row above it displays, or a green tick would be vouching for an address
+    nobody was given. Handed back from /api/sv-mocks untouched."""
+    fake_cluster(stdout=SV_PODS)
+    host = client.get("/api/sv-mocks",
+                      params={"namespace": "ns1",
+                              "sv_subdomain": "apps.example.com"}
+                      ).json()["mocks"][0]["host"]
+    install, calls = fake_endpoint
+    install(200)
+    client.get("/api/sv-check", params={"host": host})
+    assert calls[0]["url"] == f"http://{host}/"
+
+
+def test_sv_check_reads_a_503_as_a_diagnosis_not_a_failure(fake_endpoint):
+    """The whole point of the button. A 503 from the ingress controller is the
+    answer -- it is what crane's port mismatch looks like from outside -- so it
+    reports the status it got and names the command that fixes it."""
+    install, _ = fake_endpoint
+    install(urllib.error.HTTPError(
+        "http://vs1-8080-ns1.apps.example.com/", 503, "Service Unavailable",
+        {}, None))
+    r = client.get("/api/sv-check",
+                   params={"host": "vs1-8080-ns1.apps.example.com"})
+    assert r.status_code == 200
+    body = r.json()
+    # It answered: this is not one of the failure kinds.
+    assert body["status"] == "ok" and body["code"] == 503
+    assert "sv-expose" in body["message"]
+
+
+def test_sv_check_reports_any_other_http_status_it_gets(fake_endpoint):
+    """404 from the mock itself is a routed endpoint, and the panel must not
+    round it up to a failure the way a 503 diagnosis would."""
+    install, _ = fake_endpoint
+    install(urllib.error.HTTPError("http://h/", 404, "Not Found", {}, None))
+    body = client.get("/api/sv-check", params={"host": "h.example.com"}).json()
+    assert body["status"] == "ok" and body["code"] == 404
+    assert "sv-expose" not in body["message"]
+
+
+@pytest.mark.parametrize("status, error", [
+    # Four distinct answers because four distinct things went wrong, and each
+    # has its own way forward: no DNS record, nothing listening, a certificate
+    # this machine will not accept, or a host that never replied.
+    ("dns", urllib.error.URLError(
+        socket.gaierror(-2, "Name or service not known"))),
+    ("refused", urllib.error.URLError(
+        ConnectionRefusedError(61, "Connection refused"))),
+    ("tls", urllib.error.URLError(ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+        "self signed certificate (_ssl.c:1000)"))),
+    ("timeout", urllib.error.URLError(socket.timeout("timed out"))),
+    # A read that stalls after the connect succeeds surfaces bare, not wrapped.
+    ("timeout", TimeoutError("timed out")),
+    # Anything unforeseen still comes back as an answer, never a traceback.
+    ("error", urllib.error.URLError("<unknown>")),
+])
+def test_sv_check_tells_the_failure_kinds_apart(fake_endpoint, status, error):
+    install, _ = fake_endpoint
+    install(error)
+    r = client.get("/api/sv-check", params={"host": "vs1-8080-ns1.example.com"})
+    # Never an HTTP error: the browser can only print those in red, and a host
+    # that does not answer is the expected outcome this button exists to find.
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == status
+    assert body["code"] is None
+    assert body["message"]              # says which one it was, in words
+    assert body["detail"]               # ...and carries the raw reason
+
+
+def test_sv_check_waits_no_longer_than_a_poll_interval(fake_endpoint):
+    """A hung endpoint must not stall the panel it sits in: the watch poll comes
+    round every 10s, so the deadline is below that."""
+    install, calls = fake_endpoint
+    install(200)
+    client.get("/api/sv-check", params={"host": "h.example.com"})
+    assert calls[0]["timeout"] == server.SV_CHECK_TIMEOUT_S
+    assert 0 < server.SV_CHECK_TIMEOUT_S < 10
+
+
+def test_sv_check_can_be_asked_for_https(fake_endpoint):
+    """TLS is configured per deployment (sv_tls_secret), and probing the wrong
+    scheme answers a question nobody asked -- plain http against a TLS-only
+    route, or a handshake against a listener that speaks none."""
+    install, calls = fake_endpoint
+    install(200)
+    client.get("/api/sv-check", params={"host": "h.example.com", "scheme": "https"})
+    assert calls[0]["url"] == "https://h.example.com/"
+
+
+@pytest.mark.parametrize("bad", [
+    "h.example.com/admin",              # a path -- would fetch anything
+    "user:pw@h.example.com",
+    "h.example.com evil.example.com",
+    "",
+])
+def test_sv_check_refuses_anything_that_is_not_a_host(fake_endpoint, bad):
+    """The host arrives from the browser, so the guard is what keeps this from
+    being a general-purpose fetcher pointed by whatever loads the page. A
+    rejected request is the user getting it wrong, so unlike an endpoint that
+    will not answer it is a 4xx."""
+    install, calls = fake_endpoint
+    install(200)
+    assert client.get("/api/sv-check", params={"host": bad}).status_code == 400
+    assert calls == []
+
+
+@pytest.mark.parametrize("scheme", ["ftp", "file"])
+def test_sv_check_refuses_a_scheme_it_does_not_speak(fake_endpoint, scheme):
+    install, calls = fake_endpoint
+    install(200)
+    assert client.get("/api/sv-check", params={
+        "host": "h.example.com", "scheme": scheme}).status_code == 400
+    assert calls == []
+
+
+def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
+    """It reads nothing from kubectl -- the host was resolved when the panel
+    listed the mock. With no CLI on the machine at all it still answers, which
+    is what keeps the button from being a second thing that needs a cluster."""
+    fake_cluster(tools=())
+    install, _ = fake_endpoint
+    install(200)
+    body = client.get("/api/sv-check", params={"host": "h.example.com"}).json()
+    assert body["status"] == "ok" and body["code"] == 200
