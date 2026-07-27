@@ -16,6 +16,7 @@ import { SvCtx } from "./SvPrereqs";
 import {
   allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
   enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
+  incompleteGroups,
   setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 import { CaGroup } from "./groups/CaGroup";
@@ -41,13 +42,6 @@ const KIND_COUPLING =
   + "lifecycle, so redeploying the performance agent takes the virtual "
   + "services down with it";
 
-// How a location's own funcIds are labelled in the list. "both" is the case
-// worth naming: it deploys as one agent whichever kind you picked.
-const LOC_KIND_BADGE: Record<"performance" | "sv" | "both", [string, string]> = {
-  performance: ["performance", "bg-slate-100 text-slate-600"],
-  sv: ["service virtualization", "bg-violet-100 text-violet-700"],
-  both: ["performance + SV", "bg-amber-100 text-amber-700"],
-};
 
 export default function App() {
   // -- connection ------------------------------------------------------------
@@ -177,13 +171,11 @@ export default function App() {
   // suites, the recorder -- runs on a performance agent, so "not SV" is the test
   // rather than a second list to keep in step. Nothing is claimed until that
   // fetch lands, or every SV location would flash up labelled performance.
-  const locKind = useCallback((l: Location) => {
-    const ids = l.funcIds ?? [];
-    if (!svConst.func_ids.length || !ids.length) return null;
-    const sv = ids.some((f) => svConst.func_ids.includes(f));
-    const perf = ids.some((f) => !svConst.func_ids.includes(f));
-    return sv && perf ? "both" as const : sv ? "sv" as const : "performance" as const;
-  }, [svConst]);
+  // Both the badge here and the view in step 4 come from featuresOf, so a
+  // location cannot be called one thing in the list and another below it.
+  const locLabels = useCallback((l: Location) =>
+    featuresOf(l.funcIds, features).map(
+      (id) => features.find((f) => f.id === id)?.label ?? id), [features]);
 
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
@@ -443,12 +435,12 @@ export default function App() {
   // Configured, off screen, and still in the bundle -- reported beside the
   // preview, which is where "what is in this bundle" is read.
   const hiddenSet = setButHidden(options, feature);
-  // Which groups are not merely unset but *incomplete*: SV is the only one with
-  // such a rule today (generate() refuses an SV location without an ingress, a
-  // domain and a TLS secret). Whether the reason is on screen is what decides
-  // between the group showing its own error and the button explaining itself.
-  const incomplete: GroupId[] = svOk ? [] : ["sv"];
-  const blockers = hiddenBlockers(incomplete, feature, features);
+  // Which groups are in use but not finished. Each group declares its own rule,
+  // so a feature gaining required options later needs nothing here. Whether the
+  // reason is on screen is what decides between the group showing its own error
+  // and the download button having to explain itself.
+  const incomplete = incompleteGroups(options, { sv: svRequired });
+  const blockers = hiddenBlockers(incomplete, feature);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -663,17 +655,18 @@ export default function App() {
                   )}
                   <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
                     {filteredLocs.map((l) => {
-                      const k = locKind(l);
+                      const labels = locLabels(l);
                       return (
                       <button key={l.id}
                         className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
                         onClick={() => setHarborId(l.id)}>
                         <span className="font-medium">{l.name}</span>
-                        {k && (
-                          <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
-                            {LOC_KIND_BADGE[k][0]}
+                        {labels.map((label) => (
+                          <span key={label}
+                            className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 bg-slate-100 text-slate-600">
+                            {label}
                           </span>
-                        )}
+                        ))}
                         <span className="text-xs text-slate-400 ml-2">
                           {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
                           {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
@@ -681,7 +674,7 @@ export default function App() {
                         {/* Said here rather than left to the badge's tooltip: this
                             is where the location is being chosen, and a tooltip is
                             invisible on touch and to the keyboard. */}
-                        {k === "both" && (
+                        {labels.length > 1 && (
                           <span className="block text-[11px] text-amber-700 mt-0.5">
                             one agent for both — {KIND_COUPLING}
                           </span>
@@ -692,7 +685,7 @@ export default function App() {
                     {who && filteredLocs.length === 0 && (
                       <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
                   </div>
-                  {location && locKind(location) === "both" && (
+                  {location && locLabels(location).length > 1 && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                       <b>{location.name}</b> carries both performance and
                       service-virtualization features, so one agent serves both:{" "}
@@ -999,15 +992,15 @@ export default function App() {
                   the failure the feature view is meant to remove, so the block
                   names the feature and offers the switch to it. A group in view
                   is absent from `blockers` -- it shows its own error. */}
-              {blockers.map((b) => (
-                <div key={b.group.id}
+              {blockers.map((g) => (
+                <div key={g.id}
                   className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                   <p className="text-xs text-amber-800 grow">
-                    <b>{b.label}</b> is not finished, and its settings are not in
-                    view: {b.group.requiredHint ?? b.group.hint}.
+                    <b>{appliesTo(g, features)}</b> is not finished, and its
+                    settings are not in view: {g.requiredHint ?? g.hint}.
                   </p>
-                  <Button kind="ghost" onClick={() => pickFeature(b.feature)}>
-                    Configure {b.label}
+                  <Button kind="ghost" onClick={() => pickFeature(g.features[0])}>
+                    Configure {appliesTo(g, features)}
                   </Button>
                 </div>
               ))}

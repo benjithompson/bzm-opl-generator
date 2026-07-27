@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
   allGroupsOff, ANY_DEPLOYMENT, appliesTo, detectGroups, ENGINE_SIZES,
-  featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, OPTION_GROUPS, OptionGroup,
+  featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
+  OPTION_GROUPS, OptionGroup,
   setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 
@@ -310,7 +311,7 @@ describe("which groups are in view", () => {
     expect(() => {
       visibleGroups("sv");
       setButHidden(frozen, "sv");
-      hiddenBlockers(["sv"], "performance", FEATURES);
+      hiddenBlockers([GROUP_BY_ID.sv], "performance");
     }).not.toThrow();
     expect(frozen).toEqual(FULL);
   });
@@ -343,29 +344,35 @@ describe("set but not in view", () => {
 });
 
 describe("required but not in view", () => {
-  it("names the feature to switch to", () => {
-    // The block is the caller's -- only it knows an SV location needs an
-    // ingress -- and this says whether its reason is even on screen.
-    expect(hiddenBlockers(["sv"], "performance", FEATURES))
-      .toEqual([{ group: GROUP_BY_ID.sv, feature: "sv", label: SV.label }]);
+  const unfinished = incompleteGroups({ sv_ingress: "nginx" }, {});
+
+  it("is the unfinished groups the current view is hiding", () => {
+    // Which groups are unfinished is each group's own rule; this only says
+    // whether the reason is even on screen.
+    expect(hiddenBlockers(unfinished, "performance")).toEqual([GROUP_BY_ID.sv]);
   });
 
   it("says nothing when the group needing attention is on screen", () => {
     // Then the group renders its own error, which is where it belongs.
-    expect(hiddenBlockers(["sv"], "sv", FEATURES)).toEqual([]);
+    expect(hiddenBlockers(unfinished, "sv")).toEqual([]);
   });
 
   it("says nothing when nothing is incomplete", () => {
-    expect(hiddenBlockers([], "performance", FEATURES)).toEqual([]);
+    expect(hiddenBlockers([], "performance")).toEqual([]);
   });
 
   it("never blocks on a group that applies to any deployment", () => {
     // It cannot be off screen, so it can never be the hidden reason.
-    expect(hiddenBlockers(["registry", "proxy"], "sv", FEATURES)).toEqual([]);
+    expect(hiddenBlockers([GROUP_BY_ID.registry, GROUP_BY_ID.proxy], "sv"))
+      .toEqual([]);
   });
 
-  it("falls back to the raw id when the vocabulary has not named it", () => {
-    expect(hiddenBlockers(["sv"], "performance", [])[0].label).toBe("sv");
+  it("labels the switch from the served vocabulary, like every other row", () => {
+    // One label lookup, so the button and the "also in this bundle" line
+    // beside it cannot disagree about what a group is called.
+    const [g] = hiddenBlockers(unfinished, "performance");
+    expect(appliesTo(g, FEATURES)).toBe(SV.label);
+    expect(appliesTo(g, [])).toBe("sv");     // unnamed feature falls back
   });
 });
 
@@ -443,5 +450,52 @@ describe("the suggested namespace", () => {
     const served = [...FEATURES, SECRETS];
     expect(suggestNamespace("blazemeter-vault", SV, served)).toBe("blazemeter-sv");
     expect(suggestNamespace("blazemeter", SECRETS, served)).toBe("blazemeter-vault");
+  });
+});
+
+
+// -- completeness is the group's own business ---------------------------------
+// The download used to be gated by a rule the page held about one group. That
+// is the promise "adding a feature needs no frontend change" quietly breaking:
+// the second feature with required options would need its own check in App, its
+// own entry in the incomplete list, and its own arm on the download guard.
+
+describe("a group declares whether its own configuration is finished", () => {
+  const sv = GROUP_BY_ID.sv;
+
+  it("is complete when it is not in use at all", () => {
+    expect(sv.incomplete?.({}, false)).toBe(false);
+  });
+
+  it("is incomplete once an ingress is chosen without a domain and secret", () => {
+    expect(sv.incomplete?.({ sv_ingress: "nginx" }, false)).toBe(true);
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "apps.x.com" }, false)).toBe(true);
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "apps.x.com",
+        sv_tls_secret: "wild" }, false)).toBe(false);
+  });
+
+  it("is incomplete when the location requires it and nothing is set", () => {
+    expect(sv.incomplete?.({}, true)).toBe(true);
+  });
+
+  it("counts NODEPORT as incomplete -- generate() refuses that pairing", () => {
+    expect(sv.incomplete?.(
+      { sv_ingress: "nginx", sv_subdomain: "a.b", sv_tls_secret: "w",
+        service_type: "NODEPORT" }, false)).toBe(true);
+  });
+
+  it("groups with no completeness rule never block", () => {
+    for (const g of OPTION_GROUPS.filter((x) => x.id !== "sv")) {
+      expect(g.incomplete).toBeUndefined();
+    }
+  });
+
+  it("incompleteGroups derives the list rather than being handed one", () => {
+    expect(incompleteGroups({ sv_ingress: "nginx" }, { sv: false })
+      .map((g) => g.id)).toEqual(["sv"]);
+    expect(incompleteGroups({}, { sv: false })).toEqual([]);
+    expect(incompleteGroups({}, { sv: true }).map((g) => g.id)).toEqual(["sv"]);
   });
 });

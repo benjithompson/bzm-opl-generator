@@ -1,4 +1,6 @@
 import io
+import os
+import re
 import zipfile
 
 import pytest
@@ -496,3 +498,24 @@ def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
     install(200)
     body = client.get("/api/sv-check", params={"host": "h.example.com"}).json()
     assert body["status"] == "ok" and body["code"] == 200
+
+
+def test_group_tags_name_features_the_server_actually_serves():
+    """The frontend tags each option group with the feature ids it belongs to,
+    and those ids are the join between the two halves. Nothing else checks it:
+    the vitest suite tags against its own fixture, so renaming a served id
+    passes both suites green and silently empties a feature's options in the
+    browser. Read the tags out of the source rather than duplicating them."""
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "frontend", "src", "optionGroups.ts")
+    with open(src) as fh:
+        text = fh.read()
+    tagged = {i for line in text.splitlines() if "features:" in line
+              for i in re.findall(r'"([^"]+)"', line)}
+    served = {f["id"] for f in client.get("/api/features").json()}
+    assert tagged, "no group tags found -- has the declaration shape changed?"
+    assert tagged <= served, (
+        f"option groups tag features the server does not serve: "
+        f"{sorted(tagged - served)}. Either the id was renamed in "
+        f"server.FEATURES, or the tag is a typo -- the group's options would "
+        f"never appear.")

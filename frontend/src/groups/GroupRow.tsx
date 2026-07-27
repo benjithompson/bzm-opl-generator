@@ -18,7 +18,9 @@ export function GroupRow(props: {
   group: OptionGroup;
   on: boolean;
   required?: boolean;
-  applies?: string;
+  /** Which features this group belongs to, always shown -- every row is
+   *  attributed, so no option is on screen without saying why. */
+  applies: string;
   onFlip: (on: boolean) => void;
   children: ReactNode;
 }) {

@@ -52,6 +52,14 @@ export interface OptionGroup {
   /** Applied when the switch goes off. OFF hides the fields AND wipes their
    *  options, so nothing hidden ever reaches the manifests. */
   disable: (o: Options) => OptionPatch;
+  /** Is this group in use but not yet finished, so the bundle cannot generate?
+   *  Declared here with everything else about the group, because the page
+   *  holding one group's rule is how "adding a feature needs no frontend
+   *  change" breaks: the next feature with required options would otherwise
+   *  need its own check in App, its own entry in a list, and its own arm on the
+   *  download guard. `required` is the location's own demand -- funcIds can make
+   *  a group mandatory when nothing is set yet. Absent means never blocks. */
+  incomplete?: (o: Options, required: boolean) => boolean;
 }
 
 // -- CA trust ----------------------------------------------------------------
@@ -191,6 +199,16 @@ export const OPTION_GROUPS: OptionGroup[] = [
     detect: (o) => !!o.sv_ingress,
     // The ingress path only works on CLUSTERIP; NODEPORT would send crane to
     // the cluster-scoped Node object instead.
+    // Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and
+    // the TLS secret are both mandatory (the secret even for plain HTTP --
+    // crane validates it at startup), and NODEPORT is refused because it sends
+    // crane to the cluster-scoped Node object. With none chosen, only a
+    // location whose funcIds demand SV is unfinished.
+    incomplete: (o, required) => (o.sv_ingress
+      ? !String(o.sv_subdomain ?? "").trim()
+        || !String(o.sv_tls_secret ?? "").trim()
+        || (o.service_type != null && o.service_type !== "CLUSTERIP")
+      : required),
     enable: (o) => ({ sv_ingress: o.sv_ingress || "nginx", service_type: "CLUSTERIP" }),
     // Deliberately does NOT restore service_type: CLUSTERIP is the safe value
     // and the one the backend defaults to, and putting a NODEPORT back is not
@@ -252,16 +270,15 @@ export function appliesTo(g: OptionGroup, features: Feature[]): string {
  *  ones that apply to any deployment. `null` -- nothing chosen yet, or the
  *  vocabulary fetch failed -- shows everything: a view that cannot be chosen
  *  must not take options off the page. */
-export function visibleGroups(
-    feature: string | null, groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
-  if (!feature) return groups;
-  return groups.filter((g) => !g.features.length || g.features.includes(feature));
+export function visibleGroups(feature: string | null): OptionGroup[] {
+  if (!feature) return OPTION_GROUPS;
+  return OPTION_GROUPS.filter(
+    (g) => !g.features.length || g.features.includes(feature));
 }
 
-export function hiddenGroups(
-    feature: string | null, groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
-  const shown = new Set(visibleGroups(feature, groups));
-  return groups.filter((g) => !shown.has(g));
+function hiddenGroups(feature: string | null): OptionGroup[] {
+  const shown = new Set(visibleGroups(feature));
+  return OPTION_GROUPS.filter((g) => !shown.has(g));
 }
 
 /** Groups holding configuration while off screen. Reported near the preview:
@@ -270,37 +287,29 @@ export function hiddenGroups(
  *  toggle state, because a group switched on with nothing in it adds nothing to
  *  the manifests and saying otherwise would be noise. */
 export function setButHidden(
-    o: Options, feature: string | null,
-    groups: OptionGroup[] = OPTION_GROUPS): OptionGroup[] {
-  return hiddenGroups(feature, groups).filter((g) => g.detect(o));
+    o: Options, feature: string | null): OptionGroup[] {
+  return hiddenGroups(feature).filter((g) => g.detect(o));
 }
 
-/** A group whose configuration blocks the download while being off screen. */
-export interface Blocker {
-  group: OptionGroup;
-  /** The feature to switch the view to. */
-  feature: string;
-  label: string;
+/** Groups in use but not finished, so the download is blocked. Derived from the
+ *  declarations rather than passed in: the caller knowing which groups can be
+ *  incomplete is the coupling this exists to remove. */
+export function incompleteGroups(
+    o: Options, required: Partial<Record<GroupId, boolean>>): OptionGroup[] {
+  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id]));
 }
 
 /** Why the download is blocked when the reason is not on screen -- the failure
  *  this view is meant to remove is a disabled button whose cause is elsewhere
- *  on the page. `incomplete` is the caller's own validation (only it knows an
- *  SV location needs a domain and a TLS secret); this says which of those
- *  groups are hidden and which feature to switch to for each. A group that
- *  applies to any deployment is never hidden, so it can never appear here. */
+ *  on the page. Which groups are unfinished is `incompleteGroups`; this is the
+ *  subset of those the current view is hiding. A group that applies to any
+ *  deployment is never hidden, so it can never appear here -- and its feature
+ *  to switch to is `g.features[0]`, with `appliesTo` giving the label, rather
+ *  than a second label lookup that could disagree with the one beside it. */
 export function hiddenBlockers(
-    incomplete: GroupId[], feature: string | null, features: Feature[],
-    groups: OptionGroup[] = OPTION_GROUPS): Blocker[] {
-  return hiddenGroups(feature, groups)
-    .filter((g) => incomplete.includes(g.id))
-    .map((g) => ({
-      group: g,
-      // Non-empty: an untagged group is visible under every feature, so it was
-      // already filtered out above.
-      feature: g.features[0],
-      label: features.find((f) => f.id === g.features[0])?.label ?? g.features[0],
-    }));
+    incomplete: OptionGroup[], feature: string | null): OptionGroup[] {
+  const hidden = new Set(hiddenGroups(feature));
+  return incomplete.filter((g) => hidden.has(g));
 }
 
 /** The features a location's funcIds carry, in served order. funcIds the tool
