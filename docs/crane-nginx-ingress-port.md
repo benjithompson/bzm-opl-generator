@@ -4,7 +4,7 @@
 `port.number: 80` (or `port.name: "8080"`). It currently emits `port.number: 8080`.
 
 **Version:** crane `3.7.55` (`sha256:875ce4b04f24bfc82ace039b1b5a3b86e8345691f3daabe0f0326cafde753c25`),
-Service Virtualization path (`mockServices` / `sv-bridge`).
+Service Virtualization path (`mockServices`).
 
 > **Reproducing on `ingress-nginx` will show this passing.** That controller tolerates
 > the bad value; OpenShift's `ingress-to-route` does not. Test there, or use the

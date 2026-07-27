@@ -147,10 +147,11 @@ CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
 CA_CONFIGMAP = "blazemeter-cacerts"
 
-# The funcIds BlazeMeter puts on a location that serves virtual services. Both
-# need the same ingress wiring: mockServices runs the mocks, sv-bridge fronts
-# them, and either alone is enough to make the ingress options mandatory.
-SV_FUNC_IDS = ("mockServices", "sv-bridge")
+# The funcId BlazeMeter puts on a location that serves virtual services, and so
+# the one that makes the ingress options mandatory. A tuple, not a string,
+# because it is served to the UI as a set and was two entries until sv-bridge
+# was retired -- a second one returning is a data change, not a code change.
+SV_FUNC_IDS = ("mockServices",)
 
 
 class SvBackend(collections.namedtuple(

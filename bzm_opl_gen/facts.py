@@ -18,7 +18,6 @@ IMAGE_CATEGORY = {
     "service-mock": "mock",
     "mock-pc-service": "mock",
     "group-gateway": "mock",   # mock services gateway
-    "sv-bridge": "sv",         # service virtualization bridge
     "proxy-recorder": "recorder",
 }
 
@@ -30,7 +29,6 @@ CATEGORY_BY_FUNC = {
     "functionalApi": {"performance"},          # API tests run in the taurus engine
     "functionalGui": {"performance", "gui"},
     "mockServices": {"mock"},
-    "sv-bridge": {"sv"},
     "proxyRecorder": {"recorder"},
 }
 

@@ -445,7 +445,7 @@ over). Replay it with `generate --profile out/profile.json`; `livetest
 
 Images are selected automatically from the location's enabled funcIds:
 performance engines always ship; browser/grid (functionalGui), mock-service
-(mockServices), SV bridge (sv-bridge), and recorder (proxyRecorder) images only
+(mockServices), and recorder (proxyRecorder) images only
 when that feature is enabled on the location. `images --all` lists everything.
 
 ### Engine requests: the gap, and what a LimitRange can and cannot do

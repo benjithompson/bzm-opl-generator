@@ -11,6 +11,14 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Removed
+
+- **`sv-bridge` support.** The funcId is retired upstream, so it no longer
+  selects an image, no longer appears in the create-location form, and no longer
+  makes the service-virtualization ingress options mandatory. Locations that
+  still carry the funcId now generate as ordinary performance locations — if you
+  mirror images for one, the `sv-bridge` image is no longer in the set.
+
 ### Added
 
 - **Web UI: the deployed virtual services, beside the heartbeat** — while
@@ -40,8 +48,8 @@ anything that breaks.
   reported as distinct outcomes, each with the equivalent command prefilled to
   run elsewhere.
 - **Web UI: every funcId a location can be created with** is served from the
-  generator rather than copied into the frontend, so `sv-bridge` (and
-  `proxyRecorder`) can be selected at last — the hardcoded list omitted both.
+  generator rather than copied into the frontend, so `proxyRecorder` can be
+  selected at last — the hardcoded list omitted it.
 - **`ui --host`** — bind the web UI to something other than loopback, for when
   the machine running it is not the machine you are sitting at. The default is
   unchanged (`127.0.0.1`) and a widened bind warns at startup: the server holds
