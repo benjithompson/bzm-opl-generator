@@ -56,6 +56,10 @@ export default function App() {
   const [saveKey, setSaveKey] = useState(false);
   const [who, setWho] = useState<{ email: string; keyId: string } | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
+  // A round trip to BlazeMeter over someone's corporate network, so the wait is
+  // long enough to look like nothing happened. Also guards re-entry: all three
+  // entry points (Browse, Connect, paste) share this one flag.
+  const [connecting, setConnecting] = useState(false);
 
   // -- account tree ----------------------------------------------------------
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -153,14 +157,20 @@ export default function App() {
   }, []);
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
+    if (connecting) return;
     setConnErr(null);
+    setConnecting(true);
     try {
       const r = await api.keySet(body);
       setWho({ email: r.user.email, keyId: r.key_id });
+      // Still connecting as far as the user is concerned: the key is accepted
+      // but the account list is what the next step needs, and releasing the
+      // button between the two would show a ready form with nothing in it.
       const accts = await api.accounts();
       setAccounts(accts);
       setAccountId(r.default_account_id ?? accts[0]?.id ?? null);
     } catch (e) { setConnErr(String((e as Error).message)); }
+    finally { setConnecting(false); }
   };
 
   useEffect(() => {
@@ -734,7 +744,14 @@ export default function App() {
                         placeholder="/path/to/api-key.json" />
                     </Field>
                   </div>
-                  <label className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 cursor-pointer whitespace-nowrap">
+                  {/* A label, not a Button, so it cannot be `disabled` -- while a
+                      connect is in flight it is taken out of reach instead, or a
+                      second key could be picked mid-request. */}
+                  <label className={"rounded-md px-3 py-1.5 text-sm font-medium border "
+                    + "border-slate-300 text-slate-600 whitespace-nowrap "
+                    + (connecting
+                      ? "opacity-40 pointer-events-none"
+                      : "hover:bg-slate-50 cursor-pointer")}>
                     Browse…
                     <input type="file" accept=".json,application/json" className="hidden"
                       onChange={async (e) => {
@@ -751,8 +768,9 @@ export default function App() {
                         }
                       }} />
                   </label>
-                  <Button onClick={() => connect({ path: keyPath })} disabled={!keyPath}>
-                    Connect
+                  <Button onClick={() => connect({ path: keyPath })}
+                    disabled={!keyPath} busy={connecting}>
+                    {connecting ? "Connecting…" : "Connect"}
                   </Button>
                 </div>
                 <Check label="Remember this key on this machine" checked={saveKey} onChange={setSaveKey}
@@ -767,7 +785,9 @@ export default function App() {
                         value={pasteSecret} onChange={(e) => setPasteSecret(e.target.value)} />
                     </Field>
                     <Button onClick={() => connect({ id: pasteId, secret: pasteSecret, save: saveKey })}
-                      disabled={!pasteId || !pasteSecret}>Connect</Button>
+                      disabled={!pasteId || !pasteSecret} busy={connecting}>
+                      {connecting ? "Connecting…" : "Connect"}
+                    </Button>
                   </div>
                 </details>
                 <ErrorMsg msg={connErr} />

@@ -65,17 +65,40 @@ export function Check(props: {
   );
 }
 
+/** Indeterminate progress, for a wait whose length we cannot predict -- a
+ *  round-trip to BlazeMeter over someone's corporate network. `currentColor`
+ *  so it works on both button kinds without being told which it is on. */
+export function Spinner({ className = "" }: { className?: string }) {
+  return (
+    <svg className={"animate-spin h-3.5 w-3.5 shrink-0 " + className}
+      viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle className="opacity-25" cx="12" cy="12" r="10"
+        stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-90" fill="currentColor"
+        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+    </svg>
+  );
+}
+
 export function Button(props: {
-  onClick: () => void; children: ReactNode; kind?: "primary" | "ghost"; disabled?: boolean;
+  onClick: () => void; children: ReactNode; kind?: "primary" | "ghost";
+  disabled?: boolean;
+  /** In flight: shows a spinner and stops a second click starting a second
+   *  request. Separate from `disabled` so the caller does not have to conflate
+   *  "not allowed" with "already going". */
+  busy?: boolean;
 }) {
-  const base = "rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40";
+  const base = "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm "
+    + "font-medium transition-colors disabled:opacity-40";
   const kinds = {
     primary: "bg-bzm text-white hover:bg-bzm-dark",
     ghost: "border border-slate-300 text-slate-600 hover:bg-slate-50",
   };
   return (
     <button className={`${base} ${kinds[props.kind ?? "primary"]}`}
-      onClick={props.onClick} disabled={props.disabled}>
+      onClick={props.onClick} disabled={props.disabled || props.busy}
+      aria-busy={props.busy || undefined}>
+      {props.busy && <Spinner />}
       {props.children}
     </button>
   );
