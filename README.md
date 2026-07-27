@@ -171,51 +171,53 @@ pip install -e .[ui]
 bzm-opl-gen ui          # opens http://127.0.0.1:8765
 ```
 
-Single page: Connect (key stays local) → choose what the bundle deploys →
-pick/create location & agent → configure (presets, private registry, proxy/CA,
-tolerations/nodeSelector, engine sizing) → live manifest preview → download zip
-(AUTH_TOKEN fetched on download) → watch the agent flip online. Profile JSON
-import/export round-trips with `generate --profile`. Frontend dev: `cd frontend
-&& npm install && npm run dev` (proxies /api to :8765); `npm run build`
-refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.
+Single page: Connect (key stays local) → pick or create a location & agent →
+choose the feature you are configuring → configure → live manifest preview →
+download zip (AUTH_TOKEN fetched on download) → watch the agent flip online.
+Profile JSON import/export round-trips with `generate --profile`. Frontend dev:
+`cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
+build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
+runs the option-group logic suite that CI runs as its own job.
 
-**One agent per kind.** The first thing the page asks is whether this bundle
-deploys a *performance* agent or a *service-virtualization* agent. Deploy them
-separately: a single agent serving both puts virtual services and load engines
-in one namespace, on one slot budget, with one restart lifecycle — so
-redeploying the performance agent takes the virtual services down with it.
-Picking service virtualization seeds the create-location form with the SV
-funcIds, defaults the namespace to `blazemeter-sv` rather than `blazemeter`, and
-switches the SV options on. It is a recommendation, not a restriction: a
-location carrying both feature sets is labelled as such in the list and can
-still be selected and generated for, and the generator gained no new rejection —
-existing combined locations keep working.
+**Configure one feature at a time.** The step shows that feature's options plus
+the ones that apply to any deployment — registry, proxy, CA trust, scheduling,
+security. It is a **view, not a scope**: the manifests come from the location's
+own funcIds either way, so anything set under one feature stays set and stays in
+the bundle. Options set under a feature you are not looking at are listed beside
+the preview; ones that are *required* and not on screen block the download with
+a link to the feature that needs them. The feature list is served, so it grows
+without a UI release — and a location carrying funcIds no feature claims says so
+rather than hiding them.
 
-For a location with SV enabled, the page also names every prerequisite the
-bundle does *not* create (the wildcard TLS secret, an Istio Gateway when one is
-named, the controller itself) and what the chosen backend does with each, plus
-the endpoint host to check once it is applied — the same facts as
+Picking or creating is one or the other: starting to create a location or an
+agent hides the list of existing ones until you finish or cancel. Reusing an
+agent identity that is already running somewhere conflicts with that install,
+so the two paths are kept apart deliberately.
+
+For a location with SV enabled, the page names every prerequisite the bundle
+does *not* create (the wildcard TLS secret, an Istio Gateway when one is named,
+the controller itself) and what the chosen backend does with each, plus the
+endpoint host to check once it is applied — the same facts as
 [Service virtualization](#service-virtualization), against the namespace and
 domain actually configured.
 
-While watching the agent, an SV deployment also lists the virtual services
-deployed in the namespace and the endpoint host each publishes. That is the part
-the heartbeat cannot tell you: the agent reports idle whether or not any of them
-became reachable, so a deploy stalled at `WAITING_FOR_DOMAIN` reads as healthy
-until you look at the hosts. It uses the same optional cluster read as below —
-without a kubecontext the heartbeat still works and the list says why it is
-absent.
+While watching the agent, an SV deployment lists the virtual services deployed
+in the namespace, the endpoint host each publishes, and a check for whether that
+host actually answers. That is the part the heartbeat cannot tell you: the agent
+reports idle whether or not any of them became reachable, so a deploy stalled at
+`WAITING_FOR_DOMAIN` reads as healthy until you look at the hosts. A **503**
+there is the diagnosis, not a failed check — it is this cluster refusing crane's
+port reference, and [`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose)
+is the fix. A probe that gets no status line says which kind it was: the host did
+not resolve, nothing accepted the connection, the TLS handshake failed, or
+nothing replied in time.
 
-Once virtual services are deployed, the page runs
-[`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) too, rendering
-the Service+Ingress pair into the same preview. That is the one thing the UI
-does that needs a cluster, and it needs one only for that: reading the mocks
-uses whatever `kubectl`/`oc` context the machine running `bzm-opl-gen ui` has.
-There is often none, so an unreadable cluster is a normal answer rather than an
-error — it says which of *no CLI*, *no context*, *denied* or *no virtual
-services in that namespace* applied, and hands you the equivalent command,
-prefilled, to run where you do have access. Nothing else in the UI needs a
-cluster at all.
+Reading the namespace is the one thing the UI does that needs a cluster, and it
+needs one only for that: it uses whatever `kubectl`/`oc` context the machine
+running `bzm-opl-gen ui` has. There is often none, so an unreadable cluster is a
+normal answer rather than an error — it says which of *no CLI*, *no context*,
+*denied* or *no virtual services in that namespace* applied, and the heartbeat
+keeps working either way. Nothing else in the UI needs a cluster at all.
 
 **It binds this machine only, on purpose.** The server holds your API key in
 process memory, so reaching the page is equivalent to holding the key — and the
@@ -388,11 +390,8 @@ bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-defaul
 kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
 
-The [web UI](#web-ui) runs the same thing from the browser, against the
-`kubectl`/`oc` context of the machine serving it, and tells you which reason
-applied when there is no cluster to read rather than failing. Setting the
-ingress class there also writes `sv_ingress_class` into the bundle's
-`profile.json`, so a later `sv-expose --manifests out/` picks it up without
+`sv_ingress_class` is read from the bundle's `profile.json`, so a profile
+carrying it lets a later `sv-expose --manifests out/` pick the class up without
 repeating the flag. It is not a `generate` option — nothing about it reaches the
 agent, and a bundle generated without it is byte-identical to before.
 

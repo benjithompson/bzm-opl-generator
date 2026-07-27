@@ -28,25 +28,28 @@ anything that breaks.
   `WAITING_FOR_DOMAIN` used to look identical to a healthy one. Needs a
   kubecontext like `sv-expose` does; without one the panel still watches the
   heartbeat and says why the list is absent.
-- **Web UI: pick what the bundle deploys** — a performance agent or a
-  service-virtualization agent — before choosing a location. The SV kind seeds
-  the create-location funcIds, defaults the namespace to `blazemeter-sv`, and
-  turns the SV options on; locations are labelled with the kind their funcIds
-  imply, and one carrying both is flagged with the namespace/slot/lifecycle
-  coupling it brings. Advisory only — any location can still be generated for
-  either kind, and the generator gained no new rejection.
+- **Web UI: configure one feature at a time.** The configure step shows the
+  selected feature's options plus the ones that apply to any deployment. It is a
+  view, not a scope — the manifests still come from the location's own funcIds,
+  so nothing set under another feature is lost or omitted. Options set out of
+  view are listed beside the preview; required ones missing from view block the
+  download with a link to the feature that needs them. The feature list is
+  served, so functional testing, secrets or API monitoring become selectable
+  without a UI release.
+- **Web UI: picking and creating are separate.** Starting to create a location
+  or an agent hides the list of existing ones until you finish or cancel, so it
+  is never ambiguous which of the two you are doing — they have very different
+  consequences when an agent identity is already running somewhere.
+- **Web UI: check whether a published endpoint answers.** Beside the virtual
+  services in the watch panel, a check reports the HTTP status or which kind of
+  failure it was. A 503 is the diagnosis rather than a broken check: it is the
+  cluster refusing crane's port reference, and it names `sv-expose` as the fix.
 - **Web UI: the SV prerequisites the bundle does not create** — wildcard TLS
   secret, Istio Gateway, the controller — now say who provides each one and what
   the chosen backend actually does with it, alongside the endpoint host to check
   after applying. Previously README-only, while the failure it prevents is
   silent: manifests apply, agent goes idle, mock runs 1/1, every deploy hangs at
   `WAITING_FOR_DOMAIN`.
-- **Web UI: `sv-expose` from the browser**, rendering the Service+Ingress pair
-  into the same preview, with the ingress class settable for the first time
-  outside the CLI. Reading the cluster is optional and the only thing in the UI
-  that needs one: no CLI, no context, denied and no-virtual-services are
-  reported as distinct outcomes, each with the equivalent command prefilled to
-  run elsewhere.
 - **Web UI: every funcId a location can be created with** is served from the
   generator rather than copied into the frontend, so `proxyRecorder` can be
   selected at last — the hardcoded list omitted it.
