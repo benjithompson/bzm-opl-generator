@@ -44,7 +44,6 @@ KEY_CANDIDATES = [
     SAVED_KEY_PATH,
     os.path.expanduser("~/.bzm/api-key.json"),
 ]
-PROFILE_DIR = os.path.join(os.path.dirname(__file__), "profiles")
 
 
 def _client():
@@ -447,18 +446,6 @@ def sv_check(host: str, scheme: str = "http"):
     return {"status": SV_CHECK_OK, "code": code, "url": url, "detail": detail,
             "message": SV_CHECK_503 if code == 503
             else f"HTTP {code} -- the endpoint answered."}
-
-
-# -- profiles -----------------------------------------------------------------
-
-@app.get("/api/profiles")
-def profiles():
-    out = []
-    for fn in sorted(os.listdir(PROFILE_DIR)):
-        if fn.endswith(".json"):
-            with open(os.path.join(PROFILE_DIR, fn)) as fh:
-                out.append({"name": fn[:-5], "options": json.load(fh)})
-    return out
 
 
 @app.get("/api/option-defaults")

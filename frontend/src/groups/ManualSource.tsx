@@ -18,8 +18,6 @@ export function ManualSource(props: {
   harborId: string;
   shipId: string;
   authToken: string;
-  guiIncomplete: boolean;
-  privateRegistry: boolean;
   onHarborId: (v: string) => void;
   onShipId: (v: string) => void;
   onAuthToken: (v: string) => void;
@@ -51,22 +49,6 @@ export function ManualSource(props: {
       </Field>
 
 
-      {/* The one gap manual entry cannot close, surfaced where it bites: a
-          private registry. Against the public registry a missing key just
-          resolves upstream, which is fine. */}
-      {props.guiIncomplete && (
-        <div className={"rounded-md border px-3 py-2 text-xs " + (props.privateRegistry
-          ? "border-amber-300 bg-amber-50 text-amber-800"
-          : "border-slate-200 bg-slate-50 text-slate-600")}>
-          <b>GUI browser images are version-pinned.</b> BlazeMeter carries a
-          separate repo per browser build (<code>charmander/chrome_128…</code>,
-          <code>firefox_128.0</code>, …) and which one this location uses is only
-          in a live agent's inventory, so the catalogue cannot name it.
-          {props.privateRegistry
-            ? " You have a private registry set, so add the browser key to IMAGE_OVERRIDES by hand — crane resolves a key it cannot find against the public registry, which is exactly what a sealed cluster blocks."
-            : " Harmless here: without a private registry crane pulls it from BlazeMeter's own registry."}
-        </div>
-      )}
     </div>
   );
 }

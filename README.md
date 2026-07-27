@@ -203,10 +203,12 @@ pip install -e .[ui]
 bzm-opl-gen ui          # opens http://127.0.0.1:8765
 ```
 
-Single page: Connect (key stays local) → pick or create a location & agent →
-choose the feature you are configuring → configure → live manifest preview →
-download zip (AUTH_TOKEN fetched on download) → watch the agent flip online.
-Profile JSON import/export round-trips with `generate --profile`. Frontend dev:
+Single page: Agent details — either connect (key stays local) and pick or create
+a location & agent, or enter the harbor id, ship id and token by hand → choose
+what the location runs → configure → live manifest preview → download zip
+(AUTH_TOKEN fetched on download when connected, as entered when not) → watch the
+agent flip online. Profile JSON import/export round-trips with
+`generate --profile`. Frontend dev:
 `cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
 build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
 runs the option-group logic suite that CI runs as its own job.

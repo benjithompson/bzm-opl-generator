@@ -98,7 +98,6 @@ export default function App() {
   // repo has been bitten by.
   const [manual, setManual] = useState<{ harbor_id: string; ship_id: string; func_ids: string[] }>(
     { harbor_id: "", ship_id: "", func_ids: [] });
-  const [guiIncomplete, setGuiIncomplete] = useState(false);
   // Collapsed once the source is settled: three steps' worth of pickers is
   // noise while you are configuring, and the summary says what was chosen.
   const [sourceOpen, setSourceOpen] = useState(true);
@@ -126,7 +125,6 @@ export default function App() {
   const raw = useCallback(
     (k: string) => String(options[k] ?? ""), [options]);
 
-  const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -151,7 +149,6 @@ export default function App() {
       setCandidates(r.candidates);
       if (r.candidates[0]) setKeyPath(r.candidates[0].path);
     }).catch(() => {});
-    api.profiles().then(setProfiles).catch(() => {});
     api.optionDefaults().then((d) => {
       setDefaults(d);
       setOptions((o) => ({ ...d, ...o }));
@@ -314,7 +311,6 @@ export default function App() {
       }).then((r: ManualFactsOut) => {
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
-        setGuiIncomplete(r.gui_images_incomplete);
       }).catch((e) => setGenErr(String(e.message)));
     }, 250);
   }, [sourceMode, manual]);
@@ -333,11 +329,6 @@ export default function App() {
     // The token is fetched on download when connected, and typed when not --
     // so it must not survive the switch either way.
     set("auth_token", null);
-  };
-
-  const applyProfile = (name: string) => {
-    const p = profiles.find((x) => x.name === name);
-    if (p) setOptions({ ...defaults, namespace: options.namespace, ...p.options });
   };
 
   const exportProfile = () => {
@@ -461,14 +452,6 @@ export default function App() {
     (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
       .find((x) => imageFuncs.has(x)),
     [features, imageFuncs]);
-  const featureFuncs = useCallback(
-    (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
-      .filter((x) => imageFuncs.has(x)),
-    [features, imageFuncs]);
-  const labelOf = useCallback(
-    (id: string) => funcIdChoices.find((c) => c.id === id)?.label ?? id,
-    [funcIdChoices]);
-
   const pickFeature = useCallback((id: string, suggestNs = false) => {
     setFeature(id);
     // Manual mode has no account to read funcIds from, so the feature buttons
@@ -714,8 +697,6 @@ export default function App() {
                   harborId={manual.harbor_id}
                   shipId={manual.ship_id}
                   authToken={raw("auth_token")}
-                  guiIncomplete={guiIncomplete}
-                  privateRegistry={!!options.private_registry}
                   onHarborId={(v) => setManual((m) => ({ ...m, harbor_id: v }))}
                   onShipId={(v) => setManual((m) => ({ ...m, ship_id: v }))}
                   onAuthToken={(v) => set("auth_token", v || null)} />
@@ -1030,17 +1011,9 @@ export default function App() {
 
           {/* 2 · Configure */}
           <Section n={2} title="Configure"
-            hint="Everything re-renders the preview live. Presets give a starting point.">
+            hint="Everything re-renders the preview live.">
             <div className="space-y-4">
               <div className="flex gap-2 items-center flex-wrap">
-                <span className="text-xs font-medium text-slate-500">Presets:</span>
-                {profiles.map((p) => (
-                  <button key={p.name}
-                    className="px-2.5 py-1 rounded-full text-xs border border-slate-300 text-slate-600 hover:bg-slate-50"
-                    onClick={() => applyProfile(p.name)}>
-                    {p.name}
-                  </button>
-                ))}
                 <span className="flex-1" />
                 <Button kind="ghost" onClick={exportProfile}>Export</Button>
                 <label className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 cursor-pointer">
@@ -1104,35 +1077,11 @@ export default function App() {
                       are the declaration -- which is why the sentence under them
                       has to change with the mode rather than claim both. */}
                   {sourceMode === "manual" ? (
-                    <>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Declared here, not read from an account — it decides which
-                        images the bundle names.
-                      </p>
-                      {/* Refinements, not a second copy of the question above: a
-                          feature can stand for several funcIds that name
-                          different images, and without these manual mode could
-                          not ask for the grid proxy or the recorder at all. Only
-                          shown when the chosen feature has more than one. */}
-                      {featureFuncs(feature).length > 1 && (
-                        <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                          {featureFuncs(feature).slice(1).map((id) => (
-                            <label key={id}
-                              className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
-                              <input type="checkbox" className="accent-bzm"
-                                checked={manual.func_ids.includes(id)}
-                                onChange={() => setManual((m) => ({
-                                  ...m,
-                                  func_ids: m.func_ids.includes(id)
-                                    ? m.func_ids.filter((x) => x !== id)
-                                    : [...m.func_ids, id],
-                                }))} />
-                              also runs {labelOf(id)}
-                            </label>
-                          ))}
-                        </div>
-                      )}
-                    </>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Declared here, not read from an account — it decides which
+                      images the bundle names. A feature stands for one funcId
+                      here; the location's other features are not offered yet.
+                    </p>
                   ) : (
                     <p className="text-[11px] text-slate-400 mt-1">
                       The location's own features decide what the manifests

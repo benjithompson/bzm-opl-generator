@@ -121,10 +121,12 @@ def test_func_ids_mark_which_ones_change_the_images():
         assert by_id[f]["changes_images"] is True
 
 
-def test_option_defaults_carry_the_output_format():
-    """The UI seeds its options from this response, so a format missing from
-    DEFAULT_OPTIONS is a segment that starts blank."""
-    assert client.get("/api/option-defaults").json()["output_format"] == "manifests"
+def test_option_defaults_are_served():
+    """The UI seeds its options from this response, so anything missing from
+    DEFAULT_OPTIONS is a control that starts blank."""
+    body = client.get("/api/option-defaults").json()
+    assert body["platform"] == "openshift"
+    assert body["output_format"] == "manifests"
 
 
 def test_generate_invalid_options_400():
@@ -132,14 +134,6 @@ def test_generate_invalid_options_400():
     r = client.post("/api/generate", json={
         "facts": facts, "options": {}, "fetch_token": False})
     assert r.status_code == 400
-
-
-def test_profiles_and_defaults():
-    r = client.get("/api/profiles")
-    assert {p["name"] for p in r.json()} >= {
-        "standard", "private-registry", "proxy-ca"}
-    r2 = client.get("/api/option-defaults")
-    assert r2.json()["platform"] == "openshift"
 
 
 def test_sv_constants_are_served_from_the_generator():
@@ -310,7 +304,6 @@ def test_no_cluster_access_leaves_the_rest_of_the_api_working(fake_cluster):
     assert client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"},
         "fetch_token": False}).status_code == 200
-    assert client.get("/api/profiles").status_code == 200
     assert client.get("/api/option-defaults").status_code == 200
     assert client.get("/api/sv-constants").status_code == 200
 

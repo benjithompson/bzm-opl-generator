@@ -19,7 +19,9 @@ export interface Facts {
 export interface GeneratedFile { name: string; content: string }
 /** Manual facts, plus the one thing no catalogue can supply: a GUI location
  *  needs a version-pinned browser image that only a live agent inventory names.
- *  Served as a flag so the page does not have to re-derive it. */
+ *  `gui_images_incomplete` is served but currently unread here -- the page can
+ *  no longer declare functionalGui, so it cannot be true. `bzm-opl-gen facts
+ *  --manual --func-ids functionalGui` still warns. */
 export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;
@@ -68,7 +70,6 @@ export const api = {
   generate: (facts: Facts, options: Options) =>
     req<{ files: GeneratedFile[] }>("POST", "/api/generate",
       { facts, options, fetch_token: false }),
-  profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
