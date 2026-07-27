@@ -337,6 +337,27 @@ export function unclaimedFuncIds(
  *  starts on the first -- performance, the common case -- and is routed to the
  *  other by the download-button block if that is where the missing settings
  *  are. `null` only before the vocabulary lands. */
+/** Features to show as unavailable, given what the location runs. Empty
+ *  whenever the question cannot be answered, which is three distinct cases and
+ *  all of them mean "say nothing" rather than "say no":
+ *
+ *   - `known` false — manual entry declares the location's features rather than
+ *     reading them, so nothing there is ever unavailable; and before a location
+ *     is chosen an empty `locFeatures` means "not asked yet", not "none".
+ *   - the location claims no feature at all. 10 of 169 locations in the account
+ *     this was checked against are sv-bridge, tdm or dataPublisher only, and
+ *     marking every feature unavailable for those leaves nothing configurable
+ *     and no way forward.
+ *
+ *  Disabling hides the view but not the effect — options already set under a
+ *  feature are still generated — so the caller has to say when that has
+ *  happened. See the button's "still set here" line. */
+export function unavailableFeatures(
+    known: boolean, locFeatures: string[], features: Feature[]): string[] {
+  if (!known || locFeatures.length === 0) return [];
+  return features.map((f) => f.id).filter((id) => !locFeatures.includes(id));
+}
+
 export function startFeature(
     funcIds: string[] | undefined, features: Feature[]): string | null {
   return featuresOf(funcIds, features)[0] ?? features[0]?.id ?? null;

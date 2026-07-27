@@ -19,7 +19,8 @@ import {
   allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
   enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
   incompleteGroups,
-  setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
+  setButHidden, startFeature, suggestNamespace, unavailableFeatures,
+  unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
@@ -529,6 +530,18 @@ export default function App() {
   // has no options for. Locations already run tdm/dataPublisher/delphix; naming
   // them is the honest version of a selector that quietly models five funcIds.
   const locFeatures = featuresOf(facts?.func_ids, features);
+  // Which feature buttons read as unavailable. The rule -- including every case
+  // where it must stay silent -- is in optionGroups, where it is tested as data.
+  const unavailable = unavailableFeatures(
+    sourceMode === "connect" && !!facts, locFeatures, features);
+  // Groups a feature owns that already hold settings. Only consulted for a
+  // feature we are about to make unreachable: those options are still generated,
+  // so they have to be named rather than quietly disappearing behind a disabled
+  // button.
+  const setUnderFeature = useCallback((featureId: string) =>
+    Object.values(GROUP_BY_ID)
+      .filter((g) => g.features.includes(featureId) && g.detect(options))
+      .map((g) => g.title), [options]);
   const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
   // Configured, off screen, and still in the bundle -- reported beside the
   // preview, which is where "what is in this bundle" is read.
@@ -1017,23 +1030,43 @@ export default function App() {
                       : "Which feature are you configuring?"}
                   </p>
                   <div className="grid grid-cols-2 gap-2">
-                    {features.map((f) => (
-                      <button key={f.id} onClick={() => pickFeature(f.id)}
-                        className={`text-left px-3 py-2 rounded-md border text-sm ${f.id === feature ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}>
-                        {f.label}
-                        {/* Which features the location actually runs, without
-                            hiding the others: the view is not a scope, and an
-                            option set under either still ships. */}
-                        {locFeatures.includes(f.id) && (
-                          <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-100 rounded px-1.5 py-0.5">
-                            this location
+                    {features.map((f) => {
+                      // Enabled is the unremarkable case and says nothing; only
+                      // the absence is worth a word.
+                      const off = unavailable.includes(f.id);
+                      const stranded = off ? setUnderFeature(f.id) : [];
+                      return (
+                        <button key={f.id} disabled={off}
+                          title={off ? "not enabled on this location" : undefined}
+                          onClick={() => !off && pickFeature(f.id)}
+                          className={"text-left px-3 py-2 rounded-md border text-sm "
+                            + (f.id === feature
+                              ? "border-bzm bg-bzm/10 text-bzm-dark font-medium"
+                              : off
+                                ? "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed"
+                                : "border-slate-300 hover:bg-slate-50")}>
+                          {f.label}
+                          {off && (
+                            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-200 rounded px-1.5 py-0.5">
+                              not enabled
+                            </span>
+                          )}
+                          <span className="block text-[11px] font-normal text-slate-400">
+                            {off ? "not enabled on this location" : f.hint}
                           </span>
-                        )}
-                        <span className="block text-[11px] font-normal text-slate-400">
-                          {f.hint}
-                        </span>
-                      </button>
-                    ))}
+                          {/* Disabling hides the view, not the effect: options
+                              set under this feature are still generated. Left
+                              unsaid they would ship from behind a button nobody
+                              can open. */}
+                          {stranded.length > 0 && (
+                            <span className="block text-[11px] font-normal text-amber-700 mt-0.5">
+                              {stranded.join(", ")} still set here — generated, but
+                              no longer reachable.
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                   {/* Connected, this is a view over a fact the account already
                       settled. Manually there is no account, so the same buttons
@@ -1071,9 +1104,11 @@ export default function App() {
                     </>
                   ) : (
                     <p className="text-[11px] text-slate-400 mt-1">
-                      A view, not a scope — the manifests come from the location's
-                      own features either way. Anything you set under one feature
-                      stays set, and stays in the bundle, while you look at another.
+                      The location's own features decide what the manifests
+                      contain. Anything already set under a feature stays set and
+                      stays in the bundle — including under one this location
+                      does not run, which is why those say so rather than
+                      silently dropping it.
                     </p>
                   )}
                   {locUnclaimed.length > 0 && (
