@@ -50,6 +50,15 @@ jobs:
           whl = glob.glob("dist/*.whl")[0]
           names = zipfile.ZipFile(whl).namelist()
           missing = [p for p in ("bzm_opl_gen/templates/deployment.yaml",
+                                 # The chart is package data too, and its own
+                                 # subdirectory -- the templates/*.yaml glob
+                                 # does not recurse into it.
+                                 "bzm_opl_gen/templates/helm/Chart.yaml",
+                                 "bzm_opl_gen/templates/helm/values.yaml",
+                                 "bzm_opl_gen/templates/helm/templates/deployment.yaml",
+                                 # A leading-dot file is not matched by `*` in
+                                 # package-data and has to be named there.
+                                 "bzm_opl_gen/templates/helm/.helmignore",
                                  "bzm_opl_gen/profiles/standard.json",
                                  "bzm_opl_gen/ui_dist/index.html")
                      if p not in names]

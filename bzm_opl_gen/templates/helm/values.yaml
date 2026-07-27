@@ -1,0 +1,220 @@
+# BlazeMeter private location agent -- performance testing only.
+#
+# The three account facts at the top are the only required values. Get them with
+#   bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT>"
+# and keep authToken out of git (--set-string, or a Secret you create yourself
+# and name in existingSecret).
+
+# -- Account facts (required) -------------------------------------------------
+
+# Private location id.
+harborId: ""
+# Agent id within the location. A location with several agents needs the id of
+# the one this deployment is.
+shipId: ""
+# Token generated for the private location in the BlazeMeter UI. Leave empty and
+# set existingSecret if a Secret already holds it.
+authToken: ""
+
+# -- Platform -----------------------------------------------------------------
+
+# k8s | openshift. On openshift the restricted-v2 SCC assigns the UID, so
+# runAsUser is left unset and engines are told to inherit crane's UID:GID.
+platform: k8s
+
+# CLUSTERIP | NODEPORT. NODEPORT makes crane resolve its advertised address from
+# the Node object, which needs clusterRbac below -- CLUSTERIP does not.
+serviceType: CLUSTERIP
+
+# -- Credentials --------------------------------------------------------------
+
+# true  -> AUTH_TOKEN goes in a Secret this chart creates (blazemeter-secret).
+# false -> AUTH_TOKEN goes in the ConfigMap in plain text. Simpler to eyeball,
+#          readable by anyone who can read ConfigMaps.
+useSecret: true
+
+# Name of a Secret you manage that already carries AUTH_TOKEN (and optionally
+# HTTP_PROXY/HTTPS_PROXY). Set this and the chart creates no Secret of its own;
+# authToken is then unused. Requires useSecret: true.
+existingSecret: ""
+
+# -- Images -------------------------------------------------------------------
+
+image:
+  # Empty -> derived: privateRegistry/crane when privateRegistry is set,
+  # otherwise BlazeMeter's public registry.
+  repository: ""
+  # `bzm-opl-gen generate` pins the tag the account actually advertises for this
+  # location; a chart has no API access and cannot, so this floats. Pin it for a
+  # reproducible install -- read the exact tag off the generated manifests, or
+  # from admin/ship-stats in the BlazeMeter UI.
+  tag: latest
+  pullPolicy: Always
+  # Name of a docker-registry Secret in this namespace, for the crane image
+  # pull. Engine image pulls are crane's own business -- see registryAuth.
+  pullSecret: ""
+
+# Registry the agent pulls every BlazeMeter image from. Empty -> BlazeMeter's
+# public registry, and auto-update stays on. Setting it turns auto-update off:
+# upgrading an air-gapped location is re-mirror + bump tags, not a silent pull.
+privateRegistry: ""
+
+# Only read when privateRegistry is set. Maps BlazeMeter's image keys to the
+# refs in your registry -- a missing key silently falls back to the public
+# registry, so it has to be complete. Generate the exact map for this location:
+#   bzm-opl-gen generate --api-key api-key.json --harbor-id <id> \
+#       --private-registry <registry> --out out
+# then copy IMAGE_OVERRIDES out of out/bzm_configmap.yaml. The generator reads
+# the account's live agent inventory; a hand-written map goes stale.
+imageOverrides: {}
+  # taurus-cloud:latest: registry.example.com/blazemeter/taurus-cloud:1.2.3
+  # blazemeter:latest: registry.example.com/blazemeter/blazemeter:4.5.6
+
+# Emit commented DOCKER_REGISTRY_USERNAME/PASSWORD placeholders in the ConfigMap
+# for crane-side engine image pulls. Fill them in, or use image.pullSecret and a
+# cluster pull secret instead -- do not put a real password in a ConfigMap.
+registryAuth: false
+
+# Does crane update itself when BlazeMeter ships a newer agent? Unset follows
+# privateRegistry -- off when set (a sealed cluster cannot pull a newer image
+# anyway), on otherwise.
+#
+# SET THIS FALSE IF YOU MANAGE THIS RELEASE WITH HELM. Left on, crane takes
+# ownership of its own Deployment within seconds of install (field manager
+# "OpenAPI-Generator"): it rewrites the container image to whatever version
+# BlazeMeter currently ships, and `.spec.strategy` from Recreate to
+# RollingUpdate. Helm applies server-side, so the next `helm upgrade` fails on a
+# field-ownership conflict having already applied the ConfigMap.
+#
+# --force-conflicts does not rescue that: the chart never declares
+# `strategy.rollingUpdate`, so crane's copy survives beside the forced
+# `type: Recreate` and the API server rejects the pair. With auto-update on,
+# changing anything means uninstall + install. Verified on a live cluster.
+#
+# The tradeoff for false: the agent stops upgrading itself, so keeping it
+# current is your job, and one that falls far enough behind loses support.
+autoUpdate:
+
+# -- RBAC ---------------------------------------------------------------------
+
+# Cluster-scoped node reads. Not needed for performance testing: without them
+# crane logs a "forbidden: nodes" warning and proceeds. Required only for
+# serviceType: NODEPORT, where crane reads the Node to build its advertised
+# address and silently falls back to 127.0.0.1 when denied.
+clusterRbac: false
+
+serviceAccount:
+  create: true
+  # Empty -> the chart's fullname (default "crane").
+  name: ""
+  annotations: {}
+
+# -- Crane pod ----------------------------------------------------------------
+
+# k8s only; on openshift the SCC assigns an in-range UID and this is ignored.
+runAsUser: 1337
+
+# Scheduling for the crane pod. Engines inherit both through
+# KUBERNETES_TOLERATIONS_JSON / KUBERNETES_NODE_SELECTOR_JSON, so setting them
+# here covers the whole location.
+nodeSelector: {}
+tolerations: []
+
+podAnnotations: {}
+podLabels: {}
+
+# Crane is the lightweight always-running orchestrator, not a load generator --
+# these are the official helm-crane chart's resourcesCrane. If the namespace
+# already has a LimitRange of its own, its `max` has to clear these or the crane
+# pod is rejected at admission.
+crane:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+      ephemeral-storage: 100Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+      ephemeral-storage: 1Gi
+
+probes:
+  enabled: true
+  liveness:
+    # Crane's startup is slow enough that a short delay restart-loops it.
+    initialDelaySeconds: 300
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
+
+# -- Engines ------------------------------------------------------------------
+
+# The *limits* crane stamps on the taurus engine pods it spawns. Empty ->
+# BlazeMeter's documented default of 2 CPU / 8Gi. Each concurrent engine also
+# wants ~60GB disk (40GB of it /tmp). Check a cluster against that with
+# `bzm-opl-gen doctor`.
+#
+# Engine *requests* are not settable, from here or anywhere: crane stamps them
+# at 250m/256Mi itself, and the scheduler packs nodes on those. This chart used
+# to ship a LimitRange in the hope of changing that; a LimitRange's
+# defaultRequest only fills fields a pod leaves unset, so it never could -- and
+# what it did reach was crane's own helper pods, handing an engine's worth of
+# CPU and memory to jobs that need neither. Give the location nodes it does not
+# share, or a mutating admission policy, if the gap matters.
+engine:
+  cpuLimit: ""
+  memoryLimit: ""
+  # Integer MB.
+  ephemeralRequestMb: ""
+  ephemeralLimitMb: ""
+
+# -- Proxy --------------------------------------------------------------------
+
+# BlazeMeter has no separate proxy-auth env vars: credentials go in the URL as
+# http://user:pass@host:port. A URL with credentials is routed to the Secret
+# instead of the ConfigMap automatically (when useSecret is true).
+#
+# Known and expected: JMeter ignores HTTP(S)_PROXY for sampler traffic, so
+# engine->system-under-test goes direct. The proxy has to go in the test itself.
+proxy:
+  enabled: false
+  http: ""
+  https: ""
+  # Required for the agent to reach the API server and itself.
+  noProxy: "kubernetes.default,127.0.0.1,localhost"
+
+# -- Corporate CA trust -------------------------------------------------------
+
+# Pick one mode:
+#   none            no custom trust.
+#   inline          the PEM below (or caBundle.file, read from the chart
+#                   directory) becomes a ConfigMap this chart owns.
+#   existing        reference a ConfigMap the platform team owns and rotates,
+#                   e.g. one written by trust-manager. The chart only reads it.
+#   openshiftInject an empty labeled ConfigMap; OpenShift's network operator
+#                   injects the cluster-wide trust bundle into it.
+caBundle:
+  mode: none
+  pem: ""
+  # Path relative to the chart directory, e.g. "certificate.crt". Ignored unless
+  # mode is inline and pem is empty.
+  file: ""
+  existingConfigMap: ""
+  key: ca-bundle.crt
+  # Crane mounts the directory. Engines mount the same ConfigMap as a file via
+  # KUBERNETES_CA_BUNDLE_MOUNT, which the chart derives -- do not hand-set it.
+  mountPath: /var/cm
+
+# -- Naming -------------------------------------------------------------------
+
+# Defaults match `bzm-opl-gen generate` output so the two are interchangeable
+# and the documented `-l role=role-crane` selectors keep working.
+nameOverride: ""
+fullnameOverride: ""

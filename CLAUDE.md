@@ -18,6 +18,16 @@ went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
 is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
 optional deps import rather than trusting a green run.
 
+**Helm parity (`python tests/helm_parity.py`)** — renders 17 option
+combinations as both `--format manifests` and `--format helm` and requires the
+same objects out of each. Deliberately *not* a pytest module: it shells out to
+`helm`, and a test that skips when a binary is missing is the fastapi problem
+again. It has its own CI job. Every judgement in `templates/*.yaml` had to be
+restated in Go templates, and nothing else notices one being restated slightly
+differently. Its offline counterpart is `tests/test_helm.py`, which covers
+everything decided in Python (the values overlay, the refusals) and needs no
+helm. Add to both when you touch either side.
+
 **Live rig (`bzm-opl-gen livetest`)** — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
 Canonical full invocation:
@@ -124,21 +134,35 @@ the classes of problem it can't fix for you.
 - `generate` writes `out/profile.json` (resolved options minus `auth_token`);
   `livetest` re-renders from it, so manifests under test stay generator output
   rather than hand-patched YAML.
+- **The chart is copied, never re-rendered.** `--format helm` walks
+  `templates/helm/` and emits it verbatim, so anything added there ships in every
+  generated bundle — including files `package-data` would drop. Its globs do not
+  recurse and `*` does not match a leading dot, which is why `.helmignore` and
+  each directory are named explicitly in `pyproject.toml`; the release workflow
+  asserts the wheel carries them, because a missing chart file fails at generate
+  time on an installed copy and never in a checkout.
+- `--format helm` refuses a service-virtualization location, and `livetest`
+  refuses a chart directory. Both are one-line guards over silent failures —
+  a chart without the ingress stalls at `WAITING_FOR_DOMAIN`, and the rig's
+  `*.yaml` glob would come back empty.
 - CA bundles exceed the 256KB cap on kubectl's last-applied-configuration
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;
   `PATCH /tests/{id}` silently drops `executions` for one.
-- The emitted LimitRange's `max` is raised to cover **crane's own** limits
-  (1 CPU / 2Gi) when engines are configured smaller. A `max` pinned to the
-  engine size gets the crane pod rejected in its own namespace — verified
-  against a real API server, not theory. Don't "tighten" it back.
-- **`bzm_limitrange.yaml` does not change engine requests, and cannot.** Crane
-  sets the engine pod's requests explicitly to 250m/256Mi; a LimitRange's
-  `defaultRequest` only fills fields a pod leaves unset. Proven on a live run:
-  the `r-v4-*` engine pod comes back with no `kubernetes.io/limit-ranger`
-  annotation, while crane's `test-job-*` pods (which declare nothing) do carry
-  one. Issue #2 was filed on the opposite assumption — don't re-add the claim.
-  `livetest --run-test` prints the live gap as `ENGINE SIZING:`.
+- **This generator emits no LimitRange, and shouldn't.** It used to, opt-in, and
+  it was removed after a live install showed both halves of why. It cannot
+  change engine requests: crane sets the engine pod's requests explicitly to
+  250m/256Mi, and a LimitRange's `defaultRequest` only fills fields a pod leaves
+  unset — the `r-v4-*` engine pod comes back with no
+  `kubernetes.io/limit-ranger` annotation at all. And what it *did* reach was
+  crane's `test-job-*` pods, which declare nothing and so were handed a full
+  engine's worth of CPU and memory for jobs that need neither, reserving
+  capacity a real engine then couldn't get. Issue #2 was filed on the assumption
+  it helped — don't re-add it. `livetest --run-test` prints the live gap as
+  `ENGINE SIZING:`.
+- `doctor` still *reads* a LimitRange the customer already has, which is a
+  different thing and stays: an existing `max` below the engine size, or below
+  crane's own 1 CPU / 2Gi, rejects the respective pod at admission.
 - `doctor` measures capacity against node **allocatable**, deliberately: what is
   actually free needs every pod's requests summed per node, which is a much
   bigger read for a preflight. Say "upper bound" in any detail string you add.

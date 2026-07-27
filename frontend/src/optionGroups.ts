@@ -152,8 +152,8 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // The only group that is about engines: a location running mocks alone
     // never starts one, so this is off screen while service virtualization is.
     features: ["performance"],
-    keys: ["engine_cpu_limit", "engine_mem_limit", "emit_limitrange"],
-    detect: (o) => !!(o.engine_cpu_limit || o.engine_mem_limit || o.emit_limitrange),
+    keys: ["engine_cpu_limit", "engine_mem_limit"],
+    detect: (o) => !!(o.engine_cpu_limit || o.engine_mem_limit),
     // Seeded only when the two limits are not already a known shape: opening
     // the group must not overwrite a size a preset or profile just brought in.
     enable: (o) => {
@@ -161,8 +161,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
       const d = ENGINE_SIZES.find((s) => s.id === "standard")!;
       return { engine_cpu_limit: d.cpu, engine_mem_limit: d.mem };
     },
-    disable: () => ({
-      engine_cpu_limit: null, engine_mem_limit: null, emit_limitrange: false }),
+    disable: () => ({ engine_cpu_limit: null, engine_mem_limit: null }),
   },
   {
     id: "security",

@@ -1,0 +1,21 @@
+{{- if has .Values.caBundle.mode (list "inline" "openshiftInject") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "bzm-opl.caConfigMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+    {{- if eq .Values.caBundle.mode "openshiftInject" }}
+    # OpenShift's network operator injects the cluster-wide trust bundle
+    # (proxy/custom CAs configured at cluster level) as ca-bundle.crt. Nobody
+    # hand-manages PEMs; rotation is the cluster's job -- which is also why this
+    # ConfigMap ships with no data of its own.
+    config.openshift.io/inject-trusted-cabundle: "true"
+    {{- end }}
+{{- if eq .Values.caBundle.mode "inline" }}
+data:
+  {{ .Values.caBundle.key }}: |
+{{ include "bzm-opl.caPem" . | trim | indent 4 }}
+{{- end }}
+{{- end }}

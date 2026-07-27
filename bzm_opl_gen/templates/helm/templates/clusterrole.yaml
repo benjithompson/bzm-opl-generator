@@ -1,0 +1,20 @@
+{{- if .Values.clusterRbac }}
+# OPTIONAL -- cluster-scoped, and not required to run performance tests. For
+# performance, crane uses node reads for capacity awareness only: without them it
+# logs a "forbidden: nodes" warning and proceeds.
+#
+# The one case where it is not merely a warning is serviceType NODEPORT, where
+# crane resolves its advertised address from the Node. Denied, it silently falls
+# back to 127.0.0.1 rather than failing -- which is why the chart refuses to
+# render NODEPORT without this. Prefer CLUSTERIP and leave clusterRbac off.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bzm-opl.clusterRoleName" . }}
+  labels:
+    {{- include "bzm-opl.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+{{- end }}

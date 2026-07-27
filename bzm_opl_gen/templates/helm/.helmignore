@@ -1,0 +1,12 @@
+.DS_Store
+.git/
+.gitignore
+*.tmproj
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tgz
+# Local values files -- these carry the account's auth token.
+values.local.yaml
+*-values.yaml

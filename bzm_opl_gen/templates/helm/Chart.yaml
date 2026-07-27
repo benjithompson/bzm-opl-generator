@@ -1,0 +1,26 @@
+apiVersion: v2
+name: bzm-opl
+description: BlazeMeter private location (OPL) agent -- performance testing on Kubernetes/OpenShift
+type: application
+# Chart version. appVersion tracks the crane image tag, which BlazeMeter floats
+# on `latest` unless the location is pinned to a private registry.
+version: 0.1.0
+appVersion: "latest"
+# seccompProfile in the pod spec (used by the crane pod) is GA from 1.19.
+kubeVersion: ">=1.19.0-0"
+keywords:
+  - blazemeter
+  - crane
+  - private-location
+  - opl
+  - performance-testing
+  - load-testing
+icon: https://github.com/Blazemeter/helm-crane/raw/main/logo.png
+home: https://help.blazemeter.com/docs/guide/private-locations-install-blazemeter-agent-kubernetes.html
+sources:
+  - https://github.com/Blazemeter/helm-crane
+annotations:
+  # This chart deliberately covers performance testing only. Service
+  # virtualization (mock services) needs an ingress backend, its own RBAC and a
+  # wildcard TLS secret -- see the upstream Blazemeter/helm-crane chart for that.
+  blazemeter.com/scope: performance-only

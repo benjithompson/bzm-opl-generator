@@ -13,6 +13,11 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 DEFAULT_OPTIONS = {
     "platform": "openshift",        # openshift | k8s
+    # manifests -> flat YAML to kubectl apply. helm -> the chart in
+    # templates/helm, plus a values overlay built from these same options -- the
+    # same deployment expressed twice, not two codebases. tests/helm_parity.py
+    # is what holds the two to that.
+    "output_format": "manifests",   # manifests | helm
     "namespace": "blazemeter",
     "use_secret": True,              # False -> AUTH_TOKEN in ConfigMap (simplified)
     "auth_token": "<YOUR_AUTH_TOKEN>",
@@ -45,15 +50,6 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
-    # A namespace LimitRange: caps what any pod in the namespace may ask for,
-    # and supplies requests/limits to the ones that declare none. It does NOT
-    # fix the taurus engine -- crane sets that pod's requests explicitly, and
-    # defaultRequest only fills fields a pod leaves unset (verified on a live
-    # run: the engine pod comes back with no limit-ranger annotation). Opt-in,
-    # because it applies to every pod in the namespace.
-    "emit_limitrange": False,
-    "engine_cpu_request": None,      # defaults to engine_cpu_limit
-    "engine_mem_request": None,      # defaults to engine_mem_limit
 }
 
 # BlazeMeter's documented engine footprint -- the fallback when the customer
@@ -65,22 +61,21 @@ ENGINE_DISK_GB = 60
 ENGINE_TMP_GB = 40
 
 # Crane's own container resources, substituted into templates/deployment.yaml so
-# these are the single source. The limits matter beyond that pod: crane shares
-# the namespace, so a LimitRange max below them would get the crane pod itself
-# rejected by the LimitRanger, and doctor spends them out of node capacity.
+# these are the single source. They matter beyond that pod: doctor spends them
+# out of node capacity, and a LimitRange the customer already has in the
+# namespace has to clear them or the crane pod is rejected at admission.
 # Values are the official helm-crane chart's resourcesCrane.
 CRANE_CPU_REQUEST = "250m"
 CRANE_MEM_REQUEST = "512Mi"
 CRANE_CPU_LIMIT = "1"
 CRANE_MEM_LIMIT = "2Gi"
 
-# What crane stamps on the engine pods it spawns, explicitly. A LimitRange
-# cannot override it -- defaultRequest only fills fields a pod leaves unset --
-# so this is what the scheduler packs engines by, whatever their limits say.
+# What crane stamps on the engine pods it spawns, explicitly -- so this is what
+# the scheduler packs engines by, whatever their limits say. Nothing these
+# manifests can emit changes it: a LimitRange's defaultRequest only fills fields
+# a pod leaves unset, which is why this generator no longer ships one.
 ENGINE_STAMPED_REQUEST_CPU = "250m"
 ENGINE_STAMPED_REQUEST_MEM = "256Mi"
-
-LIMITRANGE_FILE = "bzm_limitrange.yaml"
 
 
 def _quantity(o, key, default, parse):
@@ -102,45 +97,6 @@ def engine_size(o):
     this to compare the claim against what a node can hold."""
     return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
             _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
-
-
-def engine_requests(o):
-    """(cpu_millicores, mem_bytes) engines should *request* -- their limits
-    unless the customer deliberately overcommits."""
-    cpu_limit, mem_limit = engine_size(o)
-    cpu = _quantity(o, "engine_cpu_request", cpu_limit, parse_cpu)
-    mem = _quantity(o, "engine_mem_request", mem_limit, parse_memory)
-    # k8s rejects a pod whose request exceeds its limit outright.
-    if cpu > cpu_limit:
-        raise ValueError(f"engine_cpu_request ({o['engine_cpu_request']}) exceeds "
-                         f"engine_cpu_limit ({format_cpu(cpu_limit)})")
-    if mem > mem_limit:
-        raise ValueError(f"engine_mem_request ({o['engine_mem_request']}) exceeds "
-                         f"engine_mem_limit ({format_memory(mem_limit)})")
-    return cpu, mem
-
-
-def _limitrange_max(o):
-    """The namespace ceiling: the engine size, but never below crane's own
-    limits -- crane shares the namespace, and a max under them would have the
-    LimitRanger reject the crane pod itself."""
-    cpu_limit, mem_limit = engine_size(o)
-    return (max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT)),
-            max(mem_limit, parse_memory(CRANE_MEM_LIMIT)))
-
-
-def _limitrange_sub(o):
-    """Substitutions for templates/limitrange.yaml."""
-    cpu_limit, mem_limit = engine_size(o)
-    cpu_req, mem_req = engine_requests(o)
-    max_cpu, max_mem = _limitrange_max(o)
-    return {"NAMESPACE": o["namespace"],
-            "ENGINE_CPU_REQUEST": format_cpu(cpu_req),
-            "ENGINE_MEM_REQUEST": format_memory(mem_req),
-            "ENGINE_CPU_LIMIT": format_cpu(cpu_limit),
-            "ENGINE_MEM_LIMIT": format_memory(mem_limit),
-            "LIMITRANGE_MAX_CPU": format_cpu(max_cpu),
-            "LIMITRANGE_MAX_MEM": format_memory(max_mem)}
 
 
 CA_MOUNT_PATH = "/var/cm"
@@ -581,8 +537,321 @@ def _sv_rbac_block(sv):
     ]) + "\n"
 
 
+# -- helm output --------------------------------------------------------------
+
+OUTPUT_FORMATS = ("manifests", "helm")
+
+# The chart is copied verbatim, and what the account supplies is emitted beside
+# it as an overlay passed with `-f`. Deliberately an overlay rather than a
+# rewritten helm/values.yaml: the chart's own values file holds defaults this
+# module does not own -- crane's resources, the probe timings -- and generating
+# a complete file would mean restating them here, where they would drift from
+# the chart the first time either side changed. The overlay names only the keys
+# that come from the customer's account, so `helm show values` stays the
+# documentation and re-generating never touches the chart.
+HELM_DIR = os.path.join(TEMPLATE_DIR, "helm")
+CHART_DIR = "helm"
+HELM_CHART_FILE = f"{CHART_DIR}/Chart.yaml"
+HELM_VALUES_FILE = "bzm-opl-values.yaml"
+
+
+def _helm_chart_files():
+    """The static chart, keyed by output path."""
+    out = {}
+    for root, _, names in os.walk(HELM_DIR):
+        for name in sorted(names):
+            rel = os.path.relpath(os.path.join(root, name), HELM_DIR)
+            with open(os.path.join(root, name)) as f:
+                out[f"{CHART_DIR}/{rel}"] = f.read()
+    return out
+
+
+def _yq(value):
+    """A scalar as a double-quoted YAML string. Everything a value can hold here
+    is an id, a quantity or a URL, and quoting all of them keeps `latest`,
+    `1337` and `8Gi` from being read as the wrong type."""
+    return json.dumps("" if value is None else str(value))
+
+
+def _helm_values(facts, o):
+    """The values overlay: the resolved options, in the chart's vocabulary.
+
+    Written as text rather than dumped from a dict because it is a file the
+    customer edits and re-reads -- the comments are the point, and pyyaml is a
+    test-only dependency this package does not carry at runtime.
+    """
+    ca = _ca_cfg(o)
+    image = _crane_image(facts, o)
+    repo, _, tag = image.rpartition(":")
+    lines = [
+        "# BlazeMeter private location agent -- generated by bzm-opl-gen from",
+        f"# location {facts.get('harbor_name')} ({facts['harbor_id']}).",
+        "#",
+        f"#   helm install crane ./{CHART_DIR} -n {o['namespace']} -f {HELM_VALUES_FILE}",
+        "#",
+        "# Only the keys that come from your account are here; everything else",
+        "# keeps the chart's default. `helm show values ./helm` lists them all,",
+        "# with the reasoning. Re-generating overwrites this file and leaves the",
+        "# chart alone, so prefer re-generating to hand-editing.",
+        "",
+        f"harborId: {_yq(facts['harbor_id'])}",
+        f"shipId: {_yq(o['ship_id'])}",
+    ]
+    if o["auth_token"] and o["auth_token"] != DEFAULT_OPTIONS["auth_token"]:
+        lines += [
+            "# The agent credential. Anyone holding it can register as this",
+            "# agent -- pass it at install time (--set-string authToken=...) or",
+            "# via existingSecret rather than committing this file.",
+            f"authToken: {_yq(o['auth_token'])}",
+        ]
+    else:
+        lines += [
+            "# Not fetched: generate with --api-key, or pass it at install time",
+            "# (helm install --set-string authToken=...).",
+            'authToken: ""',
+        ]
+    lines += [
+        "",
+        f"platform: {o['platform']}",
+        f"serviceType: {o['service_type']}",
+        f"useSecret: {'true' if o['use_secret'] else 'false'}",
+        'existingSecret: ""',
+        "",
+        "image:",
+        # Pinned, not floated: this is the tag the account advertises for this
+        # location right now. The chart's own default is `latest`, which is the
+        # right default for a chart with no API access and the wrong one for a
+        # bundle generated against a real account.
+        "  # The tag this location currently advertises, pinned at generate time.",
+        f"  repository: {_yq(repo)}",
+        f"  tag: {_yq(tag)}",
+        "  pullPolicy: Always",
+        f"  pullSecret: {_yq(o['pull_secret'] or '')}",
+        "",
+    ]
+    if o["private_registry"]:
+        overrides = _image_overrides(facts, o["private_registry"])
+        lines += [
+            f"privateRegistry: {_yq(o['private_registry'])}",
+            "# Resolved from the account's live agent inventory "
+            f"({facts.get('images_source', 'unknown')}).",
+            "# A key crane cannot find falls back to the public registry without",
+            "# logging anything, so re-generate rather than editing this by hand.",
+            "imageOverrides:",
+        ] + [f"  {json.dumps(k)}: {_yq(v)}" for k, v in sorted(overrides.items())] + [
+            f"registryAuth: {'true' if o['registry_auth'] else 'false'}",
+        ]
+    else:
+        lines += [
+            '# Empty -> BlazeMeter\'s public registry, and auto-update stays on.',
+            'privateRegistry: ""',
+            "imageOverrides: {}",
+            "registryAuth: false",
+        ]
+    lines += [
+        "",
+        "# Left to the chart's default (on here, off with a private registry).",
+        "# Set false if you will manage this release with `helm upgrade`: left on,",
+        "# crane takes ownership of its own Deployment and the next upgrade fails",
+        "# on a field-ownership conflict. See autoUpdate in the chart's values.yaml",
+        "# for what that costs either way.",
+        "autoUpdate:",
+    ]
+    lines += [
+        "",
+        f"clusterRbac: {'true' if o['cluster_rbac'] else 'false'}",
+        "serviceAccount:",
+        "  create: true",
+        '  name: ""',
+        "  annotations: {}",
+        "",
+    ]
+    if o["platform"] == "openshift":
+        lines += ["# Ignored on openshift: the restricted-v2 SCC assigns the UID.",
+                  f"runAsUser: {o['run_as_user']}"]
+    else:
+        lines.append(f"runAsUser: {o['run_as_user']}")
+    lines.append("")
+    if o["node_selector"]:
+        lines += ["nodeSelector:"] + [
+            f"  {json.dumps(k)}: {_yq(v)}" for k, v in o["node_selector"].items()]
+    else:
+        lines.append("nodeSelector: {}")
+    if o["tolerations"]:
+        # Engines inherit these through KUBERNETES_TOLERATIONS_JSON, which the
+        # chart derives from this same list. Spelled out as YAML rather than the
+        # JSON block _indent_yaml would give: a toleration is the thing someone
+        # most often hand-edits after generating, and `- key: ...` is what every
+        # other example they will find looks like.
+        lines.append("tolerations:")
+        for tol in o["tolerations"]:
+            items = list(tol.items())
+            lines += [f"  {'- ' if i == 0 else '  '}{k}: {_yq(v)}"
+                      for i, (k, v) in enumerate(items)]
+    else:
+        lines.append("tolerations: []")
+    cpu_limit, mem_limit = engine_size(o)
+    lines += [
+        "",
+        "# The limits crane stamps on the engine pods it spawns. Empty ->",
+        f"# BlazeMeter's documented default. This location asks for {format_cpu(cpu_limit)} CPU +",
+        f"# {format_memory(mem_limit)} per engine, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
+        "# Check a cluster against that with `bzm-opl-gen doctor`.",
+        "#",
+        "# Engine *requests* are not settable from here: crane stamps them at",
+        f"# {ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} itself, and the scheduler packs nodes on those.",
+        "engine:",
+        f"  cpuLimit: {_yq(o['engine_cpu_limit'] or '')}",
+        f"  memoryLimit: {_yq(o['engine_mem_limit'] or '')}",
+        f"  ephemeralRequestMb: {_yq(o['engine_ephemeral_request_mb'] or '')}",
+        f"  ephemeralLimitMb: {_yq(o['engine_ephemeral_limit_mb'] or '')}",
+    ]
+    lines.append("")
+    if o["proxy"]:
+        env = proxy_env(o)
+        lines += ["proxy:", "  enabled: true"]
+        if _proxy_has_creds(o):
+            lines.append("  # Credentials are embedded in the URL -- BlazeMeter has no separate")
+            lines.append("  # proxy-auth env vars. The chart routes a URL carrying them into the")
+            lines.append("  # Secret rather than the ConfigMap.")
+        lines += [
+            f"  http: {_yq(env.get('HTTP_PROXY', ''))}",
+            f"  https: {_yq(env.get('HTTPS_PROXY', ''))}",
+            f"  noProxy: {_yq(env['NO_PROXY'])}",
+        ]
+    else:
+        lines += ["proxy:", "  enabled: false", '  http: ""', '  https: ""',
+                  f"  noProxy: {_yq(DEFAULT_NO_PROXY)}"]
+    lines.append("")
+    mode = {"inline": "inline", "existing": "existing",
+            "inject": "openshiftInject"}[ca["mode"]] if ca else "none"
+    lines += ["caBundle:", f"  mode: {mode}"]
+    if ca and ca["mode"] == "inline":
+        lines.append("  pem: |")
+        lines += ["    " + line for line in o["ca_bundle"].strip().splitlines()]
+    else:
+        lines.append('  pem: ""')
+    lines += [
+        '  file: ""',
+        f"  existingConfigMap: {_yq(ca['cm'] if ca and ca['mode'] == 'existing' else '')}",
+        f"  key: {_yq(ca['key'] if ca else CA_FILENAME)}",
+        f"  mountPath: {_yq(CA_MOUNT_PATH)}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _helm_readme(facts, o):
+    ns = o["namespace"]
+    token = ""
+    if not o["auth_token"] or o["auth_token"] == DEFAULT_OPTIONS["auth_token"]:
+        token = (f" \\\n    --set-string authToken=<AUTH_TOKEN>"
+                 f"   # not in {HELM_VALUES_FILE}: generate with --api-key to embed it")
+    mirror = ""
+    if o["private_registry"]:
+        mirror = (
+            f"\n## Mirror the images into `{o['private_registry']}` first\n\n"
+            "Run the included `bzm-opl-image-mirror.sh` (docker pull/tag/push, forced\n"
+            f"linux/amd64). `{HELM_VALUES_FILE}` already names every image by the key\n"
+            "crane resolves it under, so nothing else has to be filled in.\n")
+    return f"""# BlazeMeter OPL -- generated Helm chart
+
+- Location: **{facts.get('harbor_name')}** (`{facts['harbor_id']}`), features: {facts.get('func_ids')}
+- Agent (ship): `{o['ship_id']}`
+- Platform: {o['platform']}, namespace: `{ns}`
+- Crane image: `{_crane_image(facts, o)}` (pinned to what the account advertises)
+
+`{CHART_DIR}/` is the chart, identical for every customer. `{HELM_VALUES_FILE}` is the
+part generated from your account, and it is an overlay: it names only the keys
+your location needs and everything else keeps the chart's default. Re-generating
+overwrites the overlay and leaves the chart untouched.
+
+Run `helm show values ./{CHART_DIR}` for every key you can set, with the reasoning.
+{mirror}
+## Install
+
+```
+helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE}{token}
+```
+
+## Verify
+
+```
+helm -n {ns} status crane
+kubectl -n {ns} rollout status deploy/crane
+kubectl -n {ns} logs -l role=role-crane -f
+```
+
+Then confirm the agent shows **online** in BlazeMeter (Settings -> Private
+Locations).
+
+## Upgrade
+
+**Set `autoUpdate: false` in `{HELM_VALUES_FILE}` if you intend to manage this
+release with Helm.** Then upgrades are ordinary:
+
+```
+helm upgrade crane ./{CHART_DIR} -n {ns} -f {HELM_VALUES_FILE}
+```
+
+Left on -- the default, matching the manifests -- crane takes over its own
+Deployment within seconds of install: it rewrites `.spec.template.spec.
+containers[].image` to the version BlazeMeter currently ships, and
+`.spec.strategy` from `Recreate` to `RollingUpdate`. Helm applies server-side, so
+the next `helm upgrade` fails on a field-ownership conflict, half-applied.
+`--force-conflicts` does not rescue it: Helm never declares
+`strategy.rollingUpdate`, so crane's copy survives next to the forced
+`type: Recreate` and the API server rejects the combination. With auto-update on,
+changing anything means `helm uninstall` + `helm install`, not an upgrade.
+
+All of the above was observed on a live cluster, not inferred from the docs.
+
+The tradeoff for turning it off: the agent stops upgrading itself, so keeping it
+current becomes your job -- re-generate to pick up a newer tag. An agent that
+falls far enough behind stops being supported.
+
+`harbor_id` and `ship_id` are part of the Deployment's selector and selectors
+are immutable, so repointing this install at a *different* agent needs
+`helm uninstall` + `helm install`, not an upgrade. Every other option upgrades
+in place; the Deployment carries checksums of the ConfigMap and Secret, so a
+configuration-only change still rolls the pod.
+
+Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
+Egress required to *.blazemeter.com and the image registry.
+Check the target cluster against that with `bzm-opl-gen doctor`.
+
+## Deploying these as plain manifests instead
+
+Re-generate with `--format manifests` (or the toggle in `bzm-opl-gen ui`). The
+two render the same objects -- same ConfigMap data, RBAC rules, LimitRange and
+container spec -- so the choice is about how you want to install and upgrade,
+not about what ends up in the cluster.
+"""
+
+
+PREVIEW_TAIL = ["bzm-opl-image-mirror.sh", "README.md"]
+
+
+def preview_order(files):
+    """The order generated files are listed in, for any caller showing them to a
+    human. Lives here rather than in the server because it is a fact about what
+    generate() emits: the manifest order is the order they must be applied in,
+    and the chart's is most-generated-first, values.yaml being the only file in
+    a chart bundle that is specific to the account.
+    """
+    if HELM_CHART_FILE in files:
+        lead = [HELM_VALUES_FILE, "README.md", f"{CHART_DIR}/README.md",
+                HELM_CHART_FILE, f"{CHART_DIR}/values.yaml"]
+    else:
+        lead = APPLY_ORDER + PREVIEW_TAIL
+    return [n for n in lead if n in files] + sorted(set(files) - set(lead))
+
+
 def generate(facts, options):
-    """Return {filename: content}. options overrides DEFAULT_OPTIONS."""
+    """Return {filename: content}. options overrides DEFAULT_OPTIONS.
+
+    Names may contain `/` -- the helm format emits a chart directory. write()
+    creates the parent directories.
+    """
     o = {**DEFAULT_OPTIONS, **options}
     if "ship_id" not in o:
         ships = facts.get("ships") or []
@@ -594,10 +863,35 @@ def generate(facts, options):
                 f"({[s['id'] for s in ships]})"
             )
 
-    engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
+    if o["output_format"] not in OUTPUT_FORMATS:
+        raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, "
+                         f"got {o['output_format']!r}")
+
+    engine_size(o)  # a bad engine quantity should fail here, not at apply time
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)
+    if sv and o["output_format"] == "helm":
+        # Not a gap to fill in later: publishing a virtual service needs an
+        # ingress backend, the RBAC for whichever one it is, and a wildcard TLS
+        # secret, and the upstream Blazemeter/helm-crane chart already carries
+        # all three. Emitting a chart that quietly dropped them would deploy,
+        # report idle, and stall at WAITING_FOR_DOMAIN.
+        raise ValueError(
+            "output_format=helm covers performance testing only, and this "
+            f"location is configured for service virtualization (sv_ingress="
+            f"{sv['type']}). Generate it as --format manifests, or use the "
+            "upstream Blazemeter/helm-crane chart, which supports both.")
+
+    if o["output_format"] == "helm":
+        out = _helm_chart_files()
+        out[HELM_VALUES_FILE] = _helm_values(facts, o)
+        if o["private_registry"]:
+            out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
+        out["README.md"] = _helm_readme(facts, o)
+        out[PROFILE_FILE] = _profile_json(o)
+        return out
+
     sub = {
         "SV_RBAC_BLOCK": _sv_rbac_block(sv),
         "NAMESPACE": o["namespace"],
@@ -643,8 +937,6 @@ def generate(facts, options):
         "bzm_rolebinding.yaml": _tpl("rolebinding.yaml").substitute(sub),
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
-    if o["emit_limitrange"]:
-        out[LIMITRANGE_FILE] = _tpl("limitrange.yaml").substitute(_limitrange_sub(o))
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -802,10 +1094,7 @@ def load_profile(outdir):
 
 
 APPLY_ORDER = [
-    "bzm_serviceaccount.yaml", "bzm_configmap.yaml",
-    # Before the deployment: engines must not schedule before the defaults exist.
-    LIMITRANGE_FILE,
-    "bzm_secret.yaml",
+    "bzm_serviceaccount.yaml", "bzm_configmap.yaml", "bzm_secret.yaml",
     "bzm_cacerts.yaml", "bzm_role.yaml", "bzm_rolebinding.yaml",
     "bzm_clusterrole.yaml", "bzm_clusterrolebinding.yaml",
     "bzm_deployment.yaml",
@@ -825,38 +1114,26 @@ def _readme(facts, o, files):
         big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
                   f"stores a copy in an annotation, which is capped at 256KB.\n")
-    limitrange = ""
-    if o["emit_limitrange"]:
-        cpu_req, mem_req = engine_requests(o)
-        max_cpu, max_mem = _limitrange_max(o)
-        limitrange = f"""
-## Engine sizing (`bzm_limitrange.yaml`)
+    limitrange = f"""
+## Engine sizing, and the gap in it
 
 Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
-`KUBERNETES_RESOURCES_LIMITS_MEMORY`. It also sets the engine's **requests**, to
-{ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM} -- roughly an eighth of what the engine is allowed to use. The
-scheduler packs nodes on requests, so on a busy node the run competes for CPU it
-was never given, and the numbers the test reports are wrong rather than merely
-slow.
+`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- {format_cpu(engine_size(o)[0])} / {format_memory(engine_size(o)[1])} here. It also sets each
+engine's **requests**, to {ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM}, roughly an eighth of what the engine
+is allowed to use. The scheduler packs nodes on requests, so on a busy node the
+run competes for CPU it was never given, and the numbers the test reports are
+wrong rather than merely slow.
 
-**This file does not fix that**, and nothing in these manifests can: a
-LimitRange's `defaultRequest` only fills in fields a pod leaves unset, and crane
-sets the engine's requests explicitly. What this file does do:
+**Nothing in these manifests can close that gap.** A LimitRange's
+`defaultRequest` only fills in fields a pod leaves unset, and crane sets the
+engine's requests explicitly -- verified on a live run, where the engine pod
+comes back with no `kubernetes.io/limit-ranger` annotation at all. This
+generator used to ship a LimitRange; it was removed because it could not do this
+and the defaults it did apply landed on crane's own helper pods, reserving an
+engine's worth of CPU and memory for jobs that need neither.
 
-- `max` **{format_cpu(max_cpu)} CPU / {format_memory(max_mem)}** is enforced at
-  admission -- a pod above it is rejected, so nothing in the namespace can be
-  sized past the engine (raised where needed to clear crane's own limits, or the
-  crane pod would be rejected in its own namespace).
-- `defaultRequest` **{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** and
-  the matching `default` reach every pod in the namespace that declares no
-  resources of its own -- including crane's per-run job pods, which otherwise
-  schedule as best-effort.
-
-It is namespace-wide, so other workloads in `{o['namespace']}` get those
-defaults too. Give the private location its own namespace if that is a problem.
-
-To size engines honestly today, give the location nodes it does not share, or
-add a mutating admission policy that rewrites the engine pod's requests --
+To size engines honestly, give the location nodes it does not share, or add a
+mutating admission policy that rewrites the engine pod's requests.
 `bzm-opl-gen livetest --run-test` prints the live gap under `ENGINE SIZING:`.
 """
     mirror = ""
@@ -902,6 +1179,10 @@ Check the target cluster against that with `bzm-opl-gen doctor`.
 def write(files, outdir):
     os.makedirs(outdir, exist_ok=True)
     for name, content in files.items():
-        with open(os.path.join(outdir, name), "w") as f:
+        path = os.path.join(outdir, name)
+        # The helm format keys files by chart-relative path, so a name can carry
+        # directories that do not exist yet.
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
             f.write(content)
     return sorted(files)

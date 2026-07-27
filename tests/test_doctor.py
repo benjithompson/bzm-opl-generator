@@ -262,10 +262,6 @@ def test_limitrange_absent_warns_about_cranes_defaults():
     assert "250m" in c.detail and "256Mi" in c.detail
 
 
-def test_limitrange_absent_is_fine_when_we_emit_one():
-    assert doctor.check_limitrange(FACTS, {"emit_limitrange": True}, {"limitranges": []})[0].status == doctor.PASS
-
-
 def test_limitrange_matching_passes():
     assert _statuses(doctor.check_limitrange(FACTS, {}, {"limitranges": [LR_MATCHING]})) == {doctor.PASS}
 

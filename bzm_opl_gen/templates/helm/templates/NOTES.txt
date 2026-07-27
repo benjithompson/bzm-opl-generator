@@ -1,0 +1,30 @@
+{{- $cli := ternary "oc" "kubectl" (eq .Values.platform "openshift") }}
+BlazeMeter agent "{{ include "bzm-opl.fullname" . }}" installed into namespace {{ .Release.Namespace }}.
+
+  Location (harbor): {{ .Values.harborId }}
+  Agent (ship):      {{ .Values.shipId }}
+  Image:             {{ include "bzm-opl.craneImage" . }}
+  AUTH_TOKEN:        {{ if .Values.useSecret }}Secret/{{ include "bzm-opl.secretName" . }}{{ else }}ConfigMap/{{ include "bzm-opl.configMapName" . }} (plain text){{ end }}
+
+1. Watch it come up:
+
+   {{ $cli }} -n {{ .Release.Namespace }} rollout status deploy/{{ include "bzm-opl.fullname" . }}
+   {{ $cli }} -n {{ .Release.Namespace }} logs -l role={{ include "bzm-opl.roleName" . }} -f
+
+2. Confirm the agent shows *online* in BlazeMeter under
+   Settings -> Private Locations, then run a test against the location.
+
+Engines need {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} RAM + ~60GB disk (40GB of it /tmp) per concurrent
+engine, and egress to *.blazemeter.com{{ if .Values.privateRegistry }} and {{ .Values.privateRegistry }}{{ else }} and gcr.io{{ end }}.
+Check a cluster against that before a real run: bzm-opl-gen doctor
+{{- if and (not .Values.privateRegistry) (not .Values.proxy.enabled) }}
+
+Note: with no privateRegistry and no proxy, the nodes pull images from the
+public internet directly. In a locked-down cluster that is the first thing to
+fail, and it fails as ImagePullBackOff on the *engine* pod mid-test, not here.
+{{- end }}
+{{- if not .Values.useSecret }}
+
+WARNING: AUTH_TOKEN is in a ConfigMap, readable by anyone with get on
+ConfigMaps in {{ .Release.Namespace }}. Reinstall with useSecret=true to move it.
+{{- end }}

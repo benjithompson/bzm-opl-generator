@@ -1,4 +1,4 @@
-import { Check, Field, inputCls, TextInput } from "../components";
+import { Field, inputCls, TextInput } from "../components";
 import { ENGINE_SIZES } from "../optionGroups";
 
 /** Engine sizing. `preset` is derived from the two limits by the caller
@@ -8,12 +8,10 @@ export function SizingGroup(props: {
   preset: string;
   cpuLimit: string;
   memLimit: string;
-  emitLimitRange: boolean;
   /** The preset select writes both limits at once; "Custom…" clears both. */
   onLimits: (cpu: string | null, mem: string | null) => void;
   onCpuLimit: (v: string | null) => void;
   onMemLimit: (v: string | null) => void;
-  onEmitLimitRange: (v: boolean) => void;
 }) {
   return (
     <>
@@ -44,15 +42,14 @@ export function SizingGroup(props: {
           </Field>
         </div>
       )}
-      <Check label="Emit a namespace LimitRange (bzm_limitrange.yaml)"
-        hint="Caps the namespace at the engine size and gives pods that declare
-              no resources a sensible default. It cannot change the taurus engine
-              itself — crane sets that pod's requests to 250m/256Mi explicitly."
-        checked={props.emitLimitRange}
-        onChange={props.onEmitLimitRange} />
       <p className="text-[11px] text-slate-400">
         Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
         Size worker nodes for slots × engine size.
+      </p>
+      <p className="text-[11px] text-slate-400">
+        Engine <i>requests</i> are not settable: crane stamps them at 250m/256Mi
+        and the scheduler packs nodes on those, so a busy node under-serves the
+        run. Give the location nodes it does not share if that matters.
       </p>
     </>
   );

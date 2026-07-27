@@ -208,8 +208,7 @@ def _generate(g: GenerateIn):
 @app.post("/api/generate")
 def generate_preview(g: GenerateIn):
     files = _generate(g)
-    order = gen_mod.APPLY_ORDER + ["bzm-opl-image-mirror.sh", "README.md"]
-    names = [n for n in order if n in files] + sorted(set(files) - set(order))
+    names = gen_mod.preview_order(files)
     return {"files": [{"name": n, "content": files[n]} for n in names]}
 
 
@@ -217,12 +216,14 @@ def generate_preview(g: GenerateIn):
 def generate_zip(g: GenerateIn):
     files = _generate(g)
     buf = io.BytesIO()
+    # Names may carry directories (the helm format emits a chart), which zip
+    # stores as-is -- the slash is the path separator in the archive too.
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, content in files.items():
+        for name in gen_mod.preview_order(files):
             info = zipfile.ZipInfo(f"bzm-opl/{name}")
             if name.endswith(".sh"):
                 info.external_attr = 0o755 << 16
-            z.writestr(info, content)
+            z.writestr(info, files[name])
     ns = g.options.get("namespace", "blazemeter")
     return Response(
         buf.getvalue(), media_type="application/zip",
