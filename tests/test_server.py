@@ -81,15 +81,16 @@ def test_sv_constants_carry_what_each_backend_publishes():
 
 def test_func_id_choices_cover_the_whole_generator_vocabulary():
     """A location whose funcId the UI never offers can only be created from the
-    CLI or the BlazeMeter web app -- which is what happened to sv-bridge while
-    the checkbox list was a hardcoded copy in TypeScript. Serving it from the
-    funcId vocabulary the facts layer already keys its image selection off means
-    adding a funcId there is enough to make it selectable."""
+    CLI or the BlazeMeter web app -- which is what a hardcoded copy of the list
+    in TypeScript caused. Serving it from the funcId vocabulary the facts layer
+    already keys its image selection off means adding one there is enough to
+    make it selectable, and retiring one removes it from the form."""
     from bzm_opl_gen import facts as facts_mod
     body = client.get("/api/func-ids").json()
     assert [c["id"] for c in body] == list(facts_mod.CATEGORY_BY_FUNC)
     ids = {c["id"] for c in body}
-    assert {"mockServices", "sv-bridge"} <= ids   # both SV funcIds reach the UI
+    assert {"mockServices", "proxyRecorder"} <= ids
+    assert "sv-bridge" not in ids                 # retired, so not offered
     assert all(c["label"] for c in body)
 
 
@@ -105,8 +106,8 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
 
 
 def test_create_location_forwards_every_selected_func_id(monkeypatch):
-    """The funcIds the form submits must reach the API verbatim; sv-bridge in
-    particular has no other way in from the UI."""
+    """The funcIds the form submits must reach the API verbatim -- for several
+    of them the UI is the only way in short of the BlazeMeter web app."""
     seen = {}
 
     class FakeClient:
@@ -117,10 +118,10 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
     monkeypatch.setitem(server._state, "client", FakeClient())
     r = client.post("/api/locations", json={
         "name": "sv-loc", "account_id": 1, "workspace_id": 2,
-        "func_ids": ["mockServices", "sv-bridge"]})
+        "func_ids": ["mockServices", "proxyRecorder"]})
     assert r.status_code == 200
-    assert seen["func_ids"] == ["mockServices", "sv-bridge"]
-    assert r.json()["funcIds"] == ["mockServices", "sv-bridge"]
+    assert seen["func_ids"] == ["mockServices", "proxyRecorder"]
+    assert r.json()["funcIds"] == ["mockServices", "proxyRecorder"]
 
 
 def test_api_requires_key():

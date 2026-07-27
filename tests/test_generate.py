@@ -382,14 +382,16 @@ def test_sv_location_without_ingress_refuses():
         gen.generate(SV_FACTS, {"namespace": "ns1"})
 
 
-def test_sv_bridge_funcid_also_requires_ingress():
-    """sv-bridge fronts the mocks, so it needs the same wiring as mockServices."""
-    bridge = dict(FACTS, func_ids=["performance", "sv-bridge"])
-    with pytest.raises(ValueError, match="sv-bridge"):
-        gen.generate(bridge, {"namespace": "ns1"})
-    data = yaml.safe_load(
-        gen.generate(bridge, SV_OPTS)["bzm_configmap.yaml"])["data"]
-    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+def test_retired_sv_bridge_funcid_demands_nothing():
+    """sv-bridge is retired. Locations in real accounts still carry it, and they
+    must generate like any other performance location -- not stall on ingress
+    options for a feature that no longer exists, and not pull an image for it."""
+    retired = dict(FACTS, func_ids=["performance", "sv-bridge"])
+    files = gen.generate(retired, {"namespace": "ns1"})          # no ingress needed
+    assert "KUBERNETES_WEB_EXPOSE_TYPE" not in yaml.safe_load(
+        files["bzm_configmap.yaml"])["data"]
+    assert not [i for i in gen.select_images(retired)
+                if "sv-bridge" in i["repo"]]
 
 
 def test_sv_ingress_requires_subdomain_and_tls_secret():

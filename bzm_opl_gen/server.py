@@ -382,7 +382,6 @@ FUNC_ID_LABELS = {
     "functionalApi": "Functional API",
     "functionalGui": "Functional GUI",
     "mockServices": "Mock Services",
-    "sv-bridge": "SV bridge",
     "proxyRecorder": "Proxy Recorder",
 }
 
@@ -392,9 +391,8 @@ def func_ids():
     """The funcIds a location can be created with, in declaration order.
 
     Served for the same reason as /api/sv-constants: the create-location form
-    used to hold its own list in TypeScript, and sv-bridge was missing from it,
-    so an SV-bridge location could only be made from the CLI or the BlazeMeter
-    web app. Derived from the facts layer so adding a funcId there -- which is
+    used to hold its own list in TypeScript, and whatever was missing from that
+    copy could not be selected from the UI at all. Derived from the facts layer so adding a funcId there -- which is
     already required for its images to be selected -- is the only edit needed.
     """
     return [{"id": f, "label": FUNC_ID_LABELS.get(f, f)}
