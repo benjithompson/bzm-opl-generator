@@ -261,15 +261,41 @@ def test_crane_resources_come_from_the_constants():
 
 
 
-def test_readme_documents_the_engine_request_gap():
-    """Unconditional now. It used to appear only alongside the LimitRange, which
-    is backwards: the gap is there whatever else is emitted, and the LimitRange
-    was the thing that could not close it."""
+def test_mirror_script_is_self_contained():
+    """It is handed to someone who has neither this tool nor a BlazeMeter
+    account, so it has to stand alone -- and it has to fail before transferring
+    several GB, not after."""
+    sh = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                              "private_registry": "reg.corp.com/bzm"}
+                      )["bzm-opl-image-mirror.sh"]
+    # Nothing about how the bundle was generated leaks in: no API key, no token.
+    assert "api-key" not in sh and "auth" not in sh.lower().replace("authenticat", "")
+    # Says where credentials are and are not needed, and names the login.
+    assert "Pulling needs no credentials" in sh
+    assert "docker login reg.corp.com" in sh
+    # The push probe runs before the first pull.
+    assert sh.index("push access") < sh.index("docker pull")
+    assert "exit 1" in sh
+    # bash strict mode, so a mid-way failure stops rather than pushing garbage.
+    assert "set -euo pipefail" in sh
+
+
+def test_mirror_script_absent_without_a_private_registry():
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222"})
+    assert "bzm-opl-image-mirror.sh" not in files
+
+
+def test_readme_is_short_and_actionable():
+    """It is handed to a customer, so it is instructions -- the reasoning lives
+    in the project README. It used to run to 52 lines of rationale."""
     readme = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
-    assert "KUBERNETES_RESOURCES_LIMITS_CPU" in readme
-    assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # what crane really stamps
-    assert "Nothing in these manifests can close that gap" in readme
-    # And it must not offer a LimitRange as the remedy any more.
+    assert len(readme.splitlines()) < 45, "README is creeping back towards an essay"
+    # The four things someone needs: what this is, how to deploy, how to check,
+    # and what it costs to run.
+    assert "apply -f bzm_deployment.yaml" in readme
+    assert "rollout status deploy/crane" in readme
+    assert "online" in readme
+    assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # the engine request gap
     assert "bzm_limitrange.yaml" not in readme
 
 

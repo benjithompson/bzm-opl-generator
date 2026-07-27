@@ -459,28 +459,70 @@ def _proxy_secret_block(o):
 
 
 def _mirror_script(facts, o):
+    """Pull BlazeMeter's images and push them into the customer's registry.
+
+    Self-contained by design -- it is handed to someone who may have neither
+    this tool nor a BlazeMeter account. Two facts drive its shape:
+
+    - The *source* needs no credentials. BlazeMeter's gcr.io project is
+      anonymously pullable, so there is no `docker login`, no API key, and
+      nothing here that depends on how the bundle was generated.
+    - The *destination* needs whatever the customer's registry needs, and the
+      script cannot know it. So it checks push access first rather than
+      discovering the problem after transferring several GB -- the engine image
+      alone is ~3.5GB compressed, and failing at the end of that is the whole
+      difference between a usable script and a frustrating one.
+    """
     refs = [facts["crane_image"]] + [
         f"{i['repo']}:{i['tag']}" for i in select_images(facts)
     ]
     reg = o["private_registry"].rstrip("/")
     lines = [
         "#!/usr/bin/env bash",
-        "# Mirror the BlazeMeter images this private location needs into your",
-        "# private registry. Engines are amd64-only; --platform matters on ARM hosts.",
-        f"# Location: {facts.get('harbor_name')} ({facts['harbor_id']}), "
-        f"source: {facts.get('images_source')}",
+        "# Mirror the BlazeMeter images this private location needs into",
+        f"# {reg}.",
+        "#",
+        f"# Location: {facts.get('harbor_name')} ({facts['harbor_id']})",
+        f"# Images from: {facts.get('images_source')}",
+        "#",
+        "# Pulling needs no credentials -- BlazeMeter's registry is public.",
+        "# Pushing uses whatever your Docker client is already logged in as:",
+        f"#     docker login {reg.split('/')[0]}",
+        "#",
+        "# Engines are amd64-only, hence --platform on ARM hosts.",
         "set -euo pipefail",
+        "",
+        'command -v docker >/dev/null || { echo "docker not found on PATH" >&2; exit 1; }',
+        "",
+        "# Fail now rather than after several GB of transfer: push a tiny probe",
+        "# first. A registry that rejects this rejects the real images too, and",
+        "# the engine alone is ~3.5GB -- discovering a login problem at the end",
+        "# of that is the difference between a usable script and a maddening one.",
+        f'echo "checking push access to {reg} ..."',
+        f'probe="{reg}/bzm-opl-push-probe:check"',
+        'tmp=$(mktemp -d)',
+        'printf \'FROM scratch\\nLABEL bzm-opl=probe\\n\' > "$tmp/Dockerfile"',
+        'if ! { docker build -q -t "$probe" "$tmp" && docker push "$probe"; } >/dev/null 2>&1; then',
+        f'  echo "cannot push to {reg} -- log in first:" >&2',
+        f'  echo "    docker login {reg.split("/")[0]}" >&2',
+        '  rm -rf "$tmp"; exit 1',
+        'fi',
+        'docker rmi "$probe" >/dev/null 2>&1 || true',
+        'rm -rf "$tmp"',
+        'echo "push access OK"',
         "",
     ]
     for ref in refs:
         name = ref.rsplit("/", 1)[-1]
         lines += [
+            f'echo "--> {name}"',
             f"docker pull --platform linux/amd64 {ref}",
             f"docker tag {ref} {reg}/{name}",
             f"docker push {reg}/{name}",
             "",
         ]
-    return "\n".join(lines)
+    lines.append('echo "done -- %d images in %s"' % (len(refs), reg))
+    return "\n".join(lines) + "\n"
 
 
 def _security_context(o):
@@ -741,90 +783,55 @@ def _helm_values(facts, o):
 
 
 def _helm_readme(facts, o):
-    ns = o["namespace"]
+    """The page someone hands a customer. Instructions, not reasoning -- the
+    chart's own helm/README.md carries the why, and repeating it here made an
+    80-line document out of four commands."""
+    ns, reg = o["namespace"], o["private_registry"]
+    cli = "oc" if o["platform"] == "openshift" else "kubectl"
     token = ""
     if not o["auth_token"] or o["auth_token"] == DEFAULT_OPTIONS["auth_token"]:
-        token = (f" \\\n    --set-string authToken=<AUTH_TOKEN>"
-                 f"   # not in {HELM_VALUES_FILE}: generate with --api-key to embed it")
+        token = f" \\\n    --set-string authToken=<AUTH_TOKEN>"
     mirror = ""
-    if o["private_registry"]:
-        mirror = (
-            f"\n## Mirror the images into `{o['private_registry']}` first\n\n"
-            "Run the included `bzm-opl-image-mirror.sh` (docker pull/tag/push, forced\n"
-            f"linux/amd64). `{HELM_VALUES_FILE}` already names every image by the key\n"
-            "crane resolves it under, so nothing else has to be filled in.\n")
-    return f"""# BlazeMeter OPL -- generated Helm chart
+    if reg:
+        mirror = ("**1. Mirror the images** (needs push access to the registry; "
+                  "the pull side needs none):\n\n"
+                  "```\n./bzm-opl-image-mirror.sh\n```\n\n**2. Install**\n\n")
+    step = "" if reg else ""
+    return f"""# BlazeMeter agent -- {facts.get('harbor_name') or facts['harbor_id']}
 
-- Location: **{facts.get('harbor_name')}** (`{facts['harbor_id']}`), features: {facts.get('func_ids')}
-- Agent (ship): `{o['ship_id']}`
-- Platform: {o['platform']}, namespace: `{ns}`
-- Crane image: `{_crane_image(facts, o)}` (pinned to what the account advertises)
+| | |
+|---|---|
+| Location | `{facts['harbor_id']}` |
+| Agent | `{o['ship_id']}` |
+| Namespace | `{ns}` |
+| Platform | {o['platform']} |
+| Images from | `{reg or 'gcr.io/verdant-bulwark-278 (BlazeMeter public)'}` |
 
-`{CHART_DIR}/` is the chart, identical for every customer. `{HELM_VALUES_FILE}` is the
-part generated from your account, and it is an overlay: it names only the keys
-your location needs and everything else keeps the chart's default. Re-generating
-overwrites the overlay and leaves the chart untouched.
+## Deploy
 
-Run `helm show values ./{CHART_DIR}` for every key you can set, with the reasoning.
-{mirror}
-## Install
-
-```
+{mirror}```
 helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE}{token}
 ```
 
-## Verify
+## Check it worked
 
 ```
-helm -n {ns} status crane
-kubectl -n {ns} rollout status deploy/crane
-kubectl -n {ns} logs -l role=role-crane -f
+{cli} -n {ns} rollout status deploy/crane
+{cli} -n {ns} logs -l role=role-crane -f
 ```
 
-Then confirm the agent shows **online** in BlazeMeter (Settings -> Private
-Locations).
+The agent should show **online** in BlazeMeter under Settings -> Private
+Locations within a minute or so.
 
-## Upgrade
+## Worth knowing
 
-**Set `autoUpdate: false` in `{HELM_VALUES_FILE}` if you intend to manage this
-release with Helm.** Then upgrades are ordinary:
-
-```
-helm upgrade crane ./{CHART_DIR} -n {ns} -f {HELM_VALUES_FILE}
-```
-
-Left on -- the default, matching the manifests -- crane takes over its own
-Deployment within seconds of install: it rewrites `.spec.template.spec.
-containers[].image` to the version BlazeMeter currently ships, and
-`.spec.strategy` from `Recreate` to `RollingUpdate`. Helm applies server-side, so
-the next `helm upgrade` fails on a field-ownership conflict, half-applied.
-`--force-conflicts` does not rescue it: Helm never declares
-`strategy.rollingUpdate`, so crane's copy survives next to the forced
-`type: Recreate` and the API server rejects the combination. With auto-update on,
-changing anything means `helm uninstall` + `helm install`, not an upgrade.
-
-All of the above was observed on a live cluster, not inferred from the docs.
-
-The tradeoff for turning it off: the agent stops upgrading itself, so keeping it
-current becomes your job -- re-generate to pick up a newer tag. An agent that
-falls far enough behind stops being supported.
-
-`harbor_id` and `ship_id` are part of the Deployment's selector and selectors
-are immutable, so repointing this install at a *different* agent needs
-`helm uninstall` + `helm install`, not an upgrade. Every other option upgrades
-in place; the Deployment carries checksums of the ConfigMap and Secret, so a
-configuration-only change still rolls the pod.
-
-Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
-Egress required to *.blazemeter.com and the image registry.
-Check the target cluster against that with `bzm-opl-gen doctor`.
-
-## Deploying these as plain manifests instead
-
-Re-generate with `--format manifests` (or the toggle in `bzm-opl-gen ui`). The
-two render the same objects -- same ConfigMap data, RBAC rules, LimitRange and
-container spec -- so the choice is about how you want to install and upgrade,
-not about what ends up in the cluster.
+- Each concurrent engine needs **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk** ({ENGINE_TMP_GB}GB of it /tmp),
+  and egress to `*.blazemeter.com`{f" and `{reg}`" if reg else ""}.
+- **Upgrading:** set `autoUpdate: false` in `{HELM_VALUES_FILE}` first, or crane
+  takes over its own Deployment and `helm upgrade` fails on a conflict. With it
+  left on, change things by reinstalling.
+- `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
+  chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
 """
 
 
@@ -1102,78 +1109,61 @@ APPLY_ORDER = [
 
 
 def _readme(facts, o, files):
+    """Same brief as _helm_readme: a customer-facing quickstart. The engine
+    request gap and the LimitRange history are real but belong in the project
+    README, not in something handed over with a bundle."""
+    ns, reg = o["namespace"], o["private_registry"]
     cli = "oc" if o["platform"] == "openshift" else "kubectl"
     apply_lines = "\n".join(
-        f"{cli} -n {o['namespace']} apply -f {f}" for f in APPLY_ORDER if f in files
-    )
+        f"{cli} -n {ns} apply -f {f}" for f in APPLY_ORDER if f in files)
     # Client-side apply copies the object into the last-applied-configuration
-    # annotation, which the API server caps at 256KB. Corporate bundles that
-    # include the public roots run right into it.
+    # annotation, which the API server caps at 256KB.
     big_ca = ""
     if o["ca_bundle"] and len(o["ca_bundle"]) > 200_000:
-        big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
+        big_ca = (f"\n- The CA bundle is {len(o['ca_bundle']) // 1024}KB, so apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
-                  f"stores a copy in an annotation, which is capped at 256KB.\n")
-    limitrange = f"""
-## Engine sizing, and the gap in it
-
-Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
-`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- {format_cpu(engine_size(o)[0])} / {format_memory(engine_size(o)[1])} here. It also sets each
-engine's **requests**, to {ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM}, roughly an eighth of what the engine
-is allowed to use. The scheduler packs nodes on requests, so on a busy node the
-run competes for CPU it was never given, and the numbers the test reports are
-wrong rather than merely slow.
-
-**Nothing in these manifests can close that gap.** A LimitRange's
-`defaultRequest` only fills in fields a pod leaves unset, and crane sets the
-engine's requests explicitly -- verified on a live run, where the engine pod
-comes back with no `kubernetes.io/limit-ranger` annotation at all. This
-generator used to ship a LimitRange; it was removed because it could not do this
-and the defaults it did apply landed on crane's own helper pods, reserving an
-engine's worth of CPU and memory for jobs that need neither.
-
-To size engines honestly, give the location nodes it does not share, or add a
-mutating admission policy that rewrites the engine pod's requests.
-`bzm-opl-gen livetest --run-test` prints the live gap under `ENGINE SIZING:`.
-"""
+                  f"stores a copy in an annotation capped at 256KB.")
     mirror = ""
-    if o["private_registry"]:
-        imgs = [facts["crane_image"]] + [
-            f"{i['repo']}:{i['tag']}" for i in select_images(facts)
-        ]
-        mirror = (
-            "\n## Mirror these images into "
-            f"`{o['private_registry']}` first\n\nRun the included "
-            "`bzm-opl-image-mirror.sh` (docker pull/tag/push, forced linux/amd64), "
-            "or mirror manually:\n\n```\n" + "\n".join(imgs) + "\n```\n"
-        )
-    return f"""# BlazeMeter OPL -- generated manifests
+    if reg:
+        mirror = ("**1. Mirror the images** (needs push access to the registry; "
+                  "the pull side needs none):\n\n"
+                  "```\n./bzm-opl-image-mirror.sh\n```\n\n**2. Apply**\n\n")
+    return f"""# BlazeMeter agent -- {facts.get('harbor_name') or facts['harbor_id']}
 
-- Location: **{facts.get('harbor_name')}** (`{facts['harbor_id']}`), features: {facts.get('func_ids')}
-- Agent (ship): `{o['ship_id']}`
-- Platform: {o['platform']}, namespace: `{o['namespace']}`
-- AUTH_TOKEN: {"in Secret (bzm_secret.yaml)" if o['use_secret'] else "in ConfigMap (simplified)"}
-{mirror}
-## Apply
+| | |
+|---|---|
+| Location | `{facts['harbor_id']}` |
+| Agent | `{o['ship_id']}` |
+| Namespace | `{ns}` |
+| Platform | {o['platform']} |
+| Images from | `{reg or 'gcr.io/verdant-bulwark-278 (BlazeMeter public)'}` |
+| AUTH_TOKEN | {"in bzm_secret.yaml" if o['use_secret'] else "in bzm_configmap.yaml (plain text)"} |
 
-```
+## Deploy
+
+{mirror}```
 {apply_lines}
 ```
-{big_ca}
-## Verify
+
+## Check it worked
 
 ```
-{cli} -n {o['namespace']} rollout status deploy/crane
-{cli} -n {o['namespace']} logs -l role=role-crane -f
+{cli} -n {ns} rollout status deploy/crane
+{cli} -n {ns} logs -l role=role-crane -f
 ```
 
-Then confirm the agent shows **online** in BlazeMeter (Settings -> Private Locations),
-or run the generator's live test: `bzm-opl-gen livetest ...`
+The agent should show **online** in BlazeMeter under Settings -> Private
+Locations within a minute or so.
 
-Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
-Egress required to *.blazemeter.com and the image registry.
-Check the target cluster against that with `bzm-opl-gen doctor`.
-{limitrange}"""
+## Worth knowing
+
+- Each concurrent engine needs **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk** ({ENGINE_TMP_GB}GB of it /tmp),
+  and egress to `*.blazemeter.com`{f" and `{reg}`" if reg else ""}.
+- Engines request far less than they are allowed ({ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM}), because crane
+  sets that itself and nothing here can change it. On a shared node a run can
+  compete for CPU it was never reserved.{big_ca}
+- `bzm-opl-gen doctor` checks a cluster against all of the above before you apply.
+"""
 
 
 def write(files, outdir):
