@@ -1,6 +1,6 @@
 [project]
 name = "bzm-opl-gen"
-version = "0.1.0"
+version = "0.2.0"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
 requires-python = ">=3.9"
 dependencies = []
