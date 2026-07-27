@@ -17,6 +17,12 @@ export interface Facts {
   images: object[]; images_source?: string; crane_image?: string;
 }
 export interface GeneratedFile { name: string; content: string }
+/** Manual facts, plus the one thing no catalogue can supply: a GUI location
+ *  needs a version-pinned browser image that only a live agent inventory names.
+ *  `gui_images_incomplete` is served but currently unread here -- the page can
+ *  no longer declare functionalGui, so it cannot be true. `bzm-opl-gen facts
+ *  --manual --func-ids functionalGui` still warns. */
+export interface ManualFactsOut { facts: Facts; gui_images_incomplete: boolean }
 export interface AgentStatus {
   state: string; heartbeat_age_s: number | null;
   installed_version?: string; online: boolean;
@@ -55,12 +61,15 @@ export const api = {
   createShip: (harborId: string, name: string) =>
     req<{ ship: Ship }>("POST", "/api/ships", { harbor_id: harborId, name }),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
+  /** Facts from the three values BlazeMeter shows on the agent, with no API key.
+   *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */
+  manualFacts: (body: { harbor_id: string; ship_id: string; func_ids: string[] }) =>
+    req<ManualFactsOut>("POST", "/api/facts/manual", body),
   status: (harborId: string, shipId: string) =>
     req<AgentStatus>("GET", `/api/status?harbor_id=${harborId}&ship_id=${shipId}`),
   generate: (facts: Facts, options: Options) =>
     req<{ files: GeneratedFile[] }>("POST", "/api/generate",
       { facts, options, fetch_token: false }),
-  profiles: () => req<{ name: string; options: Options }[]>("GET", "/api/profiles"),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
@@ -89,8 +98,14 @@ export type SvConstants = {
 /** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
  *  that used to live here is how sv-bridge went missing from the create form.
  *  `label` falls back to the raw id server-side, so an unlabelled funcId is
- *  offered rather than dropped. */
-export type FuncIdChoice = { id: string; label: string };
+ *  offered rather than dropped.
+ *
+ *  `changes_images` is false for a funcId that needs the same images as one
+ *  already offered -- functionalApi is "the taurus engine", exactly as
+ *  performance is. Creating a location keeps the full list, because BlazeMeter
+ *  distinguishes them there; the manual form, where the only thing a funcId
+ *  does is pick images, offers only the ones that change the answer. */
+export type FuncIdChoice = { id: string; label: string; changes_images: boolean };
 
 /** How reading the namespace ended. The watch panel is the only thing in this
  *  client that needs a cluster, and the only one allowed to: cluster access is
@@ -156,11 +171,15 @@ export function saveBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-export async function downloadZip(facts: Facts, options: Options) {
+/** `fetchToken` pulls AUTH_TOKEN from the API on the way out, which is what the
+ *  connected flow relies on. It must be off for manually-entered facts: the
+ *  token is already in `options`, and a stale key left over from an earlier
+ *  connect would otherwise be asked for a token for someone else's agent. */
+export async function downloadZip(facts: Facts, options: Options, fetchToken = true) {
   const r = await fetch("/api/generate/zip", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facts, options, fetch_token: true }),
+    body: JSON.stringify({ facts, options, fetch_token: fetchToken }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
   saveBlob(await r.blob(),

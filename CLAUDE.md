@@ -167,6 +167,31 @@ the classes of problem it can't fix for you.
   actually free needs every pod's requests summed per node, which is a much
   bigger read for a preflight. Say "upper bound" in any detail string you add.
 
+- **`facts.manual()` is the same shape `gather()` returns, on purpose.** The UI's
+  manual mode and `facts --manual` build facts from a typed harbor id, ship id
+  and token so a bundle can be produced for an account nobody here can reach.
+  Nothing downstream learns which way the facts arrived — keep it that way, and
+  add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+- **A Kubernetes agent reports its images as bare keys** -- `taurus-cloud:latest`,
+  `torero:4.6.182` -- with no registry and `Size: 0`, i.e. crane's configured
+  image set rather than what is on the node. Docker agents report
+  registry-qualified tags instead. `gather()` handled only the Docker shape, so
+  every k8s agent -- the kind this tool generates for -- silently produced no
+  inventory and fell through to the catalogue; that is how `torero` and
+  `richrach` stayed missing from a performance bundle. `repo_for_key()` resolves
+  the bare form. Reading it properly also pins exact tags (`crane:3.7.55`,
+  `torero:4.6.182`) where the catalogue could only say `latest`.
+- **`FALLBACK_IMAGES` was read off live inventories, not derived from the keys.**
+  Keys do not reliably match their repo — `taurus-cloud`→`v4` and
+  `apm-image`→`apm` in the table, `blazemeter`→`v3` and `secrets-image`→`secrets`
+  elsewhere in the account — so a "tidy-up" that regularises them produces repos
+  that do not exist. `test_manual_facts.py` asserts the
+  catalogue covers every category `CATEGORY_BY_FUNC` can ask for — a new funcId
+  needing a new category fails there rather than on a sealed cluster.
+- GUI browser images are the one gap and cannot be closed: the account carries
+  60+ version-pinned `charmander/*` repos and only a live agent says which one a
+  location uses. `facts.gui_images_incomplete()` flags it; don't invent a default.
+
 ## Conventions
 
 - Comments explain *why*, especially where a non-obvious environment fact drove

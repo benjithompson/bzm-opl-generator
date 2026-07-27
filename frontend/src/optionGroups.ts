@@ -332,6 +332,27 @@ export function unclaimedFuncIds(
     (id) => !features.some((f) => f.func_ids.includes(id)));
 }
 
+/** Features to show as unavailable, given what the location runs. Empty
+ *  whenever the question cannot be answered, and every such case means "say
+ *  nothing" rather than "say no":
+ *
+ *   - `known` false — manual entry declares the location's features rather than
+ *     reading them, so nothing there is ever unavailable; and before a location
+ *     is chosen an empty `locFeatures` means "not asked yet", not "none".
+ *   - the location claims no feature at all. 10 of 169 locations in the account
+ *     this was checked against are sv-bridge, tdm or dataPublisher only, and
+ *     marking every feature unavailable for those leaves nothing configurable
+ *     and no way forward.
+ *
+ *  Disabling hides the view but not the effect — options already set under a
+ *  feature are still generated — so the caller has to say when that has
+ *  happened. See the button's "still set here" line. */
+export function unavailableFeatures(
+    known: boolean, locFeatures: string[], features: Feature[]): string[] {
+  if (!known || locFeatures.length === 0) return [];
+  return features.map((f) => f.id).filter((id) => !locFeatures.includes(id));
+}
+
 /** Which feature to open a location on: the first served feature its funcIds
  *  carry, else the first served feature. A location carrying both therefore
  *  starts on the first -- performance, the common case -- and is routed to the

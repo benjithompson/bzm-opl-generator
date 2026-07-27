@@ -3,6 +3,7 @@ import { Feature, Options } from "./api";
 import {
   allGroupsOff, ANY_DEPLOYMENT, appliesTo, detectGroups, ENGINE_SIZES,
   featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
+  unavailableFeatures,
   OPTION_GROUPS, OptionGroup,
   setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
@@ -495,5 +496,40 @@ describe("a group declares whether its own configuration is finished", () => {
       .map((g) => g.id)).toEqual(["sv"]);
     expect(incompleteGroups({}, { sv: false })).toEqual([]);
     expect(incompleteGroups({}, { sv: true }).map((g) => g.id)).toEqual(["sv"]);
+  });
+});
+
+describe("unavailableFeatures", () => {
+  it("names the features the location does not run", () => {
+    expect(unavailableFeatures(true, ["performance"], FEATURES)).toEqual(["sv"]);
+    expect(unavailableFeatures(true, ["sv"], FEATURES)).toEqual(["performance"]);
+  });
+
+  it("says nothing when the location runs both", () => {
+    expect(unavailableFeatures(true, ["performance", "sv"], FEATURES)).toEqual([]);
+  });
+
+  it("says nothing before the answer is known", () => {
+    // Manual entry declares rather than reads, and no location chosen yet is
+    // "not asked" -- an empty locFeatures must not read as "none enabled", or
+    // every feature greys out on first load.
+    expect(unavailableFeatures(false, [], FEATURES)).toEqual([]);
+    expect(unavailableFeatures(false, ["performance"], FEATURES)).toEqual([]);
+  });
+
+  it("says nothing for a location whose funcIds claim no feature", () => {
+    // The dead end this guards: 10 of 169 locations in the account checked are
+    // sv-bridge / tdm / dataPublisher only. Marking every feature unavailable
+    // there would leave nothing configurable and no way forward.
+    expect(featuresOf(UNMODELLED, FEATURES)).toEqual([]);
+    expect(unavailableFeatures(true, [], FEATURES)).toEqual([]);
+  });
+
+  it("extends with the served vocabulary", () => {
+    // A third feature nobody has tagged a group with is still a feature a
+    // location can lack, so it must be nameable without an edit here.
+    const served = [PERF, SV, SECRETS];
+    expect(unavailableFeatures(true, ["performance"], served))
+      .toEqual(["sv", SECRETS.id]);
   });
 });

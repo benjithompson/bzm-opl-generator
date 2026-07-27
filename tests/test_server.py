@@ -74,10 +74,59 @@ def test_generate_helm_rejects_service_virtualization_400():
     assert "performance testing only" in r.json()["detail"]
 
 
-def test_option_defaults_carry_the_output_format():
-    """The UI seeds its options from this response, so a format missing from
-    DEFAULT_OPTIONS is a segment that starts blank."""
-    assert client.get("/api/option-defaults").json()["output_format"] == "manifests"
+def test_manual_facts_need_no_api_key():
+    """The whole point: this mode exists for an account nobody here can reach,
+    so requiring a key would defeat it. Every other /api route 401s."""
+    r = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]})
+    assert r.status_code == 200
+    f = r.json()["facts"]
+    assert f["harbor_id"] == "H1"
+    assert f["ships"][0]["id"] == "S1"
+    assert f["images_source"] == "manual entry (no account access)"
+    assert r.json()["gui_images_incomplete"] is False
+
+
+def test_manual_facts_flag_the_gui_image_gap():
+    r = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["functionalGui"]})
+    assert r.json()["gui_images_incomplete"] is True
+
+
+def test_manual_facts_generate_without_a_token_fetch():
+    """The UI posts fetch_token=false in this mode -- the token was typed, and a
+    key left over from an earlier connect must not be asked for one belonging to
+    somebody else's agent."""
+    facts = client.post("/api/facts/manual", json={
+        "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]}).json()["facts"]
+    r = client.post("/api/generate", json={
+        "facts": facts, "fetch_token": False,
+        "options": {"namespace": "cust", "auth_token": "TOK", "ship_id": "S1"}})
+    assert r.status_code == 200
+    names = [f["name"] for f in r.json()["files"]]
+    assert "bzm_deployment.yaml" in names and "bzm_secret.yaml" in names
+
+
+def test_func_ids_mark_which_ones_change_the_images():
+    """The create-location form needs every funcId; the manual form needs only
+    the ones that change the answer. Both read this one response, so the
+    distinction is served rather than re-derived in TypeScript."""
+    rows = client.get("/api/func-ids").json()
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["performance"]["changes_images"] is True
+    assert by_id["functionalApi"]["changes_images"] is False
+    # Still offered -- creating a location with it is a real, different thing.
+    assert "functionalApi" in by_id
+    for f in ("mockServices", "proxyRecorder", "functionalGui"):
+        assert by_id[f]["changes_images"] is True
+
+
+def test_option_defaults_are_served():
+    """The UI seeds its options from this response, so anything missing from
+    DEFAULT_OPTIONS is a control that starts blank."""
+    body = client.get("/api/option-defaults").json()
+    assert body["platform"] == "openshift"
+    assert body["output_format"] == "manifests"
 
 
 def test_generate_invalid_options_400():
@@ -85,14 +134,6 @@ def test_generate_invalid_options_400():
     r = client.post("/api/generate", json={
         "facts": facts, "options": {}, "fetch_token": False})
     assert r.status_code == 400
-
-
-def test_profiles_and_defaults():
-    r = client.get("/api/profiles")
-    assert {p["name"] for p in r.json()} >= {
-        "standard", "private-registry", "proxy-ca"}
-    r2 = client.get("/api/option-defaults")
-    assert r2.json()["platform"] == "openshift"
 
 
 def test_sv_constants_are_served_from_the_generator():
@@ -149,7 +190,11 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
     from bzm_opl_gen import facts as facts_mod
     monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
     body = client.get("/api/func-ids").json()
-    assert {"id": "tdm", "label": "tdm"} in body
+    # Matched on id/label rather than the whole row: the row carries other
+    # fields, and what this pins is that an unlabelled funcId is still offered
+    # under its raw name.
+    assert {"id": "tdm", "label": "tdm"} in [
+        {"id": r["id"], "label": r["label"]} for r in body]
 
 
 def test_features_are_served_with_a_label_and_a_suggested_namespace():
@@ -259,7 +304,6 @@ def test_no_cluster_access_leaves_the_rest_of_the_api_working(fake_cluster):
     assert client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"},
         "fetch_token": False}).status_code == 200
-    assert client.get("/api/profiles").status_code == 200
     assert client.get("/api/option-defaults").status_code == 200
     assert client.get("/api/sv-constants").status_code == 200
 

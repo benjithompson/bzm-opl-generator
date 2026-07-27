@@ -44,7 +44,6 @@ KEY_CANDIDATES = [
     SAVED_KEY_PATH,
     os.path.expanduser("~/.bzm/api-key.json"),
 ]
-PROFILE_DIR = os.path.join(os.path.dirname(__file__), "profiles")
 
 
 def _client():
@@ -166,6 +165,32 @@ def ship_create(s: ShipIn):
 @app.get("/api/facts")
 def get_facts(harbor_id: str):
     return _wrap(facts_mod.gather, _client(), harbor_id)
+
+
+class ManualFactsIn(BaseModel):
+    harbor_id: str
+    ship_id: str
+    func_ids: list = ["performance"]
+
+
+@app.post("/api/facts/manual")
+def manual_facts(m: ManualFactsIn):
+    """Facts from the three values BlazeMeter shows on the agent, with no API
+    key involved -- the case where you are producing manifests for a customer's
+    cluster and have access to neither their account nor their cluster.
+
+    Deliberately not behind _client(): requiring a key here would defeat the
+    point. It reads nothing and writes nothing; it only fills in the shape
+    `gather` would have returned.
+
+    The ids are not validated. There is nothing here to validate them against,
+    and a guess at their format would reject input that is correct.
+    """
+    facts = facts_mod.manual(m.harbor_id, m.ship_id, func_ids=m.func_ids)
+    return {"facts": facts,
+            # Carried rather than left for the caller to notice -- see
+            # facts.gui_images_incomplete for what it means.
+            "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
 
 
 @app.get("/api/status")
@@ -423,18 +448,6 @@ def sv_check(host: str, scheme: str = "http"):
             else f"HTTP {code} -- the endpoint answered."}
 
 
-# -- profiles -----------------------------------------------------------------
-
-@app.get("/api/profiles")
-def profiles():
-    out = []
-    for fn in sorted(os.listdir(PROFILE_DIR)):
-        if fn.endswith(".json"):
-            with open(os.path.join(PROFILE_DIR, fn)) as fh:
-                out.append({"name": fn[:-5], "options": json.load(fh)})
-    return out
-
-
 @app.get("/api/option-defaults")
 def option_defaults():
     return gen_mod.DEFAULT_OPTIONS
@@ -460,8 +473,17 @@ def func_ids():
     used to hold its own list in TypeScript, and whatever was missing from that
     copy could not be selected from the UI at all. Derived from the facts layer so adding a funcId there -- which is
     already required for its images to be selected -- is the only edit needed.
+
+    `changes_images` marks the ones worth offering where a funcId's only job is
+    to pick images -- the manual-entry form. functionalApi and performance both
+    mean "the taurus engine", so offering both there is a choice that cannot
+    change the output. Served rather than filtered in TypeScript for the same
+    reason the list itself is: a copy in the frontend is how the vocabulary and
+    the thing it describes drift apart.
     """
-    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f)}
+    distinct = set(facts_mod.image_distinct_funcs())
+    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f),
+             "changes_images": f in distinct}
             for f in facts_mod.CATEGORY_BY_FUNC]
 
 

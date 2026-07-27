@@ -270,20 +270,19 @@ def test_bad_engine_size_is_still_caught_in_helm_format():
 
 # -- the bundle a chart install actually needs --------------------------------
 
-def test_readme_does_not_promise_force_conflicts_fixes_the_upgrade():
-    """It does not, and the earlier draft of this README said it did.
-
-    Forcing hands back only the fields Helm declares; crane's
-    `strategy.rollingUpdate` is not one, and it survives beside the forced
-    `type: Recreate` for the API server to reject.
-    """
+def test_readme_is_short_and_actionable():
+    """Handed to a customer, so it is instructions; the chart's own README keeps
+    the reasoning. This one used to run to 78 lines."""
     readme = gen.generate(FACTS, BASE)["README.md"]
+    assert len(readme.splitlines()) < 50, "README is creeping back towards an essay"
+    assert "helm install crane" in readme
+    assert "rollout status deploy/crane" in readme
+    assert "online" in readme
+    # The upgrade trap still has to be said -- briefly -- because it bites
+    # silently and the fix is a value most people would not guess.
     assert "autoUpdate: false" in readme
-    assert "--force-conflicts` does not rescue" in readme or \
-           "--force-conflicts does not rescue" in readme
-    # The plain upgrade command must not carry the flag as if it were the fix.
-    upgrade = [l for l in readme.splitlines() if l.startswith("helm upgrade")]
-    assert upgrade and not any("--force-conflicts" in l for l in upgrade)
+    # ...and never as a bare `helm upgrade` that would hit the conflict.
+    assert not any(l.startswith("helm upgrade") for l in readme.splitlines())
 
 
 def test_readme_names_the_overlay_in_its_install_command():
