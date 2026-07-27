@@ -22,6 +22,30 @@ Editing `examples/facts.example.json` is the fastest way to see how account
 facts drive the output — `func_ids` decides which images are dead weight and
 drop out of `IMAGE_OVERRIDES`.
 
+## Layout
+
+```
+bzm_opl_gen/
+  api.py         BlazeMeter API client (stdlib)
+  facts.py       account fact gathering + image classification
+  generate.py    manifest rendering (templates/ + per-option assembly)
+  doctor.py      cluster preflight (pure verdicts over fetched cluster JSON)
+  workstation.py workstation preflight for the live rig (`toolcheck`)
+  quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
+  livetest.py    deploy, poll-until-online, teardown
+  server.py      FastAPI backend for the web UI
+  cli.py         subcommands: facts | generate | doctor | toolcheck | images
+                              | livetest | ui | sv-expose | locations
+                              | create-location | create-ship
+  templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
+  profiles/      scenario presets (standard | private-registry | proxy-ca)
+  ui_dist/       prebuilt web UI, shipped in the wheel
+frontend/        web UI source (React); `npm run build` refreshes ui_dist/
+tests/           offline unit tests (fixture facts)
+docs/            user-facing reference split out of README.md
+examples/        sample facts + api-key placeholder (the no-account path)
+```
+
 ## The two test layers
 
 **Offline** (`pytest tests -q`) — stdlib + fixtures, no cluster, ~1s. Every
@@ -78,7 +102,10 @@ seatbelt, not a lock.
 - CI runs the offline suite on Python 3.9 (the declared floor) and 3.13, and
   generates from the sample facts. Both must be green.
 - If you change what a live check proves, update its offline counterpart and
-  the relevant section of README.md in the same PR.
+  the relevant page under `docs/` in the same PR.
+- Add your entry to `## [Unreleased]` in `CHANGELOG.md` — that section is what
+  the next release's notes are cut from, so anything missing from it is missing
+  from the release.
 
 ## Cutting a release
 
@@ -111,7 +138,11 @@ and nobody writes those by accident.
 
 | | |
 |---|---|
-| `README.md` | what the tool does and every flag — user-facing |
-| `CONTRIBUTING.md` | this file: setup, test layers, PR flow |
+| `README.md` | what the tool is, how to install it, how to get a bundle out — deliberately short |
+| `docs/` | the user-facing reference: options, web UI, Helm, SV, preflight, the live rig, plus write-ups of specific findings |
+| `CONTRIBUTING.md` | this file: setup, layout, test layers, PR flow, releases |
 | `CLAUDE.md` | live-rig internals, account facts, the traps behind each flag |
-| `docs/` | write-ups of specific findings (e.g. crane's nginx Ingress port) |
+
+README.md is kept to what a new user needs to install and produce a bundle.
+Reference detail goes in `docs/`, linked from the README's documentation table —
+add the link when you add a page, or nothing will find it.

@@ -11,6 +11,14 @@ anything that breaks.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-27
+
+Two things you could not do in 0.1.0: install the deployment as a **Helm chart**
+rather than flat YAML, and **generate a bundle for an account you have no access
+to**. Plus a real fix — `IMAGE_OVERRIDES` could come out empty for a location
+with no running agent, which only shows up once the customer's cluster is
+actually sealed.
+
 ### Removed
 
 - **`sv-bridge` support.** The funcId is retired upstream, so it no longer
@@ -18,9 +26,34 @@ anything that breaks.
   makes the service-virtualization ingress options mandatory. Locations that
   still carry the funcId now generate as ordinary performance locations — if you
   mirror images for one, the `sv-bridge` image is no longer in the set.
+- **Web UI: the `sv-expose` panel**, and the `POST /api/sv-expose` endpoint
+  behind it. It asked for an ingress class most people cannot judge, on a screen
+  that appeared whether or not the cluster had the problem it solves. The
+  `bzm-opl-gen sv-expose` **command is unchanged**; the endpoint check below is
+  what now tells you when you need it.
 
 ### Added
 
+- **Helm chart output** — `generate --format helm` emits the same deployment as
+  a chart (`out/helm/`, byte-identical for every customer) plus a values overlay
+  (`out/bzm-opl-values.yaml`, the only file generated from the account), instead
+  of flat manifests. Both formats render the same objects; a parity check renders
+  17 option combinations both ways and requires them to agree, so the choice is
+  about how you install and upgrade, not what lands in the cluster. Set
+  `autoUpdate: false` in the overlay if you intend to run `helm upgrade` — left
+  on, crane takes ownership of its own Deployment and the next upgrade fails
+  half-applied on a field-ownership conflict. Both behaviours were confirmed
+  against a live cluster and a real agent. Service virtualization is refused in
+  this format rather than emitted broken, and `livetest` does not take a chart
+  directory. See [docs/helm.md](https://github.com/benjithompson/bzm-opl-generator/blob/main/docs/helm.md).
+- **Generate for an account you cannot reach** — the three values BlazeMeter
+  shows on an agent (harbor id, ship id, AUTH_TOKEN) are enough to render every
+  manifest, so a customer's deployment can be produced with access to neither
+  their BlazeMeter account nor their cluster. `bzm-opl-gen facts --manual
+  --harbor-id H --ship-id S`, or **Enter values manually** in the web UI. Nothing
+  is validated and nothing is sent to BlazeMeter. What you give up is listed in
+  the README — chiefly that the crane tag floats on `latest`, and that GUI
+  browser images cannot be resolved without a live agent.
 - **Web UI: the deployed virtual services, beside the heartbeat** — while
   watching an SV deployment, each one is listed with the endpoint host it
   publishes, refreshed on the existing poll. The agent reports idle whether or
@@ -59,6 +92,31 @@ anything that breaks.
   your API key in process memory, and downloading a bundle rotates the
   AUTH_TOKEN out from under any agent already running for that ship. An SSH
   tunnel to the default bind does the same job without exposing the listener.
+
+### Fixed
+
+- **`IMAGE_OVERRIDES` came out empty for a location with no live agent.** The
+  built-in image catalogue held only the two performance images, so a
+  `mockServices` or `proxyRecorder` location generated overrides that covered
+  nothing — and crane resolves a missing key against the *public* registry
+  silently, so the bundle looks correct right up until the customer's cluster is
+  actually sealed. The catalogue now covers mock, recorder and doduo. GUI browser
+  images remain uncoverable without a running agent (60+ version-pinned repos,
+  and only the agent says which one a location uses); that is flagged, and
+  escalated to a warning when a private registry is set.
+- **A Kubernetes agent's image inventory was being discarded.** k8s agents report
+  bare keys (`taurus-cloud:latest`) where Docker agents report registry-qualified
+  tags, and only the Docker shape was handled — so every k8s agent, which is the
+  kind this tool generates for, silently produced no inventory and fell back to
+  the catalogue. Reading it properly also pins exact tags where the catalogue
+  could only say `latest`.
+
+### Changed
+
+- **The README is now short**, covering what the tool is, how to install it and
+  how to get a bundle out. The reference material it used to carry — every
+  option, the web UI, Helm, service virtualization, preflight, the live rig — is
+  in [`docs/`](https://github.com/benjithompson/bzm-opl-generator/blob/main/docs/), linked from a table in the README.
 
 ## [0.1.0] — 2026-07-26
 
