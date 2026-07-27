@@ -37,3 +37,26 @@ jobs:
               --facts examples/facts.example.json \
               --namespace ci-demo -o "$RUNNER_TEMP/out"
           test -s "$RUNNER_TEMP/out/bzm_deployment.yaml"
+
+  # The web UI. Separate from the python job rather than bolted onto its
+  # matrix: it shares no toolchain with it, and running it twice over two
+  # python versions would say nothing new. The suite is the option-group
+  # lifecycle -- plain data in, data out -- which is the part of the form that
+  # used to drift silently between the fields and the wipe list.
+  ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm test
