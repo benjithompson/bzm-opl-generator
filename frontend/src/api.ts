@@ -68,6 +68,8 @@ export const api = {
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
+  svCheck: (host: string, scheme: SvScheme) =>
+    req<SvCheckOut>("GET", "/api/sv-check?" + new URLSearchParams({ host, scheme })),
 };
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
@@ -110,6 +112,22 @@ export interface SvMocksOut {
   status: SvExposeStatus;
   mocks: SvEndpoint[];
   message: string;
+}
+/** Whether the endpoint a deployed mock publishes actually answers, probed by
+ *  the machine serving this page. `status` is how the attempt ended, not how
+ *  the mock feels: "ok" means something replied with a status line — a 503
+ *  included, and that one is the finding, not a failed check. Its `message`
+ *  carries the sv-expose wording, so no caller has to recognise the code. */
+export type SvCheckStatus = "ok" | "dns" | "refused" | "tls" | "timeout" | "error";
+export type SvScheme = "http" | "https";
+export interface SvCheckOut {
+  status: SvCheckStatus;
+  /** The HTTP status, or null when nothing answered with one. */
+  code: number | null;
+  url: string;
+  message: string;
+  /** The raw reason, for the cases where the sentence above is not enough. */
+  detail: string;
 }
 export interface SvExposeIn {
   namespace: string;

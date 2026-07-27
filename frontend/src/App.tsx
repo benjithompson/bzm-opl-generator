@@ -1,8 +1,8 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, saveBlob, Account, AgentStatus, Facts, GeneratedFile,
-  FuncIdChoice, KeyCandidate, Location, Options, Ship, SvConstants, SvExposeIn,
-  SvExposeOut, SvMocksOut, Workspace,
+  FuncIdChoice, KeyCandidate, Location, Options, Ship, SvCheckOut, SvConstants,
+  SvExposeIn, SvExposeOut, SvMocksOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
@@ -117,6 +117,13 @@ export default function App() {
   // is the same staleness the sv-expose block below refuses to show.
   const [svMocks, setSvMocks] =
     useState<{ ns: string; read: SvMocksOut } | null>(null);
+  // Endpoint checks, keyed by the host that was probed rather than by row
+  // index: the poll above replaces the list every 10s, and a result must never
+  // end up beside a different virtual service than the one it was asked about.
+  // Keying by host also retires a result when its host does -- editing the
+  // namespace or the domain changes every key, so nothing stale survives.
+  const [svChecks, setSvChecks] =
+    useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
 
@@ -470,6 +477,32 @@ export default function App() {
   // Served, not restated here: what the Role grants is generate.py's to state,
   // and the two can disagree only if one of them is a copy.
   const svRbac = svConst.backends[txt("sv_ingress")];
+
+  // -- is the published endpoint answering? ----------------------------------
+  // A Running mock pod says nothing about whether anything routes to it: where
+  // the controller rejects crane's Ingress the endpoint 503s while the pod is
+  // healthy. The scheme follows the TLS secret, because that is what decides
+  // whether the pair rendered in step 6 terminates TLS -- probing the other one
+  // answers a question nobody asked.
+  const svScheme = txt("sv_tls_secret") ? "https" as const : "http" as const;
+  // Nothing renders off the promise: the row goes busy, the status poll behind
+  // it keeps running, and the server bounds its own wait well inside one poll
+  // interval, so a hanging endpoint holds up nothing but its own row.
+  const checkEndpoint = async (host: string) => {
+    setSvChecks((c) => ({ ...c, [host]: { busy: true } }));
+    try {
+      const res = await api.svCheck(host, svScheme);
+      setSvChecks((c) => ({ ...c, [host]: { busy: false, res } }));
+    } catch (e) {
+      setSvChecks((c) => ({ ...c, [host]: { busy: false, err: String((e as Error).message) } }));
+    }
+  };
+  // How the result reads. A 503 is amber, not red: the check worked and this is
+  // its answer -- the one the sv-expose step below exists for. Anything else
+  // that answered routed, so only a probe that got no status line is red.
+  const svCheckTone = (r: SvCheckOut) =>
+    r.status !== "ok" ? "text-red-600"
+      : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
   // -- sv-expose -------------------------------------------------------------
   // Renders the pair that actually routes, from the mocks running in the
@@ -1229,16 +1262,47 @@ export default function App() {
                       Virtual services in {svMocks.ns}
                     </p>
                     {svMocks.read.mocks.length > 0 ? (
-                      <ul className="space-y-0.5">
-                        {svMocks.read.mocks.map((m) => (
-                          <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
-                            <span className="font-medium text-slate-700">{m.name}</span>
-                            <span className="text-slate-400">:{m.port}</span>
-                            {m.host
-                              ? <> — <code className="text-slate-700">{m.host}</code></>
-                              : <> — set a wildcard domain to get the endpoint host</>}
-                          </li>
-                        ))}
+                      <ul className="space-y-1.5">
+                        {svMocks.read.mocks.map((m) => {
+                          const chk = m.host ? svChecks[m.host] : undefined;
+                          return (
+                            <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
+                              <span className="font-medium text-slate-700">{m.name}</span>
+                              <span className="text-slate-400">:{m.port}</span>
+                              {m.host ? (
+                                <>
+                                  {" — "}
+                                  <a className="text-bzm hover:underline font-mono break-all"
+                                    href={`${svScheme}://${m.host}/`}
+                                    target="_blank" rel="noreferrer">
+                                    {svScheme}://{m.host}/
+                                  </a>
+                                  {/* The check is made from the machine serving
+                                      this page, against the host shown above --
+                                      never a second copy of that string. */}
+                                  <button type="button" disabled={chk?.busy}
+                                    onClick={() => checkEndpoint(m.host!)}
+                                    className="ml-2 align-baseline rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
+                                    {chk?.busy ? "checking…" : "check endpoint"}
+                                  </button>
+                                </>
+                              ) : <> — set a wildcard domain to get the endpoint host</>}
+                              {chk?.res && (
+                                <p className={`mt-0.5 ${svCheckTone(chk.res)}`}>
+                                  {chk.res.message}
+                                  {chk.res.status !== "ok" && chk.res.detail && (
+                                    <span className="block text-slate-400 font-mono break-all">
+                                      {chk.res.detail}
+                                    </span>
+                                  )}
+                                </p>
+                              )}
+                              {chk?.err && (
+                                <p className="mt-0.5 text-red-600">{chk.err}</p>
+                              )}
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : (
                       // "Nothing deployed" and "cannot look" are different
