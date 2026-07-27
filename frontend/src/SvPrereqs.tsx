@@ -9,6 +9,25 @@ type SvOwner = "you" | "bundle" | "none";
 export type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
 type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
 
+/** Everything said about one backend, in one place. The hints are here rather
+ *  than beside the fields they annotate because they are the same kind of claim
+ *  as the rows below -- and split across two files, a backend added to one and
+ *  forgotten in the other inherits whatever the fallback says, which for these
+ *  fields was nginx's advice. */
+type SvBackendProse = {
+  controller: SvPrereq;
+  tls: SvPrereq;
+  /** A row only some backends have -- istio's Gateway. */
+  extra?: SvPrereq;
+  /** Shown under the endpoint host, where the defect actually bites. */
+  caveat?: ReactNode;
+  controllerHint: string;
+  tlsHint: string;
+  /** Crane reads KUBERNETES_ISTIO_GATEWAY_NAME in the istio backend alone, so
+   *  only that one offers the field; generate() rejects it anywhere else. */
+  takesGateway?: boolean;
+};
+
 // Per-backend prerequisites, from README "Which one to pick" -- every row of
 // that table was measured on a live cluster. Editorial, and so kept here: what
 // a controller demands of *you* is not in generate.py to be served. The Role
@@ -18,7 +37,7 @@ type SvPrereq = { own: SvOwner; text: (c: SvCtx) => ReactNode };
 // A backend added on the Python side and not here renders no prose at all
 // rather than nginx's advice, which would be wrong in the direction that costs
 // an afternoon.
-const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
+const SV_PREREQS: Record<string, SvBackendProse> = {
   nginx: {
     controller: { own: "you", text: () => (
       <>An ingress controller already serving the wildcard domain, registering an{" "}
@@ -30,6 +49,19 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
       <>A Secret <code>{c.secret}</code> in namespace <code>{c.ns}</code> with a
       wildcard certificate for <code>*.{c.dom}</code> — crane's Ingress references it.</>
     ) },
+    controllerHint: "must already be installed and serving the wildcard domain below",
+    tlsHint: "in the agent namespace; required even for HTTP virtual services",
+    caveat: (
+      <>On NGINX whether that host answers depends on the controller:
+      crane's Ingress backend says port <code>8080</code> while the
+      Service it creates publishes <code>80</code>, which by the
+      Ingress spec resolves to nothing. <code>ingress-nginx</code>{" "}
+      matches leniently and serves it (measured: 200); a strict
+      controller builds no route and the host 503s while the mock
+      stays healthy. If yours 503s, <code>bzm-opl-gen sv-expose</code>{" "}
+      emits a Service + Ingress pair that resolves. Every other
+      backend gets the port right.</>
+    ),
   },
   istio: {
     controller: { own: "you", text: () => (
@@ -44,6 +76,18 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
       name stays mandatory (crane crash-loops without it), and an HTTPS virtual
       service terminates TLS in the mock pod itself.</>
     ) },
+    // The gateway row, keyed by the backend that reads the env var rather than
+    // by an `ingress === "istio"` test further down the render.
+    extra: { own: "you", text: (c) => (
+      c.gateway
+        ? <>Gateway <code>{c.gateway}</code> must already exist — the bundle only
+           names it (<code>KUBERNETES_ISTIO_GATEWAY_NAME</code>).</>
+        : <>No Gateway to create — crane makes one per virtual service. Name one
+           above to reuse a single Gateway instead.</>
+    ) },
+    controllerHint: "must already be installed and serving the wildcard domain below",
+    tlsHint: "required even for HTTP — though nothing on Istio ever reads it",
+    takesGateway: true,
   },
   contour: {
     controller: { own: "you", text: () => (
@@ -55,6 +99,8 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
       wildcard certificate for <code>*.{c.dom}</code> — crane's HTTPProxy carries
       it as <code>tls.secretName</code> and Contour validates it.</>
     ) },
+    controllerHint: "must already be installed and serving the wildcard domain below",
+    tlsHint: "in the agent namespace; required even for HTTP virtual services",
   },
   openshift: {
     controller: { own: "none", text: () => (
@@ -66,8 +112,19 @@ const SV_PREREQS: Record<string, { controller: SvPrereq; tls: SvPrereq }> = {
       <code>Allow</code> at the router, so nothing reads <code>{c.secret}</code>.
       The name stays mandatory; crane validates it at startup.</>
     ) },
+    // Telling an OpenShift user to install a controller would contradict the
+    // prerequisite row directly above it.
+    controllerHint: "the cluster router already serves the wildcard domain below",
+    tlsHint: "in the agent namespace; required even for HTTP virtual services",
   },
 };
+
+/** The prose for one backend, for the fields App renders outside this panel.
+ *  Undefined for a backend nobody has written up yet -- callers fall back
+ *  rather than inheriting another backend's claims. */
+export function svProse(ingress: string): SvBackendProse | undefined {
+  return SV_PREREQS[ingress];
+}
 
 const OWNER_BADGE: Record<SvOwner, [string, string]> = {
   you: ["you create", "bg-amber-50 text-amber-700 border-amber-200"],
@@ -116,15 +173,9 @@ export function SvPrereqs(
             </PrereqItem>
           </>
         )}
-        {ingress === "istio" && (
-          <PrereqItem own={ctx.gateway ? "you" : "none"}>
-            {ctx.gateway
-              ? <>Gateway <code>{ctx.gateway}</code> must already exist —
-                 the bundle only names it
-                 (<code>KUBERNETES_ISTIO_GATEWAY_NAME</code>).</>
-              : <>No Gateway to create — crane makes one per virtual
-                 service. Name one above to reuse a single Gateway
-                 instead.</>}
+        {backend?.extra && (
+          <PrereqItem own={ctx.gateway ? backend.extra.own : "none"}>
+            {backend.extra.text(ctx)}
           </PrereqItem>
         )}
         {/* The one row that is mechanical rather than editorial,
@@ -155,20 +206,11 @@ export function SvPrereqs(
         the manifests apply, the agent reports idle, the mock pod runs
         1/1, and the endpoint never answers.
       </p>
-      {/* The nginx port defect belongs to that endpoint, so it is
-          stated here rather than beside the backend select. */}
-      {ingress === "nginx" && (
-        <p className="text-[11px] text-amber-700">
-          On NGINX whether that host answers depends on the controller:
-          crane's Ingress backend says port <code>8080</code> while the
-          Service it creates publishes <code>80</code>, which by the
-          Ingress spec resolves to nothing. <code>ingress-nginx</code>{" "}
-          matches leniently and serves it (measured: 200); a strict
-          controller builds no route and the host 503s while the mock
-          stays healthy. If yours 503s, <code>bzm-opl-gen sv-expose</code>{" "}
-          emits a Service + Ingress pair that resolves. Every other
-          backend gets the port right.
-        </p>
+      {/* A backend's caveat belongs to the endpoint above, not to the select
+          that chose it -- that is where someone is deciding whether the host
+          they were just given will actually answer. */}
+      {backend?.caveat && (
+        <p className="text-[11px] text-amber-700">{backend.caveat}</p>
       )}
     </div>
   );

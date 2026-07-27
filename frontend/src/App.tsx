@@ -8,7 +8,7 @@ import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
-import { SvCtx, SvPrereqs } from "./SvPrereqs";
+import { SvCtx, SvPrereqs, svProse } from "./SvPrereqs";
 
 // Display names only. The set of values is served from generate.SV_INGRESS_TYPES
 // -- an unlabelled backend falls back to its raw name and still appears, which
@@ -463,6 +463,10 @@ export default function App() {
     secret: txt("sv_tls_secret") || "<tls-secret>",
     gateway: txt("sv_istio_gateway"),
   };
+  // Everything said about the chosen backend, from the one place it is written
+  // down. Undefined for a backend nobody has written up: the fields below then
+  // fall back to the generic wording rather than showing another backend's.
+  const prose = svProse(txt("sv_ingress"));
   // Served, not restated here: what the Role grants is generate.py's to state,
   // and the two can disagree only if one of them is a copy.
   const svRbac = svConst.backends[txt("sv_ingress")];
@@ -1108,12 +1112,8 @@ export default function App() {
                 {grpOn.sv && (
                 <div className="mt-3 pl-12 space-y-2">
                   <Field label="Ingress controller"
-                    hint={options.sv_ingress === "openshift"
-                      // The cluster router is already there; telling an
-                      // OpenShift user to install a controller would contradict
-                      // the prerequisite list below.
-                      ? "the cluster router already serves the wildcard domain below"
-                      : "must already be installed and serving the wildcard domain below"}>
+                    hint={prose?.controllerHint
+                      ?? "must already be installed and serving the wildcard domain below"}>
                     <select className={inputCls} value={String(options.sv_ingress ?? "nginx")}
                       onChange={(e) => set("sv_ingress", e.target.value)}>
                       {svConst.ingress_types
@@ -1136,16 +1136,13 @@ export default function App() {
                       onChange={(v) => set("sv_subdomain", v || null)} />
                   </Field>
                   <Field label="Wildcard TLS secret"
-                    hint={options.sv_ingress === "istio"
-                      // Why it is inert on istio is one line down, in the
-                      // prerequisite list, rather than said twice here.
-                      ? "required even for HTTP — though nothing on Istio ever reads it"
-                      : "in the agent namespace; required even for HTTP virtual services"}>
+                    hint={prose?.tlsHint
+                      ?? "in the agent namespace; required even for HTTP virtual services"}>
                     <TextInput mono placeholder="wildcard-credential"
                       value={String(options.sv_tls_secret ?? "")}
                       onChange={(v) => set("sv_tls_secret", v || null)} />
                   </Field>
-                  {options.sv_ingress === "istio" && (
+                  {prose?.takesGateway && (
                     <Field label="Istio Gateway name (optional)"
                       hint="leave empty and crane creates a Gateway per virtual service">
                       <TextInput mono placeholder="bzm-gateway"
