@@ -985,7 +985,7 @@ def sv_read(namespace, timeout=15):
     except ValueError:
         # A zero exit whose output will not parse -- a wrapper or plugin that
         # printed before the JSON. Rare, but this answers a browser, and
-        # /api/sv-expose promises no bare errors, so it is an unreadable
+        # /api/sv-mocks promises no bare errors, so it is an unreadable
         # cluster like any other rather than a traceback.
         return SvClusterRead(SV_READ_NO_CONTEXT, [],
                              (out.stdout or "").strip())

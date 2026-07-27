@@ -17,7 +17,6 @@ import io
 import json
 import os
 import re
-import shlex
 import socket
 import ssl
 import time
@@ -230,26 +229,14 @@ def generate_zip(g: GenerateIn):
         headers={"Content-Disposition": f'attachment; filename="bzm-opl-{ns}.zip"'})
 
 
-class SvExposeIn(BaseModel):
-    """Everything sv-expose needs and nothing else -- the namespace to read,
-    plus the three fields generate.sv_publish_cfg resolves."""
-    namespace: str = "blazemeter"
-    sv_subdomain: Optional[str] = None
-    sv_tls_secret: Optional[str] = None
-    sv_ingress_class: Optional[str] = None
-
-
-# What each unreadable cluster means, in the user's terms. The UI pairs these
-# with the CLI equivalent below; a reason without a way forward is the dead
-# panel this endpoint exists to avoid.
+# What each unreadable cluster means, in the user's terms -- a reason without a
+# way forward is the dead panel the watch list must never become.
 def _sv_read_message(read):
     """The sentence shown for an unreadable cluster.
 
-    Shared by both endpoints that do this read: they answer the same question
-    about the same failure, and a message that differed between them would be
-    the UI contradicting itself. `.get`, not `[]`, because livetest owns the set
-    of reasons -- a fifth one should degrade to the raw detail, not 500 the one
-    endpoint whose contract is that it never returns a bare error.
+    `.get`, not `[]`, because livetest owns the set of reasons -- a fifth one
+    should degrade to the raw detail, not 500 the one endpoint whose contract is
+    that it never returns a bare error.
     """
     return SV_READ_MESSAGES.get(read.status, read.detail)
 
@@ -271,86 +258,26 @@ SV_READ_MESSAGES = {
         "pods in that namespace.",
     livetest.SV_READ_NO_MOCKS:
         "That namespace holds no virtual-service pods. Deploy the virtual "
-        "service in BlazeMeter first, then read it again.",
+        "service in BlazeMeter first; this list refreshes on the poll.",
 }
-
-
-def _sv_expose_command(x: SvExposeIn):
-    """The `sv-expose` invocation equivalent to this request, to run wherever
-    the user does have cluster access.
-
-    `--manifests ''` on purpose: the flag defaults to `out/` and the CLI reads
-    profile.json from it, which is a file a browser user need never have
-    downloaded. Every option is on the command line instead, so the suggestion
-    runs from any directory.
-    """
-    cmd = ["bzm-opl-gen", "sv-expose", "--manifests", "",
-           "--namespace", x.namespace]
-    for flag, value in (("--sv-subdomain", x.sv_subdomain),
-                        ("--sv-tls-secret", x.sv_tls_secret),
-                        ("--ingress-class", x.sv_ingress_class)):
-        if value:
-            cmd += [flag, value]
-    # shlex.join quotes what needs it and nothing else -- quoting per element
-    # on the way in means a flag added without it emits a command that will not
-    # run, and nothing here would catch that.
-    return shlex.join(cmd)
-
-
-@app.post("/api/sv-expose")
-def sv_expose_render(x: SvExposeIn):
-    """Render the Service+Ingress pair for the virtual services deployed in a
-    namespace -- the `sv-expose` command, from the browser.
-
-    Reading a cluster is the only thing this server ever does beyond the
-    BlazeMeter API, and it is optional: an unreadable cluster comes back 200
-    with which of the four reasons applied and the command to run elsewhere,
-    never an HTTP error the browser can only print in red. The single 4xx is a
-    request that could not be rendered even with a cluster in reach.
-    """
-    publish_opts = {"sv_subdomain": x.sv_subdomain,
-                    "sv_tls_secret": x.sv_tls_secret,
-                    "sv_ingress_class": x.sv_ingress_class}
-    try:
-        publish = gen_mod.sv_publish_cfg(publish_opts)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    command = _sv_expose_command(x)
-    read = livetest.sv_read(x.namespace)
-    if read.status != livetest.SV_READ_OK:
-        return {"status": read.status, "mocks": [], "files": [],
-                "message": _sv_read_message(read),
-                "detail": read.detail, "command": command}
-    return {
-        "status": read.status,
-        # host alongside each mock so the UI never rebuilds it: the same string
-        # the Ingress below routes, and the one a person is told to try.
-        "mocks": [dict(m, host=gen_mod.sv_endpoint_host(
-            m["name"], m["port"], x.namespace, publish.subdomain))
-            for m in read.mocks],
-        # Same shape as /api/generate, so the UI previews it in the same pane.
-        "files": [{"name": gen_mod.SV_EXPOSE_FILE,
-                   "content": gen_mod.sv_expose(read.mocks, x.namespace, publish)}],
-        "message": (f"{len(read.mocks)} virtual service(s) in {x.namespace}: "
-                    + ", ".join(f"{m['name']}:{m['port']}" for m in read.mocks)),
-        "detail": f"apply with: kubectl apply -n {x.namespace} -f {gen_mod.SV_EXPOSE_FILE}",
-        "command": command,
-    }
 
 
 @app.get("/api/sv-mocks")
 def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
     """What is deployed in `namespace`, and the host each one answers at.
 
-    The same cluster read as /api/sv-expose without the rendering, because this
-    one rides the UI's existing status poll: the agent reports idle whether or
+    This rides the UI's existing status poll: the agent reports idle whether or
     not its virtual services ever became reachable, so a deploy stalled at
     WAITING_FOR_DOMAIN looks identical to a healthy one in the watch panel.
 
-    Always 200, for the same reason as /api/sv-expose and one more: a poll that
-    401s or 500s every ten seconds either fills the console or gets swallowed by
-    the caller's catch and silently reads as "nothing deployed", which is the
-    one answer this must never fake.
+    Reading a cluster is the only thing this server ever does beyond the
+    BlazeMeter API, and it is optional: the UI is API-only by design and most
+    people running it have no kubecontext, so an unreadable cluster comes back
+    200 saying which of the four reasons applied, never an HTTP error the
+    browser can only print in red. A poll that 401s or 500s every ten seconds
+    either fills the console or gets swallowed by the caller's catch and
+    silently reads as "nothing deployed", which is the one answer this must
+    never fake.
     """
     read = livetest.sv_read(namespace)
     return {
@@ -422,8 +349,8 @@ SV_CHECK_503 = (
     "HTTP 503 -- the endpoint is published but nothing routes to it, while the "
     "mock pod itself is healthy. That is this cluster rejecting crane's Ingress: "
     "its backend names port 8080 where the Service crane created exposes port "
-    "80. Run `bzm-opl-gen sv-expose` (step 6 below) to publish a Service+Ingress "
-    "pair that does route.")
+    "80. Run `bzm-opl-gen sv-expose` where you have cluster access to publish a "
+    "Service+Ingress pair that does route.")
 
 
 def _sv_check_reason(err):
