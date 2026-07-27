@@ -270,17 +270,14 @@ def check_limitrange(facts, opts, cluster):
     limitranges = cluster.get("limitranges") or []
     cpu, mem = engine_size(opts)
     if not limitranges:
-        if opts.get("emit_limitrange"):
-            return [Check("limitrange", PASS,
-                          "none in the namespace; the generated "
-                          "bzm_limitrange.yaml caps it at the engine size")]
-        # No LimitRange means no ceiling on the namespace either -- and the
-        # engines are already scheduling small (see the detail), which nothing
-        # here can change.
+        # Nothing caps the namespace, which is a note rather than a problem --
+        # and separately the engines schedule small, which nothing here can
+        # change. The generator used to offer a LimitRange for this and no
+        # longer does: it could not fix the requests, and the defaults it did
+        # apply landed on crane's helper pods.
         return [Check("limitrange", WARN,
-                      f"no LimitRange in the namespace and the profile does not "
-                      f"emit one, so nothing caps what the namespace may ask "
-                      f"for. Separately, engine pods request "
+                      f"no LimitRange in the namespace, so nothing caps what it "
+                      f"may ask for. Separately, engine pods request "
                       f"{ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} "
                       f"rather than {_engine_str(cpu, mem)} because crane sets "
                       f"that explicitly -- a LimitRange cannot override it")]
@@ -324,15 +321,12 @@ def check_limitrange(facts, opts, cluster):
                                 f"admission: {'; '.join(blocking)} (crane itself "
                                 f"needs {CRANE_CPU_LIMIT}/{CRANE_MEM_LIMIT})"))
         if conflicts:
-            # Every LimitRange in the namespace is enforced, but when more than
-            # one supplies defaults there is no defined winner -- so ours does
-            # not simply take over from this one.
             checks.append(Check(f"limitrange {name} defaults", WARN,
                                 f"LimitRange '{name}' sets {', '.join(conflicts)} "
                                 f"against an engine of {_engine_str(cpu, mem)} "
-                                f"-- adding our bzm_limitrange.yaml gives the "
-                                f"namespace two sources of defaults with no "
-                                f"defined winner; drop one"))
+                                f"-- those reach every pod in the namespace that "
+                                f"declares no resources, including crane's "
+                                f"per-run job pods"))
         if not blocking and not conflicts:
             checks.append(Check(f"limitrange {name}", PASS,
                                 f"LimitRange '{name}' is compatible with a "
@@ -386,15 +380,16 @@ def check_resourcequota(facts, opts, cluster):
                                 f"ResourceQuota '{name}' has room for slots="
                                 f"{slots} ({format_cpu(cpu * slots)} / "
                                 f"{format_memory(mem * slots)}, {slots + 1} pods)"))
-    if constrains and not limitranges and not opts.get("emit_limitrange"):
+    if constrains and not limitranges:
         # With a cpu/memory quota in force the API server rejects any pod that
         # does not declare that resource -- and crane sets no requests on the
         # engines it spawns, so something has to supply them.
         checks.append(Check("quota defaults", WARN,
                             f"ResourceQuota '{constrains}' constrains "
                             f"cpu/memory, so every pod must declare requests and "
-                            f"limits; crane sets none on engine pods. Supply them "
-                            f"with a LimitRange (regenerate with emit_limitrange)"))
+                            f"limits; crane sets none on the job pods it spawns. "
+                            f"Add a LimitRange of your own to supply them -- sized "
+                            f"for those pods, not for an engine"))
     return checks
 
 

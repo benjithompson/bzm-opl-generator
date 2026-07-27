@@ -141,13 +141,10 @@ def cmd_generate(a):
             proxy[key] = v
     if proxy:
         opts["proxy"] = proxy
-    for key in ("engine_cpu_limit", "engine_mem_limit",
-                "engine_cpu_request", "engine_mem_request"):
+    for key in ("engine_cpu_limit", "engine_mem_limit"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
-    if a.limitrange:
-        opts["emit_limitrange"] = True
     if a.api_key and not opts.get("auth_token"):
         ship_id = opts.get("ship_id") or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
         if ship_id:
@@ -422,15 +419,6 @@ def main():
                         "lands in the Secret unless --no-secret")
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
-    g.add_argument("--limitrange", action="store_true",
-                   help="emit bzm_limitrange.yaml: a namespace ceiling at the "
-                        "engine size, plus requests/limits for pods that declare "
-                        "none. It does NOT change the taurus engine, whose "
-                        "requests crane sets itself (250m/256Mi)")
-    g.add_argument("--engine-cpu-request", dest="engine_cpu_request",
-                   help="LimitRange defaultRequest CPU (default: the CPU limit)")
-    g.add_argument("--engine-mem-request", dest="engine_mem_request",
-                   help="LimitRange defaultRequest memory (default: the memory limit)")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)

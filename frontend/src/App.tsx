@@ -518,12 +518,11 @@ export default function App() {
     sizing: (
       <SizingGroup preset={enginePreset(options)}
         cpuLimit={raw("engine_cpu_limit")} memLimit={raw("engine_mem_limit")}
-        emitLimitRange={!!options.emit_limitrange}
         onLimits={(cpu, mem) => setOptions((o) => ({
           ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
         onCpuLimit={(v) => set("engine_cpu_limit", v)}
         onMemLimit={(v) => set("engine_mem_limit", v)}
-        onEmitLimitRange={(v) => set("emit_limitrange", v)} />
+/>
     ),
     security: (
       <SecurityGroup useSecret={Boolean(options.use_secret)}

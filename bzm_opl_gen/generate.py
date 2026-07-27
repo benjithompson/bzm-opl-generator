@@ -50,15 +50,6 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
-    # A namespace LimitRange: caps what any pod in the namespace may ask for,
-    # and supplies requests/limits to the ones that declare none. It does NOT
-    # fix the taurus engine -- crane sets that pod's requests explicitly, and
-    # defaultRequest only fills fields a pod leaves unset (verified on a live
-    # run: the engine pod comes back with no limit-ranger annotation). Opt-in,
-    # because it applies to every pod in the namespace.
-    "emit_limitrange": False,
-    "engine_cpu_request": None,      # defaults to engine_cpu_limit
-    "engine_mem_request": None,      # defaults to engine_mem_limit
 }
 
 # BlazeMeter's documented engine footprint -- the fallback when the customer
@@ -70,22 +61,21 @@ ENGINE_DISK_GB = 60
 ENGINE_TMP_GB = 40
 
 # Crane's own container resources, substituted into templates/deployment.yaml so
-# these are the single source. The limits matter beyond that pod: crane shares
-# the namespace, so a LimitRange max below them would get the crane pod itself
-# rejected by the LimitRanger, and doctor spends them out of node capacity.
+# these are the single source. They matter beyond that pod: doctor spends them
+# out of node capacity, and a LimitRange the customer already has in the
+# namespace has to clear them or the crane pod is rejected at admission.
 # Values are the official helm-crane chart's resourcesCrane.
 CRANE_CPU_REQUEST = "250m"
 CRANE_MEM_REQUEST = "512Mi"
 CRANE_CPU_LIMIT = "1"
 CRANE_MEM_LIMIT = "2Gi"
 
-# What crane stamps on the engine pods it spawns, explicitly. A LimitRange
-# cannot override it -- defaultRequest only fills fields a pod leaves unset --
-# so this is what the scheduler packs engines by, whatever their limits say.
+# What crane stamps on the engine pods it spawns, explicitly -- so this is what
+# the scheduler packs engines by, whatever their limits say. Nothing these
+# manifests can emit changes it: a LimitRange's defaultRequest only fills fields
+# a pod leaves unset, which is why this generator no longer ships one.
 ENGINE_STAMPED_REQUEST_CPU = "250m"
 ENGINE_STAMPED_REQUEST_MEM = "256Mi"
-
-LIMITRANGE_FILE = "bzm_limitrange.yaml"
 
 
 def _quantity(o, key, default, parse):
@@ -107,45 +97,6 @@ def engine_size(o):
     this to compare the claim against what a node can hold."""
     return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
             _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
-
-
-def engine_requests(o):
-    """(cpu_millicores, mem_bytes) engines should *request* -- their limits
-    unless the customer deliberately overcommits."""
-    cpu_limit, mem_limit = engine_size(o)
-    cpu = _quantity(o, "engine_cpu_request", cpu_limit, parse_cpu)
-    mem = _quantity(o, "engine_mem_request", mem_limit, parse_memory)
-    # k8s rejects a pod whose request exceeds its limit outright.
-    if cpu > cpu_limit:
-        raise ValueError(f"engine_cpu_request ({o['engine_cpu_request']}) exceeds "
-                         f"engine_cpu_limit ({format_cpu(cpu_limit)})")
-    if mem > mem_limit:
-        raise ValueError(f"engine_mem_request ({o['engine_mem_request']}) exceeds "
-                         f"engine_mem_limit ({format_memory(mem_limit)})")
-    return cpu, mem
-
-
-def _limitrange_max(o):
-    """The namespace ceiling: the engine size, but never below crane's own
-    limits -- crane shares the namespace, and a max under them would have the
-    LimitRanger reject the crane pod itself."""
-    cpu_limit, mem_limit = engine_size(o)
-    return (max(cpu_limit, parse_cpu(CRANE_CPU_LIMIT)),
-            max(mem_limit, parse_memory(CRANE_MEM_LIMIT)))
-
-
-def _limitrange_sub(o):
-    """Substitutions for templates/limitrange.yaml."""
-    cpu_limit, mem_limit = engine_size(o)
-    cpu_req, mem_req = engine_requests(o)
-    max_cpu, max_mem = _limitrange_max(o)
-    return {"NAMESPACE": o["namespace"],
-            "ENGINE_CPU_REQUEST": format_cpu(cpu_req),
-            "ENGINE_MEM_REQUEST": format_memory(mem_req),
-            "ENGINE_CPU_LIMIT": format_cpu(cpu_limit),
-            "ENGINE_MEM_LIMIT": format_memory(mem_limit),
-            "LIMITRANGE_MAX_CPU": format_cpu(max_cpu),
-            "LIMITRANGE_MAX_MEM": format_memory(max_mem)}
 
 
 CA_MOUNT_PATH = "/var/cm"
@@ -740,43 +691,21 @@ def _helm_values(facts, o):
     else:
         lines.append("tolerations: []")
     cpu_limit, mem_limit = engine_size(o)
-    cpu_req, mem_req = engine_requests(o)
     lines += [
         "",
-        "# What crane stamps on the engine pods it spawns. Empty -> BlazeMeter's",
-        f"# documented default. This location asks for {format_cpu(cpu_limit)} CPU + "
-        f"{format_memory(mem_limit)} per engine,",
-        f"# plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp). Check a cluster with "
-        "`bzm-opl-gen doctor`.",
+        "# The limits crane stamps on the engine pods it spawns. Empty ->",
+        f"# BlazeMeter's documented default. This location asks for {format_cpu(cpu_limit)} CPU +",
+        f"# {format_memory(mem_limit)} per engine, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
+        "# Check a cluster against that with `bzm-opl-gen doctor`.",
+        "#",
+        "# Engine *requests* are not settable from here: crane stamps them at",
+        f"# {ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} itself, and the scheduler packs nodes on those.",
         "engine:",
         f"  cpuLimit: {_yq(o['engine_cpu_limit'] or '')}",
         f"  memoryLimit: {_yq(o['engine_mem_limit'] or '')}",
-        f"  cpuRequest: {_yq(o['engine_cpu_request'] or '')}",
-        f"  memoryRequest: {_yq(o['engine_mem_request'] or '')}",
         f"  ephemeralRequestMb: {_yq(o['engine_ephemeral_request_mb'] or '')}",
         f"  ephemeralLimitMb: {_yq(o['engine_ephemeral_limit_mb'] or '')}",
-        "",
-        "# Namespace-wide, so it reaches every pod in the namespace and not just",
-        "# this release. It does not change what crane requests for engine pods.",
-        "limitRange:",
-        f"  enabled: {'true' if o['emit_limitrange'] else 'false'}",
     ]
-    if o["emit_limitrange"]:
-        max_cpu, max_mem = _limitrange_max(o)
-        # maxCpu/maxMemory are deliberately NOT pinned here. The chart derives
-        # them from the engine size, raised to clear crane's own limits; pinning
-        # the value computed at generate time makes the LimitRange
-        # self-inconsistent the moment anyone raises the engine size, and the
-        # API server rejects it ("default request value 6Gi is greater than max
-        # value 4Gi"). Verified on a live cluster -- the upgrade fails, and the
-        # release is left half-applied.
-        lines += [
-            f"  # max is derived: {format_cpu(max_cpu)} CPU / {format_memory(max_mem)} for this engine size,",
-            f"  # never below crane's own limits ({CRANE_CPU_LIMIT} / {CRANE_MEM_LIMIT}) or the crane pod is",
-            "  # rejected in its own namespace. Set maxCpu/maxMemory only to raise",
-            "  # it further -- the chart refuses a value below what it derives.",
-            f"  # requests default to the limits: {format_cpu(cpu_req)} / {format_memory(mem_req)}",
-        ]
     lines.append("")
     if o["proxy"]:
         env = proxy_env(o)
@@ -824,14 +753,6 @@ def _helm_readme(facts, o):
             "Run the included `bzm-opl-image-mirror.sh` (docker pull/tag/push, forced\n"
             f"linux/amd64). `{HELM_VALUES_FILE}` already names every image by the key\n"
             "crane resolves it under, so nothing else has to be filled in.\n")
-    limitrange = ""
-    if o["emit_limitrange"]:
-        max_cpu, max_mem = _limitrange_max(o)
-        limitrange = (
-            f"\nThe LimitRange caps `{ns}` at {format_cpu(max_cpu)} CPU / "
-            f"{format_memory(max_mem)} per container and applies to **every** pod in\n"
-            "the namespace, not just this release. It does not change what crane\n"
-            "requests for engine pods -- see `helm/README.md` for why nothing can.\n")
     return f"""# BlazeMeter OPL -- generated Helm chart
 
 - Location: **{facts.get('harbor_name')}** (`{facts['harbor_id']}`), features: {facts.get('func_ids')}
@@ -893,7 +814,7 @@ are immutable, so repointing this install at a *different* agent needs
 `helm uninstall` + `helm install`, not an upgrade. Every other option upgrades
 in place; the Deployment carries checksums of the ConfigMap and Secret, so a
 configuration-only change still rolls the pod.
-{limitrange}
+
 Engines need **{format_cpu(engine_size(o)[0])} CPU + {format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB /tmp)** per concurrent engine.
 Egress required to *.blazemeter.com and the image registry.
 Check the target cluster against that with `bzm-opl-gen doctor`.
@@ -946,7 +867,7 @@ def generate(facts, options):
         raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, "
                          f"got {o['output_format']!r}")
 
-    engine_requests(o)  # a bad engine size is wrong with or without the LimitRange
+    engine_size(o)  # a bad engine quantity should fail here, not at apply time
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)
@@ -1016,8 +937,6 @@ def generate(facts, options):
         "bzm_rolebinding.yaml": _tpl("rolebinding.yaml").substitute(sub),
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
-    if o["emit_limitrange"]:
-        out[LIMITRANGE_FILE] = _tpl("limitrange.yaml").substitute(_limitrange_sub(o))
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -1175,10 +1094,7 @@ def load_profile(outdir):
 
 
 APPLY_ORDER = [
-    "bzm_serviceaccount.yaml", "bzm_configmap.yaml",
-    # Before the deployment: engines must not schedule before the defaults exist.
-    LIMITRANGE_FILE,
-    "bzm_secret.yaml",
+    "bzm_serviceaccount.yaml", "bzm_configmap.yaml", "bzm_secret.yaml",
     "bzm_cacerts.yaml", "bzm_role.yaml", "bzm_rolebinding.yaml",
     "bzm_clusterrole.yaml", "bzm_clusterrolebinding.yaml",
     "bzm_deployment.yaml",
@@ -1198,38 +1114,26 @@ def _readme(facts, o, files):
         big_ca = (f"\n> The CA bundle is {len(o['ca_bundle']) // 1024}KB. Apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
                   f"stores a copy in an annotation, which is capped at 256KB.\n")
-    limitrange = ""
-    if o["emit_limitrange"]:
-        cpu_req, mem_req = engine_requests(o)
-        max_cpu, max_mem = _limitrange_max(o)
-        limitrange = f"""
-## Engine sizing (`bzm_limitrange.yaml`)
+    limitrange = f"""
+## Engine sizing, and the gap in it
 
 Crane sets engine **limits** from `KUBERNETES_RESOURCES_LIMITS_CPU` /
-`KUBERNETES_RESOURCES_LIMITS_MEMORY`. It also sets the engine's **requests**, to
-{ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM} -- roughly an eighth of what the engine is allowed to use. The
-scheduler packs nodes on requests, so on a busy node the run competes for CPU it
-was never given, and the numbers the test reports are wrong rather than merely
-slow.
+`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- {format_cpu(engine_size(o)[0])} / {format_memory(engine_size(o)[1])} here. It also sets each
+engine's **requests**, to {ENGINE_STAMPED_REQUEST_CPU} / {ENGINE_STAMPED_REQUEST_MEM}, roughly an eighth of what the engine
+is allowed to use. The scheduler packs nodes on requests, so on a busy node the
+run competes for CPU it was never given, and the numbers the test reports are
+wrong rather than merely slow.
 
-**This file does not fix that**, and nothing in these manifests can: a
-LimitRange's `defaultRequest` only fills in fields a pod leaves unset, and crane
-sets the engine's requests explicitly. What this file does do:
+**Nothing in these manifests can close that gap.** A LimitRange's
+`defaultRequest` only fills in fields a pod leaves unset, and crane sets the
+engine's requests explicitly -- verified on a live run, where the engine pod
+comes back with no `kubernetes.io/limit-ranger` annotation at all. This
+generator used to ship a LimitRange; it was removed because it could not do this
+and the defaults it did apply landed on crane's own helper pods, reserving an
+engine's worth of CPU and memory for jobs that need neither.
 
-- `max` **{format_cpu(max_cpu)} CPU / {format_memory(max_mem)}** is enforced at
-  admission -- a pod above it is rejected, so nothing in the namespace can be
-  sized past the engine (raised where needed to clear crane's own limits, or the
-  crane pod would be rejected in its own namespace).
-- `defaultRequest` **{format_cpu(cpu_req)} CPU / {format_memory(mem_req)}** and
-  the matching `default` reach every pod in the namespace that declares no
-  resources of its own -- including crane's per-run job pods, which otherwise
-  schedule as best-effort.
-
-It is namespace-wide, so other workloads in `{o['namespace']}` get those
-defaults too. Give the private location its own namespace if that is a problem.
-
-To size engines honestly today, give the location nodes it does not share, or
-add a mutating admission policy that rewrites the engine pod's requests --
+To size engines honestly, give the location nodes it does not share, or add a
+mutating admission policy that rewrites the engine pod's requests.
 `bzm-opl-gen livetest --run-test` prints the live gap under `ENGINE SIZING:`.
 """
     mirror = ""

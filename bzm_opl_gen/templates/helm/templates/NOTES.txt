@@ -23,14 +23,6 @@ Note: with no privateRegistry and no proxy, the nodes pull images from the
 public internet directly. In a locked-down cluster that is the first thing to
 fail, and it fails as ImagePullBackOff on the *engine* pod mid-test, not here.
 {{- end }}
-{{- if .Values.limitRange.enabled }}
-
-The LimitRange blazemeter-engine-sizing applies to *every* pod in
-{{ .Release.Namespace }}, not just this release. It caps the namespace at
-{{ include "bzm-opl.limitRangeMaxCpu" . }} CPU / {{ include "bzm-opl.limitRangeMaxMemory" . }} per container. It does not change what crane
-requests for engine pods -- crane sets those explicitly (250m/256Mi) and a
-LimitRange cannot override a value a pod already sets.
-{{- end }}
 {{- if not .Values.useSecret }}
 
 WARNING: AUTH_TOKEN is in a ConfigMap, readable by anyone with get on

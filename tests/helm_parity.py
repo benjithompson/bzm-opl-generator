@@ -9,10 +9,10 @@ having tested nothing). Named so pytest does not collect it, and run as its own
 CI job where helm is installed.
 
 The point it defends: `--format helm` and `--format manifests` are two ways of
-writing one deployment. Every judgement in templates/*.yaml -- the LimitRange
-ceiling, the CA mount being a directory, which proxy URLs reach the ConfigMap --
-had to be restated in Go templates, and nothing but this check would notice one
-of them being restated slightly differently.
+writing one deployment. Every judgement in templates/*.yaml -- the CA mount
+being a directory, which proxy URLs reach the ConfigMap, the RBAC the agent
+actually needs -- had to be restated in Go templates, and nothing but this check
+would notice one of them being restated slightly differently.
 
 Three ConfigMap values are compared as JSON rather than as bytes: they are JSON
 documents in a string field, and Go's toJson sorts keys and omits the spaces
@@ -42,15 +42,10 @@ COMMON = {"ship_id": "bbb222", "namespace": "bzm-perf", "auth_token": "TOKEN"}
 CASES = {
     "plain": {"platform": "k8s"},
     "openshift": {"platform": "openshift"},
-    "sized+limitrange": {"platform": "k8s", "engine_cpu_limit": "2",
-                         "engine_mem_limit": "8Gi", "emit_limitrange": True},
-    # Engine smaller than crane: the LimitRange max has to be raised to crane's
-    # own limits or the crane pod is rejected in its own namespace.
-    "small+limitrange": {"platform": "k8s", "engine_cpu_limit": "500m",
-                         "engine_mem_limit": "1Gi", "emit_limitrange": True},
-    "overcommit+limitrange": {"platform": "k8s", "engine_cpu_limit": "4",
-                              "engine_mem_limit": "8Gi", "engine_cpu_request": "2",
-                              "engine_mem_request": "4Gi", "emit_limitrange": True},
+    "engine-sized": {"platform": "k8s", "engine_cpu_limit": "2",
+                     "engine_mem_limit": "8Gi"},
+    "engine-small": {"platform": "k8s", "engine_cpu_limit": "500m",
+                     "engine_mem_limit": "1Gi"},
     "token-in-configmap": {"platform": "k8s", "use_secret": False},
     "nodeport": {"platform": "k8s", "service_type": "NODEPORT", "cluster_rbac": True},
     "private-registry": {"platform": "k8s", "private_registry": "reg.example.com/bzm"},
@@ -148,8 +143,6 @@ def compare(name, opts):
         elif kind in ("Role", "ClusterRole"):
             if m["rules"] != h["rules"]:
                 diffs.append(f"{kind}.rules: {m['rules']} != {h['rules']}")
-        elif kind == "LimitRange" and m["spec"] != h["spec"]:
-            diffs.append(f"LimitRange.spec: {m['spec']} != {h['spec']}")
         elif kind == "Secret" and m["stringData"] != h["stringData"]:
             diffs.append(f"Secret.stringData: {m['stringData']} != {h['stringData']}")
     return diffs
@@ -159,14 +152,16 @@ def overrides_stay_consistent():
     """A generated bundle must survive `--set` on top of it.
 
     The overlay is a file people edit and a base people override at install
-    time, so the chart has to re-derive anything that depends on the engine
-    size. It did not: the overlay pinned the LimitRange max, and
-    `--set engine.memoryLimit=6Gi` produced `default: 6Gi` against `max: 4Gi`,
-    which the API server rejects -- found by running a real `helm upgrade`,
-    which failed with the ConfigMap already applied.
+    time, so nothing in the chart may depend on a value the overlay froze. This
+    caught a real one: the overlay used to pin the LimitRange max computed at
+    generate time, and `--set engine.memoryLimit=6Gi` then rendered `default`
+    above `max`, which the API server rejects -- found by running a real
+    `helm upgrade`, which failed with the ConfigMap already applied. The
+    LimitRange is gone now; the check stays, because the next frozen value would
+    fail the same way.
     """
     opts = {**COMMON, "platform": "k8s", "engine_cpu_limit": "1",
-            "engine_mem_limit": "4Gi", "emit_limitrange": True}
+            "engine_mem_limit": "4Gi"}
     outdir = tempfile.mkdtemp(prefix="bzm-parity-override-")
     problems = []
     try:
@@ -183,19 +178,14 @@ def overrides_stay_consistent():
                 problems.append(f"--set engine={cpu}/{mem}: render failed: "
                                 f"{(r.stderr or '').strip()[:200]}")
                 continue
-            lr = _by_kind(yaml.safe_load_all(r.stdout)).get("LimitRange")
-            if not lr:
-                problems.append(f"--set engine={cpu}/{mem}: no LimitRange rendered")
-                continue
-            lim = lr["spec"]["limits"][0]
-            for field in ("default", "defaultRequest"):
-                for res in ("cpu", "memory"):
-                    parse = gen.parse_cpu if res == "cpu" else gen.parse_memory
-                    if parse(lim[field][res]) > parse(lim["max"][res]):
-                        problems.append(
-                            f"--set engine={cpu}/{mem}: {field}.{res}="
-                            f"{lim[field][res]} exceeds max.{res}={lim['max'][res]}"
-                            " -- the API server rejects this at apply time")
+            docs = _by_kind(yaml.safe_load_all(r.stdout))
+            cm = docs.get("ConfigMap", {}).get("data", {})
+            if cm.get("KUBERNETES_RESOURCES_LIMITS_CPU") != cpu or \
+                    cm.get("KUBERNETES_RESOURCES_LIMITS_MEMORY") != mem:
+                problems.append(
+                    f"--set engine={cpu}/{mem}: the override did not reach the "
+                    f"ConfigMap (got {cm.get('KUBERNETES_RESOURCES_LIMITS_CPU')}"
+                    f"/{cm.get('KUBERNETES_RESOURCES_LIMITS_MEMORY')})")
     finally:
         shutil.rmtree(outdir, ignore_errors=True)
     return problems

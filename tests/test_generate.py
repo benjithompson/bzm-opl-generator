@@ -228,75 +228,12 @@ def test_engine_resource_limits():
     assert cm["KUBERNETES_LIMITS_EPHEMERAL_STORAGE"] == "40960"
 
 
-def _limitrange(files):
-    return yaml.safe_load(files["bzm_limitrange.yaml"])["spec"]["limits"][0]
 
 
-def test_limitrange_absent_by_default():
-    files = gen.generate(FACTS, {"namespace": "ns1"})
-    assert "bzm_limitrange.yaml" not in files
 
 
-def test_limitrange_default_request_matches_engine_limits():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
-                                 "engine_cpu_limit": "4", "engine_mem_limit": "16Gi"})
-    _all_yaml_parse(files)
-    lr = yaml.safe_load(files["bzm_limitrange.yaml"])
-    assert lr["kind"] == "LimitRange"
-    assert lr["metadata"]["namespace"] == "ns1"
-    item = lr["spec"]["limits"][0]
-    assert item["type"] == "Container"
-    # The headline behaviour: engines request what they are limited to, instead
-    # of crane's 250m/256Mi defaults.
-    assert item["defaultRequest"] == {"cpu": "4", "memory": "16Gi"}
-    assert item["default"] == {"cpu": "4", "memory": "16Gi"}
-    # ephemeral-storage has its own agent envs -- deliberately not covered here
-    assert "ephemeral-storage" not in item["defaultRequest"]
 
 
-def test_limitrange_explicit_requests_honoured():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
-                                 "engine_cpu_limit": "4", "engine_mem_limit": "16Gi",
-                                 "engine_cpu_request": "2", "engine_mem_request": "8Gi"})
-    _all_yaml_parse(files)
-    item = _limitrange(files)
-    assert item["defaultRequest"] == {"cpu": "2", "memory": "8Gi"}
-    assert item["default"] == {"cpu": "4", "memory": "16Gi"}
-
-
-def test_limitrange_uses_documented_engine_size_when_unset():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
-    _all_yaml_parse(files)
-    item = _limitrange(files)
-    assert item["defaultRequest"] == {"cpu": "2", "memory": "8Gi"}
-    assert item["default"] == {"cpu": "2", "memory": "8Gi"}
-    assert item["max"] == {"cpu": "2", "memory": "8Gi"}
-
-
-def test_limitrange_max_not_below_crane_own_limits():
-    # Crane runs in the same namespace; a max under its own limits would get the
-    # crane pod rejected by LimitRanger.
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
-                                 "engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"})
-    _all_yaml_parse(files)
-    item = _limitrange(files)
-    assert item["max"] == {"cpu": "1", "memory": "2Gi"}
-    assert item["default"] == {"cpu": "500m", "memory": "1Gi"}
-
-
-def test_limitrange_applied_before_deployment():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
-    order = [f for f in gen.APPLY_ORDER if f in files]
-    assert order.index("bzm_limitrange.yaml") < order.index("bzm_deployment.yaml")
-
-
-def test_engine_request_above_limit_rejected():
-    with pytest.raises(ValueError, match="engine_cpu_request"):
-        gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "1",
-                             "engine_cpu_request": "2"})
-    with pytest.raises(ValueError, match="engine_mem_request"):
-        gen.generate(FACTS, {"namespace": "ns1", "engine_mem_limit": "1Gi",
-                             "engine_mem_request": "2Gi"})
 
 
 def test_unparseable_engine_quantity_rejected():
@@ -323,28 +260,36 @@ def test_crane_resources_come_from_the_constants():
     assert res["requests"]["memory"] == gen.CRANE_MEM_REQUEST
 
 
-def test_readme_documents_limitrange_and_applies_it():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True})
-    readme = files["README.md"]
-    assert "apply -f bzm_limitrange.yaml" in readme
+
+def test_readme_documents_the_engine_request_gap():
+    """Unconditional now. It used to appear only alongside the LimitRange, which
+    is backwards: the gap is there whatever else is emitted, and the LimitRange
+    was the thing that could not close it."""
+    readme = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
     assert "KUBERNETES_RESOURCES_LIMITS_CPU" in readme
-    assert "250m" in readme                 # the requests crane stamps on engines
-    assert "namespace" in readme
-    # The README must not promise the one thing this object cannot do: crane
-    # sets the engine's requests explicitly, so defaultRequest never reaches it.
-    assert "does not fix that" in readme
-    assert "only fills in fields a pod leaves unset" in readme
-    plain = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
-    assert "bzm_limitrange.yaml" not in plain
+    assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # what crane really stamps
+    assert "Nothing in these manifests can close that gap" in readme
+    # And it must not offer a LimitRange as the remedy any more.
+    assert "bzm_limitrange.yaml" not in readme
+
+
+def test_no_limitrange_is_emitted():
+    """Removed outright: it could not change the engine's requests, and the
+    defaults it did apply reached crane's own helper pods, handing an engine's
+    worth of CPU and memory to jobs that need neither."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "4",
+                                 "engine_mem_limit": "16Gi"})
+    assert not any("limitrange" in n.lower() for n in files)
+    assert not any(yaml.safe_load(c).get("kind") == "LimitRange"
+                   for n, c in files.items() if n.endswith(".yaml"))
 
 
 def test_profile_json_round_trips_new_options():
-    files = gen.generate(FACTS, {"namespace": "ns1", "emit_limitrange": True,
-                                 "engine_cpu_request": "1"})
+    files = gen.generate(FACTS, {"namespace": "ns1", "engine_cpu_limit": "1"})
     prof = json.loads(files[gen.PROFILE_FILE])
-    assert prof["emit_limitrange"] is True
-    assert prof["engine_cpu_request"] == "1"
-    assert prof["engine_mem_request"] is None
+    assert prof["engine_cpu_limit"] == "1"
+    assert prof["engine_mem_limit"] is None
+    assert "emit_limitrange" not in prof
     assert "auth_token" not in prof
 
 

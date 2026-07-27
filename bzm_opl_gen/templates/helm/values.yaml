@@ -124,8 +124,9 @@ podAnnotations: {}
 podLabels: {}
 
 # Crane is the lightweight always-running orchestrator, not a load generator --
-# these are the official helm-crane chart's resourcesCrane. Raising the limits
-# also raises the LimitRange ceiling below, because crane shares the namespace.
+# these are the official helm-crane chart's resourcesCrane. If the namespace
+# already has a LimitRange of its own, its `max` has to clear these or the crane
+# pod is rejected at admission.
 crane:
   resources:
     requests:
@@ -155,38 +156,24 @@ probes:
 
 # -- Engines ------------------------------------------------------------------
 
-# What crane stamps on the taurus engine pods it spawns. Empty -> BlazeMeter's
-# documented default of 2 CPU / 8Gi. Each concurrent engine also wants ~60GB
-# disk (40GB of it /tmp). Check a cluster against that with `bzm-opl-gen doctor`.
+# The *limits* crane stamps on the taurus engine pods it spawns. Empty ->
+# BlazeMeter's documented default of 2 CPU / 8Gi. Each concurrent engine also
+# wants ~60GB disk (40GB of it /tmp). Check a cluster against that with
+# `bzm-opl-gen doctor`.
+#
+# Engine *requests* are not settable, from here or anywhere: crane stamps them
+# at 250m/256Mi itself, and the scheduler packs nodes on those. This chart used
+# to ship a LimitRange in the hope of changing that; a LimitRange's
+# defaultRequest only fills fields a pod leaves unset, so it never could -- and
+# what it did reach was crane's own helper pods, handing an engine's worth of
+# CPU and memory to jobs that need neither. Give the location nodes it does not
+# share, or a mutating admission policy, if the gap matters.
 engine:
   cpuLimit: ""
   memoryLimit: ""
-  # Requests default to the limits. Set them lower only to deliberately
-  # overcommit -- and note crane ignores these for the engine pod itself; see
-  # limitRange below.
-  cpuRequest: ""
-  memoryRequest: ""
   # Integer MB.
   ephemeralRequestMb: ""
   ephemeralLimitMb: ""
-
-# A namespace LimitRange. Off by default because it applies to every pod in the
-# namespace, not just this release's.
-#
-# It does NOT fix engine requests and nothing here can: crane sets the engine
-# pod's requests explicitly (250m/256Mi), and a LimitRange's defaultRequest only
-# fills fields a pod leaves unset. Verified on a live run -- the engine pod comes
-# back with no limit-ranger annotation while crane's own job pods do carry one.
-#
-# What it does do: `max` is enforced at admission, so nothing in the namespace
-# can be sized past an engine; `defaultRequest`/`default` reach the pods that
-# declare nothing, including crane's per-run job pods.
-limitRange:
-  enabled: false
-  # Empty -> the engine size, raised where needed to clear crane's own limits.
-  # A max below crane's limits gets the crane pod rejected in its own namespace.
-  maxCpu: ""
-  maxMemory: ""
 
 # -- Proxy --------------------------------------------------------------------
 

@@ -186,35 +186,25 @@ def test_ca_modes_map_to_the_charts_vocabulary(opts, mode, extra):
         assert v["caBundle"][k] == want
 
 
-def test_overlay_never_pins_the_limitrange_max():
-    """Regression, found by installing for real.
-
-    The overlay used to carry the max computed at generate time. The chart
-    derives `default` from the engine size at render time, so the moment anyone
-    raised the engine -- `helm upgrade --set engine.memoryLimit=6Gi` -- the two
-    disagreed and the API server rejected the LimitRange ("default request value
-    6Gi is greater than max value 4Gi"), mid-upgrade, with the ConfigMap already
-    applied. Leaving it to the chart keeps the object self-consistent under any
-    override.
-    """
-    for over in ({"emit_limitrange": True},
-                 {"emit_limitrange": True, "engine_cpu_limit": "500m",
-                  "engine_mem_limit": "1Gi"},
-                 {"emit_limitrange": True, "engine_cpu_limit": "4",
-                  "engine_mem_limit": "16Gi"}):
+def test_overlay_carries_no_limitrange_at_all():
+    """It used to, and pinned the max computed at generate time -- so raising
+    the engine size later produced `default` above `max` and the API server
+    rejected the object mid-upgrade, ConfigMap already applied. The object is
+    gone entirely now: it could not change what crane requests for engines, and
+    the defaults it did apply landed on crane's own helper pods."""
+    for over in ({}, {"engine_cpu_limit": "500m", "engine_mem_limit": "1Gi"},
+                 {"engine_cpu_limit": "4", "engine_mem_limit": "16Gi"}):
         v, _ = _values(**over)
-        assert v["limitRange"]["enabled"] is True
-        assert "maxCpu" not in v["limitRange"], over
-        assert "maxMemory" not in v["limitRange"], over
+        assert "limitRange" not in v, over
 
 
-def test_limitrange_derivation_is_still_documented_in_the_overlay():
-    """Not pinned, but the reader should still see what it will be -- the
-    numbers are why someone opened the file."""
-    _, files = _values(engine_cpu_limit="4", engine_mem_limit="16Gi",
-                       emit_limitrange=True)
-    text = files[gen.HELM_VALUES_FILE]
-    assert "max is derived: 4 CPU / 16Gi" in text
+def test_overlay_offers_no_engine_request_knob():
+    """Crane stamps engine requests itself; a value that silently did nothing
+    would be worse than its absence."""
+    v, files = _values(engine_cpu_limit="4", engine_mem_limit="16Gi")
+    assert "cpuRequest" not in v["engine"]
+    assert "memoryRequest" not in v["engine"]
+    assert "not settable" in files[gen.HELM_VALUES_FILE]
 
 
 def test_auto_update_is_left_to_the_chart():
@@ -274,9 +264,8 @@ def test_unknown_format_is_rejected():
 
 def test_bad_engine_size_is_still_caught_in_helm_format():
     with pytest.raises(ValueError) as e:
-        gen.generate(FACTS, {**BASE, "engine_cpu_limit": "1",
-                             "engine_cpu_request": "2"})
-    assert "engine_cpu_request" in str(e.value)
+        gen.generate(FACTS, {**BASE, "engine_mem_limit": "not-a-quantity"})
+    assert "engine_mem_limit" in str(e.value)
 
 
 # -- the bundle a chart install actually needs --------------------------------
