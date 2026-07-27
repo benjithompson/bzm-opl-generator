@@ -98,8 +98,11 @@ export function SubSection(props: {
   return (
     <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
       <div className="flex items-baseline gap-2 mb-2">
-        <span className={"text-xs " + (props.done ? "text-emerald-600" : "text-slate-400")}>
-          {props.done ? "✓" : "○"}
+        {/* Only the finished state is marked. An "unfinished" glyph on every
+            step you have not reached yet reads as a list of failures. The span
+            keeps its width either way so the headings stay aligned. */}
+        <span className="text-xs text-emerald-600 w-2.5 shrink-0">
+          {props.done ? "✓" : ""}
         </span>
         <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
       </div>
