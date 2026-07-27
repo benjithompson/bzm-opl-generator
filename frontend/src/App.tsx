@@ -90,6 +90,7 @@ export default function App() {
 
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
+  const [showCreateShip, setShowCreateShip] = useState(false);
   const [newShipName, setNewShipName] = useState("");
   const [shipErr, setShipErr] = useState<string | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
@@ -201,7 +202,7 @@ export default function App() {
   }, [svConst]);
 
   useEffect(() => {
-    setShipId(null); setFacts(null); setStatus(null);
+    setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
     if (!harborId) return;
     api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message));
   }, [harborId]);
@@ -214,6 +215,15 @@ export default function App() {
     // a new deployment should get a NEW agent identity, not clone a live one.
     if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
   }, [harborId, ships.length]);
+
+  // Which half of step 3 is on screen -- picking an identity and minting one
+  // are one-of, because reusing an identity that is already running conflicts
+  // with that install while creating one is free. Derived, not a second piece
+  // of state: a location with no agents has nothing to pick, so it opens on the
+  // create form, and creating the first agent drops back to the list showing
+  // it. The same derivation is why Cancel appears only when there is a list to
+  // go back to.
+  const creatingShip = showCreateShip || ships.length === 0;
 
   // debounced live preview
   const previewTimer = useRef<number>();
@@ -662,8 +672,13 @@ export default function App() {
           </Section>
 
           {/* 2 · Location */}
+          {/* Picking and creating are one-of, and the hint says which you are
+              in: with both on screen at once it was never obvious which half
+              of the step you were meant to fill in. */}
           <Section n={2} title="Private location" done={!!harborId}
-            hint="The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests.">
+            hint={showCreateLoc
+              ? "Creating a new location — the existing ones are hidden until you create or cancel. Cancel keeps whatever you had selected."
+              : "The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests."}>
             <div className="space-y-3">
               <div>
                 <p className="text-xs font-medium text-slate-600 mb-1.5">
@@ -700,56 +715,66 @@ export default function App() {
                     onChange={(v) => setWorkspaceId(Number(v))} />
                 </Field>
               </div>
-              {locations.length > 8 && (
-                <TextInput value={locFilter} onChange={setLocFilter}
-                  placeholder={`filter ${locations.length} locations…`} />
-              )}
-              <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-                {filteredLocs.map((l) => {
-                  const k = locKind(l);
-                  return (
-                  <button key={l.id}
-                    className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
-                    onClick={() => setHarborId(l.id)}>
-                    <span className="font-medium">{l.name}</span>
-                    {k && (
-                      <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
-                        {LOC_KIND_BADGE[k][0]}
-                      </span>
-                    )}
-                    <span className="text-xs text-slate-400 ml-2">
-                      {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
-                      {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
-                    </span>
-                    {/* Said here rather than left to the badge's tooltip: this
-                        is where the location is being chosen, and a tooltip is
-                        invisible on touch and to the keyboard. */}
-                    {k === "both" && (
-                      <span className="block text-[11px] text-amber-700 mt-0.5">
-                        one agent for both — {KIND_COUPLING}
-                      </span>
-                    )}
-                  </button>
-                  );
-                })}
-                {who && filteredLocs.length === 0 && (
-                  <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
-              </div>
-              {location && locKind(location) === "both" && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                  <b>{location.name}</b> carries both performance and
-                  service-virtualization features, so one agent serves both:{" "}
-                  {KIND_COUPLING}. You can still generate for it — a location
-                  per kind is what avoids the coupling.
-                </p>
+              {/* The whole picking half, hidden while the create form is open.
+                  Nothing here is unmounted state -- harborId lives above, so
+                  cancelling comes back to the same selection. */}
+              {!showCreateLoc && (
+                <>
+                  {locations.length > 8 && (
+                    <TextInput value={locFilter} onChange={setLocFilter}
+                      placeholder={`filter ${locations.length} locations…`} />
+                  )}
+                  <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
+                    {filteredLocs.map((l) => {
+                      const k = locKind(l);
+                      return (
+                      <button key={l.id}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
+                        onClick={() => setHarborId(l.id)}>
+                        <span className="font-medium">{l.name}</span>
+                        {k && (
+                          <span className={`ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 ${LOC_KIND_BADGE[k][1]}`}>
+                            {LOC_KIND_BADGE[k][0]}
+                          </span>
+                        )}
+                        <span className="text-xs text-slate-400 ml-2">
+                          {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
+                          {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
+                        </span>
+                        {/* Said here rather than left to the badge's tooltip: this
+                            is where the location is being chosen, and a tooltip is
+                            invisible on touch and to the keyboard. */}
+                        {k === "both" && (
+                          <span className="block text-[11px] text-amber-700 mt-0.5">
+                            one agent for both — {KIND_COUPLING}
+                          </span>
+                        )}
+                      </button>
+                      );
+                    })}
+                    {who && filteredLocs.length === 0 && (
+                      <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
+                  </div>
+                  {location && locKind(location) === "both" && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                      <b>{location.name}</b> carries both performance and
+                      service-virtualization features, so one agent serves both:{" "}
+                      {KIND_COUPLING}. You can still generate for it — a location
+                      per kind is what avoids the coupling.
+                    </p>
+                  )}
+                  <Button kind="ghost" disabled={!who}
+                    onClick={() => { setLocErr(null); setShowCreateLoc(true); }}>
+                    + New location (new harbor_id)
+                  </Button>
+                </>
               )}
               <ErrorMsg msg={locErr} />
-              {!showCreateLoc ? (
-                <Button kind="ghost" onClick={() => setShowCreateLoc(true)} disabled={!who}>
-                  + New location (new harbor_id)
-                </Button>
-              ) : (
+              {showCreateLoc && (
                 <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
+                  <p className="text-xs font-semibold text-slate-700">
+                    New private location
+                  </p>
                   <Field label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
                     <TextInput value={newLoc.name}
                       onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
@@ -785,7 +810,10 @@ export default function App() {
                           setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
                         } catch (e) { setLocErr(String((e as Error).message)); }
                       }}>Create</Button>
-                    <Button kind="ghost" onClick={() => setShowCreateLoc(false)}>Cancel</Button>
+                    <Button kind="ghost"
+                      onClick={() => { setLocErr(null); setShowCreateLoc(false); }}>
+                      Cancel
+                    </Button>
                   </div>
                 </div>
               )}
@@ -793,55 +821,82 @@ export default function App() {
           </Section>
 
           {/* 3 · Agent */}
+          {/* Same one-of as step 2, and it matters more here: the two paths have
+              different consequences, so the hint names the one you are in. */}
           <Section n={3} title="Agent (ship)" done={!!shipId}
-            hint="A new deployment needs a NEW agent identity (new ship_id + AUTH_TOKEN, same harbor). The token is fetched automatically on download.">
+            hint={creatingShip
+              ? "Creating a new agent identity (new ship_id + AUTH_TOKEN, same harbor) — what a new deployment needs. The token is fetched automatically on download."
+              : "Reusing an identity means replacing the install it is already running. The location's existing agents are below; creating a new one instead is free."}>
             <div className="space-y-3">
-              <div className="flex gap-2 items-end">
-                <div className="grow">
-                  <Field label="Create a new agent in this location (recommended)">
+              {creatingShip ? (
+                <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
+                  <p className="text-xs font-semibold text-slate-700">
+                    New agent in this location
+                  </p>
+                  <Field label="Name">
                     <TextInput value={newShipName} onChange={setNewShipName}
                       placeholder="e.g. k8s-prod-cluster" />
                   </Field>
-                </div>
-                <Button disabled={!harborId || !newShipName}
-                  onClick={async () => {
-                    try {
-                      const r = await api.createShip(harborId!, newShipName);
-                      const ls = await api.locations(workspaceId!);
-                      setLocations(ls); setShipId(r.ship.id); setNewShipName("");
-                      api.facts(harborId!).then(setFacts).catch(() => {});
-                    } catch (e) { setShipErr(String((e as Error).message)); }
-                  }}>Create</Button>
-              </div>
-              {ships.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-slate-600 mb-1.5">
-                    …or reuse an existing agent identity (re-deploying / replacing it):
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {ships.map((s) => (
-                      <button key={s.id}
-                        className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
-                        onClick={() => setShipId(s.id)}>
-                        {s.name || s.id}{" "}
-                        <span className={`text-xs ${shipOnline(s) ? "text-emerald-600" : "text-slate-400"}`}>
-                          ({shipOnline(s) ? "online" : s.state})
-                        </span>
-                      </button>
-                    ))}
+                  <div className="flex gap-2">
+                    <Button disabled={!harborId || !newShipName}
+                      onClick={async () => {
+                        try {
+                          const r = await api.createShip(harborId!, newShipName);
+                          const ls = await api.locations(workspaceId!);
+                          setLocations(ls); setShipId(r.ship.id); setNewShipName("");
+                          setShowCreateShip(false);
+                          api.facts(harborId!).then(setFacts).catch(() => {});
+                        } catch (e) { setShipErr(String((e as Error).message)); }
+                      }}>Create</Button>
+                    {/* Only where there is a list to come back to -- see
+                        creatingShip. The selection it comes back to is shipId,
+                        which nothing in this form touches. */}
+                    {ships.length > 0 && (
+                      <Button kind="ghost"
+                        onClick={() => { setShipErr(null); setShowCreateShip(false); }}>
+                        Cancel
+                      </Button>
+                    )}
                   </div>
                 </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-xs font-medium text-slate-600 mb-1.5">
+                      Reuse an existing agent identity (re-deploying / replacing it):
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {ships.map((s) => (
+                        <button key={s.id}
+                          className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
+                          onClick={() => setShipId(s.id)}>
+                          {s.name || s.id}{" "}
+                          <span className={`text-xs ${shipOnline(s) ? "text-emerald-600" : "text-slate-400"}`}>
+                            ({shipOnline(s) ? "online" : s.state})
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* The hazard, stated against the identity you have selected --
+                      which is why it belongs to this half of the step and not
+                      the create form, where nothing is being reused. */}
+                  {(() => {
+                    const sel = ships.find((s) => s.id === shipId);
+                    return sel && shipOnline(sel) ? (
+                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                        <b>{sel.name}</b> is currently online — it's already running
+                        somewhere. Deploying a second agent with the same identity will
+                        conflict. Create a new agent unless you're replacing that install.
+                      </p>
+                    ) : null;
+                  })()}
+                  <Button kind="ghost" disabled={!harborId}
+                    onClick={() => { setShipErr(null); setShowCreateShip(true); }}>
+                    + New agent identity (recommended)
+                  </Button>
+                </>
               )}
-              {(() => {
-                const sel = ships.find((s) => s.id === shipId);
-                return sel && shipOnline(sel) ? (
-                  <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                    <b>{sel.name}</b> is currently online — it's already running
-                    somewhere. Deploying a second agent with the same identity will
-                    conflict. Create a new agent unless you're replacing that install.
-                  </p>
-                ) : null;
-              })()}
               <ErrorMsg msg={shipErr} />
               {facts && (
                 <p className="text-xs text-slate-500">
