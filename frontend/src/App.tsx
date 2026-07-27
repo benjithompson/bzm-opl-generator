@@ -8,23 +8,22 @@ import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section, Switch, TextInput,
 } from "./components";
 import { Preview } from "./Preview";
-import { SvCtx, SvPrereqs, svProse } from "./SvPrereqs";
-
-// Display names only. The set of values is served from generate.SV_INGRESS_TYPES
-// -- an unlabelled backend falls back to its raw name and still appears, which
-// is the failure mode worth having.
-const SV_INGRESS_LABELS: Record<string, string> = {
-  nginx: "NGINX", istio: "Istio", contour: "Contour", openshift: "OpenShift Route",
-};
-
-
-// Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
-// to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
-const ENGINE_SIZES = [
-  { id: "small", cpu: "1", mem: "4Gi", label: "Small — 1 CPU / 4Gi (dev clusters, light tests)" },
-  { id: "standard", cpu: "2", mem: "8Gi", label: "Standard — 2 CPU / 8Gi (BlazeMeter default)" },
-  { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
-];
+import { SvCtx } from "./SvPrereqs";
+// The option groups of step 4: one declaration each (title, hint, the option
+// keys it owns, and its detect/enable/disable), plus a body per group. This
+// file only wires them -- what a group *is* lives in optionGroups.ts.
+import {
+  allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
+  GROUP_BY_ID, GroupFlags, GroupId, OPTION_GROUPS,
+} from "./optionGroups";
+import { CaGroup } from "./groups/CaGroup";
+import { GroupRow } from "./groups/GroupRow";
+import { ProxyGroup } from "./groups/ProxyGroup";
+import { RegistryGroup } from "./groups/RegistryGroup";
+import { SchedGroup } from "./groups/SchedGroup";
+import { SecurityGroup } from "./groups/SecurityGroup";
+import { SizingGroup } from "./groups/SizingGroup";
+import { SvGroup } from "./groups/SvGroup";
 
 // What the bundle deploys. Performance and service virtualization want separate
 // agents: one agent serving both puts mocks and load engines in a single
@@ -99,13 +98,16 @@ export default function App() {
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
     { func_ids: [], ingress_types: [], backends: {} });
-  type CaMode = "none" | "existing" | "inline" | "inject";
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // One way to read a text option. Written out per-site, the `.trim()` was
   // getting forgotten -- an ingress name pasted with a trailing space missed
   // the SV_PREREQS lookup and the panel silently lost its prose.
   const txt = useCallback(
     (k: string) => String(options[k] ?? "").trim(), [options]);
+  // The same read for a controlled input, where trimming would stop the user
+  // typing a space -- so the two are separate rather than one with a flag.
+  const raw = useCallback(
+    (k: string) => String(options[k] ?? ""), [options]);
 
   const [profiles, setProfiles] = useState<{ name: string; options: Options }[]>([]);
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -307,32 +309,16 @@ export default function App() {
   };
 
   // CA trust is one-of: existing ConfigMap | inline PEM | OpenShift injection.
-  const caMode: CaMode = options.ca_existing_configmap != null ? "existing"
-    : options.ca_bundle != null ? "inline"
-    : options.ca_openshift_inject ? "inject" : "none";
-  const setCaMode = (m: CaMode) => setOptions((o) => ({
-    ...o,
-    ca_existing_configmap: m === "existing" ? (o.ca_existing_configmap ?? "") : null,
-    ca_configmap_key: m === "existing" ? o.ca_configmap_key : null,
-    ca_bundle: m === "inline" ? (o.ca_bundle ?? "") : null,
-    ca_openshift_inject: m === "inject",
-  }));
-
-  // Engine size is a dropdown of known-good shapes; the preset is derived from
-  // the two limits rather than stored, so an imported/preset config lands on
-  // the right entry and anything unrecognised shows as Custom.
-  const sizePreset = ENGINE_SIZES.find(
-    (s) => s.cpu === options.engine_cpu_limit && s.mem === options.engine_mem_limit,
-  )?.id ?? "custom";
+  // Derived from the options rather than stored, so the radios and the group's
+  // own switch (which is caModePatch at "existing"/"none") cannot disagree.
+  const caMode: CaMode = caModeOf(options);
+  const setCaMode = (m: CaMode) =>
+    setOptions((o) => ({ ...o, ...caModePatch(o, m) }));
 
   // Toggle-to-enable option groups: OFF hides the fields AND wipes their
   // options, so nothing hidden ever reaches the manifests. Auto-flips on when
   // a preset/import brings values in.
-  type GroupId = "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
-  const [grpOn, setGrpOn] = useState<Record<GroupId, boolean>>({
-    registry: false, proxy: false, ca: false, sched: false, sizing: false,
-    security: false, sv: false,
-  });
+  const [grpOn, setGrpOn] = useState<GroupFlags>(allGroupsOff);
   // An SV location cannot be generated without this group: the manifests would
   // apply cleanly and then stall at WAITING_FOR_DOMAIN, so the backend refuses.
   // Surface it as required rather than letting the user find out later. The
@@ -340,19 +326,16 @@ export default function App() {
   // copy here, so adding one cannot leave the UI silently disagreeing.
   const svRequired = !!facts?.func_ids?.some(
     (f) => svConst.func_ids.includes(f));
+  // What a group cannot read off the options: SV is required by the location,
+  // not by anything configured. Keyed by group id so the walk below never has
+  // to test for one by name.
+  const grpRequired: Partial<GroupFlags> = { sv: svRequired };
+  // Sticky: this only ever opens groups, so a group the user opened by hand
+  // stays open with nothing set in it. svRequired is the dependency; the record
+  // above is derived from it, which is why it is not one.
   useEffect(() => {
-    setGrpOn((g) => ({
-      registry: g.registry || !!(options.private_registry || options.pull_secret || options.registry_auth),
-      proxy: g.proxy || !!options.proxy,
-      ca: g.ca || caMode !== "none",
-      sched: g.sched || !!(options.tolerations || options.node_selector),
-      sizing: g.sizing || !!(options.engine_cpu_limit || options.engine_mem_limit
-        || options.emit_limitrange),
-      security: g.security || options.use_secret === false || !!options.cluster_rbac ||
-        (options.service_type != null && options.service_type !== "CLUSTERIP"),
-      sv: g.sv || !!options.sv_ingress || svRequired,
-    }));
-  }, [options, caMode, svRequired]);
+    setGrpOn((g) => detectGroups(options, g, grpRequired));
+  }, [options, svRequired]);
   // Keep the SV options self-consistent however they arrived -- an imported
   // profile sets them without ever calling flipGroup, and opening the panel via
   // svRequired goes through setGrpOn, so neither path would otherwise seed
@@ -388,31 +371,13 @@ export default function App() {
       options.sv_istio_gateway, options.platform]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
-    if (id === "ca") { setCaMode(on ? "existing" : "none"); return; }
-    if (on) {
-      if (id === "sizing" && sizePreset === "custom") {
-        const d = ENGINE_SIZES.find((s) => s.id === "standard")!;
-        setOptions((o) => ({ ...o, engine_cpu_limit: d.cpu, engine_mem_limit: d.mem }));
-      }
-      // The ingress path only works on CLUSTERIP; NODEPORT would send crane to
-      // the cluster-scoped Node object instead.
-      if (id === "sv") {
-        setOptions((o) => ({ ...o, sv_ingress: o.sv_ingress || "nginx",
-          service_type: "CLUSTERIP" }));
-      }
-      return;
-    }
+    const group = GROUP_BY_ID[id];
     setOptions((o) => {
-      const w = { ...o };
-      if (id === "registry") Object.assign(w, { private_registry: null, pull_secret: null, registry_auth: false });
-      if (id === "proxy") w.proxy = null;
-      if (id === "sched") Object.assign(w, { tolerations: null, node_selector: null });
-      if (id === "sizing") Object.assign(w, { engine_cpu_limit: null, engine_mem_limit: null,
-        emit_limitrange: false });
-      if (id === "security") Object.assign(w, { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" });
-      if (id === "sv") Object.assign(w, { sv_ingress: null, sv_subdomain: null,
-        sv_tls_secret: null, sv_istio_gateway: null });
-      return w;
+      const patch = on ? group.enable(o) : group.disable(o);
+      // A group that seeds nothing must hand back the same object: a fresh
+      // identity would re-run the preview effect and re-POST /api/generate for
+      // options that did not change.
+      return Object.keys(patch).length ? { ...o, ...patch } : o;
     });
   };
   // Seeding happens here rather than in an effect on `kind`: an effect would
@@ -463,10 +428,6 @@ export default function App() {
     secret: txt("sv_tls_secret") || "<tls-secret>",
     gateway: txt("sv_istio_gateway"),
   };
-  // Everything said about the chosen backend, from the one place it is written
-  // down. Undefined for a backend nobody has written up: the fields below then
-  // fall back to the generic wording rather than showing another backend's.
-  const prose = svProse(txt("sv_ingress"));
   // Served, not restated here: what the Role grants is generate.py's to state,
   // and the two can disagree only if one of them is a copy.
   const svRbac = svConst.backends[txt("sv_ingress")];
@@ -514,6 +475,71 @@ export default function App() {
   const previewFiles = useMemo(
     () => (svExpose?.files.length ? [...files, ...svExpose.files] : files),
     [files, svExpose]);
+
+  // Each group's body, wired with the props that group actually needs -- no
+  // shared bag of options handed round, so a group reads on its own and what it
+  // may write is what its declaration says it owns.
+  const groupBody: Record<GroupId, ReactNode> = {
+    registry: (
+      <RegistryGroup
+        registry={raw("private_registry")}
+        pullSecret={raw("pull_secret")}
+        registryAuth={Boolean(options.registry_auth)}
+        onRegistry={(v) => set("private_registry", v)}
+        onPullSecret={(v) => set("pull_secret", v)}
+        onRegistryAuth={(v) => set("registry_auth", v)} />
+    ),
+    proxy: <ProxyGroup proxy={proxyOpt} onField={setProxy} />,
+    ca: (
+      <CaGroup mode={caMode} onMode={setCaMode}
+        configmap={raw("ca_existing_configmap")}
+        configmapKey={raw("ca_configmap_key")}
+        bundle={raw("ca_bundle")}
+        onConfigmap={(v) => set("ca_existing_configmap", v)}
+        onConfigmapKey={(v) => set("ca_configmap_key", v)}
+        onBundle={(v) => set("ca_bundle", v)} />
+    ),
+    sched: (
+      <SchedGroup
+        tolerations={options.tolerations} nodeSelector={options.node_selector}
+        onTolerations={(v) => set("tolerations", v)}
+        onNodeSelector={(v) => set("node_selector", v)} />
+    ),
+    sizing: (
+      <SizingGroup preset={enginePreset(options)}
+        cpuLimit={raw("engine_cpu_limit")} memLimit={raw("engine_mem_limit")}
+        emitLimitRange={!!options.emit_limitrange}
+        onLimits={(cpu, mem) => setOptions((o) => ({
+          ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
+        onCpuLimit={(v) => set("engine_cpu_limit", v)}
+        onMemLimit={(v) => set("engine_mem_limit", v)}
+        onEmitLimitRange={(v) => set("emit_limitrange", v)} />
+    ),
+    security: (
+      <SecurityGroup useSecret={Boolean(options.use_secret)}
+        clusterRbac={Boolean(options.cluster_rbac)}
+        serviceType={String(options.service_type ?? "CLUSTERIP")}
+        svOn={!!options.sv_ingress}
+        onUseSecret={(v) => set("use_secret", v)}
+        onClusterRbac={(v) => set("cluster_rbac", v)}
+        onServiceType={(v) => set("service_type", v)} />
+    ),
+    sv: (
+      <SvGroup
+        // Null, not "", while nothing is chosen: the select still shows its
+        // nginx default, but no backend's prose is claimed until one is picked.
+        ingress={options.sv_ingress == null ? null : String(options.sv_ingress)}
+        ingressTypes={svConst.ingress_types} openshift={openshift}
+        subdomain={raw("sv_subdomain")} tlsSecret={raw("sv_tls_secret")}
+        gateway={raw("sv_istio_gateway")}
+        onIngress={(v) => set("sv_ingress", v)}
+        onSubdomain={(v) => set("sv_subdomain", v)}
+        onTlsSecret={(v) => set("sv_tls_secret", v)}
+        onGateway={(v) => set("sv_istio_gateway", v)}
+        ok={svOk} nodePortConflict={svNodePortConflict}
+        ctx={svCtx} rbac={svRbac} />
+    ),
+  };
 
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
@@ -841,328 +867,13 @@ export default function App() {
               )}
 
               <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.registry} onChange={(v) => flipGroup("registry", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.registry ? "text-slate-900" : "text-slate-500"}`}>Private registry</p>
-                    <p className="text-[11px] text-slate-400 truncate">mirror images into your own registry (air-gapped)</p>
-                  </div>
-                </div>
-                {grpOn.registry && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <Field label="Registry" hint="sets DOCKER_REGISTRY + IMAGE_OVERRIDES, disables auto-update, emits bzm-opl-image-mirror.sh">
-                    <TextInput mono value={String(options.private_registry ?? "")}
-                      placeholder="registry.corp.com/bzm"
-                      onChange={(v) => set("private_registry", v || null)} />
-                  </Field>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="imagePullSecret name"
-                      hint="existing docker-registry Secret in the namespace; lets the kubelet pull the crane image from your registry">
-                      <TextInput mono value={String(options.pull_secret ?? "")}
-                        onChange={(v) => set("pull_secret", v || null)} />
-                    </Field>
-                    <Check label="Registry auth env stubs"
-                      hint="commented DOCKER_REGISTRY_USERNAME/PASSWORD"
-                      checked={Boolean(options.registry_auth)}
-                      onChange={(v) => set("registry_auth", v)} />
-                  </div>
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.proxy} onChange={(v) => flipGroup("proxy", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.proxy ? "text-slate-900" : "text-slate-500"}`}>HTTP(S) proxy</p>
-                    <p className="text-[11px] text-slate-400 truncate">egress via a corporate proxy, optional authentication</p>
-                  </div>
-                </div>
-                {grpOn.proxy && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field label="HTTP proxy">
-                      <TextInput mono placeholder="http://proxy:3128"
-                        value={String(proxyOpt.http ?? "")}
-                        onChange={(v) => setProxy("http", v)} />
-                    </Field>
-                    <Field label="HTTPS proxy">
-                      <TextInput mono placeholder="http://proxy:3128"
-                        value={String(proxyOpt.https ?? "")}
-                        onChange={(v) => setProxy("https", v)} />
-                    </Field>
-                    <Field label="Username" hint="optional — proxy auth">
-                      <TextInput mono value={String(proxyOpt.username ?? "")}
-                        onChange={(v) => setProxy("username", v)} />
-                    </Field>
-                    <Field label="Password">
-                      <TextInput mono value={String(proxyOpt.password ?? "")}
-                        onChange={(v) => setProxy("password", v)} />
-                    </Field>
-                  </div>
-                  <Field label="NO_PROXY">
-                    <TextInput mono placeholder="kubernetes.default,127.0.0.1,localhost"
-                      value={String(proxyOpt.no_proxy ?? "")}
-                      onChange={(v) => setProxy("no_proxy", v)} />
-                  </Field>
-                  <p className="text-[11px] text-slate-400">
-                    BlazeMeter has no separate proxy-auth env vars — credentials are
-                    URL-encoded into the proxy URL (user:pass@host). With
-                    "AUTH_TOKEN in a Secret" on, the credentialed proxy URLs move
-                    into the Secret instead of the ConfigMap.
-                  </p>
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.ca} onChange={(v) => flipGroup("ca", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.ca ? "text-slate-900" : "text-slate-500"}`}>Custom CA trust</p>
-                    <p className="text-[11px] text-slate-400 truncate">TLS-intercepting proxy / private CAs — mounted into crane + engines</p>
-                  </div>
-                </div>
-                {grpOn.ca && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <div className="space-y-1.5 text-sm">
-                    {([
-                      ["existing", "Reference an existing ConfigMap (recommended)",
-                        "your platform/security team owns and rotates the trust bundle (e.g. via trust-manager); manifests only reference it"],
-                      ["inline", "Paste PEM — generator creates the ConfigMap",
-                        "you own the bundle; rotation means regenerating and re-applying"],
-                      ["inject", "OpenShift cluster trust injection",
-                        "empty ConfigMap labeled inject-trusted-cabundle; the cluster injects and rotates ca-bundle.crt — OpenShift only"],
-                    ] as [CaMode, string, string][]).map(([m, label, hint]) => (
-                      <label key={m} className="flex items-start gap-2 cursor-pointer select-none">
-                        <input type="radio" name="ca-mode" className="mt-1 accent-bzm"
-                          checked={caMode === m} onChange={() => setCaMode(m)} />
-                        <span>{label}
-                          <span className="block text-[11px] text-slate-400">{hint}</span>
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  {caMode === "existing" && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <Field label="ConfigMap name">
-                        <TextInput mono placeholder="corp-trust-bundle"
-                          value={String(options.ca_existing_configmap ?? "")}
-                          onChange={(v) => set("ca_existing_configmap", v)} />
-                      </Field>
-                      <Field label="Bundle key" hint="file key inside the ConfigMap">
-                        <TextInput mono placeholder="ca-bundle.crt"
-                          value={String(options.ca_configmap_key ?? "")}
-                          onChange={(v) => set("ca_configmap_key", v || null)} />
-                      </Field>
-                    </div>
-                  )}
-                  {caMode === "inline" && (
-                    <Field label="CA bundle (PEM)">
-                      <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
-                        placeholder="-----BEGIN CERTIFICATE-----"
-                        value={String(options.ca_bundle ?? "")}
-                        onChange={(e) => set("ca_bundle", e.target.value)} />
-                    </Field>
-                  )}
-                  <p className="text-[11px] text-slate-400">
-                    Mounted read-only at /var/cm in crane; engines get the same
-                    ConfigMap via KUBERNETES_CA_BUNDLE_MOUNT, and
-                    REQUESTS_CA_BUNDLE / AWS_CA_BUNDLE point at it.
-                  </p>
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.sched} onChange={(v) => flipGroup("sched", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.sched ? "text-slate-900" : "text-slate-500"}`}>Scheduling</p>
-                    <p className="text-[11px] text-slate-400 truncate">tolerations + nodeSelector for crane & engines</p>
-                  </div>
-                </div>
-                {grpOn.sched && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <JsonArea label="Tolerations (JSON list — crane pod + engines)"
-                    value={options.tolerations}
-                    placeholder='[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]'
-                    onValid={(v) => set("tolerations", v)} />
-                  <JsonArea label="Node selector (JSON object)" rows={2}
-                    value={options.node_selector}
-                    placeholder='{"pool":"loadtest"}'
-                    onValid={(v) => set("node_selector", v)} />
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.sizing} onChange={(v) => flipGroup("sizing", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.sizing ? "text-slate-900" : "text-slate-500"}`}>Engine sizing</p>
-                    <p className="text-[11px] text-slate-400 truncate">CPU / memory limits for load engines (default 2 CPU / 8Gi)</p>
-                  </div>
-                </div>
-                {grpOn.sizing && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <Field label="Engine size"
-                    hint="KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY — the pod limits the crane stamps on every engine it spawns">
-                    <select className={inputCls} value={sizePreset}
-                      onChange={(e) => {
-                        // "Custom…" clears both, which is what makes sizePreset
-                        // fall through to "custom" and reveal the two fields.
-                        const p = ENGINE_SIZES.find((s) => s.id === e.target.value);
-                        setOptions((o) => ({ ...o,
-                          engine_cpu_limit: p?.cpu ?? null,
-                          engine_mem_limit: p?.mem ?? null }));
-                      }}>
-                      {ENGINE_SIZES.map((s) => (
-                        <option key={s.id} value={s.id}>{s.label}</option>
-                      ))}
-                      <option value="custom">Custom…</option>
-                    </select>
-                  </Field>
-                  {sizePreset === "custom" && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <Field label="CPU limit">
-                        <TextInput mono placeholder="2"
-                          value={String(options.engine_cpu_limit ?? "")}
-                          onChange={(v) => set("engine_cpu_limit", v || null)} />
-                      </Field>
-                      <Field label="Memory limit">
-                        <TextInput mono placeholder="8Gi"
-                          value={String(options.engine_mem_limit ?? "")}
-                          onChange={(v) => set("engine_mem_limit", v || null)} />
-                      </Field>
-                    </div>
-                  )}
-                  <Check label="Emit a namespace LimitRange (bzm_limitrange.yaml)"
-                    hint="Caps the namespace at the engine size and gives pods that declare
-                          no resources a sensible default. It cannot change the taurus engine
-                          itself — crane sets that pod's requests to 250m/256Mi explicitly."
-                    checked={!!options.emit_limitrange}
-                    onChange={(v) => set("emit_limitrange", v)} />
-                  <p className="text-[11px] text-slate-400">
-                    Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
-                    Size worker nodes for slots × engine size.
-                  </p>
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.security} onChange={(v) => flipGroup("security", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.security ? "text-slate-900" : "text-slate-500"}`}>Security & RBAC</p>
-                    <p className="text-[11px] text-slate-400 truncate">defaults: token in a Secret, CLUSTERIP, no cluster RBAC</p>
-                  </div>
-                </div>
-                {grpOn.security && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Check label="AUTH_TOKEN in a Secret"
-                      hint="uncheck = simplified ConfigMap variant"
-                      checked={Boolean(options.use_secret)}
-                      onChange={(v) => set("use_secret", v)} />
-                    <Check label="Read-only nodes ClusterRole"
-                      hint="optional; not needed for perf tests"
-                      checked={Boolean(options.cluster_rbac)}
-                      onChange={(v) => set("cluster_rbac", v)} />
-                  </div>
-                  <Field label="Service type"
-                    hint={options.sv_ingress
-                      ? "locked to CLUSTERIP: service virtualization reaches pods through the ingress, and NODEPORT would need cluster-scoped node access"
-                      : "NODEPORT is BlazeMeter's default but often disallowed"}>
-                    <select className={inputCls}
-                      value={String(options.service_type ?? "CLUSTERIP")}
-                      onChange={(e) => set("service_type", e.target.value)}>
-                      <option value="CLUSTERIP">CLUSTERIP</option>
-                      {/* Offering NODEPORT while SV is on would only lead to a
-                          blocked download; make the bad state unreachable. */}
-                      {!options.sv_ingress && <option value="NODEPORT">NODEPORT</option>}
-                    </select>
-                  </Field>
-                </div>
-                )}
-              </div>
-
-              <div className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Switch on={grpOn.sv} onChange={(v) => flipGroup("sv", v)} />
-                  <div className="min-w-0">
-                    <p className={`text-sm font-medium ${grpOn.sv ? "text-slate-900" : "text-slate-500"}`}>
-                      Service virtualization
-                      {svRequired && (
-                        <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-bzm">
-                          required
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-[11px] text-slate-400 truncate">
-                      {svRequired
-                        ? "this location runs mockServices — virtual services need an ingress"
-                        : "only for locations with the mockServices feature"}
-                    </p>
-                  </div>
-                </div>
-                {grpOn.sv && (
-                <div className="mt-3 pl-12 space-y-2">
-                  <Field label="Ingress controller"
-                    hint={prose?.controllerHint
-                      ?? "must already be installed and serving the wildcard domain below"}>
-                    <select className={inputCls} value={String(options.sv_ingress ?? "nginx")}
-                      onChange={(e) => set("sv_ingress", e.target.value)}>
-                      {svConst.ingress_types
-                        // openshift publishes a route.openshift.io Route, which
-                        // a plain API server does not serve -- generate()
-                        // refuses the combination, so do not offer it.
-                        .filter((t) => t !== "openshift"
-                                       || options.platform === "openshift")
-                        .map((t) => (
-                          <option key={t} value={t}>
-                            {SV_INGRESS_LABELS[t] ?? t}
-                          </option>
-                        ))}
-                    </select>
-                  </Field>
-                  <Field label="Wildcard domain"
-                    hint="endpoints become <service>-<port>-<namespace>.<domain>">
-                    <TextInput mono placeholder="apps.example.com"
-                      value={String(options.sv_subdomain ?? "")}
-                      onChange={(v) => set("sv_subdomain", v || null)} />
-                  </Field>
-                  <Field label="Wildcard TLS secret"
-                    hint={prose?.tlsHint
-                      ?? "in the agent namespace; required even for HTTP virtual services"}>
-                    <TextInput mono placeholder="wildcard-credential"
-                      value={String(options.sv_tls_secret ?? "")}
-                      onChange={(v) => set("sv_tls_secret", v || null)} />
-                  </Field>
-                  {prose?.takesGateway && (
-                    <Field label="Istio Gateway name (optional)"
-                      hint="leave empty and crane creates a Gateway per virtual service">
-                      <TextInput mono placeholder="bzm-gateway"
-                        value={String(options.sv_istio_gateway ?? "")}
-                        onChange={(v) => set("sv_istio_gateway", v || null)} />
-                    </Field>
-                  )}
-                  {!svOk && (
-                    <p className="text-[11px] text-amber-700">
-                      {svNodePortConflict
-                        ? "Service type must be CLUSTERIP — NODEPORT sends crane to the cluster-scoped Node object, which namespaced RBAC cannot grant."
-                        : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
-                    </p>
-                  )}
-                  <SvPrereqs ingress={txt("sv_ingress")} ctx={svCtx}
-                    rbac={svRbac} />
-                </div>
-                )}
-              </div>
-
+                {OPTION_GROUPS.map((g) => (
+                  <GroupRow key={g.id} group={g} on={grpOn[g.id]}
+                    required={!!grpRequired[g.id]}
+                    onFlip={(v) => flipGroup(g.id, v)}>
+                    {groupBody[g.id]}
+                  </GroupRow>
+                ))}
               </div>
 
               <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
