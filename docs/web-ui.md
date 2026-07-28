@@ -75,6 +75,30 @@ with a reason attached, never a clean bill of health. A file that is not
 evidence, or carries a schema this version does not know, is refused by name and
 leaves the verdicts already on screen standing.
 
+### Applying what the cluster implies
+
+Under the verdicts, the same file answers the question that comes first: not
+whether the deployment survives this cluster but how it should have been
+configured. Each row names one option, what the evidence says about it, the
+evidence paths behind it, and what the configuration holds right now — the whole
+point being that you stop transcribing a namespace's ServiceAccount names and a
+router's wildcard domain by hand.
+
+- **Decisive** suggestions offer the value as one click. **Suggestive** ones
+  offer a button per candidate and never a default, at one candidate as much as
+  at three: narrowing the shortlist is not choosing from it.
+- **A value you set is never overwritten silently.** Where the evidence
+  disagrees with it the row turns amber and shows both values, and the button
+  says *Replace* rather than *Apply*.
+- **Applying is reversible for the session.** Each applied row grows an *Undo*
+  that puts the previous value back without you re-entering it.
+- An option no row names is not in this file. It is left exactly as you set it,
+  and nothing here has checked it.
+
+An applied value is an ordinary option from there on: the preview, the bundle
+and `profile.json` are identical to what you get typing it in the form, and
+nothing downstream can tell the difference.
+
 Reading the namespace is the one thing the UI does that needs a cluster, and it
 needs one only for that: it uses whatever `kubectl`/`oc` context the machine
 running `bzm-opl-gen ui` has. There is often none, so an unreadable cluster is a

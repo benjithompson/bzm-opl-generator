@@ -104,6 +104,49 @@ export interface PreflightCheck {
 export interface PreflightOut {
   namespace: string;
   checks: PreflightCheck[];
+  /** What the same file implies about the options, in suggest.py's reporting
+   *  order. Carried here rather than fetched separately because both halves are
+   *  judged against the configuration that was sent, and two round trips is two
+   *  answers that can end up describing different configurations in one panel. */
+  suggestions: Suggestion[];
+  /** Why there are none, when there are none -- a file that never reached a
+   *  cluster and a cluster that constrains nothing produce the same empty list,
+   *  and only the first is worth re-collecting for. Null once there is anything
+   *  to show. */
+  why_nothing: string | null;
+}
+
+/** How strongly a suggestion holds. DECISIVE: the evidence settles it and
+ *  `value` is the answer. SUGGESTIVE: it narrows the choice without making it,
+ *  `value` is always null, and `candidates` is the shortlist a person still has
+ *  to pick from. The invariant is suggest.py's and is asserted over every
+ *  fixture there — `strength` alone is enough to decide what may be offered. */
+export type Strength = "DECISIVE" | "SUGGESTIVE";
+
+/** How the suggestion stands against the options that were sent, from
+ *  suggest.merge(). SETTLED: already configured this way. FILL: the option
+ *  still holds what the generator would have used anyway. CHOOSE: suggestive,
+ *  nothing picked yet. CONFLICT: the configuration says something else, which
+ *  is a disagreement to show rather than a write to make. */
+export type MergeState = "SETTLED" | "FILL" | "CHOOSE" | "CONFLICT";
+
+/** One implication of the evidence, and where it stands. `option` is a generate
+ *  option (asserted against DEFAULT_OPTIONS in tests/test_suggest.py), `detail`
+ *  is why in the reader's terms, and `evidence` are dotted paths into the file
+ *  so a reader can go and disagree with it. */
+export interface Suggestion {
+  option: string;
+  strength: Strength;
+  /** The settled value — always null for a suggestive one. */
+  value: unknown;
+  candidates: unknown[];
+  ruled_out: unknown[];
+  evidence: string[];
+  detail: string;
+  state: MergeState;
+  /** What the configuration holds for this option right now. Shown whatever the
+   *  state: applying is always a value replacing a value. */
+  current: unknown;
 }
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in

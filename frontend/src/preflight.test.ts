@@ -25,8 +25,10 @@ const THIN: PreflightCheck[] = [
   check("WARN", "egress", "egress was not probed from inside the cluster"),
 ];
 
+// The verdict half of the response. What the same file implies about the
+// options rides along on it, and is exercised in suggestions.test.ts.
 const out = (checks: PreflightCheck[]): PreflightOut =>
-  ({ namespace: "blazemeter", checks });
+  ({ namespace: "blazemeter", checks, suggestions: [], why_nothing: null });
 
 describe("reading the verdict list", () => {
   it("counts every status, including the ones nothing has", () => {

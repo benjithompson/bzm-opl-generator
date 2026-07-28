@@ -615,7 +615,7 @@ def test_group_tags_name_features_the_server_actually_serves():
 # cluster or for the API key: the file is the cluster read, and the case this
 # exists for is the customer whose account and cluster are both out of reach.
 
-from bzm_opl_gen import doctor  # noqa: E402
+from bzm_opl_gen import doctor, suggest  # noqa: E402
 # The fixtures live with the checks that read them, so the HTTP layer is fed the
 # same documents the doctor tests are -- a difference between the two would be a
 # difference in what the browser is told.
@@ -747,3 +747,67 @@ def test_preflight_refuses_options_no_bundle_could_be_generated_from():
     """A quantity that does not parse is a 400 like /api/generate's, not a
     traceback -- this re-runs on every keystroke in those fields."""
     assert _preflight(_evidence(), {"engine_cpu_limit": "two"}).status_code == 400
+
+
+# -- what the same file implies about the options ------------------------------
+# Carried on the preflight response rather than served from an endpoint of its
+# own: it is the same file, judged against the same configuration, and both have
+# to move together on every option change. Two endpoints is two round trips that
+# can disagree about which options the answer describes.
+
+from test_suggest import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
+from test_suggest import REGCRED, _evidence as _read_evidence  # noqa: E402
+
+
+def _suggestions(evidence, options=None):
+    body = _preflight(evidence, options).json()
+    return {s["option"]: s for s in body["suggestions"]}
+
+
+def test_preflight_carries_what_the_evidence_implies_about_the_options():
+    """The same suggestions `bzm-opl-gen suggest` prints, in the same order and
+    the same wire shape -- compared against suggest itself, because the failure
+    to guard is the server quietly reshaping them on the way to the browser."""
+    doc = _read_evidence()
+    body = _preflight(doc).json()
+    expected = suggest.from_evidence(doc)
+    assert [s["option"] for s in body["suggestions"]] == [s.option for s in expected]
+    for got, want in zip(body["suggestions"], expected):
+        assert got["strength"] == want.strength
+        assert got["value"] == want.value
+        assert got["candidates"] == list(want.candidates)
+        assert got["evidence"] == list(want.evidence)
+
+
+def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
+    """Not against the defaults: the same evidence is a fill for a configuration
+    that named no pull secret and a conflict for one that named another."""
+    doc = _read_evidence(**REGCRED)
+    assert _suggestions(doc)["pull_secret"]["state"] == suggest.FILL
+    conflict = _suggestions(doc, {"pull_secret": "team-creds"})["pull_secret"]
+    assert conflict["state"] == suggest.CONFLICT
+    # Both values reach the browser, because the row shows both.
+    assert conflict["current"] == "team-creds" and conflict["value"] == "regcred"
+
+
+def test_preflight_never_offers_a_value_for_a_suggestive_suggestion():
+    """The invariant, over HTTP, where a browser could otherwise read `value`
+    off a shortlist and call it a default."""
+    doc = _read_evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
+    for s in _preflight(doc).json()["suggestions"]:
+        if s["strength"] == suggest.SUGGESTIVE:
+            assert s["value"] is None
+
+
+def test_preflight_says_why_it_has_nothing_to_suggest():
+    """An empty list from a file that reached no cluster reads exactly like one
+    from a cluster that constrains nothing, and only the first is worth
+    re-collecting for. Same sentence the command prints."""
+    body = _preflight(_degraded(), {"namespace": "some-ns"}).json()
+    assert body["suggestions"] == []
+    assert "serverVersion" in body["why_nothing"]
+
+
+def test_preflight_drops_the_reason_once_there_is_something_to_show():
+    body = _preflight(_read_evidence()).json()
+    assert body["suggestions"] and body["why_nothing"] is None

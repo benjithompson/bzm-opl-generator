@@ -120,8 +120,10 @@ Every suggestion names the evidence it came from and how strongly it holds:
 
 Two things it deliberately does not do:
 
-- **Nothing is applied.** The suggestions are printed (or emitted as JSON);
-  passing them to `generate` stays a decision somebody makes.
+- **The command applies nothing.** The suggestions are printed (or emitted as
+  JSON); passing them to `generate` stays a decision somebody makes. The web UI
+  can apply one, and only ever one you click — see
+  [the web UI](web-ui.md#applying-what-the-cluster-implies).
 - **Nothing is suggested from evidence the collector could not read.** A `null`
   section is skipped as it is everywhere else, but the boolean maps need more
   than that: `auth can-i` and `api-resources` both report failure as *no*, so a

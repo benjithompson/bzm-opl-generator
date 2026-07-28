@@ -442,6 +442,92 @@ def as_dict(s):
             "evidence": list(s.evidence), "detail": s.detail}
 
 
+# -- how a suggestion stands against a configuration --------------------------
+# Producing the reasoning and applying it are separate acts (see the module
+# docstring); this is the second one's rules, and it still writes nothing. A
+# caller hands in the options as they are and gets back what applying would
+# mean -- fill an option nobody moved, replace one somebody did, or nothing.
+#
+# The rule that outranks the convenience: a value somebody set is never handed
+# back as a fill. Where the evidence disagrees with it, that is a CONFLICT for
+# the caller to show -- both values, and the evidence behind the suggestion --
+# because the bundle is what somebody deploys and one that changed under them
+# is worse than one they filled in twice.
+
+# SETTLED   the option already holds what the evidence says (a candidate of it,
+#           for a suggestive one). Nothing to apply, and the only state in which
+#           "the cluster confirms this" is truthful.
+# FILL      decisive, and the option still holds what the generator would have
+#           used anyway. The one state safe to offer as a one-click default.
+# CHOOSE    suggestive, and nothing chosen yet: `candidates` is the shortlist and
+#           picking from it is the user's act. Never carries a value, even at one
+#           candidate -- narrowing to one is still not choosing.
+# CONFLICT  the configuration holds something else. `value` is what a replace the
+#           user asks for by name would write, and is None for a suggestive
+#           suggestion, which has nothing single to replace it with.
+SETTLED, FILL, CHOOSE, CONFLICT = "SETTLED", "FILL", "CHOOSE", "CONFLICT"
+
+# option:  the generate option, as on the Suggestion
+# state:   SETTLED | FILL | CHOOSE | CONFLICT
+# current: what the configuration holds for it now, shown whatever the state --
+#          applying is always a value replacing a value, and the one being
+#          replaced is never left off screen
+# value:   what a single click would write, or None where there is no single
+#          value to write (SETTLED, CHOOSE, and any suggestive conflict). The
+#          same invariant the strengths carry: a None here means a person picks.
+Merge = collections.namedtuple("Merge", "option state current value")
+
+
+def merge(s, options):
+    """How suggestion `s` stands against `options`."""
+    current = options.get(s.option, DEFAULT_OPTIONS.get(s.option))
+    value = s.value if s.strength == DECISIVE else None
+    if _holds(s, current):
+        return Merge(s.option, SETTLED, current, None)
+    if _chosen(s.option, current):
+        return Merge(s.option, CONFLICT, current, value)
+    return Merge(s.option, FILL if s.strength == DECISIVE else CHOOSE,
+                 current, value)
+
+
+def _holds(s, current):
+    """Is this option already answered the way the evidence would answer it?
+    A suggestive suggestion is satisfied by any of its candidates: the shortlist
+    is the whole of what it has to say, so a configuration already holding one
+    is neither something to nag about nor a disagreement."""
+    return current == s.value if s.strength == DECISIVE \
+        else current in s.candidates
+
+
+# What an option holds when nobody has touched it. "" is in here because the web
+# UI seeds one into the field a group reveals -- switching CA trust on shows an
+# empty ConfigMap name -- and reading that as a value would make every group the
+# user opened a conflict with nothing in it.
+_UNSET = (None, "", {}, [])
+
+
+def _chosen(option, current):
+    """Did somebody set this, as far as anything can tell?
+
+    A departure from the generator's own default is the test. It is the only one
+    available: a field holding the default is indistinguishable from one nobody
+    touched, and a tracker of which keys were typed would move the promise out
+    of here and into whichever caller remembered to keep it. What makes that
+    safe is that nothing is ever applied without a click that names the value --
+    this decides how loudly to ask, not whether to.
+    """
+    return current not in _UNSET and current != DEFAULT_OPTIONS.get(option)
+
+
+def merged_as_dict(s, options):
+    """A suggestion plus how it stands, as one wire object. Deliberately
+    `as_dict` extended rather than a second shape beside it: the browser reads
+    these two facts about the same suggestion in one row, and a second envelope
+    is how the two start disagreeing about which suggestion they describe."""
+    m = merge(s, options)
+    return dict(as_dict(s), state=m.state, current=m.current)
+
+
 def report(doc, suggestions):
     """Print the suggestions, and -- when there are none -- why."""
     print(f"suggestions from cluster evidence collected "

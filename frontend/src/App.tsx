@@ -29,6 +29,11 @@ import {
   EVIDENCE_SCRIPT, imported, NO_PREFLIGHT, PreflightState, readEvidence,
   rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
 } from "./preflight";
+// Acting on the same file: what each suggestion offers, what applying writes,
+// and how to take it back. What the evidence means is suggest.py's and how it
+// stands against the options is suggest.merge()'s -- both arrive on the row.
+import { Applied, applyPatch, NOTHING_APPLIED, record, undo } from "./suggestions";
+import { SuggestionList } from "./SuggestionList";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
 import { GroupRow } from "./groups/GroupRow";
@@ -154,6 +159,12 @@ export default function App() {
   // described an older configuration would be worse than none.
   const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
   const [preflightBusy, setPreflightBusy] = useState(false);
+  // What the panel has written into the options this session, and what each of
+  // those options held first. Kept beside the options rather than in them: an
+  // applied value has to be indistinguishable from a typed one downstream, so
+  // the only place the history can live is here -- which is also what makes
+  // undo possible without the previous value being re-entered.
+  const [applied, setApplied] = useState<Applied>(NOTHING_APPLIED);
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -642,6 +653,28 @@ export default function App() {
         .catch((e) => setPreflight((p) => refused(p, String((e as Error).message))));
     }, 250);
   }, [preflight.doc, facts, options]);
+
+  // Applying one of the suggestions the same file carries. Always a click, and
+  // always one the row has already shown both values for: what would be written
+  // and what is there now. Nothing is applied on import, and nothing suggestive
+  // can be applied without a candidate being picked -- `offer` is what enforces
+  // that, and it is tested as data in suggestions.test.ts.
+  //
+  // The write is the plain option, so the preview, the bundle and profile.json
+  // cannot tell this from a value someone typed. The re-check effect above then
+  // re-judges the evidence against the configuration it just changed, and the
+  // group detection effect opens whichever group now holds something.
+  const applySuggestion = (option: string, value: unknown) => {
+    setApplied((a) => record(a, option, options[option] ?? null, value));
+    setOptions((o) => ({ ...o, ...applyPatch(option, value) }));
+  };
+
+  const undoSuggestion = (option: string) => {
+    const back = undo(applied, option);
+    if (!back) return;                  // never written from here; not ours
+    setApplied(back.applied);
+    setOptions((o) => ({ ...o, ...back.patch }));
+  };
 
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
@@ -1402,6 +1435,16 @@ export default function App() {
                         </li>
                       ))}
                     </ul>
+                    {/* The same file's other half: not "would this survive the
+                        cluster" but "how should it have been configured".
+                        Nothing here is applied on import -- every value written
+                        from this list is a click on a row showing both the value
+                        it writes and the one it replaces. */}
+                    <SuggestionList
+                      suggestions={preflight.out.suggestions}
+                      whyNothing={preflight.out.why_nothing}
+                      options={options} applied={applied}
+                      onApply={applySuggestion} onUndo={undoSuggestion} />
                   </div>
                 )}
               </div>

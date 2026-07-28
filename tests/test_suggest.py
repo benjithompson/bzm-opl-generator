@@ -558,3 +558,142 @@ def test_suggest_says_where_to_get_an_evidence_file_it_cannot_find(monkeypatch,
     code = _run(monkeypatch, "suggest", "--cluster-evidence",
                 str(tmp_path / "nope.json"))
     assert "nope.json" in str(code) and "bzm-cluster-evidence.sh" in str(code)
+
+
+# -- applying one to a configuration -----------------------------------------
+# The half #54 adds: a suggestion says what the cluster implies, and `merge`
+# says how that stands against the options as they are right now. The rule the
+# rest of the feature rests on is that a value somebody set is never quietly
+# replaced -- so the interesting assertions below are about what merge REFUSES
+# to hand back, not about what it fills in.
+
+REGCRED = {"inventory": {"configmaps": [],
+                         "secrets": [{"name": "regcred",
+                                      "type": suggest.DOCKERCONFIGJSON}]}}
+PLAIN_K8S = {"api_groups": dict(API_GROUPS, openshift_security=False)}
+
+
+def _merge(doc, option, options):
+    s = _for(doc, option)
+    assert s is not None, f"no suggestion for {option} to merge"
+    return suggest.merge(s, options)
+
+
+def test_a_decisive_suggestion_fills_an_option_nobody_has_moved():
+    """The plain case, and the only one that may be offered as a one-click
+    default: the option still holds what the generator would have used anyway,
+    so applying replaces nothing a person decided."""
+    m = _merge(_evidence(**PLAIN_K8S), "platform", {"namespace": "blazemeter"})
+    assert m.state == suggest.FILL
+    assert m.value == "k8s"
+    # ...and what it would replace, which the caller shows either way.
+    assert m.current == "openshift"
+
+
+def test_an_option_already_holding_the_evidence_value_has_nothing_to_apply():
+    """SETTLED is the one state where "the cluster confirms this" is a truthful
+    thing to say, and it carries no value: a caller that wrote it back would
+    re-render a bundle byte-for-byte identical to the one on screen."""
+    m = _merge(_evidence(**PLAIN_K8S), "platform", {"platform": "k8s"})
+    assert m.state == suggest.SETTLED
+    assert m.value is None
+
+
+def test_a_value_somebody_moved_off_the_default_conflicts_rather_than_applying():
+    """The constraint the whole feature is subordinate to. The evidence names
+    the only pull secret in the namespace and the configuration names another
+    one; that is a disagreement to show -- with both values -- and never a
+    write to make on its own."""
+    m = _merge(_evidence(**REGCRED), "pull_secret", {"pull_secret": "team-creds"})
+    assert m.state == suggest.CONFLICT
+    assert m.current == "team-creds"
+    # Still carried, because the resolution is a replace the user asks for by
+    # name: what must not happen is it being written without that.
+    assert m.value == "regcred"
+
+
+def test_an_empty_field_is_not_a_choice_somebody_made():
+    """The web UI seeds an empty string into the field a group reveals -- CA
+    trust switched on shows an empty ConfigMap name. Treating that as a value
+    would turn every group the user opened into a conflict with nothing in it.
+    """
+    m = _merge(_evidence(**REGCRED), "pull_secret", {"pull_secret": ""})
+    assert m.state == suggest.FILL
+
+
+def test_a_suggestive_suggestion_never_hands_back_a_value_to_apply():
+    """Narrowing to one is still not choosing. ca_openshift_inject has exactly
+    one candidate -- True -- and it is still the user's to pick, because the
+    alternative (naming a bundle already in the namespace) is a decision about
+    the customer's platform that no evidence file settles."""
+    doc = _evidence(openshift={"ingress_config": None, "proxy_config": PROXY_CONFIG})
+    m = _merge(doc, "ca_openshift_inject", {})
+    assert m.state == suggest.CHOOSE
+    assert m.value is None
+    assert _for(doc, "ca_openshift_inject").candidates == (True,)
+
+
+def test_a_suggestive_suggestion_is_settled_by_any_of_its_candidates():
+    """The shortlist is the whole answer, so a configuration already holding
+    one of them is not something to nag about -- and not a conflict either."""
+    doc = _evidence(api_groups=dict(API_GROUPS, contour=True))
+    assert _merge(doc, "sv_ingress", {"sv_ingress": "contour"}).state \
+        == suggest.SETTLED
+    assert _merge(doc, "sv_ingress", {"sv_ingress": "openshift"}).state \
+        == suggest.SETTLED
+
+
+def test_a_configured_value_the_cluster_rules_out_is_a_conflict():
+    """The loudest disagreement this can report, and the one worth importing an
+    evidence file for: the ingress the bundle is configured for is not served
+    here at all, so the deployment stalls at WAITING_FOR_DOMAIN. Reported as a
+    conflict with no value to apply, because which of the survivors to use is
+    still not the cluster's to say."""
+    doc = _evidence(api_groups=dict(API_GROUPS, contour=True))
+    m = _merge(doc, "sv_ingress", {"sv_ingress": "istio"})
+    assert m.state == suggest.CONFLICT
+    assert m.current == "istio"
+    assert m.value is None
+    assert "istio" in _for(doc, "sv_ingress").ruled_out
+
+
+def test_every_option_a_suggestion_names_is_one_generate_actually_takes():
+    """A suggestion for an option the generator has never heard of is a value
+    that applies cleanly and changes nothing in the bundle. Checked here rather
+    than discovered on a sealed cluster, in the same spirit as
+    test_manual_facts' catalogue check."""
+    from bzm_opl_gen.generate import DEFAULT_OPTIONS
+    for doc in _every_fixture():
+        for s in suggest.from_evidence(doc):
+            assert s.option in DEFAULT_OPTIONS, s.option
+
+
+def test_merge_reads_an_option_the_caller_left_out_as_its_default():
+    """A caller holding a partial options dict -- the CLI's `generate --profile`
+    shape, or a browser before /api/option-defaults lands -- must get the same
+    answer as one holding the fully resolved set."""
+    doc = _evidence(**PLAIN_K8S)
+    assert _merge(doc, "platform", {}) == _merge(doc, "platform",
+                                                 {"platform": "openshift"})
+
+
+def test_an_applied_value_is_indistinguishable_from_a_typed_one():
+    """The seam that makes the feature honest, and the same promise
+    facts.manual() makes: nothing downstream learns that a value came off a
+    cluster read. Applying is writing the option -- no marker, no wrapper, no
+    second field -- so the bundle and the profile round-trip are byte-identical
+    to the ones a person typing the same value gets."""
+    from bzm_opl_gen import generate as gen
+    facts = json.load(open(EXAMPLE_FACTS))
+    base = {"namespace": "blazemeter", "auth_token": "tok"}
+    doc = _evidence(**REGCRED)
+    m = _merge(doc, "pull_secret", base)
+    applied = dict(base, **{m.option: m.value})
+    typed = dict(base, pull_secret="regcred")
+    assert applied == typed
+    assert gen.generate(facts, applied) == gen.generate(facts, typed)
+    # ...and it replays as an ordinary option, with nothing extra beside it.
+    profile = json.loads(gen.generate(facts, applied)[gen.PROFILE_FILE])
+    assert profile["pull_secret"] == "regcred"
+    assert set(profile) == set(json.loads(
+        gen.generate(facts, typed)[gen.PROFILE_FILE]))

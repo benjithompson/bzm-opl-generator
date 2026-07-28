@@ -30,7 +30,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import api, doctor, facts as facts_mod, generate as gen_mod, livetest
+from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
+               suggest as suggest_mod)
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -308,8 +309,23 @@ def preflight(p: PreflightIn):
         # An engine limit that does not parse, say. This re-runs on every
         # keystroke in those fields, so it answers like /api/generate does.
         raise HTTPException(400, str(e))
+    # What the same file implies about the options, and how each implication
+    # stands against the ones that were sent. Here rather than on an endpoint of
+    # its own: it is one file judged against one configuration, both halves move
+    # on every option change, and two round trips is two answers that can end up
+    # describing different configurations in the same panel. Nothing is applied
+    # -- `state` says what applying would mean, and the click is the browser's.
+    suggestions = suggest_mod.from_evidence(p.evidence)
     return {"namespace": namespace,
-            "checks": [c._asdict() for c in checks]}
+            "checks": [c._asdict() for c in checks],
+            "suggestions": [suggest_mod.merged_as_dict(s, p.options)
+                            for s in suggestions],
+            # An empty list from a file that never reached a cluster reads like
+            # one from a cluster that constrains nothing, and only the first is
+            # worth re-collecting for. Null once there is anything to show, so
+            # the panel has nothing to decide.
+            "why_nothing": None if suggestions
+                           else suggest_mod.why_nothing(p.evidence)}
 
 
 # What each unreadable cluster means, in the user's terms -- a reason without a
