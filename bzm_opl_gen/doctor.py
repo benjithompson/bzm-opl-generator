@@ -90,10 +90,10 @@ def check_location(facts, opts, cluster):
     than folded into the facts, so nothing that generates learns the difference.
     A typed 0 is still a FAIL: that is a value someone supplied.
     """
-    unknown = facts_mod.from_manual_entry(facts)
+    typed_by_hand = facts_mod.from_manual_entry(facts)
     checks = []
     slots = facts.get("slots")
-    if slots is None and unknown:
+    if slots is None and typed_by_hand:
         checks.append(Check("location slots", WARN,
                             "unknown -- these facts were entered by hand, and "
                             "slots is only readable from the account. Confirm it "
@@ -106,7 +106,7 @@ def check_location(facts, opts, cluster):
         checks.append(Check("location slots", PASS,
                             f"{slots} concurrent engine(s)"))
     tpe = facts.get("threads_per_engine")
-    if tpe is None and unknown:
+    if tpe is None and typed_by_hand:
         checks.append(Check("location threadsPerEngine", WARN,
                             "unknown -- entered by hand, so there was no account "
                             "to read it from. Unset, every test start fails with "

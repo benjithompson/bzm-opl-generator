@@ -153,14 +153,18 @@ the classes of problem it can't fix for you.
   announce a namespace "does not exist yet — re-run after creating it" when it
   had merely been refused. The fourth landed *inside* the change written to fix
   the first two, which is the point: the distinction survives only where it is
-  structural, never where it is remembered — which is now literal: two named
-  enforcers carry it, and a new reader should go through one rather than restate
-  it. `suggest._read(doc, *path, kind=...)` is the only way evidence sections are
-  reached (absent, null and wrong-typed all give `None`; `kind=bool` coerces, but
-  only a value that is *present*, so a refused probe never arrives as `false`).
-  `doctor._unread_section(cluster, key, name, detail)` is the only way a check
-  branches on a section it could not read, so the next check that reads a new
-  section gets the WARN by construction. `doctor.evaluate`/`run` take
+  structural, never where it is remembered. Two named helpers carry it, and a
+  new reader should go through one rather than restate it.
+  `suggest._read(doc, *path, kind=...)` reaches evidence sections (absent, null
+  and wrong-typed all give `None`; `kind=bool` coerces, but only a value that is
+  *present*, so a refused probe never arrives as `false`).
+  `doctor._unread_section(cluster, key, name, detail)` carries the unread branch
+  for six checks, so one reading a new section gets the WARN without restating
+  it. **Neither is the only route, and do not read the pair as an invariant** —
+  `check_service_account` and `check_egress` branch on falsiness instead, and
+  `suggest._normalised` / `_reached_cluster` reach sections directly. Each is
+  argued at its site; the point is that a new reader should have to argue too,
+  not that the exceptions do not exist. `doctor.evaluate`/`run` take
   `evidence=` — the whole `Evidence` from `cluster_from_evidence`, not its three
   parts unpacked at each call site. A denied read is a WARN and exits 0;
   an empty result can be a FAIL. If a new field cannot express both, it is not
