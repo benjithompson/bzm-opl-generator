@@ -355,6 +355,12 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     assert code == 0
     assert "cluster evidence" in out and "some-ns" in out
     assert "WARN" in out and "FAIL" not in out
+    # The count, not just the presence: a refactor that dropped a check's
+    # unread branch would still leave *some* WARN in the output and pass an
+    # "is there a WARN" assertion. Every section of this file is null, so the
+    # number is what says each one was noticed. Update it deliberately when a
+    # check is added -- that is the point of pinning it.
+    assert out.count("WARN") == 7, out
 
 
 def test_doctor_takes_the_namespace_from_the_evidence(monkeypatch, capsys):

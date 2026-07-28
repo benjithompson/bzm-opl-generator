@@ -1,5 +1,6 @@
 import json
 import os
+import pathlib
 import sys
 
 import pytest
@@ -737,3 +738,28 @@ def test_endpoint_host_is_built_in_one_place():
     out = gen.sv_expose([{"name": "vs1", "port": 8080, "harbor": "h", "ship": "s"}],
                         "ns1", gen.SvPublish("apps.example.com", None, "nginx"))
     assert f"host: {host}" in out
+
+
+def test_the_sv_refusal_does_not_give_a_reason_that_was_disproved():
+    """The guard survives #49; the reason it printed did not.
+
+    A live performance location ran green on NODEPORT with namespaced RBAC only
+    -- crane takes its advertised address from its own network interfaces, not
+    from the Node object -- so the sv_ingress refusal was telling users to fix
+    something that is not the problem. The SV pairing really is unverified
+    (#60), and saying so is honest; naming a mechanism we disproved next door
+    is not.
+
+    Asserted against the message a user actually sees rather than by grepping
+    sources: a source scan wants a way to exempt the sentences that *describe*
+    the old claim, and any such exemption also exempts a genuine regression
+    sitting beside them. This cannot be fooled that way.
+    """
+    with pytest.raises(ValueError) as e:
+        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+    msg = str(e.value).lower()
+    assert "service_type=clusterip" in msg, "still has to say what to do"
+    for claim in ("read the cluster-scoped node",
+                  "node object to build an address",
+                  "namespaced role cannot grant"):
+        assert claim not in msg, f"refusal still gives the disproved reason: {claim!r}"
