@@ -112,6 +112,16 @@ Run `bzm-opl-gen toolcheck --cluster minikube --local-registry 5001
 missing tools for whatever setup you actually have. The rest of this section is
 the classes of problem it can't fix for you.
 
+- **`.venv` is an editable install pointing at this checkout, so in a git
+  worktree it silently tests the wrong code.** `pip install -e .` records the
+  main checkout's path; a `pytest` run from a worktree that reuses that venv
+  imports `bzm_opl_gen` from *here*, not from the worktree. The suite passes,
+  the numbers look right, and none of the code under test is the code you
+  changed — a deliberately-failing new test passed in the full run and failed in
+  isolation, which is how it was noticed. Build a venv inside the worktree
+  (`python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`) before trusting
+  any figure from one. Worth re-running the suite in the main checkout after
+  merging a worktree branch regardless; that run is the authoritative one.
 - **Docker provider varies and it matters for disk.** Whatever runs the daemon,
   a full disk makes minikube fail with `RSRC_DOCKER_STORAGE`, which never
   mentions disk. Which number binds depends on the provider: a preallocated VM
