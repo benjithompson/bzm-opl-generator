@@ -20,8 +20,8 @@ of these options that cluster decides and which it only narrows —
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_account_name` | `crane` | the account the agent runs as, and the one the RoleBinding (and ClusterRoleBinding) grants to. Used whether or not the bundle creates it, and **required** — see below |
 | `service_account_create` | `true` | emit the ServiceAccount object. `--no-create-service-account` leaves it out for an account your platform team already owns; everything still references `service_account_name`, so it must exist before you apply |
-| `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
-| `sv_ingress` | – | `nginx` \| `istio` \| `contour` \| `openshift` — **required** for a `mockServices` location; `openshift` needs `platform: openshift`; see [Service virtualization](service-virtualization.md) |
+| `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed. With `sv_ingress`, only `nginx` and `openshift` publish over NODEPORT — [the other two are refused](service-virtualization.md#service_type-and-the-backend-you-chose) |
+| `sv_ingress` | – | `nginx` \| `istio` \| `contour` \| `openshift` — **required** for a `mockServices` location; `openshift` needs `platform: openshift`; `contour` and `istio` are refused with `service_type: NODEPORT`; see [Service virtualization](service-virtualization.md) |
 | `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
 | `sv_tls_secret` | – | wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** |
 | `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it |

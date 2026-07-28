@@ -31,11 +31,17 @@ already exist (the generator names it, it does not create it).
 
 ## Which one to pick
 
-**Prefer anything but `nginx`.** Crane ships a separate expose implementation
-per type, and only the `nginx` one writes a port reference that is wrong by the
-Ingress spec. It happens to work on `ingress-nginx`, which forgives it — but it
-is working on tolerance no API guarantees, and it fails outright on a controller
-that follows the spec. On OpenShift, use `openshift`.
+**Prefer anything but `nginx`** — on the default `service_type: CLUSTERIP`,
+which is what this section assumes throughout. Crane ships a separate expose
+implementation per type, and only the `nginx` one writes a port reference that
+is wrong by the Ingress spec. It happens to work on `ingress-nginx`, which
+forgives it — but it is working on tolerance no API guarantees, and it fails
+outright on a controller that follows the spec. On OpenShift, use `openshift`.
+
+`NODEPORT` inverts this, which is why it has [its own
+section](#service_type-and-the-backend-you-chose): it makes the `nginx`
+reference correct and stops `contour` and `istio` working at all. The table
+below is the CLUSTERIP picture.
 
 | | `nginx` | `istio` | `contour` | `openshift` |
 |---|---|---|---|---|
@@ -127,6 +133,16 @@ a namespaced Role and RoleBinding with no ClusterRoleBinding naming the account.
 
 The generator refuses the two that fail, and `--service-type NODEPORT` is
 accepted with `nginx` and `openshift`.
+
+One istio configuration is refused without having been measured, on purpose.
+With `--sv-istio-gateway` set crane reuses a Gateway you already own instead of
+creating one, and the Gateway is the object that carried the bad port — the
+VirtualService names no port at all. That combination may work. It is refused
+with the rest because "istio does not do NODEPORT" is a rule you can predict
+from the backend alone, and `CLUSTERIP` costs you nothing: it is the default,
+it is the more widely permitted of the two under cluster policy, and it changes
+nothing else about an istio deployment. [#63](https://github.com/benjithompson/bzm-opl-generator/issues/63)
+settles it if anyone needs the narrower rule.
 
 **The two that work do so because crane writes a constant.** `8080` is the
 mock's container port. An Ingress backend resolves against the Service's
@@ -269,4 +285,4 @@ that matters in CI, gate on the other checks or use a non-nginx `sv_ingress`.
 identity labels crane stamps, not through crane's Service, so it works the same
 whether that Service is `CLUSTERIP` or `NODEPORT`. Either way the whole
 deployment stays inside namespaced RBAC — no ClusterRole required (see
-[`service_type` does not have to be `CLUSTERIP`](#service_type-does-not-have-to-be-clusterip)).
+[`service_type` and the backend you chose](#service_type-and-the-backend-you-chose)).

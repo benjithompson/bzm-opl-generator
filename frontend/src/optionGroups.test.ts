@@ -482,25 +482,25 @@ describe("a group declares whether its own configuration is finished", () => {
     expect(sv.incomplete?.({}, true)).toBe(true);
   });
 
-  // The served table, as /api/sv-constants reports it. contour and istio take
-  // the Service's nodePort into the object they publish, so the endpoint never
-  // serves; nginx and openshift write a constant and do work. Measured, #60.
-  const BACKENDS = {
-    nginx: { nodeport_ok: true }, openshift: { nodeport_ok: true },
-    contour: { nodeport_ok: false }, istio: { nodeport_ok: false },
-  };
+  // Deliberately NOT the real backend names. Which backends publish over
+  // NODEPORT is the server's fact, pinned against the generator in
+  // tests/test_server.py; restating it here would be a second copy free to go
+  // stale. What this file owns is whether `incomplete` consults the table it is
+  // handed, which two shape-only entries exercise exactly as well.
+  const BACKENDS = { publishes: { nodeport_ok: true },
+                     does_not: { nodeport_ok: false } };
   const withNodePort = (ingress: string) =>
     ({ sv_ingress: ingress, sv_subdomain: "a.b", sv_tls_secret: "w",
        service_type: "NODEPORT" });
 
   it("counts NODEPORT as complete for a backend that publishes over it", () => {
-    for (const ingress of ["nginx", "openshift"]) {
+    for (const ingress of ["publishes"]) {
       expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(false);
     }
   });
 
   it("counts NODEPORT as incomplete for one that does not", () => {
-    for (const ingress of ["contour", "istio"]) {
+    for (const ingress of ["does_not"]) {
       expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(true);
     }
   });
@@ -509,13 +509,13 @@ describe("a group declares whether its own configuration is finished", () => {
     // Undefined is "we have not been told", not "it is broken". Blocking on a
     // guess would grey out the download for a configuration that generates
     // fine, and generate() refuses authoritatively either way.
-    expect(sv.incomplete?.(withNodePort("contour"), false)).toBe(false);
-    expect(sv.incomplete?.(withNodePort("contour"), false, {})).toBe(false);
+    expect(sv.incomplete?.(withNodePort("does_not"), false)).toBe(false);
+    expect(sv.incomplete?.(withNodePort("does_not"), false, {})).toBe(false);
   });
 
   it("still blocks on an empty field whatever the service type", () => {
     expect(sv.incomplete?.(
-      { ...withNodePort("nginx"), sv_tls_secret: "" }, false, BACKENDS)).toBe(true);
+      { ...withNodePort("publishes"), sv_tls_secret: "" }, false, BACKENDS)).toBe(true);
   });
 
   it("groups with no completeness rule never block", () => {

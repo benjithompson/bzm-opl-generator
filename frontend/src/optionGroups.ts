@@ -225,9 +225,13 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // that cannot publish over it. With none chosen, only a location whose
     // funcIds demand SV is unfinished.
     //
-    // An unknown backend does NOT block: before the constants load there is no
-    // table to consult, and generate() refuses authoritatively either way. A
-    // guess here would grey out the download for a configuration that works.
+    // An unknown backend does NOT block, and that covers three states this one
+    // value cannot tell apart -- not fetched yet, fetch failed, table served
+    // empty. Usually the repo insists those stay distinct; here they genuinely
+    // share an answer, because none of them is evidence that the pairing is
+    // broken. Blocking on any of them would grey out the download for a
+    // configuration that generates fine, and generate() refuses authoritatively
+    // in the case that is actually broken.
     incomplete: (o, required, backends) => (o.sv_ingress
       ? !String(o.sv_subdomain ?? "").trim()
         || !String(o.sv_tls_secret ?? "").trim()

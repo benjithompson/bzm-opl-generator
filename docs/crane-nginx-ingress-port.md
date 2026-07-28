@@ -45,7 +45,11 @@ the port renamed `"http"`, backend `8080` still returned 200.
 **Why OpenShift fails:** `IncompleteIngressToRouteRules: No valid target port for
 backend service ... at index 0`. No Route, endpoint 503s, mock pod healthy at `1/1`.
 Patching the live Ingress to `80` makes the Route appear immediately and serve — then
-every redeploy overwrites it back to `8080`, so there is no customer-side fix.
+every redeploy overwrites it back to `8080`, so there is no customer-side fix that
+survives a redeploy. Two things do work around it without patching: `sv-expose`,
+which publishes a parallel pair crane does not rewrite, and `service_type: NODEPORT`,
+which moves the Service's port to `8080` so crane's constant matches. Neither makes
+the reference correct — the defect below is unchanged.
 
 Not the same as the `openshift` backend, which also writes `8080`: a **Route**'s
 `targetPort` resolves against the Service's *targetPort*, so it's correct there and

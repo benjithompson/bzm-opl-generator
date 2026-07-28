@@ -737,9 +737,12 @@ export default function App() {
         onTlsSecret={(v) => set("sv_tls_secret", v)}
         onGateway={(v) => set("sv_istio_gateway", v)}
         ok={svOk}
-        // The block is the service type when the two text fields are filled:
-        // then nothing else in this group can be the reason.
-        nodePortConflict={!svOk && !!txt("sv_subdomain") && !!txt("sv_tls_secret")}
+        // Computed, not deduced from the absence of other reasons: a later
+        // completeness rule would otherwise inherit the nodePort sentence, and
+        // the panel would show it before the backend table has even loaded.
+        nodePortConflict={options.service_type != null
+          && options.service_type !== "CLUSTERIP"
+          && svConst.backends[txt("sv_ingress")]?.nodeport_ok === false}
         ctx={svCtx} rbac={svRbac} />
     ),
   };

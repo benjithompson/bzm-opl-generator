@@ -147,6 +147,16 @@ class SvBackend(collections.namedtuple(
     **nodePort**, which is a number no client ever reaches the ingress on. All
     four were deployed live to settle it (#60); see docs/service-virtualization.md
     for what each one did.
+
+    One case under `istio` is refused without having been measured, and
+    deliberately: with sv_istio_gateway set crane reuses a Gateway the customer
+    already owns instead of creating one, and the Gateway is the object that
+    carried the bad port -- its VirtualService names no port at all. That
+    variant may well work. It is refused with the rest because a rule a customer
+    can predict ("istio does not do NODEPORT") is worth more here than the
+    narrowest possible one ("istio does not do NODEPORT unless you also set a
+    gateway name"), and CLUSTERIP costs them nothing. #63 settles it if the
+    narrower rule ever earns its keep.
     """
     __slots__ = ()
 
@@ -221,9 +231,12 @@ def _sv_cfg(facts, o):
             "1/1, BlazeMeter advertises the endpoint, and the endpoint does not "
             "serve. Measured live -- contour reports `unresolved service "
             "reference` and answers 503; istio's gateway ends up listening on "
-            "the nodePort alone and nothing answers at all. Use CLUSTERIP, or "
-            "sv_ingress=nginx or openshift, which write a constant port and do "
-            "work on NODEPORT.")
+            "the nodePort alone and nothing answers at all. Fix: use "
+            "service_type=CLUSTERIP, which is the default and changes nothing "
+            f"else about a {ingress} deployment. (sv_ingress=nginx and "
+            "openshift do work on NODEPORT -- they write a constant port -- but "
+            "switching backend to get there means switching ingress controller, "
+            "which is the bigger change of the two.)")
     if ingress == "openshift" and o["platform"] != "openshift":
         raise ValueError(
             f"sv_ingress=openshift requires platform=openshift, got "
@@ -1122,11 +1135,14 @@ def sv_endpoint_host(name, port, namespace, subdomain):
 def sv_expose(mocks, namespace, publish):
     """Render a Service + Ingress per deployed virtual service.
 
-    Crane publishes its own pair, but the Ingress is unusable: its backend says
-    `port.number: 8080` while the Service it created exposes `port: 80`, and
-    Kubernetes resolves a backend against `spec.ports[].port`. Nothing claims
-    it, so the endpoint BlazeMeter advertises 503s while the mock serves
-    happily inside the cluster.
+    Crane publishes its own pair, but under CLUSTERIP the Ingress is unusable:
+    its backend says `port.number: 8080` while the Service it created exposes
+    `port: 80`, and Kubernetes resolves a backend against `spec.ports[].port`.
+    Nothing claims it, so the endpoint BlazeMeter advertises 503s while the mock
+    serves happily inside the cluster. (Under NODEPORT the Service publishes
+    8080 and crane's constant matches, so the mismatch does not arise -- this
+    command is then unnecessary, though harmless: it selects on pod labels and
+    is indifferent to the Service crane made.)
 
     Rather than patch an object crane rewrites on every deploy, this emits a
     parallel pair that sidesteps the mismatch: `port == targetPort`, and a
