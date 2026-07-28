@@ -22,6 +22,18 @@ anything that breaks.
   references the name you gave. Both are in the web UI beside the namespace,
   and in the Helm chart as the `serviceAccount.create` / `serviceAccount.name`
   values it already had.
+- **`scripts/bzm-cluster-evidence.sh`** — a read-only script to hand a customer
+  whose cluster you have no access to. They run it, and one JSON file comes back
+  carrying what a deployment has to be shaped around: nodes, ingress classes,
+  the namespace, its LimitRanges/quotas/ServiceAccounts, which ingress API
+  groups the cluster serves, the OpenShift ingress domain and cluster proxy, and
+  `auth can-i` answers for everything the bundle applies. It is the cluster-side
+  twin of `facts --manual`. Secrets are listed by name and type only — never
+  `-o json`, so no secret value is ever in the output — and ConfigMaps by name,
+  which also keeps a 300KB CA bundle out of the file. Anything unreadable is
+  recorded as `null` with the error rather than as an empty list, because
+  "denied" and "there are none" are different answers and `doctor` treats them
+  differently. Nothing consumes the file yet; that is the next piece.
 - **`doctor` checks that an existing service account is really there.** Only
   when the bundle does not create one. Nothing fails at apply time if it is
   missing: the Deployment is accepted, no pod is ever created, and the reason
