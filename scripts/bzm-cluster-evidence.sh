@@ -88,8 +88,16 @@ get_json() {
 # there is nothing here that needs quoting.
 get_names() {
     key="$1"; shift
-    out=$("$CLI" get "$@" -o custom-columns=N:.metadata.name --no-headers 2>/dev/null)
-    if [ $? -ne 0 ]; then printf '    "%s": null' "$key"; return; fi
+    # Same note-on-failure as get_json: a null with no note is a section that
+    # silently disappears from "what could not be read", and the reader then
+    # presents a partial file as a complete one.
+    out=$("$CLI" get "$@" -o custom-columns=N:.metadata.name --no-headers 2>/tmp/bzm-ev-err.$$)
+    if [ $? -ne 0 ]; then
+        note "$key: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
+        rm -f /tmp/bzm-ev-err.$$
+        printf '    "%s": null' "$key"; return
+    fi
+    rm -f /tmp/bzm-ev-err.$$
     printf '    "%s": [' "$key"
     first=1
     for n in $out; do
@@ -138,7 +146,7 @@ printf '  "inventory": {\n'
 get_names configmaps configmap -n "$NS" ; printf ',\n'
 # Type is as far as this goes: it is what identifies an imagePullSecret
 # (kubernetes.io/dockerconfigjson) without reading anything inside one.
-sec=$("$CLI" get secret -n "$NS" -o custom-columns=N:.metadata.name,T:.type --no-headers 2>/dev/null)
+sec=$("$CLI" get secret -n "$NS" -o custom-columns=N:.metadata.name,T:.type --no-headers 2>/tmp/bzm-ev-err.$$)
 if [ $? -eq 0 ]; then
     printf '    "secrets": ['
     first=1
@@ -154,8 +162,10 @@ $sec
 EOF
     printf ']'
 else
+    note "secrets: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
     printf '    "secrets": null'
 fi
+rm -f /tmp/bzm-ev-err.$$
 printf '\n  },\n'
 
 # -- what the API server says you may do ------------------------------------
