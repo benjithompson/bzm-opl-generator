@@ -60,6 +60,36 @@ def _suggestive(option, candidates, evidence, detail, ruled_out=()):
                       tuple(ruled_out), tuple(evidence), detail)
 
 
+def _read(doc, *path, kind):
+    """One nested value out of the evidence file, or None where nothing said.
+
+    Every section is optional and each can arrive wrong: the collector's maps
+    grew over time, so a file from an older script does not carry the newer
+    keys, and files come back by mail and are sometimes trimmed on the way.
+    Absent, null and a section of the wrong type are all "nobody answered" --
+    which is the one thing this module may never confuse with the cluster
+    answering `false`, so it is decided here once rather than four times over.
+
+    `kind` is what a well-formed value looks like there, and anything else is
+    unanswered. bool is the exception and coerces rather than checks: the
+    boolean maps are `auth can-i` and `api-resources` read through shell, which
+    is error-to-false, so what reaches the file is whatever the script wrote --
+    but only a *present* value is coerced, and null stays None. That a False
+    here is the cluster's own answer rather than a failed command is
+    _reached_cluster()'s doing, past which every rule is only ever called.
+    """
+    value = doc
+    for key in path:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    if value is None:
+        return None
+    if kind is bool:
+        return bool(value)
+    return value if isinstance(value, kind) else None
+
+
 def _normalised(doc, key):
     """One `raw` section in gather_cluster()'s shape, for the two rules that
     need it (see the note at RULES for why they fetch it rather than take it).
@@ -81,7 +111,7 @@ def _platform(doc):
     its name suggests: the SCC-aware engine envs are emitted only on the
     openshift path, so getting it wrong is what `doctor`'s admission check
     later reports as restricted PSA rejecting the engines."""
-    served = _api_group(doc, "openshift_security")
+    served = _read(doc, "api_groups", "openshift_security", kind=bool)
     if served is None:
         return []
     if served:
@@ -94,20 +124,6 @@ def _platform(doc):
                       "Kubernetes: the OpenShift-only engine envs would go "
                       "unused, and the namespace's PodSecurity level becomes "
                       "what decides whether engine pods are admitted")]
-
-
-def _api_group(doc, key):
-    """True/False as the cluster answered, or None where nothing did.
-
-    A missing key is as unknown as an explicit null: the collector's map grew
-    over time, and a file from an older script simply does not carry the
-    newer ones.
-    """
-    groups = doc.get("api_groups")
-    if not isinstance(groups, dict):
-        return None
-    value = groups.get(key)
-    return None if value is None else bool(value)
 
 
 # -- the service account -----------------------------------------------------
@@ -138,7 +154,8 @@ def _service_account(doc):
             f"ServiceAccount '{DEFAULT_SA}' already exists in {ns}, which is the "
             f"name the bundle references by default -- so it has one to run as "
             f"and no reason to emit the object over somebody else's"))
-    elif _permission(doc, "namespaced", "create serviceaccounts") is False:
+    elif _read(doc, "permissions", "namespaced",
+               "create serviceaccounts", kind=bool) is False:
         out.append(_decisive(
             "service_account_create", False, ["permissions.namespaced"],
             f"this token cannot create ServiceAccounts in {ns} (auth can-i said "
@@ -152,18 +169,6 @@ def _service_account(doc):
             f"fact -- and an account named for another workload would quietly "
             f"gain crane's Role"))
     return out
-
-
-def _permission(doc, scope, verb):
-    """What `auth can-i` answered, or None where it was not asked. Only ever
-    reached past _reached_cluster(), which is what makes a False here the
-    cluster's answer rather than a failed command."""
-    perms = doc.get("permissions")
-    scoped = perms.get(scope) if isinstance(perms, dict) else None
-    if not isinstance(scoped, dict):
-        return None
-    value = scoped.get(verb)
-    return None if value is None else bool(value)
 
 
 # -- service virtualization ---------------------------------------------------
@@ -190,7 +195,7 @@ def _sv_ingress(doc):
             state, key, reason = _nginx_state(doc)
         else:
             group, key = _SV_API_GROUPS[value]
-            state = _api_group(doc, key)
+            state = _read(doc, "api_groups", key, kind=bool)
             key, reason = f"api_groups.{key}", f"{group} is not served"
         if state is None:
             continue                      # not collected: neither open nor out
@@ -236,7 +241,9 @@ def _sv_subdomain(doc):
     """The wildcard the OpenShift router already serves. Suggestive because it
     is the *default* router's domain: virtual services published through an
     nginx, Contour or Istio ingress may well answer on another."""
-    domain = (_openshift(doc, "ingress_config").get("spec") or {}).get("domain")
+    # Null on plain Kubernetes, where neither config kind exists at all.
+    cfg = _read(doc, "openshift", "ingress_config", kind=dict) or {}
+    domain = (cfg.get("spec") or {}).get("domain")
     if not domain:
         return []
     return [_suggestive(
@@ -259,7 +266,7 @@ def _pull_secret(doc):
     *type* is the API server's own answer about what a thing is rather than a
     guess off its name.
     """
-    secrets = _inventory(doc, "secrets")
+    secrets = _read(doc, "inventory", "secrets", kind=list)
     if secrets is None:
         return []
     names = sorted(s["name"] for s in secrets
@@ -295,7 +302,7 @@ _NOT_TRUST_BUNDLES = ("kube-root-ca.crt", "openshift-service-ca.crt")
 
 
 def _ca_configmap(doc):
-    names = _inventory(doc, "configmaps")
+    names = _read(doc, "inventory", "configmaps", kind=list)
     if names is None:
         return []
     hits = sorted(n for n in names
@@ -318,7 +325,7 @@ def _proxy(doc):
     status is what the operators publish as effective -- and its noProxy is the
     expanded list a pod actually needs -- so it wins over the spec it came from.
     """
-    cfg = _openshift(doc, "proxy_config")
+    cfg = _read(doc, "openshift", "proxy_config", kind=dict) or {}
     spec = cfg.get("status") or cfg.get("spec") or {}
     http, https = spec.get("httpProxy"), spec.get("httpsProxy")
     out = []
@@ -355,8 +362,10 @@ def _cluster_rbac(doc):
     and a line saying "either value is fine" is noise in a list whose point is
     that every line carries information.
     """
-    roles = _permission(doc, "cluster_scoped", "create clusterroles")
-    bindings = _permission(doc, "cluster_scoped", "create clusterrolebindings")
+    roles = _read(doc, "permissions", "cluster_scoped",
+                  "create clusterroles", kind=bool)
+    bindings = _read(doc, "permissions", "cluster_scoped",
+                     "create clusterrolebindings", kind=bool)
     if roles is None or bindings is None or (roles and bindings):
         return []
     missing = [n for n, ok in (("ClusterRoles", roles),
@@ -367,21 +376,6 @@ def _cluster_rbac(doc):
         f"them does not apply. Note this constrains nothing else: crane resolves "
         f"its advertised address from its own network interfaces rather than "
         f"from the Node object, and a namespaced-only install has run green")]
-
-
-def _inventory(doc, key):
-    """A names-only inventory section, or None where it was not read."""
-    inventory = doc.get("inventory")
-    value = inventory.get(key) if isinstance(inventory, dict) else None
-    return value if isinstance(value, list) else None
-
-
-def _openshift(doc, key):
-    """One of the cluster-scoped OpenShift config objects, as a dict. Null is
-    the ordinary case on plain Kubernetes, where neither kind exists at all."""
-    section = doc.get("openshift")
-    value = section.get(key) if isinstance(section, dict) else None
-    return value if isinstance(value, dict) else {}
 
 
 # A rule takes the evidence file and nothing else. It used to take `doctor`'s

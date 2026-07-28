@@ -225,10 +225,10 @@ def cmd_doctor(a):
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
     # The three things an evidence file contributes travel together as one
-    # Evidence, so an absent file is an empty Evidence rather than a None the
-    # call site then has to test three times over. Empty says exactly what
-    # doctor's own defaults say: no cluster data, no probes, and no verdicts
-    # reached before the checks ran.
+    # Evidence, from here to the `evidence=` doctor takes, so an absent file is
+    # an empty Evidence rather than a None the call site then has to test three
+    # times over. Empty says exactly what doctor's own defaults say: no cluster
+    # data, no probes, and no verdicts reached before the checks ran.
     imported = doctor.Evidence(None, None, ())
     if a.cluster_evidence:
         try:
@@ -244,8 +244,7 @@ def cmd_doctor(a):
             sys.exit(str(e))
     else:
         namespace = a.namespace
-    checks = doctor.run(f, opts, namespace, cluster_data=imported.cluster,
-                        probes=imported.probes, extra_checks=imported.checks)
+    checks = doctor.run(f, opts, namespace, evidence=imported)
     sys.exit(1 if doctor.has_failures(checks) else 0)
 
 

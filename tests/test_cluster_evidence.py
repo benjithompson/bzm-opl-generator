@@ -101,6 +101,41 @@ def test_run_prints_extra_checks_the_caller_already_made(capsys):
     assert "collected elsewhere" in capsys.readouterr().out
 
 
+def test_an_evidence_is_passed_whole_rather_than_taken_apart():
+    """#57/#58: the three things a file contributes are one Evidence from
+    cluster_from_evidence to here, so a caller holding one hands it over rather
+    than unpacking it into three keywords and hoping each lands in its slot.
+    The spelled-out form stays -- the live path supplies no evidence at all --
+    so the two have to agree."""
+    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    assert doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported) == \
+        doctor.evaluate(FACTS, OPTS, "blazemeter", cluster_data=imported.cluster,
+                        probes=imported.probes, extra_checks=imported.checks)
+
+
+def test_an_evidence_and_the_parts_it_carries_are_not_combined():
+    """Both spellings at once would have one set silently win, and which is not
+    something a reader of the call site could tell."""
+    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    with pytest.raises(TypeError):
+        doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported,
+                        extra_checks=[doctor.Check("x", doctor.WARN, "y")])
+
+
+def test_an_empty_evidence_still_means_go_and_look(monkeypatch):
+    """What `doctor` without --cluster-evidence passes: an Evidence carrying
+    nothing says exactly what the parameters' own defaults say, so the live
+    path still runs rather than being told there is no cluster."""
+    monkeypatch.setattr(doctor.livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(doctor, "gather_cluster",
+                        lambda cli, ns: _evidence_cluster())
+    monkeypatch.setattr(doctor, "probe_egress",
+                        lambda cli, ns, opts: {doctor.API_PROBE_URL: 0})
+    assert doctor.evaluate(FACTS, OPTS, "blazemeter",
+                           evidence=doctor.Evidence(None, None, ())) == \
+        doctor.evaluate(FACTS, OPTS, "blazemeter")
+
+
 def _evidence_cluster():
     return doctor.cluster_from_evidence(_evidence()).cluster
 
