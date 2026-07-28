@@ -78,6 +78,11 @@ A file whose `schema` is missing or unrecognised is refused by name — pointing
 `--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it
 would produce verdicts about a cluster nobody described.
 
+The [web UI](web-ui.md) takes the same file under Download & verify and shows
+the same verdicts against the configuration on screen, re-run as you edit it —
+no API key and no kubecontext, the same "no access to anything" path manual
+facts entry serves.
+
 ## Your machine (`toolcheck`)
 
 `doctor` asks whether a cluster can run the location. `toolcheck` asks the

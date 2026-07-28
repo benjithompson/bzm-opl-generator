@@ -15,7 +15,8 @@ agent flip online. Profile JSON import/export round-trips with
 `generate --profile`. Frontend dev:
 `cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
 build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
-runs the option-group logic suite that CI runs as its own job.
+runs the logic suites CI runs as its own job — the option groups and the
+preflight panel, both plain data in and data out, neither rendering anything.
 
 **Namespace and service account are always on screen**, above the groups and
 outside the feature view: every deployment has both, and both are always sent.
@@ -57,6 +58,22 @@ port reference, and [`sv-expose`](service-virtualization.md#reaching-a-virtual-s
 is the fix. A probe that gets no status line says which kind it was: the host did
 not resolve, nothing accepted the connection, the TLS handshake failed, or
 nothing replied in time.
+
+**Preflight a cluster from a file.** Under Download & verify, pick the JSON
+[`scripts/bzm-cluster-evidence.sh`](preflight.md#a-cluster-you-cannot-reach)
+wrote on a machine with cluster access, and the page shows the verdicts
+`bzm-opl-gen doctor` reaches — PASS, WARN or FAIL each on its own row — against
+the configuration currently on screen. Editing an option re-runs them, so the
+list always describes what is configured rather than what was when the file was
+picked. It needs no API key and no kubecontext, which is the point: the same
+person who cannot reach the account usually cannot reach the cluster either.
+
+The list leads with where the answers came from — when the file was collected,
+which namespace for, and every section its collector could not read — because
+each verdict under it is only as good as that. A thin file is a page of warnings
+with a reason attached, never a clean bill of health. A file that is not
+evidence, or carries a schema this version does not know, is refused by name and
+leaves the verdicts already on screen standing.
 
 Reading the namespace is the one thing the UI does that needs a cluster, and it
 needs one only for that: it uses whatever `kubectl`/`oc` context the machine
