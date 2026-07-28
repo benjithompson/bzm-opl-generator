@@ -11,6 +11,7 @@ nothing is suggested from evidence the collector recorded as unreadable, and
 evidence that eliminates values says so rather than handing back the survivor.
 """
 
+import dis
 import json
 import os
 import sys
@@ -125,6 +126,25 @@ def test_every_suggestion_names_the_evidence_it_came_from_and_says_why():
             # A path into the file, so a reader can go and look at it.
             assert all(k.split(".")[0] in doc for k in s.evidence), s.evidence
             assert len(s.detail) > 40, f"{s.option}: {s.detail!r}"
+
+
+def test_a_rule_takes_the_evidence_file_and_reads_every_argument_it_takes():
+    """#59: the rules used to be handed doctor's normalised cluster as well, and
+    six of the eight ignored it -- a parameter carried by the table for the
+    benefit of two, which then read `doc` anyway. The signature is the only place
+    that could have said so, so it is pinned: one argument, and used."""
+    for rule in suggest.RULES:
+        code = rule.__code__
+        args = code.co_varnames[:code.co_argcount]
+        assert args == ("doc",), f"{rule.__name__}{args}"
+        read = set()
+        for op in dis.get_instructions(code):
+            # LOAD_FAST, and the fused/borrowed spellings 3.13+ compiles it to --
+            # LOAD_FAST_LOAD_FAST carries a pair of names in one argval.
+            if op.opname.startswith("LOAD_FAST"):
+                read.update(op.argval if isinstance(op.argval, tuple)
+                            else (op.argval,))
+        assert not set(args) - read, f"{rule.__name__} ignores {set(args) - read}"
 
 
 def _every_fixture():

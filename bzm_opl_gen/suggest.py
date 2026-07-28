@@ -60,9 +60,22 @@ def _suggestive(option, candidates, evidence, detail, ruled_out=()):
                       tuple(ruled_out), tuple(evidence), detail)
 
 
+def _normalised(doc, key):
+    """One `raw` section in gather_cluster()'s shape, for the two rules that
+    need it (see the note at RULES for why they fetch it rather than take it).
+
+    A `raw` section is the whole kubectl document as collected -- and
+    raw.scoped is three kinds in one List -- so the rules that read one go
+    through `doctor`'s normalisation rather than restating it here, for the same
+    reason from_evidence() defers validation to it. Null survives that trip, so
+    "not collected" still arrives as None.
+    """
+    return doctor.cluster_from_evidence(doc).cluster[key]
+
+
 # -- platform ----------------------------------------------------------------
 
-def _platform(doc, cluster):
+def _platform(doc):
     """security.openshift.io is served by OpenShift and by nothing else, which
     settles an option with exactly two values -- and one that decides more than
     its name suggests: the SCC-aware engine envs are emitted only on the
@@ -102,7 +115,7 @@ def _api_group(doc, key):
 DEFAULT_SA = DEFAULT_OPTIONS["service_account_name"]
 
 
-def _service_account(doc, cluster):
+def _service_account(doc):
     """Which account crane runs as, and whether this bundle creates it.
 
     Two independent routes to the same `service_account_create: false`: the
@@ -110,7 +123,7 @@ def _service_account(doc, cluster):
     are reported as one suggestion, because two verdicts about one field is a
     contradiction the reader would have to arbitrate.
     """
-    accounts, out = cluster.get("serviceaccounts"), []
+    accounts, out = _normalised(doc, "serviceaccounts"), []
     ns = doc.get("namespace") or "the namespace"
     names = []
     if accounts is not None:
@@ -163,7 +176,7 @@ _SV_API_GROUPS = {"istio": ("networking.istio.io", "istio"),
                   "openshift": ("route.openshift.io", "openshift_route")}
 
 
-def _sv_ingress(doc, cluster):
+def _sv_ingress(doc):
     """Which backend could publish the virtual services -- and, deliberately,
     never which one should.
 
@@ -174,7 +187,7 @@ def _sv_ingress(doc, cluster):
     open_, ruled_out, why, evidence = [], [], [], []
     for value in SV_INGRESS_TYPES:
         if value == "nginx":
-            state, key, reason = _nginx_state(cluster)
+            state, key, reason = _nginx_state(doc)
         else:
             group, key = _SV_API_GROUPS[value]
             state = _api_group(doc, key)
@@ -205,12 +218,12 @@ def _sv_ingress(doc, cluster):
     return [_suggestive("sv_ingress", open_, evidence, detail, ruled_out)]
 
 
-def _nginx_state(cluster):
+def _nginx_state(doc):
     """crane writes `ingressClassName: nginx` on the Ingress it creates and
     BlazeMeter exposes no env to change it, so the class existing by that exact
     name is what makes the value usable -- the same fact doctor FAILs on once
     the choice has already been made."""
-    classes = cluster.get("ingressclasses")
+    classes = _normalised(doc, "ingressclasses")
     reason = (f"no IngressClass named '{CRANE_INGRESS_CLASS}', which crane "
               f"hardcodes on the Ingress it creates")
     if classes is None:
@@ -219,7 +232,7 @@ def _nginx_state(cluster):
     return CRANE_INGRESS_CLASS in names, "raw.ingressclasses", reason
 
 
-def _sv_subdomain(doc, cluster):
+def _sv_subdomain(doc):
     """The wildcard the OpenShift router already serves. Suggestive because it
     is the *default* router's domain: virtual services published through an
     nginx, Contour or Istio ingress may well answer on another."""
@@ -238,7 +251,7 @@ def _sv_subdomain(doc, cluster):
 DOCKERCONFIGJSON = "kubernetes.io/dockerconfigjson"
 
 
-def _pull_secret(doc, cluster):
+def _pull_secret(doc):
     """The imagePullSecret the bundle references for a private registry. It
     never creates one, so a name that is not there is an ImagePullBackOff.
 
@@ -281,7 +294,7 @@ _TRUST_BUNDLE_HINTS = ("ca-bundle", "cabundle", "ca-certs", "cacert",
 _NOT_TRUST_BUNDLES = ("kube-root-ca.crt", "openshift-service-ca.crt")
 
 
-def _ca_configmap(doc, cluster):
+def _ca_configmap(doc):
     names = _inventory(doc, "configmaps")
     if names is None:
         return []
@@ -299,7 +312,7 @@ def _ca_configmap(doc, cluster):
         f"PEM) before pointing the bundle at one")]
 
 
-def _proxy(doc, cluster):
+def _proxy(doc):
     """The cluster's own egress posture, which is the customer's real one.
 
     status is what the operators publish as effective -- and its noProxy is the
@@ -334,7 +347,7 @@ def _proxy(doc, cluster):
     return out
 
 
-def _cluster_rbac(doc, cluster):
+def _cluster_rbac(doc):
     """Whether the optional cluster-scoped RBAC can be applied at all.
 
     Only the constraining direction is reported. Permitted narrows nothing --
@@ -371,6 +384,18 @@ def _openshift(doc, key):
     return value if isinstance(value, dict) else {}
 
 
+# A rule takes the evidence file and nothing else. It used to take `doctor`'s
+# normalised cluster beside it, and six of the eight never referenced it (#59):
+# the two that did read `doc` as well, and cited `raw.*` paths while doing so, so
+# the normalised/raw separation the second parameter implied was never one the
+# rules kept. Making that split real was the alternative and it is not available:
+# `permissions`, `inventory`, `api_groups`, `openshift` and the namespace name
+# are not in gather_cluster()'s shape at all, and widening that shape to suit
+# this signature would change what the *live* path returns for every check in
+# `doctor`. So the parameter went, and the two rules that need normalised data
+# ask for it where they read it (_normalised) -- which also keeps a rule's cited
+# evidence paths checkable against its own body rather than against its caller.
+#
 # Order is the order they are reported in: the platform first because it frames
 # the rest, then the objects the bundle references, then the cluster-wide
 # posture, then what may not be applied at all.
@@ -385,12 +410,14 @@ def from_evidence(doc):
     same file, and a second opinion about what a well-formed one looks like is
     a second thing to keep in step.
     """
-    # Normalise first, gate second: a file that is not evidence at all is
-    # refused by name either way, rather than coming back as a quiet empty list.
-    cluster = doctor.cluster_from_evidence(doc).cluster
+    # Validate first, gate second: a file that is not evidence at all is refused
+    # by name either way, rather than coming back as a quiet empty list -- and
+    # refused here rather than from inside whichever rule happened to normalise
+    # first, which is why the result is discarded and not threaded through.
+    doctor.cluster_from_evidence(doc)
     if not _reached_cluster(doc):
         return []
-    return [s for rule in RULES for s in rule(doc, cluster)]
+    return [s for rule in RULES for s in rule(doc)]
 
 
 def _reached_cluster(doc):
