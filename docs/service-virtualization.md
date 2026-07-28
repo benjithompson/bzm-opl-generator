@@ -101,15 +101,60 @@ All three working paths were verified end to end with namespaced RBAC only and
 real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
 and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift Local. The
 `nodes ... is forbidden` warning in the crane log is expected and harmless on all
-of them. Nothing a performance location does depends on that lookup — it is
-capacity awareness, and `NODEPORT` was once believed to be the exception until a
-live run showed crane takes its address from its own network interfaces instead
-(see `bzm_opl_gen/templates/clusterrole.yaml`). The refusal below is about the
-`sv_ingress` path specifically, which is untested either way.
+of them, and on `nginx` under `NODEPORT` (see below). Nothing a performance
+location does depends on that lookup — it is capacity awareness (see
+`bzm_opl_gen/templates/clusterrole.yaml`).
 
 One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
 env-var reference documents, creates no object at all and stalls at
 `WAITING_FOR_DOMAIN`.
+
+## `service_type` does not have to be `CLUSTERIP`
+
+`NODEPORT` alongside `sv_ingress` was refused until it was run. It works, and
+the reason the refusal gave was wrong.
+
+Measured 2026-07-28 on minikube (kicbase v0.0.46, k8s 1.32, ingress-nginx
+v1.11.3) with crane 3.7.55 and service-mock 6.0.29.6, `KUBERNETES_SERVICE_USE_TYPE:
+NODEPORT` + `KUBERNETES_WEB_EXPOSE_TYPE: NGINX`, RBAC a namespaced Role and
+RoleBinding with no ClusterRoleBinding anywhere naming the account:
+
+- deployment reached `FINISHED`, the virtual service `RUNNING`, and BlazeMeter
+  published `http://<vs>-8080-<ns>.<subdomain>` — no `WAITING_FOR_DOMAIN`;
+- all three transactions answered at that host through the ingress —
+  `GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
+  `POST /api/v1/orders` → `201`, an unmatched path → `404`, a bogus Host → `404`;
+- reproduced across a stop and a second deploy.
+
+Crane's node read **is** denied, exactly as the old rationale said:
+`_get_final_ip` logs `nodes "<node>" is forbidden ... at the cluster scope` and
+then `Setting default ip 127.0.0.1`. What the rationale got wrong is the
+consequence. That address belongs to crane's *Service pool* — it pre-creates
+NodePort Services and binds one to a mock by setting its selector at deploy time
+— and the web-expose path never consults it. The endpoint comes from
+`KUBERNETES_WEB_EXPOSE_SUB_DOMAIN`, which needs no cluster-scoped read at all.
+
+Worth knowing when that warning is expected, because it is easy to read as a
+symptom: it is the *pool* that reads Node, so it appears only once a virtual
+service exists. The same agent on the same `NODEPORT` config logged it **0**
+times across ten hours idle, and once per status update from the moment the mock
+deployed. A performance location that never deploys a mock never reaches this
+code at all — which is why #49 could report a clean log for `NODEPORT` and this
+run a denied read, with neither contradicting the other.
+
+One incidental improvement: under `NODEPORT` crane's Service publishes
+`port: 8080` (`targetPort: 8080`), so the `port.number: 8080` its Ingress
+backend writes resolves correctly *by spec* — the mismatch described in
+[Which one to pick](#which-one-to-pick) is a `CLUSTERIP`-only defect, where the
+Service publishes `80`. Do not read that as a recommendation to switch: it fixes
+the reference on `nginx` alone, costs a node port per virtual service, and the
+other three backends never had the problem.
+
+What is still untested is `NODEPORT` on an SV location with **no** ingress —
+where the pool's address is all there is to publish, so the `127.0.0.1` fallback
+would plausibly be the endpoint. Nobody has run it: the generator refuses an SV
+location without an ingress whatever the service type, and gives
+`WAITING_FOR_DOMAIN` as the reason, which is a different claim from this one.
 
 ## Reaching a virtual service from outside: `sv-expose`
 
@@ -172,8 +217,8 @@ advisory — but note it is a real FAIL with a non-zero exit, because `doctor`
 reads only the profile and has no way to know you intend to run `sv-expose`. If
 that matters in CI, gate on the other checks or use a non-nginx `sv_ingress`.
 
-`service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
-alongside `sv_ingress`. NODEPORT makes crane resolve its address from the
-cluster-scoped **Node** object, which a namespaced Role cannot grant; denied, it
-silently falls back to `127.0.0.1` and stalls. Using an ingress is what keeps
-the whole deployment inside namespaced RBAC — no ClusterRole required.
+`sv-expose` is indifferent to `service_type`: it selects the mock's pod by the
+identity labels crane stamps, not through crane's Service, so it works the same
+whether that Service is `CLUSTERIP` or `NODEPORT`. Either way the whole
+deployment stays inside namespaced RBAC — no ClusterRole required (see
+[`service_type` does not have to be `CLUSTERIP`](#service_type-does-not-have-to-be-clusterip)).

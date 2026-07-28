@@ -27,10 +27,9 @@ export function SvGroup(props: {
   onSubdomain: (v: string | null) => void;
   onTlsSecret: (v: string | null) => void;
   onGateway: (v: string | null) => void;
-  /** Whether the SV settings are complete enough to generate; false shows the
-   *  reason, which is the NODEPORT conflict or the two mandatory fields. */
+  /** Whether the SV settings are complete enough to generate; false means one
+   *  of the two mandatory fields is empty. */
   ok: boolean;
-  nodePortConflict: boolean;
   ctx: SvCtx;
   rbac?: SvBackend;
 }) {
@@ -81,9 +80,8 @@ export function SvGroup(props: {
       )}
       {!props.ok && (
         <p className="text-[11px] text-amber-700">
-          {props.nodePortConflict
-            ? "Service type must be CLUSTERIP — NODEPORT sends crane to the cluster-scoped Node object, which namespaced RBAC cannot grant."
-            : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
+          Domain and TLS secret are both required — without them crane
+          crash-loops on “TLS secret name is empty”.
         </p>
       )}
       <SvPrereqs ingress={chosen} ctx={props.ctx} rbac={props.rbac} />

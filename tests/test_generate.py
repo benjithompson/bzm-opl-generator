@@ -486,9 +486,17 @@ def test_sv_ingress_requires_subdomain_and_tls_secret():
                                 "sv_subdomain": "apps.example.com"})
 
 
-def test_sv_ingress_rejects_nodeport():
-    with pytest.raises(ValueError, match="cluster-scoped"):
-        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+def test_sv_ingress_allows_nodeport():
+    """Both settings reach the ConfigMap; neither is quietly rewritten.
+
+    A rewrite would be worse than the refusal it replaced: the customer asked
+    for NODEPORT, the manifests would say CLUSTERIP, and nothing would say why.
+    """
+    data = yaml.safe_load(gen.generate(
+        SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"),
+    )["bzm_configmap.yaml"])["data"]
+    assert data["KUBERNETES_SERVICE_USE_TYPE"] == "NODEPORT"
+    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
 
 
 def test_sv_nginx_configmap_envs():
@@ -740,26 +748,25 @@ def test_endpoint_host_is_built_in_one_place():
     assert f"host: {host}" in out
 
 
-def test_the_sv_refusal_does_not_give_a_reason_that_was_disproved():
-    """The guard survives #49; the reason it printed did not.
+def test_sv_on_nodeport_still_needs_no_cluster_rbac():
+    """What #60 actually measured, pinned as the thing that could regress.
 
-    A live performance location ran green on NODEPORT with namespaced RBAC only
-    -- crane takes its advertised address from its own network interfaces, not
-    from the Node object -- so the sv_ingress refusal was telling users to fix
-    something that is not the problem. The SV pairing really is unverified
-    (#60), and saying so is honest; naming a mechanism we disproved next door
-    is not.
-
-    Asserted against the message a user actually sees rather than by grepping
-    sources: a source scan wants a way to exempt the sentences that *describe*
-    the old claim, and any such exemption also exempts a genuine regression
-    sitting beside them. This cannot be fooled that way.
+    The old refusal claimed NODEPORT forced a cluster-scoped Node read that a
+    namespaced Role cannot grant. The live run (crane 3.7.55, service-mock
+    6.0.29.6, ingress-nginx v1.11.3 on k8s 1.32) denied that read -- crane logs
+    the 403 and falls back to 127.0.0.1 -- and the virtual service served
+    anyway, because the endpoint comes from the web-expose subdomain and not
+    from that address. So the pairing must keep generating namespaced RBAC and
+    nothing else; a ClusterRole appearing here would mean someone had reinstated
+    the disproved mechanism by way of the manifests instead of the message.
     """
-    with pytest.raises(ValueError) as e:
-        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
-    msg = str(e.value).lower()
-    assert "service_type=clusterip" in msg, "still has to say what to do"
-    for claim in ("read the cluster-scoped node",
-                  "node object to build an address",
-                  "namespaced role cannot grant"):
-        assert claim not in msg, f"refusal still gives the disproved reason: {claim!r}"
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+    assert not [n for n in files if "clusterrole" in n.lower()]
+    # The Role carries the ingress grant and no `nodes` rule to make up for it.
+    # Every resource of every rule, flat: four rules share the core "" group, so
+    # collecting them into a dict keyed by group drops three of them and lets a
+    # `nodes` rule through in whichever position did not survive.
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    granted = [res for r in role["rules"] for res in r["resources"]]
+    assert "ingresses" in granted
+    assert "nodes" not in granted

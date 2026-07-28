@@ -428,7 +428,11 @@ export default function App() {
   // profile sets them without ever calling flipGroup, and opening the panel via
   // svRequired goes through setGrpOn, so neither path would otherwise seed
   // sv_ingress (leaving the select showing "NGINX" off the ?? fallback while
-  // state stayed null) or clear a NODEPORT the SV path cannot use.
+  // state stayed null).
+  //
+  // service_type is deliberately not touched here. This effect used to rewrite
+  // a NODEPORT to CLUSTERIP whenever an ingress was configured; #60 showed the
+  // pairing works, so an imported profile keeps the value it arrived with.
   //
   // Same reason a stale sv_istio_gateway is dropped here rather than only in the
   // select's onChange: only crane's istio backend reads it, so generate() now
@@ -440,23 +444,18 @@ export default function App() {
   // on screen to explain the error. Fall back to nginx, which works anywhere.
   useEffect(() => {
     setOptions((o) => {
-      const strandedIngress =
-        o.sv_ingress === "openshift" && o.platform !== "openshift";
-      const seedIngress = svRequired && !o.sv_ingress;
-      const ingress = seedIngress || strandedIngress ? "nginx" : o.sv_ingress;
-      const clearNodePort = !!ingress
-        && o.service_type != null && o.service_type !== "CLUSTERIP";
+      const stranded = o.sv_ingress === "openshift" && o.platform !== "openshift";
+      const toNginx = stranded || (svRequired && !o.sv_ingress);
+      const ingress = toNginx ? "nginx" : o.sv_ingress;
       const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
-      if (!seedIngress && !strandedIngress && !clearNodePort && !clearGateway) return o;
+      if (!toNginx && !clearGateway) return o;
       return {
         ...o,
-        ...(seedIngress || strandedIngress ? { sv_ingress: "nginx" } : {}),
-        ...(clearNodePort ? { service_type: "CLUSTERIP" } : {}),
+        ...(toNginx ? { sv_ingress: "nginx" } : {}),
         ...(clearGateway ? { sv_istio_gateway: null } : {}),
       };
     });
-  }, [svRequired, options.sv_ingress, options.service_type,
-      options.sv_istio_gateway, options.platform]);
+  }, [svRequired, options.sv_ingress, options.sv_istio_gateway, options.platform]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     const group = GROUP_BY_ID[id];
@@ -517,15 +516,6 @@ export default function App() {
   // two that produces no bundle at all.
   const saOk = serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
-  // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
-  // once SV is on (the secret even for plain HTTP, because crane validates it at
-  // startup), the ingress itself is mandatory for an SV location, and NODEPORT
-  // is incompatible because it sends crane to the cluster-scoped Node object.
-  // Absent service_type means the backend default (CLUSTERIP), so only an
-  // explicit NODEPORT is a conflict -- same `!= null` treatment the group
-  // toggles above use.
-  const svNodePortConflict = options.service_type != null
-    && options.service_type !== "CLUSTERIP";
   // What the bundle is: flat YAML to kubectl apply, or the chart with a values
   // overlay. Both render the same objects -- the choice is how you install and
   // upgrade -- except that the chart is performance-only, so an SV location is
@@ -542,9 +532,10 @@ export default function App() {
     if (svRequired && options.output_format === "helm") set("output_format", "manifests");
   }, [svRequired, options.output_format, set]);
 
-  const svOk = (options.sv_ingress
-    ? !!txt("sv_subdomain") && !!txt("sv_tls_secret") && !svNodePortConflict
-    : !svRequired);
+  // Read off the group's own rule rather than restated here. The two were
+  // separate copies of _sv_cfg's requirements and had to be edited in lockstep
+  // -- #60 relaxed the rule and had to touch both, which is the argument.
+  const svOk = !GROUP_BY_ID.sv.incomplete!(options, svRequired);
   // What the prerequisite list and the endpoint host are rendered against. The
   // list shows from the moment the group is on, so a field still empty renders
   // as its own placeholder rather than a gap; anything filled in is substituted
@@ -729,7 +720,6 @@ export default function App() {
       <SecurityGroup useSecret={Boolean(options.use_secret)}
         clusterRbac={Boolean(options.cluster_rbac)}
         serviceType={String(options.service_type ?? "CLUSTERIP")}
-        svOn={!!options.sv_ingress}
         onUseSecret={(v) => set("use_secret", v)}
         onClusterRbac={(v) => set("cluster_rbac", v)}
         onServiceType={(v) => set("service_type", v)} />
@@ -746,7 +736,7 @@ export default function App() {
         onSubdomain={(v) => set("sv_subdomain", v)}
         onTlsSecret={(v) => set("sv_tls_secret", v)}
         onGateway={(v) => set("sv_istio_gateway", v)}
-        ok={svOk} nodePortConflict={svNodePortConflict}
+        ok={svOk}
         ctx={svCtx} rbac={svRbac} />
     ),
   };

@@ -36,7 +36,7 @@ DEFAULT_OPTIONS = {
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
     # Service virtualization ingress. Only meaningful for a location whose
     # funcIds include mockServices; see _sv_cfg for why all three are required
-    # together and why NODEPORT is rejected alongside them.
+    # together. service_type is not among them -- see the note there.
     "sv_ingress": None,              # None, or one of SV_INGRESS_TYPES
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
     "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
@@ -196,18 +196,13 @@ def _sv_cfg(facts, o):
             "The TLS secret is mandatory even for HTTP virtual services -- crane "
             "refuses to start without it."
         )
-    if o["service_type"] != "CLUSTERIP":
-        raise ValueError(
-            f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
-            f"{o['service_type']}. A virtual service has to publish an address "
-            "something outside the cluster then resolves, and that pairing is "
-            "unverified -- when it goes wrong it stalls at WAITING_FOR_DOMAIN "
-            "with the mock healthy, which is why this refuses rather than "
-            "renders. (The reason once given here -- that NODEPORT needs a "
-            "cluster-scoped Node read -- was disproved for performance "
-            "locations; crane takes its address from its own interfaces. See "
-            "issue #60, which settles the SV case with a live run.)"
-        )
+    # service_type is deliberately not constrained here. NODEPORT alongside an
+    # ingress was refused until #60 ran it: on a namespaced Role only, crane
+    # published its Ingress, bound a NodePort Service to the mock, and all three
+    # transactions answered at the host BlazeMeter advertised. Crane's node read
+    # *is* denied and it *does* fall back to 127.0.0.1 -- but only for the
+    # address its Service pool would advertise, which the web-expose path never
+    # consults. See docs/service-virtualization.md for the run.
     if ingress == "openshift" and o["platform"] != "openshift":
         raise ValueError(
             f"sv_ingress=openshift requires platform=openshift, got "
@@ -662,10 +657,10 @@ def _sv_rbac_block(sv):
     """Namespaced Role rules crane needs to publish a virtual service.
 
     Deliberately namespaced: keeping the whole deployment inside a namespaced
-    Role is the reason the ingress path is preferred. Not, as this said, because
-    NODEPORT needs cluster-scoped node reads -- it does not (#49). What is
-    unverified is whether crane's SV expose path can publish a reachable address
-    over a NodePort at all, which #60 settles.
+    Role is the reason the ingress path is preferred. Not because NODEPORT needs
+    cluster-scoped node reads -- it does not, for a performance location (#49)
+    or a virtual service (#60). A virtual service does provoke a denied node
+    read, from the Service pool, and publishes its endpoint anyway.
 
     Only the group the configured backend actually writes is granted. Crane
     picks one implementation per KUBERNETES_WEB_EXPOSE_TYPE and never touches

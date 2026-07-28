@@ -42,8 +42,6 @@ const DETECTS: [GroupId, string, unknown][] = [
 const WRITE_ONLY: [GroupId, string][] = [
   // Only meaningful beside ca_existing_configmap, which does the detecting.
   ["ca", "ca_configmap_key"],
-  // Written by two groups; only Security's CLUSTERIP departure opens anything.
-  ["sv", "service_type"],
   // An imported profile carrying these without an ingress is not an SV config;
   // the ingress is what the group is.
   ["sv", "sv_subdomain"],
@@ -90,9 +88,11 @@ describe("the declarations", () => {
     }
   });
 
-  it("show the two groups that both write service_type", () => {
+  it("leaves service_type to Security alone", () => {
+    // The SV group co-owned it to force CLUSTERIP until #60 ran that pairing
+    // live and it published fine; two writers for one key was the coupling.
     const owners = OPTION_GROUPS.filter((g) => g.keys.includes("service_type"));
-    expect(owners.map((g) => g.id)).toEqual(["security", "sv"]);
+    expect(owners.map((g) => g.id)).toEqual(["security"]);
   });
 });
 
@@ -159,8 +159,8 @@ describe("switching a group off", () => {
   });
 
   it("leaves service_type alone when service virtualization goes off", () => {
-    // Deliberate asymmetry, preserved from the original switch: enabling SV
-    // forces CLUSTERIP, disabling it does not put NODEPORT back.
+    // It never writes service_type in either direction now -- but a wipe that
+    // reached it would still silently rewrite the user's choice, so pin it.
     expect(GROUP_BY_ID.sv.disable(FULL)).not.toHaveProperty("service_type");
   });
 
@@ -194,16 +194,18 @@ describe("switching a group on", () => {
       { engine_cpu_limit: small.cpu, engine_mem_limit: small.mem })).toEqual({});
   });
 
-  it("seeds an ingress and forces CLUSTERIP for service virtualization", () => {
-    // NODEPORT would send crane at the cluster-scoped Node object, so the
-    // service type is forced rather than merely defaulted.
+  it("seeds an ingress and keeps the chosen service type", () => {
+    // It used to force CLUSTERIP here. #60 deployed a virtual service over
+    // NODEPORT on namespaced RBAC and it served, so a NODEPORT the user chose
+    // survives switching SV on.
     expect(GROUP_BY_ID.sv.enable({ service_type: "NODEPORT" }))
-      .toEqual({ sv_ingress: "nginx", service_type: "CLUSTERIP" });
+      .toEqual({ sv_ingress: "nginx" });
   });
 
-  it("keeps an ingress that was already chosen", () => {
-    expect(GROUP_BY_ID.sv.enable({ sv_ingress: "contour" }))
-      .toEqual({ sv_ingress: "contour", service_type: "CLUSTERIP" });
+  it("seeds nothing over an ingress that was already chosen", () => {
+    // An empty patch, not the value echoed back: flipGroup hands back the same
+    // options object for one, and a fresh identity re-POSTs /api/generate.
+    expect(GROUP_BY_ID.sv.enable({ sv_ingress: "contour" })).toEqual({});
   });
 
   it("starts CA trust on the existing-ConfigMap mode", () => {
@@ -479,10 +481,10 @@ describe("a group declares whether its own configuration is finished", () => {
     expect(sv.incomplete?.({}, true)).toBe(true);
   });
 
-  it("counts NODEPORT as incomplete -- generate() refuses that pairing", () => {
+  it("counts NODEPORT as complete -- generate() renders that pairing", () => {
     expect(sv.incomplete?.(
       { sv_ingress: "nginx", sv_subdomain: "a.b", sv_tls_secret: "w",
-        service_type: "NODEPORT" }, false)).toBe(true);
+        service_type: "NODEPORT" }, false)).toBe(false);
   });
 
   it("groups with no completeness rule never block", () => {
