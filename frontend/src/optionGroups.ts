@@ -58,8 +58,14 @@ export interface OptionGroup {
    *  change" breaks: the next feature with required options would otherwise
    *  need its own check in App, its own entry in a list, and its own arm on the
    *  download guard. `required` is the location's own demand -- funcIds can make
-   *  a group mandatory when nothing is set yet. Absent means never blocks. */
-  incomplete?: (o: Options, required: boolean) => boolean;
+   *  a group mandatory when nothing is set yet. Absent means never blocks.
+   *
+   *  `backends` is the served SV backend table; only the SV group reads it, and
+   *  only to answer whether the chosen backend tolerates NODEPORT -- a
+   *  per-backend fact that lives on the server and cannot be stated here
+   *  without keeping a second copy of it. Undefined before the constants load. */
+  incomplete?: (o: Options, required: boolean,
+                backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
 }
 
 // -- CA trust ----------------------------------------------------------------
@@ -215,11 +221,18 @@ export const OPTION_GROUPS: OptionGroup[] = [
     detect: (o) => !!o.sv_ingress,
     // Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and
     // the TLS secret are both mandatory (the secret even for plain HTTP --
-    // crane validates it at startup). With none chosen, only a location whose
+    // crane validates it at startup), and NODEPORT is refused for a backend
+    // that cannot publish over it. With none chosen, only a location whose
     // funcIds demand SV is unfinished.
-    incomplete: (o, required) => (o.sv_ingress
+    //
+    // An unknown backend does NOT block: before the constants load there is no
+    // table to consult, and generate() refuses authoritatively either way. A
+    // guess here would grey out the download for a configuration that works.
+    incomplete: (o, required, backends) => (o.sv_ingress
       ? !String(o.sv_subdomain ?? "").trim()
         || !String(o.sv_tls_secret ?? "").trim()
+        || (o.service_type != null && o.service_type !== "CLUSTERIP"
+            && backends?.[String(o.sv_ingress)]?.nodeport_ok === false)
       : required),
     // `{}` when an ingress is already chosen, like every other group that has
     // nothing to seed: a patch with a key in it mints a fresh options identity
@@ -306,8 +319,9 @@ export function setButHidden(
  *  declarations rather than passed in: the caller knowing which groups can be
  *  incomplete is the coupling this exists to remove. */
 export function incompleteGroups(
-    o: Options, required: Partial<Record<GroupId, boolean>>): OptionGroup[] {
-  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id]));
+    o: Options, required: Partial<Record<GroupId, boolean>>,
+    backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
+  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
 /** Why the download is blocked when the reason is not on screen -- the failure

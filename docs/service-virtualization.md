@@ -109,34 +109,62 @@ One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
 env-var reference documents, creates no object at all and stalls at
 `WAITING_FOR_DOMAIN`.
 
-## `service_type` does not have to be `CLUSTERIP`
+## `service_type` and the backend you chose
 
-`NODEPORT` alongside `sv_ingress` was refused until it was run. It works, and
-the reason the refusal gave was wrong.
+`NODEPORT` alongside `sv_ingress` was refused outright, on the reasoning that
+NODEPORT forces a cluster-scoped Node read a namespaced Role cannot grant. That
+reasoning is wrong — and the refusal was still half right, for a different
+reason nobody had looked for. All four backends were deployed live on
+2026-07-28 to settle it, crane 3.7.55 and service-mock 6.0.29.6 throughout, RBAC
+a namespaced Role and RoleBinding with no ClusterRoleBinding naming the account.
 
-Measured 2026-07-28 on **two backends**, both with crane 3.7.55 and
-service-mock 6.0.29.6, `KUBERNETES_SERVICE_USE_TYPE: NODEPORT`, and RBAC a
-namespaced Role and RoleBinding with no ClusterRoleBinding anywhere naming the
-account:
-
-| | `nginx` | `openshift` |
+| backend | port crane writes | on `NODEPORT` |
 |---|---|---|
-| cluster | minikube kicbase v0.0.46, k8s 1.32 | OpenShift 4.22.1 |
-| controller | ingress-nginx v1.11.3 | the cluster router |
-| crane creates | Ingress → NodePort Service | Route → NodePort Service |
+| `nginx` | `port.number: 8080` — a constant | **works** |
+| `openshift` | `port.targetPort: 8080` — a constant | **works** |
+| `contour` | the Service's **nodePort** (`30598`) | **fails** |
+| `istio` | Gateway `port.number:` the **nodePort** (`32430`) | **fails** |
 
-On both: deployment reached `FINISHED`, the virtual service `RUNNING`, and
-BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>` — no
-`WAITING_FOR_DOMAIN`. All three transactions answered at that host —
+The generator refuses the two that fail, and `--service-type NODEPORT` is
+accepted with `nginx` and `openshift`.
+
+**The two that work do so because crane writes a constant.** `8080` is the
+mock's container port. An Ingress backend resolves against the Service's
+`port`, which `NODEPORT` moves from `80` to `8080` — so crane's reference, which
+is *wrong* under `CLUSTERIP` and tolerated only by lenient controllers (see
+[Which one to pick](#which-one-to-pick)), becomes exactly right. A Route
+resolves against `targetPort`, which is `8080` either way. Neither was designed
+for this; both survive it.
+
+Measured: `nginx` on minikube (kicbase v0.0.46, k8s 1.32, ingress-nginx
+v1.11.3), `openshift` on OpenShift 4.22.1. Deployment `FINISHED`, virtual
+service `RUNNING`, BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>` —
+no `WAITING_FOR_DOMAIN` — and all three transactions answered there:
 `GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
-`POST /api/v1/orders` → `201`, an unmatched path → `404`, an unknown host →
-`404` (nginx) / `503` (the router). The nginx case was reproduced across a stop
-and a second deploy.
+`POST /api/v1/orders` → `201`; unmatched path `404`, unknown host `404`
+(ingress-nginx) / `503` (the router). The nginx case was reproduced across a
+stop and a second deploy.
 
-`istio` and `contour` are **not** measured on `NODEPORT`. Nothing suggests they
-differ — the endpoint comes from the subdomain in every backend, which is the
-whole argument below — but that is inference, and this page exists because an
-inference of exactly that shape turned out to be wrong.
+**The two that fail derive the port from the Service and take its nodePort**,
+which is not a port anything reaches the ingress on. Both fail *silently* in the
+way this page keeps warning about — object written, mock `1/1`, endpoint
+advertised, nothing serving:
+
+- **contour** wrote `services: [{name: crane-b3696-…, port: 30598}]`. Contour
+  rejected it — `unresolved service reference: port "30598" on service … not
+  matched`, HTTPProxy `invalid` — and the endpoint returned **503** while the
+  mock answered `200` on its nodePort directly. Confirmed without crane by
+  [`docs/repro/contour-nodeport-port.yaml`](repro/contour-nodeport-port.yaml):
+  the same `port: 80` reference is valid against a `CLUSTERIP` Service and
+  invalid against a `NODEPORT` one.
+- **istio** wrote a Gateway server on `port.number: 32430`. Istio accepted it,
+  and the ingress gateway's envoy came up listening on `15021`, `15090` and
+  `32430` — **nothing on 80 or 443**, which is where the published host resolves.
+  Both ports refused the connection outright.
+
+This is why the refusal is per backend rather than per service type, and why it
+could not have been settled by reasoning about node reads: crane's node read is
+denied under `NODEPORT` on all four, including both that work.
 
 Crane's node read **is** denied, exactly as the old rationale said:
 `_get_final_ip` logs `nodes "<node>" is forbidden ... at the cluster scope` and
@@ -165,13 +193,10 @@ crane-managed: deleting one by hand while the pool holds it desynchronises the
 agent, and the virtual service then deploys a pod with no Service and no
 endpoint. Stop the virtual service and let crane rebuild instead.
 
-One incidental improvement: under `NODEPORT` crane's Service publishes
-`port: 8080` (`targetPort: 8080`), so the `port.number: 8080` its Ingress
-backend writes resolves correctly *by spec* — the mismatch described in
-[Which one to pick](#which-one-to-pick) is a `CLUSTERIP`-only defect, where the
-Service publishes `80`. Do not read that as a recommendation to switch: it fixes
-the reference on `nginx` alone, costs a node port per virtual service, and the
-other three backends never had the problem.
+None of this is a reason to switch. `NODEPORT` does make crane's `nginx`
+reference correct by spec, but it fixes that on one backend, costs a node port
+per virtual service, and the three others either never had the problem or are
+refused. `CLUSTERIP` remains the default and the smaller ask of a cluster.
 
 What is still untested is `NODEPORT` on an SV location with **no** ingress —
 where the pool's address is all there is to publish, so the `127.0.0.1` fallback

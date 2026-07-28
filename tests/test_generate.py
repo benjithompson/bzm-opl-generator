@@ -486,17 +486,47 @@ def test_sv_ingress_requires_subdomain_and_tls_secret():
                                 "sv_subdomain": "apps.example.com"})
 
 
-def test_sv_ingress_allows_nodeport():
+def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
     """Both settings reach the ConfigMap; neither is quietly rewritten.
 
     A rewrite would be worse than the refusal it replaced: the customer asked
     for NODEPORT, the manifests would say CLUSTERIP, and nothing would say why.
     """
-    data = yaml.safe_load(gen.generate(
-        SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"),
-    )["bzm_configmap.yaml"])["data"]
-    assert data["KUBERNETES_SERVICE_USE_TYPE"] == "NODEPORT"
-    assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items() if b.nodeport_ok]:
+        opts = dict(SV_OPTS, service_type="NODEPORT", sv_ingress=ingress)
+        if ingress == "openshift":
+            opts["platform"] = "openshift"
+        data = yaml.safe_load(
+            gen.generate(SV_FACTS, opts)["bzm_configmap.yaml"])["data"]
+        assert data["KUBERNETES_SERVICE_USE_TYPE"] == "NODEPORT"
+        assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == ingress.upper()
+
+
+def test_sv_ingress_refuses_nodeport_where_it_was_measured_broken():
+    """contour and istio take the port from the Service's nodePort, so the
+    object is written, the mock runs, BlazeMeter advertises an endpoint, and it
+    does not serve -- the silent failure every other guard in _sv_cfg exists to
+    stop. Asserted per backend off the table, so a fifth backend added without a
+    measured `nodeport_ok` shows up here rather than on someone's cluster."""
+    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items()
+                    if not b.nodeport_ok]:
+        with pytest.raises(ValueError, match="requires service_type=CLUSTERIP"):
+            gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT",
+                                        sv_ingress=ingress))
+
+
+def test_the_nodeport_refusal_gives_the_measured_reason_not_the_disproved_one():
+    """#49 and #60 each corrected a rationale that named a mechanism nobody had
+    measured. This refusal is real, so it has to say the real thing: the port
+    crane writes -- never the cluster-scoped Node read, which is denied on every
+    backend including the two that work."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT",
+                                    sv_ingress="contour"))
+    msg = str(e.value).lower()
+    assert "nodeport" in msg, "has to name the port it writes"
+    for claim in ("cluster-scoped", "node object", "namespaced role cannot"):
+        assert claim not in msg, f"refusal revives the disproved reason: {claim!r}"
 
 
 def test_sv_nginx_configmap_envs():

@@ -123,7 +123,7 @@ SV_FUNC_IDS = ("mockServices",)
 
 
 class SvBackend(collections.namedtuple(
-        "SvBackend", "group resources creates via_ingress_class")):
+        "SvBackend", "group resources creates via_ingress_class nodeport_ok")):
     """One crane web-expose backend: the object it publishes, and so the single
     API group the Role has to grant.
 
@@ -137,16 +137,27 @@ class SvBackend(collections.namedtuple(
     `via_ingress_class` records whether the published object is claimed by an
     IngressClass, which is what doctor preflights -- none of Istio 1.30, Contour
     v1.33 or the OpenShift router registers an IngressClass at all.
+
+    `nodeport_ok` records whether the backend survives service_type=NODEPORT,
+    and it is per-backend because crane fills the port field two different ways.
+    nginx and openshift write a *constant* -- 8080 -- which stays valid: an
+    Ingress backend resolves against the Service's port, which NODEPORT moves
+    from 80 to 8080, and a Route resolves against targetPort, which never moves.
+    contour and istio instead derive the port from the Service and take its
+    **nodePort**, which is a number no client ever reaches the ingress on. All
+    four were deployed live to settle it (#60); see docs/service-virtualization.md
+    for what each one did.
     """
     __slots__ = ()
 
 
 SV_INGRESS_BACKENDS = {
-    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True),
+    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True,
+                       nodeport_ok=True),
     "istio": SvBackend("networking.istio.io", ["gateways", "virtualservices"],
-                       "Gateway + VirtualService", False),
+                       "Gateway + VirtualService", False, nodeport_ok=False),
     "contour": SvBackend("projectcontour.io", ["httpproxies"],
-                         "HTTPProxy", False),
+                         "HTTPProxy", False, nodeport_ok=False),
     # routes/custom-host is not padding: OpenShift gates spec.host behind its
     # own create, and crane sets spec.host. Without it the create comes back 422
     # "you do not have permission to set the host field of the route", no Route
@@ -154,7 +165,8 @@ SV_INGRESS_BACKENDS = {
     # Proven by A/B on a live cluster -- and note `auth can-i create
     # routes/custom-host` answers yes either way, so it cannot be used to check.
     "openshift": SvBackend("route.openshift.io",
-                           ["routes", "routes/custom-host"], "Route", False),
+                           ["routes", "routes/custom-host"], "Route", False,
+                           nodeport_ok=True),
 }
 # Derived, not a second list to keep in step. Crane's binary names five
 # implementations -- kubernetes_{base,contour,istio,nginx,openshift}_web_expose
@@ -196,13 +208,22 @@ def _sv_cfg(facts, o):
             "The TLS secret is mandatory even for HTTP virtual services -- crane "
             "refuses to start without it."
         )
-    # service_type is deliberately not constrained here. NODEPORT alongside an
-    # ingress was refused until #60 ran it: on a namespaced Role only, crane
-    # published its Ingress, bound a NodePort Service to the mock, and all three
-    # transactions answered at the host BlazeMeter advertised. Crane's node read
-    # *is* denied and it *does* fall back to 127.0.0.1 -- but only for the
-    # address its Service pool would advertise, which the web-expose path never
-    # consults. See docs/service-virtualization.md for the run.
+    # Per-backend, because the answer differs per backend and was measured for
+    # each (#60). Not about node reads -- crane's is denied under NODEPORT on
+    # every backend and it publishes anyway. It is about the port crane writes
+    # into the object: see SvBackend.nodeport_ok.
+    if o["service_type"] != "CLUSTERIP" and not SV_INGRESS_BACKENDS[ingress].nodeport_ok:
+        raise ValueError(
+            f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
+            f"{o['service_type']}. Crane fills this backend's port field from "
+            f"the Service's nodePort, which nothing reaches the ingress on: the "
+            f"{SV_INGRESS_BACKENDS[ingress].creates} is written, the mock runs "
+            "1/1, BlazeMeter advertises the endpoint, and the endpoint does not "
+            "serve. Measured live -- contour reports `unresolved service "
+            "reference` and answers 503; istio's gateway ends up listening on "
+            "the nodePort alone and nothing answers at all. Use CLUSTERIP, or "
+            "sv_ingress=nginx or openshift, which write a constant port and do "
+            "work on NODEPORT.")
     if ingress == "openshift" and o["platform"] != "openshift":
         raise ValueError(
             f"sv_ingress=openshift requires platform=openshift, got "

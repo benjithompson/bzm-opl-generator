@@ -535,7 +535,7 @@ export default function App() {
   // Read off the group's own rule rather than restated here. The two were
   // separate copies of _sv_cfg's requirements and had to be edited in lockstep
   // -- #60 relaxed the rule and had to touch both, which is the argument.
-  const svOk = !GROUP_BY_ID.sv.incomplete!(options, svRequired);
+  const svOk = !GROUP_BY_ID.sv.incomplete!(options, svRequired, svConst.backends);
   // What the prerequisite list and the endpoint host are rendered against. The
   // list shows from the moment the group is on, so a field still empty renders
   // as its own placeholder rather than a gap; anything filled in is substituted
@@ -576,7 +576,7 @@ export default function App() {
   // so a feature gaining required options later needs nothing here. Whether the
   // reason is on screen is what decides between the group showing its own error
   // and the download button having to explain itself.
-  const incomplete = incompleteGroups(options, { sv: svRequired });
+  const incomplete = incompleteGroups(options, { sv: svRequired }, svConst.backends);
   const blockers = hiddenBlockers(incomplete, feature);
 
   // -- is the published endpoint answering? ----------------------------------
@@ -737,6 +737,9 @@ export default function App() {
         onTlsSecret={(v) => set("sv_tls_secret", v)}
         onGateway={(v) => set("sv_istio_gateway", v)}
         ok={svOk}
+        // The block is the service type when the two text fields are filled:
+        // then nothing else in this group can be the reason.
+        nodePortConflict={!svOk && !!txt("sv_subdomain") && !!txt("sv_tls_secret")}
         ctx={svCtx} rbac={svRbac} />
     ),
   };

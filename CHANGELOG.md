@@ -123,21 +123,23 @@ anything that breaks.
 
 ### Changed
 
-- **Service virtualization no longer forces `CLUSTERIP`.** `--sv-ingress`
-  together with `--service-type NODEPORT` used to be refused, on the reasoning
-  that NODEPORT sends crane to the cluster-scoped Node object a namespaced Role
-  cannot grant. It was run on two backends with crane 3.7.55 and a namespaced
-  Role only — `nginx` on minikube (k8s 1.32, ingress-nginx v1.11.3) and
-  `openshift` on OpenShift 4.22.1. On both, the virtual service deployed,
-  BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>`, and all three
-  transactions answered there. `istio` and `contour` are untested on NODEPORT. Crane's Node read *is* denied once a virtual
-  service is deployed — it logs the 403 and falls back to `127.0.0.1` — but that
-  address belongs to its Service pool, which the ingress path never consults.
-  The warning is expected there and not a symptom. The web UI offers NODEPORT
-  with SV on,
-  and an imported profile keeps whichever service type it arrived with instead
-  of being rewritten to `CLUSTERIP`. Nothing about existing `CLUSTERIP` bundles
-  changes. Details in `docs/service-virtualization.md`.
+- **Service virtualization: `--service-type NODEPORT` is now allowed with
+  `--sv-ingress nginx` or `openshift`, and still refused with `contour` or
+  `istio`.** It used to be refused for every backend, on the reasoning that
+  NODEPORT forces a cluster-scoped Node read a namespaced Role cannot grant.
+  That reasoning was wrong — crane's Node read is denied under NODEPORT on all
+  four backends and two of them publish fine anyway. What actually decides it is
+  the port crane writes into the object it publishes: `nginx` and `openshift`
+  write a constant that stays valid, while `contour` and `istio` take the
+  Service's **nodePort**, which nothing reaches the ingress on. Those two fail
+  silently — object written, mock `1/1`, endpoint advertised, and contour
+  answers 503 while istio's gateway listens on the nodePort alone — so the
+  refusal stays for them, now with the measured reason. All four were deployed
+  live to settle it. If you use `nginx` or `openshift`, NODEPORT is available in
+  the CLI and the web UI, and an imported profile keeps whichever service type it
+  arrived with instead of being rewritten to `CLUSTERIP`. Nothing about existing
+  `CLUSTERIP` bundles changes. Details, including a crane-free reproduction of
+  the contour case, in `docs/service-virtualization.md`.
 
 - **`doctor` no longer fails a cluster for something it was not allowed to
   look at.** A `get` that is denied or errors — nodes, LimitRanges,

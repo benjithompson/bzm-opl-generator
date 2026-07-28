@@ -89,8 +89,9 @@ describe("the declarations", () => {
   });
 
   it("leaves service_type to Security alone", () => {
-    // The SV group co-owned it to force CLUSTERIP until #60 ran that pairing
-    // live and it published fine; two writers for one key was the coupling.
+    // The SV group co-owned it to force CLUSTERIP unconditionally. #60 ran all
+    // four backends: two publish fine over NODEPORT and two do not, so the rule
+    // is per-backend now and lives in `incomplete`, not in a second writer.
     const owners = OPTION_GROUPS.filter((g) => g.keys.includes("service_type"));
     expect(owners.map((g) => g.id)).toEqual(["security"]);
   });
@@ -481,10 +482,40 @@ describe("a group declares whether its own configuration is finished", () => {
     expect(sv.incomplete?.({}, true)).toBe(true);
   });
 
-  it("counts NODEPORT as complete -- generate() renders that pairing", () => {
+  // The served table, as /api/sv-constants reports it. contour and istio take
+  // the Service's nodePort into the object they publish, so the endpoint never
+  // serves; nginx and openshift write a constant and do work. Measured, #60.
+  const BACKENDS = {
+    nginx: { nodeport_ok: true }, openshift: { nodeport_ok: true },
+    contour: { nodeport_ok: false }, istio: { nodeport_ok: false },
+  };
+  const withNodePort = (ingress: string) =>
+    ({ sv_ingress: ingress, sv_subdomain: "a.b", sv_tls_secret: "w",
+       service_type: "NODEPORT" });
+
+  it("counts NODEPORT as complete for a backend that publishes over it", () => {
+    for (const ingress of ["nginx", "openshift"]) {
+      expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(false);
+    }
+  });
+
+  it("counts NODEPORT as incomplete for one that does not", () => {
+    for (const ingress of ["contour", "istio"]) {
+      expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(true);
+    }
+  });
+
+  it("does not block before the backend table has loaded", () => {
+    // Undefined is "we have not been told", not "it is broken". Blocking on a
+    // guess would grey out the download for a configuration that generates
+    // fine, and generate() refuses authoritatively either way.
+    expect(sv.incomplete?.(withNodePort("contour"), false)).toBe(false);
+    expect(sv.incomplete?.(withNodePort("contour"), false, {})).toBe(false);
+  });
+
+  it("still blocks on an empty field whatever the service type", () => {
     expect(sv.incomplete?.(
-      { sv_ingress: "nginx", sv_subdomain: "a.b", sv_tls_secret: "w",
-        service_type: "NODEPORT" }, false)).toBe(false);
+      { ...withNodePort("nginx"), sv_tls_secret: "" }, false, BACKENDS)).toBe(true);
   });
 
   it("groups with no completeness rule never block", () => {
