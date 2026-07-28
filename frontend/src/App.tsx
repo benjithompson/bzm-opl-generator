@@ -22,6 +22,13 @@ import {
   setButHidden, startFeature, suggestNamespace, unavailableFeatures,
   unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
+// The preflight panel's own decisions -- how a verdict list reads, what a
+// picked file has to be, what a refused import leaves behind. No verdict is
+// reached there either: they are doctor's, and arrive in doctor's order.
+import {
+  EVIDENCE_SCRIPT, imported, NO_PREFLIGHT, PreflightState, readEvidence,
+  rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
+} from "./preflight";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
 import { GroupRow } from "./groups/GroupRow";
@@ -141,6 +148,12 @@ export default function App() {
     useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
+  // The imported cluster evidence, its verdicts, and whatever the last import
+  // was refused for. The document itself is kept, not just its verdicts: the
+  // preflight re-runs against it on every option change, because verdicts that
+  // described an older configuration would be worse than none.
+  const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
+  const [preflightBusy, setPreflightBusy] = useState(false);
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -590,6 +603,45 @@ export default function App() {
   const svCheckTone = (r: SvCheckOut) =>
     r.status !== "ok" ? "text-red-600"
       : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
+
+  // -- preflight against an imported cluster read ----------------------------
+  // The cluster-side twin of manual facts entry: someone with access to the
+  // customer's cluster runs the collector script, and this judges the file it
+  // produced. No API key, no kubecontext, nothing reachable from here.
+
+  /** Import: parse, then let the server say whether it is evidence at all --
+   *  and only commit it once it has. A file that is not evidence must not
+   *  displace the one whose verdicts are on screen, which it would if the doc
+   *  were stored first and left for the re-run effect to fail on. */
+  const importEvidence = async (f: File) => {
+    const read = readEvidence(f.name, await f.text());
+    if ("error" in read) { setPreflight((p) => refused(p, read.error)); return; }
+    setPreflightBusy(true);
+    try {
+      const out = await api.preflight(facts, options, read.doc);
+      setPreflight(imported(f.name, read.doc, out));
+    } catch (e) {
+      setPreflight((p) => refused(p, String((e as Error).message)));
+    } finally { setPreflightBusy(false); }
+  };
+
+  // Re-judged whenever the configuration moves, so the verdicts on screen are
+  // always about what is on screen -- engine sizing against the nodes, the
+  // ingress class against the ones that exist, the namespace against the one
+  // the file describes. Debounced like the preview: this runs on every
+  // keystroke in the namespace field. Held to `facts` for the same reason the
+  // picker is -- the checks measure the cluster against a location's slots and
+  // engine size, and none of it means anything without them.
+  const preflightTimer = useRef<number>();
+  useEffect(() => {
+    if (preflight.doc == null || !facts) return;
+    window.clearTimeout(preflightTimer.current);
+    preflightTimer.current = window.setTimeout(() => {
+      api.preflight(facts, options, preflight.doc)
+        .then((out) => setPreflight((p) => rechecked(p, out)))
+        .catch((e) => setPreflight((p) => refused(p, String((e as Error).message))));
+    }, 250);
+  }, [preflight.doc, facts, options]);
 
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
@@ -1265,6 +1317,95 @@ export default function App() {
                 </div>
               ))}
               <ErrorMsg msg={dlErr} />
+
+              {/* Will the cluster take it? Answered from a file rather than
+                  from a cluster, because the person configuring this usually
+                  has access to neither the account nor the cluster -- so it
+                  sits here beside the download, needing no key and no
+                  kubecontext of its own. */}
+              <div className="border-t border-slate-100 pt-3">
+                <div className="flex items-start gap-2 flex-wrap">
+                  <div className="grow min-w-[16rem]">
+                    <p className="text-xs font-medium text-slate-700">
+                      Preflight the target cluster
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Nothing here reads a cluster: have someone with access run{" "}
+                      <code className="font-mono">{EVIDENCE_SCRIPT}</code>{" "}
+                      (read-only, creates nothing, reads no secret value) and
+                      pick the file it wrote. The checks are the ones{" "}
+                      <code className="font-mono">bzm-opl-gen doctor</code> runs,
+                      against the configuration above.
+                    </p>
+                  </div>
+                  {/* A label rather than a Button so the file dialog is the
+                      click, as in Connect and Import above. */}
+                  <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
+                    + "border border-slate-300 text-slate-600 whitespace-nowrap "
+                    + (!facts || preflightBusy
+                      ? "opacity-40 pointer-events-none"
+                      : "hover:bg-slate-50 cursor-pointer")}>
+                    {preflightBusy ? "Checking…"
+                      : preflight.out ? "Choose another file…"
+                      : "Choose evidence file…"}
+                    <input type="file" accept=".json,application/json"
+                      className="hidden" disabled={!facts || preflightBusy}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";      // so the same file re-imports
+                        if (f) importEvidence(f);
+                      }} />
+                  </label>
+                </div>
+                {!facts && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Needs the agent details above — these checks measure the
+                    cluster against the location's slots, engine size and
+                    namespace.
+                  </p>
+                )}
+                <ErrorMsg msg={preflight.error} />
+                {preflight.out && (
+                  <div className="mt-2">
+                    <p className="text-[11px] text-slate-500">
+                      <b className="text-slate-700">{preflight.file}</b>
+                      {" · namespace "}
+                      <code className="font-mono">{preflight.out.namespace}</code>
+                      {" · "}
+                      <span className={worstStatus(preflight.out.checks)
+                        ? STATUS_STYLE[worstStatus(preflight.out.checks)!].text
+                        : ""}>
+                        {verdictLine(preflight.out.checks)}
+                      </span>
+                    </p>
+                    {/* doctor's order, kept: where the answers came from leads,
+                        because every verdict under it is only as good as that
+                        one -- a file collected by someone with little access
+                        warns about each section it could not see, and a list
+                        sorted by severity would bury the reason for all of
+                        them. */}
+                    <ul className="mt-1.5 space-y-1">
+                      {preflight.out.checks.map((c, i) => (
+                        <li key={`${c.name}-${i}`}
+                          className="flex items-start gap-2 text-[11px] text-slate-500">
+                          <span className={"shrink-0 rounded px-1.5 py-0.5 "
+                            + "text-[10px] font-bold uppercase tracking-wide "
+                            + STATUS_STYLE[c.status].badge}>
+                            {STATUS_STYLE[c.status].label}
+                          </span>
+                          <span>
+                            <span className="font-medium text-slate-700">
+                              {c.name}
+                            </span>
+                            {" — "}{c.detail}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+
               <div className="border-t border-slate-100 pt-3">
                 {sourceMode === "manual" ? (
                   /* Watching needs the API this mode exists to do without. Said

@@ -79,7 +79,32 @@ export const api = {
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
   svCheck: (host: string, scheme: SvScheme) =>
     req<SvCheckOut>("GET", "/api/sv-check?" + new URLSearchParams({ host, scheme })),
+  /** The preflight verdicts for a cluster nobody here can reach, from the file
+   *  its collector script produced. Needs no API key and no cluster, like
+   *  manualFacts -- `evidence` is the parsed file, sent whole and judged
+   *  server-side, because what counts as evidence is doctor's to say. */
+  preflight: (facts: Facts | null, options: Options, evidence: unknown) =>
+    req<PreflightOut>("POST", "/api/preflight",
+      { facts: facts ?? {}, options, evidence }),
 };
+
+/** One verdict, exactly as `doctor` reaches it. FAIL = a test would not start;
+ *  WARN = the numbers are wrong or it will bite later, but a test still starts.
+ *  Nothing in the browser re-decides one. */
+export type CheckStatus = "PASS" | "WARN" | "FAIL";
+export interface PreflightCheck {
+  name: string;
+  status: CheckStatus;
+  detail: string;
+}
+/** The verdicts, in doctor's order — which puts where the answers came from
+ *  first, because it qualifies every one after it. `namespace` is the one they
+ *  were judged against: the configured one, which the evidence file may not be
+ *  the one collected for (the leading check says so when it is not). */
+export interface PreflightOut {
+  namespace: string;
+  checks: PreflightCheck[];
+}
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */

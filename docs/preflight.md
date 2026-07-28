@@ -78,6 +78,11 @@ A file whose `schema` is missing or unrecognised is refused by name — pointing
 `--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it
 would produce verdicts about a cluster nobody described.
 
+The [web UI](web-ui.md) takes the same file under Download & verify and shows
+the same verdicts against the configuration on screen, re-run as you edit it —
+no API key and no kubecontext, the same "no access to anything" path manual
+facts entry serves.
+
 ## What the cluster implies about the options (`suggest`)
 
 `doctor` asks whether a deployment would survive a cluster. The same evidence
@@ -130,6 +135,7 @@ Cluster-scoped permissions say nothing about `service_type`, and `suggest` will
 not claim otherwise. Crane resolves its advertised address from its own network
 interfaces rather than from the Node object, and NODEPORT has run green against
 a cluster where the agent had namespaced RBAC only.
+
 
 ## Your machine (`toolcheck`)
 
