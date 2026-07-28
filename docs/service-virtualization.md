@@ -31,11 +31,17 @@ already exist (the generator names it, it does not create it).
 
 ## Which one to pick
 
-**Prefer anything but `nginx`.** Crane ships a separate expose implementation
-per type, and only the `nginx` one writes a port reference that is wrong by the
-Ingress spec. It happens to work on `ingress-nginx`, which forgives it — but it
-is working on tolerance no API guarantees, and it fails outright on a controller
-that follows the spec. On OpenShift, use `openshift`.
+**Prefer anything but `nginx`** — on the default `service_type: CLUSTERIP`,
+which is what this section assumes throughout. Crane ships a separate expose
+implementation per type, and only the `nginx` one writes a port reference that
+is wrong by the Ingress spec. It happens to work on `ingress-nginx`, which
+forgives it — but it is working on tolerance no API guarantees, and it fails
+outright on a controller that follows the spec. On OpenShift, use `openshift`.
+
+`NODEPORT` inverts this, which is why it has [its own
+section](#service_type-and-the-backend-you-chose): it makes the `nginx`
+reference correct and stops `contour` and `istio` working at all. The table
+below is the CLUSTERIP picture.
 
 | | `nginx` | `istio` | `contour` | `openshift` |
 |---|---|---|---|---|
@@ -101,15 +107,118 @@ All three working paths were verified end to end with namespaced RBAC only and
 real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
 and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift Local. The
 `nodes ... is forbidden` warning in the crane log is expected and harmless on all
-of them. Nothing a performance location does depends on that lookup — it is
-capacity awareness, and `NODEPORT` was once believed to be the exception until a
-live run showed crane takes its address from its own network interfaces instead
-(see `bzm_opl_gen/templates/clusterrole.yaml`). The refusal below is about the
-`sv_ingress` path specifically, which is untested either way.
+of them, and on `nginx` under `NODEPORT` (see below). Nothing a performance
+location does depends on that lookup — it is capacity awareness (see
+`bzm_opl_gen/templates/clusterrole.yaml`).
 
 One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
 env-var reference documents, creates no object at all and stalls at
 `WAITING_FOR_DOMAIN`.
+
+## `service_type` and the backend you chose
+
+`NODEPORT` alongside `sv_ingress` was refused outright, on the reasoning that
+NODEPORT forces a cluster-scoped Node read a namespaced Role cannot grant. That
+reasoning is wrong — and the refusal was still half right, for a different
+reason nobody had looked for. All four backends were deployed live on
+2026-07-28 to settle it, crane 3.7.55 and service-mock 6.0.29.6 throughout, RBAC
+a namespaced Role and RoleBinding with no ClusterRoleBinding naming the account.
+
+| backend | port crane writes | on `NODEPORT` |
+|---|---|---|
+| `nginx` | `port.number: 8080` — a constant | **works** |
+| `openshift` | `port.targetPort: 8080` — a constant | **works** |
+| `contour` | the Service's **nodePort** (`30598`) | **fails** |
+| `istio` | Gateway `port.number:` the **nodePort** (`32430`) | **fails** |
+
+The generator refuses the two that fail, and `--service-type NODEPORT` is
+accepted with `nginx` and `openshift`.
+
+One istio configuration is refused without having been measured, on purpose.
+With `--sv-istio-gateway` set crane reuses a Gateway you already own instead of
+creating one, and the Gateway is the object that carried the bad port — the
+VirtualService names no port at all. That combination may work. It is refused
+with the rest because "istio does not do NODEPORT" is a rule you can predict
+from the backend alone, and `CLUSTERIP` costs you nothing: it is the default,
+it is the more widely permitted of the two under cluster policy, and it changes
+nothing else about an istio deployment. [#63](https://github.com/benjithompson/bzm-opl-generator/issues/63)
+settles it if anyone needs the narrower rule.
+
+**The two that work do so because crane writes a constant.** `8080` is the
+mock's container port. An Ingress backend resolves against the Service's
+`port`, which `NODEPORT` moves from `80` to `8080` — so crane's reference, which
+is *wrong* under `CLUSTERIP` and tolerated only by lenient controllers (see
+[Which one to pick](#which-one-to-pick)), becomes exactly right. A Route
+resolves against `targetPort`, which is `8080` either way. Neither was designed
+for this; both survive it.
+
+Measured: `nginx` on minikube (kicbase v0.0.46, k8s 1.32, ingress-nginx
+v1.11.3), `openshift` on OpenShift 4.22.1. Deployment `FINISHED`, virtual
+service `RUNNING`, BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>` —
+no `WAITING_FOR_DOMAIN` — and all three transactions answered there:
+`GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
+`POST /api/v1/orders` → `201`; unmatched path `404`, unknown host `404`
+(ingress-nginx) / `503` (the router). The nginx case was reproduced across a
+stop and a second deploy.
+
+**The two that fail derive the port from the Service and take its nodePort**,
+which is not a port anything reaches the ingress on. Both fail *silently* in the
+way this page keeps warning about — object written, mock `1/1`, endpoint
+advertised, nothing serving:
+
+- **contour** wrote `services: [{name: crane-b3696-…, port: 30598}]`. Contour
+  rejected it — `unresolved service reference: port "30598" on service … not
+  matched`, HTTPProxy `invalid` — and the endpoint returned **503** while the
+  mock answered `200` on its nodePort directly. Confirmed without crane by
+  [`docs/repro/contour-nodeport-port.yaml`](repro/contour-nodeport-port.yaml):
+  the same `port: 80` reference is valid against a `CLUSTERIP` Service and
+  invalid against a `NODEPORT` one.
+- **istio** wrote a Gateway server on `port.number: 32430`. Istio accepted it,
+  and the ingress gateway's envoy came up listening on `15021`, `15090` and
+  `32430` — **nothing on 80 or 443**, which is where the published host resolves.
+  Both ports refused the connection outright.
+
+This is why the refusal is per backend rather than per service type, and why it
+could not have been settled by reasoning about node reads: crane's node read is
+denied under `NODEPORT` on all four, including both that work.
+
+Crane's node read **is** denied, exactly as the old rationale said:
+`_get_final_ip` logs `nodes "<node>" is forbidden ... at the cluster scope` and
+then `Setting default ip 127.0.0.1`. What the rationale got wrong is the
+consequence. That address belongs to crane's *Service pool* — it pre-creates
+NodePort Services and binds one to a mock by setting its selector at deploy time
+— and the web-expose path never consults it. The endpoint comes from
+`KUBERNETES_WEB_EXPOSE_SUB_DOMAIN`, which needs no cluster-scoped read at all.
+
+Worth knowing when that warning is expected, because it is easy to read as a
+symptom: it is the *pool* that reads Node, so it appears only once a virtual
+service exists. The same agent on the same `NODEPORT` config logged it **0**
+times across ten hours idle, and once per status update from the moment the mock
+deployed. A performance location that never deploys a mock never reaches this
+code at all — which is why #49 could report a clean log for `NODEPORT` and this
+run a denied read, with neither contradicting the other.
+
+If you switch an existing agent between the two service types, note that crane
+does **not** retype the pool Services it already created — it keeps them and
+adds new ones of the current type, binding whichever it picks. Observed on the
+OpenShift agent above: after switching back to `CLUSTERIP` the virtual service
+served correctly from a Service still typed `NodePort`. Harmless, but it means
+`kubectl get svc` is not a reliable reading of the configured service type, and
+the stale members hold node ports until something removes them. They are
+crane-managed: deleting one by hand while the pool holds it desynchronises the
+agent, and the virtual service then deploys a pod with no Service and no
+endpoint. Stop the virtual service and let crane rebuild instead.
+
+None of this is a reason to switch. `NODEPORT` does make crane's `nginx`
+reference correct by spec, but it fixes that on one backend, costs a node port
+per virtual service, and the three others either never had the problem or are
+refused. `CLUSTERIP` remains the default and the smaller ask of a cluster.
+
+What is still untested is `NODEPORT` on an SV location with **no** ingress —
+where the pool's address is all there is to publish, so the `127.0.0.1` fallback
+would plausibly be the endpoint. Nobody has run it: the generator refuses an SV
+location without an ingress whatever the service type, and gives
+`WAITING_FOR_DOMAIN` as the reason, which is a different claim from this one.
 
 ## Reaching a virtual service from outside: `sv-expose`
 
@@ -172,8 +281,8 @@ advisory — but note it is a real FAIL with a non-zero exit, because `doctor`
 reads only the profile and has no way to know you intend to run `sv-expose`. If
 that matters in CI, gate on the other checks or use a non-nginx `sv_ingress`.
 
-`service_type` stays `CLUSTERIP` here and the generator rejects `NODEPORT`
-alongside `sv_ingress`. NODEPORT makes crane resolve its address from the
-cluster-scoped **Node** object, which a namespaced Role cannot grant; denied, it
-silently falls back to `127.0.0.1` and stalls. Using an ingress is what keeps
-the whole deployment inside namespaced RBAC — no ClusterRole required.
+`sv-expose` is indifferent to `service_type`: it selects the mock's pod by the
+identity labels crane stamps, not through crane's Service, so it works the same
+whether that Service is `CLUSTERIP` or `NODEPORT`. Either way the whole
+deployment stays inside namespaced RBAC — no ClusterRole required (see
+[`service_type` and the backend you chose](#service_type-and-the-backend-you-chose)).

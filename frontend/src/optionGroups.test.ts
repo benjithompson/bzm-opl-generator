@@ -42,8 +42,6 @@ const DETECTS: [GroupId, string, unknown][] = [
 const WRITE_ONLY: [GroupId, string][] = [
   // Only meaningful beside ca_existing_configmap, which does the detecting.
   ["ca", "ca_configmap_key"],
-  // Written by two groups; only Security's CLUSTERIP departure opens anything.
-  ["sv", "service_type"],
   // An imported profile carrying these without an ingress is not an SV config;
   // the ingress is what the group is.
   ["sv", "sv_subdomain"],
@@ -90,9 +88,12 @@ describe("the declarations", () => {
     }
   });
 
-  it("show the two groups that both write service_type", () => {
+  it("leaves service_type to Security alone", () => {
+    // The SV group co-owned it to force CLUSTERIP unconditionally. #60 ran all
+    // four backends: two publish fine over NODEPORT and two do not, so the rule
+    // is per-backend now and lives in `incomplete`, not in a second writer.
     const owners = OPTION_GROUPS.filter((g) => g.keys.includes("service_type"));
-    expect(owners.map((g) => g.id)).toEqual(["security", "sv"]);
+    expect(owners.map((g) => g.id)).toEqual(["security"]);
   });
 });
 
@@ -159,8 +160,8 @@ describe("switching a group off", () => {
   });
 
   it("leaves service_type alone when service virtualization goes off", () => {
-    // Deliberate asymmetry, preserved from the original switch: enabling SV
-    // forces CLUSTERIP, disabling it does not put NODEPORT back.
+    // It never writes service_type in either direction now -- but a wipe that
+    // reached it would still silently rewrite the user's choice, so pin it.
     expect(GROUP_BY_ID.sv.disable(FULL)).not.toHaveProperty("service_type");
   });
 
@@ -194,16 +195,18 @@ describe("switching a group on", () => {
       { engine_cpu_limit: small.cpu, engine_mem_limit: small.mem })).toEqual({});
   });
 
-  it("seeds an ingress and forces CLUSTERIP for service virtualization", () => {
-    // NODEPORT would send crane at the cluster-scoped Node object, so the
-    // service type is forced rather than merely defaulted.
+  it("seeds an ingress and keeps the chosen service type", () => {
+    // It used to force CLUSTERIP here. #60 deployed a virtual service over
+    // NODEPORT on namespaced RBAC and it served, so a NODEPORT the user chose
+    // survives switching SV on.
     expect(GROUP_BY_ID.sv.enable({ service_type: "NODEPORT" }))
-      .toEqual({ sv_ingress: "nginx", service_type: "CLUSTERIP" });
+      .toEqual({ sv_ingress: "nginx" });
   });
 
-  it("keeps an ingress that was already chosen", () => {
-    expect(GROUP_BY_ID.sv.enable({ sv_ingress: "contour" }))
-      .toEqual({ sv_ingress: "contour", service_type: "CLUSTERIP" });
+  it("seeds nothing over an ingress that was already chosen", () => {
+    // An empty patch, not the value echoed back: flipGroup hands back the same
+    // options object for one, and a fresh identity re-POSTs /api/generate.
+    expect(GROUP_BY_ID.sv.enable({ sv_ingress: "contour" })).toEqual({});
   });
 
   it("starts CA trust on the existing-ConfigMap mode", () => {
@@ -479,10 +482,40 @@ describe("a group declares whether its own configuration is finished", () => {
     expect(sv.incomplete?.({}, true)).toBe(true);
   });
 
-  it("counts NODEPORT as incomplete -- generate() refuses that pairing", () => {
+  // Deliberately NOT the real backend names. Which backends publish over
+  // NODEPORT is the server's fact, pinned against the generator in
+  // tests/test_server.py; restating it here would be a second copy free to go
+  // stale. What this file owns is whether `incomplete` consults the table it is
+  // handed, which two shape-only entries exercise exactly as well.
+  const BACKENDS = { publishes: { nodeport_ok: true },
+                     does_not: { nodeport_ok: false } };
+  const withNodePort = (ingress: string) =>
+    ({ sv_ingress: ingress, sv_subdomain: "a.b", sv_tls_secret: "w",
+       service_type: "NODEPORT" });
+
+  it("counts NODEPORT as complete for a backend that publishes over it", () => {
+    for (const ingress of ["publishes"]) {
+      expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(false);
+    }
+  });
+
+  it("counts NODEPORT as incomplete for one that does not", () => {
+    for (const ingress of ["does_not"]) {
+      expect(sv.incomplete?.(withNodePort(ingress), false, BACKENDS)).toBe(true);
+    }
+  });
+
+  it("does not block before the backend table has loaded", () => {
+    // Undefined is "we have not been told", not "it is broken". Blocking on a
+    // guess would grey out the download for a configuration that generates
+    // fine, and generate() refuses authoritatively either way.
+    expect(sv.incomplete?.(withNodePort("does_not"), false)).toBe(false);
+    expect(sv.incomplete?.(withNodePort("does_not"), false, {})).toBe(false);
+  });
+
+  it("still blocks on an empty field whatever the service type", () => {
     expect(sv.incomplete?.(
-      { sv_ingress: "nginx", sv_subdomain: "a.b", sv_tls_secret: "w",
-        service_type: "NODEPORT" }, false)).toBe(true);
+      { ...withNodePort("publishes"), sv_tls_secret: "" }, false, BACKENDS)).toBe(true);
   });
 
   it("groups with no completeness rule never block", () => {

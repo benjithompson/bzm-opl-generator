@@ -187,6 +187,10 @@ export interface SvBackend {
   resources: string[];
   /** What crane publishes with it — "Ingress", "Gateway + VirtualService", … */
   creates: string;
+  /** Whether this backend works with service_type NODEPORT. False for the two
+   *  where crane writes the Service's nodePort into the published object, so
+   *  the endpoint never serves — generate() refuses those (#60). */
+  nodeport_ok: boolean;
 }
 export type SvConstants = {
   func_ids: string[];

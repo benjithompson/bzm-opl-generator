@@ -1,0 +1,97 @@
+# Reproduction for the contour row of docs/service-virtualization.md#service_type-and-the-backend-you-chose
+# -- does an HTTPProxy port reference survive the Service being NodePort?
+#
+# No BlazeMeter account and no crane needed: this reconstructs the two Service
+# shapes crane creates (CLUSTERIP publishes 80, NODEPORT publishes 8080) and
+# points the same port reference at each.
+#
+#   kubectl apply -f docs/repro/contour-nodeport-port.yaml
+#   kubectl -n projectcontour port-forward svc/envoy 18080:80 &
+#   for h in clusterip-80 nodeport-80 nodeport-8080 bogus; do
+#     printf '%-16s %s\n' "$h" \
+#       "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $h.test" http://127.0.0.1:18080/)"
+#   done
+#   kubectl -n contour-porttest get httpproxy   # contour's own verdict
+#
+# Expected: bogus is ALWAYS 404 -- the control; anything else means the rig is
+# not reaching contour. clusterip-80 is 200: crane's reference is correct on the
+# service type it was designed against. nodeport-80 is the finding -- 503, and
+# the HTTPProxy reports `invalid` with "unresolved service reference".
+# nodeport-8080 is 200, i.e. what crane would have to write instead.
+#
+# Measured 2026-07-28: Contour v1.33.5 on minikube k8s 1.32 -> 200 / 503 / 200 / 404.
+# Note crane does not write 80 under NODEPORT -- it writes the *nodePort*, which
+# fails the same way for the same reason. This file pins the mechanism; the live
+# run is in the doc.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: contour-porttest
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: backend, namespace: contour-porttest }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: backend } }
+  template:
+    metadata: { labels: { app: backend } }
+    spec:
+      containers:
+        - name: echo
+          image: hashicorp/http-echo:1.0.0
+          args: ["-listen=:8080", "-text=OK"]
+          ports: [{ containerPort: 8080 }]
+---
+# The Service shape crane creates under KUBERNETES_SERVICE_USE_TYPE: NODEPORT
+# -- port 8080, targetPort 8080. Under CLUSTERIP it publishes 80 instead, which
+# is the whole point of this repro.
+apiVersion: v1
+kind: Service
+metadata: { name: svc-nodeport, namespace: contour-porttest }
+spec:
+  type: NodePort
+  selector: { app: backend }
+  ports: [{ name: "8080", port: 8080, targetPort: 8080 }]
+---
+# The Service shape crane creates under CLUSTERIP: port 80, targetPort 8080.
+apiVersion: v1
+kind: Service
+metadata: { name: svc-clusterip, namespace: contour-porttest }
+spec:
+  type: ClusterIP
+  selector: { app: backend }
+  ports: [{ name: "80", port: 80, targetPort: 8080 }]
+---
+# CONTROL: crane's documented contour shape (port 80) against the CLUSTERIP
+# Service it was measured on. Must be 200, or the rig is not reaching contour.
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata: { name: p-clusterip-80, namespace: contour-porttest }
+spec:
+  virtualhost: { fqdn: clusterip-80.test }
+  routes:
+    - conditions: [{ prefix: / }]
+      services: [{ name: svc-clusterip, port: 80 }]
+---
+# THE QUESTION: the same port 80 reference against the NODEPORT Service, which
+# publishes 8080 and has no port 80 at all.
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata: { name: p-nodeport-80, namespace: contour-porttest }
+spec:
+  virtualhost: { fqdn: nodeport-80.test }
+  routes:
+    - conditions: [{ prefix: / }]
+      services: [{ name: svc-nodeport, port: 80 }]
+---
+# What crane would have to write for NODEPORT to work: the port the Service
+# actually publishes.
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata: { name: p-nodeport-8080, namespace: contour-porttest }
+spec:
+  virtualhost: { fqdn: nodeport-8080.test }
+  routes:
+    - conditions: [{ prefix: / }]
+      services: [{ name: svc-nodeport, port: 8080 }]

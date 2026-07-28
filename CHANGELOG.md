@@ -123,6 +123,24 @@ anything that breaks.
 
 ### Changed
 
+- **Service virtualization: `--service-type NODEPORT` is now allowed with
+  `--sv-ingress nginx` or `openshift`, and still refused with `contour` or
+  `istio`.** It used to be refused for every backend, on the reasoning that
+  NODEPORT forces a cluster-scoped Node read a namespaced Role cannot grant.
+  That reasoning was wrong — crane's Node read is denied under NODEPORT on all
+  four backends and two of them publish fine anyway. What actually decides it is
+  the port crane writes into the object it publishes: `nginx` and `openshift`
+  write a constant that stays valid, while `contour` and `istio` take the
+  Service's **nodePort**, which nothing reaches the ingress on. Those two fail
+  silently — object written, mock `1/1`, endpoint advertised, and contour
+  answers 503 while istio's gateway listens on the nodePort alone — so the
+  refusal stays for them, now with the measured reason. All four were deployed
+  live to settle it. If you use `nginx` or `openshift`, NODEPORT is available in
+  the CLI and the web UI, and an imported profile keeps whichever service type it
+  arrived with instead of being rewritten to `CLUSTERIP`. Nothing about existing
+  `CLUSTERIP` bundles changes. Details, including a crane-free reproduction of
+  the contour case, in `docs/service-virtualization.md`.
+
 - **`doctor` no longer fails a cluster for something it was not allowed to
   look at.** A `get` that is denied or errors — nodes, LimitRanges,
   ResourceQuotas, ServiceAccounts — now reports WARN "could not be read" for

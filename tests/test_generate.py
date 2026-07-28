@@ -486,9 +486,47 @@ def test_sv_ingress_requires_subdomain_and_tls_secret():
                                 "sv_subdomain": "apps.example.com"})
 
 
-def test_sv_ingress_rejects_nodeport():
-    with pytest.raises(ValueError, match="cluster-scoped"):
-        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
+    """Both settings reach the ConfigMap; neither is quietly rewritten.
+
+    A rewrite would be worse than the refusal it replaced: the customer asked
+    for NODEPORT, the manifests would say CLUSTERIP, and nothing would say why.
+    """
+    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items() if b.nodeport_ok]:
+        opts = dict(SV_OPTS, service_type="NODEPORT", sv_ingress=ingress)
+        if ingress == "openshift":
+            opts["platform"] = "openshift"
+        data = yaml.safe_load(
+            gen.generate(SV_FACTS, opts)["bzm_configmap.yaml"])["data"]
+        assert data["KUBERNETES_SERVICE_USE_TYPE"] == "NODEPORT"
+        assert data["KUBERNETES_WEB_EXPOSE_TYPE"] == ingress.upper()
+
+
+def test_sv_ingress_refuses_nodeport_where_it_was_measured_broken():
+    """contour and istio take the port from the Service's nodePort, so the
+    object is written, the mock runs, BlazeMeter advertises an endpoint, and it
+    does not serve -- the silent failure every other guard in _sv_cfg exists to
+    stop. Asserted per backend off the table, so a fifth backend added without a
+    measured `nodeport_ok` shows up here rather than on someone's cluster."""
+    for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items()
+                    if not b.nodeport_ok]:
+        with pytest.raises(ValueError, match="requires service_type=CLUSTERIP"):
+            gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT",
+                                        sv_ingress=ingress))
+
+
+def test_the_nodeport_refusal_gives_the_measured_reason_not_the_disproved_one():
+    """#49 and #60 each corrected a rationale that named a mechanism nobody had
+    measured. This refusal is real, so it has to say the real thing: the port
+    crane writes -- never the cluster-scoped Node read, which is denied on every
+    backend including the two that work."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT",
+                                    sv_ingress="contour"))
+    msg = str(e.value).lower()
+    assert "nodeport" in msg, "has to name the port it writes"
+    for claim in ("cluster-scoped", "node object", "namespaced role cannot"):
+        assert claim not in msg, f"refusal revives the disproved reason: {claim!r}"
 
 
 def test_sv_nginx_configmap_envs():
@@ -740,26 +778,25 @@ def test_endpoint_host_is_built_in_one_place():
     assert f"host: {host}" in out
 
 
-def test_the_sv_refusal_does_not_give_a_reason_that_was_disproved():
-    """The guard survives #49; the reason it printed did not.
+def test_sv_on_nodeport_still_needs_no_cluster_rbac():
+    """What #60 actually measured, pinned as the thing that could regress.
 
-    A live performance location ran green on NODEPORT with namespaced RBAC only
-    -- crane takes its advertised address from its own network interfaces, not
-    from the Node object -- so the sv_ingress refusal was telling users to fix
-    something that is not the problem. The SV pairing really is unverified
-    (#60), and saying so is honest; naming a mechanism we disproved next door
-    is not.
-
-    Asserted against the message a user actually sees rather than by grepping
-    sources: a source scan wants a way to exempt the sentences that *describe*
-    the old claim, and any such exemption also exempts a genuine regression
-    sitting beside them. This cannot be fooled that way.
+    The old refusal claimed NODEPORT forced a cluster-scoped Node read that a
+    namespaced Role cannot grant. The live run (crane 3.7.55, service-mock
+    6.0.29.6, ingress-nginx v1.11.3 on k8s 1.32) denied that read -- crane logs
+    the 403 and falls back to 127.0.0.1 -- and the virtual service served
+    anyway, because the endpoint comes from the web-expose subdomain and not
+    from that address. So the pairing must keep generating namespaced RBAC and
+    nothing else; a ClusterRole appearing here would mean someone had reinstated
+    the disproved mechanism by way of the manifests instead of the message.
     """
-    with pytest.raises(ValueError) as e:
-        gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
-    msg = str(e.value).lower()
-    assert "service_type=clusterip" in msg, "still has to say what to do"
-    for claim in ("read the cluster-scoped node",
-                  "node object to build an address",
-                  "namespaced role cannot grant"):
-        assert claim not in msg, f"refusal still gives the disproved reason: {claim!r}"
+    files = gen.generate(SV_FACTS, dict(SV_OPTS, service_type="NODEPORT"))
+    assert not [n for n in files if "clusterrole" in n.lower()]
+    # The Role carries the ingress grant and no `nodes` rule to make up for it.
+    # Every resource of every rule, flat: four rules share the core "" group, so
+    # collecting them into a dict keyed by group drops three of them and lets a
+    # `nodes` rule through in whichever position did not survive.
+    role = yaml.safe_load(files["bzm_role.yaml"])
+    granted = [res for r in role["rules"] for res in r["resources"]]
+    assert "ingresses" in granted
+    assert "nodes" not in granted

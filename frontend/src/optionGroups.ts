@@ -30,11 +30,11 @@ export interface OptionGroup {
   hint: string;
   /** Shown instead of `hint` on a row the caller flags as required. */
   requiredHint?: string;
-  /** Every option key this group writes. Overlap is legal: `service_type` is
-   *  displayed by Security and forced by Service virtualization, and is listed
-   *  by both so that the sharing is visible here rather than only to someone
-   *  who reads two lifecycle functions. The list is also what a later view can
-   *  use to say "set, but not currently shown". */
+  /** Every option key this group writes. Overlap is legal and would be listed
+   *  by each owner, so the sharing is visible here rather than only to someone
+   *  who reads two lifecycle functions -- there is none at present, since
+   *  Service virtualization gave up its claim on `service_type` (#60). The list
+   *  is also what a later view can use to say "set, but not currently shown". */
   keys: string[];
   /** The ids of the served features this group belongs to (see Feature in
    *  api.ts). Empty means every deployment needs it whatever is being
@@ -58,8 +58,14 @@ export interface OptionGroup {
    *  change" breaks: the next feature with required options would otherwise
    *  need its own check in App, its own entry in a list, and its own arm on the
    *  download guard. `required` is the location's own demand -- funcIds can make
-   *  a group mandatory when nothing is set yet. Absent means never blocks. */
-  incomplete?: (o: Options, required: boolean) => boolean;
+   *  a group mandatory when nothing is set yet. Absent means never blocks.
+   *
+   *  `backends` is the served SV backend table; only the SV group reads it, and
+   *  only to answer whether the chosen backend tolerates NODEPORT -- a
+   *  per-backend fact that lives on the server and cannot be stated here
+   *  without keeping a second copy of it. Undefined before the constants load. */
+  incomplete?: (o: Options, required: boolean,
+                backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
 }
 
 // -- CA trust ----------------------------------------------------------------
@@ -184,12 +190,11 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "security",
     title: "Security & RBAC",
     hint: "defaults: token in a Secret, CLUSTERIP, no cluster RBAC",
-    // Untagged deliberately, though it shares service_type with SV below: how
-    // the auth token is stored and whether the bundle asks for cluster RBAC are
-    // questions every deployment answers, and hiding the field that the SV
-    // group's own NODEPORT error points at would be the worst of both.
+    // Untagged deliberately: how the auth token is stored and whether the
+    // bundle asks for cluster RBAC are questions every deployment answers.
     features: [],
-    // service_type is shared with the SV group below.
+    // Sole owner of service_type -- the SV group gave up its claim once #60
+    // showed an ingress publishes fine over NODEPORT.
     keys: ["use_secret", "cluster_rbac", "service_type"],
     // Absent service_type means the backend default (CLUSTERIP), so only an
     // explicit NODEPORT is a departure worth opening the group for -- the same
@@ -205,31 +210,38 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "only for locations with the mockServices feature",
     requiredHint: "this location runs mockServices — virtual services need an ingress",
     features: ["sv"],
-    // service_type is written here and owned by Security too; see the note on
-    // `disable` for why only one of the two directions restores it.
-    keys: ["sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway",
-           "service_type"],
+    // service_type is *not* here. This group used to own it as well, to force
+    // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
+    // on namespaced RBAC, so SV has no opinion on it and Security owns it
+    // alone.
+    keys: ["sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"],
     // The ingress is what the group is: a domain or TLS secret arriving without
     // one is not an SV configuration, and an SV *location* is flagged required
     // by the caller rather than found in the options at all.
     detect: (o) => !!o.sv_ingress,
-    // The ingress path only works on CLUSTERIP; NODEPORT would send crane to
-    // the cluster-scoped Node object instead.
     // Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and
     // the TLS secret are both mandatory (the secret even for plain HTTP --
-    // crane validates it at startup), and NODEPORT is refused because it sends
-    // crane to the cluster-scoped Node object. With none chosen, only a
-    // location whose funcIds demand SV is unfinished.
-    incomplete: (o, required) => (o.sv_ingress
+    // crane validates it at startup), and NODEPORT is refused for a backend
+    // that cannot publish over it. With none chosen, only a location whose
+    // funcIds demand SV is unfinished.
+    //
+    // An unknown backend does NOT block, and that covers three states this one
+    // value cannot tell apart -- not fetched yet, fetch failed, table served
+    // empty. Usually the repo insists those stay distinct; here they genuinely
+    // share an answer, because none of them is evidence that the pairing is
+    // broken. Blocking on any of them would grey out the download for a
+    // configuration that generates fine, and generate() refuses authoritatively
+    // in the case that is actually broken.
+    incomplete: (o, required, backends) => (o.sv_ingress
       ? !String(o.sv_subdomain ?? "").trim()
         || !String(o.sv_tls_secret ?? "").trim()
-        || (o.service_type != null && o.service_type !== "CLUSTERIP")
+        || (o.service_type != null && o.service_type !== "CLUSTERIP"
+            && backends?.[String(o.sv_ingress)]?.nodeport_ok === false)
       : required),
-    enable: (o) => ({ sv_ingress: o.sv_ingress || "nginx", service_type: "CLUSTERIP" }),
-    // Deliberately does NOT restore service_type: CLUSTERIP is the safe value
-    // and the one the backend defaults to, and putting a NODEPORT back is not
-    // something switching a group off should do behind the user's back. This
-    // asymmetry with `enable` is intended -- don't "fix" it.
+    // `{}` when an ingress is already chosen, like every other group that has
+    // nothing to seed: a patch with a key in it mints a fresh options identity
+    // and re-POSTs /api/generate for a configuration that did not change.
+    enable: (o) => (o.sv_ingress ? {} : { sv_ingress: "nginx" }),
     disable: () => ({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
       sv_istio_gateway: null }),
   },
@@ -311,8 +323,9 @@ export function setButHidden(
  *  declarations rather than passed in: the caller knowing which groups can be
  *  incomplete is the coupling this exists to remove. */
 export function incompleteGroups(
-    o: Options, required: Partial<Record<GroupId, boolean>>): OptionGroup[] {
-  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id]));
+    o: Options, required: Partial<Record<GroupId, boolean>>,
+    backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
+  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
 /** Why the download is blocked when the reason is not on screen -- the failure

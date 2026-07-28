@@ -27,9 +27,13 @@ export function SvGroup(props: {
   onSubdomain: (v: string | null) => void;
   onTlsSecret: (v: string | null) => void;
   onGateway: (v: string | null) => void;
-  /** Whether the SV settings are complete enough to generate; false shows the
-   *  reason, which is the NODEPORT conflict or the two mandatory fields. */
+  /** Whether the SV settings are complete enough to generate; false means one
+   *  of the two mandatory fields is empty, or the service type is one this
+   *  backend cannot publish over. */
   ok: boolean;
+  /** True when the block is the service type rather than an empty field --
+   *  the two need different sentences, because only one names a fix that is
+   *  somewhere else on the page. */
   nodePortConflict: boolean;
   ctx: SvCtx;
   rbac?: SvBackend;
@@ -82,7 +86,10 @@ export function SvGroup(props: {
       {!props.ok && (
         <p className="text-[11px] text-amber-700">
           {props.nodePortConflict
-            ? "Service type must be CLUSTERIP — NODEPORT sends crane to the cluster-scoped Node object, which namespaced RBAC cannot grant."
+            ? `Service type must be CLUSTERIP for this backend — crane writes the
+               Service's nodePort into the ${props.rbac?.creates ?? "published object"},
+               which nothing reaches the ingress on, so the endpoint never serves.
+               Change it under Security & RBAC, or pick nginx or openshift.`
             : "Domain and TLS secret are both required — without them crane crash-loops on “TLS secret name is empty”."}
         </p>
       )}

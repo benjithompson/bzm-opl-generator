@@ -161,10 +161,15 @@ def test_sv_constants_carry_what_each_backend_publishes():
     assert set(backends) == set(gen_mod.SV_INGRESS_TYPES)
     for name, b in gen_mod.SV_INGRESS_BACKENDS.items():
         assert backends[name] == {"group": b.group, "resources": list(b.resources),
-                                  "creates": b.creates}
+                                  "creates": b.creates, "nodeport_ok": b.nodeport_ok}
     # routes/custom-host is the one nobody would guess: OpenShift gates
     # spec.host behind it, and crane sets spec.host.
     assert "routes/custom-host" in backends["openshift"]["resources"]
+    # nodeport_ok is served because the UI *decides* with it -- it greys out the
+    # download rather than letting generate() refuse after the fact -- so a
+    # backend added without it would silently offer a pairing that cannot serve.
+    assert {n: b["nodeport_ok"] for n, b in backends.items()} == {
+        "nginx": True, "openshift": True, "contour": False, "istio": False}
 
 
 def test_func_id_choices_cover_the_whole_generator_vocabulary():

@@ -36,7 +36,7 @@ DEFAULT_OPTIONS = {
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
     # Service virtualization ingress. Only meaningful for a location whose
     # funcIds include mockServices; see _sv_cfg for why all three are required
-    # together and why NODEPORT is rejected alongside them.
+    # together. service_type is not among them -- see the note there.
     "sv_ingress": None,              # None, or one of SV_INGRESS_TYPES
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
     "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
@@ -123,7 +123,7 @@ SV_FUNC_IDS = ("mockServices",)
 
 
 class SvBackend(collections.namedtuple(
-        "SvBackend", "group resources creates via_ingress_class")):
+        "SvBackend", "group resources creates via_ingress_class nodeport_ok")):
     """One crane web-expose backend: the object it publishes, and so the single
     API group the Role has to grant.
 
@@ -137,16 +137,37 @@ class SvBackend(collections.namedtuple(
     `via_ingress_class` records whether the published object is claimed by an
     IngressClass, which is what doctor preflights -- none of Istio 1.30, Contour
     v1.33 or the OpenShift router registers an IngressClass at all.
+
+    `nodeport_ok` records whether the backend survives service_type=NODEPORT,
+    and it is per-backend because crane fills the port field two different ways.
+    nginx and openshift write a *constant* -- 8080 -- which stays valid: an
+    Ingress backend resolves against the Service's port, which NODEPORT moves
+    from 80 to 8080, and a Route resolves against targetPort, which never moves.
+    contour and istio instead derive the port from the Service and take its
+    **nodePort**, which is a number no client ever reaches the ingress on. All
+    four were deployed live to settle it (#60); see docs/service-virtualization.md
+    for what each one did.
+
+    One case under `istio` is refused without having been measured, and
+    deliberately: with sv_istio_gateway set crane reuses a Gateway the customer
+    already owns instead of creating one, and the Gateway is the object that
+    carried the bad port -- its VirtualService names no port at all. That
+    variant may well work. It is refused with the rest because a rule a customer
+    can predict ("istio does not do NODEPORT") is worth more here than the
+    narrowest possible one ("istio does not do NODEPORT unless you also set a
+    gateway name"), and CLUSTERIP costs them nothing. #63 settles it if the
+    narrower rule ever earns its keep.
     """
     __slots__ = ()
 
 
 SV_INGRESS_BACKENDS = {
-    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True),
+    "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True,
+                       nodeport_ok=True),
     "istio": SvBackend("networking.istio.io", ["gateways", "virtualservices"],
-                       "Gateway + VirtualService", False),
+                       "Gateway + VirtualService", False, nodeport_ok=False),
     "contour": SvBackend("projectcontour.io", ["httpproxies"],
-                         "HTTPProxy", False),
+                         "HTTPProxy", False, nodeport_ok=False),
     # routes/custom-host is not padding: OpenShift gates spec.host behind its
     # own create, and crane sets spec.host. Without it the create comes back 422
     # "you do not have permission to set the host field of the route", no Route
@@ -154,7 +175,8 @@ SV_INGRESS_BACKENDS = {
     # Proven by A/B on a live cluster -- and note `auth can-i create
     # routes/custom-host` answers yes either way, so it cannot be used to check.
     "openshift": SvBackend("route.openshift.io",
-                           ["routes", "routes/custom-host"], "Route", False),
+                           ["routes", "routes/custom-host"], "Route", False,
+                           nodeport_ok=True),
 }
 # Derived, not a second list to keep in step. Crane's binary names five
 # implementations -- kubernetes_{base,contour,istio,nginx,openshift}_web_expose
@@ -196,18 +218,25 @@ def _sv_cfg(facts, o):
             "The TLS secret is mandatory even for HTTP virtual services -- crane "
             "refuses to start without it."
         )
-    if o["service_type"] != "CLUSTERIP":
+    # Per-backend, because the answer differs per backend and was measured for
+    # each (#60). Not about node reads -- crane's is denied under NODEPORT on
+    # every backend and it publishes anyway. It is about the port crane writes
+    # into the object: see SvBackend.nodeport_ok.
+    if o["service_type"] != "CLUSTERIP" and not SV_INGRESS_BACKENDS[ingress].nodeport_ok:
         raise ValueError(
             f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
-            f"{o['service_type']}. A virtual service has to publish an address "
-            "something outside the cluster then resolves, and that pairing is "
-            "unverified -- when it goes wrong it stalls at WAITING_FOR_DOMAIN "
-            "with the mock healthy, which is why this refuses rather than "
-            "renders. (The reason once given here -- that NODEPORT needs a "
-            "cluster-scoped Node read -- was disproved for performance "
-            "locations; crane takes its address from its own interfaces. See "
-            "issue #60, which settles the SV case with a live run.)"
-        )
+            f"{o['service_type']}. Crane fills this backend's port field from "
+            f"the Service's nodePort, which nothing reaches the ingress on: the "
+            f"{SV_INGRESS_BACKENDS[ingress].creates} is written, the mock runs "
+            "1/1, BlazeMeter advertises the endpoint, and the endpoint does not "
+            "serve. Measured live -- contour reports `unresolved service "
+            "reference` and answers 503; istio's gateway ends up listening on "
+            "the nodePort alone and nothing answers at all. Fix: use "
+            "service_type=CLUSTERIP, which is the default and changes nothing "
+            f"else about a {ingress} deployment. (sv_ingress=nginx and "
+            "openshift do work on NODEPORT -- they write a constant port -- but "
+            "switching backend to get there means switching ingress controller, "
+            "which is the bigger change of the two.)")
     if ingress == "openshift" and o["platform"] != "openshift":
         raise ValueError(
             f"sv_ingress=openshift requires platform=openshift, got "
@@ -662,10 +691,10 @@ def _sv_rbac_block(sv):
     """Namespaced Role rules crane needs to publish a virtual service.
 
     Deliberately namespaced: keeping the whole deployment inside a namespaced
-    Role is the reason the ingress path is preferred. Not, as this said, because
-    NODEPORT needs cluster-scoped node reads -- it does not (#49). What is
-    unverified is whether crane's SV expose path can publish a reachable address
-    over a NodePort at all, which #60 settles.
+    Role is the reason the ingress path is preferred. Not because NODEPORT needs
+    cluster-scoped node reads -- it does not, for a performance location (#49)
+    or a virtual service (#60). A virtual service does provoke a denied node
+    read, from the Service pool, and publishes its endpoint anyway.
 
     Only the group the configured backend actually writes is granted. Crane
     picks one implementation per KUBERNETES_WEB_EXPOSE_TYPE and never touches
@@ -1106,11 +1135,14 @@ def sv_endpoint_host(name, port, namespace, subdomain):
 def sv_expose(mocks, namespace, publish):
     """Render a Service + Ingress per deployed virtual service.
 
-    Crane publishes its own pair, but the Ingress is unusable: its backend says
-    `port.number: 8080` while the Service it created exposes `port: 80`, and
-    Kubernetes resolves a backend against `spec.ports[].port`. Nothing claims
-    it, so the endpoint BlazeMeter advertises 503s while the mock serves
-    happily inside the cluster.
+    Crane publishes its own pair, but under CLUSTERIP the Ingress is unusable:
+    its backend says `port.number: 8080` while the Service it created exposes
+    `port: 80`, and Kubernetes resolves a backend against `spec.ports[].port`.
+    Nothing claims it, so the endpoint BlazeMeter advertises 503s while the mock
+    serves happily inside the cluster. (Under NODEPORT the Service publishes
+    8080 and crane's constant matches, so the mismatch does not arise -- this
+    command is then unnecessary, though harmless: it selects on pod labels and
+    is indifferent to the Service crane made.)
 
     Rather than patch an object crane rewrites on every deploy, this emits a
     parallel pair that sidesteps the mismatch: `port == targetPort`, and a

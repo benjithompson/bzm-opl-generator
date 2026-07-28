@@ -105,6 +105,31 @@ library convention, not a JVM one), so engine→SUT goes direct and fails under
 `--contain-egress` while results still upload. Not a manifest bug; the proxy has
 to go in the test. Don't "fix" it in the generator.
 
+### Testing a virtual service by hand
+
+`livetest` covers performance locations only, so an SV backend is verified by
+deploying a real virtual service to a real location and curling the endpoint
+BlazeMeter advertises. Three things cost an afternoon the first time:
+
+- **Only one ingress controller can hold the node's `:80`/`:443`.** ingress-nginx,
+  Contour's envoy and istio's gateway all want hostPorts 80 and 443, and on a
+  one-node minikube the second one scheduled sits `Pending` with
+  `didn't have free ports`. Scale the incumbent to 0 rather than debugging it.
+  Istio's gateway must also be installed under a release name that produces the
+  label `istio: ingressgateway` — crane hardcodes that selector, and a Gateway
+  matching no pod fails exactly like a bad port would.
+- **Never delete a Service or Route crane created.** Crane keeps a *pool* of
+  them and binds one to a mock by setting its selector at deploy time; deleting
+  one it is holding desynchronises the agent, and the next deploy produces a
+  mock pod with no Service, no endpoint, and a virtual service wedged in
+  `CONFIGURING`. Stop the virtual service and let crane rebuild. Note the pool
+  also survives a `KUBERNETES_SERVICE_USE_TYPE` change — the old Services keep
+  their old type, so `kubectl get svc` does not report what is configured.
+- **`CONFIGURING` clears itself, eventually.** A deploy interrupted mid-flight
+  (a crane restart will do it) leaves BlazeMeter refusing both `deploy` ("already
+  running") and `stop` ("not running"). It drops to `FAILED` on its own after a
+  few minutes and is deployable again; there is no API call that forces it.
+
 ## Local environment
 
 Run `bzm-opl-gen toolcheck --cluster minikube --local-registry 5001

@@ -1,14 +1,13 @@
 import { Check, Field, inputCls } from "../components";
 
-/** Security & RBAC. `service_type` is written here and by the SV group, which
- *  forces it to CLUSTERIP -- hence `svOn`: with an SV ingress configured the
- *  select offers the one value that works, rather than a state whose only
- *  outcome is a blocked download. */
+/** Security & RBAC, sole owner of `service_type`. The SV group used to force
+ *  CLUSTERIP and this select hid NODEPORT whenever an ingress was configured;
+ *  #60 ran that pairing live and it publishes fine on namespaced RBAC, so both
+ *  values are offered whatever else is on. */
 export function SecurityGroup(props: {
   useSecret: boolean;
   clusterRbac: boolean;
   serviceType: string;
-  svOn: boolean;
   onUseSecret: (v: boolean) => void;
   onClusterRbac: (v: boolean) => void;
   onServiceType: (v: string) => void;
@@ -26,15 +25,11 @@ export function SecurityGroup(props: {
           onChange={props.onClusterRbac} />
       </div>
       <Field label="Service type"
-        hint={props.svOn
-          ? "locked to CLUSTERIP: service virtualization reaches pods through the ingress, and NODEPORT would need cluster-scoped node access"
-          : "NODEPORT is BlazeMeter's default but often disallowed"}>
+        hint="NODEPORT is BlazeMeter's default but often disallowed">
         <select className={inputCls} value={props.serviceType}
           onChange={(e) => props.onServiceType(e.target.value)}>
           <option value="CLUSTERIP">CLUSTERIP</option>
-          {/* Offering NODEPORT while SV is on would only lead to a
-              blocked download; make the bad state unreachable. */}
-          {!props.svOn && <option value="NODEPORT">NODEPORT</option>}
+          <option value="NODEPORT">NODEPORT</option>
         </select>
       </Field>
     </>

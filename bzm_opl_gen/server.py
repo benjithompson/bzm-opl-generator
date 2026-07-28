@@ -624,11 +624,14 @@ def sv_constants():
             # What each backend publishes, so the UI can name the Role the
             # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
             # -- which is mechanical, unlike the prose around it. Only the
-            # three fields the UI renders; via_ingress_class is doctor's, and
-            # serving it here would be a field nothing reads.
+            # four fields the UI renders; via_ingress_class is doctor's, and
+            # serving it here would be a field nothing reads. nodeport_ok is
+            # here because the UI decides something with it -- whether to offer
+            # NODEPORT beside this backend -- not merely to display it.
             "backends": {name: {"group": b.group,
                                 "resources": list(b.resources),
-                                "creates": b.creates}
+                                "creates": b.creates,
+                                "nodeport_ok": b.nodeport_ok}
                          for name, b in gen_mod.SV_INGRESS_BACKENDS.items()}}
 
 

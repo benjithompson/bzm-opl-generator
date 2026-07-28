@@ -635,11 +635,13 @@ def check_ingress_class(facts, opts, cluster):
     controller = (mine.get("spec") or {}).get("controller") or "?"
     detail = (f"IngressClass '{CRANE_INGRESS_CLASS}' exists (controller "
               f"{controller}) to claim the Ingress crane creates")
-    if controller == OPENSHIFT_ROUTE_CONTROLLER:
-        # Verified live: crane's Ingress backend uses port.number 8080 while the
-        # Service it created exposes port 80, and this controller resolves the
-        # backend against spec.ports[].port -- so it logs
-        # IncompleteIngressToRouteRules and creates no Route.
+    # Only under CLUSTERIP. Crane's Ingress backend writes a constant 8080 and
+    # this controller resolves it against spec.ports[].port -- which is 80 under
+    # CLUSTERIP (mismatch, no Route) and 8080 under NODEPORT (a match, so the
+    # defect does not arise). Saying it unconditionally would tell a NODEPORT
+    # customer their endpoint is broken when generate() just accepted it.
+    if (controller == OPENSHIFT_ROUTE_CONTROLLER
+            and opts.get("service_type", "CLUSTERIP") == "CLUSTERIP"):
         detail += (f"; note that this controller resolves the backend port "
                    f"against the Service's port 80 and crane writes 8080, so it "
                    f"reports IncompleteIngressToRouteRules and creates no Route "
