@@ -195,14 +195,18 @@ export const OPTION_GROUPS: OptionGroup[] = [
     features: [],
     // Sole owner of service_type -- the SV group gave up its claim once #60
     // showed an ingress publishes fine over NODEPORT.
-    keys: ["use_secret", "cluster_rbac", "service_type"],
+    keys: ["use_secret", "cluster_rbac", "service_type", "restrict_engines"],
     // Absent service_type means the backend default (CLUSTERIP), so only an
     // explicit NODEPORT is a departure worth opening the group for -- the same
-    // `!= null` treatment the SV validation uses.
+    // `!= null` treatment the SV validation uses. restrict_engines is the same
+    // shape the other way up: absent means the backend default, which is on,
+    // so only an explicit false is a departure.
     detect: (o) => o.use_secret === false || !!o.cluster_rbac
+      || o.restrict_engines === false
       || (o.service_type != null && o.service_type !== "CLUSTERIP"),
     enable: () => ({}),
-    disable: () => ({ use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" }),
+    disable: () => ({ use_secret: true, cluster_rbac: false,
+                      service_type: "CLUSTERIP", restrict_engines: true }),
   },
   {
     id: "sv",

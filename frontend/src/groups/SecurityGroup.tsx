@@ -7,9 +7,11 @@ import { Check, Field, inputCls } from "../components";
 export function SecurityGroup(props: {
   useSecret: boolean;
   clusterRbac: boolean;
+  restrictEngines: boolean;
   serviceType: string;
   onUseSecret: (v: boolean) => void;
   onClusterRbac: (v: boolean) => void;
+  onRestrictEngines: (v: boolean) => void;
   onServiceType: (v: string) => void;
 }) {
   return (
@@ -24,6 +26,15 @@ export function SecurityGroup(props: {
           checked={props.clusterRbac}
           onChange={props.onClusterRbac} />
       </div>
+      {/* On by default, and the only one here whose *unchecked* state is the
+          dangerous one -- crane's own default engine pod is privileged, which
+          restricted PodSecurity, OpenShift SCC and GKE Autopilot all refuse
+          after the agent is already online. The hint says what unchecking
+          costs rather than what checking buys. */}
+      <Check label="Engines drop privileges"
+        hint="uncheck only for an image needing a capability; privileged engines are rejected by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
+        checked={props.restrictEngines}
+        onChange={props.onRestrictEngines} />
       <Field label="Service type"
         hint="NODEPORT is BlazeMeter's default but often disallowed">
         <select className={inputCls} value={props.serviceType}

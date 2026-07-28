@@ -719,9 +719,15 @@ export default function App() {
     security: (
       <SecurityGroup useSecret={Boolean(options.use_secret)}
         clusterRbac={Boolean(options.cluster_rbac)}
+        // Absent means the backend default, which is on -- so `!== false`
+        // rather than Boolean(), which would show an untouched bundle as
+        // unrestricted and invite someone to "fix" it by ticking a box that
+        // then writes a key that was never there.
+        restrictEngines={options.restrict_engines !== false}
         serviceType={String(options.service_type ?? "CLUSTERIP")}
         onUseSecret={(v) => set("use_secret", v)}
         onClusterRbac={(v) => set("cluster_rbac", v)}
+        onRestrictEngines={(v) => set("restrict_engines", v)}
         onServiceType={(v) => set("service_type", v)} />
     ),
     sv: (

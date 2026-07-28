@@ -34,6 +34,10 @@ const DETECTS: [GroupId, string, unknown][] = [
   ["security", "use_secret", false],
   ["security", "cluster_rbac", true],
   ["security", "service_type", "NODEPORT"],
+  // The one entry here whose detecting value is `false`: restrict_engines is
+  // on by default, so absent means restricted and only an explicit false is
+  // a departure the group should open for.
+  ["security", "restrict_engines", false],
   ["sv", "sv_ingress", "nginx"],
 ];
 
@@ -69,6 +73,7 @@ const FULL: Options = {
   use_secret: false,
   cluster_rbac: true,
   service_type: "NODEPORT",
+  restrict_engines: false,
   sv_ingress: "istio",
   sv_subdomain: "apps.example.com",
   sv_tls_secret: "wildcard-credential",
@@ -150,7 +155,8 @@ describe("switching a group off", () => {
       },
       sched: { tolerations: null, node_selector: null },
       sizing: { engine_cpu_limit: null, engine_mem_limit: null },
-      security: { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" },
+      security: { use_secret: true, cluster_rbac: false,
+                  service_type: "CLUSTERIP", restrict_engines: true },
       sv: {
         sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
         sv_istio_gateway: null,
