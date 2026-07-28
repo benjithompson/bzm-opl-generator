@@ -107,23 +107,26 @@ def _normalised(doc, key):
 
 def _platform(doc):
     """security.openshift.io is served by OpenShift and by nothing else, which
-    settles an option with exactly two values -- and one that decides more than
-    its name suggests: the SCC-aware engine envs are emitted only on the
-    openshift path, so getting it wrong is what `doctor`'s admission check
-    later reports as restricted PSA rejecting the engines."""
+    settles an option with exactly two values.
+
+    It used to decide more than its name suggests -- the engine security envs
+    rode on it, so choosing k8s silently gave up the restricted engine pod.
+    They are on by default on both platforms now (restrict_engines), and this
+    is back to deciding only what it says: whether crane's own pod pins a
+    runAsUser or leaves it to an SCC."""
     served = _read(doc, "api_groups", "openshift_security", kind=bool)
     if served is None:
         return []
     if served:
         return [_decisive("platform", "openshift", ["api_groups.openshift_security"],
                           "security.openshift.io is served, which only OpenShift "
-                          "does. The bundle's SCC-aware engine envs "
-                          "(INHERIT_RUNNING_USER_AND_GROUP) belong here")]
+                          "does. Crane's pod leaves runAsUser to the SCC, and "
+                          "engines inherit the UID it assigns")]
     return [_decisive("platform", "k8s", ["api_groups.openshift_security"],
                       "security.openshift.io is not served, so this is plain "
-                      "Kubernetes: the OpenShift-only engine envs would go "
-                      "unused, and the namespace's PodSecurity level becomes "
-                      "what decides whether engine pods are admitted")]
+                      "Kubernetes: crane's pod pins runAsUser itself, and the "
+                      "namespace's PodSecurity level is what decides whether "
+                      "engine pods are admitted")]
 
 
 # -- the service account -----------------------------------------------------

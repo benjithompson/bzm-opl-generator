@@ -19,8 +19,17 @@ authToken: ""
 # -- Platform -----------------------------------------------------------------
 
 # k8s | openshift. On openshift the restricted-v2 SCC assigns the UID, so
-# runAsUser is left unset and engines are told to inherit crane's UID:GID.
+# runAsUser is left unset. What engines inherit differs by platform; whether
+# they drop privileges is restrictEngines below, on either.
 platform: k8s
+
+# Engines crane spawns inherit its UID:GID and drop all capabilities, so they
+# pass restricted PodSecurity, OpenShift's restricted-v2 SCC and GKE Autopilot's
+# Warden. Crane's own default is a privileged engine pod, which all three refuse
+# -- and refuse late, after the agent is already online and the location looks
+# ready, so the run hangs at BOOT_STARTING rather than failing usefully. Set
+# false only for an image that genuinely needs a capability.
+restrictEngines: true
 
 # CLUSTERIP | NODEPORT. Either runs on the namespaced Role this chart creates:
 # crane takes its advertised address from its own network interfaces, not from

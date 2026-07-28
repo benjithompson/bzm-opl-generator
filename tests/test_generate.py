@@ -111,8 +111,30 @@ def test_k8s_platform_sets_runasuser():
     files = gen.generate(FACTS, {"namespace": "ns1", "platform": "k8s"})
     _all_yaml_parse(files)
     assert "runAsUser: 1337" in files["bzm_deployment.yaml"]
-    cm = yaml.safe_load(files["bzm_configmap.yaml"])
+
+
+def test_engines_drop_privileges_on_every_platform():
+    """This used to assert the opposite for k8s, and the asymmetry was an
+    accident of where a rejection was first noticed rather than a decision:
+    `platform` defaults to openshift, so the restricted engine was already what
+    the tool shipped, and naming k8s quietly opted out of it. Crane's own
+    default engine pod is privileged, and restricted PodSecurity, OpenShift SCC
+    and GKE Autopilot's Warden all refuse it -- late, after the agent is online,
+    so the run hangs at BOOT_STARTING instead of failing usefully."""
+    for platform in ("k8s", "openshift"):
+        cm = yaml.safe_load(gen.generate(
+            FACTS, {"namespace": "ns1", "platform": platform})["bzm_configmap.yaml"])
+        assert cm["data"]["INHERIT_RUNNING_USER_AND_GROUP"] == "true", platform
+        assert json.loads(cm["data"]["KUBERNETES_SECURITY_CONTEXT_CAP_JSON"]) == {
+            "drop": ["ALL"]}, platform
+
+
+def test_restrict_engines_can_be_turned_off_for_an_image_that_needs_a_capability():
+    cm = yaml.safe_load(gen.generate(
+        FACTS, {"namespace": "ns1", "platform": "k8s",
+                "restrict_engines": False})["bzm_configmap.yaml"])
     assert "INHERIT_RUNNING_USER_AND_GROUP" not in cm["data"]
+    assert "KUBERNETES_SECURITY_CONTEXT_CAP_JSON" not in cm["data"]
 
 
 def test_cluster_rbac_optional():

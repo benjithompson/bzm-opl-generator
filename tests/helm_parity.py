@@ -77,6 +77,10 @@ CASES = {
     # keeps its own copy of the default and the overlay only names an override,
     # so the two sides can disagree here without either looking wrong alone.
     "crane-ephemeral": {"platform": "k8s", "crane_ephemeral_storage": "4Gi"},
+    # The escape hatch, not the default -- the default is covered by every other
+    # case here. Off is the side that can drift: the chart gates on its own
+    # value and the overlay only speaks when it is false.
+    "unrestricted-engines": {"platform": "k8s", "restrict_engines": False},
     # The name has to reach the Deployment and both binding subjects, and
     # `create` has to remove the object from one format exactly when it removes
     # it from the other -- a chart still rendering it would adopt an account the

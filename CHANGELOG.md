@@ -11,6 +11,25 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **Engines drop privileges on every platform, not just OpenShift.** The two
+  ConfigMap keys that make crane stamp a security context on the pods it spawns
+  — `INHERIT_RUNNING_USER_AND_GROUP` and `KUBERNETES_SECURITY_CONTEXT_CAP_JSON`
+  — were emitted only for `platform=openshift`. Since `platform` defaults to
+  `openshift`, the restricted engine was already what most bundles got; naming
+  `k8s` quietly opted out of it and left crane's own default, which is a
+  *privileged* engine pod. Restricted PodSecurity, OpenShift's restricted-v2 SCC
+  and GKE Autopilot's Warden all refuse that — and refuse it after the agent is
+  online and the location reads ready, so the run hangs at `BOOT_STARTING`
+  rather than failing usefully. Nothing in those keys was ever
+  OpenShift-specific. Verified with a real JMeter run on GKE Autopilot: the
+  engine comes back `privileged: false`, `uid=1337`, all capabilities dropped,
+  and returns 20 samples with 0 failures. `--no-restrict-engines` restores the
+  old behaviour for an image that genuinely needs a capability. `doctor` follows
+  the option rather than the platform: `pod-security.kubernetes.io/enforce=restricted`
+  is now a PASS, and a FAIL only when the restriction is turned off.
+
 ### Fixed
 
 - **The crane pod now asks for the ephemeral storage it actually uses, and asks

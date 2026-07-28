@@ -427,9 +427,25 @@ def test_resourcequota_without_a_limitrange_warns_about_explicit_requests():
 
 # -- check_admission --------------------------------------------------------
 
-def test_admission_k8s_restricted_fails_on_the_engine_pods():
-    ns = {"metadata": {"labels": {"pod-security.kubernetes.io/enforce": "restricted"}}}
-    c = doctor.check_admission(FACTS, {"platform": "k8s"}, {"namespace": ns})[0]
+NS_RESTRICTED = {"metadata": {"labels":
+                 {"pod-security.kubernetes.io/enforce": "restricted"}}}
+
+
+def test_admission_k8s_restricted_passes_now_that_engines_drop_privileges():
+    """Used to be a FAIL, and correctly so: the engine security envs were
+    emitted only for platform=openshift, so restricted PSA rejected the engine
+    pods after crane was online. They are on by default everywhere now."""
+    c = doctor.check_admission(FACTS, {"platform": "k8s"},
+                               {"namespace": NS_RESTRICTED})[0]
+    assert c.status == doctor.PASS
+
+
+def test_admission_k8s_restricted_still_fails_with_engine_restriction_off():
+    """The verdict follows the option, not the platform -- turning the envs off
+    is what puts this namespace back where it was."""
+    c = doctor.check_admission(FACTS,
+                               {"platform": "k8s", "restrict_engines": False},
+                               {"namespace": NS_RESTRICTED})[0]
     assert c.status == doctor.FAIL
     assert "engine" in c.detail
 

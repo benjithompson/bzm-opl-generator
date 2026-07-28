@@ -142,6 +142,8 @@ def cmd_generate(a):
         opts["service_account_create"] = False
     if a.cluster_rbac:
         opts["cluster_rbac"] = True
+    if a.no_restrict_engines:
+        opts["restrict_engines"] = False
     if a.tolerations:
         opts["tolerations"] = json.loads(a.tolerations)
     if a.node_selector:
@@ -515,6 +517,13 @@ def main():
                    help='crane pod ephemeral storage, request and limit both '
                         '(default 1Gi). One value because GKE Autopilot '
                         'rewrites the limit down to the request')
+    g.add_argument("--no-restrict-engines", dest="no_restrict_engines",
+                   action="store_true",
+                   help="let crane spawn engines with its own default security "
+                        "context (privileged). Only for an image that needs a "
+                        "capability -- a privileged engine is refused by "
+                        "restricted PodSecurity, OpenShift SCC and GKE Autopilot, "
+                        "and the run hangs at BOOT_STARTING when it is")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)

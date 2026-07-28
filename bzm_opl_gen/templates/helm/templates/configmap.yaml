@@ -15,9 +15,11 @@ data:
   AUTH_TOKEN: {{ .Values.authToken | quote }}
   {{- end }}
   CONTAINER_MANAGER_TYPE: KUBERNETES
-  {{- if eq .Values.platform "openshift" }}
-  # OpenShift non-privileged path: engines inherit crane's SCC-assigned UID:GID
-  # and drop all capabilities, so spawned engine pods also pass restricted-v2.
+  {{- if .Values.restrictEngines }}
+  # Engines inherit crane's UID:GID and drop all capabilities, so the pods crane
+  # spawns pass restricted PodSecurity, OpenShift's restricted-v2 SCC and GKE
+  # Autopilot's Warden. Crane's own default is privileged, which every one of
+  # those refuses -- and refuses invisibly, since the agent is online by then.
   INHERIT_RUNNING_USER_AND_GROUP: 'true'
   KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{"drop": ["ALL"]}'
   {{- end }}

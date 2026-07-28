@@ -338,6 +338,25 @@ def test_bad_engine_size_is_still_caught_in_helm_format():
     assert "engine_mem_limit" in str(e.value)
 
 
+def test_chart_defaults_to_restricted_engines():
+    """The chart's own default matters more than the overlay here: a bare
+    `helm install` of this chart used to get privileged engines, because
+    values.yaml sets platform=k8s and the template gated on it."""
+    _, files = _values()
+    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    assert chart["restrictEngines"] is True
+
+
+def test_restrict_engines_off_reaches_the_overlay():
+    values, _ = _values(restrict_engines=False)
+    assert values["restrictEngines"] is False
+
+
+def test_restrict_engines_on_leaves_the_overlay_silent():
+    values, _ = _values()
+    assert "restrictEngines" not in values
+
+
 def test_chart_default_crane_ephemeral_storage_is_a_matched_pair():
     """The chart carries its own defaults, so the manifests-side constant does
     not reach it -- this is the restatement that can drift. Equal request and

@@ -478,9 +478,15 @@ def check_admission(facts, opts, cluster):
 
     Our crane pod satisfies restricted PSA (runAsNonRoot, no privilege
     escalation, drop ALL, RuntimeDefault seccomp). The engines crane spawns are
-    a different matter: they only get KUBERNETES_SECURITY_CONTEXT_CAP_JSON and
-    INHERIT_RUNNING_USER_AND_GROUP on the openshift path, so under restricted
-    PSA on plain k8s they are rejected after crane is already happily online.
+    a different matter, and the one worth checking: their security context comes
+    from KUBERNETES_SECURITY_CONTEXT_CAP_JSON and INHERIT_RUNNING_USER_AND_GROUP
+    in the ConfigMap, not from anything in the Deployment, so a bundle can look
+    entirely correct and still have crane create a privileged pod that
+    admission refuses. That refusal lands after the agent is online and the
+    location reads ready, which is why it is worth a preflight at all.
+
+    Those envs are on by default on every platform now, so what this reads is
+    the option, not the platform.
     """
     namespace_obj = cluster.get("namespace")
     platform = opts.get("platform") or "openshift"
@@ -516,12 +522,21 @@ def check_admission(facts, opts, cluster):
                       f"has nothing to inherit and engine pods may be rejected")]
     enforce = (meta.get("labels") or {}).get(PSA_ENFORCE)
     if enforce == "restricted":
+        # This was a flat FAIL while the engine security envs were emitted only
+        # for platform=openshift. They are on by default everywhere now, so the
+        # verdict follows the option rather than the platform -- and turning
+        # them off is exactly what puts this namespace back where it was.
+        if opts.get("restrict_engines", True):
+            return [Check("admission (PodSecurity)", PASS,
+                          f"{PSA_ENFORCE}=restricted; engines drop all "
+                          f"capabilities and inherit crane's UID:GID, so the "
+                          f"pods crane spawns satisfy it too")]
         return [Check("admission (PodSecurity)", FAIL,
-                      f"{PSA_ENFORCE}=restricted with platform=k8s: crane passes, "
-                      f"but the engine pods it spawns get no security context "
-                      f"(the generator emits KUBERNETES_SECURITY_CONTEXT_CAP_JSON "
-                      f"/ INHERIT_RUNNING_USER_AND_GROUP only for platform="
-                      f"openshift), so runs fail after the agent is online. Use "
+                      f"{PSA_ENFORCE}=restricted with restrict_engines off: "
+                      f"crane passes, but the engine pods it spawns keep "
+                      f"crane's own privileged default and are rejected after "
+                      f"the agent is already online, so runs hang rather than "
+                      f"fail. Drop --no-restrict-engines, or use "
                       f"enforce=baseline for this namespace")]
     if enforce:
         return [Check("admission (PodSecurity)", PASS,

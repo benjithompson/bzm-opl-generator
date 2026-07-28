@@ -46,6 +46,11 @@ DEFAULT_OPTIONS = {
     # URL moves into the Secret when use_secret is on.
     "proxy": None,
     "run_as_user": 1337,             # k8s platform only (openshift: SCC assigns)
+    # Engines crane spawns drop all capabilities and inherit crane's UID:GID.
+    # On by default on every platform -- crane's own default is privileged, and
+    # a privileged engine is refused by anything that enforces admission. Off is
+    # for an image that genuinely needs a capability; see _configmap.
+    "restrict_engines": True,
     # Real-cluster scheduling / trust / sizing (all optional):
     "tolerations": None,             # k8s toleration list -> crane pod + engines
     "node_selector": None,           # {"label": "value"} -> crane pod + engines
@@ -376,11 +381,29 @@ def _configmap(facts, o):
             f"  AUTH_TOKEN: \"{o['auth_token']}\"",
         ]
     lines += ["  CONTAINER_MANAGER_TYPE: KUBERNETES"]
-    if o["platform"] == "openshift":
+    if o["restrict_engines"]:
+        # Crane's own default engine pod is privileged, and nothing in these two
+        # keys is OpenShift-specific -- they were only ever emitted there because
+        # that is where a rejection was noticed first. Any cluster that enforces
+        # admission rejects the privileged engine: restricted PSA on plain k8s,
+        # and GKE Autopilot, whose Warden denies the Job outright
+        # (`[denied by autogke-disallow-privilege]`). The failure is the
+        # expensive kind -- crane is online and healthy, the location looks
+        # ready, and the run hangs at BOOT_STARTING until it times out, because
+        # the pod that was refused is one crane creates and no manifest here
+        # names.
+        #
+        # Measured on GKE Autopilot with a real JMeter run: the engine comes
+        # back `privileged: false`, and inside the container `uid=1337 gid=1337`
+        # with CapEff/CapPrm all zero, producing 20 samples and 0 failures. What
+        # engines inherit differs by platform -- an SCC-assigned UID on
+        # OpenShift, crane's pinned run_as_user on k8s -- but wanting no
+        # privileges does not.
         lines += [
-            "  # OpenShift non-privileged path: engines inherit crane's SCC-assigned",
-            "  # UID:GID and drop all capabilities, so spawned engine pods also pass",
-            "  # the restricted-v2 SCC.",
+            "  # Engines inherit crane's UID:GID and drop all capabilities, so the",
+            "  # pods crane spawns pass restricted PodSecurity, OpenShift's",
+            "  # restricted-v2 SCC and GKE Autopilot's Warden. Turn off only for an",
+            "  # image that genuinely needs a capability (--no-restrict-engines).",
             "  INHERIT_RUNNING_USER_AND_GROUP: 'true'",
             "  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{\"drop\": [\"ALL\"]}'",
         ]
@@ -814,6 +837,16 @@ def _helm_values(facts, o):
         "",
         f"platform: {o['platform']}",
         f"serviceType: {o['service_type']}",
+    ]
+    if not o["restrict_engines"]:
+        # Only when off. On is the chart's default too, and the overlay names
+        # what was chosen rather than restating what was not.
+        lines += [
+            "# Crane's default engine pod is privileged; restricted PodSecurity,",
+            "# OpenShift SCC and GKE Autopilot all refuse it.",
+            "restrictEngines: false",
+        ]
+    lines += [
         f"useSecret: {'true' if o['use_secret'] else 'false'}",
         'existingSecret: ""',
         "",

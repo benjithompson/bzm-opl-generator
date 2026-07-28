@@ -12,7 +12,8 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON); `k8s` = pinned runAsUser 1337 |
+| `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, engines inherit the SCC-assigned UID); `k8s` = pinned runAsUser 1337 |
+| `restrict_engines` | `true` | engines crane spawns drop all capabilities and inherit crane's UID:GID (INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON). Crane's own default is a privileged engine pod, which restricted PodSecurity, OpenShift SCC and GKE Autopilot all reject — after the agent is online, so the run hangs at `BOOT_STARTING`. `--no-restrict-engines` only for an image that needs a capability |
 | `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay — see [Helm](helm.md) |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified) |
 | `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, disables auto-update, rewrites crane image |
