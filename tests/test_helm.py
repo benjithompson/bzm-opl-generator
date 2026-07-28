@@ -233,6 +233,40 @@ def test_engine_sizing_is_passed_through_unresolved():
 
 # -- what it refuses ----------------------------------------------------------
 
+def test_service_account_defaults_are_stated_not_left_to_the_chart():
+    """Unlike crane's resources, this one is the customer's answer, so the
+    overlay states it. `name` is written out rather than left empty even at the
+    default: the manifests format has no fullname to fall back to, and the two
+    formats agreeing on the rendered name is what helm_parity checks."""
+    v, _ = _values()
+    assert v["serviceAccount"] == {"create": True, "name": "crane",
+                                   "annotations": {}}
+
+
+def test_existing_service_account_reaches_the_overlay():
+    v, _ = _values(service_account_name="platform-sa",
+                   service_account_create=False)
+    assert v["serviceAccount"]["create"] is False
+    assert v["serviceAccount"]["name"] == "platform-sa"
+
+
+def test_helm_readme_names_a_service_account_it_will_not_create():
+    _, files = _values(service_account_name="platform-sa",
+                       service_account_create=False)
+    assert "platform-sa" in files["README.md"]
+    _, plain = _values()
+    assert "must already exist" not in plain["README.md"]
+
+
+def test_unnamed_service_account_is_refused_in_helm_format_too():
+    """The chart refuses the same combination in Go (see bzm-opl.validate), but
+    a bundle that only fails at `helm install` has already been handed over."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {**BASE, "service_account_name": "",
+                             "service_account_create": False})
+    assert "service_account_name" in str(e.value)
+
+
 def test_service_virtualization_is_refused():
     """The chart is performance-only. Emitting one that quietly dropped the
     ingress, its RBAC and the TLS secret would deploy, report idle, and stall at

@@ -13,12 +13,16 @@ who does want release-scoped names.
 {{- default (include "bzm-opl.name" .) .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+One name whether or not we create the account: `create` decides only whether
+serviceaccount.yaml renders. Deliberately NOT the `helm create` scaffold, which
+falls back to the namespace's `default` account when create is false -- that
+renders, installs, runs, and silently binds crane's Role to the account every
+other pod in the namespace runs as. serviceAccount.name is required instead when
+create is false; see bzm-opl.validate.
+*/}}
 {{- define "bzm-opl.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create -}}
 {{- default (include "bzm-opl.fullname" .) .Values.serviceAccount.name -}}
-{{- else -}}
-{{- default "default" .Values.serviceAccount.name -}}
-{{- end -}}
 {{- end -}}
 
 {{- define "bzm-opl.configMapName" -}}blazemeter-configmap{{- end -}}
@@ -169,6 +173,9 @@ on it, so each message names the fix.
 {{- end -}}
 {{- if and (not .Values.authToken) (not .Values.existingSecret) -}}
 {{- fail "authToken is required -- generate one on the private location in the BlazeMeter UI. Pass it with --set-string authToken=... rather than committing it, or create the Secret yourself and set existingSecret" -}}
+{{- end -}}
+{{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
+{{- fail "serviceAccount.name is required when serviceAccount.create is false -- with nothing creating an account, the name is the only thing saying which existing one crane runs as and which one the RoleBinding grants to. Leaving it empty would fall back to the namespace's `default` account, which installs cleanly and hands crane's permissions to every other pod in the namespace" -}}
 {{- end -}}
 {{- if and .Values.existingSecret (not .Values.useSecret) -}}
 {{- fail "existingSecret needs useSecret: true -- with useSecret false the token is expected in the ConfigMap and the Secret is never referenced" -}}

@@ -101,6 +101,23 @@ export function enginePreset(o: Options): string {
     (s) => s.cpu === o.engine_cpu_limit && s.mem === o.engine_mem_limit)?.id ?? "custom";
 }
 
+// -- service account ---------------------------------------------------------
+// Deliberately not a group. A group is a switch that hides its fields when it is
+// off, and these two are neither optional nor feature-specific: every
+// deployment runs as some account, so they sit beside the namespace and are
+// always sent. What lives here rather than in App is the one rule that must not
+// be restated -- generate.service_account() refuses an empty name in both
+// output formats, and this is that refusal, in time to be shown on the field.
+
+/** Is the service account usable? `create` may be either way; only an empty
+ *  name blocks, because with nothing creating the account the name is the only
+ *  thing saying which existing one crane runs as -- and the alternative,
+ *  falling back to the namespace's `default`, hands crane's Role to every other
+ *  pod in the namespace. */
+export function serviceAccountOk(o: Options): boolean {
+  return !!String(o.service_account_name ?? "").trim();
+}
+
 // -- the groups, in the order the form shows them ----------------------------
 export const OPTION_GROUPS: OptionGroup[] = [
   {

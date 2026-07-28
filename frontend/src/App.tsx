@@ -18,7 +18,7 @@ import { SvCtx } from "./SvPrereqs";
 import {
   allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
   enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
-  incompleteGroups,
+  incompleteGroups, serviceAccountOk,
   setButHidden, startFeature, suggestNamespace, unavailableFeatures,
   unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
@@ -488,6 +488,11 @@ export default function App() {
   }, [facts?.harbor_id, features, pickFeature]);
 
   const namespaceOk = !!txt("namespace");
+  // Empty is refused by generate(), so this blocks the download rather than
+  // only colouring the field -- an unnamed account is the one state of these
+  // two that produces no bundle at all.
+  const saOk = serviceAccountOk(options);
+  const saCreate = options.service_account_create !== false;
   // Mirrors _sv_cfg in generate.py: domain and TLS secret are both mandatory
   // once SV is on (the secret even for plain HTTP, because crane validates it at
   // startup), the ingress itself is mandatory for an SV location, and NODEPORT
@@ -1122,6 +1127,37 @@ export default function App() {
                   you type here outranks the suggestion.
                 </span>
               </label>
+
+              {/* Beside the namespace rather than in a group below: every
+                  deployment runs as some account, both fields are always sent,
+                  and putting the name behind a switch would make the required
+                  half of it look optional. */}
+              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
+                    Service account
+                    {saOk
+                      ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
+                      : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>}
+                  </span>
+                  <input className={inputCls + (saOk ? "" : " border-red-300")}
+                    value={String(options.service_account_name ?? "")}
+                    placeholder="e.g. crane"
+                    onChange={(e) => set("service_account_name", e.target.value)} />
+                  <span className="text-[11px] text-slate-400">
+                    what the agent runs as, and what the RoleBinding grants to —
+                    used whether or not the bundle creates it
+                  </span>
+                </label>
+                <div className="pt-5 w-56">
+                  <Check label="Create it"
+                    hint={saCreate
+                      ? "the bundle includes the ServiceAccount"
+                      : "already exists: referenced, not created — nothing here creates it, and the agent pod is never scheduled if the name is wrong"}
+                    checked={saCreate}
+                    onChange={(v) => set("service_account_create", v)} />
+                </div>
+              </div>
               {facts && (
                 <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
                   Images are selected automatically from the location's enabled
@@ -1192,7 +1228,7 @@ export default function App() {
                   },
                 ]} />
               <div className="flex gap-2 items-center">
-                <Button disabled={!facts || !shipId || !!genErr || !svOk}
+                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
                     setDlErr(null);
                     downloadZip(facts!, { ...options, ship_id: shipId },

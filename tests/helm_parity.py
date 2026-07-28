@@ -69,6 +69,15 @@ CASES = {
                                     "value": "spot", "effect": "NoSchedule"}]},
     "ephemeral": {"platform": "k8s", "engine_ephemeral_request_mb": 1024,
                   "engine_ephemeral_limit_mb": 61440},
+    # The name has to reach the Deployment and both binding subjects, and
+    # `create` has to remove the object from one format exactly when it removes
+    # it from the other -- a chart still rendering it would adopt an account the
+    # customer's platform team owns.
+    "service-account-named": {"platform": "k8s", "cluster_rbac": True,
+                              "service_account_name": "bzm-agent"},
+    "service-account-existing": {"platform": "k8s", "cluster_rbac": True,
+                                 "service_account_name": "platform-sa",
+                                 "service_account_create": False},
 }
 
 JSON_ENVS = ("IMAGE_OVERRIDES", "KUBERNETES_TOLERATIONS_JSON",
@@ -140,6 +149,21 @@ def compare(name, opts):
                 if mp["containers"][0].get(f) != hp["containers"][0].get(f):
                     diffs.append(f"container.{f}: {mp['containers'][0].get(f)!r} "
                                  f"!= {hp['containers'][0].get(f)!r}")
+        elif kind in ("RoleBinding", "ClusterRoleBinding"):
+            # Not covered by the kind set alone: a binding that grants to the
+            # wrong account renders fine and gives crane no permissions at all.
+            if m["subjects"] != h["subjects"]:
+                diffs.append(f"{kind}.subjects: {m['subjects']} != {h['subjects']}")
+            # roleRef is only compared for the namespaced binding. The chart's
+            # cluster-scoped names carry the namespace on purpose, so that two
+            # locations in two namespaces do not collide over one
+            # cluster-role-binding-crane -- see bzm-opl.clusterRoleName.
+            if kind == "RoleBinding" and m["roleRef"] != h["roleRef"]:
+                diffs.append(f"{kind}.roleRef: {m['roleRef']} != {h['roleRef']}")
+        elif kind == "ServiceAccount":
+            if m["metadata"]["name"] != h["metadata"]["name"]:
+                diffs.append(f"ServiceAccount name: {m['metadata']['name']} != "
+                             f"{h['metadata']['name']}")
         elif kind in ("Role", "ClusterRole"):
             if m["rules"] != h["rules"]:
                 diffs.append(f"{kind}.rules: {m['rules']} != {h['rules']}")

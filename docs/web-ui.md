@@ -17,6 +17,14 @@ agent flip online. Profile JSON import/export round-trips with
 build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
 runs the option-group logic suite that CI runs as its own job.
 
+**Namespace and service account are always on screen**, above the groups and
+outside the feature view: every deployment has both, and both are always sent.
+The service account's **Create it** checkbox is the only thing that decides
+whether the bundle carries the ServiceAccount object — the name is what the
+Deployment runs as and what the RoleBinding grants to either way, so a customer
+who must run under an account their platform team owns unchecks it and types
+that name. The name itself is required, and an empty one blocks the download.
+
 **Configure one feature at a time.** The step shows that feature's options plus
 the ones that apply to any deployment — registry, proxy, CA trust, scheduling,
 security. It is a **view, not a scope**: the manifests come from the location's

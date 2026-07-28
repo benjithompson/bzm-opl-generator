@@ -13,6 +13,8 @@ platforms: the default works on OpenShift and vanilla Kubernetes alike.
 | `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, disables auto-update, rewrites crane image |
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
+| `service_account_name` | `crane` | the account the agent runs as, and the one the RoleBinding (and ClusterRoleBinding) grants to. Used whether or not the bundle creates it, and **required** — see below |
+| `service_account_create` | `true` | emit the ServiceAccount object. `--no-create-service-account` leaves it out for an account your platform team already owns; everything still references `service_account_name`, so it must exist before you apply |
 | `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed |
 | `sv_ingress` | – | `nginx` \| `istio` \| `contour` \| `openshift` — **required** for a `mockServices` location; `openshift` needs `platform: openshift`; see [Service virtualization](service-virtualization.md) |
 | `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
@@ -21,6 +23,20 @@ platforms: the default works on OpenShift and vanilla Kubernetes alike.
 | `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
 | `engine_cpu_limit` / `engine_mem_limit` | – (documented 2 / 8Gi) | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` — the limits crane stamps on every engine it spawns |
 | `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
+
+## The service account
+
+`service_account_name` is required in both output formats, including with
+`service_account_create: false`, and an empty one is refused rather than
+resolved. The tempting fallback — and what most Helm charts scaffold — is the
+namespace's `default` ServiceAccount: that installs cleanly, runs, and binds
+crane's Role to the account every other pod in the namespace runs as. A blank
+field should not be able to decide that.
+
+With `create` off nothing else changes: the Deployment's `serviceAccountName`
+and both binding subjects name the account you gave. If it is not there, nothing
+fails at apply time — the Deployment is accepted and no pod is ever created, the
+reason being an event on the ReplicaSet. `bzm-opl-gen doctor` checks for it.
 
 ## Image selection, and the generated profile
 

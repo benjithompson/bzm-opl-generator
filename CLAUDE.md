@@ -18,7 +18,7 @@ went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
 is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
 optional deps import rather than trusting a green run.
 
-**Helm parity (`python tests/helm_parity.py`)** — renders 17 option
+**Helm parity (`python tests/helm_parity.py`)** — renders 19 option
 combinations as both `--format manifests` and `--format helm` and requires the
 same objects out of each. Deliberately *not* a pytest module: it shells out to
 `helm`, and a test that skips when a binary is missing is the fastapi problem
@@ -144,7 +144,10 @@ the classes of problem it can't fix for you.
 - `--format helm` refuses a service-virtualization location, and `livetest`
   refuses a chart directory. Both are one-line guards over silent failures —
   a chart without the ingress stalls at `WAITING_FOR_DOMAIN`, and the rig's
-  `*.yaml` glob would come back empty.
+  `*.yaml` glob would come back empty. `livetest` also refuses a profile with
+  `service_account_create: false`: the rig creates its own namespace, so an
+  account it was told already exists never does, every object applies, no pod
+  is created, and the run waits out its whole timeout.
 - CA bundles exceed the 256KB cap on kubectl's last-applied-configuration
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;
