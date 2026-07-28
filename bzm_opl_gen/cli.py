@@ -165,7 +165,7 @@ def cmd_generate(a):
             proxy[key] = v
     if proxy:
         opts["proxy"] = proxy
-    for key in ("engine_cpu_limit", "engine_mem_limit"):
+    for key in ("engine_cpu_limit", "engine_mem_limit", "crane_ephemeral_storage"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
@@ -510,6 +510,11 @@ def main():
                         "lands in the Secret unless --no-secret")
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
+    g.add_argument("--crane-ephemeral-storage", dest="crane_ephemeral_storage",
+                   metavar="SIZE",
+                   help='crane pod ephemeral storage, request and limit both '
+                        '(default 1Gi). One value because GKE Autopilot '
+                        'rewrites the limit down to the request')
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)

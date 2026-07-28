@@ -11,6 +11,19 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The crane pod now asks for the ephemeral storage it actually uses, and asks
+  for it as one number.** The request was `100Mi` against a `1Gi` limit; crane
+  reaches ~161MiB (107MiB of it `/tmp`) within seconds of starting, so the
+  request never described the pod on any platform — elsewhere only the limit
+  kept it alive. On GKE Autopilot, which rewrites the ephemeral-storage limit
+  down to the request, the pod came back `100Mi/100Mi` and was evicted about
+  twelve seconds into every start, indefinitely. Both fields are now `1Gi`, and
+  `--crane-ephemeral-storage SIZE` moves them together — one value, because a
+  gap between them is headroom on some platforms and a silent ceiling on
+  others. CPU and memory are unaffected and unchanged.
+
 ### Added
 
 - **Choose the ServiceAccount the agent runs as, and whether to create it.**

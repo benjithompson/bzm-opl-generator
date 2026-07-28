@@ -143,10 +143,15 @@ crane:
     requests:
       cpu: 250m
       memory: 512Mi
-      ephemeral-storage: 100Mi
+      ephemeral-storage: 1Gi
     limits:
       cpu: "1"
       memory: 2Gi
+      # Same value as the request, on purpose. GKE Autopilot rewrites this
+      # limit down to whatever the request says, so a larger limit is headroom
+      # you do not get -- and crane sits at ~161MiB (107MiB of it /tmp) within
+      # seconds of starting, which is what evicted it when the request was
+      # 100Mi. Raise both together or neither.
       ephemeral-storage: 1Gi
 
 probes:

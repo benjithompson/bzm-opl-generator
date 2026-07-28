@@ -42,11 +42,14 @@ ${SECURITY_CONTEXT_BLOCK}
             requests:
               cpu: ${CRANE_CPU_REQUEST}
               memory: ${CRANE_MEM_REQUEST}
-              ephemeral-storage: 100Mi
+              ephemeral-storage: ${CRANE_EPHEMERAL_STORAGE}
             limits:
               cpu: "${CRANE_CPU_LIMIT}"
               memory: ${CRANE_MEM_LIMIT}
-              ephemeral-storage: 1Gi
+              # Deliberately the same value as the request -- GKE Autopilot
+              # rewrites this limit down to the request, so a gap here is
+              # headroom the customer does not actually get.
+              ephemeral-storage: ${CRANE_EPHEMERAL_STORAGE}
           livenessProbe:
             failureThreshold: 3
             httpGet: { path: /healtz, port: 5000, scheme: HTTP }

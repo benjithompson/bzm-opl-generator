@@ -73,6 +73,10 @@ CASES = {
                                     "value": "spot", "effect": "NoSchedule"}]},
     "ephemeral": {"platform": "k8s", "engine_ephemeral_request_mb": 1024,
                   "engine_ephemeral_limit_mb": 61440},
+    # Crane's own pod, which the engine case above does not touch. The chart
+    # keeps its own copy of the default and the overlay only names an override,
+    # so the two sides can disagree here without either looking wrong alone.
+    "crane-ephemeral": {"platform": "k8s", "crane_ephemeral_storage": "4Gi"},
     # The name has to reach the Deployment and both binding subjects, and
     # `create` has to remove the object from one format exactly when it removes
     # it from the other -- a chart still rendering it would adopt an account the

@@ -58,6 +58,9 @@ DEFAULT_OPTIONS = {
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
     "engine_ephemeral_request_mb": None,  # int MB -> KUBERNETES_REQUESTS_EPHEMERAL_STORAGE
     "engine_ephemeral_limit_mb": None,    # int MB -> KUBERNETES_LIMITS_EPHEMERAL_STORAGE
+    # Crane's own pod, unset -> CRANE_EPHEMERAL_STORAGE. One value, both fields;
+    # see the constant for why they are not separately settable.
+    "crane_ephemeral_storage": None,      # e.g. "2Gi"
 }
 
 # BlazeMeter's documented engine footprint -- the fallback when the customer
@@ -77,6 +80,27 @@ CRANE_CPU_REQUEST = "250m"
 CRANE_MEM_REQUEST = "512Mi"
 CRANE_CPU_LIMIT = "1"
 CRANE_MEM_LIMIT = "2Gi"
+
+# Ephemeral storage is one value, used for BOTH the request and the limit, and
+# that is the whole point of it not being a pair like the two above.
+#
+# The original 100Mi request / 1Gi limit describes a pod that does not exist,
+# and nothing on a working cluster ever said so. Crane sits at ~161MiB with
+# 107MiB of that in /tmp within
+# seconds of starting, so 100Mi never described crane on any platform -- it was
+# a scheduling hint below steady-state usage, and elsewhere only the 1Gi limit
+# kept the pod alive. On GKE Autopilot the limit is not the customer's to set:
+# Autopilot rewrites it down to the request, so the pod came back 100Mi/100Mi
+# and was evicted in ~12s -- `Pod ephemeral local storage usage exceeds the
+# total limit of containers 100Mi` -- forever, since each replacement did the
+# same. CPU and memory are NOT rewritten that way (250m/512Mi requests against
+# 1/2Gi limits survive untouched in the same pod), so this is specific to
+# ephemeral storage rather than a general requests==limits rule.
+#
+# Keeping one value means the number a customer names is the number that binds
+# on every platform, instead of a gap that is headroom on one and a lie on
+# another.
+CRANE_EPHEMERAL_STORAGE = "1Gi"
 
 # What crane stamps on the engine pods it spawns, explicitly -- so this is what
 # the scheduler packs engines by, whatever their limits say. Nothing these
@@ -885,6 +909,21 @@ def _helm_values(facts, o):
         f"  ephemeralRequestMb: {_yq(o['engine_ephemeral_request_mb'] or '')}",
         f"  ephemeralLimitMb: {_yq(o['engine_ephemeral_limit_mb'] or '')}",
     ]
+    if o["crane_ephemeral_storage"]:
+        # Both fields, always together -- the chart's default is already a
+        # matched pair, and overriding only one reintroduces the gap that
+        # Autopilot collapses. See CRANE_EPHEMERAL_STORAGE.
+        lines += [
+            "",
+            "# Crane's own pod. Request and limit are one value on purpose:",
+            "# GKE Autopilot rewrites the limit down to the request.",
+            "crane:",
+            "  resources:",
+            "    requests:",
+            f"      ephemeral-storage: {_yq(o['crane_ephemeral_storage'])}",
+            "    limits:",
+            f"      ephemeral-storage: {_yq(o['crane_ephemeral_storage'])}",
+        ]
     lines.append("")
     if o["proxy"]:
         env = proxy_env(o)
@@ -1029,6 +1068,8 @@ def generate(facts, options):
         "CRANE_MEM_REQUEST": CRANE_MEM_REQUEST,
         "CRANE_CPU_LIMIT": CRANE_CPU_LIMIT,
         "CRANE_MEM_LIMIT": CRANE_MEM_LIMIT,
+        "CRANE_EPHEMERAL_STORAGE": (o["crane_ephemeral_storage"]
+                                    or CRANE_EPHEMERAL_STORAGE),
         "SECRET_REF_BLOCK": (
             "            - secretRef:\n                name: blazemeter-secret\n"
             if o["use_secret"] else ""

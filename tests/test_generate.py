@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 from bzm_opl_gen.api import BzmApiError, parse_auth_token  # noqa: E402
+from bzm_opl_gen.quantity import parse_memory  # noqa: E402
 
 
 def test_parse_auth_token():
@@ -234,6 +235,35 @@ def test_tolerations_node_selector_in_pod_and_configmap():
     cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
     assert json.loads(cm["KUBERNETES_TOLERATIONS_JSON"]) == tol
     assert json.loads(cm["KUBERNETES_NODE_SELECTOR_JSON"]) == {"pool": "loadtest"}
+
+
+def _crane_ephemeral(files):
+    c = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]["containers"][0]
+    return (c["resources"]["requests"]["ephemeral-storage"],
+            c["resources"]["limits"]["ephemeral-storage"])
+
+
+def test_crane_ephemeral_storage_request_equals_limit_by_default():
+    # The pair being equal is the property, not the number. GKE Autopilot
+    # rewrites the limit down to the request, so a bundle whose request is the
+    # smaller of the two ships a ceiling the customer never chose -- at 100Mi
+    # that evicted crane in ~12s, forever, because each replacement repeated it.
+    req, lim = _crane_ephemeral(gen.generate(FACTS, {"namespace": "ns1"}))
+    assert req == lim == gen.CRANE_EPHEMERAL_STORAGE
+
+
+def test_crane_ephemeral_storage_clears_measured_usage():
+    # Crane sits at ~161MiB, 107MiB of it /tmp, within seconds of starting.
+    # A default below that is the bug this constant exists to prevent, so pin
+    # the floor rather than the exact value -- raising it stays fine.
+    assert parse_memory(gen.CRANE_EPHEMERAL_STORAGE) >= 512 * 1024 * 1024
+
+
+def test_crane_ephemeral_storage_override_moves_both_fields():
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "crane_ephemeral_storage": "4Gi"})
+    _all_yaml_parse(files)
+    assert _crane_ephemeral(files) == ("4Gi", "4Gi")
 
 
 def test_ca_bundle_configmap_mount_and_envs():

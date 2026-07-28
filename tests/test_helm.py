@@ -338,6 +338,34 @@ def test_bad_engine_size_is_still_caught_in_helm_format():
     assert "engine_mem_limit" in str(e.value)
 
 
+def test_chart_default_crane_ephemeral_storage_is_a_matched_pair():
+    """The chart carries its own defaults, so the manifests-side constant does
+    not reach it -- this is the restatement that can drift. Equal request and
+    limit is the property: GKE Autopilot rewrites the limit down to the request,
+    and a chart whose request is the smaller number evicts crane on Autopilot
+    while rendering perfectly well everywhere the parity test can look."""
+    _, files = _values()
+    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    res = chart["crane"]["resources"]
+    assert (res["requests"]["ephemeral-storage"]
+            == res["limits"]["ephemeral-storage"]
+            == gen.CRANE_EPHEMERAL_STORAGE)
+
+
+def test_crane_ephemeral_storage_override_reaches_the_overlay_as_both_fields():
+    values, _ = _values(crane_ephemeral_storage="4Gi")
+    res = values["crane"]["resources"]
+    assert res["requests"]["ephemeral-storage"] == "4Gi"
+    assert res["limits"]["ephemeral-storage"] == "4Gi"
+
+
+def test_unset_crane_ephemeral_storage_leaves_the_overlay_silent():
+    """The overlay names only what came from the account or the flags; an
+    untouched default belongs to the chart, not to a key repeated here."""
+    values, _ = _values()
+    assert "crane" not in values
+
+
 # -- the bundle a chart install actually needs --------------------------------
 
 def test_readme_is_short_and_actionable():
