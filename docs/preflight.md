@@ -19,10 +19,10 @@ registry, proxy/CA — so it checks the deployment you actually generated.
 | location | `slots` or `threadsPerEngine` unset (every start 403s "Not enough available resources") | – |
 | threadsPerEngine vs engine size | – | more threads than the size supports (500 threads is BlazeMeter's own pairing with 2 CPU / 8Gi) |
 | capacity: per-node fit | no eligible node holds **one** engine — a pod cannot be split across nodes | – |
-| capacity: aggregate | eligible nodes can't hold `slots ×` engine | – |
+| capacity: aggregate | eligible nodes can't hold `slots ×` engine | the nodes could not be read at all |
 | node disk | – | short of the documented 60GB (40GB `/tmp`) per engine — an engine that fills it is evicted mid-run |
-| limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size, or none exists and none is emitted |
-| resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults |
+| limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size; none exists and none is emitted; or they could not be read |
+| resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults, or the quotas could not be read |
 | admission | `pod-security…/enforce=restricted` on `platform: k8s` — crane passes, but the engine pods it spawns get the security-context envs only on the openshift path | no PSA label; OpenShift namespace with no `sa.scc.uid-range` |
 | service account | `service_account_create: false` and no ServiceAccount of that name in the namespace — the Deployment applies and no pod is ever created, the reason being an event on the ReplicaSet | the namespace's ServiceAccounts could not be read, so the name is unverified |
 | sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)) | the IngressClasses could not be read |
@@ -36,6 +36,47 @@ honour a configured CA reports *unknown*, never a FAIL.
 Capacity is measured against node **allocatable**, which is an upper bound:
 other workloads already hold part of it. A doctor pass means "nothing here
 stops a test", not "there is headroom".
+
+## A cluster you cannot reach
+
+The cluster-side twin of `facts --manual`. Have someone with access run the
+read-only [collector script](../scripts/bzm-cluster-evidence.sh) — it needs no
+cluster-admin, creates nothing, and reads no secret value — and preflight the
+file it sends back:
+
+```
+# on their machine, pointed at the cluster
+./bzm-cluster-evidence.sh -n their-ns > cluster-evidence.json
+
+# on yours, with no kubeconfig at all
+bzm-opl-gen doctor --facts facts.json --manifests out/ \
+    --cluster-evidence cluster-evidence.json
+```
+
+Same checks, same verdicts: the file carries the `kubectl get` documents
+`doctor` would have read, and the importer normalises them into exactly what the
+live path produces — nothing downstream knows which way the data arrived. The
+namespace defaults to the one the evidence was collected for; preflighting a
+different one is reported rather than quietly used, because LimitRanges, quotas,
+ServiceAccounts and the PSA labels are all per-namespace.
+
+Two differences, both reported rather than guessed:
+
+- **Egress is unverified.** Probing it takes a pod inside the namespace running
+  curl, which is the one thing a collector script must not create. WARN, never
+  a PASS.
+- **Anything the script could not read stays unknown.** It records a denied or
+  failed `get` as `null` — distinct from the empty list a successful read of
+  nothing returns — and every such section becomes a WARN ("we did not look"),
+  not the FAIL an empty list can mean ("we looked, there are none"). A file
+  collected by someone with very little access is still worth reading, and it
+  exits 0 with warnings rather than raising a false alarm. The leading
+  `cluster evidence` verdict says when it was collected, for which namespace,
+  and what the script was refused.
+
+A file whose `schema` is missing or unrecognised is refused by name — pointing
+`--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it
+would produce verdicts about a cluster nobody described.
 
 ## Your machine (`toolcheck`)
 

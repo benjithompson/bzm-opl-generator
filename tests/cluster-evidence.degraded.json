@@ -1,0 +1,57 @@
+{
+  "schema": "bzm-opl-cluster-evidence/1",
+  "collected_at": "2026-07-28T02:51:50Z",
+  "namespace": "some-ns",
+  "cli": "oc",
+  "raw": {
+    "nodes": null,
+    "ingressclasses": null,
+    "namespace": null,
+    "scoped": null
+  },
+  "inventory": {
+    "configmaps": null,
+    "secrets": null
+  },
+  "permissions": {
+    "namespaced": {
+      "create serviceaccounts": false,
+      "create roles": false,
+      "create rolebindings": false,
+      "create configmaps": false,
+      "create secrets": false,
+      "create deployments": false,
+      "create ingresses": false
+    },
+    "cluster_scoped": {
+      "list nodes": false,
+      "create clusterroles": false,
+      "create clusterrolebindings": false
+    }
+  },
+  "api_groups": {
+    "openshift_route": false,
+    "openshift_security": false,
+    "istio": false,
+    "contour": false
+  },
+  "openshift": {
+    "ingress_config": null,
+    "proxy_config": null
+  },
+  "versions": {
+  "clientVersion": {
+    "major": "",
+    "minor": "",
+    "gitVersion": "4.22.5",
+    "gitCommit": "062bc5449c4987c92c76da4d315ef4969c22d638",
+    "gitTreeState": "clean",
+    "buildDate": "2026-07-22T00:16:17Z",
+    "goVersion": "go1.26.5",
+    "compiler": "gc",
+    "platform": "darwin/arm64"
+  },
+  "kustomizeVersion": "v5.7.1"
+},
+  "notes": ["nodes: error: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. ","ingressclasses: error: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. ","namespace: error: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. ","scoped: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. Missing o","ingress_config: error: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. ","proxy_config: error: Missing or incomplete configuration info.  Please point to an existing, complete config file:     1. Via the command-line flag --kubeconfig   2. Via the KUBECONFIG environment variable   3. In your home directory as ~/.kube/config  To view or setup config directly use the 'config' command. "]
+}

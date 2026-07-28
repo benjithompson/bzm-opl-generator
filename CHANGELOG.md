@@ -33,13 +33,35 @@ anything that breaks.
   which also keeps a 300KB CA bundle out of the file. Anything unreadable is
   recorded as `null` with the error rather than as an empty list, because
   "denied" and "there are none" are different answers and `doctor` treats them
-  differently. Nothing consumes the file yet; that is the next piece.
+  differently.
+- **`doctor --cluster-evidence <file>` preflights a cluster you have no access
+  to**, from the JSON that script produced there — no cluster reachable, no
+  kubeconfig configured. It runs the same checks over the same data and prints
+  the same verdict list: the file carries the `kubectl get` documents `doctor`
+  would have read, and they are normalised into exactly what the live path
+  gathers, so nothing downstream knows which way the data arrived. The namespace
+  defaults to the one the evidence was collected for, and preflighting a
+  different one is reported rather than quietly used. Two things are reported as
+  unverified rather than guessed: egress, which needs a pod inside the namespace
+  to curl from, and any section the script was refused — those stay WARN ("we
+  did not look") instead of becoming the FAIL an empty list means ("we looked,
+  there are none"), so a file collected with little access exits 0 with warnings
+  rather than a false alarm. A file whose `schema` is missing or unrecognised is
+  refused by name.
 - **`doctor` checks that an existing service account is really there.** Only
   when the bundle does not create one. Nothing fails at apply time if it is
   missing: the Deployment is accepted, no pod is ever created, and the reason
   is an event on the ReplicaSet.
 
 ### Changed
+
+- **`doctor` no longer fails a cluster for something it was not allowed to
+  look at.** A `get` that is denied or errors — nodes, LimitRanges,
+  ResourceQuotas, ServiceAccounts — now reports WARN "could not be read" for
+  that check, where a denied `list nodes` previously produced the same
+  "no eligible node — engines have nowhere to run" FAIL, and a non-zero exit, as
+  a cluster that genuinely had none. Reading nothing and finding nothing are
+  different answers; only the second is a failure.
 
 - **Helm chart: `serviceAccount.name` is now required when
   `serviceAccount.create` is `false`, and the chart refuses to render without

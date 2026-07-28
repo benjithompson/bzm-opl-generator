@@ -674,10 +674,13 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
-    # ingressclasses is None, not []: kget reports a failed command as {}, and
-    # "could not ask" has to stay distinguishable from "asked, none exist".
-    assert data == {"nodes": [], "ingressclasses": None, "limitranges": [],
-                    "quotas": [], "serviceaccounts": [], "namespace": {}}
+    # Every list is None rather than []: kget reports a failed command as {},
+    # and "could not ask" has to stay distinguishable from "asked, none exist"
+    # -- an [] here would fail the capacity check of anyone who is merely not
+    # allowed to list nodes. The namespace stays {}, which is what
+    # check_admission already reads as "not created yet".
+    assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
+                    "quotas": None, "serviceaccounts": None, "namespace": {}}
 
 
 @pytest.mark.parametrize("served,expected,status", [

@@ -10,7 +10,11 @@ just a run stuck in "initializing".
 
 Every check here is a pure function over already-fetched data (`Check` list),
 so the whole doctor is testable offline; the only impure parts are
-gather_cluster() / probe_egress(), which are thin.
+gather_cluster() / probe_egress(), which are thin. That data can equally come
+from an evidence file collected on a cluster nobody here can reach
+(cluster_from_evidence, the twin of facts.manual()), and no check can tell the
+difference -- it is the same shape either way. evaluate() returns the verdicts,
+run() prints them.
 
 FAIL = a test would not start. WARN = the numbers are wrong or it will bite
 later, but a test still starts.
@@ -181,6 +185,14 @@ def check_capacity(facts, opts, cluster):
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
     want = _engine_str(cpu, mem)
+    if cluster.get("nodes") is None:
+        # Denied `list nodes`, or an evidence file collected without it. The
+        # capacity question is simply unanswered -- and unanswered is not the
+        # FAIL that "there are no eligible nodes" is.
+        return [Check("capacity", WARN,
+                      f"the cluster's nodes could not be read, so nothing here "
+                      f"knows whether slots={slots} x {want} can be scheduled. "
+                      f"Needs a role that can list nodes")]
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
         return [Check("capacity: eligible nodes", FAIL,
@@ -231,6 +243,10 @@ def check_disk(facts, opts, cluster):
     footprint. WARN, not FAIL: a short run may never fill it -- but an engine
     that does gets evicted mid-test, which reads as a random failure."""
     slots = facts.get("slots") or 1
+    if cluster.get("nodes") is None:
+        return [Check("node disk", WARN,
+                      f"the cluster's nodes could not be read, so the "
+                      f"{ENGINE_DISK_GB}GB per engine is unverified")]
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
         return [Check("node disk", WARN,
@@ -268,8 +284,12 @@ def check_limitrange(facts, opts, cluster):
     its limits, min above the requests crane stamps, or a maxLimitRequestRatio
     tighter than the gap between the two -- and can rewrite the resources of any
     pod in the namespace that declares none. Neither shows up in the manifests."""
-    limitranges = cluster.get("limitranges") or []
+    limitranges = cluster.get("limitranges")
     cpu, mem = engine_size(opts)
+    if limitranges is None:
+        return [Check("limitrange", WARN,
+                      "the namespace's LimitRanges could not be read, so whether "
+                      "one would reject the engine pod at admission is unverified")]
     if not limitranges:
         # Nothing caps the namespace, which is a note rather than a problem --
         # and separately the engines schedule small, which nothing here can
@@ -343,9 +363,15 @@ _QUOTA_MEM = ("requests.memory", "limits.memory", "memory")
 
 def check_resourcequota(facts, opts, cluster):
     """hard - used, per resource, against slots x engine (+1 pod for crane)."""
-    quotas, limitranges = cluster.get("quotas") or [], cluster.get("limitranges")
+    quotas, limitranges = cluster.get("quotas"), cluster.get("limitranges")
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
+    if quotas is None:
+        # "no ResourceQuota in the namespace" is a claim, and a read we were
+        # denied is no basis for making it.
+        return [Check("resourcequota", WARN,
+                      f"the namespace's ResourceQuotas could not be read, so "
+                      f"whether one has room for slots={slots} is unverified")]
     if not quotas:
         return [Check("resourcequota", PASS, "no ResourceQuota in the namespace")]
 
@@ -381,7 +407,7 @@ def check_resourcequota(facts, opts, cluster):
                                 f"ResourceQuota '{name}' has room for slots="
                                 f"{slots} ({format_cpu(cpu * slots)} / "
                                 f"{format_memory(mem * slots)}, {slots + 1} pods)"))
-    if constrains and not limitranges:
+    if constrains and limitranges == []:      # read them, there are none
         # With a cpu/memory quota in force the API server rejects any pod that
         # does not declare that resource -- and crane sets no requests on the
         # engines it spawns, so something has to supply them.
@@ -573,9 +599,14 @@ def check_egress(facts, opts, cluster):
     """Pure verdict over {target: curl returncode}; None = we could not probe."""
     probes = cluster.get("probes")
     if not probes:
+        # True of both ways in: no crane pod and no throwaway pod either, or an
+        # evidence file, which cannot carry a probe -- it takes a pod in the
+        # namespace to find out, and that is the one thing a collector script
+        # must not create.
         return [Check("egress", WARN,
-                      "egress could not be probed from inside the cluster -- "
-                      "no crane pod and no way to run a one-shot probe pod")]
+                      "egress was not probed from inside the cluster, so whether "
+                      "the namespace can reach BlazeMeter is unverified -- the "
+                      "agent will not come online without it")]
     checks = []
     for target, rc in probes.items():
         name = f"egress {target.split('/')[2]}"
@@ -596,33 +627,179 @@ def check_egress(facts, opts, cluster):
 
 # -- impure layer -------------------------------------------------------------
 
+def _items(document):
+    """The `.items` of a kubectl List document, or None when the command failed.
+
+    "served the kind, has none" and "could not ask" are different answers and
+    the checks report them differently -- [] is a FAIL where we know nothing
+    will claim crane's Ingress, None is a WARN because we did not look.
+    `.get("items", [])` would collapse both to [], turning a namespace we were
+    denied into a hard failure with a non-zero exit. kget reports a failed
+    command as {}, which is the falsy case here.
+    """
+    return document.get("items", []) if document else None
+
+
+def _split_by_kind(document):
+    """One `get limitrange,resourcequota,serviceaccount` -> the three lists, or
+    three Nones when the whole get failed. Nothing partial: the kinds come back
+    from a single command, so it succeeded for all of them or none."""
+    items = _items(document)
+    if items is None:
+        return None, None, None
+    by_kind = {"LimitRange": [], "ResourceQuota": [], "ServiceAccount": []}
+    for item in items:
+        by_kind.setdefault(item.get("kind"), []).append(item)
+    return by_kind["LimitRange"], by_kind["ResourceQuota"], by_kind["ServiceAccount"]
+
+
 def gather_cluster(cli, namespace):
     """Everything the checks read, in as few API round trips as it takes.
-    LimitRanges and ResourceQuotas are both namespaced, so one `get` covers
-    them; splitting the result by kind is cheaper than a second call."""
-    scoped = livetest.kget(
-        cli, namespace, "limitrange,resourcequota,serviceaccount").get("items", [])
-    by_kind = {"LimitRange": [], "ResourceQuota": [], "ServiceAccount": []}
-    for item in scoped:
-        by_kind.setdefault(item.get("kind"), []).append(item)
-    # Cluster-scoped like nodes, but kept its own get: kget reports a failed
-    # command as {}, so folding the kinds into one call would lose the nodes too
-    # on a cluster whose API server does not serve IngressClass.
-    #
-    # "served the kind, has none" and "could not ask" are different answers and
-    # check_ingress_class reports them differently -- [] is a FAIL because we
-    # know nothing will claim crane's Ingress, None is a WARN because we did not
-    # look. `.get("items", [])` would collapse both to [], turning an unreadable
-    # cluster into a hard failure with a non-zero exit.
-    ingressclasses = livetest.kget(cli, None, "ingressclass")
+    LimitRanges, ResourceQuotas and ServiceAccounts are all namespaced, so one
+    `get` covers them; splitting the result by kind is cheaper than three."""
+    limitranges, quotas, accounts = _split_by_kind(livetest.kget(
+        cli, namespace, "limitrange,resourcequota,serviceaccount"))
+    # IngressClass is cluster-scoped like nodes, but kept its own get: kget
+    # reports a failed command as {}, so folding the kinds into one call would
+    # lose the nodes too on a cluster whose API server does not serve it.
     return {
-        "nodes": livetest.kget(cli, None, "nodes").get("items", []),
-        "ingressclasses": ingressclasses.get("items") if ingressclasses else None,
-        "limitranges": by_kind["LimitRange"],
-        "quotas": by_kind["ResourceQuota"],
-        "serviceaccounts": by_kind["ServiceAccount"],
+        "nodes": _items(livetest.kget(cli, None, "nodes")),
+        "ingressclasses": _items(livetest.kget(cli, None, "ingressclass")),
+        "limitranges": limitranges,
+        "quotas": quotas,
+        "serviceaccounts": accounts,
         "namespace": livetest.kget(cli, None, "ns", namespace),
     }
+
+
+# -- evidence file ------------------------------------------------------------
+
+EVIDENCE_SCHEMA = "bzm-opl-cluster-evidence/1"
+EVIDENCE_SCRIPT = "scripts/bzm-cluster-evidence.sh"
+
+# What an import produces: cluster data in gather_cluster()'s shape, the probes
+# it cannot supply, and the verdicts about the file itself.
+Evidence = collections.namedtuple("Evidence", "cluster probes checks")
+
+
+def load_evidence(path):
+    """Read an evidence file. ValueError says what to do about a bad one --
+    this is a file a customer mailed back, so every way it can be wrong is a
+    message rather than a traceback."""
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        raise ValueError(
+            f"no cluster evidence file at '{path}'. Have someone with access to "
+            f"the cluster run {EVIDENCE_SCRIPT} (read-only) and send back its "
+            f"output:\n  ./{EVIDENCE_SCRIPT} -n <namespace> > cluster-evidence.json")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"'{path}' is not valid JSON ({e}). It should be the "
+                         f"unedited output of {EVIDENCE_SCRIPT}")
+
+
+def cluster_from_evidence(doc, namespace=None):
+    """Normalise an evidence file into what gather_cluster() returns.
+
+    The cluster-side twin of `facts.manual()`, and the same rule applies: the
+    result is exactly the shape the live path produces, so no check can tell
+    which way the data arrived. Everything the file carries beyond that --
+    when it was collected, which namespace for, what the script could not read
+    -- comes back as Checks instead, because it qualifies the verdicts without
+    being one of them.
+
+    The `raw` sections are whole kubectl List documents, or null where the
+    command failed; null stays null through here (see _items) so that "we did
+    not look" cannot arrive looking like "there are none".
+    """
+    _validate_evidence(doc)
+    raw = doc.get("raw") or {}
+    limitranges, quotas, accounts = _split_by_kind(_section(raw, "scoped"))
+    cluster = {
+        "nodes": _items(_section(raw, "nodes")),
+        "ingressclasses": _items(_section(raw, "ingressclasses")),
+        "limitranges": limitranges,
+        "quotas": quotas,
+        "serviceaccounts": accounts,
+        # A namespace that does not exist yet is the normal preflight case, and
+        # kget reports it as {} -- check_admission already reads that.
+        "namespace": _section(raw, "namespace") or {},
+    }
+    # Egress needs something inside the namespace to curl from, so an evidence
+    # file cannot carry it. {} is check_egress's "not probed" (WARN), which is
+    # the honest answer -- never a PASS nobody stood behind.
+    return Evidence(cluster, {}, _evidence_checks(doc, namespace))
+
+
+def _section(raw, key):
+    """One `raw` section: the kubectl document as collected, or None. Files come
+    back by mail and are sometimes trimmed on the way, so anything else is named
+    here rather than reaching a check as an AttributeError."""
+    document = raw.get(key)
+    if document is not None and not isinstance(document, dict):
+        raise ValueError(f"cluster evidence: raw.{key} should be the kubectl "
+                         f"document as collected, or null for a section that "
+                         f"could not be read; found a {type(document).__name__}")
+    return document
+
+
+def _validate_evidence(doc):
+    if not isinstance(doc, dict):
+        found = "a JSON array" if isinstance(doc, list) else type(doc).__name__
+        raise ValueError(f"cluster evidence must be a JSON object; found {found}. "
+                         f"Expected the output of {EVIDENCE_SCRIPT} "
+                         f"(schema {EVIDENCE_SCHEMA})")
+    schema = doc.get("schema")
+    if not schema:
+        raise ValueError(f"this file has no 'schema' field, so it is not cluster "
+                         f"evidence -- expected {EVIDENCE_SCHEMA}, the output of "
+                         f"{EVIDENCE_SCRIPT}. (Account facts go to --facts.)")
+    if schema != EVIDENCE_SCHEMA:
+        raise ValueError(f"unrecognised cluster evidence: found schema "
+                         f"'{schema}', expected '{EVIDENCE_SCHEMA}'. Re-collect "
+                         f"with the {EVIDENCE_SCRIPT} shipped with this version "
+                         f"rather than trusting a partial read of a shape this "
+                         f"doctor does not know")
+
+
+def _evidence_checks(doc, namespace):
+    """One verdict about the file itself: where these answers came from, how
+    stale they are, whether they describe the namespace being preflighted, and
+    anything the script was refused. Every verdict after it is only as good as
+    this one, which is why it is a Check and not a printed aside."""
+    collected = doc.get("collected_at") or "an unrecorded time"
+    for_ns = doc.get("namespace") or "an unnamed namespace"
+    parts = [f"cluster read by {EVIDENCE_SCRIPT} at {collected} for namespace "
+             f"{for_ns}, not from a live cluster"]
+    if namespace and doc.get("namespace") and namespace != doc["namespace"]:
+        # Most of what follows is per-namespace -- LimitRanges, quotas,
+        # ServiceAccounts, the PSA labels -- so evidence from another namespace
+        # says little about this one. It still describes the same nodes, so this
+        # reports rather than refuses.
+        parts.append(f"but this preflight is for '{namespace}', so the "
+                     f"namespaced verdicts below describe '{doc['namespace']}' "
+                     f"instead: re-collect with -n {namespace}")
+    if doc.get("notes"):
+        parts.append(_unread(doc["notes"]))
+    return [Check("cluster evidence", WARN if len(parts) > 1 else PASS,
+                  "; ".join(parts))]
+
+
+def _unread(notes):
+    """The script's own errors, which are what explains every null below. It
+    writes "<section>: <error>", and on a cluster nobody can reach that error is
+    the same six times over -- so the sections are listed and the distinct
+    reasons given once."""
+    sections, reasons = [], []
+    for note in notes:
+        section, _, reason = note.partition(": ")
+        sections.append(section)
+        if reason.strip() and reason.strip() not in reasons:
+            reasons.append(reason.strip())
+    why = " | ".join(reasons or notes)
+    return (f"could not read {', '.join(sections)}, reported below as "
+            f"unverified rather than as absent: {why[:300]}")
 
 
 def _ca_configured(opts):
@@ -699,12 +876,27 @@ CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
           check_service_account, check_ingress_class, check_egress)
 
 
-def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):
-    """Run every check and print the verdict list. Returns the Check list; the
-    caller decides the exit code (see has_failures)."""
+def resolve_namespace(namespace, opts):
+    """What the checks are asked about: the explicit namespace, else the one the
+    bundle was generated for, else the documented default."""
+    return (namespace or (opts or {}).get("namespace")
+            or DEFAULT_OPTIONS["namespace"])
+
+
+def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
+             extra_checks=()):
+    """Every verdict as data, and nothing printed.
+
+    Split out of run() so a caller that is not a terminal -- the web UI -- gets
+    the Check list without capturing stdout, and so importing cluster data can
+    be tested against the live path by comparing whole lists.
+
+    `extra_checks` are verdicts the caller reached before the cluster data
+    existed at all: where it came from, whether it describes this namespace.
+    They lead the list because they qualify everything after them.
+    """
     opts = dict(opts or {})
-    namespace = (namespace or opts.get("namespace")
-                 or DEFAULT_OPTIONS["namespace"])
+    namespace = resolve_namespace(namespace, opts)
     if cluster_data is None or probes is None:
         cli = cli or livetest.cli_tool()
     if cluster_data is None:
@@ -713,8 +905,17 @@ def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):
         probes = probe_egress(cli, namespace, opts)
 
     cluster = {**cluster_data, "probes": probes}
-    checks = [c for check in CHECKS for c in check(facts, opts, cluster)]
-    _report(checks, facts, namespace)
+    return list(extra_checks) + [c for check in CHECKS
+                                 for c in check(facts, opts, cluster)]
+
+
+def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
+        extra_checks=()):
+    """Run every check and print the verdict list. Returns the Check list; the
+    caller decides the exit code (see has_failures)."""
+    checks = evaluate(facts, opts, namespace, cluster_data, probes, cli,
+                      extra_checks)
+    _report(checks, facts, resolve_namespace(namespace, opts))
     return checks
 
 

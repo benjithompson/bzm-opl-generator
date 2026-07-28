@@ -223,7 +223,25 @@ def cmd_doctor(a):
         opts = {}
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
-    checks = doctor.run(f, opts, a.namespace)
+    imported = None
+    if a.cluster_evidence:
+        try:
+            doc = doctor.load_evidence(a.cluster_evidence)
+            # The namespace the evidence was collected for is the last fallback,
+            # not the first: an explicit -n or the bundle's own namespace is what
+            # the user is preflighting, and evidence for a different one is
+            # reported by cluster_from_evidence rather than silently adopted.
+            namespace = (a.namespace or opts.get("namespace")
+                         or doc.get("namespace"))
+            imported = doctor.cluster_from_evidence(doc, namespace)
+        except ValueError as e:
+            sys.exit(str(e))
+    else:
+        namespace = a.namespace
+    checks = doctor.run(f, opts, namespace,
+                        cluster_data=imported.cluster if imported else None,
+                        probes=imported.probes if imported else None,
+                        extra_checks=imported.checks if imported else ())
     sys.exit(1 if doctor.has_failures(checks) else 0)
 
 
@@ -499,7 +517,13 @@ def main():
                    help="directory holding profile.json -- the options the "
                         "checks measure the cluster against")
     d.add_argument("-n", "--namespace",
-                   help="target namespace (default: the profile's)")
+                   help="target namespace (default: the profile's, or the "
+                        "one --cluster-evidence was collected for)")
+    d.add_argument("--cluster-evidence", metavar="FILE",
+                   help="preflight a cluster you have no access to, from the "
+                        "JSON scripts/bzm-cluster-evidence.sh produced there. "
+                        "The checks are the same ones; egress, which needs a "
+                        "pod in the namespace, reports as unverified")
     d.set_defaults(fn=cmd_doctor)
 
     w = sub.add_parser("toolcheck",

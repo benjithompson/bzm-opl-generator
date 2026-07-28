@@ -133,6 +133,19 @@ running agent says which of the 60+ version-pinned repos a location uses),
 `doctor` has no concurrency numbers to check against, and the agent-status watch
 needs an API key. The UI and CLI both say so when it applies.
 
+The cluster is the same story, and has the same answer: have someone who *does*
+have access run the read-only
+[scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh), then
+preflight from the file it produces —
+
+```
+./scripts/bzm-cluster-evidence.sh -n their-ns > cluster-evidence.json
+bzm-opl-gen doctor --facts facts.json --cluster-evidence cluster-evidence.json
+```
+
+— which runs the same checks against the same data, with no kubeconfig here at
+all ([docs/preflight.md](docs/preflight.md#a-cluster-you-cannot-reach)).
+
 ## Documentation
 
 | | |
@@ -144,7 +157,7 @@ needs an API key. The UI and CLI both say so when it applies.
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `toolcheck`, and engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: local registry, proxy + CA, egress containment, real engine runs |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
-| [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts |
+| [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor --cluster-evidence` then preflights |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the two test layers, PR flow, cutting a release |
 | [CLAUDE.md](CLAUDE.md) | live-rig internals and the environment trap behind each flag |
 
