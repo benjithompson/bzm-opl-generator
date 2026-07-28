@@ -30,12 +30,13 @@ bzm_opl_gen/
   facts.py       account fact gathering + image classification
   generate.py    manifest rendering (templates/ + per-option assembly)
   doctor.py      cluster preflight (pure verdicts over fetched cluster JSON)
+  suggest.py     what a cluster's evidence implies about the generate options
   workstation.py workstation preflight for the live rig (`toolcheck`)
   quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
   livetest.py    deploy, poll-until-online, teardown
   server.py      FastAPI backend for the web UI
-  cli.py         subcommands: facts | generate | doctor | toolcheck | images
-                              | livetest | ui | sv-expose | locations
+  cli.py         subcommands: facts | generate | doctor | suggest | toolcheck
+                              | images | livetest | ui | sv-expose | locations
                               | create-location | create-ship
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
   profiles/      scenario presets (standard | private-registry | proxy-ca)

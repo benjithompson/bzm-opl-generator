@@ -161,8 +161,15 @@ printf '\n  },\n'
 # -- what the API server says you may do ------------------------------------
 # This is the part `doctor` cannot ask on your behalf: whether the bundle will
 # even apply. A namespaced Role is all a standard deployment needs; the
-# cluster-scoped rows decide whether serviceType NODEPORT is available at all,
-# since crane resolves its advertised address from the Node object.
+# cluster-scoped rows decide only whether the bundle's *optional* ClusterRole
+# can be applied. They say nothing about serviceType: crane resolves its
+# advertised address from its own network interfaces, not from the Node object,
+# and NODEPORT has run green with namespaced RBAC only (issue #49).
+#
+# Note for whoever reads this file: a `false` below is "the API server said no"
+# only when the command reached it -- `auth can-i` and `api-resources` both
+# report failure as no. `versions.serverVersion` is what tells the two apart,
+# and bzm_opl_gen/suggest.py will not suggest anything without it.
 printf '  "permissions": {\n'
 printf '    "namespaced": {\n'
 can_i "create serviceaccounts" create serviceaccounts ; printf ',\n'

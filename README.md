@@ -140,11 +140,15 @@ preflight from the file it produces —
 
 ```
 ./scripts/bzm-cluster-evidence.sh -n their-ns > cluster-evidence.json
-bzm-opl-gen doctor --facts facts.json --cluster-evidence cluster-evidence.json
+bzm-opl-gen doctor   --facts facts.json --cluster-evidence cluster-evidence.json
+bzm-opl-gen suggest                     --cluster-evidence cluster-evidence.json
 ```
 
-— which runs the same checks against the same data, with no kubeconfig here at
-all ([docs/preflight.md](docs/preflight.md#a-cluster-you-cannot-reach)).
+`doctor` runs the same checks against the same data, with no kubeconfig here at
+all. `suggest` answers the question that comes first — what that cluster implies
+about the options you should generate with, each suggestion naming the evidence
+behind it and whether it settles the option or only narrows it
+([docs/preflight.md](docs/preflight.md#a-cluster-you-cannot-reach)).
 
 ## Documentation
 
@@ -154,10 +158,10 @@ all ([docs/preflight.md](docs/preflight.md#a-cluster-you-cannot-reach)).
 | [docs/web-ui.md](docs/web-ui.md) | what each step of `bzm-opl-gen ui` does, and why it binds locally |
 | [docs/helm.md](docs/helm.md) | `--format helm`, and managing the release with `helm upgrade` |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, which to pick, and `sv-expose` |
-| [docs/preflight.md](docs/preflight.md) | `doctor`, `toolcheck`, and engine sizing |
+| [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, and engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: local registry, proxy + CA, egress containment, real engine runs |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
-| [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor --cluster-evidence` then preflights |
+| [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor` and `suggest` then read with `--cluster-evidence` |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the two test layers, PR flow, cutting a release |
 | [CLAUDE.md](CLAUDE.md) | live-rig internals and the environment trap behind each flag |
 

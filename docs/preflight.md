@@ -1,4 +1,4 @@
-# Preflight: `doctor` and `toolcheck`
+# Preflight: `doctor`, `suggest` and `toolcheck`
 
 Manifests that apply cleanly say nothing about whether an engine can be
 *scheduled*. When it can't, the customer sees a run stuck in "initializing" —
@@ -77,6 +77,59 @@ Two differences, both reported rather than guessed:
 A file whose `schema` is missing or unrecognised is refused by name — pointing
 `--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it
 would produce verdicts about a cluster nobody described.
+
+## What the cluster implies about the options (`suggest`)
+
+`doctor` asks whether a deployment would survive a cluster. The same evidence
+answers the question that comes first — how the bundle should have been
+configured — and `suggest` writes that reasoning down instead of leaving it in
+whoever read the file:
+
+```
+bzm-opl-gen suggest --cluster-evidence cluster-evidence.json
+bzm-opl-gen suggest --cluster-evidence cluster-evidence.json --json   # as data
+```
+
+Every suggestion names the evidence it came from and how strongly it holds:
+
+- **DECISIVE** — the evidence settles it, and you can pass the value straight to
+  `generate`. The namespace already holds the ServiceAccount the bundle would
+  create, so `service_account_create` is `false`.
+- **SUGGESTIVE** — the evidence narrows the choice without making it, so what
+  comes back is a shortlist. The cluster serves `projectcontour.io` and not
+  `networking.istio.io`, which rules `sv_ingress` values *out* without picking
+  among the rest — narrowing to a single survivor is still not choosing it.
+
+| option | read from | strength |
+|---|---|---|
+| `platform` | `api_groups.openshift_security` — served by OpenShift and nothing else | decisive either way |
+| `service_account_create` | a ServiceAccount named `crane` already in the namespace, or `permissions.namespaced` refusing to create one | decisive (`false`) |
+| `service_account_name` | the namespace's other ServiceAccounts (never `default`) | suggestive |
+| `sv_ingress` | `api_groups` for istio/contour/openshift, and an IngressClass named `nginx` — the name crane hardcodes | suggestive, with what is ruled out and why |
+| `sv_subdomain` | `openshift.ingress_config` `spec.domain` | suggestive — that is the *default* router's wildcard |
+| `pull_secret` | `inventory.secrets` of type `kubernetes.io/dockerconfigjson` | decisive at exactly one, suggestive above that |
+| `ca_existing_configmap` | `inventory.configmaps` named like a trust bundle | suggestive, always — only names are collected, never contents |
+| `proxy` | `openshift.proxy_config` (`status` first: it is the effective one) | decisive |
+| `ca_openshift_inject` | the cluster proxy's `trustedCA` — egress is TLS-intercepted | suggestive |
+| `cluster_rbac` | `permissions.cluster_scoped` refusing ClusterRoles | decisive (`false`) |
+
+Two things it deliberately does not do:
+
+- **Nothing is applied.** The suggestions are printed (or emitted as JSON);
+  passing them to `generate` stays a decision somebody makes.
+- **Nothing is suggested from evidence the collector could not read.** A `null`
+  section is skipped as it is everywhere else, but the boolean maps need more
+  than that: `auth can-i` and `api-resources` both report failure as *no*, so a
+  machine with no kubeconfig produces a file that reads as a plain-Kubernetes
+  cluster where nothing may be created. `versions.serverVersion` is present only
+  when a server actually answered, and without it `suggest` returns nothing and
+  says why. (`doctor` still reads such a file usefully — a warning about what
+  could not be seen is worth having; a configuration guessed from it is not.)
+
+Cluster-scoped permissions say nothing about `service_type`, and `suggest` will
+not claim otherwise. Crane resolves its advertised address from its own network
+interfaces rather than from the Node object, and NODEPORT has run green against
+a cluster where the agent had namespaced RBAC only.
 
 ## Your machine (`toolcheck`)
 
