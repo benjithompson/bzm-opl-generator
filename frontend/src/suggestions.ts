@@ -114,6 +114,24 @@ export function record(
   return { ...prev, [option]: { previous, value } };
 }
 
+/** Applying a row: what to write, and what to remember so it can be taken back.
+ *
+ *  The previous value comes off the suggestion -- `current`, the value the row
+ *  displayed -- and never out of `options`. The two are not the same value: the
+ *  server fills `current` from the generator's default for an option nobody
+ *  set, and the options object need not carry the key at all. Recording the
+ *  options' side of that gave "Undo → not set" on a row reading "now openshift",
+ *  and undoing it wrote an explicit null rather than putting the default back.
+ *
+ *  Both halves are here rather than in the caller for the same reason: what is
+ *  written, what is shown as recoverable, and what undo restores are one
+ *  decision, and splitting it across a component is how they came apart. */
+export function apply(prev: Applied, s: Suggestion, value: unknown):
+    { patch: OptionPatch; applied: Applied } {
+  return { patch: applyPatch(s.option, value),
+           applied: record(prev, s.option, s.current, value) };
+}
+
 /** Is the undo still the panel's to offer? Only while the option still holds
  *  what was applied. Undo restores what was there BEFORE that write, so putting
  *  it back over a value typed afterwards would overwrite that value -- the one

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MergeState, Options, Strength, Suggestion } from "./api";
 import { allGroupsOff, detectGroups } from "./optionGroups";
 import {
-  applyPatch, canUndo, clipValue, NOTHING_APPLIED, offer, record, showValue,
-  STRENGTH_STYLE, suggestionLine, undo,
+  apply, applyPatch, canUndo, clipValue, NOTHING_APPLIED, offer, record,
+  showValue, STRENGTH_STYLE, suggestionLine, undo,
 } from "./suggestions";
 
 // What the panel offers, and what applying one does to the configuration. The
@@ -96,6 +96,30 @@ describe("applying one", () => {
     // and its value -- no marker, no provenance, nothing for generate() to see.
     expect(applyPatch("pull_secret", "regcred")).toEqual({ pull_secret: "regcred" });
     expect(Object.keys(applyPatch("cluster_rbac", false))).toEqual(["cluster_rbac"]);
+  });
+
+  it("remembers the value the row displayed, not one read back out of the options", () => {
+    // The two are not the same value. `current` is the server's, and it falls
+    // back to the generator's default for an option nobody set; the options
+    // object may simply not carry the key. Reading the previous value from
+    // there gave "Undo → not set" on a row that said "now openshift", and
+    // clicking it wrote an explicit null instead of putting the default back.
+    // One source for that value, and it is the one on screen.
+    const s = sugg();                          // platform: current "openshift"
+    const { patch, applied } = apply(NOTHING_APPLIED, s, "k8s");
+    expect(patch).toEqual({ platform: "k8s" });
+    expect(applied.platform.previous).toBe("openshift");
+    expect(undo(applied, "platform")?.patch).toEqual({ platform: "openshift" });
+  });
+
+  it("keeps the first previous value when a second candidate is picked", () => {
+    // Same rule `record` keeps, through the seam the panel actually uses: what
+    // a person wants back is the configuration they had before the panel
+    // touched anything.
+    const s = shortlist();                     // sv_ingress: current null
+    const once = apply(NOTHING_APPLIED, s, "contour").applied;
+    const twice = apply(once, { ...s, current: "contour" }, "nginx").applied;
+    expect(undo(twice, "sv_ingress")?.patch).toEqual({ sv_ingress: null });
   });
 
   it("leaves the option groups agreeing with what it wrote", () => {

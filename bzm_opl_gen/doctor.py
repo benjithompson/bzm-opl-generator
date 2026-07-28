@@ -435,9 +435,23 @@ def check_admission(facts, opts, cluster):
     INHERIT_RUNNING_USER_AND_GROUP on the openshift path, so under restricted
     PSA on plain k8s they are rejected after crane is already happily online.
     """
-    namespace_obj = cluster.get("namespace") or {}
-    meta = namespace_obj.get("metadata") or {}
+    namespace_obj = cluster.get("namespace")
     platform = opts.get("platform") or "openshift"
+    # Two different facts, and only one of them is answered by creating the
+    # namespace. `{}` is a read that came back empty -- the live path's `get ns`
+    # on a namespace that is not there yet, which is the ordinary preflight
+    # case. `None` is nobody having looked, which today only an evidence file
+    # says: the collector records a section it was refused as null, and telling
+    # its reader to create a namespace they may well already have is advice
+    # about a problem they do not have.
+    if namespace_obj is None:
+        return [Check("admission", WARN,
+                      "the namespace could not be read, so its PodSecurity / SCC "
+                      "posture is unverified -- unreadable is not absent, and "
+                      "creating the namespace is not what is missing here. The "
+                      "cluster evidence verdict carries the collector's own "
+                      "reason; re-collect with access to it to settle this")]
+    meta = namespace_obj.get("metadata") or {}
     if not namespace_obj:
         return [Check("admission", WARN,
                       "the namespace does not exist yet -- its PodSecurity / SCC "
@@ -722,9 +736,11 @@ def cluster_from_evidence(doc, namespace=None):
         "limitranges": limitranges,
         "quotas": quotas,
         "serviceaccounts": accounts,
-        # A namespace that does not exist yet is the normal preflight case, and
-        # kget reports it as {} -- check_admission already reads that.
-        "namespace": _section(raw, "namespace") or {},
+        # Null stays null here too, and this section is the one where it costs
+        # something to lose: `{}` is what the live path produces for a namespace
+        # that is not there yet, and check_admission's answer to that is "create
+        # it". A collector that was refused `get ns` said nothing of the kind.
+        "namespace": _section(raw, "namespace"),
     }
     # Egress needs something inside the namespace to curl from, so an evidence
     # file cannot carry it. {} is check_egress's "not probed" (WARN), which is
@@ -791,15 +807,41 @@ def _unread(notes):
     writes "<section>: <error>", and on a cluster nobody can reach that error is
     the same six times over -- so the sections are listed and the distinct
     reasons given once."""
-    sections, reasons = [], []
+    reasons = []
     for note in notes:
-        section, _, reason = note.partition(": ")
-        sections.append(section)
-        if reason.strip() and reason.strip() not in reasons:
-            reasons.append(reason.strip())
+        reason = note.partition(": ")[2].strip()
+        if reason and reason not in reasons:
+            reasons.append(reason)
     why = " | ".join(reasons or notes)
-    return (f"could not read {', '.join(sections)}, reported below as "
-            f"unverified rather than as absent: {why[:300]}")
+    return (f"could not read {', '.join(unreadable_sections(notes))}, reported "
+            f"below as unverified rather than as absent: {why[:300]}")
+
+
+def unreadable_sections(notes):
+    """Which sections the collector recorded as unreadable, in the order it
+    wrote them. Names only -- the reasons are _unread's half."""
+    sections = []
+    for note in notes or []:
+        section = str(note).partition(": ")[0]
+        if section and section not in sections:
+            sections.append(section)
+    return sections
+
+
+def evidence_summary(doc):
+    """What the file says about itself, as data rather than as a sentence.
+
+    The same three facts _evidence_checks() states in prose, and it stays the
+    one that judges them -- this is for a caller that renders a header instead
+    of a verdict list. The web UI is that caller: three facts inside one
+    verdict's prose, ten verdicts down a panel, is how a thin file passes for a
+    clean bill of health (#53), and a browser re-deriving them by parsing that
+    sentence would be a second opinion about the same file.
+    """
+    doc = doc if isinstance(doc, dict) else {}
+    return {"collected_at": doc.get("collected_at") or None,
+            "namespace": doc.get("namespace") or None,
+            "unreadable": unreadable_sections(doc.get("notes"))}
 
 
 def _ca_configured(opts):

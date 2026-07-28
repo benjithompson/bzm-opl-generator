@@ -72,7 +72,10 @@ Two differences, both reported rather than guessed:
   collected by someone with very little access is still worth reading, and it
   exits 0 with warnings rather than raising a false alarm. The leading
   `cluster evidence` verdict says when it was collected, for which namespace,
-  and what the script was refused.
+  and what the script was refused. The namespace object is held to the same
+  rule: a `get ns` the collector could not run leaves the admission posture
+  *unverified*, which is not the same verdict as a namespace that does not
+  exist yet — one is answered by creating it and the other is not.
 
 A file whose `schema` is missing or unrecognised is refused by name — pointing
 `--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it

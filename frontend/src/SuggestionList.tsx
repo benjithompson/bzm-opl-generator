@@ -38,7 +38,10 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
   whyNothing: string | null;
   options: Options;
   applied: Applied;
-  onApply: (option: string, value: unknown) => void;
+  // The whole suggestion, not just its option: what applying replaces is the
+  // value this row displayed, and handing over only the name would leave the
+  // caller to find it again somewhere it is not the same value.
+  onApply: (s: Suggestion, value: unknown) => void;
   onUndo: (option: string) => void;
 }) {
   if (!suggestions.length) {
@@ -134,7 +137,7 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   {act.kind === "apply" && (
-                    <Act onClick={() => onApply(s.option, s.value)}>
+                    <Act onClick={() => onApply(s, s.value)}>
                       Apply {clipValue(s.value)}
                     </Act>
                   )}
@@ -142,7 +145,7 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                       but this one overwrites a value somebody chose, and the row
                       above has just shown them both. */}
                   {act.kind === "replace" && (
-                    <Act tone="warn" onClick={() => onApply(s.option, s.value)}>
+                    <Act tone="warn" onClick={() => onApply(s, s.value)}>
                       Replace with {clipValue(s.value)}
                     </Act>
                   )}
@@ -150,7 +153,7 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                       single candidate. Narrowing to one is still not choosing. */}
                   {act.kind === "choose" && act.candidates.map((c) => (
                     <Act key={String(c)} tone={conflict ? "warn" : "plain"}
-                      onClick={() => onApply(s.option, c)}>
+                      onClick={() => onApply(s, c)}>
                       Use {clipValue(c)}
                     </Act>
                   ))}

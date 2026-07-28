@@ -2,8 +2,8 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   api, downloadZip, Account, AgentStatus, Facts, Feature, GeneratedFile,
   ManualFactsOut,
-  FuncIdChoice, KeyCandidate, Location, Options, Ship, SvCheckOut, SvConstants,
-  SvMocksOut, Workspace,
+  FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
+  SvConstants, SvMocksOut, Workspace,
 } from "./api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section,
@@ -26,13 +26,13 @@ import {
 // picked file has to be, what a refused import leaves behind. No verdict is
 // reached there either: they are doctor's, and arrive in doctor's order.
 import {
-  EVIDENCE_SCRIPT, imported, NO_PREFLIGHT, PreflightState, readEvidence,
-  rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
+  evidenceHeader, EVIDENCE_SCRIPT, imported, NO_PREFLIGHT, PreflightState,
+  readEvidence, rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
 } from "./preflight";
 // Acting on the same file: what each suggestion offers, what applying writes,
 // and how to take it back. What the evidence means is suggest.py's and how it
 // stands against the options is suggest.merge()'s -- both arrive on the row.
-import { Applied, applyPatch, NOTHING_APPLIED, record, undo } from "./suggestions";
+import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 import { SuggestionList } from "./SuggestionList";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
@@ -664,9 +664,14 @@ export default function App() {
   // cannot tell this from a value someone typed. The re-check effect above then
   // re-judges the evidence against the configuration it just changed, and the
   // group detection effect opens whichever group now holds something.
-  const applySuggestion = (option: string, value: unknown) => {
-    setApplied((a) => record(a, option, options[option] ?? null, value));
-    setOptions((o) => ({ ...o, ...applyPatch(option, value) }));
+  //
+  // What it writes and what it remembers for the undo are decided together, in
+  // `apply` -- the value being replaced is the one the row displayed, and this
+  // component is not a second place that gets to work it out.
+  const applySuggestion = (s: Suggestion, value: unknown) => {
+    const next = apply(applied, s, value);
+    setApplied(next.applied);
+    setOptions((o) => ({ ...o, ...next.patch }));
   };
 
   const undoSuggestion = (option: string) => {
@@ -675,6 +680,12 @@ export default function App() {
     setApplied(back.applied);
     setOptions((o) => ({ ...o, ...back.patch }));
   };
+
+  // What the imported file says about itself -- collected when, for which
+  // namespace, and what its collector could not read. doctor's, off the same
+  // document; the header states all three rather than leaving them in the
+  // leading verdict's prose.
+  const evidence = preflight.out ? evidenceHeader(preflight.out) : null;
 
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
@@ -1398,11 +1409,20 @@ export default function App() {
                   </p>
                 )}
                 <ErrorMsg msg={preflight.error} />
-                {preflight.out && (
+                {preflight.out && evidence && (
                   <div className="mt-2">
+                    {/* What was imported, before what it implies. All of this
+                        is in the leading verdict's prose as well, and that is
+                        not enough: a file collected by somebody with almost no
+                        access reads as a clean bill of health if the only place
+                        that says so is the tenth line of a list (#53). */}
                     <p className="text-[11px] text-slate-500">
                       <b className="text-slate-700">{preflight.file}</b>
-                      {" · namespace "}
+                      {" · collected "}
+                      <code className="font-mono">{evidence.collected}</code>
+                      {" · describes namespace "}
+                      <code className="font-mono">{evidence.describes}</code>
+                      {" · preflighting "}
                       <code className="font-mono">{preflight.out.namespace}</code>
                       {" · "}
                       <span className={worstStatus(preflight.out.checks)
@@ -1411,6 +1431,24 @@ export default function App() {
                         {verdictLine(preflight.out.checks)}
                       </span>
                     </p>
+                    {/* The namespaced verdicts -- LimitRanges, quotas,
+                        ServiceAccounts, the PSA labels -- are all about the
+                        namespace the file describes, whichever one is being
+                        configured here. */}
+                    {evidence.elsewhere && (
+                      <p className="text-[11px] text-amber-700">
+                        This file was collected for{" "}
+                        <code className="font-mono">{evidence.describes}</code>,
+                        so every namespaced verdict below describes that
+                        namespace and not{" "}
+                        <code className="font-mono">{preflight.out.namespace}</code>.
+                      </p>
+                    )}
+                    {evidence.unreadableLine && (
+                      <p className="text-[11px] text-amber-700">
+                        {evidence.unreadableLine}
+                      </p>
+                    )}
                     {/* doctor's order, kept: where the answers came from leads,
                         because every verdict under it is only as good as that
                         one -- a file collected by someone with little access

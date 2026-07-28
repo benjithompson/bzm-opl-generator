@@ -317,6 +317,12 @@ def preflight(p: PreflightIn):
     # -- `state` says what applying would mean, and the click is the browser's.
     suggestions = suggest_mod.from_evidence(p.evidence)
     return {"namespace": namespace,
+            # The same three facts the leading check states in prose, apart from
+            # it: the panel puts them in its header, where they cannot be read
+            # past. Which namespace the *file* describes is not `namespace`
+            # above -- that is the one being preflighted, and the difference is
+            # the point.
+            "evidence": doctor.evidence_summary(p.evidence),
             "checks": [c._asdict() for c in checks],
             "suggestions": [suggest_mod.merged_as_dict(s, p.options)
                             for s in suggestions],

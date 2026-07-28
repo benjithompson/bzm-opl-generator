@@ -676,6 +676,39 @@ def test_preflight_leads_with_where_the_answers_came_from():
     assert "FAIL" not in {c["status"] for c in body["checks"]}
 
 
+def test_preflight_carries_what_the_file_says_about_itself_as_data():
+    """The same three facts the leading verdict states in prose, apart from it:
+    collected when, which namespace the file describes, and what the collector
+    could not read. Prose in a list of ten verdicts is where a thin file passes
+    for a clean bill of health (#53), so the browser gets them as fields and
+    puts them in the header -- and reads them here rather than parsing that
+    sentence, which would be a second opinion about the same file.
+    """
+    body = _preflight(_degraded(), {"namespace": "some-ns"}).json()
+    assert body["evidence"] == {
+        "collected_at": "2026-07-28T02:51:50Z",
+        "namespace": "some-ns",
+        # Every section this collector was refused, named -- one entry per
+        # section, in the order the script wrote them.
+        "unreadable": ["nodes", "ingressclasses", "namespace", "scoped",
+                       "ingress_config", "proxy_config"]}
+    # ...and it stays consistent with the verdict, which is the same file read
+    # by the same function.
+    detail = body["checks"][0]["detail"]
+    for part in body["evidence"]["unreadable"]:
+        assert part in detail
+
+
+def test_preflight_says_a_readable_file_had_nothing_it_could_not_read():
+    """The other half: an empty list, never a missing key. A header that has to
+    guess whether "no notes" means "read everything" or "field absent" is one
+    that shows the reassuring answer for both."""
+    body = _preflight(_evidence()).json()
+    assert body["evidence"]["unreadable"] == []
+    assert body["evidence"]["collected_at"] == "2026-07-27T10:00:00Z"
+    assert body["evidence"]["namespace"] == "blazemeter"
+
+
 def test_preflight_needs_no_api_key_and_no_cluster(monkeypatch):
     """The same 'no access to anything' path manual facts entry serves. No key
     is configured in this process, and nothing may go looking for a kubectl --

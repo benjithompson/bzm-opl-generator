@@ -509,12 +509,22 @@ _UNSET = (None, "", {}, [])
 def _chosen(option, current):
     """Did somebody set this, as far as anything can tell?
 
-    A departure from the generator's own default is the test. It is the only one
-    available: a field holding the default is indistinguishable from one nobody
-    touched, and a tracker of which keys were typed would move the promise out
-    of here and into whichever caller remembered to keep it. What makes that
-    safe is that nothing is ever applied without a click that names the value --
-    this decides how loudly to ask, not whether to.
+    A departure from the generator's own default is the test, and it is the only
+    one available. A field holding the default is indistinguishable from one
+    nobody touched: profile.json carries every option resolved, and the web UI
+    seeds /api/option-defaults into its options on load, so `platform` reads
+    "openshift" for every caller from the first render. Only a record of which
+    keys were *typed* could separate them, and keeping one would move this
+    promise out of here and into whichever caller remembered to keep it.
+
+    So this is knowingly wrong in one direction: a deliberate choice that equals
+    the default is read as untouched, and gets FILL where CONFLICT would be
+    truer. Erring the other way is worse -- drop the comparison and every
+    unmoved default becomes an amber disagreement, on every import, which is how
+    a panel stops being read. What makes either safe is that nothing is applied
+    without a click on a row showing both values: this decides how loudly to
+    ask, not whether to. Pinned in
+    test_a_deliberate_choice_that_matches_the_default_reads_as_untouched.
     """
     return current not in _UNSET and current != DEFAULT_OPTIONS.get(option)
 

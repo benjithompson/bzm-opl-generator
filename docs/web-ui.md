@@ -68,12 +68,16 @@ list always describes what is configured rather than what was when the file was
 picked. It needs no API key and no kubecontext, which is the point: the same
 person who cannot reach the account usually cannot reach the cluster either.
 
-The list leads with where the answers came from — when the file was collected,
-which namespace for, and every section its collector could not read — because
-each verdict under it is only as good as that. A thin file is a page of warnings
-with a reason attached, never a clean bill of health. A file that is not
-evidence, or carries a schema this version does not know, is refused by name and
-leaves the verdicts already on screen standing.
+The panel header states what was imported before any of it: the file name, when
+it was collected, the namespace the file *describes*, the namespace being
+preflighted, and every section its collector could not read. Those last two are
+different things — a file collected for another namespace still describes the
+same nodes, but its LimitRanges, quotas, ServiceAccounts and PSA labels are
+somebody else's, and the header says so. The same facts lead the verdict list as
+its first row, because every verdict under it is only as good as they are. A
+thin file is a page of warnings with a reason attached, never a clean bill of
+health. A file that is not evidence, or carries a schema this version does not
+know, is refused by name and leaves the verdicts already on screen standing.
 
 ### Applying what the cluster implies
 

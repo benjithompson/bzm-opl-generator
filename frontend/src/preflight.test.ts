@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { CheckStatus, PreflightCheck, PreflightOut } from "./api";
+import { CheckStatus, EvidenceSummary, PreflightCheck, PreflightOut } from "./api";
 import {
-  countByStatus, imported, NO_PREFLIGHT, readEvidence, rechecked, refused,
-  STATUS_STYLE, verdictLine, worstStatus,
+  countByStatus, evidenceHeader, imported, NO_PREFLIGHT, readEvidence,
+  rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
 } from "./preflight";
 
 // What the panel decides on its own, as data in and data out: how a verdict
@@ -25,10 +25,17 @@ const THIN: PreflightCheck[] = [
   check("WARN", "egress", "egress was not probed from inside the cluster"),
 ];
 
+/** What the file says about itself, as the server reads it off the document. */
+const summary = (over: Partial<EvidenceSummary> = {}): EvidenceSummary =>
+  ({ collected_at: "2026-07-28T02:51:50Z", namespace: "some-ns",
+     unreadable: [], ...over });
+
 // The verdict half of the response. What the same file implies about the
 // options rides along on it, and is exercised in suggestions.test.ts.
-const out = (checks: PreflightCheck[]): PreflightOut =>
-  ({ namespace: "blazemeter", checks, suggestions: [], why_nothing: null });
+const out = (checks: PreflightCheck[],
+             evidence: EvidenceSummary = summary()): PreflightOut =>
+  ({ namespace: "blazemeter", checks, suggestions: [], why_nothing: null,
+     evidence });
 
 describe("reading the verdict list", () => {
   it("counts every status, including the ones nothing has", () => {
@@ -84,6 +91,53 @@ describe("telling the three apart", () => {
     const labels = statuses.map((s) => STATUS_STYLE[s].label);
     expect(new Set(labels).size).toBe(statuses.length);
     for (const l of labels) expect(l.trim()).not.toBe("");
+  });
+});
+
+describe("what the imported file says about itself", () => {
+  // #53's criterion: what was imported stays visible -- collected-at, the
+  // namespace it describes, and anything the collector recorded as unreadable
+  // -- so a thin file is not mistaken for a clean bill of health. All three
+  // exist in the leading verdict's prose, and prose in a list of ten verdicts
+  // is exactly where they go unread.
+
+  it("carries collected-at, the namespace it describes, and what it could not read", () => {
+    const h = evidenceHeader(out(THIN, summary({ unreadable: ["nodes", "scoped"] })));
+    expect(h.collected).toBe("2026-07-28T02:51:50Z");
+    expect(h.describes).toBe("some-ns");
+    expect(h.unreadable).toEqual(["nodes", "scoped"]);
+    expect(h.unreadableLine).toContain("nodes, scoped");
+    // And what a null section means, since that is the whole point of showing
+    // them: not read is not "there are none".
+    expect(h.unreadableLine).toContain("unverified");
+  });
+
+  it("says nothing about unreadable sections when there were none", () => {
+    const h = evidenceHeader(out(THIN));
+    expect(h.unreadable).toEqual([]);
+    expect(h.unreadableLine).toBe("");
+  });
+
+  it("separates the namespace the file describes from the one being preflighted", () => {
+    // The two are different things and the difference is the point: every
+    // namespaced verdict below describes the file's namespace, whatever
+    // namespace the bundle is being configured for.
+    const elsewhere = evidenceHeader(out(THIN, summary({ namespace: "their-ns" })));
+    expect(elsewhere.describes).toBe("their-ns");
+    expect(elsewhere.elsewhere).toBe(true);
+    const same = evidenceHeader(out(THIN, summary({ namespace: "blazemeter" })));
+    expect(same.elsewhere).toBe(false);
+  });
+
+  it("says so in words when the file recorded neither", () => {
+    // A file with no collected_at is older or hand-made; blank space where the
+    // date goes reads as "just now" to anyone skimming.
+    const h = evidenceHeader(
+      out(THIN, summary({ collected_at: null, namespace: null })));
+    expect(h.collected).toContain("unrecorded");
+    expect(h.describes).toContain("unnamed");
+    // ...and an unnamed namespace is not a mismatch to shout about.
+    expect(h.elsewhere).toBe(false);
   });
 });
 

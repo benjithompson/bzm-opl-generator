@@ -63,11 +63,12 @@ anything that breaks.
 - **Cluster preflight in the web UI.** Pick the file the collector wrote and see
   `doctor`'s verdicts against the configuration on screen, re-run as you edit it.
   `POST /api/preflight` needs no API key and no kubecontext — the same "no access
-  to anything" path manual facts entry serves. The list leads with where the
-  answers came from: collected when, for which namespace, and what the collector
-  was refused, so a thin file cannot read as a clean bill of health. A file that
-  is not evidence is refused by name and leaves the verdicts already on screen
-  standing.
+  to anything" path manual facts entry serves. The panel header says what was
+  imported — collected when, the namespace the file *describes* as against the
+  one being preflighted, and every section the collector was refused — and the
+  same facts lead the verdict list, so a thin file cannot read as a clean bill
+  of health. A file that is not evidence is refused by name and leaves the
+  verdicts already on screen standing.
 - **Apply what the evidence implies, one suggestion at a time.** Decisive
   suggestions offer their value as a single click; suggestive ones offer a button
   per candidate and never a default. **A value you already set is never

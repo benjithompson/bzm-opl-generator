@@ -103,6 +103,11 @@ export interface PreflightCheck {
  *  the one collected for (the leading check says so when it is not). */
 export interface PreflightOut {
   namespace: string;
+  /** What the file says about itself. Distinct from `namespace` above on
+   *  purpose: that is the namespace being preflighted, this is the one the
+   *  file describes, and a file collected for another namespace says little
+   *  about this one. */
+  evidence: EvidenceSummary;
   checks: PreflightCheck[];
   /** What the same file implies about the options, in suggest.py's reporting
    *  order. Carried here rather than fetched separately because both halves are
@@ -114,6 +119,19 @@ export interface PreflightOut {
    *  and only the first is worth re-collecting for. Null once there is anything
    *  to show. */
   why_nothing: string | null;
+}
+
+/** What an imported evidence file says about itself, read off the document by
+ *  doctor.evidence_summary. The verdicts are only ever as good as these three:
+ *  how stale the read is, which namespace it describes, and which sections the
+ *  collector was refused — a null section is "we did not look", never "there
+ *  are none". Nulls where the file recorded neither. */
+export interface EvidenceSummary {
+  collected_at: string | null;
+  namespace: string | null;
+  /** Section names, in the order the collector wrote them; empty when it read
+   *  everything it asked for. */
+  unreadable: string[];
 }
 
 /** How strongly a suggestion holds. DECISIVE: the evidence settles it and

@@ -156,6 +156,24 @@ def test_an_empty_section_still_fails_where_it_should(monkeypatch):
                  "ingress class").status == doctor.FAIL
 
 
+def test_a_namespace_nobody_could_read_is_not_reported_as_one_that_is_absent():
+    """The same null-vs-empty distinction, on the one section that used to lose
+    it: `raw.namespace: null` was collapsed to `{}` on the way in, and `{}` is
+    what check_admission reads as "the namespace does not exist yet -- create
+    it". A collector that was refused `get ns` described nothing of the sort,
+    and that advice sends its reader after something that is not missing.
+    """
+    doc = _evidence(notes=["namespace: Error from server (Forbidden)"])
+    doc["raw"]["namespace"] = None
+    imported = doctor.cluster_from_evidence(doc, "blazemeter")
+    assert imported.cluster["namespace"] is None
+    c = _find(doctor.evaluate(FACTS, OPTS, "blazemeter", probes={},
+                              cluster_data=imported.cluster), "admission")
+    assert c.status == doctor.WARN
+    assert "does not exist" not in c.detail
+    assert "could not be read" in c.detail
+
+
 def test_an_unreadable_quota_is_not_a_pass(monkeypatch):
     """`no ResourceQuota in the namespace` is a claim, and a denied read is no
     basis for making it -- that is the one place an empty list PASSes."""
@@ -177,12 +195,17 @@ def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
     imported = doctor.cluster_from_evidence(doc, "some-ns")
     assert imported.cluster == {"nodes": None, "ingressclasses": None,
                                 "limitranges": None, "quotas": None,
-                                "serviceaccounts": None, "namespace": {}}
+                                "serviceaccounts": None, "namespace": None}
     checks = doctor.evaluate(FACTS, OPTS, "some-ns", cluster_data=imported.cluster,
                              probes=imported.probes, extra_checks=imported.checks)
     assert doctor.FAIL not in _statuses(checks)
     for name in ("capacity", "limitrange", "quota", "admission", "egress"):
         assert _find(checks, name).status == doctor.WARN
+    # Status alone is not the whole verdict: this file's collector had no
+    # kubeconfig at all, so every WARN above has to say it did not look --
+    # "the namespace does not exist yet, create it" would be a WARN stating a
+    # fact this file cannot support.
+    assert "could not be read" in _find(checks, "admission").detail
     # The script's own errors explain every null above; dropping them would
     # leave the reader with six WARNs and no reason for any of them.
     assert "Missing or incomplete configuration" in _find(checks, "evidence").detail

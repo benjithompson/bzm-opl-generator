@@ -10,6 +10,46 @@
 
 import { CheckStatus, PreflightCheck, PreflightOut } from "./api";
 
+/** The header over the verdict list: what was imported, stated where it cannot
+ *  be read past.
+ *
+ *  All three of these are already in the leading verdict's prose, and that is
+ *  not enough — prose in a list of ten verdicts is exactly where a file
+ *  collected by somebody with almost no access passes for a clean bill of
+ *  health (#53). Nothing is decided here: the facts are doctor's, off the
+ *  document, and this only puts them in the words the header uses. */
+export interface EvidenceHeader {
+  /** When the collector ran, or that the file did not record it. */
+  collected: string;
+  /** The namespace the FILE describes — not the one being preflighted. */
+  describes: string;
+  /** The two are different namespaces, so every namespaced verdict below
+   *  describes the other one. */
+  elsewhere: boolean;
+  unreadable: string[];
+  /** The unreadable sections as a sentence, or "" when there were none. Said
+   *  in the same terms doctor uses, because it is the same distinction: not
+   *  read is unverified, not absent. */
+  unreadableLine: string;
+}
+
+export function evidenceHeader(out: PreflightOut): EvidenceHeader {
+  const { collected_at, namespace, unreadable } = out.evidence;
+  return {
+    collected: collected_at ?? "an unrecorded time",
+    describes: namespace ?? "an unnamed namespace",
+    // A file that names no namespace is not a mismatch — there is nothing to
+    // mismatch with, and warning about one would be a complaint nobody can act
+    // on.
+    elsewhere: namespace != null && namespace !== out.namespace,
+    unreadable,
+    unreadableLine: unreadable.length
+      ? `could not read ${unreadable.join(", ")} — reported below as unverified, `
+        + `not as absent`
+      : "",
+  };
+}
+
 export const EVIDENCE_SCRIPT = "scripts/bzm-cluster-evidence.sh";
 
 /** How each verdict reads: the badge on its own row, and the colour the summary

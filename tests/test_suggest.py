@@ -657,6 +657,55 @@ def test_a_configured_value_the_cluster_rules_out_is_a_conflict():
     assert "istio" in _for(doc, "sv_ingress").ruled_out
 
 
+def test_a_deliberate_choice_that_matches_the_default_reads_as_untouched():
+    """Pinned rather than fixed, and the one trade in this module worth naming.
+
+    Somebody who deliberately picks platform=openshift, against evidence that
+    decisively says k8s, gets FILL and a one-click "Apply k8s" -- not CONFLICT
+    and "Replace". Nothing in the data can tell that choice from a field nobody
+    touched: profile.json carries every option resolved, and the web UI seeds
+    /api/option-defaults into its options state on load, so `platform` reads
+    "openshift" for every caller from the first render. Only a record of which
+    keys were *typed* could separate them, and keeping one would move this
+    guarantee out of here and into three callers, one of which is a browser --
+    a promise held by whoever remembered to update it is not held.
+
+    Erring the other way is worse, not safer: without the default comparison,
+    every option still holding its default becomes an amber "disagreement" --
+    service_account_name against a namespace holding other accounts, on every
+    import -- and a panel that cries conflict about values nobody chose is one
+    people stop reading.
+
+    What carries the promise instead is that FILL is not a licence to write.
+    Nothing is applied without a click, on a row that has already shown both
+    values -- which is what the `current` assertions here and in
+    test_merge_shows_what_would_be_replaced_whatever_the_state are about. FILL
+    against CONFLICT decides how loudly to ask, never whether to ask.
+    """
+    doc = _evidence(**PLAIN_K8S)
+    deliberate = _merge(doc, "platform", {"platform": "openshift"})
+    assert deliberate.state == suggest.FILL
+    assert deliberate.value == "k8s"
+    # The mitigation, on the row itself: what would be replaced is on screen.
+    assert deliberate.current == "openshift"
+
+
+def test_merge_shows_what_would_be_replaced_whatever_the_state():
+    """`current` is what makes the trade above survivable, so it is asserted
+    over every fixture rather than on the states where it happens to matter: a
+    row that stopped naming the value it would overwrite would take the
+    "never without being shown" guarantee with it, silently."""
+    for doc in _every_fixture():
+        for s in suggest.from_evidence(doc):
+            for options in ({}, {s.option: "something-else"}):
+                m = suggest.merge(s, options)
+                assert m.option == s.option
+                # Present, and the value the caller holds -- not a re-derivation
+                # a UI could disagree with.
+                assert m.current == options.get(
+                    s.option, suggest.DEFAULT_OPTIONS.get(s.option))
+
+
 def test_every_option_a_suggestion_names_is_one_generate_actually_takes():
     """A suggestion for an option the generator has never heard of is a value
     that applies cleanly and changes nothing in the bundle. Checked here rather
