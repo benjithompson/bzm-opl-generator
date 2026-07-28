@@ -144,6 +144,7 @@ needs an API key. The UI and CLI both say so when it applies.
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `toolcheck`, and engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: local registry, proxy + CA, egress containment, real engine runs |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
+| [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the two test layers, PR flow, cutting a release |
 | [CLAUDE.md](CLAUDE.md) | live-rig internals and the environment trap behind each flag |
 
