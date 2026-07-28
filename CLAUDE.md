@@ -146,7 +146,13 @@ the classes of problem it can't fix for you.
   structural, never where it is remembered. A denied read is a WARN and exits 0;
   an empty result can be a FAIL. If a new field cannot express both, it is not
   ready to be read. (`versions.serverVersion` is how the boolean sections tell
-  the two apart, since a bare `false` cannot.)
+  the two apart, since a bare `false` cannot.) The fifth was on the account
+  side: `facts.manual()` leaves `slots` and `threadsPerEngine` `None` because
+  there is no account to ask, and `gather()` returns the same `None` for a real
+  location that has them unset — which is the 403-at-every-start FAIL. Here the
+  value genuinely cannot carry it, so `doctor.check_location` reads
+  `facts.from_manual_entry()` instead; unknown is `None` only, a typed 0 is
+  still a FAIL.
 - `generate` writes `out/profile.json` (resolved options minus `auth_token`);
   `livetest` re-renders from it, so manifests under test stay generator output
   rather than hand-patched YAML.
@@ -189,8 +195,11 @@ the classes of problem it can't fix for you.
 - **`facts.manual()` is the same shape `gather()` returns, on purpose.** The UI's
   manual mode and `facts --manual` build facts from a typed harbor id, ship id
   and token so a bundle can be produced for an account nobody here can reach.
-  Nothing downstream learns which way the facts arrived — keep it that way, and
-  add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+  Nothing that *generates* learns which way the facts arrived — keep it that
+  way, and add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+  The one consumer that legitimately asks is `doctor`, and it asks the marker
+  the facts already carry (`from_manual_entry()`, over `images_source`) rather
+  than a field of its own.
 - **A Kubernetes agent reports its images as bare keys** -- `taurus-cloud:latest`,
   `torero:4.6.182` -- with no registry and `Size: 0`, i.e. crane's configured
   image set rather than what is on the node. Docker agents report

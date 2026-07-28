@@ -112,6 +112,52 @@ def test_location_without_slots_fails(slots):
     assert c.status == doctor.FAIL
 
 
+# Both fields are read from the account, so "there was no account to ask"
+# (manual facts) and "the location has it unset" (gather() against a real
+# location) both arrive as None -- and only the second is the 403-at-start
+# failure. The value cannot tell them apart; how the facts arrived can.
+
+def test_manually_entered_location_reports_the_two_fields_unknown():
+    """The flagship path: harbor id, ship id and a token typed in, no account
+    to read. Neither value could have been supplied and nothing is
+    misconfigured, so neither is a failure."""
+    checks = doctor.check_location(facts_mod.manual("aaa111", "bbb222"), {}, {})
+    assert _statuses(checks) == {doctor.WARN}
+    assert not doctor.has_failures(checks)
+    for c in checks:
+        assert "unknown" in c.detail
+        # Still says where to look: unknown is not "no longer your problem".
+        assert "Private Locations" in c.detail
+
+
+def test_gathered_facts_with_the_same_nulls_still_fail():
+    """The distinction is the marker, not the value -- identical None/None read
+    off a real location stays the FAIL it has always been."""
+    gathered = {**FACTS, "slots": None, "threads_per_engine": None,
+                "images_source": "live agent inventory"}
+    checks = doctor.check_location(gathered, {}, {})
+    assert _statuses(checks) == {doctor.FAIL}
+    assert "403" in _find(checks, "threadsPerEngine").detail
+
+
+def test_manual_facts_with_the_values_filled_in_are_checked_normally():
+    """Nothing is exempted by the marker: a manual facts file the customer
+    completed from the BlazeMeter UI gets the verdicts a gathered one would."""
+    filled = {**facts_mod.manual("aaa111", "bbb222"),
+              "slots": 2, "threads_per_engine": 500}
+    assert _statuses(doctor.check_location(filled, {}, {})) == {doctor.PASS}
+
+
+def test_manual_facts_with_a_slot_count_of_zero_still_fail():
+    """Unknown is `None` on manually-entered facts, and only that. A typed 0 is
+    a value the customer did supply, and zero slots is the case BlazeMeter has
+    nowhere to place a run -- exempting it would hide a real misconfiguration
+    behind the marker."""
+    zero = {**facts_mod.manual("aaa111", "bbb222"),
+            "slots": 0, "threads_per_engine": 500}
+    assert _find(doctor.check_location(zero, {}, {}), "slots").status == doctor.FAIL
+
+
 # -- check_threads_per_engine ----------------------------------------------
 
 @pytest.mark.parametrize("threads,opts,status", [

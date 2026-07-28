@@ -720,6 +720,20 @@ def test_preflight_needs_no_api_key_and_no_cluster(monkeypatch):
     assert r.status_code == 200 and r.json()["checks"]
 
 
+def test_preflight_of_manually_entered_facts_reports_no_failures():
+    """Both halves of the no-access path in one request, as the browser makes
+    it: the facts the manual form produced, judged against a file someone else
+    collected. The facts go back out over HTTP and come in again, so this also
+    holds the marker doctor reads to surviving the round trip -- trimmed on the
+    way, the location verdicts would silently be failures again."""
+    facts = client.post("/api/facts/manual",
+                        json={"harbor_id": "H1", "ship_id": "S1"}).json()["facts"]
+    body = _preflight(_degraded(), {"namespace": "some-ns"}, facts=facts).json()
+    assert "FAIL" not in {c["status"] for c in body["checks"]}
+    for name in ("location slots", "location threadsPerEngine"):
+        assert _find_check(body, name)["status"] == "WARN"
+
+
 def test_preflight_judges_the_configuration_it_was_sent():
     """Not the defaults: an engine size no node can hold is a FAIL against the
     same evidence that passes at the documented one."""

@@ -19,7 +19,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor  # noqa: E402
+from bzm_opl_gen import cli, doctor, facts as facts_mod  # noqa: E402
 # The cluster fixtures live with the checks that read them; reused rather than
 # re-declared so both paths are fed literally the same objects.
 from test_doctor import (FACTS, LR_MATCHING, NS_BASELINE, QUOTA_ITEM,  # noqa: E402
@@ -209,6 +209,22 @@ def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
     # The script's own errors explain every null above; dropping them would
     # leave the reader with six WARNs and no reason for any of them.
     assert "Missing or incomplete configuration" in _find(checks, "evidence").detail
+
+
+def test_no_account_and_no_cluster_reports_nothing_as_broken():
+    """The path both halves of this feature exist for: facts typed in from what
+    BlazeMeter shows the customer, cluster read from a file collected by someone
+    else. Everything unknown is a WARN and nothing is a failure -- the report
+    used to open with two failures about slots and threadsPerEngine, values no
+    one on this side of the account could have supplied."""
+    with open(DEGRADED) as fh:
+        imported = doctor.cluster_from_evidence(json.load(fh), "some-ns")
+    checks = doctor.evaluate(facts_mod.manual("aaa111", "bbb222"), OPTS, "some-ns",
+                             cluster_data=imported.cluster, probes=imported.probes,
+                             extra_checks=imported.checks)
+    assert not doctor.has_failures(checks)
+    for name in ("location slots", "location threadsPerEngine"):
+        assert _find(checks, name).status == doctor.WARN
 
 
 def test_egress_is_reported_unavailable_rather_than_guessed():
