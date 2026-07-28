@@ -131,6 +131,22 @@ the classes of problem it can't fix for you.
 
 ## Generator details that bite
 
+- **"Could not read" and "there is nothing there" must never share a
+  representation.** This has been the same bug four times, and three of them
+  were found within one session: `null` vs `[]` in the evidence collector; the
+  same collapse already latent in `gather_cluster()`, where a denied `list
+  nodes` produced the identical "engines have nowhere to run" FAIL and non-zero
+  exit as an empty cluster; `auth can-i` and `api-resources` both reporting
+  failure as *no*, so a file collected with no kubeconfig read as a locked-down
+  cluster and would have yielded a configuration about a cluster nobody
+  described; and `raw.namespace: null` becoming `{}`, which had `check_admission`
+  announce a namespace "does not exist yet — re-run after creating it" when it
+  had merely been refused. The fourth landed *inside* the change written to fix
+  the first two, which is the point: the distinction survives only where it is
+  structural, never where it is remembered. A denied read is a WARN and exits 0;
+  an empty result can be a FAIL. If a new field cannot express both, it is not
+  ready to be read. (`versions.serverVersion` is how the boolean sections tell
+  the two apart, since a bare `false` cannot.)
 - `generate` writes `out/profile.json` (resolved options minus `auth_token`);
   `livetest` re-renders from it, so manifests under test stay generator output
   rather than hand-patched YAML.

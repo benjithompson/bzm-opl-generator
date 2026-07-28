@@ -15,7 +15,8 @@ agent flip online. Profile JSON import/export round-trips with
 `generate --profile`. Frontend dev:
 `cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
 build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
-runs the option-group logic suite that CI runs as its own job.
+runs the logic suites CI runs as its own job — the option groups and the
+preflight panel, both plain data in and data out, neither rendering anything.
 
 **Namespace and service account are always on screen**, above the groups and
 outside the feature view: every deployment has both, and both are always sent.
@@ -57,6 +58,50 @@ port reference, and [`sv-expose`](service-virtualization.md#reaching-a-virtual-s
 is the fix. A probe that gets no status line says which kind it was: the host did
 not resolve, nothing accepted the connection, the TLS handshake failed, or
 nothing replied in time.
+
+**Preflight a cluster from a file.** Under Download & verify, pick the JSON
+[`scripts/bzm-cluster-evidence.sh`](preflight.md#a-cluster-you-cannot-reach)
+wrote on a machine with cluster access, and the page shows the verdicts
+`bzm-opl-gen doctor` reaches — PASS, WARN or FAIL each on its own row — against
+the configuration currently on screen. Editing an option re-runs them, so the
+list always describes what is configured rather than what was when the file was
+picked. It needs no API key and no kubecontext, which is the point: the same
+person who cannot reach the account usually cannot reach the cluster either.
+
+The panel header states what was imported before any of it: the file name, when
+it was collected, the namespace the file *describes*, the namespace being
+preflighted, and every section its collector could not read. Those last two are
+different things — a file collected for another namespace still describes the
+same nodes, but its LimitRanges, quotas, ServiceAccounts and PSA labels are
+somebody else's, and the header says so. The same facts lead the verdict list as
+its first row, because every verdict under it is only as good as they are. A
+thin file is a page of warnings with a reason attached, never a clean bill of
+health. A file that is not evidence, or carries a schema this version does not
+know, is refused by name and leaves the verdicts already on screen standing.
+
+### Applying what the cluster implies
+
+Under the verdicts, the same file answers the question that comes first: not
+whether the deployment survives this cluster but how it should have been
+configured. Each row names one option, what the evidence says about it, the
+evidence paths behind it, and what the configuration holds right now — the whole
+point being that you stop transcribing a namespace's ServiceAccount names and a
+router's wildcard domain by hand.
+
+- **Decisive** suggestions offer the value as one click. **Suggestive** ones
+  offer a button per candidate and never a default, at one candidate as much as
+  at three: narrowing the shortlist is not choosing from it.
+- **A value you set is never overwritten silently.** Where the evidence
+  disagrees with it the row turns amber and shows both values, and the button
+  says *Replace* rather than *Apply*.
+- **Applying is reversible for the session.** Each applied row grows an *Undo*
+  that puts the previous value back without you re-entering it.
+- An option no row names is not in this file. It is left exactly as you set it,
+  and nothing here has checked it.
+
+An applied value is an ordinary option from there on: the preview, the bundle
+and `profile.json` are identical to what you get typing it in the form, and
+nothing downstream can tell the difference.
 
 Reading the namespace is the one thing the UI does that needs a cluster, and it
 needs one only for that: it uses whatever `kubectl`/`oc` context the machine

@@ -7,6 +7,7 @@ Subcommands:
   facts       query the account, write facts.json (harbor, ships, images, features)
   generate    render manifests from facts + customer parameters
   doctor      preflight a cluster: can it schedule the location's concurrency?
+  suggest     what a cluster's evidence implies about the generate options
   sv-expose   emit a working Service+Ingress per deployed virtual service
   images      list / pull / mirror the images the location actually needs
   livetest    apply manifests to a cluster and verify the agent comes online
@@ -18,7 +19,7 @@ import subprocess
 import sys
 
 from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               workstation)
+               suggest as suggest_mod, workstation)
 
 
 def _resolve_account(client, a):
@@ -223,8 +224,45 @@ def cmd_doctor(a):
         opts = {}
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
-    checks = doctor.run(f, opts, a.namespace)
+    imported = None
+    if a.cluster_evidence:
+        try:
+            doc = doctor.load_evidence(a.cluster_evidence)
+            # The namespace the evidence was collected for is the last fallback,
+            # not the first: an explicit -n or the bundle's own namespace is what
+            # the user is preflighting, and evidence for a different one is
+            # reported by cluster_from_evidence rather than silently adopted.
+            namespace = (a.namespace or opts.get("namespace")
+                         or doc.get("namespace"))
+            imported = doctor.cluster_from_evidence(doc, namespace)
+        except ValueError as e:
+            sys.exit(str(e))
+    else:
+        namespace = a.namespace
+    checks = doctor.run(f, opts, namespace,
+                        cluster_data=imported.cluster if imported else None,
+                        probes=imported.probes if imported else None,
+                        extra_checks=imported.checks if imported else ())
     sys.exit(1 if doctor.has_failures(checks) else 0)
+
+
+def cmd_suggest(a):
+    """Say what a cluster's evidence implies about the generate options.
+
+    Deliberately its own command rather than a flag on `doctor`: that one
+    answers whether a deployment survives this cluster and exits non-zero when
+    it would not, and this one answers how it should have been configured. Same
+    file, different question, and nothing here is applied to anything.
+    """
+    try:
+        doc = doctor.load_evidence(a.cluster_evidence)
+        suggestions = suggest_mod.from_evidence(doc)
+    except ValueError as e:
+        sys.exit(str(e))
+    if a.json:
+        print(json.dumps([suggest_mod.as_dict(s) for s in suggestions], indent=2))
+    else:
+        suggest_mod.report(doc, suggestions)
 
 
 def cmd_toolcheck(a):
@@ -499,8 +537,26 @@ def main():
                    help="directory holding profile.json -- the options the "
                         "checks measure the cluster against")
     d.add_argument("-n", "--namespace",
-                   help="target namespace (default: the profile's)")
+                   help="target namespace (default: the profile's, or the "
+                        "one --cluster-evidence was collected for)")
+    d.add_argument("--cluster-evidence", metavar="FILE",
+                   help="preflight a cluster you have no access to, from the "
+                        "JSON scripts/bzm-cluster-evidence.sh produced there. "
+                        "The checks are the same ones; egress, which needs a "
+                        "pod in the namespace, reports as unverified")
     d.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("suggest",
+                       help="what a cluster's evidence implies about the "
+                            "generate options")
+    s.add_argument("--cluster-evidence", metavar="FILE", required=True,
+                   help="the JSON scripts/bzm-cluster-evidence.sh produced on "
+                        "the cluster. No API key and no cluster access needed: "
+                        "every answer comes out of this file")
+    s.add_argument("--json", action="store_true",
+                   help="the suggestions as data -- option, strength, value, "
+                        "candidates, the evidence each came from")
+    s.set_defaults(fn=cmd_suggest)
 
     w = sub.add_parser("toolcheck",
                        help="does this workstation have what livetest shells "

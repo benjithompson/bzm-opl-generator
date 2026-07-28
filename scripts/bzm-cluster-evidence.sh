@@ -88,8 +88,16 @@ get_json() {
 # there is nothing here that needs quoting.
 get_names() {
     key="$1"; shift
-    out=$("$CLI" get "$@" -o custom-columns=N:.metadata.name --no-headers 2>/dev/null)
-    if [ $? -ne 0 ]; then printf '    "%s": null' "$key"; return; fi
+    # Same note-on-failure as get_json: a null with no note is a section that
+    # silently disappears from "what could not be read", and the reader then
+    # presents a partial file as a complete one.
+    out=$("$CLI" get "$@" -o custom-columns=N:.metadata.name --no-headers 2>/tmp/bzm-ev-err.$$)
+    if [ $? -ne 0 ]; then
+        note "$key: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
+        rm -f /tmp/bzm-ev-err.$$
+        printf '    "%s": null' "$key"; return
+    fi
+    rm -f /tmp/bzm-ev-err.$$
     printf '    "%s": [' "$key"
     first=1
     for n in $out; do
@@ -138,7 +146,7 @@ printf '  "inventory": {\n'
 get_names configmaps configmap -n "$NS" ; printf ',\n'
 # Type is as far as this goes: it is what identifies an imagePullSecret
 # (kubernetes.io/dockerconfigjson) without reading anything inside one.
-sec=$("$CLI" get secret -n "$NS" -o custom-columns=N:.metadata.name,T:.type --no-headers 2>/dev/null)
+sec=$("$CLI" get secret -n "$NS" -o custom-columns=N:.metadata.name,T:.type --no-headers 2>/tmp/bzm-ev-err.$$)
 if [ $? -eq 0 ]; then
     printf '    "secrets": ['
     first=1
@@ -154,15 +162,24 @@ $sec
 EOF
     printf ']'
 else
+    note "secrets: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
     printf '    "secrets": null'
 fi
+rm -f /tmp/bzm-ev-err.$$
 printf '\n  },\n'
 
 # -- what the API server says you may do ------------------------------------
 # This is the part `doctor` cannot ask on your behalf: whether the bundle will
 # even apply. A namespaced Role is all a standard deployment needs; the
-# cluster-scoped rows decide whether serviceType NODEPORT is available at all,
-# since crane resolves its advertised address from the Node object.
+# cluster-scoped rows decide only whether the bundle's *optional* ClusterRole
+# can be applied. They say nothing about serviceType: crane resolves its
+# advertised address from its own network interfaces, not from the Node object,
+# and NODEPORT has run green with namespaced RBAC only (issue #49).
+#
+# Note for whoever reads this file: a `false` below is "the API server said no"
+# only when the command reached it -- `auth can-i` and `api-resources` both
+# report failure as no. `versions.serverVersion` is what tells the two apart,
+# and bzm_opl_gen/suggest.py will not suggest anything without it.
 printf '  "permissions": {\n'
 printf '    "namespaced": {\n'
 can_i "create serviceaccounts" create serviceaccounts ; printf ',\n'

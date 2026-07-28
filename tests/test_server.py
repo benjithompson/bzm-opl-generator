@@ -608,3 +608,239 @@ def test_group_tags_name_features_the_server_actually_serves():
         f"{sorted(tagged - served)}. Either the id was renamed in "
         f"server.FEATURES, or the tag is a typo -- the group's options would "
         f"never appear.")
+
+
+# -- preflight from an evidence file -------------------------------------------
+# The browser half of `doctor --cluster-evidence`. Nothing here may reach for a
+# cluster or for the API key: the file is the cluster read, and the case this
+# exists for is the customer whose account and cluster are both out of reach.
+
+from bzm_opl_gen import doctor, suggest  # noqa: E402
+# The fixtures live with the checks that read them, so the HTTP layer is fed the
+# same documents the doctor tests are -- a difference between the two would be a
+# difference in what the browser is told.
+from test_cluster_evidence import DEGRADED, _evidence  # noqa: E402
+from test_doctor import FACTS as LOC_FACTS, SV_NGINX  # noqa: E402
+
+
+def _degraded():
+    with open(DEGRADED) as fh:
+        return json.load(fh)
+
+
+def _preflight(evidence, options=None, facts=None):
+    return client.post("/api/preflight", json={
+        "facts": LOC_FACTS if facts is None else facts,
+        "options": {"namespace": "blazemeter", **(options or {})},
+        "evidence": evidence})
+
+
+def _find_check(body, needle):
+    hits = [c for c in body["checks"] if needle in c["name"]]
+    assert hits, f"no check matching {needle!r} in {[c['name'] for c in body['checks']]}"
+    return hits[0]
+
+
+def test_preflight_answers_with_the_verdicts_the_command_would_print():
+    """The seam #51 built, over HTTP: the same Check list, in the same order,
+    with nothing filtered on the way to the browser. Compared against
+    doctor.evaluate itself, because the failure this guards against is the
+    server quietly dropping or reordering a verdict nobody would then miss."""
+    doc = _evidence()
+    opts = {"namespace": "blazemeter", **SV_NGINX}
+    r = _preflight(doc, SV_NGINX)
+    assert r.status_code == 200
+    imported = doctor.cluster_from_evidence(doc, "blazemeter")
+    expected = doctor.evaluate(LOC_FACTS, opts, "blazemeter",
+                               cluster_data=imported.cluster,
+                               probes=imported.probes, extra_checks=imported.checks)
+    assert [(c["status"], c["name"], c["detail"]) for c in r.json()["checks"]] \
+        == [(c.status, c.name, c.detail) for c in expected]
+    assert r.json()["namespace"] == "blazemeter"
+
+
+def test_preflight_leads_with_where_the_answers_came_from():
+    """Provenance is a verdict, not an aside: collected when, for which
+    namespace, and what the script could not read -- so a thin file cannot be
+    mistaken for a clean bill of health. It leads the list because it qualifies
+    everything after it."""
+    body = _preflight(_degraded(), {"namespace": "some-ns"}).json()
+    first = body["checks"][0]
+    assert "evidence" in first["name"]
+    assert "2026-07-28T02:51:50Z" in first["detail"]     # collected at
+    assert "some-ns" in first["detail"]                  # and for which namespace
+    assert "could not read nodes" in first["detail"]     # and what it could not see
+    assert first["status"] == "WARN"
+    # The thin file's other half: everything it could not read is a warning, and
+    # none of it a pass anyone stood behind.
+    assert "FAIL" not in {c["status"] for c in body["checks"]}
+
+
+def test_preflight_carries_what_the_file_says_about_itself_as_data():
+    """The same three facts the leading verdict states in prose, apart from it:
+    collected when, which namespace the file describes, and what the collector
+    could not read. Prose in a list of ten verdicts is where a thin file passes
+    for a clean bill of health (#53), so the browser gets them as fields and
+    puts them in the header -- and reads them here rather than parsing that
+    sentence, which would be a second opinion about the same file.
+    """
+    body = _preflight(_degraded(), {"namespace": "some-ns"}).json()
+    assert body["evidence"] == {
+        "collected_at": "2026-07-28T02:51:50Z",
+        "namespace": "some-ns",
+        # Every section this collector was refused, named -- one entry per
+        # section, in the order the script wrote them.
+        "unreadable": ["nodes", "ingressclasses", "namespace", "scoped",
+                       "ingress_config", "proxy_config"]}
+    # ...and it stays consistent with the verdict, which is the same file read
+    # by the same function.
+    detail = body["checks"][0]["detail"]
+    for part in body["evidence"]["unreadable"]:
+        assert part in detail
+
+
+def test_preflight_says_a_readable_file_had_nothing_it_could_not_read():
+    """The other half: an empty list, never a missing key. A header that has to
+    guess whether "no notes" means "read everything" or "field absent" is one
+    that shows the reassuring answer for both."""
+    body = _preflight(_evidence()).json()
+    assert body["evidence"]["unreadable"] == []
+    assert body["evidence"]["collected_at"] == "2026-07-27T10:00:00Z"
+    assert body["evidence"]["namespace"] == "blazemeter"
+
+
+def test_preflight_needs_no_api_key_and_no_cluster(monkeypatch):
+    """The same 'no access to anything' path manual facts entry serves. No key
+    is configured in this process, and nothing may go looking for a kubectl --
+    either being required would defeat the point. Same guard the command's own
+    test uses, because this is the same claim over HTTP."""
+    monkeypatch.setattr(doctor.livetest, "cli_tool",
+                        lambda: pytest.fail("preflight went looking for a cluster"))
+    r = _preflight(_degraded(), {"namespace": "some-ns"})
+    assert r.status_code == 200 and r.json()["checks"]
+
+
+def test_preflight_judges_the_configuration_it_was_sent():
+    """Not the defaults: an engine size no node can hold is a FAIL against the
+    same evidence that passes at the documented one."""
+    doc = _evidence()
+    assert _find_check(_preflight(doc).json(), "capacity")["status"] == "PASS"
+    huge = _preflight(doc, {"engine_cpu_limit": "64",
+                            "engine_mem_limit": "256Gi"}).json()
+    assert _find_check(huge, "capacity")["status"] == "FAIL"
+
+
+def test_preflight_reports_evidence_collected_for_another_namespace():
+    """Most of what follows is per-namespace. The file still describes the same
+    nodes, so this is reported rather than refused -- and the namespace judged
+    is the one being configured, never the one the file happens to name."""
+    body = _preflight(_evidence("their-ns")).json()
+    first = body["checks"][0]
+    assert body["namespace"] == "blazemeter"
+    assert first["status"] == "WARN"
+    assert "their-ns" in first["detail"] and "blazemeter" in first["detail"]
+
+
+def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
+    """Same precedence as the command: what is being configured wins, and the
+    file's own namespace is the last resort rather than the first."""
+    r = client.post("/api/preflight", json={
+        "facts": LOC_FACTS, "options": {}, "evidence": _evidence("their-ns")})
+    assert r.status_code == 200
+    assert r.json()["namespace"] == "their-ns"
+
+
+@pytest.mark.parametrize("evidence,says", [
+    # The likeliest wrong file: account facts, which have no schema at all.
+    ({"harbor_id": "aaa111", "ships": []}, "no 'schema' field"),
+    # A file from a newer collector -- half-parsing it produces verdicts about
+    # a cluster nobody described.
+    ({"schema": "bzm-opl-cluster-evidence/2", "raw": {}}, "bzm-opl-cluster-evidence/2"),
+    # Not an object at all. Refused by doctor rather than by a request-validation
+    # error, so the message says what was found instead of naming a field.
+    ([{"schema": doctor.EVIDENCE_SCHEMA}], "a JSON array"),
+    # Mailed in and trimmed on the way.
+    (_evidence(nodes=[{"metadata": {"name": "n1"}}]), "raw.nodes"),
+])
+def test_preflight_refuses_a_file_that_is_not_evidence(evidence, says):
+    r = _preflight(evidence)
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert says in detail
+    # Every refusal names the kind of file that was wanted -- the browser has no
+    # --help to fall back on, and "invalid" alone leaves the reader guessing
+    # which of the two files they were asked for is the wrong one.
+    assert "cluster evidence" in detail
+    # Nothing to render over what the browser already has: a refusal carries no
+    # verdicts, so a previously imported file's are left standing.
+    assert "checks" not in r.json()
+
+
+def test_preflight_refuses_options_no_bundle_could_be_generated_from():
+    """A quantity that does not parse is a 400 like /api/generate's, not a
+    traceback -- this re-runs on every keystroke in those fields."""
+    assert _preflight(_evidence(), {"engine_cpu_limit": "two"}).status_code == 400
+
+
+# -- what the same file implies about the options ------------------------------
+# Carried on the preflight response rather than served from an endpoint of its
+# own: it is the same file, judged against the same configuration, and both have
+# to move together on every option change. Two endpoints is two round trips that
+# can disagree about which options the answer describes.
+
+from test_suggest import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
+from test_suggest import REGCRED, _evidence as _read_evidence  # noqa: E402
+
+
+def _suggestions(evidence, options=None):
+    body = _preflight(evidence, options).json()
+    return {s["option"]: s for s in body["suggestions"]}
+
+
+def test_preflight_carries_what_the_evidence_implies_about_the_options():
+    """The same suggestions `bzm-opl-gen suggest` prints, in the same order and
+    the same wire shape -- compared against suggest itself, because the failure
+    to guard is the server quietly reshaping them on the way to the browser."""
+    doc = _read_evidence()
+    body = _preflight(doc).json()
+    expected = suggest.from_evidence(doc)
+    assert [s["option"] for s in body["suggestions"]] == [s.option for s in expected]
+    for got, want in zip(body["suggestions"], expected):
+        assert got["strength"] == want.strength
+        assert got["value"] == want.value
+        assert got["candidates"] == list(want.candidates)
+        assert got["evidence"] == list(want.evidence)
+
+
+def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
+    """Not against the defaults: the same evidence is a fill for a configuration
+    that named no pull secret and a conflict for one that named another."""
+    doc = _read_evidence(**REGCRED)
+    assert _suggestions(doc)["pull_secret"]["state"] == suggest.FILL
+    conflict = _suggestions(doc, {"pull_secret": "team-creds"})["pull_secret"]
+    assert conflict["state"] == suggest.CONFLICT
+    # Both values reach the browser, because the row shows both.
+    assert conflict["current"] == "team-creds" and conflict["value"] == "regcred"
+
+
+def test_preflight_never_offers_a_value_for_a_suggestive_suggestion():
+    """The invariant, over HTTP, where a browser could otherwise read `value`
+    off a shortlist and call it a default."""
+    doc = _read_evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
+    for s in _preflight(doc).json()["suggestions"]:
+        if s["strength"] == suggest.SUGGESTIVE:
+            assert s["value"] is None
+
+
+def test_preflight_says_why_it_has_nothing_to_suggest():
+    """An empty list from a file that reached no cluster reads exactly like one
+    from a cluster that constrains nothing, and only the first is worth
+    re-collecting for. Same sentence the command prints."""
+    body = _preflight(_degraded(), {"namespace": "some-ns"}).json()
+    assert body["suggestions"] == []
+    assert "serverVersion" in body["why_nothing"]
+
+
+def test_preflight_drops_the_reason_once_there_is_something_to_show():
+    body = _preflight(_read_evidence()).json()
+    assert body["suggestions"] and body["why_nothing"] is None

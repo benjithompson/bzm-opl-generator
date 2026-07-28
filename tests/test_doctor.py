@@ -398,6 +398,23 @@ def test_admission_k8s_unlabelled_warns():
     assert c.status == doctor.WARN
 
 
+def test_admission_tells_an_absent_namespace_from_an_unread_one():
+    """Two different facts, and the advice for one is wrong for the other. `{}`
+    is the live path's "asked, it is not there" -- the normal preflight case,
+    answered by creating it. `None` is "nobody looked", which an evidence file
+    says when the collector was refused the namespace; telling that reader to
+    create the namespace sends them after something that is not missing.
+    """
+    absent = doctor.check_admission(FACTS, {"platform": "k8s"}, {"namespace": {}})[0]
+    unread = doctor.check_admission(FACTS, {"platform": "k8s"},
+                                    {"namespace": None})[0]
+    assert absent.status == unread.status == doctor.WARN
+    assert "does not exist yet" in absent.detail
+    # The claim that cannot be made about a namespace nobody could read.
+    assert "does not exist" not in unread.detail
+    assert "could not be read" in unread.detail
+
+
 def test_admission_openshift_needs_a_uid_range():
     ns = {"metadata": {"annotations": {"openshift.io/sa.scc.uid-range": "1000700000/10000"}}}
     assert doctor.check_admission(FACTS, {"platform": "openshift"}, {"namespace": ns})[0].status == doctor.PASS
@@ -674,10 +691,13 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
-    # ingressclasses is None, not []: kget reports a failed command as {}, and
-    # "could not ask" has to stay distinguishable from "asked, none exist".
-    assert data == {"nodes": [], "ingressclasses": None, "limitranges": [],
-                    "quotas": [], "serviceaccounts": [], "namespace": {}}
+    # Every list is None rather than []: kget reports a failed command as {},
+    # and "could not ask" has to stay distinguishable from "asked, none exist"
+    # -- an [] here would fail the capacity check of anyone who is merely not
+    # allowed to list nodes. The namespace stays {}, which is what
+    # check_admission already reads as "not created yet".
+    assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
+                    "quotas": None, "serviceaccounts": None, "namespace": {}}
 
 
 @pytest.mark.parametrize("served,expected,status", [

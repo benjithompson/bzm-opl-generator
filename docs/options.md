@@ -5,6 +5,11 @@ or a key in a `--profile` JSON file. `bzm_opl_gen/profiles/` holds three scenari
 presets — `standard`, `private-registry`, `proxy-ca` — which are *postures*, not
 platforms: the default works on OpenShift and vanilla Kubernetes alike.
 
+If someone has sent you a [cluster evidence
+file](preflight.md#a-cluster-you-cannot-reach), `bzm-opl-gen suggest` says which
+of these options that cluster decides and which it only narrows —
+[what the cluster implies](preflight.md#what-the-cluster-implies-about-the-options-suggest).
+
 | Option | Default | Meaning |
 |---|---|---|
 | `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON); `k8s` = pinned runAsUser 1337 |

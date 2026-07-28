@@ -23,14 +23,15 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import api, facts as facts_mod, generate as gen_mod, livetest
+from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
+               suggest as suggest_mod)
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -253,6 +254,84 @@ def generate_zip(g: GenerateIn):
     return Response(
         buf.getvalue(), media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="bzm-opl-{ns}.zip"'})
+
+
+# -- preflight ----------------------------------------------------------------
+
+class PreflightIn(BaseModel):
+    facts: dict
+    options: dict = {}
+    # `Any`, not `dict`: a file that is not an object at all -- a JSON array, a
+    # number -- has to reach doctor's own refusal, which names what it found and
+    # what it wanted. Typed as dict here it would come back as a 422 naming a
+    # field of this model, which tells the person who picked the wrong file
+    # nothing about the file.
+    evidence: Any
+
+
+@app.post("/api/preflight")
+def preflight(p: PreflightIn):
+    """The verdicts `doctor --cluster-evidence` prints, for the configuration
+    the browser currently holds.
+
+    Deliberately not behind _client(), for the same reason /api/facts/manual is
+    not: reading an evidence file needs no BlazeMeter account and no cluster --
+    it is the cluster-side half of the "no access to anything" path -- and
+    requiring a key would put a preflight behind the one thing this case does
+    not have. Nothing here can reach a cluster either: cluster_data and probes
+    are both supplied, which is what stops doctor.evaluate looking for a
+    kubectl on the machine serving this page.
+
+    Everything the file carries beyond the cluster read -- when it was
+    collected, which namespace for, what the collector was refused -- arrives
+    as the leading Check rather than as a second field beside the verdicts,
+    because it qualifies every one of them.
+    """
+    doc_ns = p.evidence.get("namespace") if isinstance(p.evidence, dict) else None
+    # Same precedence as the command: the namespace being configured wins, and
+    # the one the file was collected for is the last resort. A file collected
+    # elsewhere is then reported by cluster_from_evidence rather than adopted.
+    namespace = p.options.get("namespace") or doc_ns
+    try:
+        imported = doctor.cluster_from_evidence(p.evidence, namespace)
+    except ValueError as e:
+        # Every way a file can be the wrong one is a sentence doctor already
+        # writes; a 400 carrying it is all the browser needs, and carries no
+        # verdicts -- so whatever was imported before stays on screen.
+        raise HTTPException(400, str(e))
+    namespace = doctor.resolve_namespace(namespace, p.options)
+    try:
+        checks = doctor.evaluate(p.facts, p.options, namespace,
+                                 cluster_data=imported.cluster,
+                                 probes=imported.probes,
+                                 extra_checks=imported.checks)
+    except (ValueError, KeyError) as e:
+        # An engine limit that does not parse, say. This re-runs on every
+        # keystroke in those fields, so it answers like /api/generate does.
+        raise HTTPException(400, str(e))
+    # What the same file implies about the options, and how each implication
+    # stands against the ones that were sent. Here rather than on an endpoint of
+    # its own: it is one file judged against one configuration, both halves move
+    # on every option change, and two round trips is two answers that can end up
+    # describing different configurations in the same panel. Nothing is applied
+    # -- `state` says what applying would mean, and the click is the browser's.
+    suggestions = suggest_mod.from_evidence(p.evidence)
+    return {"namespace": namespace,
+            # The same three facts the leading check states in prose, apart from
+            # it: the panel puts them in its header, where they cannot be read
+            # past. Which namespace the *file* describes is not `namespace`
+            # above -- that is the one being preflighted, and the difference is
+            # the point.
+            "evidence": doctor.evidence_summary(p.evidence),
+            "checks": [c._asdict() for c in checks],
+            "suggestions": [suggest_mod.merged_as_dict(s, p.options)
+                            for s in suggestions],
+            # An empty list from a file that never reached a cluster reads like
+            # one from a cluster that constrains nothing, and only the first is
+            # worth re-collecting for. Null once there is anything to show, so
+            # the panel has nothing to decide.
+            "why_nothing": None if suggestions
+                           else suggest_mod.why_nothing(p.evidence)}
 
 
 # What each unreadable cluster means, in the user's terms -- a reason without a

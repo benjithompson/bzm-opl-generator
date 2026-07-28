@@ -79,7 +79,93 @@ export const api = {
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
   svCheck: (host: string, scheme: SvScheme) =>
     req<SvCheckOut>("GET", "/api/sv-check?" + new URLSearchParams({ host, scheme })),
+  /** The preflight verdicts for a cluster nobody here can reach, from the file
+   *  its collector script produced. Needs no API key and no cluster, like
+   *  manualFacts -- `evidence` is the parsed file, sent whole and judged
+   *  server-side, because what counts as evidence is doctor's to say. */
+  preflight: (facts: Facts | null, options: Options, evidence: unknown) =>
+    req<PreflightOut>("POST", "/api/preflight",
+      { facts: facts ?? {}, options, evidence }),
 };
+
+/** One verdict, exactly as `doctor` reaches it. FAIL = a test would not start;
+ *  WARN = the numbers are wrong or it will bite later, but a test still starts.
+ *  Nothing in the browser re-decides one. */
+export type CheckStatus = "PASS" | "WARN" | "FAIL";
+export interface PreflightCheck {
+  name: string;
+  status: CheckStatus;
+  detail: string;
+}
+/** The verdicts, in doctor's order — which puts where the answers came from
+ *  first, because it qualifies every one after it. `namespace` is the one they
+ *  were judged against: the configured one, which the evidence file may not be
+ *  the one collected for (the leading check says so when it is not). */
+export interface PreflightOut {
+  namespace: string;
+  /** What the file says about itself. Distinct from `namespace` above on
+   *  purpose: that is the namespace being preflighted, this is the one the
+   *  file describes, and a file collected for another namespace says little
+   *  about this one. */
+  evidence: EvidenceSummary;
+  checks: PreflightCheck[];
+  /** What the same file implies about the options, in suggest.py's reporting
+   *  order. Carried here rather than fetched separately because both halves are
+   *  judged against the configuration that was sent, and two round trips is two
+   *  answers that can end up describing different configurations in one panel. */
+  suggestions: Suggestion[];
+  /** Why there are none, when there are none -- a file that never reached a
+   *  cluster and a cluster that constrains nothing produce the same empty list,
+   *  and only the first is worth re-collecting for. Null once there is anything
+   *  to show. */
+  why_nothing: string | null;
+}
+
+/** What an imported evidence file says about itself, read off the document by
+ *  doctor.evidence_summary. The verdicts are only ever as good as these three:
+ *  how stale the read is, which namespace it describes, and which sections the
+ *  collector was refused — a null section is "we did not look", never "there
+ *  are none". Nulls where the file recorded neither. */
+export interface EvidenceSummary {
+  collected_at: string | null;
+  namespace: string | null;
+  /** Section names, in the order the collector wrote them; empty when it read
+   *  everything it asked for. */
+  unreadable: string[];
+}
+
+/** How strongly a suggestion holds. DECISIVE: the evidence settles it and
+ *  `value` is the answer. SUGGESTIVE: it narrows the choice without making it,
+ *  `value` is always null, and `candidates` is the shortlist a person still has
+ *  to pick from. The invariant is suggest.py's and is asserted over every
+ *  fixture there — `strength` alone is enough to decide what may be offered. */
+export type Strength = "DECISIVE" | "SUGGESTIVE";
+
+/** How the suggestion stands against the options that were sent, from
+ *  suggest.merge(). SETTLED: already configured this way. FILL: the option
+ *  still holds what the generator would have used anyway. CHOOSE: suggestive,
+ *  nothing picked yet. CONFLICT: the configuration says something else, which
+ *  is a disagreement to show rather than a write to make. */
+export type MergeState = "SETTLED" | "FILL" | "CHOOSE" | "CONFLICT";
+
+/** One implication of the evidence, and where it stands. `option` is a generate
+ *  option (asserted against DEFAULT_OPTIONS in tests/test_suggest.py), `detail`
+ *  is why in the reader's terms, and `evidence` are dotted paths into the file
+ *  so a reader can go and disagree with it. */
+export interface Suggestion {
+  option: string;
+  strength: Strength;
+  /** The settled value — always null for a suggestive one. */
+  value: unknown;
+  candidates: unknown[];
+  ruled_out: unknown[];
+  evidence: string[];
+  detail: string;
+  state: MergeState;
+  /** What the configuration holds for this option right now. Shown whatever the
+   *  state: applying is always a value replacing a value. */
+  current: unknown;
+}
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. */
