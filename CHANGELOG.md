@@ -48,10 +48,55 @@ anything that breaks.
   there are none"), so a file collected with little access exits 0 with warnings
   rather than a false alarm. A file whose `schema` is missing or unrecognised is
   refused by name.
+- **`bzm-opl-gen suggest --cluster-evidence <file>`** — what a cluster's
+  evidence implies about the generate options, with no cluster and no API key.
+  `doctor` asks whether a deployment would survive a cluster; this answers the
+  question that comes first, and writes the reasoning down instead of leaving it
+  in whoever read the file. Each suggestion names the evidence behind it and how
+  strongly it holds: **decisive** (the namespace already holds the ServiceAccount
+  the bundle would create) or **suggestive** (the served API groups rule some
+  `sv_ingress` values out without picking among the rest — narrowing to one
+  survivor is still not choosing it). Covers `platform`, `service_account_create`
+  / `service_account_name`, `sv_ingress`, `sv_subdomain`, `pull_secret`,
+  `ca_existing_configmap`, `proxy`, `ca_openshift_inject` and `cluster_rbac`.
+  Nothing is applied; `--json` emits the same as data.
+- **Cluster preflight in the web UI.** Pick the file the collector wrote and see
+  `doctor`'s verdicts against the configuration on screen, re-run as you edit it.
+  `POST /api/preflight` needs no API key and no kubecontext — the same "no access
+  to anything" path manual facts entry serves. The list leads with where the
+  answers came from: collected when, for which namespace, and what the collector
+  was refused, so a thin file cannot read as a clean bill of health. A file that
+  is not evidence is refused by name and leaves the verdicts already on screen
+  standing.
+- **Apply what the evidence implies, one suggestion at a time.** Decisive
+  suggestions offer their value as a single click; suggestive ones offer a button
+  per candidate and never a default. **A value you already set is never
+  overwritten silently** — the row turns amber, shows both values and the
+  evidence behind the suggestion, and the button says *Replace*. Applying is
+  reversible for the session, and an applied value is an ordinary option from
+  there on: the bundle and `profile.json` are identical to what typing it gives.
 - **`doctor` checks that an existing service account is really there.** Only
   when the bundle does not create one. Nothing fails at apply time if it is
   missing: the Deployment is accepted, no pod is ever created, and the reason
   is an event on the ReplicaSet.
+
+### Fixed
+
+- **`scripts/bzm-cluster-evidence.sh` no longer claims the cluster-scoped
+  permission rows decide whether `serviceType: NODEPORT` is available.** Crane
+  resolves its advertised address from its own network interfaces, not from the
+  Node object, and NODEPORT has run green against a cluster where the agent had
+  namespaced RBAC only — see #49. `suggest` will not draw that inference either.
+- **Nothing is suggested from evidence the collector could not read.** A `null`
+  section is skipped, but that alone is not enough: `auth can-i` and
+  `api-resources` both report failure as *no*, so a file collected with no
+  kubeconfig reads at face value as a plain Kubernetes cluster where nothing may
+  be created — and would have produced `platform`, `cluster_rbac` and
+  `service_account_create` about a cluster nobody described.
+  `versions.serverVersion` is present only when a server actually answered, and
+  without it `suggest` returns nothing and says why. `doctor` still reads such a
+  file usefully: a warning about what could not be seen is worth having, a
+  configuration guessed from it is not.
 
 ### Changed
 
