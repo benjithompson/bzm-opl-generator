@@ -44,6 +44,17 @@ def test_manual_facts_match_the_shape_gather_returns():
         assert key in m, key
 
 
+def test_how_the_facts_arrived_is_readable_from_the_marker_they_already_carry():
+    """Doctor has to tell "there was no account to ask" from "the account said
+    no slots", and the facts already record which -- `images_source`. One
+    predicate over it, rather than a second field (which would be a second
+    shape) or a source test spelled out at each call site."""
+    assert facts_mod.from_manual_entry(facts_mod.manual(H, S))
+    assert not facts_mod.from_manual_entry(
+        facts_mod.gather(_FakeClient([_ship([])]), "H1"))     # catalogue fallback
+    assert not facts_mod.from_manual_entry(FACTS)             # a fixture, no marker
+
+
 def test_the_three_values_reach_the_manifests():
     files = _gen(facts_mod.manual(H, S))
     cm = _cm(files)

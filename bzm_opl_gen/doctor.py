@@ -26,6 +26,8 @@ import os
 import subprocess
 
 from . import livetest
+# Aliased because every check takes a `facts` argument, which takes the name.
+from . import facts as facts_mod
 from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
 from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
@@ -57,10 +59,24 @@ def has_failures(checks):
 
 def check_location(facts, opts, cluster):
     """The two fields BlazeMeter itself needs before it will hand a run to this
-    location."""
+    location.
+
+    Both come from the account, so both are None on manually-entered facts --
+    the same None a real location with them unset produces, and only that second
+    case is a misconfiguration. The value cannot tell them apart; the marker the
+    facts already carry for how they arrived can, and it is read here rather
+    than folded into the facts, so nothing that generates learns the difference.
+    A typed 0 is still a FAIL: that is a value someone supplied.
+    """
+    unknown = facts_mod.from_manual_entry(facts)
     checks = []
     slots = facts.get("slots")
-    if not slots:
+    if slots is None and unknown:
+        checks.append(Check("location slots", WARN,
+                            "unknown -- these facts were entered by hand, and "
+                            "slots is only readable from the account. Confirm it "
+                            "is set in Settings -> Private Locations"))
+    elif not slots:
         checks.append(Check("location slots", FAIL,
                             "the location advertises no slots -- BlazeMeter has "
                             "nowhere to place a run"))
@@ -68,7 +84,13 @@ def check_location(facts, opts, cluster):
         checks.append(Check("location slots", PASS,
                             f"{slots} concurrent engine(s)"))
     tpe = facts.get("threads_per_engine")
-    if not tpe:
+    if tpe is None and unknown:
+        checks.append(Check("location threadsPerEngine", WARN,
+                            "unknown -- entered by hand, so there was no account "
+                            "to read it from. Unset, every test start fails with "
+                            "403 'Not enough available resources', so check it in "
+                            "Settings -> Private Locations"))
+    elif not tpe:
         # A location created via the API has this null (POST ignores it), and
         # every start then fails 403 "Not enough available resources" -- with no
         # hint that a scalar field is the reason.
@@ -91,7 +113,7 @@ def check_threads_per_engine(facts, opts, cluster):
     """
     tpe = facts.get("threads_per_engine")
     if not tpe:
-        return []                     # check_location already FAILs on this
+        return []                     # check_location has already reported it
     cpu, mem = engine_size(opts)
     base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
     ratio = min(cpu / base_cpu, mem / base_mem)
