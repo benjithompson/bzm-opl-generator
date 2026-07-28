@@ -120,6 +120,92 @@ def test_cluster_rbac_optional():
     assert "get, list, watch" in files["bzm_clusterrole.yaml"] or "verbs: [get, list, watch]" in files["bzm_clusterrole.yaml"]
 
 
+# -- service account ---------------------------------------------------------
+# The name reaches four places and `create` gates one file. What makes this
+# worth its own block is that getting any single reference wrong is silent:
+# a Deployment naming an account no binding grants to comes online and then
+# 403s on the API it needs, and a binding subject naming one nothing runs as
+# grants permissions to nobody.
+
+def _sa_refs(files):
+    """Every place the manifests name a ServiceAccount, by file."""
+    dep = yaml.safe_load(files["bzm_deployment.yaml"])
+    rb = yaml.safe_load(files["bzm_rolebinding.yaml"])
+    refs = {
+        "deployment": dep["spec"]["template"]["spec"]["serviceAccountName"],
+        "rolebinding": rb["subjects"][0]["name"],
+    }
+    if "bzm_serviceaccount.yaml" in files:
+        refs["serviceaccount"] = yaml.safe_load(
+            files["bzm_serviceaccount.yaml"])["metadata"]["name"]
+    if "bzm_clusterrolebinding.yaml" in files:
+        refs["clusterrolebinding"] = yaml.safe_load(
+            files["bzm_clusterrolebinding.yaml"])["subjects"][0]["name"]
+    return refs
+
+
+def test_service_account_defaults_to_crane_everywhere():
+    files = gen.generate(FACTS, {"namespace": "ns1", "cluster_rbac": True})
+    _all_yaml_parse(files)
+    assert set(_sa_refs(files).values()) == {"crane"}
+
+
+def test_named_service_account_is_used_by_every_reference():
+    files = gen.generate(FACTS, {"namespace": "ns1", "cluster_rbac": True,
+                                 "service_account_name": "bzm-agent"})
+    _all_yaml_parse(files)
+    assert set(_sa_refs(files).values()) == {"bzm-agent"}
+    # The Role, RoleBinding and Deployment objects keep their own names: they
+    # are ours, and the `-l role=role-crane` selectors in BlazeMeter's docs are
+    # written against them.
+    assert yaml.safe_load(files["bzm_rolebinding.yaml"])["metadata"]["name"] \
+        == "role-binding-crane"
+
+
+def test_existing_service_account_is_referenced_not_created():
+    """create off = somebody else owns the object. Applying our own copy would
+    take ownership of an account the platform team maintains."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "cluster_rbac": True,
+                                 "service_account_name": "platform-sa",
+                                 "service_account_create": False})
+    _all_yaml_parse(files)
+    assert "bzm_serviceaccount.yaml" not in files
+    assert set(_sa_refs(files).values()) == {"platform-sa"}
+    # ...and the README neither tells you to apply a file that is not there nor
+    # leaves the prerequisite unsaid.
+    assert "bzm_serviceaccount.yaml" not in files["README.md"]
+    assert "platform-sa" in files["README.md"]
+
+
+def test_created_service_account_is_not_advertised_as_a_prerequisite():
+    files = gen.generate(FACTS, {"namespace": "ns1"})
+    assert "bzm_serviceaccount.yaml" in files["README.md"]
+    assert "must already exist" not in files["README.md"]
+
+
+@pytest.mark.parametrize("name", ["", "   ", None])
+def test_unnamed_service_account_is_refused(name):
+    """Not defaulted at render time. The tempting fallback -- the namespace's
+    `default` account -- deploys, works, and hands crane's Role to every other
+    pod in the namespace."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {"namespace": "ns1", "service_account_name": name,
+                             "service_account_create": False})
+    assert "service_account_name" in str(e.value)
+
+
+def test_service_account_round_trips_through_the_profile():
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "service_account_name": "platform-sa",
+                                 "service_account_create": False})
+    prof = json.loads(files[gen.PROFILE_FILE])
+    assert prof["service_account_name"] == "platform-sa"
+    assert prof["service_account_create"] is False
+    replayed = gen.generate(FACTS, prof)
+    assert "bzm_serviceaccount.yaml" not in replayed
+    assert set(_sa_refs(replayed).values()) == {"platform-sa"}
+
+
 def test_tolerations_node_selector_in_pod_and_configmap():
     tol = [{"key": "lifecycle", "operator": "Equal", "value": "spot", "effect": "NoSchedule"}]
     files = gen.generate(FACTS, {"namespace": "ns1", "tolerations": tol,

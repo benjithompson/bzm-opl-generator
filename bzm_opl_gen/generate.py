@@ -26,6 +26,13 @@ DEFAULT_OPTIONS = {
     "pull_secret": None,             # name of docker-registry secret for crane image
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
+    # The ServiceAccount crane runs as. The name is used either way -- what
+    # `create` decides is only whether the bundle carries the ServiceAccount
+    # object. Customers routinely have to run under an account their platform
+    # team owns, and with create off the deployment and the RBAC subjects still
+    # name it, because it is already there.
+    "service_account_name": "crane",
+    "service_account_create": True,
     "service_type": "CLUSTERIP",    # CLUSTERIP | NODEPORT
     # Service virtualization ingress. Only meaningful for a location whose
     # funcIds include mockServices; see _sv_cfg for why all three are required
@@ -507,6 +514,18 @@ def _sizing_bullet(o):
             + (f" and `{reg}`." if reg else "."))
 
 
+def _sa_bullet(o):
+    """Named in the handover only when the bundle does not create it: the pod
+    stays Pending with `serviceaccount not found` on its ReplicaSet, which is an
+    event on an object nobody thinks to look at."""
+    if o["service_account_create"]:
+        return ""
+    return (f"\n- ServiceAccount **`{service_account(o)}`** must already exist in "
+            f"`{o['namespace']}` -- this bundle\n  references it and does not "
+            f"create it. Nothing fails at apply time if it is\n  missing; the "
+            f"agent pod is simply never created.")
+
+
 def _mirror_step(o, verb):
     """The mirror instruction, or nothing when there is no private registry."""
     if not o["private_registry"]:
@@ -602,6 +621,28 @@ def _security_context(o):
         "              drop:\n"
         "                - ALL"
     )
+
+
+def service_account(o):
+    """The ServiceAccount name every reference uses -- the Deployment's
+    serviceAccountName and both binding subjects -- whether or not this bundle
+    creates the account itself.
+
+    Required, never resolved from an empty field. The obvious alternative, and
+    what `helm create` scaffolds, is to fall back to the namespace's `default`
+    account when nothing creates one: that deploys, works, and quietly binds
+    crane's Role to the account every other pod in the namespace runs as. An
+    empty text field should not be able to decide that, so both output formats
+    refuse instead. doctor.py imports this to check the account is really there.
+    """
+    name = str(o.get("service_account_name") or "").strip()
+    if not name:
+        raise ValueError(
+            "service_account_name is required -- it names the account the "
+            "Deployment runs as and the one the RoleBinding grants to, whether "
+            "or not service_account_create emits the ServiceAccount itself. "
+            "Pass --service-account <name> (the default is 'crane')")
+    return name
 
 
 def _crane_image(facts, o):
@@ -757,9 +798,12 @@ def _helm_values(facts, o):
     lines += [
         "",
         f"clusterRbac: {'true' if o['cluster_rbac'] else 'false'}",
+        "# The account crane runs as. The name is used either way: with create",
+        "# false the ServiceAccount object is not rendered, and the Deployment",
+        "# and the binding subjects name the one already in the namespace.",
         "serviceAccount:",
-        "  create: true",
-        '  name: ""',
+        f"  create: {'true' if o['service_account_create'] else 'false'}",
+        f"  name: {_yq(service_account(o))}",
         "  annotations: {}",
         "",
     ]
@@ -855,7 +899,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}
+{_sizing_bullet(o)}{_sa_bullet(o)}
 - **Upgrading:** set `autoUpdate: false` in `{HELM_VALUES_FILE}` first, or crane
   takes over its own Deployment and the upgrade fails on a conflict. With it
   left on, change things by reinstalling.
@@ -904,6 +948,7 @@ def generate(facts, options):
                          f"got {o['output_format']!r}")
 
     engine_size(o)  # a bad engine quantity should fail here, not at apply time
+    sa = service_account(o)  # ...and an unnamed service account, likewise
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)
@@ -934,6 +979,7 @@ def generate(facts, options):
         "HARBOR_ID": facts["harbor_id"],
         "SHIP_ID": o["ship_id"],
         "AUTH_TOKEN": o["auth_token"],
+        "SERVICE_ACCOUNT": sa,
         "PROXY_SECRET_BLOCK": _proxy_secret_block(o),
         "CRANE_IMAGE": _crane_image(facts, o),
         "PULL_SECRETS_BLOCK": (
@@ -967,12 +1013,16 @@ def generate(facts, options):
     }
 
     out = {
-        "bzm_serviceaccount.yaml": _tpl("serviceaccount.yaml").substitute(sub),
         "bzm_configmap.yaml": _configmap(facts, o),
         "bzm_role.yaml": _tpl("role.yaml").substitute(sub),
         "bzm_rolebinding.yaml": _tpl("rolebinding.yaml").substitute(sub),
         "bzm_deployment.yaml": _tpl("deployment.yaml").substitute(sub),
     }
+    if o["service_account_create"]:
+        # Off means the account already exists and is somebody else's object --
+        # emitting it anyway would make `kubectl apply` take ownership of a
+        # ServiceAccount the platform team maintains, annotations and all.
+        out["bzm_serviceaccount.yaml"] = _tpl("serviceaccount.yaml").substitute(sub)
     if o["use_secret"]:
         out["bzm_secret.yaml"] = _tpl("secret.yaml").substitute(sub)
     if o["cluster_rbac"]:
@@ -1162,7 +1212,7 @@ def _readme(facts, o, files):
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}
+{_sizing_bullet(o)}{_sa_bullet(o)}
 - Engines request far less than they are allowed ({ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM}), because crane
   sets that itself and nothing here can change it. On a shared node a run can
   compete for CPU it was never reserved.{big_ca}

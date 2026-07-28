@@ -20,7 +20,7 @@ chart untouched. `helm show values ./out/helm` documents every key.
 
 Both formats render **the same objects** — same ConfigMap data, RBAC rules,
 container spec — so the choice is about how you install and upgrade,
-not about what ends up in the cluster. `tests/helm_parity.py` renders 17 option
+not about what ends up in the cluster. `tests/helm_parity.py` renders 19 option
 combinations both ways and requires them to agree; it runs as its own CI job
 because it is the one check that needs the `helm` binary.
 

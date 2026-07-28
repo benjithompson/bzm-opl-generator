@@ -407,6 +407,50 @@ def test_admission_openshift_needs_a_uid_range():
     assert "INHERIT_RUNNING_USER_AND_GROUP" in c.detail
 
 
+# -- check_service_account ---------------------------------------------------
+# The live counterpart is a run that never produces a pod: the Deployment
+# applies, the ReplicaSet records `serviceaccounts "x" not found`, and nothing
+# else says anything. Cheap to catch here, expensive to catch there.
+
+EXISTING_SA = {"service_account_name": "platform-sa",
+               "service_account_create": False}
+
+
+def _sa(*names):
+    return [{"metadata": {"name": n}} for n in ("default",) + names]
+
+
+def test_service_account_silent_when_the_bundle_creates_it():
+    """The default bundle brings its own, so there is nothing to look up --
+    and no verdict, rather than one that is trivially true."""
+    assert doctor.check_service_account(FACTS, {}, {"serviceaccounts": _sa()}) == []
+
+
+def test_existing_service_account_found_passes():
+    c = doctor.check_service_account(
+        FACTS, EXISTING_SA, {"serviceaccounts": _sa("platform-sa")})[0]
+    assert c.status == doctor.PASS
+    assert "platform-sa" in c.detail
+
+
+def test_existing_service_account_missing_fails():
+    c = doctor.check_service_account(
+        FACTS, EXISTING_SA, {"serviceaccounts": _sa("something-else")})[0]
+    assert c.status == doctor.FAIL
+    assert "platform-sa" in c.detail
+    # The failure mode is the point: nothing errors at apply time.
+    assert "no pod is ever created" in c.detail
+
+
+def test_unreadable_namespace_warns_rather_than_failing():
+    """Every namespace that exists has `default`, so an empty list means we
+    could not look -- which is not evidence the account is missing."""
+    c = doctor.check_service_account(FACTS, EXISTING_SA, {"serviceaccounts": []})[0]
+    assert c.status == doctor.WARN
+    c2 = doctor.check_service_account(FACTS, EXISTING_SA, {})[0]
+    assert c2.status == doctor.WARN
+
+
 # -- check_ingress_class ----------------------------------------------------
 
 SV_NGINX = {"sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
@@ -592,9 +636,13 @@ QUOTA_ITEM = {"kind": "ResourceQuota", "metadata": {"name": "q"},
               "status": {"hard": {}, "used": {}}}
 
 
+SA_ITEM = {"kind": "ServiceAccount", "metadata": {"name": "crane"}}
+
+
 def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
-    """LimitRanges and ResourceQuotas come back from a single `get` -- one API
-    round trip instead of two -- so the shape has to be split by kind."""
+    """LimitRanges, ResourceQuotas and ServiceAccounts come back from a single
+    `get` -- one API round trip instead of three -- so the shape has to be split
+    by kind."""
     calls = []
 
     def fake_kget(cli, namespace, kind, name=None):
@@ -605,15 +653,17 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
             return {"items": [_ingressclass("nginx")]}
         if kind == "ns":
             return NS_BASELINE
-        return {"items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM]}
+        return {"items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM,
+                          SA_ITEM]}
 
     monkeypatch.setattr(doctor.livetest, "kget", fake_kget)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
     assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
     assert data["quotas"] == [QUOTA_ITEM]
+    assert data["serviceaccounts"] == [SA_ITEM]
     assert data["namespace"] == NS_BASELINE
-    assert ("ns1", "limitrange,resourcequota", None) in calls
+    assert ("ns1", "limitrange,resourcequota,serviceaccount", None) in calls
     # IngressClass is cluster-scoped, so it is read like nodes are.
     assert ("ingressclass" in [kind for _, kind, _ in calls])
     assert [c["metadata"]["name"] for c in data["ingressclasses"]] == ["nginx"]
@@ -627,7 +677,7 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     # ingressclasses is None, not []: kget reports a failed command as {}, and
     # "could not ask" has to stay distinguishable from "asked, none exist".
     assert data == {"nodes": [], "ingressclasses": None, "limitranges": [],
-                    "quotas": [], "namespace": {}}
+                    "quotas": [], "serviceaccounts": [], "namespace": {}}
 
 
 @pytest.mark.parametrize("served,expected,status", [

@@ -194,13 +194,19 @@ are immutable: repointing an install at a different agent needs
 
 | Object | When |
 |---|---|
-| ServiceAccount `crane` | `serviceAccount.create` (default on) |
+| ServiceAccount `serviceAccount.name` (default `crane`) | `serviceAccount.create` (default on) |
 | ConfigMap `blazemeter-configmap` | always |
 | Secret `blazemeter-secret` | `useSecret` and no `existingSecret` |
 | Role/RoleBinding `role-crane` | always |
 | Deployment `crane` | always |
 | ConfigMap `blazemeter-cacerts` | `caBundle.mode` inline or openshiftInject |
 | ClusterRole/Binding | `clusterRbac` |
+
+Whichever name `serviceAccount.name` holds is what the Deployment runs as and
+what both binding subjects grant to, created here or not. With
+`serviceAccount.create: false` the name is **required** — an empty one would
+otherwise resolve to the namespace's `default` account and hand crane's Role to
+every other pod in the namespace, so the chart refuses to render instead.
 
 The Deployment carries `checksum/config` and `checksum/secret` annotations, so a
 `helm upgrade` that only changes configuration still rolls the pod — crane reads

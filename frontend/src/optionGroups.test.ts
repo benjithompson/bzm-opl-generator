@@ -3,7 +3,7 @@ import { Feature, Options } from "./api";
 import {
   allGroupsOff, ANY_DEPLOYMENT, appliesTo, detectGroups, ENGINE_SIZES,
   featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
-  unavailableFeatures,
+  serviceAccountOk, unavailableFeatures,
   OPTION_GROUPS, OptionGroup,
   setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
@@ -531,5 +531,40 @@ describe("unavailableFeatures", () => {
     const served = [PERF, SV, SECRETS];
     expect(unavailableFeatures(true, ["performance"], served))
       .toEqual(["sv", SECRETS.id]);
+  });
+});
+
+describe("serviceAccountOk", () => {
+  // The name is required whether or not the bundle creates the account, which
+  // is the one place the UI's rule and generate.service_account() have to say
+  // the same thing -- an empty name produces no bundle at all, so the field
+  // shows it rather than the download button failing with a server error.
+
+  it("accepts a name with either setting of create", () => {
+    expect(serviceAccountOk({ service_account_name: "crane" })).toBe(true);
+    expect(serviceAccountOk({
+      service_account_name: "platform-sa", service_account_create: false,
+    })).toBe(true);
+  });
+
+  it("rejects an empty or whitespace name", () => {
+    expect(serviceAccountOk({ service_account_name: "" })).toBe(false);
+    expect(serviceAccountOk({ service_account_name: "   " })).toBe(false);
+  });
+
+  it("rejects a config that has not named one at all", () => {
+    // Before /api/option-defaults lands there is no key. That is not a valid
+    // bundle either, and treating it as one would show a green field for a
+    // download that cannot happen.
+    expect(serviceAccountOk({})).toBe(false);
+  });
+
+  it("does not belong to any option group", () => {
+    // The fields sit beside the namespace and are always on screen. If they
+    // ever became a group's keys, `setButHidden` could report them as hidden
+    // and a feature view could take a required field off the page.
+    const owned = OPTION_GROUPS.flatMap((g: OptionGroup) => g.keys);
+    expect(owned).not.toContain("service_account_name");
+    expect(owned).not.toContain("service_account_create");
   });
 });

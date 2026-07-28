@@ -11,6 +11,33 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **Choose the ServiceAccount the agent runs as, and whether to create it.**
+  `--service-account <name>` (default `crane`, so existing bundles are
+  unchanged) names the account the Deployment runs as and the one the
+  RoleBinding — and the ClusterRoleBinding, with `--cluster-rbac` — grants to.
+  `--no-create-service-account` leaves the ServiceAccount object out of the
+  bundle for an account your platform team already owns; everything still
+  references the name you gave. Both are in the web UI beside the namespace,
+  and in the Helm chart as the `serviceAccount.create` / `serviceAccount.name`
+  values it already had.
+- **`doctor` checks that an existing service account is really there.** Only
+  when the bundle does not create one. Nothing fails at apply time if it is
+  missing: the Deployment is accepted, no pod is ever created, and the reason
+  is an event on the ReplicaSet.
+
+### Changed
+
+- **Helm chart: `serviceAccount.name` is now required when
+  `serviceAccount.create` is `false`, and the chart refuses to render without
+  it.** It previously fell back to the namespace's `default` ServiceAccount —
+  the usual chart scaffold, and wrong here: that installs cleanly and grants
+  crane's Role to every other pod in the namespace that runs as `default`. If
+  you install this chart with `serviceAccount.create: false` and no name, set
+  the name to whichever account you meant. Bundles from `bzm-opl-gen generate`
+  always carry an explicit name and are unaffected.
+
 ## [0.2.0] — 2026-07-27
 
 Two things you could not do in 0.1.0: install the deployment as a **Helm chart**

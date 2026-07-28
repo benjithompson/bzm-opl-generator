@@ -27,7 +27,8 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       SV_INGRESS_BACKENDS, engine_size, proxy_env)
+                       SV_INGRESS_BACKENDS, engine_size, proxy_env,
+                       service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -443,6 +444,43 @@ def check_admission(facts, opts, cluster):
                   f"(a cluster-wide default may still apply)")]
 
 
+# -- service account ----------------------------------------------------------
+
+def check_service_account(facts, opts, cluster):
+    """Is the ServiceAccount the bundle references actually there?
+
+    Only asked when the bundle does not create one: with
+    `service_account_create` off, the Deployment and both binding subjects name
+    an account somebody else owns, and if that name is wrong nothing errors --
+    the Deployment applies, the ReplicaSet reports `serviceaccounts "x" not
+    found` in an event, and the agent simply never appears. A preflight is the
+    only place that is visible before someone waits on it.
+    """
+    if opts.get("service_account_create", True):
+        return []                     # we create it; nothing to find
+    name = service_account(opts)
+    accounts = cluster.get("serviceaccounts")
+    # Every namespace that exists has at least `default`, so an empty list means
+    # the namespace is missing or unreadable rather than genuinely accountless
+    # -- a different answer from "we looked and it is not there", and not one to
+    # fail a preflight on.
+    if not accounts:
+        return [Check("service account", WARN,
+                      f"could not read the ServiceAccounts in the namespace, so "
+                      f"'{name}' is unverified -- it must exist before you apply, "
+                      f"because nothing in this bundle creates it")]
+    if name in {(sa.get("metadata") or {}).get("name") for sa in accounts}:
+        return [Check("service account", PASS,
+                      f"ServiceAccount '{name}' exists (not created by this "
+                      f"bundle, as configured)")]
+    return [Check("service account", FAIL,
+                  f"ServiceAccount '{name}' does not exist in the namespace and "
+                  f"this bundle does not create it. The Deployment applies "
+                  f"cleanly and no pod is ever created -- the reason is an event "
+                  f"on the ReplicaSet. Create it, correct the name, or "
+                  f"re-generate without --no-create-service-account")]
+
+
 # -- service virtualization ---------------------------------------------------
 
 # Crane writes `ingressClassName: nginx` on the Ingress it creates per virtual
@@ -562,8 +600,9 @@ def gather_cluster(cli, namespace):
     """Everything the checks read, in as few API round trips as it takes.
     LimitRanges and ResourceQuotas are both namespaced, so one `get` covers
     them; splitting the result by kind is cheaper than a second call."""
-    scoped = livetest.kget(cli, namespace, "limitrange,resourcequota").get("items", [])
-    by_kind = {"LimitRange": [], "ResourceQuota": []}
+    scoped = livetest.kget(
+        cli, namespace, "limitrange,resourcequota,serviceaccount").get("items", [])
+    by_kind = {"LimitRange": [], "ResourceQuota": [], "ServiceAccount": []}
     for item in scoped:
         by_kind.setdefault(item.get("kind"), []).append(item)
     # Cluster-scoped like nodes, but kept its own get: kget reports a failed
@@ -581,6 +620,7 @@ def gather_cluster(cli, namespace):
         "ingressclasses": ingressclasses.get("items") if ingressclasses else None,
         "limitranges": by_kind["LimitRange"],
         "quotas": by_kind["ResourceQuota"],
+        "serviceaccounts": by_kind["ServiceAccount"],
         "namespace": livetest.kget(cli, None, "ns", namespace),
     }
 
@@ -656,7 +696,7 @@ def _oneshot_curl(cli, namespace, targets, opts):
 # edit here, not a new argument order to remember.
 CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
           check_limitrange, check_resourcequota, check_admission,
-          check_ingress_class, check_egress)
+          check_service_account, check_ingress_class, check_egress)
 
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None):

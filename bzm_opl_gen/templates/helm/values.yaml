@@ -103,9 +103,15 @@ autoUpdate:
 # address and silently falls back to 127.0.0.1 when denied.
 clusterRbac: false
 
+# The account crane runs as. `create` decides only whether the ServiceAccount
+# object is rendered -- the name is what the Deployment and both binding
+# subjects use either way, so set create: false when your platform team already
+# owns the account. Doing that makes `name` mandatory: unlike the usual chart
+# scaffold this one will not fall back to the namespace's `default` account,
+# which would install cleanly and grant crane's Role to every other pod there.
 serviceAccount:
   create: true
-  # Empty -> the chart's fullname (default "crane").
+  # Empty -> the chart's fullname (default "crane"). Required with create: false.
   name: ""
   annotations: {}
 

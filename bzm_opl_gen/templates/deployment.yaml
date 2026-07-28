@@ -24,7 +24,7 @@ spec:
         harbor_id: "${HARBOR_ID}"
         ship_id: "${SHIP_ID}"
     spec:
-      serviceAccountName: crane
+      serviceAccountName: ${SERVICE_ACCOUNT}
 ${SCHEDULING_BLOCK}${PULL_SECRETS_BLOCK}      restartPolicy: Always
       terminationGracePeriodSeconds: 30
       securityContext:

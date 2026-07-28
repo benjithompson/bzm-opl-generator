@@ -130,12 +130,15 @@ def cmd_generate(a):
             opts.update(json.load(fh))
     for key in ("platform", "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
+                "service_account_name",
                 "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
     if a.no_secret:
         opts["use_secret"] = False
+    if a.no_create_service_account:
+        opts["service_account_create"] = False
     if a.cluster_rbac:
         opts["cluster_rbac"] = True
     if a.tolerations:
@@ -301,6 +304,18 @@ def cmd_livetest(a):
             f"(the two render the same objects), or install the chart yourself "
             f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
             f"logs -l role=role-crane -f")
+    # Same shape of guard, for the same reason. The rig deploys into a namespace
+    # it creates itself, so a ServiceAccount the bundle does not create is never
+    # there: every object applies, no pod is ever created, and the run burns its
+    # whole timeout waiting for a heartbeat that cannot come.
+    if opts and not opts.get("service_account_create", True):
+        sa = opts.get("service_account_name")
+        sys.exit(
+            f"{a.manifests}/ references ServiceAccount '{sa}' without creating "
+            f"it, and livetest deploys into a namespace it creates itself, "
+            f"where that account will not exist. Re-generate without "
+            f"--no-create-service-account, or create '{sa}' in {a.namespace} "
+            f"yourself before starting the run")
     proxy_user = proxy_pass = None
     # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
     # the engine sizing); the callback needs a profile to merge onto, so it is
@@ -412,6 +427,14 @@ def main():
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
+    g.add_argument("--service-account", dest="service_account_name", metavar="NAME",
+                   help="ServiceAccount the agent runs as (default crane). Used "
+                        "whether or not the bundle creates it")
+    g.add_argument("--no-create-service-account", dest="no_create_service_account",
+                   action="store_true",
+                   help="the ServiceAccount already exists in the namespace: "
+                        "reference it from the Deployment and the RBAC subjects, "
+                        "but do not emit the object")
     g.add_argument("--sv-ingress", dest="sv_ingress",
                    choices=list(gen_mod.SV_INGRESS_TYPES),
                    help="service virtualization: ingress controller to publish "
