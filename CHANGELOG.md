@@ -126,10 +126,11 @@ anything that breaks.
 - **Service virtualization no longer forces `CLUSTERIP`.** `--sv-ingress`
   together with `--service-type NODEPORT` used to be refused, on the reasoning
   that NODEPORT sends crane to the cluster-scoped Node object a namespaced Role
-  cannot grant. It was run: on minikube (k8s 1.32, ingress-nginx v1.11.3) with
-  crane 3.7.55 and a namespaced Role only, the virtual service deployed,
+  cannot grant. It was run on two backends with crane 3.7.55 and a namespaced
+  Role only — `nginx` on minikube (k8s 1.32, ingress-nginx v1.11.3) and
+  `openshift` on OpenShift 4.22.1. On both, the virtual service deployed,
   BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>`, and all three
-  transactions answered there. Crane's Node read *is* denied once a virtual
+  transactions answered there. `istio` and `contour` are untested on NODEPORT. Crane's Node read *is* denied once a virtual
   service is deployed — it logs the 403 and falls back to `127.0.0.1` — but that
   address belongs to its Service pool, which the ingress path never consults.
   The warning is expected there and not a symptom. The web UI offers NODEPORT

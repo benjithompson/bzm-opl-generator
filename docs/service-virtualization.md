@@ -114,17 +114,29 @@ env-var reference documents, creates no object at all and stalls at
 `NODEPORT` alongside `sv_ingress` was refused until it was run. It works, and
 the reason the refusal gave was wrong.
 
-Measured 2026-07-28 on minikube (kicbase v0.0.46, k8s 1.32, ingress-nginx
-v1.11.3) with crane 3.7.55 and service-mock 6.0.29.6, `KUBERNETES_SERVICE_USE_TYPE:
-NODEPORT` + `KUBERNETES_WEB_EXPOSE_TYPE: NGINX`, RBAC a namespaced Role and
-RoleBinding with no ClusterRoleBinding anywhere naming the account:
+Measured 2026-07-28 on **two backends**, both with crane 3.7.55 and
+service-mock 6.0.29.6, `KUBERNETES_SERVICE_USE_TYPE: NODEPORT`, and RBAC a
+namespaced Role and RoleBinding with no ClusterRoleBinding anywhere naming the
+account:
 
-- deployment reached `FINISHED`, the virtual service `RUNNING`, and BlazeMeter
-  published `http://<vs>-8080-<ns>.<subdomain>` — no `WAITING_FOR_DOMAIN`;
-- all three transactions answered at that host through the ingress —
-  `GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
-  `POST /api/v1/orders` → `201`, an unmatched path → `404`, a bogus Host → `404`;
-- reproduced across a stop and a second deploy.
+| | `nginx` | `openshift` |
+|---|---|---|
+| cluster | minikube kicbase v0.0.46, k8s 1.32 | OpenShift 4.22.1 |
+| controller | ingress-nginx v1.11.3 | the cluster router |
+| crane creates | Ingress → NodePort Service | Route → NodePort Service |
+
+On both: deployment reached `FINISHED`, the virtual service `RUNNING`, and
+BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>` — no
+`WAITING_FOR_DOMAIN`. All three transactions answered at that host —
+`GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
+`POST /api/v1/orders` → `201`, an unmatched path → `404`, an unknown host →
+`404` (nginx) / `503` (the router). The nginx case was reproduced across a stop
+and a second deploy.
+
+`istio` and `contour` are **not** measured on `NODEPORT`. Nothing suggests they
+differ — the endpoint comes from the subdomain in every backend, which is the
+whole argument below — but that is inference, and this page exists because an
+inference of exactly that shape turned out to be wrong.
 
 Crane's node read **is** denied, exactly as the old rationale said:
 `_get_final_ip` logs `nodes "<node>" is forbidden ... at the cluster scope` and
@@ -141,6 +153,17 @@ times across ten hours idle, and once per status update from the moment the mock
 deployed. A performance location that never deploys a mock never reaches this
 code at all — which is why #49 could report a clean log for `NODEPORT` and this
 run a denied read, with neither contradicting the other.
+
+If you switch an existing agent between the two service types, note that crane
+does **not** retype the pool Services it already created — it keeps them and
+adds new ones of the current type, binding whichever it picks. Observed on the
+OpenShift agent above: after switching back to `CLUSTERIP` the virtual service
+served correctly from a Service still typed `NodePort`. Harmless, but it means
+`kubectl get svc` is not a reliable reading of the configured service type, and
+the stale members hold node ports until something removes them. They are
+crane-managed: deleting one by hand while the pool holds it desynchronises the
+agent, and the virtual service then deploys a pod with no Service and no
+endpoint. Stop the virtual service and let crane rebuild instead.
 
 One incidental improvement: under `NODEPORT` crane's Service publishes
 `port: 8080` (`targetPort: 8080`), so the `port.number: 8080` its Ingress
