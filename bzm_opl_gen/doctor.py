@@ -26,6 +26,8 @@ import os
 import subprocess
 
 from . import livetest
+# Aliased because every check takes a `facts` argument, which takes the name.
+from . import facts as facts_mod
 from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
 from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
@@ -53,14 +55,50 @@ def has_failures(checks):
     return any(c.status == FAIL for c in checks)
 
 
+def _unread_section(cluster, key, name, detail):
+    """The branch every check that reads a cluster section opens with.
+
+    A section is None when nobody could look -- a denied `list nodes`, an API
+    server that does not serve the kind, or an evidence file whose collector was
+    refused it. It is never None for "we looked and there are none": that
+    arrives as [] or {}, and the two get opposite verdicts. An unread section is
+    a WARN and exits 0; an empty one can be the FAIL that "no eligible node" or
+    "no IngressClass named nginx" is, and claiming either off a read we were
+    denied is a claim nothing here can stand behind.
+
+    Returns the verdict to hand straight back, or None to carry on. `detail`
+    stays the caller's, because what an unread section costs is specific to the
+    question being asked of it -- only the branch is shared, so a check that
+    reads a new section gets it by naming its section rather than by its author
+    remembering the rule.
+    """
+    if cluster.get(key) is None:
+        return [Check(name, WARN, detail)]
+    return None
+
+
 # -- location -----------------------------------------------------------------
 
 def check_location(facts, opts, cluster):
     """The two fields BlazeMeter itself needs before it will hand a run to this
-    location."""
+    location.
+
+    Both come from the account, so both are None on manually-entered facts --
+    the same None a real location with them unset produces, and only that second
+    case is a misconfiguration. The value cannot tell them apart; the marker the
+    facts already carry for how they arrived can, and it is read here rather
+    than folded into the facts, so nothing that generates learns the difference.
+    A typed 0 is still a FAIL: that is a value someone supplied.
+    """
+    typed_by_hand = facts_mod.from_manual_entry(facts)
     checks = []
     slots = facts.get("slots")
-    if not slots:
+    if slots is None and typed_by_hand:
+        checks.append(Check("location slots", WARN,
+                            "unknown -- these facts were entered by hand, and "
+                            "slots is only readable from the account. Confirm it "
+                            "is set in Settings -> Private Locations"))
+    elif not slots:
         checks.append(Check("location slots", FAIL,
                             "the location advertises no slots -- BlazeMeter has "
                             "nowhere to place a run"))
@@ -68,7 +106,13 @@ def check_location(facts, opts, cluster):
         checks.append(Check("location slots", PASS,
                             f"{slots} concurrent engine(s)"))
     tpe = facts.get("threads_per_engine")
-    if not tpe:
+    if tpe is None and typed_by_hand:
+        checks.append(Check("location threadsPerEngine", WARN,
+                            "unknown -- entered by hand, so there was no account "
+                            "to read it from. Unset, every test start fails with "
+                            "403 'Not enough available resources', so check it in "
+                            "Settings -> Private Locations"))
+    elif not tpe:
         # A location created via the API has this null (POST ignores it), and
         # every start then fails 403 "Not enough available resources" -- with no
         # hint that a scalar field is the reason.
@@ -91,7 +135,7 @@ def check_threads_per_engine(facts, opts, cluster):
     """
     tpe = facts.get("threads_per_engine")
     if not tpe:
-        return []                     # check_location already FAILs on this
+        return []                     # check_location has already reported it
     cpu, mem = engine_size(opts)
     base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
     ratio = min(cpu / base_cpu, mem / base_mem)
@@ -185,14 +229,13 @@ def check_capacity(facts, opts, cluster):
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
     want = _engine_str(cpu, mem)
-    if cluster.get("nodes") is None:
-        # Denied `list nodes`, or an evidence file collected without it. The
-        # capacity question is simply unanswered -- and unanswered is not the
-        # FAIL that "there are no eligible nodes" is.
-        return [Check("capacity", WARN,
-                      f"the cluster's nodes could not be read, so nothing here "
-                      f"knows whether slots={slots} x {want} can be scheduled. "
-                      f"Needs a role that can list nodes")]
+    unread = _unread_section(
+        cluster, "nodes", "capacity",
+        f"the cluster's nodes could not be read, so nothing here knows whether "
+        f"slots={slots} x {want} can be scheduled. Needs a role that can list "
+        f"nodes")
+    if unread:
+        return unread
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
         return [Check("capacity: eligible nodes", FAIL,
@@ -243,10 +286,12 @@ def check_disk(facts, opts, cluster):
     footprint. WARN, not FAIL: a short run may never fill it -- but an engine
     that does gets evicted mid-test, which reads as a random failure."""
     slots = facts.get("slots") or 1
-    if cluster.get("nodes") is None:
-        return [Check("node disk", WARN,
-                      f"the cluster's nodes could not be read, so the "
-                      f"{ENGINE_DISK_GB}GB per engine is unverified")]
+    unread = _unread_section(
+        cluster, "nodes", "node disk",
+        f"the cluster's nodes could not be read, so the {ENGINE_DISK_GB}GB per "
+        f"engine is unverified")
+    if unread:
+        return unread
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
         return [Check("node disk", WARN,
@@ -286,10 +331,12 @@ def check_limitrange(facts, opts, cluster):
     pod in the namespace that declares none. Neither shows up in the manifests."""
     limitranges = cluster.get("limitranges")
     cpu, mem = engine_size(opts)
-    if limitranges is None:
-        return [Check("limitrange", WARN,
-                      "the namespace's LimitRanges could not be read, so whether "
-                      "one would reject the engine pod at admission is unverified")]
+    unread = _unread_section(
+        cluster, "limitranges", "limitrange",
+        "the namespace's LimitRanges could not be read, so whether one would "
+        "reject the engine pod at admission is unverified")
+    if unread:
+        return unread
     if not limitranges:
         # Nothing caps the namespace, which is a note rather than a problem --
         # and separately the engines schedule small, which nothing here can
@@ -366,12 +413,12 @@ def check_resourcequota(facts, opts, cluster):
     quotas, limitranges = cluster.get("quotas"), cluster.get("limitranges")
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
-    if quotas is None:
-        # "no ResourceQuota in the namespace" is a claim, and a read we were
-        # denied is no basis for making it.
-        return [Check("resourcequota", WARN,
-                      f"the namespace's ResourceQuotas could not be read, so "
-                      f"whether one has room for slots={slots} is unverified")]
+    unread = _unread_section(
+        cluster, "quotas", "resourcequota",
+        f"the namespace's ResourceQuotas could not be read, so whether one has "
+        f"room for slots={slots} is unverified")
+    if unread:
+        return unread
     if not quotas:
         return [Check("resourcequota", PASS, "no ResourceQuota in the namespace")]
 
@@ -444,13 +491,14 @@ def check_admission(facts, opts, cluster):
     # says: the collector records a section it was refused as null, and telling
     # its reader to create a namespace they may well already have is advice
     # about a problem they do not have.
-    if namespace_obj is None:
-        return [Check("admission", WARN,
-                      "the namespace could not be read, so its PodSecurity / SCC "
-                      "posture is unverified -- unreadable is not absent, and "
-                      "creating the namespace is not what is missing here. The "
-                      "cluster evidence verdict carries the collector's own "
-                      "reason; re-collect with access to it to settle this")]
+    unread = _unread_section(
+        cluster, "namespace", "admission",
+        "the namespace could not be read, so its PodSecurity / SCC posture is "
+        "unverified -- unreadable is not absent, and creating the namespace is "
+        "not what is missing here. The cluster evidence verdict carries the "
+        "collector's own reason; re-collect with access to it to settle this")
+    if unread:
+        return unread
     meta = namespace_obj.get("metadata") or {}
     if not namespace_obj:
         return [Check("admission", WARN,
@@ -563,12 +611,13 @@ def check_ingress_class(facts, opts, cluster):
                       f"{backend.creates} crane creates, not an IngressClass")]
 
     classes = cluster.get("ingressclasses")
-    if classes is None:
-        # Older cluster_data, or an API server that does not serve the kind.
-        return [Check("sv ingress class", WARN,
-                      f"IngressClasses could not be read, so the "
-                      f"'{CRANE_INGRESS_CLASS}' class crane requires is "
-                      f"unverified")]
+    # Older cluster_data, or an API server that does not serve the kind.
+    unread = _unread_section(
+        cluster, "ingressclasses", "sv ingress class",
+        f"IngressClasses could not be read, so the '{CRANE_INGRESS_CLASS}' "
+        f"class crane requires is unverified")
+    if unread:
+        return unread
     by_name = {c.get("metadata", {}).get("name"): c for c in classes}
     mine = by_name.get(CRANE_INGRESS_CLASS)
     if mine is None:
@@ -926,7 +975,7 @@ def resolve_namespace(namespace, opts):
 
 
 def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
-             extra_checks=()):
+             extra_checks=(), evidence=None):
     """Every verdict as data, and nothing printed.
 
     Split out of run() so a caller that is not a terminal -- the web UI -- gets
@@ -936,7 +985,21 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
     `extra_checks` are verdicts the caller reached before the cluster data
     existed at all: where it came from, whether it describes this namespace.
     They lead the list because they qualify everything after them.
+
+    `evidence` is the three of them as the one thing they are -- what
+    cluster_from_evidence() returns -- for the callers that have a file. The
+    three parts stay spelled out for the live path and for tests that supply
+    one and not the others, but a caller holding an Evidence should not have to
+    take it apart and hope it lands back in the right slots.
     """
+    if evidence is not None:
+        # Two spellings of one thing, never both: layering extra_checks over an
+        # imported file would silently drop one set or the other, and which is
+        # not something a reader of the call site could tell.
+        if cluster_data is not None or probes is not None or extra_checks:
+            raise TypeError("pass evidence= or the three parts it carries "
+                            "(cluster_data, probes, extra_checks), not both")
+        cluster_data, probes, extra_checks = evidence
     opts = dict(opts or {})
     namespace = resolve_namespace(namespace, opts)
     if cluster_data is None or probes is None:
@@ -952,11 +1015,11 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
 
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
-        extra_checks=()):
+        extra_checks=(), evidence=None):
     """Run every check and print the verdict list. Returns the Check list; the
     caller decides the exit code (see has_failures)."""
     checks = evaluate(facts, opts, namespace, cluster_data, probes, cli,
-                      extra_checks)
+                      extra_checks, evidence)
     _report(checks, facts, resolve_namespace(namespace, opts))
     return checks
 

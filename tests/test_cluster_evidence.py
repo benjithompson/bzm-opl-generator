@@ -19,7 +19,7 @@ import sys
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor  # noqa: E402
+from bzm_opl_gen import cli, doctor, facts as facts_mod  # noqa: E402
 # The cluster fixtures live with the checks that read them; reused rather than
 # re-declared so both paths are fed literally the same objects.
 from test_doctor import (FACTS, LR_MATCHING, NS_BASELINE, QUOTA_ITEM,  # noqa: E402
@@ -99,6 +99,41 @@ def test_run_prints_extra_checks_the_caller_already_made(capsys):
                         probes={}, extra_checks=[mine])
     assert checks[0] == mine
     assert "collected elsewhere" in capsys.readouterr().out
+
+
+def test_an_evidence_is_passed_whole_rather_than_taken_apart():
+    """#57/#58: the three things a file contributes are one Evidence from
+    cluster_from_evidence to here, so a caller holding one hands it over rather
+    than unpacking it into three keywords and hoping each lands in its slot.
+    The spelled-out form stays -- the live path supplies no evidence at all --
+    so the two have to agree."""
+    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    assert doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported) == \
+        doctor.evaluate(FACTS, OPTS, "blazemeter", cluster_data=imported.cluster,
+                        probes=imported.probes, extra_checks=imported.checks)
+
+
+def test_an_evidence_and_the_parts_it_carries_are_not_combined():
+    """Both spellings at once would have one set silently win, and which is not
+    something a reader of the call site could tell."""
+    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    with pytest.raises(TypeError):
+        doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported,
+                        extra_checks=[doctor.Check("x", doctor.WARN, "y")])
+
+
+def test_an_empty_evidence_still_means_go_and_look(monkeypatch):
+    """What `doctor` without --cluster-evidence passes: an Evidence carrying
+    nothing says exactly what the parameters' own defaults say, so the live
+    path still runs rather than being told there is no cluster."""
+    monkeypatch.setattr(doctor.livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(doctor, "gather_cluster",
+                        lambda cli, ns: _evidence_cluster())
+    monkeypatch.setattr(doctor, "probe_egress",
+                        lambda cli, ns, opts: {doctor.API_PROBE_URL: 0})
+    assert doctor.evaluate(FACTS, OPTS, "blazemeter",
+                           evidence=doctor.Evidence(None, None, ())) == \
+        doctor.evaluate(FACTS, OPTS, "blazemeter")
 
 
 def _evidence_cluster():
@@ -211,6 +246,22 @@ def test_the_script_output_from_a_machine_with_no_cluster_is_usable():
     assert "Missing or incomplete configuration" in _find(checks, "evidence").detail
 
 
+def test_no_account_and_no_cluster_reports_nothing_as_broken():
+    """The path both halves of this feature exist for: facts typed in from what
+    BlazeMeter shows the customer, cluster read from a file collected by someone
+    else. Everything unknown is a WARN and nothing is a failure -- the report
+    used to open with two failures about slots and threadsPerEngine, values no
+    one on this side of the account could have supplied."""
+    with open(DEGRADED) as fh:
+        imported = doctor.cluster_from_evidence(json.load(fh), "some-ns")
+    checks = doctor.evaluate(facts_mod.manual("aaa111", "bbb222"), OPTS, "some-ns",
+                             cluster_data=imported.cluster, probes=imported.probes,
+                             extra_checks=imported.checks)
+    assert not doctor.has_failures(checks)
+    for name in ("location slots", "location threadsPerEngine"):
+        assert _find(checks, name).status == doctor.WARN
+
+
 def test_egress_is_reported_unavailable_rather_than_guessed():
     """Egress is the one thing an evidence file cannot carry: it needs a pod in
     the namespace to curl from. Unknown, never an assumed PASS."""
@@ -304,6 +355,12 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     assert code == 0
     assert "cluster evidence" in out and "some-ns" in out
     assert "WARN" in out and "FAIL" not in out
+    # The count, not just the presence: a refactor that dropped a check's
+    # unread branch would still leave *some* WARN in the output and pass an
+    # "is there a WARN" assertion. Every section of this file is null, so the
+    # number is what says each one was noticed. Update it deliberately when a
+    # check is added -- that is the point of pinning it.
+    assert out.count("WARN") == 7, out
 
 
 def test_doctor_takes_the_namespace_from_the_evidence(monkeypatch, capsys):

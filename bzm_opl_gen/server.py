@@ -278,9 +278,9 @@ def preflight(p: PreflightIn):
     not: reading an evidence file needs no BlazeMeter account and no cluster --
     it is the cluster-side half of the "no access to anything" path -- and
     requiring a key would put a preflight behind the one thing this case does
-    not have. Nothing here can reach a cluster either: cluster_data and probes
-    are both supplied, which is what stops doctor.evaluate looking for a
-    kubectl on the machine serving this page.
+    not have. Nothing here can reach a cluster either: the imported evidence
+    supplies both the cluster read and the probes, which is what stops
+    doctor.evaluate looking for a kubectl on the machine serving this page.
 
     Everything the file carries beyond the cluster read -- when it was
     collected, which namespace for, what the collector was refused -- arrives
@@ -302,9 +302,7 @@ def preflight(p: PreflightIn):
     namespace = doctor.resolve_namespace(namespace, p.options)
     try:
         checks = doctor.evaluate(p.facts, p.options, namespace,
-                                 cluster_data=imported.cluster,
-                                 probes=imported.probes,
-                                 extra_checks=imported.checks)
+                                 evidence=imported)
     except (ValueError, KeyError) as e:
         # An engine limit that does not parse, say. This re-runs on every
         # keystroke in those fields, so it answers like /api/generate does.

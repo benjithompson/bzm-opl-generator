@@ -22,8 +22,13 @@ authToken: ""
 # runAsUser is left unset and engines are told to inherit crane's UID:GID.
 platform: k8s
 
-# CLUSTERIP | NODEPORT. NODEPORT makes crane resolve its advertised address from
-# the Node object, which needs clusterRbac below -- CLUSTERIP does not.
+# CLUSTERIP | NODEPORT. Either runs on the namespaced Role this chart creates:
+# crane takes its advertised address from its own network interfaces, not from
+# the Node object, and creates the NodePort Service through the same `services`
+# rule it uses for everything else. So NODEPORT does not need clusterRbac below
+# -- verified on a live performance location with no ClusterRole in the cluster
+# at all. CLUSTERIP stays the default because it is the smaller ask of a
+# cluster, not because NODEPORT costs permissions.
 serviceType: CLUSTERIP
 
 # -- Credentials --------------------------------------------------------------
@@ -97,10 +102,10 @@ autoUpdate:
 
 # -- RBAC ---------------------------------------------------------------------
 
-# Cluster-scoped node reads. Not needed for performance testing: without them
-# crane logs a "forbidden: nodes" warning and proceeds. Required only for
-# serviceType: NODEPORT, where crane reads the Node to build its advertised
-# address and silently falls back to 127.0.0.1 when denied.
+# Cluster-scoped node reads. Nothing this chart renders requires them: crane
+# uses them for capacity awareness only, and without them it logs a
+# "forbidden: nodes" warning and carries on. serviceType: NODEPORT is not an
+# exception, whatever an older copy of this chart said.
 clusterRbac: false
 
 # The account crane runs as. `create` decides only whether the ServiceAccount

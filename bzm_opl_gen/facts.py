@@ -230,6 +230,21 @@ def gather(client, harbor_id):
 MANUAL_SOURCE = "manual entry (no account access)"
 
 
+def from_manual_entry(facts):
+    """True when these facts were typed in rather than read from the account.
+
+    Not a second shape and not a second field: `images_source` already records
+    where they came from, and reading it is what lets a consumer tell "there was
+    no account to ask" from "the account answered, and the answer was nothing".
+    Both arrive as None, and only the second is ever a misconfiguration -- see
+    doctor.check_location, the one place that distinction changes a verdict.
+
+    Nothing that *generates* asks this, and nothing should: the manifests are
+    identical either way, which is the property manual() exists to preserve.
+    """
+    return facts.get("images_source") == MANUAL_SOURCE
+
+
 def gui_images_incomplete(facts):
     """True when this bundle needs GUI browser images that no catalogue can
     supply -- a functionalGui location built without a live agent inventory.
@@ -239,9 +254,8 @@ def gui_images_incomplete(facts):
     the public registry. That is fine until the cluster is genuinely sealed,
     which is exactly when a private registry is in play -- so callers surface
     this alongside the private-registry options rather than refusing."""
-    return bool(
-        facts.get("images_source") == MANUAL_SOURCE
-        and "gui" in needed_categories(facts.get("func_ids")))
+    return bool(from_manual_entry(facts)
+                and "gui" in needed_categories(facts.get("func_ids")))
 
 
 def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
@@ -264,8 +278,11 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
         "harbor_id": harbor_id,
         "harbor_name": harbor_name or None,
         "func_ids": list(func_ids or ["performance"]),
-        # Unknown without the API, and only doctor reads them -- it reports
-        # "unknown" rather than passing a check it could not make.
+        # Unknown without the API, and only doctor reads them. None is what
+        # says so: doctor reports both unknown (a WARN naming where to look)
+        # rather than passing a check it could not make -- or failing one the
+        # customer could not have satisfied. It tells this case from a real
+        # location with the fields unset via from_manual_entry() above.
         "slots": None,
         "threads_per_engine": None,
         "ships": [{"id": ship_id, "name": None, "state": None,

@@ -112,6 +112,16 @@ Run `bzm-opl-gen toolcheck --cluster minikube --local-registry 5001
 missing tools for whatever setup you actually have. The rest of this section is
 the classes of problem it can't fix for you.
 
+- **`.venv` is an editable install pointing at this checkout, so in a git
+  worktree it silently tests the wrong code.** `pip install -e .` records the
+  main checkout's path; a `pytest` run from a worktree that reuses that venv
+  imports `bzm_opl_gen` from *here*, not from the worktree. The suite passes,
+  the numbers look right, and none of the code under test is the code you
+  changed — a deliberately-failing new test passed in the full run and failed in
+  isolation, which is how it was noticed. Build a venv inside the worktree
+  (`python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"`) before trusting
+  any figure from one. Worth re-running the suite in the main checkout after
+  merging a worktree branch regardless; that run is the authoritative one.
 - **Docker provider varies and it matters for disk.** Whatever runs the daemon,
   a full disk makes minikube fail with `RSRC_DOCKER_STORAGE`, which never
   mentions disk. Which number binds depends on the provider: a preallocated VM
@@ -143,10 +153,29 @@ the classes of problem it can't fix for you.
   announce a namespace "does not exist yet — re-run after creating it" when it
   had merely been refused. The fourth landed *inside* the change written to fix
   the first two, which is the point: the distinction survives only where it is
-  structural, never where it is remembered. A denied read is a WARN and exits 0;
+  structural, never where it is remembered. Two named helpers carry it, and a
+  new reader should go through one rather than restate it.
+  `suggest._read(doc, *path, kind=...)` reaches evidence sections (absent, null
+  and wrong-typed all give `None`; `kind=bool` coerces, but only a value that is
+  *present*, so a refused probe never arrives as `false`).
+  `doctor._unread_section(cluster, key, name, detail)` carries the unread branch
+  for six checks, so one reading a new section gets the WARN without restating
+  it. **Neither is the only route, and do not read the pair as an invariant** —
+  `check_service_account` and `check_egress` branch on falsiness instead, and
+  `suggest._normalised` / `_reached_cluster` reach sections directly. Each is
+  argued at its site; the point is that a new reader should have to argue too,
+  not that the exceptions do not exist. `doctor.evaluate`/`run` take
+  `evidence=` — the whole `Evidence` from `cluster_from_evidence`, not its three
+  parts unpacked at each call site. A denied read is a WARN and exits 0;
   an empty result can be a FAIL. If a new field cannot express both, it is not
   ready to be read. (`versions.serverVersion` is how the boolean sections tell
-  the two apart, since a bare `false` cannot.)
+  the two apart, since a bare `false` cannot.) The fifth was on the account
+  side: `facts.manual()` leaves `slots` and `threadsPerEngine` `None` because
+  there is no account to ask, and `gather()` returns the same `None` for a real
+  location that has them unset — which is the 403-at-every-start FAIL. Here the
+  value genuinely cannot carry it, so `doctor.check_location` reads
+  `facts.from_manual_entry()` instead; unknown is `None` only, a typed 0 is
+  still a FAIL.
 - `generate` writes `out/profile.json` (resolved options minus `auth_token`);
   `livetest` re-renders from it, so manifests under test stay generator output
   rather than hand-patched YAML.
@@ -189,8 +218,11 @@ the classes of problem it can't fix for you.
 - **`facts.manual()` is the same shape `gather()` returns, on purpose.** The UI's
   manual mode and `facts --manual` build facts from a typed harbor id, ship id
   and token so a bundle can be produced for an account nobody here can reach.
-  Nothing downstream learns which way the facts arrived — keep it that way, and
-  add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+  Nothing that *generates* learns which way the facts arrived — keep it that
+  way, and add to `FALLBACK_IMAGES` rather than special-casing the manual path.
+  The one consumer that legitimately asks is `doctor`, and it asks the marker
+  the facts already carry (`from_manual_entry()`, over `images_source`) rather
+  than a field of its own.
 - **A Kubernetes agent reports its images as bare keys** -- `taurus-cloud:latest`,
   `torero:4.6.182` -- with no registry and `Size: 0`, i.e. crane's configured
   image set rather than what is on the node. Docker agents report

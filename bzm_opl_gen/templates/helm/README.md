@@ -167,11 +167,13 @@ Off by default, and it should stay off for performance testing. Crane uses
 cluster-scoped node reads for capacity awareness only — denied, it logs a
 `forbidden: nodes` warning and proceeds.
 
-The exception is `serviceType: NODEPORT`, where crane resolves its advertised
-address from the Node object and, denied, silently falls back to `127.0.0.1`
-instead of failing. The chart therefore refuses `NODEPORT` without
-`clusterRbac: true`. `CLUSTERIP` needs no cluster-scoped access at all — prefer
-it.
+`serviceType: NODEPORT` is **not** an exception, though this chart used to
+refuse the pairing on the theory that it was. Crane resolves its advertised
+address from its own network interfaces rather than from the `Node` object, and
+creates the NodePort Service through the namespaced Role, which already grants
+`services`. A performance location deployed with `NODEPORT`, namespaced RBAC
+only and no ClusterRole in the cluster came online, spawned a real engine, and
+ran the test to completion — with nothing forbidden anywhere in the crane log.
 
 Cluster-scoped object names carry the namespace
 (`cluster-role-binding-crane-<ns>`) so two locations in two namespaces do not

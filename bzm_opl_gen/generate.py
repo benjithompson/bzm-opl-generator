@@ -199,8 +199,14 @@ def _sv_cfg(facts, o):
     if o["service_type"] != "CLUSTERIP":
         raise ValueError(
             f"sv_ingress={ingress} requires service_type=CLUSTERIP, got "
-            f"{o['service_type']}. NODEPORT makes crane read the cluster-scoped "
-            "Node object to build an address, which a namespaced Role cannot grant."
+            f"{o['service_type']}. A virtual service has to publish an address "
+            "something outside the cluster then resolves, and that pairing is "
+            "unverified -- when it goes wrong it stalls at WAITING_FOR_DOMAIN "
+            "with the mock healthy, which is why this refuses rather than "
+            "renders. (The reason once given here -- that NODEPORT needs a "
+            "cluster-scoped Node read -- was disproved for performance "
+            "locations; crane takes its address from its own interfaces. See "
+            "issue #60, which settles the SV case with a live run.)"
         )
     if ingress == "openshift" and o["platform"] != "openshift":
         raise ValueError(
@@ -655,8 +661,11 @@ def _crane_image(facts, o):
 def _sv_rbac_block(sv):
     """Namespaced Role rules crane needs to publish a virtual service.
 
-    Deliberately namespaced: this is the whole reason the ingress path is
-    preferred over NODEPORT, which would need cluster-scoped node reads.
+    Deliberately namespaced: keeping the whole deployment inside a namespaced
+    Role is the reason the ingress path is preferred. Not, as this said, because
+    NODEPORT needs cluster-scoped node reads -- it does not (#49). What is
+    unverified is whether crane's SV expose path can publish a reachable address
+    over a NodePort at all, which #60 settles.
 
     Only the group the configured backend actually writes is granted. Crane
     picks one implementation per KUBERNETES_WEB_EXPOSE_TYPE and never touches

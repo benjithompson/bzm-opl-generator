@@ -83,6 +83,28 @@ anything that breaks.
 
 ### Fixed
 
+- **The Helm chart no longer refuses `serviceType: NODEPORT` without
+  `clusterRbac: true`.** The refusal rested on crane resolving its advertised
+  address from the cluster-scoped Node object and falling back silently to
+  `127.0.0.1` when denied. A live performance location on crane 3.7.55
+  disproved it: deployed with NODEPORT and namespaced RBAC only — no ClusterRole
+  in the cluster — the agent came online, crane created its NodePort Service
+  through the namespaced Role, and a real engine ran a test to `ENDED`. Crane
+  takes the address from its own network interfaces, and nothing in its log was
+  forbidden. Corrected in `clusterrole.yaml` (both formats), the chart's
+  `values.yaml` and its README; cluster-scoped node reads remain genuinely
+  optional, for capacity awareness. The parity suite now covers NODEPORT
+  *without* cluster RBAC — the combination the two formats disagreed on was
+  tested in neither direction, which is how the disagreement survived. (#49)
+- **`doctor` no longer fails a manually-entered location for `slots` and
+  `threadsPerEngine`.** With no account to read them from, both are now reported
+  unknown, naming Settings → Private Locations. A location gathered from the
+  account with either genuinely unset still FAILs with the 403-at-start wording:
+  the two are told apart by the `images_source` marker the facts already carry,
+  so generated manifests are unaffected and nothing else downstream learns how
+  the facts arrived. The no-account, no-cluster path — manual facts plus an
+  imported evidence file — previously reported two failures for values nobody
+  could have supplied. (#55)
 - **`scripts/bzm-cluster-evidence.sh` no longer claims the cluster-scoped
   permission rows decide whether `serviceType: NODEPORT` is available.** Crane
   resolves its advertised address from its own network interfaces, not from the

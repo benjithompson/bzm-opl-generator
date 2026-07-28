@@ -138,14 +138,25 @@ export interface EvidenceSummary {
  *  `value` is the answer. SUGGESTIVE: it narrows the choice without making it,
  *  `value` is always null, and `candidates` is the shortlist a person still has
  *  to pick from. The invariant is suggest.py's and is asserted over every
- *  fixture there — `strength` alone is enough to decide what may be offered. */
+ *  fixture there — `strength` alone is enough to decide what may be offered.
+ *
+ *  Declared here rather than served, unlike the vocabularies further down, and
+ *  the difference is that this set is closed. A backend list grows: one is
+ *  added to generate.py and every consumer should get it for free, so a copy
+ *  here is a picker quietly missing an entry. A strength is not added — it is a
+ *  branch the UI has to grow, in `offer()` and in STRENGTH_STYLE, and a union is
+ *  what makes the compiler point at both. Served, a third strength would arrive
+ *  as an undefined style and a row offering nothing, at runtime, on a customer's
+ *  screen. Same reasoning for MergeState below. */
 export type Strength = "DECISIVE" | "SUGGESTIVE";
 
 /** How the suggestion stands against the options that were sent, from
  *  suggest.merge(). SETTLED: already configured this way. FILL: the option
  *  still holds what the generator would have used anyway. CHOOSE: suggestive,
  *  nothing picked yet. CONFLICT: the configuration says something else, which
- *  is a disagreement to show rather than a write to make. */
+ *  is a disagreement to show rather than a write to make. Declared rather than
+ *  served for the reason Strength gives: every state is a branch in `offer()`,
+ *  and the four are what suggest.merge() can return, not a list it extends. */
 export type MergeState = "SETTLED" | "FILL" | "CHOOSE" | "CONFLICT";
 
 /** One implication of the evidence, and where it stands. `option` is a generate
@@ -168,7 +179,9 @@ export interface Suggestion {
 }
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
- *  TypeScript is how a new expose backend goes missing from the picker. */
+ *  TypeScript is how a new expose backend goes missing from the picker. The
+ *  rule is about vocabularies that grow — see Strength above for why the two
+ *  closed sets are deliberately the other way round. */
 export interface SvBackend {
   group: string;
   resources: string[];

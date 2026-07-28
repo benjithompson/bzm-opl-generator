@@ -186,9 +186,13 @@ on it, so each message names the fix.
 {{- if not (has .Values.serviceType (list "CLUSTERIP" "NODEPORT")) -}}
 {{- fail (printf "serviceType must be CLUSTERIP or NODEPORT, got %q" .Values.serviceType) -}}
 {{- end -}}
-{{- if and (eq .Values.serviceType "NODEPORT") (not .Values.clusterRbac) -}}
-{{- fail "serviceType NODEPORT requires clusterRbac: true -- crane resolves its advertised address from the Node object, and denied it falls back to 127.0.0.1 without erroring. Prefer serviceType CLUSTERIP, which needs no cluster-scoped access" -}}
-{{- end -}}
+{{/*
+NODEPORT deliberately has no clusterRbac requirement here. It used to, on the
+theory that crane read the Node object to build its advertised address; a live
+performance location with namespaced RBAC only came online, created its
+NodePort Service through the namespaced Role, and ran an engine to completion.
+See the serviceType comment in values.yaml.
+*/}}
 {{- if not (has .Values.caBundle.mode (list "none" "inline" "existing" "openshiftInject")) -}}
 {{- fail (printf "caBundle.mode must be one of none|inline|existing|openshiftInject, got %q" .Values.caBundle.mode) -}}
 {{- end -}}

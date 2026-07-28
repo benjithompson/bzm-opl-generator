@@ -101,7 +101,11 @@ All three working paths were verified end to end with namespaced RBAC only and
 real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
 and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift Local. The
 `nodes ... is forbidden` warning in the crane log is expected and harmless on all
-of them; only `NODEPORT` actually depends on that lookup.
+of them. Nothing a performance location does depends on that lookup — it is
+capacity awareness, and `NODEPORT` was once believed to be the exception until a
+live run showed crane takes its address from its own network interfaces instead
+(see `bzm_opl_gen/templates/clusterrole.yaml`). The refusal below is about the
+`sv_ingress` path specifically, which is untested either way.
 
 One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
 env-var reference documents, creates no object at all and stalls at

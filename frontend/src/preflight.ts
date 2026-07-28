@@ -9,6 +9,7 @@
 // like optionGroups.ts and needs no DOM to test.
 
 import { CheckStatus, PreflightCheck, PreflightOut } from "./api";
+import { counted, plural } from "./text";
 
 /** The header over the verdict list: what was imported, stated where it cannot
  *  be read past.
@@ -81,18 +82,15 @@ export function worstStatus(checks: PreflightCheck[]): CheckStatus | null {
   return SEVERITY.find((s) => checks.some((c) => c.status === s)) ?? null;
 }
 
-const plural = (n: number, one: string, many: string) =>
-  `${n} ${n === 1 ? one : many}`;
-
 /** The one-line summary, in doctor's own terms. The consequence is stated only
  *  where something FAILed: an evidence file with sections nobody could read is
  *  all warnings, and ending that with "a test would not start" would turn a
  *  thin file into a rejection of the cluster. */
 export function verdictLine(checks: PreflightCheck[]): string {
   const n = countByStatus(checks);
-  const line = `${plural(n.PASS, "passed", "passed")}, `
-    + `${plural(n.WARN, "warning", "warnings")}, `
-    + (n.FAIL ? plural(n.FAIL, "failure", "failures") : "no failures");
+  const line = `${counted(n.PASS, "passed")}, `
+    + `${plural(n.WARN, "warning")}, `
+    + (n.FAIL ? plural(n.FAIL, "failure") : "no failures");
   return n.FAIL
     ? `${line} — a test would not start on this location as configured`
     : line;

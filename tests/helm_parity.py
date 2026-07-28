@@ -48,6 +48,10 @@ CASES = {
                      "engine_mem_limit": "1Gi"},
     "token-in-configmap": {"platform": "k8s", "use_secret": False},
     "nodeport": {"platform": "k8s", "service_type": "NODEPORT", "cluster_rbac": True},
+    # The pairing only one format used to accept. Manifests rendered it, the
+    # chart refused it, and neither direction was covered here -- which is how
+    # the disagreement survived a live run that proved the manifests right.
+    "nodeport-namespaced-rbac": {"platform": "k8s", "service_type": "NODEPORT"},
     "private-registry": {"platform": "k8s", "private_registry": "reg.example.com/bzm"},
     "registry-auth": {"platform": "k8s", "private_registry": "reg.example.com/bzm",
                       "registry_auth": True, "pull_secret": "regcred"},

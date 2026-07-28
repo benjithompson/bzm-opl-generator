@@ -5,11 +5,11 @@
 # For performance, crane uses node reads for capacity awareness only: without
 # them it logs a "forbidden: nodes" warning and proceeds.
 #
-# The one case where it is NOT merely a warning is KUBERNETES_SERVICE_USE_TYPE
-# NODEPORT, where crane resolves the advertised address from the Node. Denied,
-# it silently falls back to 127.0.0.1 -- a virtual service then stalls at
-# WAITING_FOR_DOMAIN indefinitely rather than failing. Prefer the ingress path
-# over granting this.
+# KUBERNETES_SERVICE_USE_TYPE NODEPORT does not need it either, though this file
+# used to say it did. Crane resolves the advertised address from its own network
+# interfaces (crane_updater/machine_ip_finder.py), and creates the NodePort
+# Service through the namespaced Role's `services` rule. A performance location
+# ran NODEPORT green with no ClusterRole in the cluster at all.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: cluster-role-crane }

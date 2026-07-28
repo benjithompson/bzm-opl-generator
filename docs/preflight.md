@@ -16,7 +16,7 @@ registry, proxy/CA — so it checks the deployment you actually generated.
 
 | check | FAIL when | WARN when |
 |---|---|---|
-| location | `slots` or `threadsPerEngine` unset (every start 403s "Not enough available resources") | – |
+| location | `slots` or `threadsPerEngine` unset (every start 403s "Not enough available resources") | facts entered by hand: neither is readable without the account, so both are reported unknown rather than failed |
 | threadsPerEngine vs engine size | – | more threads than the size supports (500 threads is BlazeMeter's own pairing with 2 CPU / 8Gi) |
 | capacity: per-node fit | no eligible node holds **one** engine — a pod cannot be split across nodes | – |
 | capacity: aggregate | eligible nodes can't hold `slots ×` engine | the nodes could not be read at all |
@@ -60,11 +60,16 @@ namespace defaults to the one the evidence was collected for; preflighting a
 different one is reported rather than quietly used, because LimitRanges, quotas,
 ServiceAccounts and the PSA labels are all per-namespace.
 
-Two differences, both reported rather than guessed:
+Three differences, all reported rather than guessed:
 
 - **Egress is unverified.** Probing it takes a pod inside the namespace running
   curl, which is the one thing a collector script must not create. WARN, never
   a PASS.
+- **With `facts --manual` on the other side, so are the location's numbers.**
+  `slots` and `threadsPerEngine` live in the account, so facts typed in from
+  what BlazeMeter shows the customer carry neither. Both are reported unknown,
+  naming Settings → Private Locations; a location that really does have them
+  unset still FAILs, which is what the account was read to find out.
 - **Anything the script could not read stays unknown.** It records a denied or
   failed `get` as `null` — distinct from the empty list a successful read of
   nothing returns — and every such section becomes a WARN ("we did not look"),
