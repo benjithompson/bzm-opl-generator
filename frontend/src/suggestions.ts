@@ -18,6 +18,7 @@
 
 import { Options, Strength, Suggestion } from "./api";
 import { OptionPatch } from "./optionGroups";
+import { counted, plural } from "./text";
 
 /** How the two strengths read. Colour is not the distinction -- the label is,
  *  for the same reason the verdict badges carry one. */
@@ -169,9 +170,6 @@ export function clipValue(v: unknown, max = 22): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n} ${n === 1 ? one : many}`;
-
 /** The one-line summary of what the evidence implies, in the states' own terms.
  *  Empty for an empty list, deliberately: an option no suggestion names was not
  *  checked at all, and a summary over nothing would imply it was. */
@@ -180,7 +178,7 @@ export function suggestionLine(suggestions: Suggestion[]): string {
   const n = (...states: string[]) =>
     suggestions.filter((s) => states.includes(s.state)).length;
   const parts = [];
-  if (n("FILL")) parts.push(`${plural(n("FILL"), "to apply", "to apply")}`);
+  if (n("FILL")) parts.push(counted(n("FILL"), "to apply"));
   if (n("CHOOSE")) parts.push(plural(n("CHOOSE"), "shortlist"));
   if (n("CONFLICT")) parts.push(plural(n("CONFLICT"), "disagreement"));
   if (n("SETTLED")) parts.push(`${n("SETTLED")} already configured this way`);
