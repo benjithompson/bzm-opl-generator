@@ -120,6 +120,21 @@ def test_cluster_rbac_optional():
     assert "get, list, watch" in files["bzm_clusterrole.yaml"] or "verbs: [get, list, watch]" in files["bzm_clusterrole.yaml"]
 
 
+def test_nodeport_needs_no_cluster_rbac():
+    """Rendered without the ClusterRole, and the file's own header does not say
+    otherwise. A live performance location ran NODEPORT with namespaced RBAC
+    only -- crane took its advertised address from its own interfaces, created
+    the NodePort Service through the namespaced Role, and ran an engine to
+    ENDED. The node reads stay optional for capacity awareness; what was wrong
+    was tying them to service_type."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "service_type": "NODEPORT"})
+    _all_yaml_parse(files)
+    assert "bzm_clusterrole.yaml" not in files
+    header = gen.generate(FACTS, {"namespace": "ns1", "service_type": "NODEPORT",
+                                  "cluster_rbac": True})["bzm_clusterrole.yaml"]
+    assert "127.0.0.1" not in header
+
+
 # -- service account ---------------------------------------------------------
 # The name reaches four places and `create` gates one file. What makes this
 # worth its own block is that getting any single reference wrong is silent:

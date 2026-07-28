@@ -233,6 +233,42 @@ def test_engine_sizing_is_passed_through_unresolved():
 
 # -- what it refuses ----------------------------------------------------------
 
+def test_nodeport_is_not_refused_without_cluster_rbac():
+    """The chart used to `fail` on NODEPORT unless clusterRbac was on. A live
+    performance location disproved the premise: deployed with namespaced RBAC
+    only and no ClusterRole in the cluster, crane came online, created its
+    `NodePort` Service through the namespaced Role, and ran a real engine to
+    ENDED. It resolves its advertised address from its own interfaces
+    (`crane_updater/machine_ip_finder.py`), never from the Node -- nothing in
+    the log was forbidden, so there was no 127.0.0.1 fallback to protect
+    against. The manifests format has always rendered this pairing; the chart
+    refusing it sent customers to ask for the one permission a locked-down
+    cluster will not grant."""
+    v, files = _values(service_type="NODEPORT")
+    assert v["serviceType"] == "NODEPORT"
+    assert v["clusterRbac"] is False
+    validate = files[f"{gen.CHART_DIR}/templates/_helpers.tpl"]
+    coupled = [ln for ln in validate.splitlines()
+               if "fail" in ln and "NODEPORT" in ln and "clusterRbac" in ln]
+    assert not coupled, f"chart still refuses the pairing: {coupled}"
+
+
+def test_no_chart_file_claims_nodeport_needs_the_node_object():
+    """The refusal is only half of it -- the reason travelled, into values.yaml,
+    the chart README and the ClusterRole's own header. Left there, a customer
+    who never hits the guard still reads that NODEPORT costs cluster-scoped
+    RBAC. The node reads themselves stay optional (capacity awareness); it is
+    the tie to serviceType that is wrong."""
+    _, files = _values(service_type="NODEPORT")
+    chart = {n: t for n, t in files.items() if n.startswith(f"{gen.CHART_DIR}/")}
+    assert chart
+    for name, text in chart.items():
+        low = text.lower()
+        for claim in ("falls back to 127.0.0.1", "requires clusterrbac",
+                      "needs clusterrbac"):
+            assert claim not in low, f"{name} still says {claim!r}"
+
+
 def test_service_account_defaults_are_stated_not_left_to_the_chart():
     """Unlike crane's resources, this one is the customer's answer, so the
     overlay states it. `name` is written out rather than left empty even at the
