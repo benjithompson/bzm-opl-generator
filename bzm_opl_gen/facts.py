@@ -272,6 +272,20 @@ def from_manual_entry(facts):
     return facts.get("images_source") == MANUAL_SOURCE
 
 
+def image_refs(facts, all_images=False):
+    """Every image reference this location's bundle will pull, crane first.
+
+    Crane's own image leads because it is the one that must exist before
+    anything else can, and the one a private-registry mirror is most often
+    missing. Three callers had their own copy of this two-line expression --
+    `images`, the MCP bundle tool, and the live rig's mirror -- which meant the
+    crane-first rule and the all_images flag were three edits, and the rig's
+    copy is the one no offline test exercises.
+    """
+    return [facts["crane_image"]] + [
+        f"{i['repo']}:{i['tag']}" for i in select_images(facts, all_images=all_images)]
+
+
 def gui_images_incomplete(facts):
     """True when this bundle needs GUI browser images that no catalogue can
     supply -- a functionalGui location built without a live agent inventory.

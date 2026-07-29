@@ -39,9 +39,10 @@ import os
 import sys
 from typing import Any, Literal
 
+from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-from . import core, generate as gen_mod, facts as facts_mod, livetest
+from . import __version__, core, generate as gen_mod, facts as facts_mod, livetest
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -362,18 +363,17 @@ def _facts(action, args):
     if action == "gather":
         harbor_id, = _need(args, "harbor_id")
         facts = core.gather_facts(_client(args), harbor_id)
-        return {"facts": facts, "warnings": _facts_warnings(facts),
-                "next": _after_facts(facts)}
-
-    if action == "manual":
+    elif action == "manual":
         harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
-        got = core.manual_facts(harbor_id, ship_id,
-                                func_ids=args.get("func_ids") or ["performance"])
-        facts = got["facts"]
-        return {"facts": facts, "warnings": _facts_warnings(facts),
-                "next": _after_facts(facts)}
-
-    raise _unknown(action, FACTS_ACTIONS)
+        facts = core.manual_facts(
+            harbor_id, ship_id,
+            func_ids=args.get("func_ids") or ["performance"])["facts"]
+    else:
+        raise _unknown(action, FACTS_ACTIONS)
+    # However they arrived, the answer is the same shape -- which is the point
+    # of facts.manual() returning what gather() returns.
+    return {"facts": facts, "warnings": _facts_warnings(facts),
+            "next": _after_facts(facts)}
 
 
 def _after_facts(facts):
@@ -678,10 +678,7 @@ def build():
     """A fresh server. Built per call rather than at import so that tests get a
     clean one and so nothing is captured from the environment at import time --
     both gates are read when an action runs."""
-    from mcp.server import MCPServer
-    from mcp.types import ToolAnnotations
-
-    srv = MCPServer(name=SERVER_NAME, version=_version(),
+    srv = MCPServer(name=SERVER_NAME, version=__version__,
                     instructions=INSTRUCTIONS)
 
     @srv.tool(name="opl_location",
@@ -738,20 +735,12 @@ def _add_doc(srv, name):
         with open(os.path.join(docs_dir(), name), encoding="utf-8") as fh:
             return fh.read()
 
+    # The SDK derives the resource's handler identity from the function name,
+    # so nine closures all called `read` collide on registration.
     read.__name__ = "doc_" + name.replace(".", "_").replace("-", "_")
     srv.resource(f"{RESOURCE_SCHEME}://docs/{name}", name=name,
                  mime_type="text/markdown",
                  description=DOC_SUMMARIES.get(name, f"Reference: {name}"))(read)
-
-
-def _version():
-    try:
-        from importlib.metadata import version
-        return version("bzm-opl-gen")
-    except Exception:
-        # An unimportable version is not a reason to refuse to start; the
-        # number is a label on the handshake and nothing depends on it.
-        return "0"
 
 
 def main():

@@ -19,10 +19,17 @@ package only. Failures are `CoreError`, which carries the status code the web
 layer answers with -- the code belongs to the refusal, not to the route, or the
 same refusal answers 400 on one endpoint and 500 on another.
 
-What is deliberately *not* here: holding a client (each transport owns its own
-credential lifetime and the remedy it names when there is none), and anything
-about how a bundle reaches the user -- the UI streams a zip, the CLI writes a
-directory, and neither is a decision about OPL.
+What is deliberately *not* here: holding a client. Each transport owns its own
+credential lifetime and the remedy it names when there is none -- a browser
+posts to a form, a stdio server is restarted with a different environment.
+
+A bundle's *delivery* is here, which reads like an exception and is not. Which
+container it arrives in is the transport's (the UI streams a zip, the CLI
+prints what it wrote), but `zip_bundle`, `write_bundle`, `read_bundle_file` and
+`redact_tokens` carry rules no transport should get to re-decide: that a name
+cannot escape the directory it is read from, that a written path is absolute,
+that a token is blanked on the way out. Those are the same rules for every
+caller, and the one that has them wrong is the one that would never say so.
 """
 
 import http.client
@@ -397,23 +404,16 @@ def write_bundle(files, out_dir):
             f"one resolves against this process's working directory, which is "
             f"whatever started it rather than anywhere you chose")
     gen_mod.write(files, out_dir)
-    for name in files:
-        # The mirror script is meant to be run, and a bundle whose script needs
-        # chmod first is a bundle with an undocumented step. The zip download
-        # already carries the bit; a written directory should too.
-        if name.endswith(".sh"):
-            path = os.path.join(out_dir, name)
-            os.chmod(path, os.stat(path).st_mode | 0o111)
     return [{"name": n, "bytes": len(files[n].encode())} for n in preview_order(files)]
 
 
-# The two field names a generated bundle ever carries a token under: the
-# Secret's stringData (plain text -- Kubernetes encodes it on apply), the
-# ConfigMap's when use_secret is off, and the chart's values overlay. Matched by
-# key rather than by value because a reader has no idea what the value is.
+# Matched by field name rather than by value, because a reader has no idea what
+# the value is. The names come from generate.TOKEN_FIELDS -- the module that
+# writes them -- rather than being restated here, which is how the reader and
+# the redactor came to know different sets in the first place.
 _TOKEN_FIELDS = re.compile(
-    r'^(?P<lead>\s*(?:AUTH_TOKEN|authToken)\s*:\s*)(?P<quote>["\']?)(?P<value>.+?)(?P=quote)\s*$',
-    re.M)
+    r'^(?P<lead>\s*(?:' + "|".join(gen_mod.TOKEN_FIELDS) +
+    r')\s*:\s*)(?P<quote>["\']?)(?P<value>.+?)(?P=quote)\s*$', re.M)
 REDACTED = "<redacted -- opl_location reveal_token>"
 
 
@@ -427,10 +427,7 @@ def redact_tokens(text):
     redaction; the value itself has a call of its own that says out loud that
     asking for it rotates it.
     """
-    count = len(_TOKEN_FIELDS.findall(text))
-    if not count:
-        return text, 0
-    return _TOKEN_FIELDS.sub(lambda m: f"{m.group('lead')}\"{REDACTED}\"", text), count
+    return _TOKEN_FIELDS.subn(lambda m: f"{m.group('lead')}\"{REDACTED}\"", text)
 
 
 def read_bundle_file(out_dir, name):
@@ -494,14 +491,9 @@ def _docker(args, dry_run):
 
 
 def bundle_images(facts, all_images=False):
-    """Every image reference this location's bundle will pull.
-
-    Crane's own image first -- it is the one that must exist before anything
-    else can, and the one a private-registry mirror is most often missing.
-    """
-    return [facts["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}"
-        for i in facts_mod.select_images(facts, all_images=all_images)]
+    """Every image reference this location's bundle will pull. See
+    facts.image_refs, which is where the crane-first rule lives."""
+    return facts_mod.image_refs(facts, all_images=all_images)
 
 
 # -- preflight -----------------------------------------------------------------
@@ -555,14 +547,7 @@ def preflight(facts, options, evidence):
             # `namespace` above -- that is the one being preflighted, and the
             # difference is the point.
             "evidence": doctor.evidence_summary(evidence),
-            "suggestions": [suggest_mod.merged_as_dict(s, options)
-                            for s in suggestions],
-            # An empty list from a file that never reached a cluster reads like
-            # one from a cluster that constrains nothing, and only the first is
-            # worth re-collecting for. Null once there is anything to show, so
-            # the caller has nothing to decide.
-            "why_nothing": None if suggestions
-                           else suggest_mod.why_nothing(evidence)}
+            **suggestions_from_evidence(evidence, options)}
 
 
 def suggestions_from_evidence(evidence, options=None):
@@ -585,12 +570,13 @@ def suggestions_from_evidence(evidence, options=None):
 def toolcheck(cluster=None, local_registry=None, local_proxy=False):
     """The workstation preflight, for the rig flags you mean to pass.
 
-    Reports rather than exits: `has_failures` is the caller's to act on, and a
-    caller with no exit code of its own needs the verdicts either way.
+    Evaluates rather than runs, and answers rather than exits: `workstation.run`
+    prints its report, and core is not a terminal -- for the MCP server stdout
+    is the JSON-RPC channel. `ok` is the caller's to act on.
     """
-    checks = workstation.run({"cluster": cluster,
-                              "local_registry": local_registry,
-                              "local_proxy": local_proxy})
+    checks = workstation.evaluate({"cluster": cluster,
+                                   "local_registry": local_registry,
+                                   "local_proxy": local_proxy})
     return _verdicts(checks)
 
 

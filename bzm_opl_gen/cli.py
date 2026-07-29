@@ -77,11 +77,9 @@ def cmd_create_location(a):
 
 
 def cmd_delete_location(a):
-    client = api.BzmClient(a.api_key)
-    h = client.private_location(a.harbor_id)
-    client.delete_private_location(a.harbor_id)
-    print(f"deleted location '{h.get('name')}' ({a.harbor_id}) and its "
-          f"{len(h.get('ships', []))} ship(s)")
+    gone = core.delete_location(api.BzmClient(a.api_key), a.harbor_id)
+    print(f"deleted location '{gone['name']}' ({gone['deleted']}) and its "
+          f"{len(gone['ships_deleted'])} ship(s)")
 
 
 def cmd_create_ship(a):
@@ -277,10 +275,12 @@ def cmd_suggest(a):
 
 def cmd_toolcheck(a):
     """Preflight the workstation against the rig flags you intend to pass."""
-    checks = workstation.run({"cluster": a.cluster,
-                              "local_registry": a.local_registry,
-                              "local_proxy": a.local_proxy})
-    sys.exit(1 if doctor.has_failures(checks) else 0)
+    opts = {"cluster": a.cluster, "local_registry": a.local_registry,
+            "local_proxy": a.local_proxy}
+    checks = workstation.run(opts)
+    # core.toolcheck answers the same question without printing; what this
+    # command adds is the report and the exit code.
+    sys.exit(0 if not doctor.has_failures(checks) else 1)
 
 
 def cmd_images(a):
@@ -288,26 +288,16 @@ def cmd_images(a):
     if f is None:
         client = api.BzmClient(a.api_key)
         f = facts_mod.gather(client, a.harbor_id)
-    imgs = [f["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}"
-        for i in facts_mod.select_images(f, all_images=a.all)
-    ]
+    imgs = core.bundle_images(f, all_images=a.all)
     for ref in imgs:
         print(ref)
     if not a.pull:
         return
-    for ref in imgs:
-        _docker(["pull", "--platform", a.platform, ref], a.dry_run)
-        if a.mirror:
-            name = ref.rsplit("/", 1)[-1]
-            target = f"{a.mirror.rstrip('/')}/{name}"
-            _docker(["tag", ref, target], a.dry_run)
-            _docker(["push", target], a.dry_run)
-
-
-def _docker(args, dry):
-    cmd = ["docker"] + args
-    print(("DRY-RUN: " if dry else "+ ") + " ".join(cmd))
+    # The pull/tag/push is core's, so this command and the MCP tool cannot
+    # disagree about which name the target registry gets.
+    for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
+                                  dry_run=a.dry_run)["commands"]:
+        print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
     if not dry:
         subprocess.run(cmd, check=True)
 

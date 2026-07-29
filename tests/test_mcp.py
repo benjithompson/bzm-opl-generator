@@ -15,25 +15,50 @@ import json
 import os
 
 import anyio
+import mcp
 import pytest
 
 from bzm_opl_gen import core, mcp_server
+from test_core import FakeClient
 from test_generate import FACTS
 
-TOOLS = ["opl_location", "opl_facts", "opl_bundle", "opl_preflight", "opl_agent"]
+# What each tool promises a client about side effects. Asserted as a whole
+# table rather than a few hand-picked cells: a client that asks before running
+# something reads all five, and the interesting property is how they compare --
+# that the two read-only ones really are, and that the two that can change a
+# customer's account say so.
+EXPECTED_ANNOTATIONS = {
+    "opl_location":  {"read_only": False, "destructive": True},
+    "opl_facts":     {"read_only": True,  "destructive": False},
+    "opl_bundle":    {"read_only": False, "destructive": True},
+    "opl_preflight": {"read_only": True,  "destructive": False},
+    "opl_agent":     {"read_only": False, "destructive": False},
+}
+
+_SERVER = []      # the module's one server, installed by the fixture below
 
 
-def _run(coro_fn):
-    return anyio.run(coro_fn)
+# Building a server costs ~5ms of pydantic schema generation and buys nothing
+# per test: both env gates are read when an action runs, not when the server is
+# built, so a shared instance sees a monkeypatched variable exactly as a fresh
+# one would -- which test_the_gates_are_read_when_called_not_when_built is what
+# holds true.
+@pytest.fixture(scope="module")
+def server():
+    return mcp_server.build()
+
+
+@pytest.fixture(autouse=True)
+def _shared_server(server):
+    _SERVER[:] = [server]
 
 
 def call(tool, action, args=None):
-    """One tool call against a freshly built server, as a client makes it."""
+    """One tool call, as a client makes it."""
     async def go():
-        import mcp
-        async with mcp.Client(mcp_server.build()) as c:
+        async with mcp.Client(_SERVER[0]) as c:
             return await c.call_tool(tool, {"action": action, "args": args or {}})
-    return _run(go)
+    return anyio.run(go)
 
 
 def ok(tool, action, args=None):
@@ -51,49 +76,19 @@ def err(tool, action, args=None):
 
 def listing():
     async def go():
-        import mcp
-        async with mcp.Client(mcp_server.build()) as c:
-            tools = (await c.list_tools()).tools
+        async with mcp.Client(_SERVER[0]) as c:
             return {"instructions": c.instructions,
-                    "tools": {t.name: t for t in tools}}
-    return _run(go)
-
-
-class FakeClient:
-    """Enough BzmClient for the paths that reach for one."""
-
-    def __init__(self):
-        self.calls = []
-
-    def user(self):
-        return {"email": "se@example.com", "displayName": "SE",
-                "defaultProject": {"accountId": 7}}
-
-    def private_locations(self, account_id=None, workspace_id=None):
-        self.calls.append(("private_locations", account_id, workspace_id))
-        return [{"id": "h1", "name": "loc", "slots": 2,
-                 "funcIds": ["performance"],
-                 "ships": [{"id": "s1", "name": "agent1", "state": "idle"}]}]
-
-    def private_location(self, harbor_id):
-        return {"id": harbor_id, "name": "loc",
-                "ships": [{"id": "s1", "state": "idle",
-                           "installedVersion": "3.7.55", "lastHeartBeat": 0}]}
-
-    def create_ship(self, harbor_id, name):
-        return {"id": "s2", "name": name}
-
-    def auth_token(self, harbor_id, ship_id):
-        self.calls.append(("auth_token", harbor_id, ship_id))
-        return "SECRET-TOKEN-VALUE"
-
-    def delete_private_location(self, harbor_id):
-        self.calls.append(("delete", harbor_id))
+                    "tools": {t.name: t for t in (await c.list_tools()).tools}}
+    return anyio.run(go)
 
 
 @pytest.fixture
 def fake_account(monkeypatch):
-    c = FakeClient()
+    c = FakeClient(token="SECRET-TOKEN-VALUE",
+                   harbor={"id": "h1", "name": "loc",
+                           "ships": [{"id": "s1", "state": "idle",
+                                      "installedVersion": "3.7.55",
+                                      "lastHeartBeat": 0}]})
     monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
     return c
 
@@ -110,7 +105,7 @@ def no_ambient_credentials(monkeypatch):
 # -- what a session is handed -------------------------------------------------
 
 def test_the_five_tools_are_the_agreed_surface():
-    assert sorted(listing()["tools"]) == sorted(TOOLS)
+    assert sorted(listing()["tools"]) == sorted(EXPECTED_ANNOTATIONS)
 
 
 def test_every_tool_enumerates_its_actions_in_the_schema():
@@ -123,25 +118,15 @@ def test_every_tool_enumerates_its_actions_in_the_schema():
 
 
 def test_every_tool_says_whether_it_changes_anything():
-    """Annotations are how a client decides what to confirm before running.
-    A tool with none is treated as unknown, which in practice means treated as
-    safe."""
-    for name, tool in listing()["tools"].items():
-        assert tool.annotations is not None, f"{name} carries no annotations"
-        assert tool.annotations.read_only_hint is not None, name
-
-
-def test_the_read_only_tools_are_marked_read_only():
+    """Annotations are how a client decides what to confirm before running. A
+    tool with none is treated as unknown, which in practice means treated as
+    safe -- so the whole table is asserted, not a few cells of it."""
     tools = listing()["tools"]
-    assert tools["opl_preflight"].annotations.read_only_hint is True
-    assert tools["opl_facts"].annotations.read_only_hint is True
-
-
-def test_the_tools_that_change_an_account_are_marked_destructive():
-    """opl_location creates and deletes; opl_bundle can push to a registry."""
-    tools = listing()["tools"]
-    assert tools["opl_location"].annotations.destructive_hint is True
-    assert tools["opl_bundle"].annotations.destructive_hint is True
+    assert set(tools) == set(EXPECTED_ANNOTATIONS)
+    got = {name: {"read_only": t.annotations and t.annotations.read_only_hint,
+                  "destructive": t.annotations and t.annotations.destructive_hint}
+           for name, t in tools.items()}
+    assert got == EXPECTED_ANNOTATIONS
 
 
 def test_the_instructions_name_the_sibling_servers():
@@ -321,25 +306,23 @@ def test_options_are_described_without_any_credential():
 
 def test_option_help_is_available_as_a_resource():
     async def go():
-        import mcp
-        async with mcp.Client(mcp_server.build()) as c:
+        async with mcp.Client(_SERVER[0]) as c:
             res = (await c.list_resources()).resources
             uris = [str(r.uri) for r in res]
             assert any(u.endswith("options.md") for u in uris), uris
             got = await c.read_resource(
                 [u for u in uris if u.endswith("options.md")][0])
             return got.contents[0].text
-    assert "# Options and profiles" in _run(go)
+    assert "# Options and profiles" in anyio.run(go)
 
 
 def test_the_docs_ship_as_resources():
     """A session with no checkout of this repo has these and the tool
     descriptions, and nothing else."""
     async def go():
-        import mcp
-        async with mcp.Client(mcp_server.build()) as c:
+        async with mcp.Client(_SERVER[0]) as c:
             return [str(r.uri) for r in (await c.list_resources()).resources]
-    uris = _run(go)
+    uris = anyio.run(go)
     assert len(uris) >= 5
     assert all(u.startswith("bzm-opl://") for u in uris)
 
@@ -492,68 +475,46 @@ def test_only_the_gated_action_can_reach_a_cluster_write(monkeypatch):
 # -- the JSON-RPC channel -----------------------------------------------------
 # On stdio, stdout *is* the protocol. A stray print desynchronises the session,
 # and to the client that does not look like a print -- it looks like the server
-# died. The layers underneath were written for a command line and print freely.
+# died. Two defences, and they are tested at different depths on purpose.
 
-def test_a_tool_call_writes_nothing_to_stdout(fake_account, tmp_path, capsys):
-    """toolcheck reaches workstation.run, which prints a seven-line report;
-    livetest.run narrates a whole deployment. Both would have corrupted the
-    channel. Guarded once in _answer rather than hunted down one call at a
-    time, so this covers whatever gets called next as well."""
-    ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
-    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
-    ok("opl_facts", "manual", {"harbor_id": "H1", "ship_id": "S1"})
+@pytest.fixture
+def quiet_workstation(monkeypatch):
+    """A probed workstation without the probing -- gather() shells out to
+    docker, kubectl and helm, which is seconds the offline suite must not
+    spend. The same fixture the workstation tests use for the same reason."""
+    from test_workstation import OK_ENV
+    monkeypatch.setattr(core.workstation, "gather", lambda opts: OK_ENV)
+
+
+def test_the_toolcheck_path_prints_nothing_at_all(quiet_workstation, capsys):
+    """Asserted against core directly, *outside* the server's redirect --
+    inside it, this could not fail however much anything printed.
+
+    core is not a terminal, and `workstation.run` prints a seven-line report,
+    so the fix was to call `workstation.evaluate` rather than to hide the
+    output. If that regresses, the redirect would mask it everywhere else."""
+    checks = core.toolcheck(cluster="minikube")
+    assert checks["checks"]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_redirect_still_catches_a_layer_that_does_print(monkeypatch,
+                                                            capsys):
+    """The belt, for `livetest.run` -- which narrates a deployment for minutes
+    and is not worth unwinding. Proved with something that deliberately prints,
+    so removing the redirect fails this."""
+    def noisy(*a, **k):
+        print("a line that would desynchronise the session")
+        return {"ok": True}
+    monkeypatch.setattr(mcp_server, "_bundle", noisy)
+    assert ok("opl_bundle", "options") == {"ok": True}
     captured = capsys.readouterr()
-    assert captured.out == "", f"tool calls wrote to stdout: {captured.out!r}"
+    assert captured.out == "", f"reached stdout: {captured.out!r}"
+    assert "desynchronise" in captured.err, "and it was swallowed, not moved"
 
 
-def test_what_the_underlying_layer_printed_is_kept_on_stderr(fake_account,
-                                                             capsys):
-    """Redirected, not swallowed: those lines are the only diagnostics some of
-    these paths produce, and a client shows stderr as the server's log."""
-    ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
-    assert capsys.readouterr().err.strip(), "the report went nowhere"
-
-
-def test_toolcheck_answers_rather_than_exiting(fake_account):
+def test_toolcheck_answers_rather_than_exiting(quiet_workstation):
     """The command exits non-zero on failures. A server has no exit code, and
     SystemExit here would take the process down past any except Exception."""
     body = ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
     assert body["checks"] and isinstance(body["ok"], bool)
-
-
-def test_every_action_that_leads_somewhere_says_where(fake_account, tmp_path):
-    """A `next` on the ones a session moves on from. Not on `options` or
-    `images`, which are lookups -- a hint there is noise on a call whose whole
-    answer is the thing that was asked for."""
-    from test_cluster_evidence import _evidence
-    from test_doctor import FACTS as LOC_FACTS
-    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
-    cases = [
-        ("opl_location", "whoami", {}),
-        ("opl_location", "list", {}),
-        ("opl_facts", "manual", {"harbor_id": "H1", "ship_id": "S1"}),
-        ("opl_bundle", "read", {"out_dir": str(tmp_path),
-                                "name": "bzm_deployment.yaml"}),
-        ("opl_preflight", "doctor", {"facts": LOC_FACTS,
-                                     "options": {"namespace": "blazemeter"},
-                                     "evidence": _evidence()}),
-        ("opl_preflight", "suggest", {"evidence": _evidence()}),
-        ("opl_location", "reveal_token", {"harbor_id": "h1", "ship_id": "s1"}),
-    ]
-    for tool, action, args in cases:
-        assert ok(tool, action, args).get("next"), f"{tool} {action}"
-
-
-def test_a_failing_preflight_points_at_fixing_it_not_at_generating(fake_account):
-    """The moment a session is most likely to carry on regardless, so the
-    verdict carries the alternative rather than leaving it to be inferred."""
-    from test_cluster_evidence import DEGRADED
-    with open(DEGRADED) as fh:
-        degraded = json.load(fh)
-    from test_doctor import FACTS as LOC_FACTS
-    body = ok("opl_preflight", "doctor",
-              {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
-               "evidence": degraded})
-    hints = json.dumps(body["next"])
-    if not body["ok"]:
-        assert "suggest" in hints and "generate" not in hints

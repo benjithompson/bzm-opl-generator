@@ -8,7 +8,7 @@ import shlex
 from string import Template
 from urllib.parse import quote
 
-from .facts import select_images
+from .facts import image_refs, select_images
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -662,9 +662,7 @@ def _mirror_script(facts, o):
     registry -- and zero-layer images are rejected outright by some registries,
     which would abort a mirror that would otherwise have worked.
     """
-    refs = [facts["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}" for i in select_images(facts)
-    ]
+    refs = image_refs(facts)
     reg = o["private_registry"].rstrip("/")
     host = reg.split("/")[0]
     # The registry is free-form input from a CLI flag or a text field, and this
@@ -733,7 +731,22 @@ def _security_context(o):
     )
 
 
-AUTH_TOKEN_RE = re.compile(r'^\s*AUTH_TOKEN:\s*"?([^"\s]+)"?\s*$', re.M)
+# Every field name a generated bundle carries the AUTH_TOKEN under, and the
+# only place that list exists. The Secret and the simplified ConfigMap use the
+# environment variable's own name; the chart's values overlay uses the value
+# name helm templates read. Two consumers derive from this -- reading a token
+# back out of an existing bundle (below) and redacting one on the way to a
+# caller (core.redact_tokens) -- and they had drifted apart already: the reader
+# knew only AUTH_TOKEN, so a regenerated chart bundle never found its own
+# token, and a redactor that knew only the same one would have handed the chart
+# overlay over intact.
+TOKEN_FIELDS = ("AUTH_TOKEN", "authToken")
+
+# The files those fields are written into, in the order a bundle is read.
+TOKEN_FILES = ("bzm_secret.yaml", "bzm_configmap.yaml", "bzm-opl-values.yaml")
+
+AUTH_TOKEN_RE = re.compile(
+    r'^\s*(?:' + "|".join(TOKEN_FIELDS) + r'):\s*"?([^"\s]+)"?\s*$', re.M)
 
 
 def existing_auth_token(output_dir):
@@ -751,7 +764,7 @@ def existing_auth_token(output_dir):
     decision, and a bundle regenerated with the flag flipped should still find
     the token its predecessor wrote.
     """
-    for name in ("bzm_secret.yaml", "bzm_configmap.yaml"):
+    for name in TOKEN_FILES:
         try:
             with open(os.path.join(output_dir, name)) as fh:
                 m = AUTH_TOKEN_RE.search(fh.read())
@@ -1500,4 +1513,10 @@ def write(files, outdir):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
+        # A bundle whose mirror script needs chmod first is a bundle with an
+        # undocumented step. Set here rather than by whoever happens to be
+        # writing, because this is the function that knows a .sh was emitted --
+        # the zip download had the bit and `generate -o out` did not.
+        if name.endswith(".sh"):
+            os.chmod(path, os.stat(path).st_mode | 0o111)
     return sorted(files)
