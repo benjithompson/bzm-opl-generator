@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl events:*)",
+      "Bash(kubectl top:*)",
+      "Bash(kubectl explain:*)",
+      "Bash(kubectl api-resources:*)",
+      "Bash(kubectl api-versions:*)",
+      "Bash(kubectl auth can-i:*)",
+      "Bash(kubectl cluster-info:*)",
+      "Bash(kubectl version:*)",
+      "Bash(kubectl diff:*)",
+      "Bash(kubectl rollout status:*)",
+      "Bash(kubectl config get-contexts:*)",
+      "Bash(kubectl config current-context:*)",
+      "Bash(kubectl config use-context:*)",
+      "Bash(kubectl config view:*)",
+      "Bash(oc get:*)",
+      "Bash(oc describe:*)",
+      "Bash(oc logs:*)",
+      "Bash(gcloud version:*)",
+      "Bash(gcloud components list:*)",
+      "Bash(gcloud config list:*)",
+      "Bash(gcloud config get-value:*)",
+      "Bash(gcloud auth list:*)",
+      "Bash(gcloud projects list:*)",
+      "Bash(gcloud projects describe:*)",
+      "Bash(gcloud container clusters list:*)",
+      "Bash(gcloud container clusters describe:*)",
+      "Bash(gcloud container clusters get-credentials:*)",
+      "Bash(gcloud container node-pools list:*)",
+      "Bash(gcloud container node-pools describe:*)",
+      "Bash(gcloud container operations list:*)",
+      "Bash(gcloud compute instances list:*)",
+      "Bash(gcloud logging read:*)"
+    ]
+  }
+}
