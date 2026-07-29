@@ -25,6 +25,14 @@ anything that breaks.
   served as resources, so a session can read the options table rather than guess
   at an option name.
 
+  `opl_location list` answers one line per location and the first 50 of them,
+  narrowable by `name_contains` and `limit`, with `show` for the agents of the
+  one you pick. An account with 171 locations and 221 ships listed in full came
+  to 84,779 characters — past a client's result ceiling, truncated to a file and
+  never read, which blocked every step behind it. Anything the cap or the filter
+  leaves out comes back as a count: a list that quietly stopped would read as
+  the whole account.
+
   Three things it will not do. **The AUTH_TOKEN never appears in a response** —
   `generate` writes the Secret and answers with file names and byte counts, and
   reading a bundle file back redacts the token rather than handing it over,

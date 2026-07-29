@@ -56,13 +56,27 @@ second shape.
 
 | tool | actions |
 |---|---|
-| `opl_location` | `list` · `whoami` · `create` · `create_ship` · `reveal_token` · `delete`\* |
+| `opl_location` | `list` · `show` · `whoami` · `create` · `create_ship` · `reveal_token` · `delete`\* |
 | `opl_facts` | `gather` · `manual` |
 | `opl_bundle` | `generate` · `read` · `options` · `images` |
 | `opl_preflight` | `doctor` · `suggest` · `toolcheck` |
 | `opl_agent` | `status` · `livetest`\* |
 
 \* off unless an environment variable is set — see [The gates](#the-gates).
+
+**Listing locations is deliberately compact.** `opl_location list` gives one
+line per location — its id, name, `funcIds`, slots, how many agents it has and
+how many of those are reporting — and the first 50 of them. Real accounts hold
+hundreds: one with 171 locations and 221 ships listed in full came to 84,779
+characters, over a client's result ceiling, so the first step of the path never
+completed. Narrow with `name_contains` (a case-insensitive substring of the
+name) rather than raising `limit`, and use `show` for the ships of the one you
+pick. Whatever the cap or the filter left out comes back as a count with a
+sentence saying so — a listing that quietly stopped would read as the whole
+account, and "that location does not exist" is a worse answer than a response
+that was too big. `ships_reporting` is `null`, not `0`, where the payload
+carried no heartbeat to judge by; `opl_agent status` is the authority on a
+single agent.
 
 The reference pages under `docs/` are served as resources at
 `bzm-opl://docs/<name>.md`, so a session can read [options.md](options.md) or

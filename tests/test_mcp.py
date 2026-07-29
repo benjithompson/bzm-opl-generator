@@ -254,6 +254,147 @@ def test_a_file_with_no_token_is_returned_untouched(fake_account, tmp_path):
     assert "kind: Deployment" in body["content"]
 
 
+# -- listing an account somebody actually has ---------------------------------
+# The account this was built against holds two locations. A customer's holds
+# 171 with 221 ships between them, which came back as 84,779 characters: past
+# the caller's tool-result ceiling, truncated to a file, never read -- and step
+# 1 of the documented path is the one that broke, so everything after it was
+# blocked too (#78).
+
+LOCATION_COUNT, SHIP_COUNT = 171, 221
+
+# What a client will accept in one tool result, in characters. Well under any
+# real ceiling on purpose: this is a listing a session reads and then keeps in
+# context while it does five more calls.
+RESULT_CEILING = 25_000
+
+
+def _big_account():
+    """171 locations, 221 ships, with ids and names the length real ones are --
+    most of the 84,779 characters was per-ship detail on locations the caller
+    was never going to pick."""
+    locs = []
+    for i in range(LOCATION_COUNT):
+        # The first 50 have two agents each, which is what makes 221.
+        n_ships = 2 if i < SHIP_COUNT - LOCATION_COUNT else 1
+        locs.append({
+            "id": f"harbor-6{i:023d}",
+            "name": f"acme-{'eu-west' if i % 2 else 'us-east'}-perf-{i:03d}",
+            "slots": 10, "funcIds": ["performance"],
+            "workspacesId": [123456],
+            "ships": [{"id": f"ship-7{i:02d}{j:021d}",
+                       "name": f"agent-{i:03d}-{j}", "state": "idle",
+                       "installedVersion": "3.7.55",
+                       "lastHeartBeat": 1700000000 if j else 0}
+                      for j in range(n_ships)],
+        })
+    return locs
+
+
+@pytest.fixture
+def big_account(monkeypatch):
+    c = FakeClient(locations=_big_account())
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    return c
+
+
+def test_a_real_account_s_listing_fits_in_a_result_and_says_what_it_left_out(
+        big_account):
+    """Both halves together, because either alone is a bug: a response that
+    fits by stopping early reads as the whole account, and acting on "that
+    location does not exist" when it was merely omitted is worse than the size
+    problem this fixes."""
+    r = call("opl_location", "list")
+    assert not r.is_error, r.content[0].text
+    text = r.content[0].text
+    assert len(text) < RESULT_CEILING, f"{len(text)} characters"
+
+    body = json.loads(text)
+    assert body["total"] == LOCATION_COUNT
+    assert body["returned"] == len(body["locations"]) < LOCATION_COUNT
+    assert (body["omitted_by_limit"]
+            == LOCATION_COUNT - body["returned"]) > 0
+    # And in prose as well as in a field, because the number is the thing a
+    # session has to act on rather than one key of many.
+    assert str(body["omitted_by_limit"]) in body["note"]
+
+
+def test_a_listing_entry_carries_what_choosing_a_location_needs(big_account):
+    """id to pass on, name to recognise, funcIds to know a bundle can be
+    generated at all, and whether there is an agent there and it is alive.
+    Not the ships themselves -- 221 of those is the size problem."""
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["harbor_id"].startswith("harbor-")
+    assert entry["name"].startswith("acme-")
+    assert entry["func_ids"] == ["performance"] and entry["slots"] == 10
+    assert entry["ship_count"] == 2
+    assert entry["ships_reporting"] == 0     # both heartbeats are from 2023
+    assert not isinstance(entry.get("ships"), list)
+
+
+def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
+        fake_account):
+    """A listing payload without `lastHeartBeat` cannot say an agent is dead.
+    Reported as null, so nobody redeploys an agent that was working."""
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["ship_count"] == 1 and entry["ships_reporting"] is None
+
+
+def test_narrowing_by_name_counts_what_the_filter_removed(big_account):
+    """Somebody who knows the name should not receive 170 others -- and must
+    still be told the account holds them."""
+    body = ok("opl_location", "list", {"name_contains": "eu-west"})
+    assert body["locations"], "the filter matched nothing"
+    assert all("eu-west" in l["name"] for l in body["locations"])
+    assert body["total"] == LOCATION_COUNT
+    assert body["omitted_by_filter"] == LOCATION_COUNT - body["matched"]
+    assert "eu-west" in body["note"]
+
+
+def test_a_caller_can_raise_the_cap_and_is_told_when_nothing_is_missing(
+        big_account):
+    body = ok("opl_location", "list", {"limit": LOCATION_COUNT})
+    assert body["returned"] == LOCATION_COUNT
+    assert body["omitted_by_limit"] == 0 and body["omitted_by_filter"] == 0
+    assert "note" not in body, "announced an omission that did not happen"
+
+
+def test_a_cap_that_returns_nothing_is_refused(big_account):
+    assert "limit" in err("opl_location", "list", {"limit": 0})
+
+
+def test_creating_a_location_still_answers_in_full(fake_account):
+    """`create` returns one location, so it has no size problem, and the detail
+    is the confirmation that what exists is what was asked for. It happens to
+    have shared a helper with the listing -- compacting that must not reach
+    here, hence the shape is pinned rather than left to the helper."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99})
+    loc = body["location"]
+    assert loc["harbor_id"] == "h9" and loc["name"] == "scratch"
+    assert loc["func_ids"] == ["performance"] and loc["slots"] == 1
+    # The per-ship list itself, not a count of one.
+    assert loc["ships"] == [] and "ship_count" not in loc
+
+
+def test_the_listing_names_the_account_it_actually_listed(fake_account):
+    """Neither id given means the key's default account, and that default is
+    easy to be wrong about -- the key to hand defaults to a two-location
+    account while the one wanted holds 171. An empty list has to be
+    distinguishable from the wrong account being read."""
+    assert ok("opl_location", "list")["account_id"] == 7
+
+
+def test_per_ship_detail_is_reachable_for_the_location_that_was_picked(
+        fake_account):
+    """What `list` stopped paying for on all 171. `show` is one location, so
+    the detail costs what it is worth."""
+    body = ok("opl_location", "show", {"harbor_id": "h1"})
+    ships = body["location"]["ships"]
+    assert [s["ship_id"] for s in ships] == ["s1"]
+    assert ships[0]["state"] == "idle"
+
+
 # -- the bundle on disk -------------------------------------------------------
 
 def test_generate_returns_names_and_sizes_not_yaml(fake_account, tmp_path):

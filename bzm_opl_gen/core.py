@@ -218,6 +218,51 @@ def locations(client, account_id=None, workspace_id=None):
     return _upstream(client.private_locations, account_id, workspace_id)
 
 
+def location(client, harbor_id):
+    """One location with its ships -- the per-ship detail a listing leaves out,
+    paid for on the one the caller has chosen."""
+    return _upstream(client.private_location, harbor_id)
+
+
+# How many locations a listing hands back when the caller did not say. The
+# account this was built against has two; a customer's has 171 with 221 ships,
+# which came back as 84,779 characters -- past an MCP caller's result ceiling,
+# so it was truncated to a file and never read. A cap is only safe because
+# select_locations counts what it left out; see its docstring.
+DEFAULT_LOCATION_LIMIT = 50
+
+
+def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
+    """Narrow a listing, and account for every location that does not come back.
+
+    The counts are the point, not decoration. A caller handed 50 of 171 with no
+    numbers reads the account as having 50, and then reports a location that is
+    right there as missing -- which is a worse failure than the response being
+    too big, because it looks like an answer. Filter and cap are counted apart:
+    one is what the caller asked for and the other is not, so only the numbers
+    say which is worth undoing.
+
+    Here rather than in a response layer because the narrowing is the same
+    question whoever is asking -- the CLI prints the same listing -- while how
+    each entry is *shaped* differs by caller and belongs to them.
+    """
+    if limit is not None and limit < 1:
+        # `limit=0` means "no limit" to whoever passed it and "nothing matched"
+        # in the answer; nothing good is downstream of guessing which.
+        raise BadRequest("limit must be at least 1, or omitted for the default "
+                         f"of {DEFAULT_LOCATION_LIMIT}")
+    needle = (name_contains or "").strip().lower()
+    matched = [l for l in locs
+               if not needle or needle in (l.get("name") or "").lower()]
+    kept = matched if limit is None else matched[:limit]
+    return {"locations": kept,
+            "total": len(locs),
+            "matched": len(matched),
+            "returned": len(kept),
+            "omitted_by_filter": len(locs) - len(matched),
+            "omitted_by_limit": len(matched) - len(kept)}
+
+
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
@@ -260,6 +305,22 @@ HEARTBEAT_FRESH_S = 120
 ONLINE_STATES = ("idle", "running")
 
 
+def ship_reporting(ship):
+    """Whether one ship is reporting now -- or None where the payload cannot say.
+
+    None is not "no". A locations *listing* is not the same read as a single
+    location, and a payload that never carried `lastHeartBeat` is no evidence
+    that an agent has stopped: answering False there would have a session
+    redeploy an agent that is working. Present-and-stale is False; absent is
+    unknown, and the caller has to go and ask.
+    """
+    if "lastHeartBeat" not in ship:
+        return None
+    hb = ship.get("lastHeartBeat") or 0
+    return bool(hb and time.time() - hb < HEARTBEAT_FRESH_S
+                and ship.get("state") in ONLINE_STATES)
+
+
 def agent_status(client, harbor_id, ship_id):
     """Is this agent actually reporting, as opposed to merely remembered?
 
@@ -279,8 +340,9 @@ def agent_status(client, harbor_id, ship_id):
         # want different next steps.
         "heartbeat_age_s": int(time.time() - hb) if hb else None,
         "installed_version": ship.get("installedVersion"),
-        "online": bool(hb and time.time() - hb < HEARTBEAT_FRESH_S
-                       and ship.get("state") in ONLINE_STATES),
+        # This read does carry the heartbeat, so the unknown ship_reporting
+        # allows for cannot arise here -- a bool is what a status answers with.
+        "online": bool(ship_reporting(ship)),
     }
 
 
