@@ -28,25 +28,55 @@ def parse_auth_token(docker_command):
     return m.group(1)
 
 
+KEY_FILE_SHAPE = ('a JSON object with the id and secret of a BlazeMeter API '
+                  'key: {"id": "...", "secret": "..."}')
+
+
+def read_key_file(path):
+    """The (id, secret) in an api-key.json, or ValueError saying what was wrong.
+
+    Separate from the SystemExit wrapper below so a caller that must not exit
+    -- a server -- can report the same three problems its own way.
+    """
+    try:
+        with open(path) as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        raise ValueError(f"no API key file at '{path}'. It is {KEY_FILE_SHAPE}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"API key file '{path}' is not valid JSON: {e}")
+    if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
+        raise ValueError(f"API key file '{path}' needs both \"id\" and "
+                         f"\"secret\" (see examples/api-key.example.json)")
+    return d["id"], d["secret"]
+
+
+def _read_key_file(path):
+    """read_key_file, as a command wants it: the same three messages, plus how
+    to create the file, and exit rather than traceback."""
+    try:
+        return read_key_file(path)
+    except ValueError as e:
+        raise SystemExit(
+            f"{e}\nCreate the key under Settings -> API Keys in BlazeMeter, "
+            f"then:\n  cp examples/api-key.example.json {path}   # and fill it in")
+
+
 class BzmClient:
-    def __init__(self, api_key_path):
-        try:
-            with open(api_key_path) as f:
-                d = json.load(f)
-        except FileNotFoundError:
-            raise SystemExit(
-                f"no API key file at '{api_key_path}'. It is a JSON object with "
-                f'the id and secret of a BlazeMeter API key:\n'
-                f'  {{"id": "...", "secret": "..."}}\n'
-                f"Create the key under Settings -> API Keys in BlazeMeter, then:\n"
-                f"  cp examples/api-key.example.json {api_key_path}   # and fill it in")
-        except json.JSONDecodeError as e:
-            raise SystemExit(f"API key file '{api_key_path}' is not valid JSON: {e}")
-        if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
-            raise SystemExit(
-                f"API key file '{api_key_path}' needs both \"id\" and \"secret\" "
-                f"(see examples/api-key.example.json)")
-        self._auth = base64.b64encode(f"{d['id']}:{d['secret']}".encode()).decode()
+    def __init__(self, api_key_path=None, credentials=None):
+        """Either a path to an api-key.json, or an (id, secret) pair already
+        read from somewhere else.
+
+        `credentials` exists because reading the file here raises SystemExit,
+        which is right for a command and fatal for a long-running server -- it
+        is a BaseException, so a tool wrapper's `except Exception` does not stop
+        it taking the process down with it. A caller that has its own way to
+        report a bad credential reads the file itself and passes the pair.
+        """
+        if credentials is None:
+            credentials = _read_key_file(api_key_path)
+        key_id, secret = credentials
+        self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 
     def _request(self, method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None

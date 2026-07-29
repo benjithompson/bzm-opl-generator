@@ -37,6 +37,7 @@ bzm_opl_gen/
   options.py     what each generate option is for (docs/options.md renders it)
   core.py        orchestration, transport-free -- no fastapi, no request objects
   server.py      HTTP over core.py: routes, request models, the web UI's bind
+  mcp_server.py  MCP over core.py: five action-dispatch tools, docs as resources
   cli.py         subcommands: facts | generate | doctor | suggest | toolcheck
                               | images | livetest | ui | sv-expose | locations
                               | create-location | create-ship

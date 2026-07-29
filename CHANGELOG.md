@@ -11,6 +11,33 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
+  deployment without a checkout of this repo: find the location, read its real
+  image references, preflight a cluster from an evidence file, and write the
+  manifests. `pipx install 'bzm-opl-gen[mcp]'`, then point your client at it —
+  copy-paste config in [docs/mcp.md](docs/mcp.md).
+
+  Five tools, each dispatching on an `action`, matching the shape the sibling
+  BlazeMeter MCP servers already use: `opl_location`, `opl_facts`, `opl_bundle`,
+  `opl_preflight`, `opl_agent`. The reference pages ship with the wheel and are
+  served as resources, so a session can read the options table rather than guess
+  at an option name.
+
+  Three things it will not do. **The AUTH_TOKEN never appears in a response** —
+  `generate` writes the Secret and answers with file names and byte counts,
+  because a response is transcribed, summarised and quoted back, and this
+  credential rotates every time it is fetched. `reveal_token` is the one
+  exception and is a whole action so it cannot happen by accident. **A secret is
+  never a tool argument** — a path may be; the key comes from the server's
+  environment. **Nothing writes to a cluster** — `kubectl apply` stays in your
+  shell, where you can see what is being applied.
+
+  `opl_location delete` and image mirroring need `BZM_OPL_ALLOW_DESTRUCTIVE=1`;
+  `opl_agent livetest` needs `BZM_OPL_ENABLE_LIVETEST=1`. Both are read when the
+  action runs, so setting one does not mean restarting your client.
+
 ### Changed
 
 - **`ui --dev` now detects a `BZM_API_KEY_FILE` set after startup.** The four

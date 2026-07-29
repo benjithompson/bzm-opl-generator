@@ -166,6 +166,22 @@ the classes of problem it can't fix for you.
 
 ## Generator details that bite
 
+- **The MCP server's audience has no checkout.** `mcp_server.py` is written for
+  a session in a customer's directory with a cluster and an account and none of
+  this repo, so its tool descriptions, the `instructions` block and the docs it
+  serves as resources are *all* the documentation there is — a thing that is
+  only in a comment here does not exist to it. Three rules it keeps that `core`
+  does not: **the AUTH_TOKEN is never in a response** (written to disk, and
+  `reveal_token` is a whole action so it cannot happen as a side effect of
+  something else); **a secret is never an argument** (a path may be, the id and
+  secret come from the environment); **nothing writes to a cluster** (the
+  session runs `kubectl apply` in its own shell, which is where the person
+  watching sees it). `docs/*.md` reach the wheel through the
+  `bzm_opl_gen.docs` **package-dir mapping** — they stay at the repo root, where
+  they are edited and where the links between them resolve, and `docs_dir()`
+  looks in both places. The release workflow asserts every page made it in,
+  because a checkout serves them whether or not the wheel does.
+
 - **Orchestration goes in `core.py`, transport in `server.py`.** `core` imports
   no fastapi, no pydantic, nothing about requests — `tests/test_core.py` asserts
   that by parsing its imports, because a web framework reachable from there puts

@@ -38,7 +38,7 @@ import urllib.request
 import zipfile
 
 from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               options as options_mod, suggest as suggest_mod)
+               options as options_mod, suggest as suggest_mod, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -63,6 +63,13 @@ class BadRequest(CoreError):
 
 class NotFound(CoreError):
     status = 404
+
+
+class NotConfigured(CoreError):
+    """No usable credential. 401 because it is the caller's to fix, but it is
+    its own type because *how* to fix it differs by caller -- a browser posts
+    to /api/key, a stdio server is restarted with a different env."""
+    status = 401
 
 
 class UpstreamError(CoreError):
@@ -96,6 +103,47 @@ def key_candidates():
             "api-key.json",
             SAVED_KEY_PATH,
             os.path.expanduser("~/.bzm/api-key.json")]
+
+
+KEY_ID_ENV = "BZM_API_KEY_ID"
+KEY_SECRET_ENV = "BZM_API_KEY_SECRET"
+KEY_FILE_ENV = "BZM_API_KEY_FILE"
+
+
+def client_from_env(api_key_file=None):
+    """A BzmClient from the environment, or NotConfigured saying how to give one.
+
+    Three sources, in precedence order: a path the caller named, the id/secret
+    pair in the environment, then the first api-key.json that detection finds.
+
+    A *path* is something a caller may pass in an argument; the secret itself is
+    not, and there is deliberately no way to send one -- an argument travels
+    through whatever is between the caller and here, and gets logged by things
+    nobody is thinking about at the time.
+
+    Never SystemExit, which is what the file-reading constructor raises: this
+    runs inside a server, and SystemExit is a BaseException that would take the
+    process down past any `except Exception` in the way.
+    """
+    path = api_key_file or os.environ.get(KEY_FILE_ENV)
+    if path:
+        try:
+            return api.BzmClient(credentials=api.read_key_file(
+                os.path.expanduser(path)))
+        except ValueError as e:
+            raise NotConfigured(str(e))
+    key_id = os.environ.get(KEY_ID_ENV)
+    secret = os.environ.get(KEY_SECRET_ENV)
+    if key_id and secret:
+        return api.BzmClient(credentials=(key_id, secret))
+    found = detect_keys()
+    if found:
+        return api.BzmClient(credentials=api.read_key_file(found[0]["path"]))
+    raise NotConfigured(
+        f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of an "
+        f"api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} and "
+        f"{KEY_SECRET_ENV}, in the environment of whatever started this. "
+        f"Create the key under Settings -> API Keys in BlazeMeter.")
 
 
 def detect_keys():
@@ -321,6 +369,105 @@ def zip_filename(options):
     return f"{ZIP_PREFIX}-{(options or {}).get('namespace', 'blazemeter')}.zip"
 
 
+def write_bundle(files, out_dir):
+    """Write a generated bundle to `out_dir`, and say what landed where.
+
+    Absolute paths only. Every caller of this but a shell is somewhere it did
+    not choose -- a server's working directory is whatever launched it -- so a
+    relative path resolves against a directory nobody named, and the files turn
+    up somewhere the caller then cannot describe.
+
+    Returns [{name, bytes}] rather than the content: a bundle is ~40KB of YAML
+    with a CA bundle sometimes far larger, and a caller that wanted to read one
+    file should read that one file.
+    """
+    if not os.path.isabs(out_dir):
+        raise BadRequest(
+            f"out_dir must be an absolute path, not {out_dir!r} -- a relative "
+            f"one resolves against this process's working directory, which is "
+            f"whatever started it rather than anywhere you chose")
+    gen_mod.write(files, out_dir)
+    for name in files:
+        # The mirror script is meant to be run, and a bundle whose script needs
+        # chmod first is a bundle with an undocumented step. The zip download
+        # already carries the bit; a written directory should too.
+        if name.endswith(".sh"):
+            path = os.path.join(out_dir, name)
+            os.chmod(path, os.stat(path).st_mode | 0o111)
+    return [{"name": n, "bytes": len(files[n].encode())} for n in preview_order(files)]
+
+
+def read_bundle_file(out_dir, name):
+    """One file out of a written bundle, by the name write_bundle reported.
+
+    The name is joined and then checked to be inside `out_dir`, because it
+    arrives from outside: `../../.ssh/id_rsa` is a name too, and this would
+    otherwise be a general-purpose file reader with a bundle-shaped argument.
+    Checked after normalising rather than by scanning for "..", which misses
+    symlinks and absolute names.
+    """
+    if not os.path.isabs(out_dir):
+        raise BadRequest(f"out_dir must be an absolute path, not {out_dir!r}")
+    root = os.path.realpath(out_dir)
+    path = os.path.realpath(os.path.join(root, name))
+    if path != root and not path.startswith(root + os.sep):
+        raise BadRequest(f"{name!r} is not inside the bundle at {out_dir}")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except (FileNotFoundError, IsADirectoryError):
+        raise NotFound(f"no file {name!r} in the bundle at {out_dir}")
+    except UnicodeDecodeError:
+        raise BadRequest(f"{name!r} is not text")
+
+
+def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
+    """Pull each image and, with `mirror`, push it under that prefix.
+
+    The push is why this is not a read: it writes to somebody's registry. The
+    pull is not free either -- BlazeMeter images are amd64-only and large, and
+    `platform` is explicit because on an arm64 host docker will otherwise pick
+    a manifest that does not exist and fail halfway through the set.
+
+    Returns what it ran, so a dry run is a plan somebody can read and then run
+    by hand -- which is what the bundle's own mirror script is for.
+    """
+    ran = []
+    for ref in refs:
+        ran.append(_docker(["pull", "--platform", platform, ref], dry_run))
+        if mirror:
+            # Last path segment only: the target registry has its own
+            # namespace, and carrying the source project into it produces
+            # repositories nobody asked for.
+            target = f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
+            ran.append(_docker(["tag", ref, target], dry_run))
+            ran.append(_docker(["push", target], dry_run))
+    return {"mirror": mirror, "platform": platform, "dry_run": bool(dry_run),
+            "commands": ran}
+
+
+def _docker(args, dry_run):
+    cmd = ["docker"] + args
+    if not dry_run:
+        import subprocess
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode:
+            raise UpstreamError(
+                f"{' '.join(cmd)} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    return " ".join(cmd)
+
+
+def bundle_images(facts, all_images=False):
+    """Every image reference this location's bundle will pull.
+
+    Crane's own image first -- it is the one that must exist before anything
+    else can, and the one a private-registry mirror is most often missing.
+    """
+    return [facts["crane_image"]] + [
+        f"{i['repo']}:{i['tag']}"
+        for i in facts_mod.select_images(facts, all_images=all_images)]
+
+
 # -- preflight -----------------------------------------------------------------
 
 def preflight(facts, options, evidence):
@@ -365,6 +512,11 @@ def preflight(facts, options, evidence):
     # -- `state` says what applying would mean, and the choice is the caller's.
     suggestions = suggest_mod.from_evidence(evidence)
     return {"namespace": namespace,
+            # `ok` alongside the checks because every caller needs it and the
+            # rule is not "no FAILs" spelled out: a denied read is a WARN, and
+            # a caller that read WARN as failure would report a locked-down
+            # cluster as a broken one. doctor.has_failures is that rule.
+            "ok": not doctor.has_failures(checks),
             # The same three facts the leading check states in prose, apart
             # from it: a caller can put them in a header, where they cannot be
             # read past. Which namespace the *file* describes is not
@@ -380,6 +532,81 @@ def preflight(facts, options, evidence):
             # the caller has nothing to decide.
             "why_nothing": None if suggestions
                            else suggest_mod.why_nothing(evidence)}
+
+
+def suggestions_from_evidence(evidence, options=None):
+    """What a cluster's evidence implies about the generate options.
+
+    The other half of preflight(), asked on its own: `doctor` answers whether a
+    deployment survives this cluster, and this answers how it should have been
+    configured. Same file, different question, and nothing is applied.
+    """
+    try:
+        suggestions = suggest_mod.from_evidence(evidence)
+    except ValueError as e:
+        raise BadRequest(str(e))
+    return {"suggestions": [suggest_mod.merged_as_dict(s, options or {})
+                            for s in suggestions],
+            "why_nothing": None if suggestions
+                           else suggest_mod.why_nothing(evidence)}
+
+
+def toolcheck(cluster=None, local_registry=None, local_proxy=False):
+    """The workstation preflight, for the rig flags you mean to pass.
+
+    Reports rather than exits: `has_failures` is the caller's to act on, and a
+    caller with no exit code of its own needs the verdicts either way.
+    """
+    checks = workstation.run({"cluster": cluster,
+                              "local_registry": local_registry,
+                              "local_proxy": local_proxy})
+    return _verdicts(checks)
+
+
+def _verdicts(checks):
+    """Checks as data, with the one summary every caller recomputes.
+
+    `ok` is not "no FAILs" spelled out at each call site: doctor's contract is
+    that a denied read is a WARN and only an answered one can FAIL, so a caller
+    that treated WARN as failure would report a locked-down cluster as a broken
+    one.
+    """
+    return {"checks": [c._asdict() for c in checks],
+            "ok": not doctor.has_failures(checks)}
+
+
+# -- the location, as something that gets changed -----------------------------
+
+def location(client, harbor_id):
+    return _upstream(client.private_location, harbor_id)
+
+
+def reveal_token(client, harbor_id, ship_id):
+    """The ship's AUTH_TOKEN, as the answer rather than as a side effect.
+
+    **This rotates it.** The previous token stops working, and an agent already
+    running on it starts logging 404 on /ships/<id>/status while sitting at 0/1
+    -- which reads like a deleted ship, not like a credential problem. So it is
+    its own named call and never something another action does on the way past.
+    """
+    return {"harbor_id": harbor_id, "ship_id": ship_id,
+            "auth_token": _upstream(client.auth_token, harbor_id, ship_id),
+            "warning": "this issued a NEW token and invalidated the previous "
+                       "one. Any agent already running for this ship must be "
+                       "re-applied with it, Secret included."}
+
+
+def delete_location(client, harbor_id):
+    """Delete a private location and every ship in it.
+
+    Reads it first so the answer can name what went, which is the only record
+    anyone will have afterwards.
+    """
+    harbor = _upstream(client.private_location, harbor_id)
+    ships = harbor.get("ships", [])
+    _upstream(client.delete_private_location, harbor_id)
+    return {"deleted": harbor_id, "name": harbor.get("name"),
+            "ships_deleted": [s["id"] for s in ships]}
 
 
 # -- what is deployed in the namespace ----------------------------------------

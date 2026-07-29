@@ -25,8 +25,19 @@ bzm-opl-gen = "bzm_opl_gen.cli:main"
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-include = ["bzm_opl_gen*"]
+# An explicit list rather than `find`, because docs/ is mapped in below and
+# discovery cannot see it: it lives at the repo root, where it is edited and
+# where every relative link between the pages resolves. A new subpackage has to
+# be added here by hand -- there are none today, and templates/ profiles/
+# ui_dist/ are data rather than packages.
+[tool.setuptools]
+packages = ["bzm_opl_gen", "bzm_opl_gen.docs"]
+
+# The MCP server serves these as resources, so a session with no checkout of
+# this repo can still read them. Mapped rather than copied: one set of files on
+# disk, and the wheel builds its copy from the same ones.
+[tool.setuptools.package-dir]
+"bzm_opl_gen.docs" = "docs"
 
 [tool.setuptools.package-data]
 # templates/helm is the Helm packaging of the same manifests, and `generate
@@ -37,3 +48,4 @@ include = ["bzm_opl_gen*"]
 bzm_opl_gen = ["templates/*.yaml", "templates/helm/*", "templates/helm/.helmignore",
                "templates/helm/templates/*",
                "profiles/*.json", "ui_dist/**/*"]
+"bzm_opl_gen.docs" = ["*.md"]

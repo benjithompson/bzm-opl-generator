@@ -154,6 +154,7 @@ behind it and whether it settles the option or only narrows it
 
 | | |
 |---|---|
+| [docs/mcp.md](docs/mcp.md) | `bzm-opl-gen mcp` — the MCP server, for an AI session with no checkout of this repo |
 | [docs/options.md](docs/options.md) | every `generate` option and profile key |
 | [docs/web-ui.md](docs/web-ui.md) | what each step of `bzm-opl-gen ui` does, and why it binds locally |
 | [docs/helm.md](docs/helm.md) | `--format helm`, and managing the release with `helm upgrade` |

@@ -391,6 +391,20 @@ def cmd_livetest(a):
     sys.exit(0 if ok else 1)
 
 
+def cmd_mcp(a):
+    """Serve the MCP tools on stdio.
+
+    Nothing may print to stdout from here on -- it is the JSON-RPC channel, and
+    one stray line makes the session unparseable to the client. That includes
+    the friendly "starting..." this would otherwise have.
+    """
+    try:
+        from . import mcp_server
+    except ImportError:
+        sys.exit("MCP dependencies missing -- pip install 'bzm-opl-gen[mcp]'")
+    mcp_server.main()
+
+
 def cmd_ui(a):
     try:
         from . import server
@@ -671,6 +685,10 @@ def main():
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
     t.set_defaults(fn=cmd_livetest)
+
+    m = sub.add_parser("mcp", help="serve the MCP tools on stdio (for an AI "
+                                   "session; see docs/mcp.md)")
+    m.set_defaults(fn=cmd_mcp)
 
     u = sub.add_parser("ui", help="start the local web UI")
     u.add_argument("--port", type=int, default=8765)
