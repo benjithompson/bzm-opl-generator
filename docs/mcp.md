@@ -83,10 +83,15 @@ and secret come from the environment. Arguments pass through everything between
 the caller and the server and get logged by things nobody is thinking about at
 the time.
 
-**Nothing writes to a cluster.** The cluster reads are reads. `kubectl apply` is
-the session's own, run in the user's shell — which is also the only place the
-person watching sees what is being applied to their cluster. The same goes for
-`helm install`.
+**Nothing writes to a cluster, with one gated exception.** The cluster reads are
+reads. `kubectl apply` is the session's own, run in the user's shell — which is
+also the only place the person watching sees what is being applied to their
+cluster. The same goes for `helm install`.
+
+The exception is `opl_agent livetest`, which deploys because deploying is the
+whole of what it does. That is why it has its own variable rather than sharing
+`BZM_OPL_ALLOW_DESTRUCTIVE` — enabling image mirroring should not quietly also
+enable something that applies manifests.
 
 ## The gates
 

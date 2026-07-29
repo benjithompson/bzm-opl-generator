@@ -25,9 +25,12 @@ Three rules this layer keeps that core does not:
   and secret come from the environment of whatever launched the server, because
   arguments pass through everything between the caller and here.
 
-  **Nothing writes to a cluster.** The cluster reads are reads. Applying is the
-  session's own `kubectl`, which is also the only way the person watching sees
-  what was applied.
+  **Nothing writes to a cluster, with one gated exception.** The cluster reads
+  are reads. Applying is the session's own `kubectl`, which is also the only way
+  the person watching sees what was applied. The exception is `opl_agent
+  livetest`, which deploys because that is the whole of what it does -- and is
+  why it is off unless its own variable is set, rather than sharing the
+  destructive one.
 """
 
 import json
@@ -59,10 +62,11 @@ The path through it:
   5. kubectl apply -f <dir>     -- YOU run this, in your own shell
   6. opl_agent status           -- did the agent come online?
 
-Step 5 is deliberately not a tool. This server never writes to a cluster: the
-person you are working with needs to see what is being applied to theirs, and
-`kubectl apply` in their shell is where they see it. The same goes for `helm
-install` when the bundle is a chart.
+Step 5 is deliberately not a tool. This server does not apply anything to a
+cluster: the person you are working with needs to see what is being applied to
+theirs, and `kubectl apply` in their shell is where they see it. The same goes
+for `helm install` when the bundle is a chart. (The one tool that does deploy is
+opl_agent livetest, which is off unless its own variable is set.)
 
 Facts without an account: `opl_facts manual` builds the same structure from a
 harbor id and ship id read off the BlazeMeter UI, so you can produce a bundle

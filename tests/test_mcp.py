@@ -428,3 +428,14 @@ def test_listing_images_runs_no_docker(fake_account, monkeypatch):
     monkeypatch.setattr(core, "_docker",
                         lambda *a, **k: pytest.fail("listing ran docker"))
     assert ok("opl_bundle", "images", {"facts": FACTS})["images"]
+
+
+def test_only_the_gated_action_can_reach_a_cluster_write(monkeypatch):
+    """The claim the instructions make. Everything but `livetest` is a read or
+    a local write, and `livetest` is the one that has to be switched on."""
+    called = []
+    monkeypatch.setattr(core.livetest, "run",
+                        lambda *a, **k: called.append(True) or True)
+    assert err("opl_agent", "livetest", {"manifests": "/tmp/x", "namespace": "n",
+                                         "harbor_id": "h", "ship_id": "s"})
+    assert called == [], "it deployed before being allowed to"
