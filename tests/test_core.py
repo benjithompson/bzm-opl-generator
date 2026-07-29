@@ -338,6 +338,88 @@ def test_preflight_reaches_no_cluster(monkeypatch):
     assert core.preflight(LOC_FACTS, {"namespace": "blazemeter"}, _evidence())["checks"]
 
 
+# -- evidence as the file it is -----------------------------------------------
+# The collector's output is an artifact somebody sends, so a caller may name it
+# rather than restate it. The two refusals below are the point of the helper:
+# a file that could not be read and a file that was read and is not evidence
+# have different remedies, and one message covering both hides which happened.
+
+def _written(tmp_path, text, name="cluster-evidence.json"):
+    path = tmp_path / name
+    path.write_text(text)
+    return str(path)
+
+
+def test_evidence_may_be_the_path_of_the_file_it_is(tmp_path):
+    doc = _evidence()
+    assert core.evidence_document(_written(tmp_path, json.dumps(doc))) == doc
+
+
+def test_evidence_already_in_hand_passes_straight_through():
+    doc = _evidence()
+    assert core.evidence_document(doc) is doc
+
+
+def test_a_path_with_no_file_there_is_unread_rather_than_not_evidence(tmp_path):
+    """The distinction the whole helper exists for: nothing was read, so
+    nothing can be said about whether it was evidence."""
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(str(tmp_path / "nope.json"))
+    assert "nope.json" in str(e.value)
+
+
+def test_a_file_that_is_not_json_is_unread_too(tmp_path):
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(_written(tmp_path, "{not json"))
+    assert "JSON" in str(e.value)
+
+
+def test_a_path_that_is_not_a_file_at_all_is_unread_too(tmp_path):
+    """A directory, or a file nothing may open. Neither is "not evidence", and
+    neither may arrive here as the IsADirectoryError no caller expected."""
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(str(tmp_path))
+    assert str(tmp_path) in str(e.value)
+
+
+def test_a_file_that_was_read_and_is_not_evidence_is_a_different_refusal(tmp_path):
+    """Pointing this at a facts file is the likely mistake. It parsed, so the
+    refusal names the document rather than the read -- and must not arrive as
+    the type that means the file could not be opened."""
+    path = _written(tmp_path, json.dumps({"harbor_id": "h1", "images": {}}))
+    doc = core.evidence_document(path)             # read, and read fine
+    with pytest.raises(core.BadRequest) as e:
+        core.preflight(LOC_FACTS, {"namespace": "blazemeter"}, doc)
+    assert "schema" in str(e.value)
+    assert not isinstance(e.value, core.EvidenceUnreadable)
+
+
+def test_the_two_evidence_refusals_are_not_each_other():
+    """Neither catches the other, so no `except` in any transport can collapse
+    "could not read it" into "read it and it was the wrong document"."""
+    assert not issubclass(core.EvidenceUnreadable, core.BadRequest)
+    assert not issubclass(core.BadRequest, core.EvidenceUnreadable)
+    assert issubclass(core.EvidenceUnreadable, core.CoreError)
+
+
+def test_a_wrong_typed_value_is_refused_as_a_type_not_as_a_path():
+    """A number or a list is neither a path nor a document, and saying "no file
+    there" about one would send the caller looking for a file they never named."""
+    for bad in ([1, 2, 3], 7, True):
+        with pytest.raises(core.BadRequest):
+            core.preflight(LOC_FACTS, {}, core.evidence_document(bad))
+
+
+def test_a_path_and_its_contents_preflight_identically(tmp_path):
+    """Nothing downstream may learn which way the evidence arrived -- the same
+    rule facts.manual() keeps on the account side."""
+    doc = _evidence()
+    path = _written(tmp_path, json.dumps(doc))
+    opts = {"namespace": "blazemeter"}
+    assert (core.preflight(LOC_FACTS, opts, core.evidence_document(path))
+            == core.preflight(LOC_FACTS, opts, doc))
+
+
 # -- the endpoint probe -------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["", "http://host/", "a host", "host/path",

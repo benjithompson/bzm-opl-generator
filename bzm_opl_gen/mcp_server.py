@@ -534,12 +534,16 @@ PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
 DESCRIPTIONS["opl_preflight"] = (
     "Will this land? Checks that run before anything is applied.\n"
     "  doctor    -- the cluster against this configuration {facts, "
-    "evidence, options?, namespace?}. `evidence` is the JSON file the "
-    "customer collects; this server never runs kubectl itself.\n"
+    "evidence, options?, namespace?}. This server never runs kubectl "
+    "itself.\n"
     "  suggest   -- what that same evidence implies the options should "
     "be {evidence, options?}\n"
     "  toolcheck -- this machine's own tools, for the live rig "
     "{cluster?, local_registry?, local_proxy?}\n"
+    "`evidence` is the JSON a customer collects: pass the PATH of the "
+    "file they sent, which is read here, or the object itself if you "
+    "already have it parsed -- do not read a file's contents through "
+    "yourself to turn one into the other.\n"
     "A denied read is a WARN, not a FAIL: a cluster that refused a "
     "probe is not a cluster that failed one, and `ok` already knows the "
     "difference.")
@@ -553,18 +557,31 @@ def _preflight(action, args):
             options["namespace"] = args["namespace"]
         evidence = args.get("evidence")
         if evidence is None:
+            # The collector is named from doctor's own constant rather than
+            # spelled out here. This message used to offer `doctor --collect`, a
+            # flag that existed in this string and nowhere else in the tool --
+            # and a session with no checkout has no way to find that out.
             raise core.BadRequest(
-                "doctor needs `evidence`: the JSON a customer collects with "
-                "`bzm-opl-gen doctor --collect` (see the preflight doc). This "
-                "server never runs kubectl, so without a file there is no "
-                "cluster to check against -- and a preflight of no cluster "
-                "would report nothing wrong with one you have not seen.")
-        report = core.preflight(facts, options, evidence)
+                f"doctor needs `evidence`: the JSON produced by "
+                f"{core.doctor.EVIDENCE_SCRIPT}, which someone with cluster "
+                f"access runs read-only and sends back "
+                f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
+                f"for). Pass the path of the file they sent, or the object "
+                f"itself. This server never runs kubectl, so without one there "
+                f"is no cluster to check against -- and a preflight of no "
+                f"cluster would report nothing wrong with one you have not "
+                f"seen.")
+        # A path is resolved here rather than inside core.preflight: this is the
+        # transport whose caller shares a filesystem with the server, so it is
+        # the one that may name a local file. See core.evidence_document.
+        report = core.preflight(facts, options,
+                                core.evidence_document(evidence))
         return dict(report, next=_after_doctor(report, options))
 
     if action == "suggest":
         evidence, = _need(args, "evidence")
-        found = core.suggestions_from_evidence(evidence, args.get("options"))
+        found = core.suggestions_from_evidence(
+            core.evidence_document(evidence), args.get("options"))
         return dict(found, next=[
             "apply the ones you agree with as opl_bundle generate options -- "
             "nothing here is applied for you",

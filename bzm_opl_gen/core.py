@@ -84,6 +84,22 @@ class NotConfigured(CoreError):
     status = 401
 
 
+class EvidenceUnreadable(CoreError):
+    """A cluster-evidence file the caller named and nothing could be read from.
+
+    Its own type, and deliberately neither a BadRequest nor a NotFound, because
+    "could not read it" and "read it and it is not evidence" are the pair this
+    package has collapsed four times over. They have opposite remedies -- fix
+    the path, or get the file sent at all, versus stop pointing this at a facts
+    file -- so a transport catching one type for both would answer with
+    whichever sentence it happened to be holding.
+
+    400 rather than 404: the file is often there and merely unparseable, and
+    what the caller has to change is the argument either way.
+    """
+    status = 400
+
+
 class UpstreamError(CoreError):
     """BlazeMeter answered, and what it said was an error. 502 because the
     caller's request was fine; something upstream of us was not."""
@@ -497,6 +513,43 @@ def bundle_images(facts, all_images=False):
 
 
 # -- preflight -----------------------------------------------------------------
+
+def evidence_document(evidence):
+    """The evidence document, from either a path to the collector's file or the
+    parsed contents of one.
+
+    A path is accepted for the same reason `api_key_file` is: what a customer
+    sends back is a *file*, and the caller most likely to be holding one is the
+    one furthest from a shell. Inlining it costs several KB of node lists and
+    permission maps travelling through a model to reach a check that only needed
+    somewhere to read them from (#77).
+
+    Whose call this is, is the transport's -- the MCP server passes what its
+    caller sent, because that caller shares this filesystem; the web UI does not
+    offer it, since a browser has already parsed the file it uploaded and a path
+    posted from one would be read on the machine serving the page. Same division
+    as api_key_file: the rule and the refusals live here, offering the argument
+    does not.
+
+    A string is always a path and never JSON text. Reading it as either would
+    make a mistyped path come back as a complaint about JSON syntax, and no
+    caller has the text without the object -- one that parsed it passes the
+    object.
+
+    Anything else travels on untouched, so a list, a number or a facts file's
+    contents is refused further down by the check that names what it found. Only
+    the read is decided here, which is why its failure has a type of its own.
+    """
+    if not isinstance(evidence, str):
+        return evidence
+    try:
+        return doctor.load_evidence(os.path.expanduser(evidence))
+    except ValueError as e:
+        # Both of load_evidence's sentences -- no file there, and not JSON --
+        # mean nothing was read, so nothing can yet be said about whether what
+        # was named is evidence. That is the distinction this type carries.
+        raise EvidenceUnreadable(str(e))
+
 
 def preflight(facts, options, evidence):
     """The verdicts `doctor --cluster-evidence` prints, for one configuration.

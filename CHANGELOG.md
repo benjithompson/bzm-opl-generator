@@ -33,7 +33,10 @@ anything that breaks.
   get the value, and it is a whole action so it cannot happen by accident.
   **A secret is never a tool argument** — passing `auth_token` in the options is
   refused rather than written; a path may be named, and the key itself comes
-  from the server's environment. **Nothing applies to a cluster** — `kubectl
+  from the server's environment. Files are named the same way: `opl_preflight`
+  takes `evidence` as the path of the cluster-evidence JSON the customer sent as
+  readily as the parsed object, so a session need not read several KB of node
+  lists aloud to preflight one. **Nothing applies to a cluster** — `kubectl
   apply` stays in your shell, where you can see what is being applied. The one
   exception is `opl_agent livetest`, which deploys because that is all it does,
   and which is off by default.
