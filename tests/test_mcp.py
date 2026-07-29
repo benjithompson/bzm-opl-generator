@@ -19,7 +19,7 @@ import mcp
 import pytest
 
 from bzm_opl_gen import core, mcp_server
-from test_core import FakeClient
+from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
 # What each tool promises a client about side effects. Asserted as a whole
@@ -216,6 +216,19 @@ def test_only_reveal_token_reveals_the_token(fake_account):
     assert body["auth_token"] == "SECRET-TOKEN-VALUE"
     # And says what it just did, because it rotated the previous one.
     assert "invalidated" in body["warning"]
+
+
+def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
+    """This is the caller the raw 403 stranded: a session with no checkout to
+    read, whose whole view of the failure is the text of the tool error. So the
+    refusal has to carry the alternative itself -- ask for the token, and pass
+    it as an option -- or the model has nowhere to go."""
+    monkeypatch.setattr(core, "client_from_env",
+                        lambda *a, **k: RefusingClient())
+    text = err("opl_location", "reveal_token",
+               {"harbor_id": "h1", "ship_id": "s1"})
+    assert "could not be issued" in text
+    assert "auth_token" in text and "BlazeMeter UI" in text
 
 
 def test_reading_the_secret_back_does_not_hand_over_the_token(fake_account,

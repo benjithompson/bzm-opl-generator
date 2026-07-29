@@ -160,7 +160,10 @@ OPTIONS = [
             "previous one** -- for an agent already running, either re-apply the "
             "whole bundle including the Secret, or pass the existing token. A crane "
             "left holding a stale one logs `404` on `/ships/<id>/status` and sits at "
-            "`0/1`, which reads like a deleted ship."),
+            "`0/1`, which reads like a deleted ship. Supplying it is also the way "
+            "past an account that refuses the fetch outright -- some allow the token "
+            "endpoint only from BlazeMeter's own gateway, and the agent's install "
+            "command in the BlazeMeter UI carries the same value."),
     Option(
         "use_secret", "boolean", "Credentials",
         summary="Put AUTH_TOKEN in a Secret; off puts it in the ConfigMap instead.",

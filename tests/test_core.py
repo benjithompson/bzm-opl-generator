@@ -18,7 +18,7 @@ import zipfile
 
 import pytest
 
-from bzm_opl_gen import core
+from bzm_opl_gen import api, core
 from test_generate import FACTS
 
 
@@ -182,6 +182,90 @@ def test_generate_needs_no_client_at_all():
 def test_generate_refuses_options_it_cannot_render():
     with pytest.raises(core.BadRequest):
         core.generate_bundle(FACTS, {"service_account_name": ""}, client=None)
+
+
+# -- a credential the account will not issue ----------------------------------
+
+# What a restricted account really answers, in the wording api.BzmClient hands
+# on: the token endpoint is allowed only from BlazeMeter's own gateway, so every
+# attempt fails and no argument to it would have helped.
+TOKEN_403 = ('POST /private-locations/aaa111/ships/bbb222/docker-command -> '
+             'HTTP 403: {"error": {"code": 403, "message": "Forbidden: Should '
+             'access from Private-Data gateway"}}')
+
+
+class RefusingClient(FakeClient):
+    """An account whose token endpoint is closed. Shared with tests/test_cli.py,
+    which drives the other surviving caller of the fetch."""
+
+    def auth_token(self, harbor_id, ship_id):
+        self.calls.append(("auth_token", harbor_id, ship_id))
+        raise api.BzmApiError(TOKEN_403)
+
+
+# Every path that still reaches the endpoint. Parametrised rather than tested
+# once through the fetch helper: the point of the refusal is that it arrives
+# whole at whoever asked, and a caller that unwrapped it on the way -- turning
+# it into a BadRequest, or letting the raw body past -- would pass a test that
+# only drove the helper.
+REFUSED_CALLS = {
+    "fetch_auth_token":
+        lambda c: core.fetch_auth_token(c, FACTS, {"namespace": "ns1"}),
+    "generate_bundle":
+        lambda c: core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c),
+    "reveal_token":
+        lambda c: core.reveal_token(c, "aaa111", "bbb222"),
+}
+
+
+def _refusal(name):
+    with pytest.raises(core.CoreError) as caught:
+        REFUSED_CALLS[name](RefusingClient())
+    return caught.value
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_names_the_ship_and_what_failed(name):
+    """The 403 body names no ship and does not say which of the two things went
+    wrong -- the credential, or the operation the caller asked for. On an
+    account that restricts the endpoint every attempt fails, so a message that
+    reads as "your request was wrong" sends the reader to look at their
+    arguments."""
+    msg = str(_refusal(name))
+    assert "bbb222" in msg              # the ship, which the body never names
+    assert "AUTH_TOKEN" in msg
+    assert "could not be issued" in msg
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_says_the_token_can_be_supplied_instead(name):
+    """A refusal with no way forward dead-ends the whole operation, and this one
+    has one: the token is on the agent in the BlazeMeter UI, and every generate
+    takes it as an option."""
+    msg = str(_refusal(name))
+    assert "auth_token" in msg and "--auth-token" in msg
+    assert "BlazeMeter UI" in msg
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_keeps_the_upstream_reason(name):
+    """Written over, not swallowed: "Should access from Private-Data gateway" is
+    the only clue that the account is configured this way deliberately, so it
+    stays both in the message and reachable on the error."""
+    e = _refusal(name)
+    assert e.upstream == TOKEN_403
+    assert TOKEN_403 in str(e)
+    assert str(e) != TOKEN_403          # ...but is no longer the whole message
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_is_not_a_malformed_request(name):
+    """An upstream refusal, so 502: nothing the caller sent was wrong, and a 400
+    would have the web UI and the MCP session both blame the person asking."""
+    e = _refusal(name)
+    assert isinstance(e, core.UpstreamError)
+    assert e.status == 502
+    assert not isinstance(e, core.BadRequest)
 
 
 # -- the zip ------------------------------------------------------------------

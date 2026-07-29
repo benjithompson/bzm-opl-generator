@@ -90,6 +90,21 @@ class UpstreamError(CoreError):
     status = 502
 
 
+class TokenRefused(UpstreamError):
+    """BlazeMeter would not issue an agent credential.
+
+    An UpstreamError because that is what it is -- nothing the caller sent was
+    wrong, and on an account that restricts the token endpoint no argument to it
+    would have worked -- but its own type so the message can be written here
+    instead of being the endpoint's body. `.upstream` keeps that body, because
+    the point is to say more than it does, not less: see fetch_ship_token.
+    """
+
+    def __init__(self, message, upstream):
+        super().__init__(message)
+        self.upstream = upstream
+
+
 def _upstream(fn, *args, **kw):
     try:
         return fn(*args, **kw)
@@ -284,6 +299,47 @@ def agent_status(client, harbor_id, ship_id):
     }
 
 
+# -- the agent credential ------------------------------------------------------
+
+# The way forward when the fetch cannot happen at all. Worth stating in the
+# refusal rather than left to the reader: BlazeMeter shows the token on the agent
+# itself, and a bundle built with one supplied fetches nothing (token_ship_id
+# returns None), so a closed endpoint stops nothing except the convenience.
+TOKEN_ELSEWHERE = (
+    "The AUTH_TOKEN can be supplied instead of fetched: read it from the "
+    "agent's install command in the BlazeMeter UI (Settings -> Private "
+    "Locations -> the location -> the agent) and pass it as the auth_token "
+    "option (--auth-token on the command line), which also stops it being "
+    "rotated. Nothing else about the deployment needs this endpoint.")
+
+
+def fetch_ship_token(client, harbor_id, ship_id):
+    """The ship's AUTH_TOKEN, or a refusal that says what to do without one.
+
+    The single place the token endpoint is called, because what is interesting
+    about it is the failure. Some accounts refuse /docker-command outright --
+    observed as `HTTP 403 {"message": "Forbidden: Should access from Private-Data
+    gateway"}` -- and through the generic upstream wrapper that body was the
+    whole message: it names no ship, does not distinguish the credential fetch
+    failing from the operation the caller asked for being wrong, and offers
+    nothing to do next, so an MCP session that hit it could not get past it.
+
+    The body still travels, in the message and on `.upstream`. It is the only
+    clue that the account is configured this way deliberately, and a refusal
+    that hid it would just be a differently-unhelpful message.
+    """
+    try:
+        return client.auth_token(harbor_id, ship_id)
+    except api.BzmApiError as e:
+        raise TokenRefused(
+            f"The AUTH_TOKEN for ship {ship_id} in location {harbor_id} could "
+            f"not be issued: BlazeMeter refused the credential fetch itself, "
+            f"not the operation you asked for. Some accounts allow this "
+            f"endpoint only from BlazeMeter's own gateway, in which case every "
+            f"attempt from here fails whatever it sends. {TOKEN_ELSEWHERE} "
+            f"BlazeMeter said: {e}", str(e))
+
+
 # -- generating a bundle -------------------------------------------------------
 
 def sole_ship_id(facts, explicit=None):
@@ -329,8 +385,8 @@ def fetch_auth_token(client, facts, options):
     """
     ship_id = token_ship_id(facts, options)
     if ship_id:
-        options["auth_token"] = _upstream(client.auth_token,
-                                          facts["harbor_id"], ship_id)
+        options["auth_token"] = fetch_ship_token(client, facts["harbor_id"],
+                                                 ship_id)
     return ship_id
 
 
@@ -603,7 +659,7 @@ def reveal_token(client, harbor_id, ship_id):
     its own named call and never something another action does on the way past.
     """
     return {"harbor_id": harbor_id, "ship_id": ship_id,
-            "auth_token": _upstream(client.auth_token, harbor_id, ship_id),
+            "auth_token": fetch_ship_token(client, harbor_id, ship_id),
             "warning": "this issued a NEW token and invalidated the previous "
                        "one. Any agent already running for this ship must be "
                        "re-applied with it, Secret included."}
