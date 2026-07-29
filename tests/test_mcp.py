@@ -178,14 +178,35 @@ def test_the_server_survives_a_missing_key():
     assert ok("opl_bundle", "options")["platform"]["default"] == "openshift"
 
 
-def test_no_tool_takes_a_secret_as_an_argument():
-    """A path may be named in an argument; the secret may not. Arguments travel
-    through everything between the caller and here, and get logged by things
-    nobody is thinking about at the time."""
-    for name, tool in listing()["tools"].items():
-        blob = json.dumps(tool.input_schema).lower()
-        for banned in ("secret", "password", "api_key_secret"):
-            assert banned not in blob, f"{name} schema mentions {banned}"
+def test_a_credential_passed_as_an_option_is_refused(fake_account, tmp_path):
+    """The rule, enforced rather than stated. `args` is an open object, so a
+    schema check could never fail -- and `auth_token` is a real generate option
+    the UI sets, so it is not an impossible argument, just one that must not
+    arrive this way."""
+    text = err("opl_bundle", "generate",
+               {"facts": FACTS, "out_dir": str(tmp_path),
+                "options": {"auth_token": "PASTED-BY-A-MODEL"}})
+    assert "credential" in text and "reveal_token" in text
+    assert not list(tmp_path.iterdir()), "it wrote the bundle anyway"
+
+
+def test_the_refused_set_is_the_generator_s_own():
+    """Not a list restated here: generate.SECRET_OPTIONS is what profile.json
+    omits, and the two must mean the same thing."""
+    from bzm_opl_gen import generate as gen_mod
+    assert gen_mod.SECRET_OPTIONS
+    for name in gen_mod.SECRET_OPTIONS:
+        with pytest.raises(core.BadRequest):
+            mcp_server._no_secrets({name: "x"})
+
+
+def test_only_a_path_may_name_a_key(fake_account, tmp_path):
+    """api_key_file names a file to read; it is not the credential itself."""
+    key = tmp_path / "k.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    # Accepted as an argument, and it is a path -- the fixture stands in for
+    # what client_from_env would build from it.
+    assert ok("opl_location", "whoami", {"api_key_file": str(key)})["email"]
 
 
 # -- the token, which is the one thing that must not leak ---------------------
@@ -212,13 +233,40 @@ def test_only_reveal_token_reveals_the_token(fake_account):
     assert "invalidated" in body["warning"]
 
 
-def test_reading_a_bundle_file_can_still_show_the_secret(fake_account, tmp_path):
-    """Not a leak -- an explicit read of a named file the caller just wrote.
-    The point of keeping it out of `generate` is that it is not incidental."""
+def test_reading_the_secret_back_does_not_hand_over_the_token(fake_account,
+                                                             tmp_path):
+    """`read bzm_secret.yaml` was a second, quieter way to get the credential:
+    it does not look like asking for one, which is exactly why reveal_token is
+    a whole action. The file is readable, the value is not."""
     ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
     body = ok("opl_bundle", "read",
               {"out_dir": str(tmp_path), "name": "bzm_secret.yaml"})
-    assert "SECRET-TOKEN-VALUE" in body["content"]
+    assert "SECRET-TOKEN-VALUE" not in body["content"]
+    assert "AUTH_TOKEN" in body["content"]        # the shape still reads
+    assert body["redacted_fields"] == 1
+    assert "reveal_token" in body["note"]
+    # ...and it is still whole on disk, which is what gets applied.
+    assert "SECRET-TOKEN-VALUE" in (tmp_path / "bzm_secret.yaml").read_text()
+
+
+def test_the_chart_overlay_hides_its_token_too(fake_account, tmp_path):
+    """The helm format carries the token in bzm-opl-values.yaml instead, under
+    a different key -- so redacting only the Secret would have missed it."""
+    ok("opl_bundle", "generate",
+       {"facts": FACTS, "out_dir": str(tmp_path),
+        "options": {"output_format": "helm"}})
+    body = ok("opl_bundle", "read",
+              {"out_dir": str(tmp_path), "name": "bzm-opl-values.yaml"})
+    assert "SECRET-TOKEN-VALUE" not in body["content"]
+    assert body["redacted_fields"] == 1
+
+
+def test_a_file_with_no_token_is_returned_untouched(fake_account, tmp_path):
+    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    body = ok("opl_bundle", "read",
+              {"out_dir": str(tmp_path), "name": "bzm_deployment.yaml"})
+    assert body["redacted_fields"] == 0 and "note" not in body
+    assert "kind: Deployment" in body["content"]
 
 
 # -- the bundle on disk -------------------------------------------------------
@@ -439,3 +487,73 @@ def test_only_the_gated_action_can_reach_a_cluster_write(monkeypatch):
     assert err("opl_agent", "livetest", {"manifests": "/tmp/x", "namespace": "n",
                                          "harbor_id": "h", "ship_id": "s"})
     assert called == [], "it deployed before being allowed to"
+
+
+# -- the JSON-RPC channel -----------------------------------------------------
+# On stdio, stdout *is* the protocol. A stray print desynchronises the session,
+# and to the client that does not look like a print -- it looks like the server
+# died. The layers underneath were written for a command line and print freely.
+
+def test_a_tool_call_writes_nothing_to_stdout(fake_account, tmp_path, capsys):
+    """toolcheck reaches workstation.run, which prints a seven-line report;
+    livetest.run narrates a whole deployment. Both would have corrupted the
+    channel. Guarded once in _answer rather than hunted down one call at a
+    time, so this covers whatever gets called next as well."""
+    ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
+    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    ok("opl_facts", "manual", {"harbor_id": "H1", "ship_id": "S1"})
+    captured = capsys.readouterr()
+    assert captured.out == "", f"tool calls wrote to stdout: {captured.out!r}"
+
+
+def test_what_the_underlying_layer_printed_is_kept_on_stderr(fake_account,
+                                                             capsys):
+    """Redirected, not swallowed: those lines are the only diagnostics some of
+    these paths produce, and a client shows stderr as the server's log."""
+    ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
+    assert capsys.readouterr().err.strip(), "the report went nowhere"
+
+
+def test_toolcheck_answers_rather_than_exiting(fake_account):
+    """The command exits non-zero on failures. A server has no exit code, and
+    SystemExit here would take the process down past any except Exception."""
+    body = ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
+    assert body["checks"] and isinstance(body["ok"], bool)
+
+
+def test_every_action_that_leads_somewhere_says_where(fake_account, tmp_path):
+    """A `next` on the ones a session moves on from. Not on `options` or
+    `images`, which are lookups -- a hint there is noise on a call whose whole
+    answer is the thing that was asked for."""
+    from test_cluster_evidence import _evidence
+    from test_doctor import FACTS as LOC_FACTS
+    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    cases = [
+        ("opl_location", "whoami", {}),
+        ("opl_location", "list", {}),
+        ("opl_facts", "manual", {"harbor_id": "H1", "ship_id": "S1"}),
+        ("opl_bundle", "read", {"out_dir": str(tmp_path),
+                                "name": "bzm_deployment.yaml"}),
+        ("opl_preflight", "doctor", {"facts": LOC_FACTS,
+                                     "options": {"namespace": "blazemeter"},
+                                     "evidence": _evidence()}),
+        ("opl_preflight", "suggest", {"evidence": _evidence()}),
+        ("opl_location", "reveal_token", {"harbor_id": "h1", "ship_id": "s1"}),
+    ]
+    for tool, action, args in cases:
+        assert ok(tool, action, args).get("next"), f"{tool} {action}"
+
+
+def test_a_failing_preflight_points_at_fixing_it_not_at_generating(fake_account):
+    """The moment a session is most likely to carry on regardless, so the
+    verdict carries the alternative rather than leaving it to be inferred."""
+    from test_cluster_evidence import DEGRADED
+    with open(DEGRADED) as fh:
+        degraded = json.load(fh)
+    from test_doctor import FACTS as LOC_FACTS
+    body = ok("opl_preflight", "doctor",
+              {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
+               "evidence": degraded})
+    hints = json.dumps(body["next"])
+    if not body["ok"]:
+        assert "suggest" in hints and "generate" not in hints

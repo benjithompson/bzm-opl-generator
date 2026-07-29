@@ -36,7 +36,7 @@ jobs:
 
       # Don't publish a wheel that fails its own tests.
       - name: optional test deps are actually importable
-        run: python -c "import fastapi, yaml, httpx"
+        run: python -c "import fastapi, yaml, httpx, mcp"
       - run: pytest tests -q
 
       - run: python -m build

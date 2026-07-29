@@ -51,7 +51,7 @@ def read_key_file(path):
     return d["id"], d["secret"]
 
 
-def _read_key_file(path):
+def read_key_file_or_exit(path):
     """read_key_file, as a command wants it: the same three messages, plus how
     to create the file, and exit rather than traceback."""
     try:
@@ -74,7 +74,7 @@ class BzmClient:
         report a bad credential reads the file itself and passes the pair.
         """
         if credentials is None:
-            credentials = _read_key_file(api_key_path)
+            credentials = read_key_file_or_exit(api_key_path)
         key_id, secret = credentials
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 

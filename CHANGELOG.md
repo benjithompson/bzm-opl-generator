@@ -26,17 +26,24 @@ anything that breaks.
   at an option name.
 
   Three things it will not do. **The AUTH_TOKEN never appears in a response** —
-  `generate` writes the Secret and answers with file names and byte counts,
+  `generate` writes the Secret and answers with file names and byte counts, and
+  reading a bundle file back redacts the token rather than handing it over,
   because a response is transcribed, summarised and quoted back, and this
-  credential rotates every time it is fetched. `reveal_token` is the one
-  exception and is a whole action so it cannot happen by accident. **A secret is
-  never a tool argument** — a path may be; the key comes from the server's
-  environment. **Nothing writes to a cluster** — `kubectl apply` stays in your
-  shell, where you can see what is being applied.
+  credential rotates every time it is fetched. `reveal_token` is the one way to
+  get the value, and it is a whole action so it cannot happen by accident.
+  **A secret is never a tool argument** — passing `auth_token` in the options is
+  refused rather than written; a path may be named, and the key itself comes
+  from the server's environment. **Nothing applies to a cluster** — `kubectl
+  apply` stays in your shell, where you can see what is being applied. The one
+  exception is `opl_agent livetest`, which deploys because that is all it does,
+  and which is off by default.
 
-  `opl_location delete` and image mirroring need `BZM_OPL_ALLOW_DESTRUCTIVE=1`;
-  `opl_agent livetest` needs `BZM_OPL_ENABLE_LIVETEST=1`. Both are read when the
-  action runs, so setting one does not mean restarting your client.
+  `opl_location delete` needs `BZM_OPL_ALLOW_DESTRUCTIVE=1` and `opl_agent
+  livetest` needs `BZM_OPL_ENABLE_LIVETEST=1` — separate variables, because
+  enabling one should not quietly enable the other. Both are read when the
+  action runs, so setting one does not mean restarting your client. Image
+  mirroring is annotated destructive but not gated: it adds images to a
+  registry you named, where the worst case is repositories nobody wanted.
 
 ### Changed
 

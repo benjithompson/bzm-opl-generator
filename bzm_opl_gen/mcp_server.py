@@ -33,9 +33,13 @@ Three rules this layer keeps that core does not:
   destructive one.
 """
 
+import contextlib
 import json
 import os
+import sys
 from typing import Any, Literal
+
+from mcp.types import ToolAnnotations
 
 from . import core, generate as gen_mod, facts as facts_mod, livetest
 
@@ -110,6 +114,27 @@ it: the previous token stops working, and an agent already running on it sits at
 why the token is written into the bundle and never returned to you.
 """
 
+
+# Filled in beside each tool's actions and dispatch function, below --
+# the description, the action list and the code that reads them are three
+# statements of the same thing, and they go stale as a set.
+DESCRIPTIONS = {}
+
+# Kept together, unlike the descriptions: what a client is told about
+# side effects is a property of the whole surface, and the five want
+# reading against each other rather than one at a time.
+_ANNOTATIONS = {
+    "opl_location": ToolAnnotations(read_only_hint=False, destructive_hint=True,
+                                    idempotent_hint=False, open_world_hint=True),
+    "opl_facts": ToolAnnotations(read_only_hint=True, destructive_hint=False,
+                                    idempotent_hint=True, open_world_hint=True),
+    "opl_bundle": ToolAnnotations(read_only_hint=False, destructive_hint=True,
+                                    idempotent_hint=False, open_world_hint=False),
+    "opl_preflight": ToolAnnotations(read_only_hint=True, destructive_hint=False,
+                                    idempotent_hint=True, open_world_hint=False),
+    "opl_agent": ToolAnnotations(read_only_hint=False, destructive_hint=False,
+                                    idempotent_hint=False, open_world_hint=True),
+}
 
 # -- the docs this server serves ----------------------------------------------
 
@@ -187,6 +212,30 @@ def _need(args, *names):
     return [args[n] for n in names]
 
 
+def _no_secrets(options):
+    """Refuse a credential passed as an option, rather than writing it.
+
+    `auth_token` is a real generate option and the UI sets it, so this is not
+    an impossible argument -- it is one that must not arrive *this* way. A
+    secret in a tool call has already travelled through the model, the
+    transcript and whatever logs either of those keeps; by the time it reaches
+    here the damage is upstream, and the only thing left worth doing is to
+    refuse loudly enough that nobody sends the next one.
+
+    The token this generator wants is fetched from the account, which is the
+    path that does not involve anybody typing one.
+    """
+    sent = sorted(set(options) & set(gen_mod.SECRET_OPTIONS))
+    if sent:
+        raise core.BadRequest(
+            f"{', '.join(sent)} is a credential and must not be passed as a "
+            f"tool argument -- it goes through the model and into the "
+            f"transcript on the way here. Leave it out and it is fetched from "
+            f"the account, or set it in the bundle yourself afterwards; "
+            f"opl_location reveal_token is how you read the current value.")
+    return options
+
+
 def _gate(env, what):
     if os.environ.get(env) not in ("1", "true", "yes"):
         raise core.BadRequest(
@@ -203,6 +252,22 @@ def _client(args):
 
 LOCATION_ACTIONS = ("list", "whoami", "create", "create_ship", "reveal_token",
                     "delete")
+
+DESCRIPTIONS["opl_location"] = (
+    "BlazeMeter private locations (harbors) and their agents (ships).\n"
+    "  list         -- locations in an account or workspace, with their "
+    "ships. Defaults to this key's own account.\n"
+    "  whoami       -- who this API key is, and its default account\n"
+    "  create       -- a new private location {name, account_id, "
+    "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
+    "  create_ship  -- a new agent in a location {harbor_id, name}\n"
+    "  reveal_token -- the ship's AUTH_TOKEN {harbor_id, ship_id}. "
+    "ROTATES it: the previous token stops working and any agent "
+    "running on it goes to 0/1. Use only when re-applying that agent.\n"
+    "  delete       -- delete a location and every ship in it "
+    "{harbor_id}. Off unless " + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
+    "create/create_ship/delete change a real customer account -- "
+    "confirm with the person before calling them.")
 
 
 def _location(action, args):
@@ -253,13 +318,18 @@ def _location(action, args):
 
     if action == "reveal_token":
         harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
-        return core.reveal_token(_client(args), harbor_id, ship_id)
+        return dict(core.reveal_token(_client(args), harbor_id, ship_id),
+                    next=["re-apply the whole bundle, Secret included -- the "
+                          "agent is now holding a token the API has stopped "
+                          "accepting"])
 
     if action == "delete":
         harbor_id, = _need(args, "harbor_id")
         _gate(ALLOW_DESTRUCTIVE_ENV,
               "deleting a private location (and every ship in it)")
-        return core.delete_location(_client(args), harbor_id)
+        return dict(core.delete_location(_client(args), harbor_id),
+                    next=["any agent still deployed for it is now orphaned: "
+                          "kubectl delete -f <its bundle>"])
 
     raise _unknown(action, LOCATION_ACTIONS)
 
@@ -277,6 +347,15 @@ def _location_summary(loc):
 # -- opl_facts -----------------------------------------------------------------
 
 FACTS_ACTIONS = ("gather", "manual")
+
+DESCRIPTIONS["opl_facts"] = (
+    "The account facts a bundle is generated from: image references, "
+    "ids, and what the location is enabled for.\n"
+    "  gather -- read them from the account {harbor_id}\n"
+    "  manual -- build the same structure from ids read off the "
+    "BlazeMeter UI {harbor_id, ship_id, func_ids?}, for a customer "
+    "whose account you cannot reach\n"
+    "Pass the `facts` object straight to opl_bundle and opl_preflight.")
 
 
 def _facts(action, args):
@@ -326,6 +405,20 @@ def _facts_warnings(facts):
 
 BUNDLE_ACTIONS = ("generate", "read", "options", "images")
 
+DESCRIPTIONS["opl_bundle"] = (
+    "The manifests, written to a directory you name.\n"
+    "  generate -- {facts, out_dir (ABSOLUTE), options?, fetch_token?}. "
+    "Writes the bundle and answers with file names and sizes, never the "
+    "YAML and never the AUTH_TOKEN. Read a file back with `read`.\n"
+    "  read     -- one file out of a written bundle {out_dir, name}\n"
+    "  options  -- every generate option, its default and what it does\n"
+    "  images   -- the image references this bundle pulls {facts, "
+    "all?}. With mirror=<prefix> it also pulls them and pushes them "
+    "into that registry, which writes to it -- confirm before "
+    "calling it that way.\n"
+    "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
+    "action on this tool touches a cluster at all.")
+
 
 def _bundle(action, args):
     if action == "options":
@@ -337,7 +430,7 @@ def _bundle(action, args):
 
     if action == "generate":
         facts, out_dir = _need(args, "facts", "out_dir")
-        options = args.get("options") or {}
+        options = _no_secrets(args.get("options") or {})
         files = core.generate_bundle(
             facts, options,
             # A client only when a token is actually wanted: with fetch_token
@@ -355,8 +448,18 @@ def _bundle(action, args):
 
     if action == "read":
         out_dir, name = _need(args, "out_dir", "name")
-        return {"out_dir": out_dir, "name": name,
-                "content": core.read_bundle_file(out_dir, name)}
+        content, redacted = core.redact_tokens(
+            core.read_bundle_file(out_dir, name))
+        # Otherwise this is a second way to get the token, and a quiet one:
+        # `read bzm_secret.yaml` does not look like asking for a credential the
+        # way `reveal_token` does, which is the whole reason that action exists.
+        return {"out_dir": out_dir, "name": name, "content": content,
+                "redacted_fields": redacted,
+                "next": [f"kubectl apply -f {out_dir}/ -n <namespace>, when "
+                         f"the bundle reads right"],
+                **({"note": "the AUTH_TOKEN in this file is redacted here and "
+                            "intact on disk. opl_location reveal_token returns "
+                            "the value -- and rotates it."} if redacted else {})}
 
     if action == "images":
         facts, = _need(args, "facts")
@@ -387,9 +490,25 @@ def _after_generate(out_dir, options):
                 "opl_agent status, once the release is up"]
     ns = options.get("namespace", "blazemeter")
     return [f"kubectl create namespace {ns}",
-            f"kubectl apply -f {out_dir}/ -n {ns}   (YOU run this -- this "
-            f"server never writes to a cluster)",
+            f"kubectl apply -f {out_dir}/ -n {ns}   (YOU run this -- no "
+            f"tool here applies anything)",
             "opl_agent status, to see whether the agent reported in"]
+
+
+def _after_doctor(report, options):
+    """Where a preflight leads, which depends on what it found.
+
+    A clean report and a failing one want opposite next moves, and the failing
+    one is where a session is most likely to carry on regardless -- so the
+    suggestion to go and change something is attached to the verdict itself.
+    """
+    if not report.get("ok"):
+        return ["opl_preflight suggest with the same evidence -- it says which "
+                "options this cluster settles and which it only narrows",
+                "fix what FAILed, then run this again. A WARN is a read the "
+                "cluster refused, not a check that failed."]
+    return [f"opl_bundle generate with these options and an absolute out_dir "
+            f"(namespace {options.get('namespace', 'blazemeter')!r})"]
 
 
 def _bundle_warnings(options):
@@ -412,6 +531,19 @@ def _bundle_warnings(options):
 
 PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
 
+DESCRIPTIONS["opl_preflight"] = (
+    "Will this land? Checks that run before anything is applied.\n"
+    "  doctor    -- the cluster against this configuration {facts, "
+    "evidence, options?, namespace?}. `evidence` is the JSON file the "
+    "customer collects; this server never runs kubectl itself.\n"
+    "  suggest   -- what that same evidence implies the options should "
+    "be {evidence, options?}\n"
+    "  toolcheck -- this machine's own tools, for the live rig "
+    "{cluster?, local_registry?, local_proxy?}\n"
+    "A denied read is a WARN, not a FAIL: a cluster that refused a "
+    "probe is not a cluster that failed one, and `ok` already knows the "
+    "difference.")
+
 
 def _preflight(action, args):
     if action == "doctor":
@@ -427,11 +559,16 @@ def _preflight(action, args):
                 "server never runs kubectl, so without a file there is no "
                 "cluster to check against -- and a preflight of no cluster "
                 "would report nothing wrong with one you have not seen.")
-        return core.preflight(facts, options, evidence)
+        report = core.preflight(facts, options, evidence)
+        return dict(report, next=_after_doctor(report, options))
 
     if action == "suggest":
         evidence, = _need(args, "evidence")
-        return core.suggestions_from_evidence(evidence, args.get("options"))
+        found = core.suggestions_from_evidence(evidence, args.get("options"))
+        return dict(found, next=[
+            "apply the ones you agree with as opl_bundle generate options -- "
+            "nothing here is applied for you",
+            "opl_preflight doctor with the same evidence, to check the result"])
 
     if action == "toolcheck":
         return core.toolcheck(cluster=args.get("cluster"),
@@ -444,6 +581,18 @@ def _preflight(action, args):
 # -- opl_agent -----------------------------------------------------------------
 
 AGENT_ACTIONS = ("status", "livetest")
+
+DESCRIPTIONS["opl_agent"] = (
+    "The deployed agent.\n"
+    "  status   -- is it reporting? {harbor_id, ship_id}. State alone "
+    "reads as healthy forever, so this is really about the heartbeat.\n"
+    "  livetest -- deploy a bundle to a cluster and wait for the agent "
+    "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
+    "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
+    "the full rig is the `bzm-opl-gen livetest` command.\n"
+    "An online agent is not proof a test runs: for that, run one "
+    "through the blazemeter_execution MCP server if this session has "
+    "it.")
 
 
 def _agent(action, args):
@@ -462,6 +611,11 @@ def _agent(action, args):
                           timeout=args.get("timeout", 600),
                           keep=bool(args.get("keep")))
         return {"ok": bool(ok),
+                "next": (["opl_agent status, and then a real test through the "
+                          "blazemeter_execution server if this session has it"]
+                         if ok else
+                         ["kubectl -n " + namespace + " logs -l "
+                          "role=role-crane --tail=50"]),
                 "note": "this is the plain deploy-and-wait. The local "
                         "registry, proxy, negative control and engine run are "
                         "`bzm-opl-gen livetest` flags -- they need a shell and "
@@ -502,11 +656,22 @@ def _answer(fn, action, args):
     CoreError becomes a plain exception so the SDK reports it as a tool error
     with the message intact -- every one of them is a sentence written for
     whoever has to fix it.
+
+    **stdout is redirected to stderr for the duration.** On stdio transport
+    stdout *is* the JSON-RPC channel, and one stray line desynchronises the
+    session -- the client stops being able to parse anything, which does not
+    look like a print, it looks like the server died. The layers underneath
+    were written for a command line and print freely: `workstation.run` writes
+    a seven-line report, `livetest.run` narrates a whole deployment. Rather
+    than hunting those down one at a time and re-hunting them whenever
+    something new is called, the channel is protected here, once, for
+    everything. stderr is where a client shows server logs anyway.
     """
-    try:
-        return json.dumps(fn(action, _args(args)), indent=2, default=str)
-    except core.CoreError as e:
-        raise ValueError(str(e)) from None
+    with contextlib.redirect_stdout(sys.stderr):
+        try:
+            return json.dumps(fn(action, _args(args)), indent=2, default=str)
+        except core.CoreError as e:
+            raise ValueError(str(e)) from None
 
 
 def build():
@@ -519,103 +684,39 @@ def build():
     srv = MCPServer(name=SERVER_NAME, version=_version(),
                     instructions=INSTRUCTIONS)
 
-    @srv.tool(
-        name="opl_location",
-        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True,
-                                    idempotent_hint=False, open_world_hint=True),
-        description=(
-            "BlazeMeter private locations (harbors) and their agents (ships).\n"
-            "  list         -- locations in an account or workspace, with their "
-            "ships. Defaults to this key's own account.\n"
-            "  whoami       -- who this API key is, and its default account\n"
-            "  create       -- a new private location {name, account_id, "
-            "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
-            "  create_ship  -- a new agent in a location {harbor_id, name}\n"
-            "  reveal_token -- the ship's AUTH_TOKEN {harbor_id, ship_id}. "
-            "ROTATES it: the previous token stops working and any agent "
-            "running on it goes to 0/1. Use only when re-applying that agent.\n"
-            "  delete       -- delete a location and every ship in it "
-            "{harbor_id}. Off unless " + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
-            "create/create_ship/delete change a real customer account -- "
-            "confirm with the person before calling them."))
+    @srv.tool(name="opl_location",
+              annotations=_ANNOTATIONS["opl_location"],
+              description=DESCRIPTIONS["opl_location"])
     def opl_location(action: Literal[LOCATION_ACTIONS],  # type: ignore[valid-type]
                      args: dict[str, Any] | None = None) -> str:
         return _answer(_location, action, args)
 
-    @srv.tool(
-        name="opl_facts",
-        annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False,
-                                    idempotent_hint=True, open_world_hint=True),
-        description=(
-            "The account facts a bundle is generated from: image references, "
-            "ids, and what the location is enabled for.\n"
-            "  gather -- read them from the account {harbor_id}\n"
-            "  manual -- build the same structure from ids read off the "
-            "BlazeMeter UI {harbor_id, ship_id, func_ids?}, for a customer "
-            "whose account you cannot reach\n"
-            "Pass the `facts` object straight to opl_bundle and opl_preflight."))
+    @srv.tool(name="opl_facts",
+              annotations=_ANNOTATIONS["opl_facts"],
+              description=DESCRIPTIONS["opl_facts"])
     def opl_facts(action: Literal[FACTS_ACTIONS],  # type: ignore[valid-type]
-                  args: dict[str, Any] | None = None) -> str:
+                     args: dict[str, Any] | None = None) -> str:
         return _answer(_facts, action, args)
 
-    @srv.tool(
-        name="opl_bundle",
-        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=True,
-                                    idempotent_hint=False, open_world_hint=False),
-        description=(
-            "The manifests, written to a directory you name.\n"
-            "  generate -- {facts, out_dir (ABSOLUTE), options?, fetch_token?}. "
-            "Writes the bundle and answers with file names and sizes, never the "
-            "YAML and never the AUTH_TOKEN. Read a file back with `read`.\n"
-            "  read     -- one file out of a written bundle {out_dir, name}\n"
-            "  options  -- every generate option, its default and what it does\n"
-            "  images   -- the image references this bundle pulls {facts, "
-            "all?}. With mirror=<prefix> it also pulls them and pushes them "
-            "into that registry, which writes to it -- confirm before "
-            "calling it that way.\n"
-            "Applying the bundle is yours: `kubectl apply -f <out_dir>`. This "
-            "server never writes to a cluster."))
+    @srv.tool(name="opl_bundle",
+              annotations=_ANNOTATIONS["opl_bundle"],
+              description=DESCRIPTIONS["opl_bundle"])
     def opl_bundle(action: Literal[BUNDLE_ACTIONS],  # type: ignore[valid-type]
-                   args: dict[str, Any] | None = None) -> str:
+                     args: dict[str, Any] | None = None) -> str:
         return _answer(_bundle, action, args)
 
-    @srv.tool(
-        name="opl_preflight",
-        annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False,
-                                    idempotent_hint=True, open_world_hint=False),
-        description=(
-            "Will this land? Checks that run before anything is applied.\n"
-            "  doctor    -- the cluster against this configuration {facts, "
-            "evidence, options?, namespace?}. `evidence` is the JSON file the "
-            "customer collects; this server never runs kubectl itself.\n"
-            "  suggest   -- what that same evidence implies the options should "
-            "be {evidence, options?}\n"
-            "  toolcheck -- this machine's own tools, for the live rig "
-            "{cluster?, local_registry?, local_proxy?}\n"
-            "A denied read is a WARN, not a FAIL: a cluster that refused a "
-            "probe is not a cluster that failed one, and `ok` already knows the "
-            "difference."))
+    @srv.tool(name="opl_preflight",
+              annotations=_ANNOTATIONS["opl_preflight"],
+              description=DESCRIPTIONS["opl_preflight"])
     def opl_preflight(action: Literal[PREFLIGHT_ACTIONS],  # type: ignore[valid-type]
-                      args: dict[str, Any] | None = None) -> str:
+                     args: dict[str, Any] | None = None) -> str:
         return _answer(_preflight, action, args)
 
-    @srv.tool(
-        name="opl_agent",
-        annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False,
-                                    idempotent_hint=False, open_world_hint=True),
-        description=(
-            "The deployed agent.\n"
-            "  status   -- is it reporting? {harbor_id, ship_id}. State alone "
-            "reads as healthy forever, so this is really about the heartbeat.\n"
-            "  livetest -- deploy a bundle to a cluster and wait for the agent "
-            "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
-            "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
-            "the full rig is the `bzm-opl-gen livetest` command.\n"
-            "An online agent is not proof a test runs: for that, run one "
-            "through the blazemeter_execution MCP server if this session has "
-            "it."))
+    @srv.tool(name="opl_agent",
+              annotations=_ANNOTATIONS["opl_agent"],
+              description=DESCRIPTIONS["opl_agent"])
     def opl_agent(action: Literal[AGENT_ACTIONS],  # type: ignore[valid-type]
-                  args: dict[str, Any] | None = None) -> str:
+                     args: dict[str, Any] | None = None) -> str:
         return _answer(_agent, action, args)
 
     for name in doc_files():

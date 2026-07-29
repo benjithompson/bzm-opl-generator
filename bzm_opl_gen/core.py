@@ -66,9 +66,14 @@ class NotFound(CoreError):
 
 
 class NotConfigured(CoreError):
-    """No usable credential. 401 because it is the caller's to fix, but it is
-    its own type because *how* to fix it differs by caller -- a browser posts
-    to /api/key, a stdio server is restarted with a different env."""
+    """No usable credential, and the message says how to supply one.
+
+    Its own type rather than a BadRequest because what to do about it is not
+    "you sent the wrong thing" -- nothing about the call was wrong. 401 is what
+    a web layer would answer, though only the MCP server raises it today: the
+    UI holds its client in session state and decides this for itself, since the
+    remedy there is a form rather than an environment.
+    """
     status = 401
 
 
@@ -113,8 +118,10 @@ KEY_FILE_ENV = "BZM_API_KEY_FILE"
 def client_from_env(api_key_file=None):
     """A BzmClient from the environment, or NotConfigured saying how to give one.
 
-    Three sources, in precedence order: a path the caller named, the id/secret
-    pair in the environment, then the first api-key.json that detection finds.
+    Two sources, in precedence order: a path the caller named, then the
+    id/secret pair in the environment. Nothing is discovered from the working
+    directory -- see the comment below for why that matters here and not for a
+    command.
 
     A *path* is something a caller may pass in an argument; the secret itself is
     not, and there is deliberately no way to send one -- an argument travels
@@ -136,9 +143,12 @@ def client_from_env(api_key_file=None):
     secret = os.environ.get(KEY_SECRET_ENV)
     if key_id and secret:
         return api.BzmClient(credentials=(key_id, secret))
-    found = detect_keys()
-    if found:
-        return api.BzmClient(credentials=api.read_key_file(found[0]["path"]))
+    # Deliberately no fall back to detect_keys(): its first candidate is
+    # `./api-key.json`, which is fine for a command someone ran in their own
+    # checkout and wrong for a server whose working directory is wherever a
+    # client launched it -- a customer's project, quite possibly holding an
+    # api-key.json that is theirs. Asking is cheap; using the wrong account is
+    # not. The UI does its own detection, where the person can see the path.
     raise NotConfigured(
         f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of an "
         f"api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} and "
@@ -397,6 +407,32 @@ def write_bundle(files, out_dir):
     return [{"name": n, "bytes": len(files[n].encode())} for n in preview_order(files)]
 
 
+# The two field names a generated bundle ever carries a token under: the
+# Secret's stringData (plain text -- Kubernetes encodes it on apply), the
+# ConfigMap's when use_secret is off, and the chart's values overlay. Matched by
+# key rather than by value because a reader has no idea what the value is.
+_TOKEN_FIELDS = re.compile(
+    r'^(?P<lead>\s*(?:AUTH_TOKEN|authToken)\s*:\s*)(?P<quote>["\']?)(?P<value>.+?)(?P=quote)\s*$',
+    re.M)
+REDACTED = "<redacted -- opl_location reveal_token>"
+
+
+def redact_tokens(text):
+    """Blank out any AUTH_TOKEN a bundle file carries, and say how many.
+
+    For readers that hand a whole file to somebody: the point of keeping the
+    token out of responses is that responses are transcribed and quoted back,
+    and that is no less true of one fetched by name. What a reader actually
+    wants from the Secret is that it is there and shaped right, which survives
+    redaction; the value itself has a call of its own that says out loud that
+    asking for it rotates it.
+    """
+    count = len(_TOKEN_FIELDS.findall(text))
+    if not count:
+        return text, 0
+    return _TOKEN_FIELDS.sub(lambda m: f"{m.group('lead')}\"{REDACTED}\"", text), count
+
+
 def read_bundle_file(out_dir, name):
     """One file out of a written bundle, by the name write_bundle reported.
 
@@ -512,18 +548,13 @@ def preflight(facts, options, evidence):
     # -- `state` says what applying would mean, and the choice is the caller's.
     suggestions = suggest_mod.from_evidence(evidence)
     return {"namespace": namespace,
-            # `ok` alongside the checks because every caller needs it and the
-            # rule is not "no FAILs" spelled out: a denied read is a WARN, and
-            # a caller that read WARN as failure would report a locked-down
-            # cluster as a broken one. doctor.has_failures is that rule.
-            "ok": not doctor.has_failures(checks),
+            **_verdicts(checks),
             # The same three facts the leading check states in prose, apart
             # from it: a caller can put them in a header, where they cannot be
             # read past. Which namespace the *file* describes is not
             # `namespace` above -- that is the one being preflighted, and the
             # difference is the point.
             "evidence": doctor.evidence_summary(evidence),
-            "checks": [c._asdict() for c in checks],
             "suggestions": [suggest_mod.merged_as_dict(s, options)
                             for s in suggestions],
             # An empty list from a file that never reached a cluster reads like
@@ -576,10 +607,6 @@ def _verdicts(checks):
 
 
 # -- the location, as something that gets changed -----------------------------
-
-def location(client, harbor_id):
-    return _upstream(client.private_location, harbor_id)
-
 
 def reveal_token(client, harbor_id, ship_id):
     """The ship's AUTH_TOKEN, as the answer rather than as a side effect.

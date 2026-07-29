@@ -394,9 +394,8 @@ def cmd_livetest(a):
 def cmd_mcp(a):
     """Serve the MCP tools on stdio.
 
-    Nothing may print to stdout from here on -- it is the JSON-RPC channel, and
-    one stray line makes the session unparseable to the client. That includes
-    the friendly "starting..." this would otherwise have.
+    No "starting..." line, and nothing else on stdout either -- see
+    mcp_server._answer for what stdout is once this is running.
     """
     try:
         from . import mcp_server
