@@ -166,6 +166,19 @@ the classes of problem it can't fix for you.
 
 ## Generator details that bite
 
+- **Orchestration goes in `core.py`, transport in `server.py`.** `core` imports
+  no fastapi, no pydantic, nothing about requests — `tests/test_core.py` asserts
+  that by parsing its imports, because a web framework reachable from there puts
+  the whole HTTP stack behind every other caller *and* behind that suite, which
+  then skips (the fastapi problem again). Failures are `core.CoreError`
+  subclasses carrying `.status`; `server._answer` is the only thing that turns
+  one into an `HTTPException`, so no route re-decides what a refusal means. The
+  UI keeps what is genuinely its own: routes, request models, the zip's headers,
+  where a pasted key lives for a browser session, and how the process is bound.
+  **Do not re-export core's vocabulary from `server`** — `FEATURES` and friends
+  were aliased there and an alias does not follow a monkeypatch, so a test
+  patched one list and asserted against the other.
+
 - **A new option needs a row in `bzm_opl_gen/options.py`, and the doc table is
   generated from it.** `DEFAULT_OPTIONS` is still the only source of the default
   *value*; the registry carries what the option is *for*, in two lengths —

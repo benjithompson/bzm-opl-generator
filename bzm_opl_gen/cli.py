@@ -18,8 +18,8 @@ import json
 import subprocess
 import sys
 
-from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               suggest as suggest_mod, workstation)
+from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
+               livetest, suggest as suggest_mod, workstation)
 
 
 def _resolve_account(client, a):
@@ -175,12 +175,15 @@ def cmd_generate(a):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
-    if a.api_key and not opts.get("auth_token"):
-        ship_id = opts.get("ship_id") or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
-        if ship_id:
-            client = api.BzmClient(a.api_key)
-            opts["auth_token"] = client.auth_token(f["harbor_id"], ship_id)
-            print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
+    # Which ship, if any, is core's rule rather than one restated here -- see
+    # core.token_ship_id for what each clause is protecting. The client is
+    # built only once there is something to ask it, so a bad key file is not
+    # read on a run that was never going to fetch.
+    ship_id = core.token_ship_id(f, opts) if a.api_key else None
+    if ship_id:
+        client = api.BzmClient(a.api_key)
+        opts["auth_token"] = client.auth_token(f["harbor_id"], ship_id)
+        print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
@@ -329,7 +332,7 @@ def _regenerator(client, facts, a, ship_id):
 def cmd_livetest(a):
     f = facts_mod.load(a.facts)
     client = api.BzmClient(a.api_key)
-    ship_id = a.ship_id or (f["ships"][0]["id"] if len(f["ships"]) == 1 else None)
+    ship_id = core.sole_ship_id(f, a.ship_id)
     if not ship_id:
         sys.exit(f"--ship-id required (location has {len(f['ships'])} ships)")
     # The options the manifests were rendered from -- lets livetest check the

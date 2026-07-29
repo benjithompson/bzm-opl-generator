@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from bzm_opl_gen import server  # noqa: E402
+from bzm_opl_gen import core, server  # noqa: E402
 from test_generate import FACTS  # noqa: E402
 
 client = TestClient(server.app)
@@ -231,7 +231,7 @@ def test_features_are_served_with_a_label_and_a_suggested_namespace():
     to follow, and a feature has to become selectable by being added here."""
     from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/features").json()
-    assert [f["id"] for f in body] == [f["id"] for f in server.FEATURES]
+    assert [f["id"] for f in body] == [f["id"] for f in core.FEATURES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
         assert f["label"] and f["namespace"] and f["func_ids"]
@@ -248,7 +248,7 @@ def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
     """The end-to-end shape of adding a feature: one entry here, plus a tag on
     whichever option groups it owns. Nothing in the frontend enumerates
     features, so this is the whole of the backend half."""
-    monkeypatch.setattr(server, "FEATURES", server.FEATURES + [
+    monkeypatch.setattr(core, "FEATURES", core.FEATURES + [
         {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
          "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
     body = client.get("/api/features").json()
@@ -256,19 +256,6 @@ def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
                         "hint": "secrets from a vault",
                         "namespace": "blazemeter-vault",
                         "func_ids": ["secretsPrivateVault"]}
-
-
-def test_every_modelled_func_id_belongs_to_a_feature():
-    """A funcId the facts layer models but no feature claims would leave a
-    location carrying only that one with no feature to start on. The reverse is
-    deliberately allowed: a feature may claim a funcId that needs no images of
-    its own (tdm and delphix are already in that position), and the funcIds the
-    tool does not model at all stay unclaimed -- the selector reads those as no
-    signal rather than as an error."""
-    from bzm_opl_gen import facts as facts_mod
-    claimed = {f for feat in server.FEATURES for f in feat["func_ids"]}
-    assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
-    assert "tdm" not in claimed
 
 
 def test_create_location_forwards_every_selected_func_id(monkeypatch):
@@ -565,8 +552,8 @@ def test_sv_check_waits_no_longer_than_a_poll_interval(fake_endpoint):
     install, calls = fake_endpoint
     install(200)
     client.get("/api/sv-check", params={"host": "h.example.com"})
-    assert calls[0]["timeout"] == server.SV_CHECK_TIMEOUT_S
-    assert 0 < server.SV_CHECK_TIMEOUT_S < 10
+    assert calls[0]["timeout"] == core.SV_CHECK_TIMEOUT_S
+    assert 0 < core.SV_CHECK_TIMEOUT_S < 10
 
 
 def test_sv_check_can_be_asked_for_https(fake_endpoint):
