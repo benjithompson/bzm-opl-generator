@@ -212,6 +212,30 @@ def generate_zip(g: GenerateIn):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+class SaveIn(GenerateIn):
+    out_dir: str
+
+
+@app.post("/api/generate/save")
+def generate_save(g: SaveIn):
+    """Write the bundle to a directory on this machine, not down to the browser.
+
+    The zip is for handing a bundle to somebody; this is for continuing with it
+    here -- the directory it writes (profile.json included) is the same shape
+    `opl_bundle generate` produces and `livetest` consumes, so an MCP session
+    or a shell picks up exactly where the UI left off, with the filesystem as
+    the shared state.
+
+    `~` is expanded here rather than in core: this path was typed by a person
+    into a browser, and `~` is how people name their home directory. Core's
+    callers pass paths a program chose, and core still refuses a relative one.
+    """
+    out_dir = os.path.expanduser(g.out_dir)
+    files = _generate(g)
+    written = _answer(core.write_bundle, files, out_dir)
+    return {"out_dir": out_dir, "files": written}
+
+
 # -- preflight ----------------------------------------------------------------
 
 class PreflightIn(BaseModel):

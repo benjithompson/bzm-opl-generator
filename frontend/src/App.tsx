@@ -1,7 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, Account, AgentStatus, Facts, Feature, GeneratedFile,
-  ManualFactsOut,
+  api, downloadZip, saveBundle, Account, AgentStatus, Facts, Feature,
+  GeneratedFile, ManualFactsOut, SavedBundle,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
@@ -153,6 +153,12 @@ export default function App() {
     useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
+  // Saving to a folder, beside downloading: the typed directory, and where the
+  // last save actually landed (the server echoes the expanded path, which is
+  // what a kubectl command can be copied against -- `~` is not).
+  const [saveDir, setSaveDir] = useState("");
+  const [saved, setSaved] = useState<SavedBundle | null>(null);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   // The imported cluster evidence, its verdicts, and whatever the last import
   // was refused for. The document itself is kept, not just its verdicts: the
   // preflight re-runs against it on every option change, because verdicts that
@@ -1349,6 +1355,43 @@ export default function App() {
                     : " AUTH_TOKEN as entered above"}
                 </span>
               </div>
+              {/* The zip is for handing the bundle to somebody; saving writes
+                  the same files (profile.json included) to a folder on this
+                  machine -- the shape livetest re-renders from and an MCP
+                  session's opl_bundle reads, so the folder is the shared
+                  state between this page and those. */}
+              <div className="flex gap-2 items-center">
+                <input className={inputCls + " grow font-mono"}
+                  placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
+                  value={saveDir}
+                  onChange={(e) => setSaveDir(e.target.value)} />
+                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
+                  onClick={() => {
+                    setSaveErr(null); setSaved(null);
+                    const dir = saveDir.trim() ||
+                      `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
+                    saveBundle(facts!, { ...options, ship_id: shipId }, dir,
+                               sourceMode === "connect")
+                      .then(setSaved)
+                      .catch((e) => setSaveErr(String(e.message)));
+                  }}>
+                  💾 Save to folder
+                </Button>
+              </div>
+              {saved && (
+                <p className="text-xs text-emerald-700">
+                  Wrote {saved.files.length} files to{" "}
+                  <code className="font-mono">{saved.out_dir}</code>. Apply with{" "}
+                  <code className="font-mono">
+                    {format === "helm"
+                      ? `helm install bzm-opl ${saved.out_dir}/helm -f ${saved.out_dir}/bzm-opl-values.yaml`
+                      : `kubectl apply -f ${saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
+                  </code>
+                  {" "}— or point <code className="font-mono">livetest</code> or
+                  an MCP session at the folder.
+                </p>
+              )}
+              <ErrorMsg msg={saveErr} />
               {/* Why the button is disabled, when the reason is not on screen.
                   A disabled button whose cause is somewhere else on the page is
                   the failure the feature view is meant to remove, so the block

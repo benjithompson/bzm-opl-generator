@@ -68,6 +68,12 @@ The reference pages under `docs/` are served as resources at
 `bzm-opl://docs/<name>.md`, so a session can read [options.md](options.md) or
 [preflight.md](preflight.md) rather than guessing at an option name.
 
+A bundle directory is also how work arrives from elsewhere: the web UI's
+**Save to folder** writes exactly the shape `opl_bundle generate` produces,
+profile.json included, so a session pointed at that folder reads what was
+configured (`opl_bundle read` with `name=profile.json`) and carries on rather
+than starting over.
+
 ## Three rules the server keeps
 
 **The AUTH_TOKEN is never in a response.** `generate` writes the Secret to disk

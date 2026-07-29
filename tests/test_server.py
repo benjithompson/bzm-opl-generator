@@ -916,3 +916,44 @@ def test_preflight_says_why_it_has_nothing_to_suggest():
 def test_preflight_drops_the_reason_once_there_is_something_to_show():
     body = _preflight(_read_evidence()).json()
     assert body["suggestions"] and body["why_nothing"] is None
+
+
+# -- saving a bundle to disk ---------------------------------------------------
+# The zip is for handing a bundle to somebody; /api/generate/save writes the
+# same files where livetest and an MCP session can pick them up.
+
+def test_generate_save_writes_the_bundle_where_asked(tmp_path):
+    out = str(tmp_path / "bundle")
+    r = client.post("/api/generate/save", json={
+        "facts": FACTS, "options": {"namespace": "ns1"},
+        "fetch_token": False, "out_dir": out})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["out_dir"] == out
+    names = [f["name"] for f in body["files"]]
+    # profile.json is the handoff: livetest re-renders from it, and an MCP
+    # session reads it to see what this bundle was configured as.
+    assert "bzm_deployment.yaml" in names and "profile.json" in names
+    assert os.path.isfile(os.path.join(out, "bzm_deployment.yaml"))
+    assert os.path.isfile(os.path.join(out, "profile.json"))
+
+
+def test_generate_save_expands_home(tmp_path, monkeypatch):
+    """`~` is how a person types their home directory into a browser field."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = client.post("/api/generate/save", json={
+        "facts": FACTS, "options": {"namespace": "ns1"},
+        "fetch_token": False, "out_dir": "~/bundle"})
+    assert r.status_code == 200
+    assert r.json()["out_dir"] == str(tmp_path / "bundle")
+    assert os.path.isfile(tmp_path / "bundle" / "bzm_deployment.yaml")
+
+
+def test_generate_save_refuses_a_relative_dir():
+    """core's refusal (a relative path resolves against a cwd nobody chose)
+    must arrive as this transport's 400, not a 500."""
+    r = client.post("/api/generate/save", json={
+        "facts": FACTS, "options": {"namespace": "ns1"},
+        "fetch_token": False, "out_dir": "some/relative/dir"})
+    assert r.status_code == 400
+    assert "absolute" in r.json()["detail"]

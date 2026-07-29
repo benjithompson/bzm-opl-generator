@@ -288,3 +288,19 @@ export async function downloadZip(facts: Facts, options: Options, fetchToken = t
   saveBlob(await r.blob(),
     `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
 }
+
+export interface SavedBundle {
+  out_dir: string;
+  files: { name: string; bytes: number }[];
+}
+
+/** Write the bundle to a directory on the machine running this server — the
+ *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
+ *  reads, so the folder is the handoff between this page and those. The token
+ *  caveat is downloadZip's exactly: with fetchToken, every save rotates. */
+export function saveBundle(
+  facts: Facts, options: Options, outDir: string, fetchToken = true,
+): Promise<SavedBundle> {
+  return req<SavedBundle>("POST", "/api/generate/save",
+    { facts, options, fetch_token: fetchToken, out_dir: outDir });
+}
