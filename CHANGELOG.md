@@ -34,6 +34,18 @@ anything that breaks.
 
 ### Fixed
 
+- **Browser images from a live GUI location now name repos that exist.** A
+  Kubernetes agent reports them as keys with a path of their own —
+  `blazemeter/charmander/chrome_136.0.7103.113` — and only the last segment was
+  kept, so the repo came out as `.../blazemeter/chrome_136.0.7103.113`, which
+  404s. With a private registry that is the failure the registry was configured
+  to prevent: the mirror script pulls nothing, or, if the mirroring was done
+  separately, `IMAGE_OVERRIDES` sends crane after an image nobody pushed and the
+  location dies mid-test on an `ImagePullBackOff`. Losing `charmander` from the
+  repo also cost the images their category — they came back `performance`, so a
+  performance-only location selected four browsers it has no use for. Both are
+  fixed by stripping only the redundant `blazemeter/` prefix. Flat keys and the
+  irregular ones (`taurus-cloud`→`v4`, `blazemeter`→`v3`) are unchanged.
 - **The crane pod now asks for the ephemeral storage it actually uses, and asks
   for it as one number.** The request was `100Mi` against a `1Gi` limit; crane
   reaches ~161MiB (107MiB of it `/tmp`) within seconds of starting, so the

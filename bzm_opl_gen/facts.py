@@ -139,12 +139,39 @@ def repo_for_key(key):
     looked up. Known keys come from the catalogue, then the exceptions, and
     anything else follows the regular rule (`<name>` -> `blazemeter/<name>`),
     which is what every key added since has done.
+
+    A key may carry a path of its own, and all of it is repo. Browser images
+    arrive as `blazemeter/charmander/chrome_136.0.7103.113`, where only
+    `blazemeter/` is redundant with the project prefix -- `charmander/` is a
+    real directory under it. Keeping just the last segment resolved them to
+    `.../blazemeter/chrome_136.0.7103.113`, which does not exist, and dropped
+    `charmander` from the repo, which is the substring `image_category` reads,
+    so browser images also stopped being GUI images.
+
+    The prefix is spelled out rather than taken off BLAZEMETER_PROJECT: that a
+    key's first segment matches the project's last one is a coincidence of two
+    separately-observed facts, and a renamed project should not silently stop
+    the stripping.
+
+    A name whose first segment looks like a host is not a key at all -- it is a
+    reference that already names its own repo, which is what a Docker agent
+    pulling from a private mirror reports. Prefixing the project onto one gives
+    `.../blazemeter/reg.corp.com/bzm/v4`; taking its last segment instead gives
+    `.../blazemeter/v4`, which is worse for being plausible -- it says the image
+    lives somewhere the agent is not pulling it from.
     """
-    name = key.split(":", 1)[0]
+    # The tag is what follows the colon *after* the last slash: `localhost:5001/v4`
+    # is a port, not a tag, and splitting on the first colon leaves `localhost`.
+    head, sep, tail = key.rpartition(":")
+    name = head if sep and "/" not in tail else key
     for i in FALLBACK_IMAGES:
         if i["key"].split(":", 1)[0] == name:
             return i["repo"]
-    name = name.rsplit("/", 1)[-1]
+    first = name.split("/", 1)[0]
+    if "." in first or ":" in first:
+        return name
+    if name.startswith("blazemeter/"):
+        name = name[len("blazemeter/"):]
     return f"{BLAZEMETER_PROJECT}/{KEY_REPO_EXCEPTIONS.get(name, name)}"
 
 

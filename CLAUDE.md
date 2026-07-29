@@ -256,7 +256,13 @@ the classes of problem it can't fix for you.
   inventory and fell through to the catalogue; that is how `torero` and
   `richrach` stayed missing from a performance bundle. `repo_for_key()` resolves
   the bare form. Reading it properly also pins exact tags (`crane:3.7.55`,
-  `torero:4.6.182`) where the catalogue could only say `latest`.
+  `torero:4.6.182`) where the catalogue could only say `latest`. **A key may
+  carry a path, and all of it is repo**: browser images arrive as
+  `blazemeter/charmander/chrome_136.0.7103.113`, where only `blazemeter/` is
+  redundant with the project prefix. Keeping just the last segment resolved them
+  to a repo that 404s *and* dropped `charmander` from the repo, which is the
+  substring `image_category()` reads, so they came back `performance` and a
+  performance-only location selected four browsers (#70).
 - **`FALLBACK_IMAGES` was read off live inventories, not derived from the keys.**
   Keys do not reliably match their repo — `taurus-cloud`→`v4` and
   `apm-image`→`apm` in the table, `blazemeter`→`v3` and `secrets-image`→`secrets`

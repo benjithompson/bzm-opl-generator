@@ -494,6 +494,29 @@ def test_mirror_script_with_private_registry():
     assert "bzm-opl-image-mirror.sh" not in files2
 
 
+def test_a_browser_repo_mirrors_to_exactly_what_the_override_names():
+    """Browser repos are the only ones with a directory inside them
+    (`.../blazemeter/charmander/chrome_136...`), and both sides flatten a repo
+    to its last segment independently. They have to agree: if they drift, the
+    mirror pushes one name while IMAGE_OVERRIDES tells crane to pull another,
+    and nothing between here and a run says so."""
+    facts = dict(FACTS, func_ids=["performance", "functionalGui"],
+                 images=FACTS["images"] + [{
+                     "key": "blazemeter/charmander/chrome_136.0.7103.113:2.10.45",
+                     "repo": "gcr.io/verdant-bulwark-278/blazemeter/charmander/"
+                             "chrome_136.0.7103.113",
+                     "tag": "2.10.45", "category": "gui"}])
+    files = gen.generate(facts, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "private_registry": "reg.corp.com/bzm"})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])
+    target = json.loads(cm["data"]["IMAGE_OVERRIDES"])[
+        "blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
+    assert target == "reg.corp.com/bzm/chrome_136.0.7103.113:2.10.45"
+    assert (f"mirror gcr.io/verdant-bulwark-278/blazemeter/charmander/"
+            f"chrome_136.0.7103.113:2.10.45 {target}"
+            in files["bzm-opl-image-mirror.sh"])
+
+
 def test_multi_ship_requires_ship_id():
     facts = dict(FACTS, ships=FACTS["ships"] * 2)
     with pytest.raises(ValueError):
