@@ -362,8 +362,11 @@ def _bundle(action, args):
                     "next": ["pass mirror=<registry-prefix> to copy these into "
                              "a private registry, or run the bundle's "
                              "bzm-opl-image-mirror.sh yourself"]}
-        _gate(ALLOW_DESTRUCTIVE_ENV,
-              "pulling images and pushing them into a registry")
+        # Not behind the destructive gate, unlike `delete`, and the difference
+        # is what the two do: mirroring *adds* images to a registry the caller
+        # named, and the worst case is repositories nobody wanted. Deleting a
+        # location destroys an agent and its ships with nothing to restore from.
+        # The tool's destructiveHint is what makes a client confirm this one.
         return core.mirror_images(
             refs, mirror=args.get("mirror"),
             platform=args.get("platform", "linux/amd64"),
@@ -564,8 +567,8 @@ def build():
             "  options  -- every generate option, its default and what it does\n"
             "  images   -- the image references this bundle pulls {facts, "
             "all?}. With mirror=<prefix> it also pulls them and pushes them "
-            "into that registry, which writes to it: off unless "
-            + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
+            "into that registry, which writes to it -- confirm before "
+            "calling it that way.\n"
             "Applying the bundle is yours: `kubectl apply -f <out_dir>`. This "
             "server never writes to a cluster."))
     def opl_bundle(action: Literal[BUNDLE_ACTIONS],  # type: ignore[valid-type]

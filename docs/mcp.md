@@ -96,12 +96,18 @@ setting one does not mean restarting the client.
 
 | variable | what it allows |
 |---|---|
-| `BZM_OPL_ALLOW_DESTRUCTIVE=1` | `opl_location delete` (a location and every ship in it), and `opl_bundle images` with `mirror=` (which pushes to a registry) |
+| `BZM_OPL_ALLOW_DESTRUCTIVE=1` | `opl_location delete` — a location and every ship in it |
 | `BZM_OPL_ENABLE_LIVETEST=1` | `opl_agent livetest` — deploys to a cluster and blocks for minutes |
 
 Every tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`), so
 a client that asks before running something can tell which is which without
 parsing the description.
+
+`opl_bundle images` with `mirror=` pushes to a registry and is *not* gated —
+it is `destructiveHint: true` and left to the client's confirmation. The
+difference from `delete` is what the two do: mirroring adds images to a
+registry you named, and the worst case is repositories nobody wanted; deleting
+a location destroys an agent with nothing to restore from.
 
 `opl_agent livetest` is the plain deploy-and-wait. The full rig — local
 registry, mitmproxy, negative control, a real engine run — is the

@@ -410,3 +410,21 @@ def test_every_doc_the_instructions_name_is_actually_served():
              if w.strip(",.").endswith(".md")}
     assert named, "the instructions name no docs at all"
     assert named <= served, f"named but not served: {sorted(named - served)}"
+
+
+def test_mirroring_images_is_annotated_rather_than_gated(fake_account):
+    """Unlike `delete`. Mirroring adds images to a registry the caller named;
+    the tool's destructiveHint is what makes a client confirm it. A gate here
+    would put a routine private-registry setup behind an env var."""
+    body = ok("opl_bundle", "images",
+              {"facts": FACTS, "mirror": "reg.local/bzm", "dry_run": True})
+    assert body["dry_run"] is True
+    assert any("push reg.local/bzm/" in c for c in body["commands"])
+
+
+def test_listing_images_runs_no_docker(fake_account, monkeypatch):
+    """The default is a list. Only `pull`/`mirror` shell out, so a session
+    asking what a bundle needs cannot start pulling gigabytes by accident."""
+    monkeypatch.setattr(core, "_docker",
+                        lambda *a, **k: pytest.fail("listing ran docker"))
+    assert ok("opl_bundle", "images", {"facts": FACTS})["images"]
