@@ -32,6 +32,3 @@ build/
 .playwright-mcp/
 *.tsbuildinfo
 node_modules/
-
-# agent worktrees -- a checkout of this repo inside itself; never committable
-.claude/worktrees/
