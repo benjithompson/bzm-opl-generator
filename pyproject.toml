@@ -2,16 +2,21 @@
 name = "bzm-opl-gen"
 version = "0.2.0"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
-requires-python = ">=3.9"
+# 3.10 because the `mcp` SDK requires it. 3.9 has been end-of-life since
+# October 2025, and the generator itself still uses nothing newer -- the floor
+# is the SDK's, not ours.
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
 # fastapi belongs in `test`, not just `ui`: tests/test_server.py importorskips
 # it, so a venv without it reports a clean pass while testing none of the HTTP
-# layer. `dev` is the one to install from a checkout.
-test = ["pyyaml", "pytest", "httpx", "fastapi>=0.110"]
+# layer. `mcp` is in `test` for exactly that reason too. `dev` is the one to
+# install from a checkout.
+test = ["pyyaml", "pytest", "httpx", "fastapi>=0.110", "mcp>=2"]
 ui = ["fastapi>=0.110", "uvicorn>=0.27"]
-dev = ["pyyaml", "pytest", "httpx", "fastapi>=0.110", "uvicorn>=0.27"]
+mcp = ["mcp>=2"]
+dev = ["pyyaml", "pytest", "httpx", "fastapi>=0.110", "uvicorn>=0.27", "mcp>=2"]
 
 [project.scripts]
 bzm-opl-gen = "bzm_opl_gen.cli:main"

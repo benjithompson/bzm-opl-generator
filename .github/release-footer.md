@@ -8,7 +8,7 @@ gh release download --repo benjithompson/bzm-opl-generator --pattern '*.whl'
 pipx install './bzm_opl_gen-*.whl[ui]'
 ```
 
-Needs Python 3.9+ and read access to this repo. `gh` is what supplies the
+Needs Python 3.10+ and read access to this repo. `gh` is what supplies the
 credentials — **"repository not found" means access, not a typo.** No `gh`?
 Download the `.whl` from the Assets below and `pipx install` it the same way.
 

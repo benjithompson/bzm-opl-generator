@@ -1,0 +1,144 @@
+"""The option registry against the thing it describes.
+
+The registry is only worth having if it cannot fall behind, so the checks that
+matter here are the ones that fail when someone adds an option and stops: key
+parity in both directions, and docs/options.md being exactly what the registry
+renders.
+"""
+
+import re
+
+import pytest
+
+from bzm_opl_gen import generate as gen
+from bzm_opl_gen import options as opt
+
+
+def test_registry_covers_every_default_option():
+    missing = sorted(set(gen.DEFAULT_OPTIONS) - set(opt.BY_NAME))
+    assert not missing, (
+        f"new option(s) {missing} in DEFAULT_OPTIONS with no registry entry -- "
+        f"add one to bzm_opl_gen/options.py so the doc, the UI help and the MCP "
+        f"schema all describe it")
+
+
+def test_registry_invents_no_options():
+    extra = sorted(set(opt.BY_NAME) - set(gen.DEFAULT_OPTIONS))
+    assert not extra, (
+        f"registry entries {extra} name options generate() does not have -- a "
+        f"renamed or removed key leaves a row documenting nothing")
+
+
+def test_registry_entries_are_unique():
+    names = [o.name for o in opt.OPTIONS]
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize("o", opt.OPTIONS, ids=lambda o: o.name)
+def test_summary_fits_the_schema_budget(o):
+    """Every summary lands in every MCP session's context whether or not the
+    option is used, so the limit is what keeps thirty-one of them affordable."""
+    assert o.summary and o.summary[0].isupper() or o.summary[0] in "`_"
+    words = len(o.summary.split())
+    assert words <= opt.SUMMARY_MAX_WORDS, (
+        f"{o.name}: summary is {words} words, limit {opt.SUMMARY_MAX_WORDS} -- "
+        f"the long version belongs in `doc`")
+
+
+@pytest.mark.parametrize("o", opt.OPTIONS, ids=lambda o: o.name)
+def test_doc_says_more_than_the_summary(o):
+    """A `doc` that is just the summary again means the option is undocumented
+    and looks documented, which is worse than an empty cell."""
+    assert len(o.doc.split()) > opt.SUMMARY_MAX_WORDS
+    assert o.doc.strip() != o.summary.strip()
+
+
+@pytest.mark.parametrize("o", opt.OPTIONS, ids=lambda o: o.name)
+def test_declared_group_is_one_that_renders(o):
+    assert o.group in [name for name, _ in opt.GROUPS], (
+        f"{o.name}: group {o.group!r} is not in GROUPS, so the row renders "
+        f"nowhere")
+
+
+@pytest.mark.parametrize("o", opt.OPTIONS, ids=lambda o: o.name)
+def test_declared_type_matches_the_default(o):
+    """A default that contradicts its declared type would put a wrong type in
+    the MCP schema, where the client validates against it before we ever see
+    the call."""
+    value = o.default
+    if value is None:
+        return  # unset carries no type; `nullable` is what says so
+    expect = {"string": str, "boolean": bool, "integer": int,
+              "object": dict, "array": list}[o.type]
+    # bool is an int subclass, so check it before the numeric case.
+    if o.type == "integer":
+        assert isinstance(value, int) and not isinstance(value, bool)
+    else:
+        assert isinstance(value, expect), f"{o.name}: {value!r} is not {o.type}"
+
+
+@pytest.mark.parametrize("o", [o for o in opt.OPTIONS if o.choices],
+                         ids=lambda o: o.name)
+def test_default_is_one_of_the_choices(o):
+    assert o.default is None or o.default in o.choices
+
+
+def test_choices_track_generate_enumerations():
+    """The two enumerations generate() actually branches on. Restating them
+    here is the drift the registry exists to prevent, so they are read from
+    generate -- this asserts nothing added a third copy by hand."""
+    assert opt.BY_NAME["sv_ingress"].choices == tuple(gen.SV_INGRESS_TYPES)
+
+
+def test_secret_options_are_the_ones_profile_json_omits():
+    """`secret` is derived from generate.SECRET_OPTIONS rather than declared,
+    so this is really asserting that the set is not empty and still means what
+    profile.json means by it."""
+    secret = {o.name for o in opt.OPTIONS if o.secret}
+    assert secret == set(gen.SECRET_OPTIONS)
+    written = gen._profile_json(dict(gen.DEFAULT_OPTIONS))
+    for name in secret:
+        assert f'"{name}"' not in written
+
+
+def test_json_schema_admits_the_default_every_option_has():
+    for o in opt.OPTIONS:
+        schema = o.json_schema()
+        assert schema["description"] == o.summary
+        if o.default is None:
+            assert "null" in schema["type"], (
+                f"{o.name} defaults to None but its schema forbids null, so a "
+                f"client could not send the value it was given")
+        if o.choices:
+            assert o.default in schema["enum"]
+
+
+def test_generated_table_is_what_the_doc_carries():
+    """`python -m bzm_opl_gen.options` is a no-op on a clean tree. It failing
+    means either the registry changed without regenerating, or someone edited a
+    table cell that the next regeneration would silently discard."""
+    with open(opt.DOC_PATH, encoding="utf-8") as fh:
+        text = fh.read()
+    assert opt.render_table() in text, (
+        "docs/options.md is out of date -- run `python -m bzm_opl_gen.options`")
+
+
+def test_every_option_has_a_row_in_the_rendered_doc():
+    table = opt.render_table()
+    for name in gen.DEFAULT_OPTIONS:
+        assert f"| `{name}` |" in table
+
+
+def test_table_cells_are_single_line():
+    """A newline inside a cell ends the row, which turns the rest of the prose
+    into body text under the table without failing anything."""
+    for line in opt.render_table().splitlines():
+        if line.startswith("| `"):
+            assert line.endswith(" |") and line.count("\n") == 0
+
+
+def test_cell_escaping_leaves_no_bare_pipe():
+    for o in opt.OPTIONS:
+        cell = opt._cell(o.doc)
+        assert not re.search(r"(?<!\\)\|", cell), (
+            f"{o.name}: an unescaped pipe would split the row into columns")

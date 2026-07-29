@@ -13,6 +13,32 @@ anything that breaks.
 
 ### Changed
 
+- **Python 3.10 is now the floor**, up from 3.9 — which has been end-of-life
+  since October 2025. The generator itself uses nothing newer; the bump is the
+  `mcp` SDK's requirement, and it is being made now so the MCP layer lands on a
+  supported floor rather than shifting it later.
+
+- **`docs/options.md` is generated.** Every option now has a row, grouped by
+  what it configures, where ten of the thirty-one keys previously had no
+  documentation at all — including `namespace`, `run_as_user`, `tolerations`,
+  `node_selector` and all three ephemeral-storage settings. The descriptions
+  live in `bzm_opl_gen/options.py` and the doc is rebuilt from them with
+  `python -m bzm_opl_gen.options`; editing a table cell by hand now fails the
+  test suite, which also fails if an option is added to the generator and not
+  to the registry. The prose sections around the table are still hand-written.
+
+  The three CA options and the two engine-limit options used to share a table
+  row each, which is why `ca_configmap_key` had nowhere to be documented; the
+  "pick exactly one" that grouping carried is now stated above the section.
+
+### Added
+
+- **`GET /api/option-docs`** — one line per option, plus its type, whether it
+  accepts null, its choices and whether it is a credential. Kept separate from
+  `/api/option-defaults`, whose every key is submitted back as an option.
+
+### Changed
+
 - **Crane's Kubernetes auto-updater is now OFF by default**
   (`AUTO_KUBERNETES_UPDATE: 'false'`), in both output formats and in the chart
   standalone. It was on for every bundle without a private registry, copied

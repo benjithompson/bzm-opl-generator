@@ -11,8 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.9 is the floor declared in pyproject; 3.13 catches stdlib drift.
-        python-version: ["3.9", "3.13"]
+        # 3.10 is the floor declared in pyproject; 3.13 catches stdlib drift.
+        python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,9 +23,10 @@ jobs:
 
       # tests/test_server.py importorskips fastapi, so a missing optional dep
       # turns into a clean-looking pass that tested none of the HTTP layer.
-      # Fail here instead, where the cause is obvious.
+      # Fail here instead, where the cause is obvious. `mcp` is on the same
+      # list for the same reason -- the MCP suite would skip itself.
       - name: optional test deps are actually importable
-        run: python -c "import fastapi, yaml, httpx"
+        run: python -c "import fastapi, yaml, httpx, mcp"
 
       - run: pytest tests -q
 

@@ -26,7 +26,7 @@ get wrong by hand. Ship id, crane version and heartbeat are read, not typed.
 
 ## Install
 
-Needs Python 3.9+ and access to this repo. Releases ship a prebuilt wheel —
+Needs Python 3.10+ and access to this repo. Releases ship a prebuilt wheel —
 the UI bundle is inside it, so there's no npm step.
 
 ```
