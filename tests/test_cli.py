@@ -151,3 +151,54 @@ def test_sv_expose_refuses_without_a_wildcard_domain(fake_cluster, monkeypatch,
         _run(monkeypatch, "sv-expose", "--manifests", "", "-n", "ns1",
              "-o", str(out))
     assert not out.exists()
+
+
+# -- generate: the ship a token would be fetched for ---------------------------
+# The rule moved to core.token_ship_id so that the three callers of it cannot
+# disagree. These drive it the way a user hits it, through the flags.
+
+def _facts_file(tmp_path, ships):
+    f = json.load(open("examples/facts.example.json"))
+    if ships is None:
+        f.pop("ships")
+    else:
+        f["ships"] = [dict(f["ships"][0], id=s) for s in ships]
+    path = tmp_path / "facts.json"
+    path.write_text(json.dumps(f))
+    return str(path)
+
+
+def test_generate_says_which_ship_it_needs_rather_than_raising(monkeypatch,
+                                                               tmp_path):
+    """Facts carrying no ships used to reach `len(f["ships"])` and come back a
+    bare KeyError. The refusal generate() already writes names the count and
+    the flag that fixes it, and is what a hand-edited facts file deserves."""
+    monkeypatch.setattr("sys.argv", [
+        "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, None),
+        "-o", str(tmp_path / "out")])
+    with pytest.raises(ValueError, match="ship_id required"):
+        cli.main()
+
+
+def test_generate_fetches_no_token_without_an_api_key(monkeypatch, tmp_path,
+                                                      capsys):
+    """No --api-key is not a degraded run: the manifests come out with the
+    placeholder, which is the whole no-account path."""
+    out = tmp_path / "out"
+    monkeypatch.setattr("sys.argv", [
+        "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, ["b1"]),
+        "-o", str(out)])
+    cli.main()
+    assert "fetched AUTH_TOKEN" not in capsys.readouterr().out
+    assert gen.DEFAULT_OPTIONS["auth_token"] in (out / "bzm_secret.yaml").read_text()
+
+
+def test_generate_never_asks_which_of_two_ships(monkeypatch, tmp_path):
+    """Two ships and no --ship-id: fetching for the wrong one rotates a token
+    belonging to an agent nobody named, so nothing is fetched and the command
+    says so instead."""
+    monkeypatch.setattr("sys.argv", [
+        "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, ["b1", "b2"]),
+        "--api-key", "examples/api-key.example.json", "-o", str(tmp_path / "out")])
+    with pytest.raises(ValueError, match="ship_id required"):
+        cli.main()

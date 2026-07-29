@@ -13,6 +13,21 @@ anything that breaks.
 
 ### Changed
 
+- **`ui --dev` now detects a `BZM_API_KEY_FILE` set after startup.** The four
+  paths an `api-key.json` is looked for were frozen at import, and `--dev` sets
+  that variable for its reloader subprocess — which worked only because the
+  subprocess re-imports. Read per call now. Nothing else about key detection
+  changed, and the secret is still never read back out; only the key id is.
+
+  This is the one behaviour change in an otherwise internal split: what the
+  tool *does* moved to `bzm_opl_gen/core.py`, which imports no web framework,
+  and `server.py` is the HTTP layer over it. Nothing in the API moved, and the
+  same status codes come back from the same routes. It matters here because the
+  ship a token is fetched for was decided in three places — the UI's download
+  button, `generate --api-key` and `livetest` — and fetching a token rotates it,
+  so the three disagreeing would have meant rotating a credential belonging to
+  an agent nobody mentioned. One rule now, in one place.
+
 - **Python 3.10 is now the floor**, up from 3.9 — which has been end-of-life
   since October 2025. The generator itself uses nothing newer; the bump is the
   `mcp` SDK's requirement, and it is being made now so the MCP layer lands on a
