@@ -160,6 +160,7 @@ behind it and whether it settles the option or only narrows it
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, which to pick, and `sv-expose` |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, and engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: local registry, proxy + CA, egress containment, real engine runs |
+| [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns, and which images have been observed running under it |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
 | [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor` and `suggest` then read with `--cluster-evidence` |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the two test layers, PR flow, cutting a release |

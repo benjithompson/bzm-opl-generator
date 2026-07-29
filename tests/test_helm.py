@@ -207,15 +207,35 @@ def test_overlay_offers_no_engine_request_knob():
     assert "not settable" in files[gen.HELM_VALUES_FILE]
 
 
-def test_auto_update_is_left_to_the_chart():
+def test_auto_update_is_left_to_the_chart_when_unset():
     """A Helm-managed release usually wants autoUpdate false -- crane otherwise
     takes ownership of its own Deployment and the next upgrade conflicts -- but
-    that changes how the customer's agent gets upgraded, so the overlay offers
-    the key and does not decide it."""
+    that changes how the customer's agent gets upgraded, so an overlay that was
+    not told stays silent and lets the chart resolve it from privateRegistry."""
     v, files = _values()
     assert "autoUpdate" in v
     assert v["autoUpdate"] is None
     assert "helm upgrade" in files[gen.HELM_VALUES_FILE]
+
+
+def test_auto_update_is_stated_when_it_was_chosen():
+    """Stated, not left to the chart to infer: the chart resolves an unset
+    value from privateRegistry, so a later edit adding or dropping a registry
+    would flip a setting somebody had made deliberately."""
+    assert _values(auto_update=False)[0]["autoUpdate"] is False
+    assert _values(auto_update=True)[0]["autoUpdate"] is True
+    v, _ = _values(auto_update=True, private_registry="reg.local/bzm")
+    assert v["autoUpdate"] is True, "an explicit value must survive a registry"
+
+
+def test_readme_upgrade_advice_matches_the_overlay():
+    """Two instructions, and the wrong one wastes the upgrade: the default
+    bundle upgrades normally, and only a bundle that asked for auto-update
+    needs telling that it cannot."""
+    default = gen.generate(FACTS, BASE)["README.md"]
+    assert "autoUpdate: false" not in default and "helm upgrade" in default
+    on = gen.generate(FACTS, {**BASE, "auto_update": True})["README.md"]
+    assert "autoUpdate: false" in on
 
 
 def test_engine_sizing_is_passed_through_unresolved():
@@ -338,6 +358,53 @@ def test_bad_engine_size_is_still_caught_in_helm_format():
     assert "engine_mem_limit" in str(e.value)
 
 
+def test_chart_defaults_to_restricted_engines():
+    """The chart's own default matters more than the overlay here: a bare
+    `helm install` of this chart used to get privileged engines, because
+    values.yaml sets platform=k8s and the template gated on it."""
+    _, files = _values()
+    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    assert chart["restrictEngines"] is True
+
+
+def test_restrict_engines_off_reaches_the_overlay():
+    values, _ = _values(restrict_engines=False)
+    assert values["restrictEngines"] is False
+
+
+def test_restrict_engines_on_leaves_the_overlay_silent():
+    values, _ = _values()
+    assert "restrictEngines" not in values
+
+
+def test_chart_default_crane_ephemeral_storage_is_a_matched_pair():
+    """The chart carries its own defaults, so the manifests-side constant does
+    not reach it -- this is the restatement that can drift. Equal request and
+    limit is the property: GKE Autopilot rewrites the limit down to the request,
+    and a chart whose request is the smaller number evicts crane on Autopilot
+    while rendering perfectly well everywhere the parity test can look."""
+    _, files = _values()
+    chart = yaml.safe_load(files[f"{gen.CHART_DIR}/values.yaml"])
+    res = chart["crane"]["resources"]
+    assert (res["requests"]["ephemeral-storage"]
+            == res["limits"]["ephemeral-storage"]
+            == gen.CRANE_EPHEMERAL_STORAGE)
+
+
+def test_crane_ephemeral_storage_override_reaches_the_overlay_as_both_fields():
+    values, _ = _values(crane_ephemeral_storage="4Gi")
+    res = values["crane"]["resources"]
+    assert res["requests"]["ephemeral-storage"] == "4Gi"
+    assert res["limits"]["ephemeral-storage"] == "4Gi"
+
+
+def test_unset_crane_ephemeral_storage_leaves_the_overlay_silent():
+    """The overlay names only what came from the account or the flags; an
+    untouched default belongs to the chart, not to a key repeated here."""
+    values, _ = _values()
+    assert "crane" not in values
+
+
 # -- the bundle a chart install actually needs --------------------------------
 
 def test_readme_is_short_and_actionable():
@@ -348,11 +415,10 @@ def test_readme_is_short_and_actionable():
     assert "helm install crane" in readme
     assert "rollout status deploy/crane" in readme
     assert "online" in readme
-    # The upgrade trap still has to be said -- briefly -- because it bites
-    # silently and the fix is a value most people would not guess.
-    assert "autoUpdate: false" in readme
-    # ...and never as a bare `helm upgrade` that would hit the conflict.
-    assert not any(l.startswith("helm upgrade") for l in readme.splitlines())
+    # The default bundle upgrades normally now, so the README says so rather
+    # than carrying the old "set autoUpdate: false first" instruction.
+    assert "helm upgrade" in readme
+    assert "autoUpdate: false" not in readme
 
 
 def test_readme_names_the_overlay_in_its_install_command():

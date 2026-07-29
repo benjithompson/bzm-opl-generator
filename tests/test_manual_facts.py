@@ -279,3 +279,69 @@ def test_key_to_repo_covers_the_irregular_names():
     assert r("torero:4.6.182").endswith("/torero")
     assert r("blazemeter/service-mock:latest").endswith("/service-mock")
     assert r("not-invented-yet:9").endswith("/not-invented-yet")
+
+
+# What a live functionalGui agent reported (crane 3.7.55), against the repos
+# those keys were confirmed to be pullable from. The catalogue carries no
+# browser images and cannot -- the account holds 60+ version-pinned repos and
+# only an agent says which one a location uses -- so this pairing is the only
+# place their real shape is written down.
+BROWSER_IMAGES = [
+    ("blazemeter/charmander/chrome_136.0.7103.113:2.10.45",
+     "gcr.io/verdant-bulwark-278/blazemeter/charmander/chrome_136.0.7103.113"),
+    ("blazemeter/charmander/firefox_139.0.4:2.10.45",
+     "gcr.io/verdant-bulwark-278/blazemeter/charmander/firefox_139.0.4"),
+    ("blazemeter/charmander/microsoftedge_137.0.3296.83:2.10.45",
+     "gcr.io/verdant-bulwark-278/blazemeter/charmander/microsoftedge_137.0.3296.83"),
+    ("blazemeter/charmander/safari_15.0:2.10.45",
+     "gcr.io/verdant-bulwark-278/blazemeter/charmander/safari_15.0"),
+]
+BROWSER_KEYS = [k for k, _ in BROWSER_IMAGES]
+
+
+@pytest.mark.parametrize("key,repo", BROWSER_IMAGES)
+def test_browser_keys_resolve_to_the_repo_that_serves_them(key, repo):
+    """Both sides are written out rather than derived: deriving the expected
+    repo would apply the rule under test to produce the answer it is checked
+    against. Each of these four was pulled from the registry by hand. The
+    category rides along because it is read off the repo string, so the two
+    fail together -- see repo_for_key for what that cost."""
+    assert facts_mod.repo_for_key(key) == repo
+    assert facts_mod.image_category(repo) == "gui"
+
+
+@pytest.mark.parametrize("ref,repo", [
+    ("reg.corp.com/bzm/v4:2.4.444", "reg.corp.com/bzm/v4"),
+    # A port is not a tag: splitting on the first colon leaves `localhost`, and
+    # the rig's own mirror is addressed exactly this way.
+    ("host.minikube.internal:5001/v4:2.4.444", "host.minikube.internal:5001/v4"),
+    ("localhost:5001/v4", "localhost:5001/v4"),
+])
+def test_a_key_that_already_names_its_registry_is_left_alone(ref, repo):
+    """A Docker agent pulling from a private mirror reports a full reference,
+    not a crane key. Prefixing the project onto it, or reducing it to its last
+    segment, both claim the image lives somewhere it does not."""
+    assert facts_mod.repo_for_key(ref) == repo
+
+
+def test_a_gui_agents_browser_inventory_survives_gather():
+    """End to end on the shape that produced the defect: the entry crane is
+    handed has to carry the repo and the category, not just resolve them."""
+    f = facts_mod.gather(_FakeClient([_ship(
+        [{"RepoTags": [k], "Size": 0} for k in BROWSER_KEYS]
+        + [{"RepoTags": ["taurus-cloud:2.4.444-reduced"], "Size": 0}])]), "H1")
+    by_key = {i["key"]: i for i in f["images"]}
+    for key, repo in BROWSER_IMAGES:
+        assert by_key[key]["repo"] == repo
+        assert by_key[key]["category"] == "gui"
+    assert by_key["taurus-cloud:2.4.444-reduced"]["category"] == "performance"
+
+
+def test_a_performance_location_does_not_select_browser_images():
+    """The category is what keeps four browsers out of a bundle that has no
+    browser to run them in."""
+    f = {"func_ids": ["performance"],
+         "images": [{"key": k, "repo": r} for k, r in BROWSER_IMAGES]
+                   + [{"key": "taurus-cloud:latest",
+                       "repo": f"{facts_mod.BLAZEMETER_PROJECT}/v4"}]}
+    assert [i["key"] for i in facts_mod.select_images(f)] == ["taurus-cloud:latest"]

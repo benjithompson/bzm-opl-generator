@@ -34,6 +34,16 @@ const DETECTS: [GroupId, string, unknown][] = [
   ["security", "use_secret", false],
   ["security", "cluster_rbac", true],
   ["security", "service_type", "NODEPORT"],
+  // The one entry here whose detecting value is `false`: restrict_engines is
+  // on by default, so absent means restricted and only an explicit false is
+  // a departure the group should open for.
+  ["security", "restrict_engines", false],
+  // A tri-state, so unlike the two above BOTH booleans are a departure --
+  // absent means the registry decides. `true` is the one worth pinning: it is
+  // also the resolved default without a private registry, and a detection rule
+  // written as "only false matters" would leave a bundle that asks for
+  // auto-update alongside a mirror showing a closed group.
+  ["security", "auto_update", true],
   ["sv", "sv_ingress", "nginx"],
 ];
 
@@ -69,6 +79,8 @@ const FULL: Options = {
   use_secret: false,
   cluster_rbac: true,
   service_type: "NODEPORT",
+  restrict_engines: false,
+  auto_update: false,
   sv_ingress: "istio",
   sv_subdomain: "apps.example.com",
   sv_tls_secret: "wildcard-credential",
@@ -150,7 +162,12 @@ describe("switching a group off", () => {
       },
       sched: { tolerations: null, node_selector: null },
       sizing: { engine_cpu_limit: null, engine_mem_limit: null },
-      security: { use_secret: true, cluster_rbac: false, service_type: "CLUSTERIP" },
+      security: { use_secret: true, cluster_rbac: false,
+                  service_type: "CLUSTERIP", restrict_engines: true,
+                  // Back to unset, not to a boolean: the generator's default
+                  // is the tri-state's null, and writing `true` here would
+                  // pin auto-update on for a bundle with a private registry.
+                  auto_update: null },
       sv: {
         sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
         sv_istio_gateway: null,

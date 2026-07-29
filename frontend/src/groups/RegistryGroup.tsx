@@ -11,7 +11,9 @@ export function RegistryGroup(props: {
 }) {
   return (
     <>
-      <Field label="Registry" hint="sets DOCKER_REGISTRY + IMAGE_OVERRIDES, disables auto-update, emits bzm-opl-image-mirror.sh">
+      {/* Auto-update is not mentioned any more: it is off by default for every
+          bundle now, not something a registry decides. */}
+      <Field label="Registry" hint="sets DOCKER_REGISTRY + IMAGE_OVERRIDES, emits bzm-opl-image-mirror.sh">
         <TextInput mono value={props.registry}
           placeholder="registry.corp.com/bzm"
           onChange={(v) => props.onRegistry(v || null)} />

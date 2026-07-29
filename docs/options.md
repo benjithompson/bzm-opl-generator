@@ -12,10 +12,12 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON); `k8s` = pinned runAsUser 1337 |
+| `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, engines inherit the SCC-assigned UID); `k8s` = pinned runAsUser 1337 |
+| `restrict_engines` | `true` | engines crane spawns drop all capabilities and inherit crane's UID:GID (INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON). Crane's own default is a privileged engine pod, which restricted PodSecurity, OpenShift SCC and GKE Autopilot all reject — after the agent is online, so the run hangs at `BOOT_STARTING`. `--no-restrict-engines` only for an image that needs a capability — and it removes the posture from every container crane creates, so see which images have run under it in [Hardened engines](hardened-engines.md) first |
 | `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay — see [Helm](helm.md) |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified) |
-| `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, disables auto-update, rewrites crane image |
+| `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, rewrites crane image |
+| `auto_update` | `false` | `AUTO_KUBERNETES_UPDATE`: does crane rewrite its own Deployment when BlazeMeter ships a newer agent? **Off, which is a deliberate departure from BlazeMeter's own Kubernetes manifest** — theirs ships `'true'`, and with it on crane takes field ownership of its Deployment within seconds of install, so the next `helm upgrade` fails on a conflict `--force-conflicts` cannot resolve and changing anything means uninstall + install ([Helm](helm.md#managing-the-release-with-helm)). The cost of the default is that keeping the agent current is your job — re-generate and re-apply — and one far enough behind loses support. `--auto-update` hands that back to crane on those terms. (BlazeMeter's `AUTO_UPDATE` is the Docker-side switch and does nothing on a Kubernetes agent, so nothing here emits it) |
 | `pull_secret` | – | imagePullSecrets name for the crane image |
 | `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
 | `service_account_name` | `crane` | the account the agent runs as, and the one the RoleBinding (and ClusterRoleBinding) grants to. Used whether or not the bundle creates it, and **required** — see below |

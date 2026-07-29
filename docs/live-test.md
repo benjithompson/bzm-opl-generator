@@ -14,7 +14,7 @@ are torn down with the cluster.
 
 | flag | container | what it proves |
 |---|---|---|
-| `--local-registry [PORT]` (5001) | `registry:2`, published on the host, pulled via `host.minikube.internal` | air-gapped pulls: `DOCKER_REGISTRY`, `IMAGE_OVERRIDES`, auto-update off |
+| `--local-registry [PORT]` (5001) | `registry:2`, published on the host, pulled via `host.minikube.internal` | air-gapped pulls: `DOCKER_REGISTRY`, `IMAGE_OVERRIDES`, no public-registry fallback |
 | `--local-proxy` | `mitmproxy`, joined to the cluster's own docker network | proxy egress **and** custom CA trust |
 | `--contain-egress` | calico + a default-deny egress NetworkPolicy | that the proxy is the **only** way out, not just the way that was taken |
 | `--run-test TEST_ID` | a real BlazeMeter run on the location | what crane passes to the **engines** it spawns: image override, CA propagation, proxy env |
@@ -51,7 +51,7 @@ reach it. The run therefore also:
   `--skip-negative-control` (saves ~2 min);
 - **reads the deployed objects back** and checks the generator's promises:
   `AUTH_TOKEN` not in the ConfigMap, proxy credentials not readable there,
-  `AUTO_KUBERNETES_UPDATE=false` under a private registry, `IMAGE_OVERRIDES`
+  `AUTO_KUBERNETES_UPDATE` matching what the options asked for, `IMAGE_OVERRIDES`
   covering every image the location's funcIds need, every running image coming
   from the private registry, and the CA bundle actually present and parseable
   *inside the crane pod* (not merely mounted);

@@ -131,6 +131,10 @@ def cmd_generate(a):
             opts.update(json.load(fh))
     for key in ("platform", "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
+                # Tri-state, and `is not None` is what carries it: --no-auto-update
+                # sets False, which must override a profile's true rather than
+                # read as "not given".
+                "auto_update",
                 "service_account_name",
                 "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
         v = getattr(a, key, None)
@@ -142,6 +146,8 @@ def cmd_generate(a):
         opts["service_account_create"] = False
     if a.cluster_rbac:
         opts["cluster_rbac"] = True
+    if a.no_restrict_engines:
+        opts["restrict_engines"] = False
     if a.tolerations:
         opts["tolerations"] = json.loads(a.tolerations)
     if a.node_selector:
@@ -165,7 +171,7 @@ def cmd_generate(a):
             proxy[key] = v
     if proxy:
         opts["proxy"] = proxy
-    for key in ("engine_cpu_limit", "engine_mem_limit"):
+    for key in ("engine_cpu_limit", "engine_mem_limit", "crane_ephemeral_storage"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
@@ -466,6 +472,25 @@ def main():
     g.add_argument("--auth-token", dest="auth_token")
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
+    # Tri-state so profile.json records which of the two a bundle asked for,
+    # but both unset and --no-auto-update resolve the same way now: off. See
+    # generate.auto_update for why the default departs from BlazeMeter's.
+    au = g.add_mutually_exclusive_group()
+    au.add_argument("--auto-update", dest="auto_update", action="store_true",
+                    default=None,
+                    help="AUTO_KUBERNETES_UPDATE=true: let crane update its own "
+                         "Deployment when BlazeMeter ships a newer agent. NOT "
+                         "the default here, though it is in BlazeMeter's own "
+                         "manifest -- crane takes field ownership doing it, so "
+                         "`helm upgrade` then fails on a conflict that "
+                         "--force-conflicts cannot resolve, and changing "
+                         "anything means uninstall + install")
+    au.add_argument("--no-auto-update", dest="auto_update", action="store_false",
+                    help="AUTO_KUBERNETES_UPDATE=false, which is already the "
+                         "default -- pass it to record the choice in "
+                         "profile.json. The agent stays on the image in this "
+                         "bundle until you re-generate, and one far enough "
+                         "behind loses support")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
     g.add_argument("--service-account", dest="service_account_name", metavar="NAME",
                    help="ServiceAccount the agent runs as (default crane). Used "
@@ -510,6 +535,23 @@ def main():
                         "lands in the Secret unless --no-secret")
     g.add_argument("--engine-cpu-limit", dest="engine_cpu_limit", help='e.g. "2"')
     g.add_argument("--engine-mem-limit", dest="engine_mem_limit", help='e.g. "8Gi"')
+    g.add_argument("--crane-ephemeral-storage", dest="crane_ephemeral_storage",
+                   metavar="SIZE",
+                   help='crane pod ephemeral storage, request and limit both '
+                        '(default 1Gi). One value because GKE Autopilot '
+                        'rewrites the limit down to the request')
+    g.add_argument("--no-restrict-engines", dest="no_restrict_engines",
+                   action="store_true",
+                   help="let crane spawn engines with its own default security "
+                        "context (privileged). Only for an image that needs a "
+                        "capability -- a privileged engine is refused by "
+                        "restricted PodSecurity, OpenShift SCC and GKE Autopilot, "
+                        "and the run hangs at BOOT_STARTING when it is. It is "
+                        "all-or-nothing: the posture goes from every container "
+                        "crane creates, not from the one image that wanted "
+                        "something. docs/hardened-engines.md records which "
+                        "images have run under it and what they were observed "
+                        "to be given")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)

@@ -19,8 +19,17 @@ authToken: ""
 # -- Platform -----------------------------------------------------------------
 
 # k8s | openshift. On openshift the restricted-v2 SCC assigns the UID, so
-# runAsUser is left unset and engines are told to inherit crane's UID:GID.
+# runAsUser is left unset. What engines inherit differs by platform; whether
+# they drop privileges is restrictEngines below, on either.
 platform: k8s
+
+# Engines crane spawns inherit its UID:GID and drop all capabilities, so they
+# pass restricted PodSecurity, OpenShift's restricted-v2 SCC and GKE Autopilot's
+# Warden. Crane's own default is a privileged engine pod, which all three refuse
+# -- and refuse late, after the agent is already online and the location looks
+# ready, so the run hangs at BOOT_STARTING rather than failing usefully. Set
+# false only for an image that genuinely needs a capability.
+restrictEngines: true
 
 # CLUSTERIP | NODEPORT. Either runs on the namespaced Role this chart creates:
 # crane takes its advertised address from its own network interfaces, not from
@@ -60,8 +69,9 @@ image:
   pullSecret: ""
 
 # Registry the agent pulls every BlazeMeter image from. Empty -> BlazeMeter's
-# public registry, and auto-update stays on. Setting it turns auto-update off:
-# upgrading an air-gapped location is re-mirror + bump tags, not a silent pull.
+# public registry. Upgrading an air-gapped location is re-mirror + bump tags,
+# not a silent pull -- autoUpdate below is off by default, which is what a
+# sealed cluster wants anyway; it no longer keys off this value.
 privateRegistry: ""
 
 # Only read when privateRegistry is set. Maps BlazeMeter's image keys to the
@@ -80,12 +90,11 @@ imageOverrides: {}
 # cluster pull secret instead -- do not put a real password in a ConfigMap.
 registryAuth: false
 
-# Does crane update itself when BlazeMeter ships a newer agent? Unset follows
-# privateRegistry -- off when set (a sealed cluster cannot pull a newer image
-# anyway), on otherwise.
+# Does crane update itself when BlazeMeter ships a newer agent? Unset is FALSE,
+# unlike BlazeMeter's own Kubernetes manifest, which ships it on.
 #
-# SET THIS FALSE IF YOU MANAGE THIS RELEASE WITH HELM. Left on, crane takes
-# ownership of its own Deployment within seconds of install (field manager
+# The reason is that on breaks this chart's own upgrade path. Crane takes
+# ownership of its Deployment within seconds of install (field manager
 # "OpenAPI-Generator"): it rewrites the container image to whatever version
 # BlazeMeter currently ships, and `.spec.strategy` from Recreate to
 # RollingUpdate. Helm applies server-side, so the next `helm upgrade` fails on a
@@ -96,8 +105,10 @@ registryAuth: false
 # `type: Recreate` and the API server rejects the pair. With auto-update on,
 # changing anything means uninstall + install. Verified on a live cluster.
 #
-# The tradeoff for false: the agent stops upgrading itself, so keeping it
-# current is your job, and one that falls far enough behind loses support.
+# The tradeoff for the default: the agent does not upgrade itself, so keeping it
+# current is your job -- re-generate, or bump image.tag and upgrade -- and one
+# that falls far enough behind loses support. Set true to hand that back to
+# crane, knowing upgrades become uninstall + install.
 autoUpdate:
 
 # -- RBAC ---------------------------------------------------------------------
@@ -143,10 +154,15 @@ crane:
     requests:
       cpu: 250m
       memory: 512Mi
-      ephemeral-storage: 100Mi
+      ephemeral-storage: 1Gi
     limits:
       cpu: "1"
       memory: 2Gi
+      # Same value as the request, on purpose. GKE Autopilot rewrites this
+      # limit down to whatever the request says, so a larger limit is headroom
+      # you do not get -- and crane sits at ~161MiB (107MiB of it /tmp) within
+      # seconds of starting, which is what evicted it when the request was
+      # 100Mi. Raise both together or neither.
       ephemeral-storage: 1Gi
 
 probes:

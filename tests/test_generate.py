@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 from bzm_opl_gen.api import BzmApiError, parse_auth_token  # noqa: E402
+from bzm_opl_gen.quantity import parse_memory  # noqa: E402
 
 
 def test_parse_auth_token():
@@ -60,7 +61,8 @@ def test_default_openshift():
     assert cm["data"]["SHIP_ID"] == "bbb222"  # auto from single ship
     assert "AUTH_TOKEN" not in cm["data"]
     assert cm["data"]["INHERIT_RUNNING_USER_AND_GROUP"] == "true"
-    assert cm["data"]["AUTO_KUBERNETES_UPDATE"] == "true"
+    # Off, unlike BlazeMeter's own manifest -- see test_auto_update_defaults_off.
+    assert cm["data"]["AUTO_KUBERNETES_UPDATE"] == "false"
     assert "bzm_clusterrole.yaml" not in files
 
 
@@ -87,6 +89,70 @@ def test_private_registry_overrides_from_facts():
     assert "imagePullSecrets" in d and "pullsec" in d
 
 
+def _auto(**over):
+    cm = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1", **over})
+                        ["bzm_configmap.yaml"])
+    return cm["data"]["AUTO_KUBERNETES_UPDATE"]
+
+
+def test_auto_update_defaults_off():
+    """The whole point of the default, and a deliberate departure from
+    BlazeMeter's own Kubernetes manifest, which ships it on: with it on, crane
+    takes ownership of its Deployment within seconds and the next `helm
+    upgrade` fails on a conflict --force-conflicts cannot resolve. The registry
+    no longer enters into it -- it used to, which left the trap armed for
+    exactly the customers pulling from the public registry."""
+    assert _auto() == "false"
+    assert _auto(private_registry="reg.local/bzm") == "false"
+
+
+def test_auto_update_can_be_asked_for():
+    """Off is not a refusal to emit true -- a customer who wants the agent to
+    keep itself current, and will reinstall rather than upgrade, says so."""
+    assert _auto(auto_update=True) == "true"
+    assert _auto(auto_update=True, private_registry="reg.local/bzm") == "true"
+    assert _auto(auto_update=False) == "false"
+
+
+def test_auto_update_writes_the_kubernetes_variable_only():
+    """BlazeMeter has an AUTO_UPDATE too, and it is the Docker-side switch --
+    inert on a Kubernetes agent. Emitting it beside this one would look like a
+    second, contradictory setting to anyone reading the ConfigMap."""
+    cm = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1", "auto_update": False})
+                        ["bzm_configmap.yaml"])["data"]
+    assert "AUTO_UPDATE" not in cm
+    assert cm["AUTO_KUBERNETES_UPDATE"] == "false"
+
+
+def test_configmap_states_what_each_setting_costs():
+    """Someone reading the ConfigMap to decide whether they may change it needs
+    the consequence, not the value they can already see: on takes field
+    ownership, off means nobody is updating the agent but them."""
+    on = gen.generate(FACTS, {"namespace": "ns1", "auto_update": True}
+                      )["bzm_configmap.yaml"]
+    assert "--auto-update" in on and "field ownership" in on
+    off = gen.generate(FACTS, {"namespace": "ns1"})["bzm_configmap.yaml"]
+    assert "loses support" in off
+
+
+def test_readme_says_the_agent_is_pinned():
+    """On the resolved value, so the default bundle -- the common one -- says
+    it. Whoever receives it has to notice the agent ageing, and nothing else in
+    the bundle tells them the agent will not do it itself."""
+    for over in ({}, {"auto_update": False}, {"private_registry": "reg.local/bzm"}):
+        readme = gen.generate(FACTS, {"namespace": "ns1", **over})["README.md"]
+        assert "3.7.55" in readme and "Auto-update is **off**" in readme, over
+    on = gen.generate(FACTS, {"namespace": "ns1", "auto_update": True})["README.md"]
+    assert "Auto-update is **off**" not in on
+
+
+def test_auto_update_refuses_a_value_that_is_neither():
+    """A string "false" resolves truthy and would silently turn auto-update on
+    -- the shape a profile.json hand-edited by a customer arrives in."""
+    with pytest.raises(ValueError, match="auto_update"):
+        gen.generate(FACTS, {"namespace": "ns1", "auto_update": "false"})
+
+
 def test_images_follow_location_funcids():
     gui_facts = dict(FACTS, func_ids=["performance", "functionalGui", "chrome:default"])
     files = gen.generate(gui_facts, {"namespace": "ns1", "private_registry": "reg.local"})
@@ -110,8 +176,30 @@ def test_k8s_platform_sets_runasuser():
     files = gen.generate(FACTS, {"namespace": "ns1", "platform": "k8s"})
     _all_yaml_parse(files)
     assert "runAsUser: 1337" in files["bzm_deployment.yaml"]
-    cm = yaml.safe_load(files["bzm_configmap.yaml"])
+
+
+def test_engines_drop_privileges_on_every_platform():
+    """This used to assert the opposite for k8s, and the asymmetry was an
+    accident of where a rejection was first noticed rather than a decision:
+    `platform` defaults to openshift, so the restricted engine was already what
+    the tool shipped, and naming k8s quietly opted out of it. Crane's own
+    default engine pod is privileged, and restricted PodSecurity, OpenShift SCC
+    and GKE Autopilot's Warden all refuse it -- late, after the agent is online,
+    so the run hangs at BOOT_STARTING instead of failing usefully."""
+    for platform in ("k8s", "openshift"):
+        cm = yaml.safe_load(gen.generate(
+            FACTS, {"namespace": "ns1", "platform": platform})["bzm_configmap.yaml"])
+        assert cm["data"]["INHERIT_RUNNING_USER_AND_GROUP"] == "true", platform
+        assert json.loads(cm["data"]["KUBERNETES_SECURITY_CONTEXT_CAP_JSON"]) == {
+            "drop": ["ALL"]}, platform
+
+
+def test_restrict_engines_can_be_turned_off_for_an_image_that_needs_a_capability():
+    cm = yaml.safe_load(gen.generate(
+        FACTS, {"namespace": "ns1", "platform": "k8s",
+                "restrict_engines": False})["bzm_configmap.yaml"])
     assert "INHERIT_RUNNING_USER_AND_GROUP" not in cm["data"]
+    assert "KUBERNETES_SECURITY_CONTEXT_CAP_JSON" not in cm["data"]
 
 
 def test_cluster_rbac_optional():
@@ -234,6 +322,35 @@ def test_tolerations_node_selector_in_pod_and_configmap():
     cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
     assert json.loads(cm["KUBERNETES_TOLERATIONS_JSON"]) == tol
     assert json.loads(cm["KUBERNETES_NODE_SELECTOR_JSON"]) == {"pool": "loadtest"}
+
+
+def _crane_ephemeral(files):
+    c = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]["containers"][0]
+    return (c["resources"]["requests"]["ephemeral-storage"],
+            c["resources"]["limits"]["ephemeral-storage"])
+
+
+def test_crane_ephemeral_storage_request_equals_limit_by_default():
+    # The pair being equal is the property, not the number. GKE Autopilot
+    # rewrites the limit down to the request, so a bundle whose request is the
+    # smaller of the two ships a ceiling the customer never chose -- at 100Mi
+    # that evicted crane in ~12s, forever, because each replacement repeated it.
+    req, lim = _crane_ephemeral(gen.generate(FACTS, {"namespace": "ns1"}))
+    assert req == lim == gen.CRANE_EPHEMERAL_STORAGE
+
+
+def test_crane_ephemeral_storage_clears_measured_usage():
+    # Crane sits at ~161MiB, 107MiB of it /tmp, within seconds of starting.
+    # A default below that is the bug this constant exists to prevent, so pin
+    # the floor rather than the exact value -- raising it stays fine.
+    assert parse_memory(gen.CRANE_EPHEMERAL_STORAGE) >= 512 * 1024 * 1024
+
+
+def test_crane_ephemeral_storage_override_moves_both_fields():
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "crane_ephemeral_storage": "4Gi"})
+    _all_yaml_parse(files)
+    assert _crane_ephemeral(files) == ("4Gi", "4Gi")
 
 
 def test_ca_bundle_configmap_mount_and_envs():
@@ -440,6 +557,29 @@ def test_mirror_script_with_private_registry():
     assert "service-mock" not in sh  # performance-only by default
     files2 = gen.generate(FACTS, {"namespace": "ns1"})
     assert "bzm-opl-image-mirror.sh" not in files2
+
+
+def test_a_browser_repo_mirrors_to_exactly_what_the_override_names():
+    """Browser repos are the only ones with a directory inside them
+    (`.../blazemeter/charmander/chrome_136...`), and both sides flatten a repo
+    to its last segment independently. They have to agree: if they drift, the
+    mirror pushes one name while IMAGE_OVERRIDES tells crane to pull another,
+    and nothing between here and a run says so."""
+    facts = dict(FACTS, func_ids=["performance", "functionalGui"],
+                 images=FACTS["images"] + [{
+                     "key": "blazemeter/charmander/chrome_136.0.7103.113:2.10.45",
+                     "repo": "gcr.io/verdant-bulwark-278/blazemeter/charmander/"
+                             "chrome_136.0.7103.113",
+                     "tag": "2.10.45", "category": "gui"}])
+    files = gen.generate(facts, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "private_registry": "reg.corp.com/bzm"})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])
+    target = json.loads(cm["data"]["IMAGE_OVERRIDES"])[
+        "blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
+    assert target == "reg.corp.com/bzm/chrome_136.0.7103.113:2.10.45"
+    assert (f"mirror gcr.io/verdant-bulwark-278/blazemeter/charmander/"
+            f"chrome_136.0.7103.113:2.10.45 {target}"
+            in files["bzm-opl-image-mirror.sh"])
 
 
 def test_multi_ship_requires_ship_id():

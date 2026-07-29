@@ -11,8 +11,113 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **Crane's Kubernetes auto-updater is now OFF by default**
+  (`AUTO_KUBERNETES_UPDATE: 'false'`), in both output formats and in the chart
+  standalone. It was on for every bundle without a private registry, copied
+  from BlazeMeter's own manual Kubernetes manifest, which ships `'true'`.
+
+  On, it breaks the upgrade path of the thing that installed it. Crane takes
+  field ownership of its own Deployment within seconds of install (manager
+  `OpenAPI-Generator`), rewriting the image and `.spec.strategy` from `Recreate`
+  to `RollingUpdate` — so the next `helm upgrade` fails on a field-ownership
+  conflict with the ConfigMap already applied, and `--force-conflicts` cannot
+  resolve it: forcing `type: Recreate` back leaves crane's
+  `strategy.rollingUpdate` beside it and the API server rejects the pair.
+  Changing anything meant uninstall + install. The documented fix was a value
+  you had to set *before* installing, which nobody knew to do until the upgrade
+  that failed. That is the whole reason for the change: a default that breaks
+  its own upgrade path is not a default.
+
+  **What it costs, and it is real:** the agent no longer updates itself.
+  Keeping it current is now your job — re-generate and re-apply, or bump
+  `image.tag` and `helm upgrade` — and an agent that falls far enough behind
+  loses BlazeMeter support. Generated bundles say so: the ConfigMap, both
+  READMEs and the chart's `values.yaml` all state it where the value is set.
+
+  **To keep the old behaviour**, generate with `--auto-update` (option
+  `auto_update: true`, "Agent auto-update → On" in the UI, `autoUpdate: true`
+  in the chart), knowing upgrades then mean uninstall + install. Existing
+  clusters are untouched until you re-apply; a `profile.json` from before this
+  change has no `auto_update` key and so re-generates with the new default —
+  re-apply the ConfigMap and restart crane to actually turn the updater off on
+  a running agent.
+
 ### Added
 
+- **Auto-update is now an option, in both output formats and the UI.**
+  `AUTO_KUBERNETES_UPDATE` was decided entirely by the registry, with no way to
+  say otherwise short of editing the ConfigMap after generating.
+  `--auto-update` / `--no-auto-update` (option `auto_update`, "Agent
+  auto-update" under Security & RBAC in the UI, `autoUpdate` in the chart) now
+  set it either way, which is what made the default above a choice rather than
+  a removal. The generated README gives whichever upgrade instruction matches
+  the bundle, instead of one instruction that was wrong for half of them.
+
+  This is BlazeMeter's Kubernetes auto-updater. Their `AUTO_UPDATE` is a
+  different variable — documented as the Docker-side switch, inert on a
+  Kubernetes agent — and nothing this generator emits sets it.
+
+### Changed
+
+- **Engines drop privileges on every platform, not just OpenShift.** The two
+  ConfigMap keys that make crane stamp a security context on the pods it spawns
+  — `INHERIT_RUNNING_USER_AND_GROUP` and `KUBERNETES_SECURITY_CONTEXT_CAP_JSON`
+  — were emitted only for `platform=openshift`. Since `platform` defaults to
+  `openshift`, the restricted engine was already what most bundles got; naming
+  `k8s` quietly opted out of it and left crane's own default, which is a
+  *privileged* engine pod. Restricted PodSecurity, OpenShift's restricted-v2 SCC
+  and GKE Autopilot's Warden all refuse that — and refuse it after the agent is
+  online and the location reads ready, so the run hangs at `BOOT_STARTING`
+  rather than failing usefully. Nothing in those keys was ever
+  OpenShift-specific. Verified against the images that have to tolerate it —
+  the taurus engine, the doduo grid proxy and a charmander browser pod all
+  observed from inside a running container with every capability set zero, and
+  none of them needing one; see **Added** below. `--no-restrict-engines`
+  restores the old behaviour for an image that genuinely needs a capability, at
+  the cost of the posture on every container crane creates. `doctor` follows the
+  option rather than the platform: `pod-security.kubernetes.io/enforce=restricted`
+  is now a PASS, and a FAIL only when the restriction is turned off.
+
+### Fixed
+
+- **Browser images from a live GUI location now name repos that exist.** A
+  Kubernetes agent reports them as keys with a path of their own —
+  `blazemeter/charmander/chrome_136.0.7103.113` — and only the last segment was
+  kept, so the repo came out as `.../blazemeter/chrome_136.0.7103.113`, which
+  404s. With a private registry that is the failure the registry was configured
+  to prevent: the mirror script pulls nothing, or, if the mirroring was done
+  separately, `IMAGE_OVERRIDES` sends crane after an image nobody pushed and the
+  location dies mid-test on an `ImagePullBackOff`. Losing `charmander` from the
+  repo also cost the images their category — they came back `performance`, so a
+  performance-only location selected four browsers it has no use for. Both are
+  fixed by stripping only the redundant `blazemeter/` prefix. Flat keys and the
+  irregular ones (`taurus-cloud`→`v4`, `blazemeter`→`v3`) are unchanged.
+- **The crane pod now asks for the ephemeral storage it actually uses, and asks
+  for it as one number.** The request was `100Mi` against a `1Gi` limit; crane
+  reaches ~161MiB (107MiB of it `/tmp`) within seconds of starting, so the
+  request never described the pod on any platform — elsewhere only the limit
+  kept it alive. On GKE Autopilot, which rewrites the ephemeral-storage limit
+  down to the request, the pod came back `100Mi/100Mi` and was evicted about
+  twelve seconds into every start, indefinitely. Both fields are now `1Gi`, and
+  `--crane-ephemeral-storage SIZE` moves them together — one value, because a
+  gap between them is headroom on some platforms and a silent ceiling on
+  others. CPU and memory are unaffected and unchanged.
+
+### Added
+
+- **[docs/hardened-engines.md](docs/hardened-engines.md) — which images have
+  actually run under the hardened default.** The posture is a property of the
+  pod spec, so re-running it on another cluster proves little; what varies is
+  the image. Each image crane makes a pod from is recorded there with what was
+  read *inside* a running container, including a browser pod driving a real
+  Selenium session and an OpenShift run where the SCC, not `run_as_user`,
+  assigned the UID. Nothing needed a capability — which matters before reaching
+  for `--no-restrict-engines`, since it drops the posture for every container
+  crane creates, not for the one image that wanted something.
+  [docs/repro/hardened-posture-probe.yaml](docs/repro/hardened-posture-probe.yaml)
+  re-runs the image half against any tag, with no account and no crane.
 - **Choose the ServiceAccount the agent runs as, and whether to create it.**
   `--service-account <name>` (default `crane`, so existing bundles are
   unchanged) names the account the Deployment runs as and the one the

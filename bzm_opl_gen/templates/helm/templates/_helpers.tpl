@@ -125,23 +125,27 @@ Secret is in play, the ConfigMap otherwise. */}}
 {{- end -}}
 
 {{/*
-Whether crane updates itself. Unset follows the registry: a sealed location
-cannot pull a newer image anyway, so auto-update is off there and on otherwise.
+Whether crane updates itself. Unset is OFF, which is this chart departing from
+BlazeMeter's own Kubernetes manifest (it ships AUTO_KUBERNETES_UPDATE: 'true').
 
-Worth setting explicitly when Helm manages this release. With auto-update on,
-crane rewrites its own Deployment's `.image` (and `.spec.strategy.type`) as
-field manager `OpenAPI-Generator`, and Helm applies server-side -- so the next
-`helm upgrade` fails on a field-ownership conflict rather than a diff. Observed
-on a live cluster, not inferred. Turning it off leaves Helm the only writer, at
-the cost of upgrading the agent being your job.
+With it on, crane rewrites its own Deployment's `.image` and `.spec.strategy`
+as field manager `OpenAPI-Generator` within seconds of install, and Helm
+applies server-side -- so the next `helm upgrade` fails on a field-ownership
+conflict rather than a diff, with the ConfigMap already applied.
+`--force-conflicts` does not rescue it: forcing `type: Recreate` back leaves
+crane's `strategy.rollingUpdate` beside it and the API server rejects the pair,
+so changing anything means uninstall + install. Observed on a live cluster, not
+inferred. A chart whose default breaks its own upgrade path is not a default.
+
+The cost of off, and it is a real one: the agent stops upgrading itself, so
+keeping it current is your job, and one that falls far enough behind loses
+support.
 */}}
 {{- define "bzm-opl.autoUpdate" -}}
 {{- if kindIs "bool" .Values.autoUpdate -}}
 {{- .Values.autoUpdate | toString -}}
-{{- else if .Values.privateRegistry -}}
-false
 {{- else -}}
-true
+false
 {{- end -}}
 {{- end -}}
 

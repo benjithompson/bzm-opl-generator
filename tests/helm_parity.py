@@ -55,6 +55,14 @@ CASES = {
     "private-registry": {"platform": "k8s", "private_registry": "reg.example.com/bzm"},
     "registry-auth": {"platform": "k8s", "private_registry": "reg.example.com/bzm",
                       "registry_auth": True, "pull_secret": "regcred"},
+    # Both sides RESOLVE auto-update rather than pass it through -- the
+    # ConfigMap carries a boolean and the option is a tri-state -- so each
+    # format has its own copy of "unset follows the registry" and the two can
+    # disagree in either direction. The unset case is covered by every other
+    # entry here; these two are the ones where the customer overruled it.
+    "auto-update-off": {"platform": "k8s", "auto_update": False},
+    "auto-update-on-private-registry": {"platform": "k8s", "auto_update": True,
+                                        "private_registry": "reg.example.com/bzm"},
     "proxy": {"platform": "k8s", "proxy": {"http": "http://px:3128"}},
     # Credentials must reach the Secret, not the ConfigMap...
     "proxy-creds": {"platform": "k8s", "proxy": {"http": "http://px:3128",
@@ -73,6 +81,14 @@ CASES = {
                                     "value": "spot", "effect": "NoSchedule"}]},
     "ephemeral": {"platform": "k8s", "engine_ephemeral_request_mb": 1024,
                   "engine_ephemeral_limit_mb": 61440},
+    # Crane's own pod, which the engine case above does not touch. The chart
+    # keeps its own copy of the default and the overlay only names an override,
+    # so the two sides can disagree here without either looking wrong alone.
+    "crane-ephemeral": {"platform": "k8s", "crane_ephemeral_storage": "4Gi"},
+    # The escape hatch, not the default -- the default is covered by every other
+    # case here. Off is the side that can drift: the chart gates on its own
+    # value and the overlay only speaks when it is false.
+    "unrestricted-engines": {"platform": "k8s", "restrict_engines": False},
     # The name has to reach the Deployment and both binding subjects, and
     # `create` has to remove the object from one format exactly when it removes
     # it from the other -- a chart still rendering it would adopt an account the
