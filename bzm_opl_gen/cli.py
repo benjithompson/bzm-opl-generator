@@ -523,7 +523,12 @@ def main():
                         "context (privileged). Only for an image that needs a "
                         "capability -- a privileged engine is refused by "
                         "restricted PodSecurity, OpenShift SCC and GKE Autopilot, "
-                        "and the run hangs at BOOT_STARTING when it is")
+                        "and the run hangs at BOOT_STARTING when it is. It is "
+                        "all-or-nothing: the posture goes from every container "
+                        "crane creates, not from the one image that wanted "
+                        "something. docs/hardened-engines.md records which "
+                        "images have run under it and what they were observed "
+                        "to be given")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)

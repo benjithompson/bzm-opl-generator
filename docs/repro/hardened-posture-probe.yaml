@@ -1,0 +1,201 @@
+# Reproduction for docs/hardened-engines.md -- does an image tolerate the
+# security context crane stamps on the pods it spawns?
+#
+# No BlazeMeter account and no crane needed: each pod carries the context read
+# off a live crane-created pod (privileged false, allowPrivilegeEscalation
+# false, all capabilities dropped, crane's UID:GID inherited, pod-level
+# RuntimeDefault seccomp). Every pod holds two containers under that one
+# context: `run` starts the image's own entrypoint, and `id` replaces it with a
+# shell, so the identity can be read from a container that stays up whatever
+# the entrypoint does.
+#
+#   kubectl apply -f docs/repro/hardened-posture-probe.yaml
+#   for p in torero richrach doduo charmander; do
+#     echo "== $p"
+#     kubectl -n bzm-hardening exec $p -c id -- sh -c \
+#       'id; grep -E "^(CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs):" /proc/self/status'
+#     kubectl -n bzm-hardening logs $p -c run | tail -3
+#   done
+#   kubectl delete ns bzm-hardening
+#
+# Every pod settles at `1/2  Error`: that is the `run` container having exited,
+# with `id` still up, which is the one the exec above talks to.
+#
+# Measured 2026-07-28 on GKE Autopilot (k8s 1.35, amd64), against the tags a
+# live GUI-functional location reported:
+#
+#   torero      uid=1337(blazemeter) gid=1337   ValueError on int(TEST_ID)
+#   richrach    uid=1337(blazemeter) gid=1337   KeyError: None  (no COMMAND)
+#   doduo       uid=1337 gid=1337               redis up, gunicorn workers fail
+#                                               to boot (Doduo Port: None)
+#   charmander  uid=1337 gid=1337               services start, S3 client dies
+#                                               on an empty endpoint
+#
+# with CapPrm/CapEff/CapBnd/CapAmb all `0000000000000000` in each. Every `run`
+# failure above is the image reaching its own configuration, not being refused a
+# capability -- crane supplies TEST_ID, a session, an S3 endpoint.
+#
+# The control is what the same read gives with nothing dropped. An ordinary pod
+# on the same cluster (`kubectl run control --image=busybox:1.36 --command --
+# sh -c 'id; grep CapPrm /proc/self/status'`, in a namespace without the
+# `restricted` label, which would reject it) reports `uid=0(root)` and
+# `CapPrm: 00000000a80405fb` -- so a zero here is the context taking effect,
+# not the read failing to find anything.
+#
+# To measure the other UID source -- the openshift-shaped spec on a cluster
+# with no SCC to assign one -- drop the two runAs lines and re-apply:
+#
+#   sed -e '/runAsUser:/d' -e '/runAsGroup:/d' \
+#       -e 's/name: bzm-hardening/name: bzm-hardening-unset/' \
+#       -e 's/namespace: bzm-hardening/namespace: bzm-hardening-unset/' \
+#     docs/repro/hardened-posture-probe.yaml | kubectl apply -f -
+#
+# Measured there: doduo and charmander start as uid 1337 gid 0 (both declare a
+# numeric USER), while torero and richrach stay in CreateContainerConfigError --
+# `container has runAsNonRoot and image has non-numeric user (blazemeter)`.
+# That is why the pinned UID on the k8s path is the more defensive choice, and
+# why it is only safe to leave unset where an SCC fills it in.
+#
+# The image list is not fixed: replace a tag with the one `bzm-opl-gen facts`
+# reports for the location you care about, since only a live agent says which
+# browser image a location uses. crane, the taurus engine and service-mock are
+# deliberately absent -- a real run creates those, and docs/hardened-engines.md
+# records them from the run rather than from here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bzm-hardening
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: torero
+  namespace: bzm-hardening
+spec:
+  restartPolicy: Never
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: run
+      image: &torero gcr.io/verdant-bulwark-278/blazemeter/torero:4.6.182
+      securityContext: &ctx
+        privileged: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        capabilities:
+          drop: [ALL]
+      resources: &small
+        requests:
+          cpu: 200m
+          memory: 512Mi
+    - name: id
+      image: *torero
+      command: ["sh", "-c", "sleep 7200"]
+      securityContext: *ctx
+      resources: *small
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: richrach
+  namespace: bzm-hardening
+spec:
+  restartPolicy: Never
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: run
+      image: &richrach gcr.io/verdant-bulwark-278/blazemeter/richrach:1.0.81
+      securityContext: &ctx
+        privileged: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        capabilities:
+          drop: [ALL]
+      resources: &small
+        requests:
+          cpu: 200m
+          memory: 512Mi
+    - name: id
+      image: *richrach
+      command: ["sh", "-c", "sleep 7200"]
+      securityContext: *ctx
+      resources: *small
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: doduo
+  namespace: bzm-hardening
+spec:
+  restartPolicy: Never
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: run
+      image: &doduo gcr.io/verdant-bulwark-278/blazemeter/doduo:0.0.144
+      securityContext: &ctx
+        privileged: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        capabilities:
+          drop: [ALL]
+      resources: &small
+        requests:
+          cpu: 200m
+          memory: 512Mi
+    - name: id
+      image: *doduo
+      command: ["sh", "-c", "sleep 7200"]
+      securityContext: *ctx
+      resources: *small
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: charmander
+  namespace: bzm-hardening
+spec:
+  restartPolicy: Never
+  securityContext:
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    # The browser image is the one worth driving by hand as well as starting:
+    #   kubectl -n bzm-hardening exec charmander -c id -- sh -c \
+    #     'HOME=/tmp google-chrome --headless=new --no-sandbox \
+    #      --disable-setuid-sandbox --disable-gpu --user-data-dir=/tmp/cd \
+    #      --dump-dom https://blazedemo.com | head -3'
+    # renders the page; without --no-sandbox Chrome aborts, which is expected
+    # and is not a reason to hand the pod a capability. See the doc.
+    - name: run
+      image: &charmander gcr.io/verdant-bulwark-278/blazemeter/charmander/chrome_136.0.7103.113:2.10.45
+      securityContext: &ctx
+        privileged: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        capabilities:
+          drop: [ALL]
+      resources: &browser
+        requests:
+          cpu: 500m
+          memory: 1Gi
+    - name: id
+      image: *charmander
+      command: ["sh", "-c", "sleep 7200"]
+      securityContext: *ctx
+      resources: *browser

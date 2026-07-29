@@ -32,7 +32,7 @@ export function SecurityGroup(props: {
           after the agent is already online. The hint says what unchecking
           costs rather than what checking buys. */}
       <Check label="Engines drop privileges"
-        hint="uncheck only for an image needing a capability; privileged engines are rejected by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
+        hint="uncheck only for an image needing a capability, and it unchecks for every container crane creates; privileged engines are rejected by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
         checked={props.restrictEngines}
         onChange={props.onRestrictEngines} />
       <Field label="Service type"

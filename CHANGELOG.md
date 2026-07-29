@@ -23,11 +23,13 @@ anything that breaks.
   and GKE Autopilot's Warden all refuse that — and refuse it after the agent is
   online and the location reads ready, so the run hangs at `BOOT_STARTING`
   rather than failing usefully. Nothing in those keys was ever
-  OpenShift-specific. Verified with a real JMeter run on GKE Autopilot: the
-  engine comes back `privileged: false`, `uid=1337`, all capabilities dropped,
-  and returns 20 samples with 0 failures. `--no-restrict-engines` restores the
-  old behaviour for an image that genuinely needs a capability. `doctor` follows
-  the option rather than the platform: `pod-security.kubernetes.io/enforce=restricted`
+  OpenShift-specific. Verified against the images that have to tolerate it —
+  the taurus engine, the doduo grid proxy and a charmander browser pod all
+  observed from inside a running container with every capability set zero, and
+  none of them needing one; see **Added** below. `--no-restrict-engines`
+  restores the old behaviour for an image that genuinely needs a capability, at
+  the cost of the posture on every container crane creates. `doctor` follows the
+  option rather than the platform: `pod-security.kubernetes.io/enforce=restricted`
   is now a PASS, and a FAIL only when the restriction is turned off.
 
 ### Fixed
@@ -45,6 +47,17 @@ anything that breaks.
 
 ### Added
 
+- **[docs/hardened-engines.md](docs/hardened-engines.md) — which images have
+  actually run under the hardened default.** The posture is a property of the
+  pod spec, so re-running it on another cluster proves little; what varies is
+  the image. Each image crane makes a pod from is recorded there with what was
+  read *inside* a running container, including a browser pod driving a real
+  Selenium session and an OpenShift run where the SCC, not `run_as_user`,
+  assigned the UID. Nothing needed a capability — which matters before reaching
+  for `--no-restrict-engines`, since it drops the posture for every container
+  crane creates, not for the one image that wanted something.
+  [docs/repro/hardened-posture-probe.yaml](docs/repro/hardened-posture-probe.yaml)
+  re-runs the image half against any tag, with no account and no crane.
 - **Choose the ServiceAccount the agent runs as, and whether to create it.**
   `--service-account <name>` (default `crane`, so existing bundles are
   unchanged) names the account the Deployment runs as and the one the

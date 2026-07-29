@@ -393,12 +393,13 @@ def _configmap(facts, o):
         # the pod that was refused is one crane creates and no manifest here
         # names.
         #
-        # Measured on GKE Autopilot with a real JMeter run: the engine comes
-        # back `privileged: false`, and inside the container `uid=1337 gid=1337`
-        # with CapEff/CapPrm all zero, producing 20 samples and 0 failures. What
-        # engines inherit differs by platform -- an SCC-assigned UID on
-        # OpenShift, crane's pinned run_as_user on k8s -- but wanting no
-        # privileges does not.
+        # What has to tolerate this is images, not clusters: a shape the
+        # strictest cluster admits is admitted everywhere by construction, and
+        # once admitted the container's identity comes from the spec. So the
+        # evidence is per image, and docs/hardened-engines.md is where it is
+        # kept -- which images have run under this, what was read from inside
+        # them, and the one thing that does vary by platform, namely whether an
+        # SCC assigns the UID crane passes down or run_as_user pins it.
         lines += [
             "  # Engines inherit crane's UID:GID and drop all capabilities, so the",
             "  # pods crane spawns pass restricted PodSecurity, OpenShift's",
