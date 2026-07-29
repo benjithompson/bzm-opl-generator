@@ -126,6 +126,11 @@ def workspaces(account_id: int):
 
 @app.get("/api/locations")
 def locations(account_id: Optional[int] = None, workspace_id: Optional[int] = None):
+    # Scope checked before the client is resolved, and the order is the whole
+    # reason this is two calls: a request naming neither scope is malformed
+    # with or without a key, so answering 401 would send the caller off to
+    # configure one and then refuse them anyway.
+    _answer(core.require_location_scope, account_id, workspace_id)
     return _answer(core.locations, _client(), account_id, workspace_id)
 
 

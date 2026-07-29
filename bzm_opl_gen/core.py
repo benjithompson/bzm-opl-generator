@@ -131,9 +131,21 @@ def workspaces(client, account_id):
     return _upstream(client.workspaces, account_id)
 
 
-def locations(client, account_id=None, workspace_id=None):
+def require_location_scope(account_id=None, workspace_id=None):
+    """A locations listing has to be scoped to something.
+
+    Callable on its own, and not only from inside locations(), because a
+    request naming neither scope is malformed whether or not a credential was
+    configured -- so a caller that also has a credential to check wants to ask
+    this first. Answering "no API key" to a request that would have been
+    refused anyway sends the person to fix the wrong thing.
+    """
     if not account_id and not workspace_id:
         raise BadRequest("account_id or workspace_id required")
+
+
+def locations(client, account_id=None, workspace_id=None):
+    require_location_scope(account_id, workspace_id)
     return _upstream(client.private_locations, account_id, workspace_id)
 
 

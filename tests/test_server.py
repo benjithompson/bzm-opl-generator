@@ -281,6 +281,13 @@ def test_api_requires_key():
     assert client.get("/api/accounts").status_code == 401
 
 
+def test_a_malformed_request_is_refused_before_the_missing_key_is():
+    """Neither scope given: that is wrong with or without a key, and 401 would
+    send the caller off to configure one only to be refused again."""
+    r = client.get("/api/locations")
+    assert r.status_code == 400 and "account_id" in r.json()["detail"]
+
+
 # -- reading the cluster from the server ---------------------------------------
 # The one thing this server does that is not the BlazeMeter API. It is optional
 # everywhere: the UI is API-only by design and most people running it have no

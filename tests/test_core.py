@@ -298,6 +298,15 @@ def test_sv_check_refuses_a_scheme_it_does_not_speak():
         core.sv_check("host.example.com", scheme="file")
 
 
+def test_listing_locations_needs_a_scope():
+    """Asked on its own by a caller that also has a credential to check, so
+    that the malformed request is refused before the missing key is."""
+    with pytest.raises(core.BadRequest):
+        core.require_location_scope(None, None)
+    assert core.require_location_scope(account_id=1) is None
+    assert core.require_location_scope(workspace_id=2) is None
+
+
 # -- where a key might be -----------------------------------------------------
 
 def test_key_candidates_read_the_environment_when_asked(monkeypatch, tmp_path):
