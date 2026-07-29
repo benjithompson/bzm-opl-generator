@@ -12,7 +12,26 @@ a location & agent, or enter the harbor id, ship id and token by hand → choose
 what the location runs → configure → live manifest preview → download zip
 (AUTH_TOKEN fetched on download when connected, as entered when not) → watch the
 agent flip online. Profile JSON import/export round-trips with
-`generate --profile`. Frontend dev:
+`generate --profile`.
+
+**Save to folder** writes the same bundle (profile.json included) to a
+directory on the machine running the server, instead of a browser download.
+That directory is the shape `bzm-opl-gen livetest` re-renders from and an MCP
+session's `opl_bundle` reads, so it is the handoff between the UI and both:
+configure here, then `kubectl apply` / livetest / ask an AI session to carry
+on from the same folder. The token caveat is the download button's exactly —
+when connected, every save fetches (and so rotates) the AUTH_TOKEN.
+
+**Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
+writes a LaunchAgent that serves the UI from login onward with whatever
+`--port`/`--host`/`--api-key` you gave it, restarts it if it dies, and logs to
+`~/Library/Logs/bzm-opl-gen-ui.log`. `--uninstall-service` removes it. The
+agent runs the python that installed it, so rebuilding or moving the venv
+means reinstalling the service. Not docker, deliberately: the point of saving
+bundles is that `kubectl` on this machine can apply them, and a container
+puts a filesystem boundary exactly there.
+
+Frontend dev:
 `cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
 build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
 runs the logic suites CI runs as its own job — the option groups and the

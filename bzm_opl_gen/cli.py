@@ -395,6 +395,27 @@ def cmd_mcp(a):
 
 
 def cmd_ui(a):
+    if a.install_service or a.uninstall_service:
+        # Before the server import: installing the agent needs no fastapi, and
+        # the point of the service is that *launchd's* python serves -- this
+        # process only writes the plist and hands it over.
+        from . import service
+        try:
+            if a.uninstall_service:
+                out = service.uninstall()
+                print(f"removed {out['removed']}" if out["removed"]
+                      else "nothing installed -- no plist to remove")
+            else:
+                out = service.install(port=a.port, host=a.host,
+                                      api_key_path=a.api_key)
+                print(f"installed {out['plist']}\n"
+                      f"serving {out['url']} from login onward "
+                      f"(restarts if it dies)\n"
+                      f"logs: {out['log']}\n"
+                      f"remove with: bzm-opl-gen ui --uninstall-service")
+        except service.ServiceError as e:
+            sys.exit(str(e))
+        return
     try:
         from . import server
     except ImportError:
@@ -691,6 +712,13 @@ def main():
     u.add_argument("--dev", action="store_true",
                    help="auto-restart on backend code changes; pair with "
                         "`npm run dev` in frontend/ for UI hot-reload")
+    u.add_argument("--install-service", action="store_true",
+                   help="macOS: install a LaunchAgent that serves the UI from "
+                        "login onward (with --port/--host/--api-key as given) "
+                        "instead of serving now; uses this python, so "
+                        "reinstall if the venv moves")
+    u.add_argument("--uninstall-service", action="store_true",
+                   help="macOS: unload and remove the LaunchAgent")
     u.set_defaults(fn=cmd_ui)
 
     a = p.parse_args()
