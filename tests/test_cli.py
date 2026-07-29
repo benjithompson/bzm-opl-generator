@@ -20,6 +20,9 @@ from bzm_opl_gen import cli, generate as gen, livetest
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
+# The stand-in account, and the one that will not issue a credential, as core's
+# suite declares them.
+from test_core import FakeClient, RefusingClient  # noqa: E402
 
 SV_PODS = json.dumps({"items": [
     _sv_pod("vs1svc2", 8080, "aaa111", "bbb222"),
@@ -191,6 +194,37 @@ def test_generate_fetches_no_token_without_an_api_key(monkeypatch, tmp_path,
     cli.main()
     assert "fetched AUTH_TOKEN" not in capsys.readouterr().out
     assert gen.DEFAULT_OPTIONS["auth_token"] in (out / "bzm_secret.yaml").read_text()
+
+
+def _create_ship(monkeypatch, client):
+    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: client)
+    monkeypatch.setattr("sys.argv", [
+        "bzm-opl-gen", "create-ship", "--api-key",
+        "examples/api-key.example.json", "--harbor-id", "aaa111",
+        "--name", "agent1"])
+    cli.main()
+
+
+def test_create_ship_prints_the_agent_and_its_token(monkeypatch, capsys):
+    """The working path, kept alongside the refused one: the ids are printed
+    before the fetch is attempted, and the token still arrives with them."""
+    _create_ship(monkeypatch, FakeClient())
+    out = capsys.readouterr().out
+    assert "ship_id:    s2" in out
+    assert "auth_token: TOKEN-FROM-API" in out
+
+
+def test_create_ship_reports_a_refused_credential_and_the_ship_it_made(
+        monkeypatch, capsys):
+    """`create-ship` is one of the two callers that keep fetching a token, and
+    the ship exists before the fetch. On an account that refuses the endpoint,
+    printing only the failure loses the id -- and the next attempt creates a
+    second agent for the same location."""
+    with pytest.raises(SystemExit) as caught:
+        _create_ship(monkeypatch, RefusingClient())
+    assert "could not be issued" in str(caught.value)
+    assert "--auth-token" in str(caught.value)
+    assert "s2" in capsys.readouterr().out
 
 
 def test_generate_never_asks_which_of_two_ships(monkeypatch, tmp_path):

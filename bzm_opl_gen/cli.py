@@ -85,9 +85,18 @@ def cmd_delete_location(a):
 def cmd_create_ship(a):
     client = api.BzmClient(a.api_key)
     ship = client.create_ship(a.harbor_id, a.name)
-    token = client.auth_token(a.harbor_id, ship["id"])
+    # The ids first, then the token: the agent exists whatever the token endpoint
+    # answers, and an account that refuses the fetch would otherwise leave the
+    # only record of it in a traceback -- so the next attempt creates a second
+    # agent for the same location.
     print(f"harbor_id:  {a.harbor_id}")
     print(f"ship_id:    {ship['id']}  (name: {ship.get('name')})")
+    try:
+        # core's fetch, for its refusal: the raw 403 body names no ship and no
+        # way on. Exit on it rather than raise -- the message is the answer.
+        token = core.fetch_ship_token(client, a.harbor_id, ship["id"])
+    except core.CoreError as e:
+        sys.exit(str(e))
     print(f"auth_token: {token}")
     print(f"\nnext: bzm-opl-gen facts --api-key {a.api_key} --harbor-id {a.harbor_id}")
     print(f"      bzm-opl-gen generate --ship-id {ship['id']} --api-key {a.api_key} ...")
@@ -311,7 +320,8 @@ def _regenerator(client, facts, a, ship_id):
         opts.update(overlay)
         opts["namespace"] = a.namespace
         opts["ship_id"] = opts.get("ship_id") or ship_id
-        opts["auth_token"] = client.auth_token(facts["harbor_id"], opts["ship_id"])
+        opts["auth_token"] = core.fetch_ship_token(client, facts["harbor_id"],
+                                                   opts["ship_id"])
         written = gen_mod.write(gen_mod.generate(facts, opts), a.manifests)
         print(f"regenerated {len(written)} files in {a.manifests}/ with "
               f"proxy + CA trust: " + ", ".join(written))
