@@ -207,15 +207,35 @@ def test_overlay_offers_no_engine_request_knob():
     assert "not settable" in files[gen.HELM_VALUES_FILE]
 
 
-def test_auto_update_is_left_to_the_chart():
+def test_auto_update_is_left_to_the_chart_when_unset():
     """A Helm-managed release usually wants autoUpdate false -- crane otherwise
     takes ownership of its own Deployment and the next upgrade conflicts -- but
-    that changes how the customer's agent gets upgraded, so the overlay offers
-    the key and does not decide it."""
+    that changes how the customer's agent gets upgraded, so an overlay that was
+    not told stays silent and lets the chart resolve it from privateRegistry."""
     v, files = _values()
     assert "autoUpdate" in v
     assert v["autoUpdate"] is None
     assert "helm upgrade" in files[gen.HELM_VALUES_FILE]
+
+
+def test_auto_update_is_stated_when_it_was_chosen():
+    """Stated, not left to the chart to infer: the chart resolves an unset
+    value from privateRegistry, so a later edit adding or dropping a registry
+    would flip a setting somebody had made deliberately."""
+    assert _values(auto_update=False)[0]["autoUpdate"] is False
+    assert _values(auto_update=True)[0]["autoUpdate"] is True
+    v, _ = _values(auto_update=True, private_registry="reg.local/bzm")
+    assert v["autoUpdate"] is True, "an explicit value must survive a registry"
+
+
+def test_readme_upgrade_advice_matches_the_overlay():
+    """Two instructions, and the wrong one wastes the upgrade: the default
+    bundle upgrades normally, and only a bundle that asked for auto-update
+    needs telling that it cannot."""
+    default = gen.generate(FACTS, BASE)["README.md"]
+    assert "autoUpdate: false" not in default and "helm upgrade" in default
+    on = gen.generate(FACTS, {**BASE, "auto_update": True})["README.md"]
+    assert "autoUpdate: false" in on
 
 
 def test_engine_sizing_is_passed_through_unresolved():
@@ -395,11 +415,10 @@ def test_readme_is_short_and_actionable():
     assert "helm install crane" in readme
     assert "rollout status deploy/crane" in readme
     assert "online" in readme
-    # The upgrade trap still has to be said -- briefly -- because it bites
-    # silently and the fix is a value most people would not guess.
-    assert "autoUpdate: false" in readme
-    # ...and never as a bare `helm upgrade` that would hit the conflict.
-    assert not any(l.startswith("helm upgrade") for l in readme.splitlines())
+    # The default bundle upgrades normally now, so the README says so rather
+    # than carrying the old "set autoUpdate: false first" instruction.
+    assert "helm upgrade" in readme
+    assert "autoUpdate: false" not in readme
 
 
 def test_readme_names_the_overlay_in_its_install_command():

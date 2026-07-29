@@ -55,6 +55,14 @@ CASES = {
     "private-registry": {"platform": "k8s", "private_registry": "reg.example.com/bzm"},
     "registry-auth": {"platform": "k8s", "private_registry": "reg.example.com/bzm",
                       "registry_auth": True, "pull_secret": "regcred"},
+    # Both sides RESOLVE auto-update rather than pass it through -- the
+    # ConfigMap carries a boolean and the option is a tri-state -- so each
+    # format has its own copy of "unset follows the registry" and the two can
+    # disagree in either direction. The unset case is covered by every other
+    # entry here; these two are the ones where the customer overruled it.
+    "auto-update-off": {"platform": "k8s", "auto_update": False},
+    "auto-update-on-private-registry": {"platform": "k8s", "auto_update": True,
+                                        "private_registry": "reg.example.com/bzm"},
     "proxy": {"platform": "k8s", "proxy": {"http": "http://px:3128"}},
     # Credentials must reach the Secret, not the ConfigMap...
     "proxy-creds": {"platform": "k8s", "proxy": {"http": "http://px:3128",

@@ -18,7 +18,7 @@ went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
 is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
 optional deps import rather than trusting a green run.
 
-**Helm parity (`python tests/helm_parity.py`)** — renders 19 option
+**Helm parity (`python tests/helm_parity.py`)** — renders 23 option
 combinations as both `--format manifests` and `--format helm` and requires the
 same objects out of each. Deliberately *not* a pytest module: it shells out to
 `helm`, and a test that skips when a binary is missing is the fastapi problem

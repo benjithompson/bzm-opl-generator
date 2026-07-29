@@ -73,8 +73,9 @@ bzm-opl-gen generate --api-key api-key.json --harbor-id <H> \
 # out/bzm-opl-image-mirror.sh to mirror the images first
 ```
 
-Setting `privateRegistry` also turns `AUTO_KUBERNETES_UPDATE` off — upgrading a
-sealed location is re-mirror plus bump tags, not a silent pull.
+Upgrading a sealed location is re-mirror plus bump tags, not a silent pull —
+`autoUpdate` is off by default anyway, and leaving it that way is what a private
+registry wants.
 
 **Corporate CA** — four modes, pick one:
 
@@ -135,16 +136,17 @@ that.
 
 ## Upgrading, and crane's self-update
 
-**Set `autoUpdate: false` if you manage this release with Helm.** Then
-`helm upgrade` behaves normally, and a configuration-only change still rolls the
-pod (the Deployment carries checksums of the ConfigMap and Secret).
+**`autoUpdate` is off by default**, unlike BlazeMeter's own Kubernetes manifest,
+which ships it on. With the default, `helm upgrade` behaves normally and a
+configuration-only change still rolls the pod (the Deployment carries checksums
+of the ConfigMap and Secret). The cost is below.
 
-Left on — the default — crane takes ownership of its own Deployment within
-seconds of install, as field manager `OpenAPI-Generator`. It rewrites the
-container image to the version BlazeMeter currently ships, and `.spec.strategy`
-from `Recreate` to `RollingUpdate{maxSurge: 1}`. Helm applies server-side, so the
-next `helm upgrade` fails on a field-ownership conflict having already applied
-the ConfigMap.
+Set it `true` and crane takes ownership of its own Deployment within seconds of
+install, as field manager `OpenAPI-Generator`. It rewrites the container image
+to the version BlazeMeter currently ships, and `.spec.strategy` from `Recreate`
+to `RollingUpdate{maxSurge: 1}`. Helm applies server-side, so the next
+`helm upgrade` fails on a field-ownership conflict having already applied the
+ConfigMap.
 
 `--force-conflicts` does not rescue it. This chart never declares
 `strategy.rollingUpdate`, so crane's copy survives beside the forced
@@ -157,9 +159,10 @@ may not be specified when strategy `type` is 'Recreate'
 
 With auto-update on, changing anything is `helm uninstall` + `helm install`.
 
-All of this was observed on a live cluster. The cost of turning it off is that
-keeping the agent current becomes your job — re-generate, or bump `image.tag` —
-and an agent that falls far enough behind loses support.
+All of this was observed on a live cluster, and it is why the default is off.
+The cost of that default is that keeping the agent current is your job —
+re-generate, or bump `image.tag` and upgrade — and an agent that falls far
+enough behind loses support.
 
 ## Cluster RBAC
 

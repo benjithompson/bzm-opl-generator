@@ -3,6 +3,7 @@
 import collections
 import json
 import os
+import re
 import shlex
 from string import Template
 from urllib.parse import quote
@@ -25,6 +26,15 @@ DEFAULT_OPTIONS = {
     "private_registry": None,        # e.g. registry.example.com/blazemeter
     "pull_secret": None,             # name of docker-registry secret for crane image
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
+    # AUTO_KUBERNETES_UPDATE -- BlazeMeter's Kubernetes auto-updater, which
+    # rewrites crane's own Deployment when a newer agent ships. Three states,
+    # where None means "not asked, take the default" -- and the default is OFF;
+    # see auto_update() for why this generator departs from BlazeMeter's own
+    # manifest there. The chart's `autoUpdate` is the same tri-state with the
+    # same default, which is why the overlay leaves it unset unless it was
+    # chosen. (BlazeMeter's AUTO_UPDATE is a different variable and a
+    # Docker-only one, so nothing here emits it.)
+    "auto_update": None,             # None | True | False
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     # The ServiceAccount crane runs as. The name is used either way -- what
     # `create` decides is only whether the bundle carries the ServiceAccount
@@ -438,9 +448,6 @@ def _configmap(facts, o):
             f"  # inventory ({facts.get('images_source', 'unknown')}).",
             f"  DOCKER_REGISTRY: {o['private_registry']}",
             f"  IMAGE_OVERRIDES: '{json.dumps(overrides)}'",
-            "  # Auto-update pulls from BlazeMeter's public registry -- disabled for",
-            "  # private-registry clusters. Upgrade = re-mirror + bump tags.",
-            "  AUTO_KUBERNETES_UPDATE: 'false'",
         ]
         if o["registry_auth"]:
             lines += [
@@ -450,9 +457,29 @@ def _configmap(facts, o):
                 "  # DOCKER_REGISTRY_EMAIL: <email>",
             ]
     else:
+        lines.append(f"  DOCKER_REGISTRY: {PUBLIC_REGISTRY}")
+    # Emitted after the registry either way: what a self-update would pull from
+    # is the registry above, so the two read together. See auto_update() for
+    # why off is the default here and true in BlazeMeter's own manifest.
+    if auto_update(o):
         lines += [
-            f"  DOCKER_REGISTRY: {PUBLIC_REGISTRY}",
+            "  # Auto-update ON (--auto-update). Crane rewrites this Deployment --",
+            "  # its image, and .spec.strategy to RollingUpdate -- when BlazeMeter",
+            "  # ships a newer agent. It takes field ownership doing so, which is",
+            "  # what makes a later `helm upgrade` conflict; with kubectl, expect",
+            "  # the image you apply to be replaced by whatever is current."
+            + ("\n  # The newer tag has to be in your registry before crane looks"
+               "\n  # for it." if o["private_registry"] else ""),
             "  AUTO_KUBERNETES_UPDATE: 'true'",
+        ]
+    else:
+        lines += [
+            "  # Crane leaves this Deployment alone, so the image above is the",
+            "  # version that runs until you re-generate and re-apply. Keeping the",
+            "  # agent current is your job -- one far enough behind loses support.",
+            "  # --auto-update hands that back to crane, at the cost of it owning",
+            "  # fields Helm and kubectl then fight it for.",
+            "  AUTO_KUBERNETES_UPDATE: 'false'",
         ]
     if o["proxy"]:
         p = o["proxy"]
@@ -706,6 +733,35 @@ def _security_context(o):
     )
 
 
+AUTH_TOKEN_RE = re.compile(r'^\s*AUTH_TOKEN:\s*"?([^"\s]+)"?\s*$', re.M)
+
+
+def existing_auth_token(output_dir):
+    """The AUTH_TOKEN already written into the bundle at `output_dir`, or None.
+
+    Read back rather than re-fetched because fetching *mints*. The call behind
+    it is a POST to /private-locations/{h}/ships/{s}/docker-command, which
+    issues a fresh token and invalidates the one before it -- so regenerating a
+    bundle merely to look at it stops the agent already running from the last
+    one. Silently, too: crane answers a dead token with 404 on /versions, logs
+    `Sleeping for 300`, and never starts its health web service, so the pod sits
+    `0/1 Running` looking like a slow boot rather than a revoked credential.
+
+    Both files are checked because which one carries the token is use_secret's
+    decision, and a bundle regenerated with the flag flipped should still find
+    the token its predecessor wrote.
+    """
+    for name in ("bzm_secret.yaml", "bzm_configmap.yaml"):
+        try:
+            with open(os.path.join(output_dir, name)) as fh:
+                m = AUTH_TOKEN_RE.search(fh.read())
+        except OSError:
+            continue
+        if m and m.group(1) != DEFAULT_OPTIONS["auth_token"]:
+            return m.group(1)
+    return None
+
+
 def service_account(o):
     """The ServiceAccount name every reference uses -- the Deployment's
     serviceAccountName and both binding subjects -- whether or not this bundle
@@ -726,6 +782,53 @@ def service_account(o):
             "or not service_account_create emits the ServiceAccount itself. "
             "Pass --service-account <name> (the default is 'crane')")
     return name
+
+
+def auto_update(o):
+    """Resolve `auto_update` to the boolean AUTO_KUBERNETES_UPDATE carries.
+
+    That variable, not BlazeMeter's `AUTO_UPDATE`: the latter is documented as
+    the Docker-side switch and does nothing on a Kubernetes agent, so this
+    generator never emits it. Named here because the two are one word apart and
+    picking the wrong one produces a bundle whose setting is simply ignored.
+
+    **Unset is off, and that is a deliberate departure from BlazeMeter.** Their
+    manual Kubernetes manifest ships `AUTO_KUBERNETES_UPDATE: 'true'`, and this
+    generator copied it until the cost was measured on a live cluster: with the
+    updater on, crane takes ownership of its own Deployment within seconds of
+    install as field manager `OpenAPI-Generator`, rewriting the container image
+    and `.spec.strategy` from Recreate to RollingUpdate. Helm applies
+    server-side, so the *next* `helm upgrade` fails on a field-ownership
+    conflict, having already applied the ConfigMap -- and `--force-conflicts`
+    does not rescue it, because forcing `type: Recreate` back leaves crane's
+    `strategy.rollingUpdate` beside it and the API server rejects the pair. The
+    fix was a value the customer had to know to set before installing, in a
+    bundle that did not say so until they read the README after the failure.
+
+    So the bundle now ships the configuration whose upgrades work, and
+    `--auto-update` is how you ask for the other one. What off costs is real
+    and is stated wherever it is emitted: the agent stops upgrading itself, and
+    one far enough behind loses BlazeMeter support.
+
+    It does NOT follow the registry any more. It used to -- off with a mirror,
+    on without -- which meant the trap was sprung only for customers pulling
+    from the public registry, i.e. most of them. A private registry is now one
+    reason among others to leave the default alone rather than a special case
+    in the resolution.
+
+    `.get`, not `[]`: livetest judges a profile.json written by an older
+    version of this tool, where the key is simply absent. Mirrors the chart's
+    `bzm-opl.autoUpdate` helper -- both sides resolve it, so helm parity
+    compares the same string.
+    """
+    chosen = o.get("auto_update")
+    if isinstance(chosen, bool):
+        return chosen
+    if chosen is not None:
+        raise ValueError(
+            f"auto_update must be true, false or unset, got {chosen!r} -- "
+            "unset means off, the default that keeps `helm upgrade` working")
+    return False
 
 
 def _crane_image(facts, o):
@@ -877,20 +980,36 @@ def _helm_values(facts, o):
         ]
     else:
         lines += [
-            '# Empty -> BlazeMeter\'s public registry, and auto-update stays on.',
+            "# Empty -> BlazeMeter's public registry.",
             'privateRegistry: ""',
             "imageOverrides: {}",
             "registryAuth: false",
         ]
-    lines += [
-        "",
-        "# Left to the chart's default (on here, off with a private registry).",
-        "# Set false if you will manage this release with `helm upgrade`: left on,",
-        "# crane takes ownership of its own Deployment and the next upgrade fails",
-        "# on a field-ownership conflict. See autoUpdate in the chart's values.yaml",
-        "# for what that costs either way.",
-        "autoUpdate:",
-    ]
+    if o["auto_update"] is None:
+        lines += [
+            "",
+            "# Left to the chart's default, which is off: crane leaves its own",
+            "# Deployment to Helm, so `helm upgrade` works and keeping the agent",
+            "# current is your job. See autoUpdate in the chart's values.yaml for",
+            "# what turning it on costs.",
+            "autoUpdate:",
+        ]
+    else:
+        # Stated rather than left to the chart, even where it agrees with the
+        # chart's default: this overlay is the record of what was asked for,
+        # and `--auto-update` in particular is a decision someone should find
+        # in the file rather than infer from its absence.
+        lines += [
+            "",
+            ("# On by request: crane rewrites its own Deployment's image when "
+             "BlazeMeter\n# ships a newer agent, so `helm upgrade` needs "
+             "--force-conflicts -- and that\n# does not always rescue it. See "
+             "autoUpdate in the chart's values.yaml."
+             if o["auto_update"] else
+             "# Off, which is also the chart's default: crane leaves its own "
+             "Deployment\n# to Helm, and keeping the agent current is your job."),
+            f"autoUpdate: {'true' if o['auto_update'] else 'false'}",
+        ]
     lines += [
         "",
         f"clusterRbac: {'true' if o['cluster_rbac'] else 'false'}",
@@ -992,6 +1111,25 @@ def _helm_values(facts, o):
     return "\n".join(lines) + "\n"
 
 
+def _upgrade_bullet(o):
+    """What `helm upgrade` does to this particular overlay.
+
+    Two different instructions, and handing someone the wrong one wastes the
+    upgrade. The default bundle upgrades normally; only one that asked for
+    auto-update needs telling that it cannot, and telling it *before* the
+    upgrade that would otherwise half-apply."""
+    if auto_update(o):
+        return (f"- **Upgrading:** this bundle asked for auto-update, so crane "
+                f"owns its own\n  Deployment and `helm upgrade` fails on a "
+                f"conflict. Change things by\n  reinstalling, or set "
+                f"`autoUpdate: false` in `{HELM_VALUES_FILE}` and reinstall "
+                f"once.")
+    return ("- **Upgrading:** `helm upgrade` works as it should -- auto-update "
+            "is off, so\n  Helm is the only writer of the Deployment. Keeping "
+            "the agent current is\n  your job: bump `image.tag` and upgrade "
+            "(an agent far behind loses support).")
+
+
 def _helm_readme(facts, o):
     """The page someone hands a customer: instructions, not reasoning. The
     chart's own helm/README.md carries the why."""
@@ -1011,9 +1149,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 ## Worth knowing
 
 {_sizing_bullet(o)}{_sa_bullet(o)}
-- **Upgrading:** set `autoUpdate: false` in `{HELM_VALUES_FILE}` first, or crane
-  takes over its own Deployment and the upgrade fails on a conflict. With it
-  left on, change things by reinstalling.
+{_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
 """
@@ -1060,6 +1196,7 @@ def generate(facts, options):
 
     engine_size(o)  # a bad engine quantity should fail here, not at apply time
     sa = service_account(o)  # ...and an unnamed service account, likewise
+    auto_update(o)  # ...and an auto_update that is neither a bool nor unset
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)
@@ -1318,6 +1455,16 @@ def _readme(facts, o, files):
                   f"stores a copy in an annotation capped at 256KB.")
     token_row = [("AUTH_TOKEN", "in bzm_secret.yaml" if o["use_secret"]
                   else "in bzm_configmap.yaml (plain text)")]
+    # On the resolved value, not on an explicit false: off is the default now,
+    # so the common bundle is the one that needs telling. Whoever receives it
+    # is the person who has to notice the agent ageing, and nothing else in the
+    # bundle says the agent will not do it for them.
+    pinned = ""
+    if not auto_update(o):
+        pinned = (f"\n- Auto-update is **off**, so the agent stays on "
+                  f"`{_crane_image(facts, o).rsplit(':', 1)[1]}` until you "
+                  f"re-generate\n  and re-apply. An agent far enough behind "
+                  f"loses BlazeMeter support.")
     return f"""{_bundle_table(facts, o, token_row)}
 ## Deploy
 
@@ -1331,7 +1478,7 @@ def _readme(facts, o, files):
 {_sizing_bullet(o)}{_sa_bullet(o)}
 - Engines request far less than they are allowed ({ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM}), because crane
   sets that itself and nothing here can change it. On a shared node a run can
-  compete for CPU it was never reserved.{big_ca}
+  compete for CPU it was never reserved.{pinned}{big_ca}
 - `bzm-opl-gen doctor` checks a cluster against all of the above before you apply.
 """
 

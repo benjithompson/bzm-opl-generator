@@ -20,24 +20,31 @@ chart untouched. `helm show values ./out/helm` documents every key.
 
 Both formats render **the same objects** — same ConfigMap data, RBAC rules,
 container spec — so the choice is about how you install and upgrade,
-not about what ends up in the cluster. `tests/helm_parity.py` renders 19 option
+not about what ends up in the cluster. `tests/helm_parity.py` renders 23 option
 combinations both ways and requires them to agree; it runs as its own CI job
 because it is the one check that needs the `helm` binary.
 
 ## Managing the release with Helm
 
-Set `autoUpdate: false` in the overlay if you intend to run `helm upgrade`.
-Left on (the default, matching the manifests), crane takes ownership of its own
-Deployment within seconds of install — rewriting the image to the version
-BlazeMeter currently ships and `.spec.strategy` from `Recreate` to
-`RollingUpdate` — and Helm's server-side apply then fails the next upgrade on a
-field-ownership conflict, half-applied. `--force-conflicts` does not rescue it,
-because the chart never declares `strategy.rollingUpdate` and crane's copy
-survives beside the forced `type: Recreate`. With auto-update on, changing
+`helm upgrade` works, because `autoUpdate` is **off by default** — a departure
+from BlazeMeter's own Kubernetes manifest, which ships it on.
+
+Generate with `--auto-update` (or set `autoUpdate: true`) and you get theirs:
+crane takes ownership of its own Deployment within seconds of install, rewriting
+the image to the version BlazeMeter currently ships and `.spec.strategy` from
+`Recreate` to `RollingUpdate`, and Helm's server-side apply then fails the next
+upgrade on a field-ownership conflict, half-applied. `--force-conflicts` does not
+rescue it, because the chart never declares `strategy.rollingUpdate` and crane's
+copy survives beside the forced `type: Recreate`. With auto-update on, changing
 anything means uninstall + install.
 
-Turning it off makes upgrades ordinary and leaves keeping the agent current to
-you. Both behaviours were confirmed against a live cluster and a real agent.
+The default's cost is that keeping the agent current is your job — re-generate,
+or bump `image.tag` and upgrade — and an agent far enough behind loses support.
+Both behaviours were confirmed against a live cluster and a real agent.
+
+`autoUpdate` here is BlazeMeter's `AUTO_KUBERNETES_UPDATE`. Its `AUTO_UPDATE` is
+a different variable — the Docker-side switch, inert on a Kubernetes agent — and
+neither this chart nor the manifests emit it.
 
 Two things differ, both deliberate:
 

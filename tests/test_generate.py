@@ -61,7 +61,8 @@ def test_default_openshift():
     assert cm["data"]["SHIP_ID"] == "bbb222"  # auto from single ship
     assert "AUTH_TOKEN" not in cm["data"]
     assert cm["data"]["INHERIT_RUNNING_USER_AND_GROUP"] == "true"
-    assert cm["data"]["AUTO_KUBERNETES_UPDATE"] == "true"
+    # Off, unlike BlazeMeter's own manifest -- see test_auto_update_defaults_off.
+    assert cm["data"]["AUTO_KUBERNETES_UPDATE"] == "false"
     assert "bzm_clusterrole.yaml" not in files
 
 
@@ -86,6 +87,70 @@ def test_private_registry_overrides_from_facts():
     d = files["bzm_deployment.yaml"]
     assert "reg.local/bzm/crane:3.7.55" in d
     assert "imagePullSecrets" in d and "pullsec" in d
+
+
+def _auto(**over):
+    cm = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1", **over})
+                        ["bzm_configmap.yaml"])
+    return cm["data"]["AUTO_KUBERNETES_UPDATE"]
+
+
+def test_auto_update_defaults_off():
+    """The whole point of the default, and a deliberate departure from
+    BlazeMeter's own Kubernetes manifest, which ships it on: with it on, crane
+    takes ownership of its Deployment within seconds and the next `helm
+    upgrade` fails on a conflict --force-conflicts cannot resolve. The registry
+    no longer enters into it -- it used to, which left the trap armed for
+    exactly the customers pulling from the public registry."""
+    assert _auto() == "false"
+    assert _auto(private_registry="reg.local/bzm") == "false"
+
+
+def test_auto_update_can_be_asked_for():
+    """Off is not a refusal to emit true -- a customer who wants the agent to
+    keep itself current, and will reinstall rather than upgrade, says so."""
+    assert _auto(auto_update=True) == "true"
+    assert _auto(auto_update=True, private_registry="reg.local/bzm") == "true"
+    assert _auto(auto_update=False) == "false"
+
+
+def test_auto_update_writes_the_kubernetes_variable_only():
+    """BlazeMeter has an AUTO_UPDATE too, and it is the Docker-side switch --
+    inert on a Kubernetes agent. Emitting it beside this one would look like a
+    second, contradictory setting to anyone reading the ConfigMap."""
+    cm = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1", "auto_update": False})
+                        ["bzm_configmap.yaml"])["data"]
+    assert "AUTO_UPDATE" not in cm
+    assert cm["AUTO_KUBERNETES_UPDATE"] == "false"
+
+
+def test_configmap_states_what_each_setting_costs():
+    """Someone reading the ConfigMap to decide whether they may change it needs
+    the consequence, not the value they can already see: on takes field
+    ownership, off means nobody is updating the agent but them."""
+    on = gen.generate(FACTS, {"namespace": "ns1", "auto_update": True}
+                      )["bzm_configmap.yaml"]
+    assert "--auto-update" in on and "field ownership" in on
+    off = gen.generate(FACTS, {"namespace": "ns1"})["bzm_configmap.yaml"]
+    assert "loses support" in off
+
+
+def test_readme_says_the_agent_is_pinned():
+    """On the resolved value, so the default bundle -- the common one -- says
+    it. Whoever receives it has to notice the agent ageing, and nothing else in
+    the bundle tells them the agent will not do it itself."""
+    for over in ({}, {"auto_update": False}, {"private_registry": "reg.local/bzm"}):
+        readme = gen.generate(FACTS, {"namespace": "ns1", **over})["README.md"]
+        assert "3.7.55" in readme and "Auto-update is **off**" in readme, over
+    on = gen.generate(FACTS, {"namespace": "ns1", "auto_update": True})["README.md"]
+    assert "Auto-update is **off**" not in on
+
+
+def test_auto_update_refuses_a_value_that_is_neither():
+    """A string "false" resolves truthy and would silently turn auto-update on
+    -- the shape a profile.json hand-edited by a customer arrives in."""
+    with pytest.raises(ValueError, match="auto_update"):
+        gen.generate(FACTS, {"namespace": "ns1", "auto_update": "false"})
 
 
 def test_images_follow_location_funcids():

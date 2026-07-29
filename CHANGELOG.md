@@ -13,6 +13,54 @@ anything that breaks.
 
 ### Changed
 
+- **Crane's Kubernetes auto-updater is now OFF by default**
+  (`AUTO_KUBERNETES_UPDATE: 'false'`), in both output formats and in the chart
+  standalone. It was on for every bundle without a private registry, copied
+  from BlazeMeter's own manual Kubernetes manifest, which ships `'true'`.
+
+  On, it breaks the upgrade path of the thing that installed it. Crane takes
+  field ownership of its own Deployment within seconds of install (manager
+  `OpenAPI-Generator`), rewriting the image and `.spec.strategy` from `Recreate`
+  to `RollingUpdate` — so the next `helm upgrade` fails on a field-ownership
+  conflict with the ConfigMap already applied, and `--force-conflicts` cannot
+  resolve it: forcing `type: Recreate` back leaves crane's
+  `strategy.rollingUpdate` beside it and the API server rejects the pair.
+  Changing anything meant uninstall + install. The documented fix was a value
+  you had to set *before* installing, which nobody knew to do until the upgrade
+  that failed. That is the whole reason for the change: a default that breaks
+  its own upgrade path is not a default.
+
+  **What it costs, and it is real:** the agent no longer updates itself.
+  Keeping it current is now your job — re-generate and re-apply, or bump
+  `image.tag` and `helm upgrade` — and an agent that falls far enough behind
+  loses BlazeMeter support. Generated bundles say so: the ConfigMap, both
+  READMEs and the chart's `values.yaml` all state it where the value is set.
+
+  **To keep the old behaviour**, generate with `--auto-update` (option
+  `auto_update: true`, "Agent auto-update → On" in the UI, `autoUpdate: true`
+  in the chart), knowing upgrades then mean uninstall + install. Existing
+  clusters are untouched until you re-apply; a `profile.json` from before this
+  change has no `auto_update` key and so re-generates with the new default —
+  re-apply the ConfigMap and restart crane to actually turn the updater off on
+  a running agent.
+
+### Added
+
+- **Auto-update is now an option, in both output formats and the UI.**
+  `AUTO_KUBERNETES_UPDATE` was decided entirely by the registry, with no way to
+  say otherwise short of editing the ConfigMap after generating.
+  `--auto-update` / `--no-auto-update` (option `auto_update`, "Agent
+  auto-update" under Security & RBAC in the UI, `autoUpdate` in the chart) now
+  set it either way, which is what made the default above a choice rather than
+  a removal. The generated README gives whichever upgrade instruction matches
+  the bundle, instead of one instruction that was wrong for half of them.
+
+  This is BlazeMeter's Kubernetes auto-updater. Their `AUTO_UPDATE` is a
+  different variable — documented as the Docker-side switch, inert on a
+  Kubernetes agent — and nothing this generator emits sets it.
+
+### Changed
+
 - **Engines drop privileges on every platform, not just OpenShift.** The two
   ConfigMap keys that make crane stamp a security context on the pods it spawns
   — `INHERIT_RUNNING_USER_AND_GROUP` and `KUBERNETES_SECURITY_CONTEXT_CAP_JSON`

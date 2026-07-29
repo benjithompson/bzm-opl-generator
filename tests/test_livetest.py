@@ -130,6 +130,22 @@ def test_live_config_catches_public_image_and_autoupdate(monkeypatch):
     assert any("not from the private registry" in f for f in fails)
 
 
+def test_live_config_judges_autoupdate_against_the_option(monkeypatch):
+    """The check is what the options asked for, not a flat "false with a
+    registry": a bundle that deliberately asked for auto-update is correct with
+    the cluster saying true, and one on the default -- off -- is wrong if the
+    cluster says true, whether or not a registry is involved."""
+    on = {**GOOD_CM, "AUTO_KUBERNETES_UPDATE": "true"}
+    _live(monkeypatch, on, images=["reg:5001/crane:1"])
+    assert livetest.assert_live_config(
+        "kubectl", "ns", FACTS, {**REG_OPTS, "auto_update": True}) == []
+
+    _live(monkeypatch, on)
+    fails = livetest.assert_live_config("kubectl", "ns", FACTS,
+                                        {"use_secret": True, "auto_update": False})
+    assert any("AUTO_KUBERNETES_UPDATE" in f for f in fails)
+
+
 def test_live_config_catches_ca_missing_in_pod(monkeypatch):
     _live(monkeypatch, GOOD_CM, images=["reg:5001/crane:1"], ca_certs="0")
     fails = livetest.assert_live_config("kubectl", "ns", FACTS, REG_OPTS)

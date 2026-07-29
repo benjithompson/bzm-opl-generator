@@ -131,6 +131,10 @@ def cmd_generate(a):
             opts.update(json.load(fh))
     for key in ("platform", "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
+                # Tri-state, and `is not None` is what carries it: --no-auto-update
+                # sets False, which must override a profile's true rather than
+                # read as "not given".
+                "auto_update",
                 "service_account_name",
                 "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
         v = getattr(a, key, None)
@@ -468,6 +472,25 @@ def main():
     g.add_argument("--auth-token", dest="auth_token")
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
+    # Tri-state so profile.json records which of the two a bundle asked for,
+    # but both unset and --no-auto-update resolve the same way now: off. See
+    # generate.auto_update for why the default departs from BlazeMeter's.
+    au = g.add_mutually_exclusive_group()
+    au.add_argument("--auto-update", dest="auto_update", action="store_true",
+                    default=None,
+                    help="AUTO_KUBERNETES_UPDATE=true: let crane update its own "
+                         "Deployment when BlazeMeter ships a newer agent. NOT "
+                         "the default here, though it is in BlazeMeter's own "
+                         "manifest -- crane takes field ownership doing it, so "
+                         "`helm upgrade` then fails on a conflict that "
+                         "--force-conflicts cannot resolve, and changing "
+                         "anything means uninstall + install")
+    au.add_argument("--no-auto-update", dest="auto_update", action="store_false",
+                    help="AUTO_KUBERNETES_UPDATE=false, which is already the "
+                         "default -- pass it to record the choice in "
+                         "profile.json. The agent stays on the image in this "
+                         "bundle until you re-generate, and one far enough "
+                         "behind loses support")
     g.add_argument("--service-type", dest="service_type", choices=["CLUSTERIP", "NODEPORT"])
     g.add_argument("--service-account", dest="service_account_name", metavar="NAME",
                    help="ServiceAccount the agent runs as (default crane). Used "

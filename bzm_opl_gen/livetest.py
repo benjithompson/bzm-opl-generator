@@ -668,11 +668,19 @@ def assert_live_config(cli, namespace, facts, opts):
         if leaked:
             fails.append(f"proxy credentials readable in the ConfigMap: {leaked}")
 
+    # Against the resolved option rather than a flat "false with a registry":
+    # auto_update is settable now, and a run testing a mirrored bundle that
+    # deliberately keeps updating itself must be judged on what it asked for.
+    # The default resolves to false under a private registry, so the case this
+    # check was written for -- auto-update pulling from the public registry the
+    # rig has blackholed -- still fires.
+    want_auto = "true" if generate.auto_update(opts) else "false"
+    if cm.get("AUTO_KUBERNETES_UPDATE") != want_auto:
+        fails.append(f"AUTO_KUBERNETES_UPDATE is {cm.get('AUTO_KUBERNETES_UPDATE')!r}, "
+                     f"expected {want_auto!r} for these options")
+
     reg = opts.get("private_registry")
     if reg:
-        if cm.get("AUTO_KUBERNETES_UPDATE") != "false":
-            fails.append("AUTO_KUBERNETES_UPDATE is not false -- auto-update would "
-                         "pull from BlazeMeter's public registry")
         want = {i["key"] for i in select_images(facts)}
         have = set(json.loads(cm.get("IMAGE_OVERRIDES") or "{}"))
         if want - have:
