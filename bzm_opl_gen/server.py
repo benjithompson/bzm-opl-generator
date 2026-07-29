@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               suggest as suggest_mod)
+               options as options_mod, suggest as suggest_mod)
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -528,7 +528,34 @@ def sv_check(host: str, scheme: str = "http"):
 
 @app.get("/api/option-defaults")
 def option_defaults():
+    """Bare option -> default, and nothing else.
+
+    The UI spreads this response straight into the options it submits and uses
+    it as the baseline it diffs against, so any metadata key added here would
+    arrive at generate() as an option named after it. The descriptions live at
+    /api/option-docs for that reason -- same argument as /api/sv-constants.
+    """
     return gen_mod.DEFAULT_OPTIONS
+
+
+@app.get("/api/option-docs")
+def option_docs():
+    """What each option is for, from the registry docs/options.md is built from.
+
+    The one-line `summary`, not the full argued paragraph: what this is for is
+    help beside a control, and the long version is a doc link away. The UI does
+    not read it yet -- its labels are still hand-written in optionGroups.ts,
+    which also holds the enable/disable behaviour a Python registry cannot. This
+    is here so that when those labels do move, they move to the same place the
+    doc and the MCP schemas already come from rather than to a fourth copy.
+    """
+    return {o.name: {"summary": o.summary,
+                     "group": o.group,
+                     "type": o.type,
+                     "nullable": o.nullable,
+                     "choices": list(o.choices) if o.choices else None,
+                     "secret": o.secret}
+            for o in options_mod.OPTIONS}
 
 
 # Display names only -- the vocabulary itself is facts.CATEGORY_BY_FUNC, which

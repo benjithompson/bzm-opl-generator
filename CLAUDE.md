@@ -166,6 +166,20 @@ the classes of problem it can't fix for you.
 
 ## Generator details that bite
 
+- **A new option needs a row in `bzm_opl_gen/options.py`, and the doc table is
+  generated from it.** `DEFAULT_OPTIONS` is still the only source of the default
+  *value*; the registry carries what the option is *for*, in two lengths —
+  `summary` (≤20 words, capped because all thirty-one land in every MCP
+  session's context) and `doc` (the full argued paragraph, which is the
+  `docs/options.md` cell). Regenerate with `python -m bzm_opl_gen.options`;
+  editing the table between the markers fails `tests/test_options.py`, as does
+  adding a key to either side and not the other. Before this, ten of the
+  thirty-one keys had no documentation anywhere, and each new consumer wanting a
+  description had to restate one. **`frontend/src/optionGroups.ts` is not in
+  scope for it** and shouldn't be — it holds `detect`/`enable`/`disable`
+  *functions*, which a Python registry cannot carry. `/api/option-docs` serves
+  the registry so the labels have somewhere to move to later.
+
 - **"Could not read" and "there is nothing there" must never share a
   representation.** This has been the same bug four times, and three of them
   were found within one session: `null` vs `[]` in the evidence collector; the

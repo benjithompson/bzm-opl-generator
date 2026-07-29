@@ -1412,13 +1412,21 @@ def sv_expose(mocks, namespace, publish):
 
 PROFILE_FILE = "profile.json"
 
+# Options whose value is a credential. Everything that hands options to someone
+# else reads this set rather than naming auth_token: profile.json leaves them
+# out, and the MCP layer refuses to echo them back. One name to add to if a
+# second credential ever becomes an option -- the failure mode of forgetting is
+# a token in a file people paste into tickets.
+SECRET_OPTIONS = frozenset({"auth_token"})
+
 
 def _profile_json(o):
     """The resolved options, replayable with `generate --profile`. AUTH_TOKEN is
     left out on purpose -- it is re-fetched from the API, so this file can be
     committed or handed over without leaking the agent credential."""
-    return json.dumps({k: v for k, v in sorted(o.items()) if k != "auth_token"},
-                      indent=2) + "\n"
+    return json.dumps(
+        {k: v for k, v in sorted(o.items()) if k not in SECRET_OPTIONS},
+        indent=2) + "\n"
 
 
 def load_profile(outdir):

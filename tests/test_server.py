@@ -129,6 +129,28 @@ def test_option_defaults_are_served():
     assert body["output_format"] == "manifests"
 
 
+def test_option_defaults_carry_no_metadata():
+    """Every key in this response becomes an option the UI submits, so a
+    description or a type added here would arrive at generate() as one."""
+    from bzm_opl_gen import generate as gen_mod
+    assert set(client.get("/api/option-defaults").json()) == set(gen_mod.DEFAULT_OPTIONS)
+
+
+def test_option_docs_describe_every_option():
+    """Field help comes from the registry rather than a copy in TypeScript --
+    an option the UI renders with no description is one the registry is missing,
+    and that is a test failure, not a blank tooltip."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/option-docs").json()
+    assert set(body) == set(gen_mod.DEFAULT_OPTIONS)
+    assert all(e["summary"] for e in body.values())
+    assert body["sv_ingress"]["choices"] == list(gen_mod.SV_INGRESS_TYPES)
+    assert body["private_registry"]["nullable"] is True
+    # The UI must be able to tell which field not to echo back into a form it
+    # might save; only the credential is marked.
+    assert [k for k, e in body.items() if e["secret"]] == ["auth_token"]
+
+
 def test_generate_invalid_options_400():
     facts = dict(FACTS, ships=FACTS["ships"] * 2)    # ambiguous ship
     r = client.post("/api/generate", json={

@@ -10,26 +10,101 @@ file](preflight.md#a-cluster-you-cannot-reach), `bzm-opl-gen suggest` says which
 of these options that cluster decides and which it only narrows —
 [what the cluster implies](preflight.md#what-the-cluster-implies-about-the-options-suggest).
 
+> The tables below are generated from `bzm_opl_gen/options.py`, which is also
+> where the UI's field help and the MCP tool schemas get their descriptions.
+> Edit the registry and run `python -m bzm_opl_gen.options`; editing a table
+> cell here fails the test suite instead.
+
+<!-- BEGIN GENERATED OPTIONS TABLE -- python -m bzm_opl_gen.options -->
+
+### Platform and output
+
 | Option | Default | Meaning |
 |---|---|---|
-| `platform` | `openshift` | `openshift` = SCC-friendly (no runAsUser, engines inherit the SCC-assigned UID); `k8s` = pinned runAsUser 1337 |
-| `restrict_engines` | `true` | engines crane spawns drop all capabilities and inherit crane's UID:GID (INHERIT_RUNNING_USER_AND_GROUP, cap-drop JSON). Crane's own default is a privileged engine pod, which restricted PodSecurity, OpenShift SCC and GKE Autopilot all reject — after the agent is online, so the run hangs at `BOOT_STARTING`. `--no-restrict-engines` only for an image that needs a capability — and it removes the posture from every container crane creates, so see which images have run under it in [Hardened engines](hardened-engines.md) first |
-| `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay — see [Helm](helm.md) |
-| `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified) |
-| `private_registry` | – | sets DOCKER_REGISTRY, builds IMAGE_OVERRIDES from facts, rewrites crane image |
-| `auto_update` | `false` | `AUTO_KUBERNETES_UPDATE`: does crane rewrite its own Deployment when BlazeMeter ships a newer agent? **Off, which is a deliberate departure from BlazeMeter's own Kubernetes manifest** — theirs ships `'true'`, and with it on crane takes field ownership of its Deployment within seconds of install, so the next `helm upgrade` fails on a conflict `--force-conflicts` cannot resolve and changing anything means uninstall + install ([Helm](helm.md#managing-the-release-with-helm)). The cost of the default is that keeping the agent current is your job — re-generate and re-apply — and one far enough behind loses support. `--auto-update` hands that back to crane on those terms. (BlazeMeter's `AUTO_UPDATE` is the Docker-side switch and does nothing on a Kubernetes agent, so nothing here emits it) |
-| `pull_secret` | – | imagePullSecrets name for the crane image |
-| `cluster_rbac` | `false` | include optional read-only nodes ClusterRole/Binding (not required for perf tests) |
-| `service_account_name` | `crane` | the account the agent runs as, and the one the RoleBinding (and ClusterRoleBinding) grants to. Used whether or not the bundle creates it, and **required** — see below |
-| `service_account_create` | `true` | emit the ServiceAccount object. `--no-create-service-account` leaves it out for an account your platform team already owns; everything still references `service_account_name`, so it must exist before you apply |
-| `service_type` | `CLUSTERIP` | NODEPORT is the BlazeMeter default but often disallowed. With `sv_ingress`, only `nginx` and `openshift` publish over NODEPORT — [the other two are refused](service-virtualization.md#service_type-and-the-backend-you-chose) |
-| `sv_ingress` | – | `nginx` \| `istio` \| `contour` \| `openshift` — **required** for a `mockServices` location; `openshift` needs `platform: openshift`; `contour` and `istio` are refused with `service_type: NODEPORT`; see [Service virtualization](service-virtualization.md) |
-| `sv_subdomain` | – | wildcard domain your ingress controller serves; required with `sv_ingress` |
-| `sv_tls_secret` | – | wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** |
-| `sv_istio_gateway` | – | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it |
-| `proxy` | – | HTTP(S)_PROXY / NO_PROXY; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on |
-| `engine_cpu_limit` / `engine_mem_limit` | – (documented 2 / 8Gi) | `KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY` — the limits crane stamps on every engine it spawns |
-| `ca_bundle` \| `ca_existing_configmap[:key]` \| `ca_openshift_inject` | – | CA trust, pick one: inline PEM (generator creates the ConfigMap), reference a platform-owned trust-bundle ConfigMap (recommended — they rotate it), or OpenShift's `inject-trusted-cabundle` labeled ConfigMap (cluster injects + rotates). All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT` |
+| `platform` | `openshift` | `openshift` = SCC-friendly (no `runAsUser`, engines inherit the SCC-assigned UID); `k8s` = pinned `runAsUser` 1337. The difference is which side chooses the UID: OpenShift's SCC assigns one from the namespace's range and rejects a pod that pins its own, while plain Kubernetes assigns nothing and a restricted PodSecurity namespace then refuses the pod for running as root. So neither setting is a superset of the other, and the wrong one fails at admission rather than at generate time. It is a posture, not a product: the OpenShift default installs on vanilla Kubernetes too wherever the namespace assigns UIDs. |
+| `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay -- see [Helm](helm.md). The same deployment expressed twice rather than two codebases, which `tests/helm_parity.py` is what holds it to. Refused for a service-virtualization location, whose ingress the chart does not carry. |
+| `namespace` | `blazemeter` | The namespace every generated object carries, and the one crane's Role and RoleBinding are scoped to. Crane creates engine pods here, so it is also where the tests run. The bundle does **not** create the namespace -- `kubectl create namespace` first, or `helm install --create-namespace`. `doctor -n` overrides it for a check without re-generating. |
+
+### Credentials
+
+| Option | Default | Meaning |
+|---|---|---|
+| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Left as the placeholder unless `--api-key` fetches it or `--auth-token` supplies it, and it is the one option stripped from `out/profile.json`. **Fetching issues a new token and invalidates the previous one** -- for an agent already running, either re-apply the whole bundle including the Secret, or pass the existing token. A crane left holding a stale one logs `404` on `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship. |
+| `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified). Proxy credentials follow it: with `use_secret` on, the credentialed proxy URLs live in the Secret too. |
+
+### Private registry
+
+| Option | Default | Meaning |
+|---|---|---|
+| `private_registry` | -- | Sets `DOCKER_REGISTRY`, builds `IMAGE_OVERRIDES` from the facts, and rewrites the crane image. Every image the location needs must already be mirrored under this prefix -- a key missing from `IMAGE_OVERRIDES` does not fail, it silently falls back to the public registry, which is the failure `livetest --local-registry` exists to make loud. |
+| `pull_secret` | -- | `imagePullSecrets` name for the crane image. The Secret itself is not generated -- it holds credentials, so create it in the namespace with `kubectl create secret docker-registry`. Crane passes the same name to the engine pods it spawns. |
+| `registry_auth` | `false` | Emit commented `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD` entries. Commented, not set: these are credentials, and a generator that wrote them would put them in a file people paste into tickets. The lines are there so the shape is right and someone editing the bundle does not have to guess the variable names. `pull_secret` is the better answer for the crane image itself; this pair is what crane uses for the images *it* pulls. |
+
+### Agent lifecycle
+
+| Option | Default | Meaning |
+|---|---|---|
+| `auto_update` | -- (unset -> off) | `AUTO_KUBERNETES_UPDATE`: does crane rewrite its own Deployment when BlazeMeter ships a newer agent? **Off, which is a deliberate departure from BlazeMeter's own Kubernetes manifest** -- theirs ships `'true'`, and with it on crane takes field ownership of its Deployment within seconds of install, so the next `helm upgrade` fails on a conflict `--force-conflicts` cannot resolve and changing anything means uninstall + install ([Helm](helm.md#managing-the-release-with-helm)). The cost of the default is that keeping the agent current is your job -- re-generate and re-apply -- and one far enough behind loses support. `--auto-update` hands that back to crane on those terms. (BlazeMeter's `AUTO_UPDATE` is the Docker-side switch and does nothing on a Kubernetes agent, so nothing here emits it.) |
+
+### Security and RBAC
+
+| Option | Default | Meaning |
+|---|---|---|
+| `service_account_name` | `crane` | The account the agent runs as, and the one the RoleBinding (and ClusterRoleBinding) grants to. Used whether or not the bundle creates it, and **required** -- an empty one is refused rather than resolved to the namespace's `default` account, which would bind crane's Role to every pod in the namespace. See [the service account](#the-service-account). |
+| `service_account_create` | `true` | Emit the ServiceAccount object. `--no-create-service-account` leaves it out for an account your platform team already owns; everything still references `service_account_name`, so it must exist before you apply. If it does not, nothing fails at apply time -- the Deployment is accepted and no pod is ever created. `doctor` checks for it, and `livetest` refuses a profile with this off, because the rig creates its own namespace and would wait out its whole timeout. |
+| `cluster_rbac` | `false` | Include the optional read-only nodes ClusterRole/Binding. Not required for performance tests -- it lets crane read node capacity to place engines, which is a nicety, and cluster-scoped RBAC is the thing a platform team is most likely to refuse. Left off, the rest of the bundle is entirely namespace-scoped. |
+| `run_as_user` | `1337` | The UID crane's pod runs as, on `platform: k8s` only. On OpenShift the SCC assigns a UID from the namespace's range and a pinned one is rejected at admission, so nothing is emitted there. 1337 is arbitrary beyond being non-root, which is what restricted PodSecurity requires. With `restrict_engines` on, this is also the UID:GID the engines inherit. |
+| `restrict_engines` | `true` | Engines crane spawns drop all capabilities and inherit crane's UID:GID (`INHERIT_RUNNING_USER_AND_GROUP`, cap-drop JSON). Crane's own default is a privileged engine pod, which restricted PodSecurity, OpenShift SCC and GKE Autopilot all reject -- after the agent is online, so the run hangs at `BOOT_STARTING`. `--no-restrict-engines` only for an image that needs a capability -- and it removes the posture from every container crane creates, so see which images have run under it in [Hardened engines](hardened-engines.md) first. |
+
+### Networking
+
+| Option | Default | Meaning |
+|---|---|---|
+| `service_type` | `CLUSTERIP` | `KUBERNETES_SERVICE_USE_TYPE`. NODEPORT is the BlazeMeter default but often disallowed. With `sv_ingress`, only `nginx` and `openshift` publish over NODEPORT -- [the other two are refused](service-virtualization.md#service_type-and-the-backend-you-chose). Changing it later does not restyle the Services crane already pooled, so `kubectl get svc` will not report what is configured. |
+| `proxy` | -- | `HTTP(S)_PROXY` / `NO_PROXY`; optional `username`/`password` are URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth envs) and the credentialed URLs live in the Secret when `use_secret` is on. Keys: `http`, `https`, `no_proxy`, `username`, `password`. Note that **JMeter ignores these for sampler traffic** -- the proxy an engine uses to reach the system under test has to be set in the test itself. |
+
+### Service virtualization
+
+Only meaningful for a location whose funcIds include `mockServices`, and for such a location `sv_ingress` is **required**; see [Service virtualization](service-virtualization.md).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `sv_ingress` | -- | `nginx` \| `istio` \| `contour` \| `openshift` -- **required** for a `mockServices` location; `openshift` needs `platform: openshift`; `contour` and `istio` are refused with `service_type: NODEPORT`. Each backend grants a different set of resources in crane's Role, so this picks the RBAC as well as the objects. |
+| `sv_subdomain` | -- | Wildcard domain your ingress controller serves; required with `sv_ingress`. Every virtual service gets a host under it, and the endpoint BlazeMeter advertises is built from it -- so it has to resolve from wherever the tests run, not just inside the cluster. |
+| `sv_tls_secret` | -- | Wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** -- crane names it unconditionally, and an ingress referencing a Secret that is not there is accepted and then never serves. |
+| `sv_istio_gateway` | -- | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it. A Gateway whose selector matches no pod fails exactly like a wrong port would -- crane hardcodes `istio: ingressgateway`. |
+
+### CA trust
+
+Pick **exactly one** of the three modes -- inline PEM, an existing ConfigMap, or OpenShift injection. More than one is refused rather than resolved. All three mount at `/var/cm` and propagate to engines via `KUBERNETES_CA_BUNDLE_MOUNT`.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `ca_bundle` | -- | Inline PEM -- the generator creates the ConfigMap. The simplest mode and the one that goes stale: nothing rotates it for you. Bundles are large enough that the manifest crosses the 256KB cap on kubectl's last-applied-configuration annotation, which is why anything over 200KB applies `--server-side`. |
+| `ca_existing_configmap` | -- | Reference a platform-owned trust-bundle ConfigMap -- recommended, because they rotate it and an inline copy does not follow. The ConfigMap must already exist in the agent namespace. |
+| `ca_configmap_key` | -- (unset -> ca-bundle.crt) | The bundle file key within `ca_existing_configmap`. Unset means `ca-bundle.crt`, which is the convention both OpenShift and most cert-manager setups follow. Set it when yours does not -- the mount path engines are given is built from it, so a wrong key mounts an empty file rather than failing. |
+| `ca_openshift_inject` | `false` | OpenShift's `inject-trusted-cabundle` labeled ConfigMap -- the cluster injects the bundle and rotates it. The generator emits the empty labeled ConfigMap; the content arrives from the cluster operator, so on anything that is not OpenShift it stays empty and the agent trusts nothing extra. |
+
+### Scheduling
+
+| Option | Default | Meaning |
+|---|---|---|
+| `tolerations` | -- | A Kubernetes toleration list, applied to the crane pod **and** passed to the engines crane spawns. Both, because a taint that keeps crane off a node pool keeps the engines off it too, and a bundle that tolerated one but not the other schedules the agent and then leaves every test Pending. JSON, e.g. `[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]`. |
+| `node_selector` | -- | A label map applied to the crane pod and passed to the engines, for the same reason as `tolerations`. JSON, e.g. `{"pool":"loadtest"}`. `doctor` measures capacity against the nodes that match it, so a selector matching nothing is reported as no capacity rather than as a typo. |
+
+### Engine and agent sizing
+
+All unset by default: crane has its own defaults and this generator only overrides them when asked. `bzm-opl-gen doctor` checks whatever you set against real node capacity.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `engine_cpu_limit` | -- (BlazeMeter documents 2) | `KUBERNETES_RESOURCES_LIMITS_CPU` -- the CPU limit crane stamps on every engine it spawns. Unset leaves crane's own default, which BlazeMeter documents as 2. Worth lowering on an emulated arm64 runtime, where a 2-CPU engine stays Pending. This generator emits no LimitRange and will not: crane sets engine requests explicitly, so a `defaultRequest` never reaches them. |
+| `engine_mem_limit` | -- (BlazeMeter documents 8Gi) | `KUBERNETES_RESOURCES_LIMITS_MEMORY` -- the memory limit crane stamps on every engine it spawns. Unset leaves crane's own default, documented as 8Gi. `livetest --run-test` prints what an engine actually used as `ENGINE SIZING:`, which is the number to size from. |
+| `engine_ephemeral_request_mb` | -- | `KUBERNETES_REQUESTS_EPHEMERAL_STORAGE`, in MB. Matters most on GKE Autopilot, which sizes the node's boot disk from what the pod requests and gives an engine that requests nothing a share too small for the artifacts a run produces. BlazeMeter documents roughly 60GB of disk and 40GB of `/tmp` per concurrent engine; requesting the whole of that on a shared cluster is usually wrong, so set it from what a real run used. |
+| `engine_ephemeral_limit_mb` | -- | `KUBERNETES_LIMITS_EPHEMERAL_STORAGE`, in MB. The ceiling, not the reservation -- a pod that exceeds an ephemeral-storage limit is evicted mid-run, which surfaces as a test that stops rather than as a resource error, so leave headroom over `engine_ephemeral_request_mb`. |
+| `crane_ephemeral_storage` | -- (1Gi) | Crane's own pod, e.g. `2Gi`. One value sets **both** the request and the limit, deliberately: crane's disk use is its image plus logs, and a request below the limit on a cluster that sizes nodes from requests just moves the eviction somewhere harder to see. Unset uses `1Gi`. |
+
+<!-- END GENERATED OPTIONS TABLE -->
 
 ## The service account
 
