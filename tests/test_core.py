@@ -23,11 +23,17 @@ from test_generate import FACTS
 
 
 class FakeClient:
-    """Enough BzmClient to exercise the paths that reach for one."""
+    """Enough BzmClient to exercise the paths that reach for one.
+
+    Shared with tests/test_mcp.py rather than written twice: both suites drive
+    the same core functions, and two fakes answering `private_location`
+    differently would let the two layers disagree about what an account looks
+    like. Methods no core test calls are here for that reason.
+    """
 
     def __init__(self, token="TOKEN-FROM-API", harbor=None):
         self._token = token
-        self._harbor = harbor or {}
+        self._harbor = harbor if harbor is not None else {}
         self.calls = []
 
     def auth_token(self, harbor_id, ship_id):
@@ -37,6 +43,22 @@ class FakeClient:
     def private_location(self, harbor_id):
         self.calls.append(("private_location", harbor_id))
         return self._harbor
+
+    def user(self):
+        return {"email": "se@example.com", "displayName": "SE",
+                "defaultProject": {"accountId": 7}}
+
+    def private_locations(self, account_id=None, workspace_id=None):
+        self.calls.append(("private_locations", account_id, workspace_id))
+        return [{"id": "h1", "name": "loc", "slots": 2,
+                 "funcIds": ["performance"],
+                 "ships": [{"id": "s1", "name": "agent1", "state": "idle"}]}]
+
+    def create_ship(self, harbor_id, name):
+        return {"id": "s2", "name": name}
+
+    def delete_private_location(self, harbor_id):
+        self.calls.append(("delete", harbor_id))
 
 
 # -- the split itself ---------------------------------------------------------
@@ -396,3 +418,56 @@ def test_every_modelled_func_id_belongs_to_a_feature():
     claimed = {f for feat in core.FEATURES for f in feat["func_ids"]}
     assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
     assert "tdm" not in claimed
+
+
+# -- where a token lives, and that redaction still knows -----------------------
+
+TOKEN_SHAPES = [
+    ({}, "the Secret"),
+    ({"use_secret": False}, "the ConfigMap, when there is no Secret"),
+    ({"output_format": "helm"}, "the chart's values overlay"),
+]
+
+
+@pytest.mark.parametrize("opts,where", TOKEN_SHAPES, ids=lambda v: v if isinstance(v, str) else "")
+def test_no_generated_file_survives_redaction_still_holding_the_token(opts, where):
+    """The sentinel for generate.TOKEN_FIELDS.
+
+    A template that renames its key, or a fourth file that starts carrying the
+    token, would return verbatim with `redacted_fields: 0` -- which reads to a
+    caller as "no secret in this file", the quiet direction. This fails instead.
+    """
+    files = core.generate_bundle(
+        dict(FACTS), {"namespace": "ns1", "auth_token": "TOKENVALUE", **opts},
+        client=None)
+    carriers = [n for n, c in files.items() if "TOKENVALUE" in c]
+    assert carriers, f"nothing carried the token for {where}"
+    for name in carriers:
+        redacted, count = core.redact_tokens(files[name])
+        assert "TOKENVALUE" not in redacted, (
+            f"{name} ({where}) still holds the token after redaction -- "
+            f"generate.TOKEN_FIELDS does not know the field it is under")
+        assert count >= 1
+
+
+def test_the_reader_and_the_redactor_know_the_same_fields():
+    """They did not: the reader knew only AUTH_TOKEN, so a regenerated chart
+    bundle never found the token its predecessor wrote."""
+    from bzm_opl_gen import generate as gen
+    for field in gen.TOKEN_FIELDS:
+        line = f'  {field}: "abc123"\n'
+        assert gen.AUTH_TOKEN_RE.search(line), f"reader misses {field}"
+        assert core.redact_tokens(line)[1] == 1, f"redactor misses {field}"
+
+
+def test_regenerating_a_chart_bundle_finds_the_token_it_wrote(tmp_path):
+    """`existing_auth_token` reads the bundle back rather than re-fetching,
+    because fetching mints a new one. It only looked in the two manifest files,
+    so a chart bundle re-fetched every time -- rotating the token of whatever
+    was running."""
+    from bzm_opl_gen import generate as gen
+    files = core.generate_bundle(
+        dict(FACTS), {"namespace": "ns1", "output_format": "helm",
+                      "auth_token": "TOKENVALUE"}, client=None)
+    gen.write(files, str(tmp_path))
+    assert gen.existing_auth_token(str(tmp_path)) == "TOKENVALUE"

@@ -135,10 +135,8 @@ def mirror_images(facts, port, arch="linux/amd64"):
     """Pull the location's images (amd64 -- what the engines are built for),
     push into the local registry under the names generate() writes into
     IMAGE_OVERRIDES / the crane Deployment."""
-    from .facts import select_images
-    refs = [facts["crane_image"]] + [
-        f"{i['repo']}:{i['tag']}" for i in select_images(facts)
-    ]
+    from .facts import image_refs
+    refs = image_refs(facts)
     for ref in refs:
         name = ref.rsplit("/", 1)[-1]
         target = f"localhost:{port}/{name}"
@@ -271,9 +269,8 @@ def blackhole_public_registries(facts, cluster, private_registry):
     if cluster != "minikube":
         print("note: registry blackhole needs minikube; skipping")
         return []
-    from .facts import select_images
-    refs = [facts["crane_image"]] + [f"{i['repo']}:{i['tag']}"
-                                     for i in select_images(facts)]
+    from .facts import image_refs
+    refs = image_refs(facts)
     private_host = (private_registry or "").split("/")[0]
     hosts = sorted({r.split("/")[0] for r in refs
                     if "." in r.split("/")[0]} - {private_host})

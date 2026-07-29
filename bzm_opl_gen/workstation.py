@@ -232,17 +232,29 @@ CHECKS = (check_python, check_kube_cli, check_docker, check_cluster_tool,
           check_arch, check_registry_port, check_rig_images, check_disk)
 
 
-def run(opts, env=None):
-    """Run every check and print the verdict list. Returns the Check list; the
-    caller decides the exit code (doctor.has_failures)."""
+def evaluate(opts, env=None):
+    """Every verdict as data, and nothing printed.
+
+    Split out of run() for the reason doctor.evaluate was: a caller that is not
+    a terminal needs the Check list without capturing stdout. Here that caller
+    is the MCP server, where stdout is the JSON-RPC channel -- a report printed
+    down it does not garble the output, it desynchronises the session.
+    """
     opts = dict(opts or {})
     env = gather(opts) if env is None else env
-    checks = [c for check in CHECKS for c in check(opts, env)]
-    _report(opts, checks)
+    return [c for check in CHECKS for c in check(opts, env)]
+
+
+def run(opts, env=None):
+    """evaluate() plus the printed report, for a command line. Returns the
+    Check list; the caller decides the exit code (doctor.has_failures)."""
+    opts = dict(opts or {})
+    checks = evaluate(opts, env)
+    report(opts, checks)
     return checks
 
 
-def _report(opts, checks):
+def report(opts, checks):
     intent = [f"--cluster {opts.get('cluster') or 'current'}"]
     if opts.get("local_registry"):
         intent.append(f"--local-registry {opts['local_registry']}")

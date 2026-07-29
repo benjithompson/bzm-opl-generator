@@ -940,3 +940,14 @@ def test_sv_on_nodeport_still_needs_no_cluster_rbac():
     granted = [res for r in role["rules"] for res in r["resources"]]
     assert "ingresses" in granted
     assert "nodes" not in granted
+
+
+def test_a_written_bundle_carries_an_executable_mirror_script(tmp_path):
+    """`generate -o out` used to leave it non-executable while the zip download
+    carried the bit, so the bundle had an undocumented chmod step -- the two
+    writers disagreed because only one of them set it."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "private_registry": "reg.local/bzm"})
+    gen.write(files, str(tmp_path))
+    script = tmp_path / "bzm-opl-image-mirror.sh"
+    assert script.exists() and os.access(script, os.X_OK)
