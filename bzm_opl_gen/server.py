@@ -467,10 +467,11 @@ def _sv_check_reason(err):
         return SV_CHECK_TLS
     if isinstance(e, socket.gaierror):
         return SV_CHECK_DNS
-    # Both names, not one: socket.timeout only became an alias of TimeoutError
-    # in 3.10, and this package supports 3.9, where they are separate classes
-    # and matching on either alone silently drops half the timeouts.
-    if isinstance(e, (TimeoutError, socket.timeout)):
+    # socket.timeout is an alias of TimeoutError from 3.10, which is the floor,
+    # so one name catches both. It was two separate classes on 3.9 and matching
+    # on either alone silently dropped half the timeouts -- worth remembering
+    # if the floor ever moves back down.
+    if isinstance(e, TimeoutError):
         return SV_CHECK_TIMEOUT
     if isinstance(e, ConnectionRefusedError):
         return SV_CHECK_REFUSED

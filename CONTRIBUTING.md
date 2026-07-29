@@ -100,7 +100,7 @@ seatbelt, not a lock.
 
 - Comments explain **why**, especially where a non-obvious environment fact
   drove the code. Match the surrounding density; don't narrate the obvious.
-- CI runs the offline suite on Python 3.9 (the declared floor) and 3.13, and
+- CI runs the offline suite on Python 3.10 (the declared floor) and 3.13, and
   generates from the sample facts. Both must be green.
 - If you change what a live check proves, update its offline counterpart and
   the relevant page under `docs/` in the same PR.
