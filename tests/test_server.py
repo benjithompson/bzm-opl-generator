@@ -281,6 +281,43 @@ def test_api_requires_key():
     assert client.get("/api/accounts").status_code == 401
 
 
+def test_key_detection_sees_a_key_named_after_startup(monkeypatch, tmp_path):
+    """BZM_API_KEY_FILE used to be read into a module-level list at import, so
+    a value set afterwards was invisible -- and `ui --dev` sets exactly that for
+    its reloader subprocess. Asserted here as well as in test_core because this
+    is the route that answers the question."""
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    monkeypatch.setenv("BZM_API_KEY_FILE", str(key))
+    body = client.get("/api/key/detect").json()
+    assert {"path": str(key), "key_id": "KID"} in body["candidates"]
+    # The id identifies the key; the secret is what must never come back.
+    assert "s" not in [c.get("secret") for c in body["candidates"]]
+
+
+# The routes that carried an argued paragraph before the prose moved to core.
+# Each now points /api/docs at core's docstring instead of keeping a copy;
+# what this list guards is that they still point at something.
+DOCUMENTED_ROUTES = [
+    ("get", "/api/status"), ("post", "/api/facts/manual"),
+    ("post", "/api/preflight"), ("get", "/api/sv-mocks"),
+    ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
+    ("get", "/api/option-docs"), ("get", "/api/func-ids"),
+    ("get", "/api/features"), ("get", "/api/sv-constants"),
+]
+
+
+def test_the_routes_that_explained_themselves_still_do():
+    """These answers need prose -- what an empty sv-mocks list means, why a
+    preflight reaches no cluster -- and it lives in core now. A route that
+    stops pointing at it empties its own /api/docs entry, which is exactly
+    where nobody would notice."""
+    spec = server.app.openapi()
+    bare = [f"{m} {path}" for m, path in DOCUMENTED_ROUTES
+            if not (spec["paths"][path][m].get("description") or "").strip()]
+    assert not bare, f"no description in /api/docs for: {bare}"
+
+
 def test_a_malformed_request_is_refused_before_the_missing_key_is():
     """Neither scope given: that is wrong with or without a key, and 401 would
     send the caller off to configure one only to be refused again."""

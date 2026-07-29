@@ -175,14 +175,13 @@ def cmd_generate(a):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
-    # Which ship, if any, is core's rule rather than one restated here -- see
-    # core.token_ship_id for what each clause is protecting. The client is
-    # built only once there is something to ask it, so a bad key file is not
+    # Both which ship and the fetch itself are core's -- see core.token_ship_id
+    # for what each clause is protecting, and core.fetch_auth_token for why the
+    # call that rotates the credential exists once. Asked first so the client is
+    # built only when there is something to ask it: a bad key file should not be
     # read on a run that was never going to fetch.
-    ship_id = core.token_ship_id(f, opts) if a.api_key else None
-    if ship_id:
-        client = api.BzmClient(a.api_key)
-        opts["auth_token"] = client.auth_token(f["harbor_id"], ship_id)
+    if a.api_key and core.token_ship_id(f, opts):
+        ship_id = core.fetch_auth_token(api.BzmClient(a.api_key), f, opts)
         print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)

@@ -35,13 +35,12 @@ app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/opena
 
 _state = {"client": None, "key_id": None}
 
-# Where a pasted key is kept for a browser session -- this module's business,
-# so named here. The vocabulary (FEATURES, the sv-check constants) deliberately
-# is *not* re-exported: an alias is a second name for one list, it does not
-# follow when the list is replaced, and reaching for it is how a caller ends up
-# describing something core is no longer serving.
-CONFIG_DIR = core.CONFIG_DIR
-SAVED_KEY_PATH = core.SAVED_KEY_PATH
+# Nothing of core's is re-exported here, not even as a convenience: an alias is
+# a second name for one value, it does not follow when the value is replaced,
+# and reaching for it is how a caller ends up describing something core is no
+# longer serving. That is not hypothetical -- FEATURES was aliased here for one
+# commit, and a test patched this name while asserting against the list core
+# was still handing out.
 
 
 def _client():
@@ -88,8 +87,9 @@ def key_set(k: KeyIn):
         if not os.path.isfile(path):
             raise HTTPException(400, f"no such file: {path}")
     elif k.id and k.secret:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        path = SAVED_KEY_PATH if k.save else os.path.join(CONFIG_DIR, ".session-key.json")
+        os.makedirs(core.CONFIG_DIR, exist_ok=True)
+        path = (core.SAVED_KEY_PATH if k.save
+                else os.path.join(core.CONFIG_DIR, ".session-key.json"))
         with open(path, "w") as fh:
             json.dump({"id": k.id, "secret": k.secret}, fh)
         os.chmod(path, 0o600)
@@ -171,7 +171,7 @@ class ManualFactsIn(BaseModel):
     func_ids: list = ["performance"]
 
 
-@app.post("/api/facts/manual")
+@app.post("/api/facts/manual", description=core.manual_facts.__doc__)
 def manual_facts(m: ManualFactsIn):
     """Deliberately not behind _client(): requiring a key here would defeat the
     point of the manual path -- see core.manual_facts."""
@@ -179,7 +179,7 @@ def manual_facts(m: ManualFactsIn):
                    func_ids=m.func_ids)
 
 
-@app.get("/api/status")
+@app.get("/api/status", description=core.agent_status.__doc__)
 def agent_status(harbor_id: str, ship_id: str):
     return _answer(core.agent_status, _client(), harbor_id, ship_id)
 
@@ -225,7 +225,7 @@ class PreflightIn(BaseModel):
     evidence: Any
 
 
-@app.post("/api/preflight")
+@app.post("/api/preflight", description=core.preflight.__doc__)
 def preflight(p: PreflightIn):
     """The verdicts `doctor --cluster-evidence` prints, for the configuration
     the browser currently holds.
@@ -240,7 +240,7 @@ def preflight(p: PreflightIn):
 
 # -- reading the cluster ------------------------------------------------------
 
-@app.get("/api/sv-mocks")
+@app.get("/api/sv-mocks", description=core.sv_mocks.__doc__)
 def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
     """What is deployed in `namespace`, and the host each one answers at.
 
@@ -252,7 +252,7 @@ def sv_mocks(namespace: str, sv_subdomain: Optional[str] = None):
     return _answer(core.sv_mocks, namespace, sv_subdomain)
 
 
-@app.get("/api/sv-check")
+@app.get("/api/sv-check", description=core.sv_check.__doc__)
 def sv_check(host: str, scheme: str = "http"):
     """Ask whether the endpoint a deployed virtual service publishes answers.
 
@@ -267,31 +267,32 @@ def sv_check(host: str, scheme: str = "http"):
 
 
 # -- the vocabulary -----------------------------------------------------------
+# Each of these routes takes its /api/docs description from core's docstring
+# rather than restating it. The prose is about what the answer means, which is
+# core's to say; a second copy here is what goes stale, and /api/docs is
+# exactly where nobody would notice.
 
-@app.get("/api/option-defaults")
+@app.get("/api/option-defaults", description=core.option_defaults.__doc__)
 def option_defaults():
-    """Bare option -> default. The UI spreads this straight into the options it
-    submits, so a metadata key here would arrive at generate() as an option --
-    which is why the descriptions are a route of their own."""
     return core.option_defaults()
 
 
-@app.get("/api/option-docs")
+@app.get("/api/option-docs", description=core.option_docs.__doc__)
 def option_docs():
     return core.option_docs()
 
 
-@app.get("/api/func-ids")
+@app.get("/api/func-ids", description=core.func_ids.__doc__)
 def func_ids():
     return core.func_ids()
 
 
-@app.get("/api/features")
+@app.get("/api/features", description=core.features.__doc__)
 def features():
     return core.features()
 
 
-@app.get("/api/sv-constants")
+@app.get("/api/sv-constants", description=core.sv_constants.__doc__)
 def sv_constants():
     return core.sv_constants()
 

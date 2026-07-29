@@ -34,7 +34,9 @@ bzm_opl_gen/
   workstation.py workstation preflight for the live rig (`toolcheck`)
   quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
   livetest.py    deploy, poll-until-online, teardown
-  server.py      FastAPI backend for the web UI
+  options.py     what each generate option is for (docs/options.md renders it)
+  core.py        orchestration, transport-free -- no fastapi, no request objects
+  server.py      HTTP over core.py: routes, request models, the web UI's bind
   cli.py         subcommands: facts | generate | doctor | suggest | toolcheck
                               | images | livetest | ui | sv-expose | locations
                               | create-location | create-ship

@@ -49,8 +49,12 @@ class CoreError(Exception):
     Carried rather than decided per route so that a caller with no status codes
     at all -- stdio JSON-RPC -- still gets the distinction between "you sent
     the wrong thing" and "BlazeMeter did".
+
+    500 on the base, not 400: a subclass that names no status is a mistake in
+    here, and blaming the caller for it is how a bug gets reported as bad
+    input. Raise one of the subclasses.
     """
-    status = 400
+    status = 500
 
 
 class BadRequest(CoreError):
@@ -134,11 +138,11 @@ def workspaces(client, account_id):
 def require_location_scope(account_id=None, workspace_id=None):
     """A locations listing has to be scoped to something.
 
-    Callable on its own, and not only from inside locations(), because a
-    request naming neither scope is malformed whether or not a credential was
-    configured -- so a caller that also has a credential to check wants to ask
-    this first. Answering "no API key" to a request that would have been
-    refused anyway sends the person to fix the wrong thing.
+    Separate from locations(), rather than only inside it, because /api/locations
+    has a credential to check as well and the order between the two is visible:
+    a request naming neither scope is malformed with or without a key, so
+    answering "no API key" sends the person off to configure one and then
+    refuses them anyway. Asking this first is what keeps that 400 a 400.
     """
     if not account_id and not workspace_id:
         raise BadRequest("account_id or workspace_id required")
@@ -247,6 +251,24 @@ def token_ship_id(facts, options):
     return sole_ship_id(facts, options.get("ship_id"))
 
 
+def fetch_auth_token(client, facts, options):
+    """Put a freshly-issued AUTH_TOKEN into `options`, if one is wanted.
+
+    Returns the ship it was fetched for, or None if nothing was fetched --
+    which is what a caller that wants to say so out loud needs, and is why the
+    call is here rather than inlined into generate_bundle. It mutates
+    `options`, because every caller's next move is to render from them.
+
+    This is the call that rotates the credential, so it is deliberately the
+    only copy of it.
+    """
+    ship_id = token_ship_id(facts, options)
+    if ship_id:
+        options["auth_token"] = _upstream(client.auth_token,
+                                          facts["harbor_id"], ship_id)
+    return ship_id
+
+
 def generate_bundle(facts, options=None, client=None, fetch_token=True):
     """The manifests, as {name: content}.
 
@@ -257,10 +279,7 @@ def generate_bundle(facts, options=None, client=None, fetch_token=True):
     """
     opts = dict(options or {})
     if fetch_token and client is not None:
-        ship_id = token_ship_id(facts, opts)
-        if ship_id:
-            opts["auth_token"] = _upstream(client.auth_token,
-                                           facts["harbor_id"], ship_id)
+        fetch_auth_token(client, facts, opts)
     try:
         return gen_mod.generate(facts, opts)
     except (ValueError, KeyError) as e:
@@ -269,11 +288,18 @@ def generate_bundle(facts, options=None, client=None, fetch_token=True):
         raise BadRequest(str(e))
 
 
-# Which file to read first, and the rest after it. A generator decision, not a
-# presentation one -- the helm bundle leads with the values overlay because it
-# is the only file in a chart that came from the account -- so it is aliased
-# here rather than left for each caller to remember to apply.
-preview_order = gen_mod.preview_order
+def preview_order(files):
+    """Which file to read first, and the rest after it.
+
+    A generator decision, not a presentation one -- a helm bundle leads with
+    the values overlay because it is the only file in a chart that came from
+    the account -- so it is offered here rather than left for each caller to
+    remember to reach past core for. A `def` rather than
+    `preview_order = gen_mod.preview_order`, because an alias is a second name
+    that stops tracking the first one the moment anything replaces it.
+    """
+    return gen_mod.preview_order(files)
+
 
 ZIP_PREFIX = "bzm-opl"
 
@@ -283,7 +309,7 @@ def zip_bundle(files, prefix=ZIP_PREFIX):
     # Names may carry directories (the helm format emits a chart), which zip
     # stores as-is -- the slash is the path separator in the archive too.
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in gen_mod.preview_order(files):
+        for name in preview_order(files):
             info = zipfile.ZipInfo(f"{prefix}/{name}")
             if name.endswith(".sh"):
                 info.external_attr = 0o755 << 16

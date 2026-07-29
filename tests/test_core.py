@@ -13,6 +13,7 @@ a change that moves one without the other should fail somewhere.
 
 import io
 import json
+import os
 import zipfile
 
 import pytest
@@ -40,27 +41,46 @@ class FakeClient:
 
 # -- the split itself ---------------------------------------------------------
 
-def test_core_is_transport_free():
-    """A web framework imported here would put the whole HTTP stack behind
-    every other consumer -- and behind this suite, which then skips.
+def _imports(path):
+    """Every top-level name a file imports, read from the parsed source.
 
-    Read out of the parsed source rather than sys.modules: another test module
-    in the same session imports fastapi, so by the time this runs it is loaded
-    whatever core does.
+    Parsed rather than taken from sys.modules: another test module in the same
+    session imports fastapi, so by the time these run it is loaded whatever
+    core does.
     """
     import ast
-    with open(core.__file__, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
-    imported = set()
+    names = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            imported.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-            imported.add(node.module.split(".")[0])
-    banned = imported & {"fastapi", "pydantic", "starlette", "uvicorn"}
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            # `from bzm_opl_gen import core, server` -- the interesting name is
+            # what was imported, not the package it came from.
+            names.update(a.name for a in node.names)
+            if node.module and not node.level:
+                names.add(node.module.split(".")[0])
+    return names
+
+
+def test_core_is_transport_free():
+    """A web framework imported here would put the whole HTTP stack behind
+    every other consumer -- and behind this suite, which then skips."""
+    banned = _imports(core.__file__) & {"fastapi", "pydantic", "starlette",
+                                        "uvicorn"}
     assert not banned, (
         f"core imports {sorted(banned)} -- the transport belongs in the layer "
         f"above it")
+
+
+def test_this_suite_is_transport_free_too():
+    """An import of `server` anywhere in this file would put every test in it
+    behind the optional dependency -- which is the whole thing the split was
+    for. It happened once already, in a test that only wanted to read server.py
+    as text; open it by path instead.
+    """
+    assert "server" not in _imports(__file__)
 
 
 @pytest.mark.parametrize("exc,status", [
@@ -75,6 +95,15 @@ def test_errors_carry_the_status_the_web_layer_answers_with(exc, status):
     e = exc("nope")
     assert isinstance(e, core.CoreError) and e.status == status
     assert str(e) == "nope"
+
+
+def test_an_unclassified_failure_does_not_blame_the_caller():
+    """The base carries 500 so that a subclass which forgets to name a status
+    reports a bug in here, rather than inheriting 400 and reading as bad
+    input from whoever called."""
+    assert core.CoreError.status == 500
+    assert all(e.status != core.CoreError.status
+               for e in (core.BadRequest, core.NotFound, core.UpstreamError))
 
 
 # -- generate: when is a token fetched ----------------------------------------
@@ -198,14 +227,19 @@ def test_which_ship_a_token_would_be_fetched_for(options, ids, expect):
 def test_no_caller_still_decides_which_ship_for_itself():
     """Read out of the source: each duplicate was a single line that looked
     obviously right, which is how three of them survived. `ships[0]` is the
-    shape of the mistake -- taking a ship by position."""
-    from bzm_opl_gen import cli, server
-    for mod in (cli, server):
-        with open(mod.__file__, encoding="utf-8") as fh:
+    shape of the mistake -- taking a ship by position.
+
+    Opened by path rather than imported: `server` imports fastapi at module
+    scope, and importing it here would put this suite behind the optional
+    dependency it exists to be independent of.
+    """
+    here = os.path.dirname(os.path.abspath(core.__file__))
+    for name in ("cli.py", "server.py"):
+        with open(os.path.join(here, name), encoding="utf-8") as fh:
             hits = [ln.strip() for ln in fh if 'ships"][0]' in ln
                     or "ships[0]" in ln]
         assert not hits, (
-            f"{mod.__name__} picks a ship by position rather than asking "
+            f"{name} picks a ship by position rather than asking "
             f"core.sole_ship_id: {hits}")
 
 
