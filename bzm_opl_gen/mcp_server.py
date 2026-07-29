@@ -60,7 +60,12 @@ Kubernetes or OpenShift, from a real account rather than from a template.
 
 The path through it:
 
-  1. opl_location list          -- find the location and its ship (agent)
+  1. opl_location list          -- find the location, then `show` for its ship
+                                   (agent). Accounts hold hundreds of
+                                   locations, so `list` is one line each and
+                                   capped: narrow it with name_contains, and
+                                   read the omitted counts it comes back with
+                                   rather than treating the list as the account.
   2. opl_facts gather           -- the images and ids that location actually uses
   3. opl_preflight doctor       -- will this cluster take it? (needs evidence)
   4. opl_bundle generate        -- write the manifests to a directory
@@ -251,13 +256,17 @@ def _client(args):
 
 # -- opl_location --------------------------------------------------------------
 
-LOCATION_ACTIONS = ("list", "whoami", "create", "create_ship", "reveal_token",
-                    "delete")
+LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_ship",
+                    "reveal_token", "delete")
 
 DESCRIPTIONS["opl_location"] = (
     "BlazeMeter private locations (harbors) and their agents (ships).\n"
-    "  list         -- locations in an account or workspace, with their "
-    "ships. Defaults to this key's own account.\n"
+    "  list         -- one line per location {account_id?, workspace_id?, "
+    "name_contains?, limit?}. Defaults to this key's own account and to the "
+    f"first {core.DEFAULT_LOCATION_LIMIT}; accounts hold hundreds, so narrow "
+    "with name_contains rather than raising limit. Whatever it leaves out is "
+    "counted in the response.\n"
+    "  show         -- one location with its ships in full {harbor_id}\n"
     "  whoami       -- who this API key is, and its default account\n"
     "  create       -- a new private location {name, account_id, "
     "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
@@ -288,9 +297,31 @@ def _location(action, args):
             account_id = (core.user(client).get("defaultProject") or {}).get("accountId")
             core.require_location_scope(account_id, workspace_id)
         locs = core.locations(client, account_id, workspace_id)
-        return {"account_id": account_id,
-                "locations": [_location_summary(l) for l in locs],
-                "next": ["opl_facts gather, with the harbor_id of the one you want"]}
+        sel = core.select_locations(
+            locs, name_contains=args.get("name_contains"),
+            limit=args.get("limit", core.DEFAULT_LOCATION_LIMIT))
+        body = {"account_id": account_id, "workspace_id": workspace_id,
+                "total": sel["total"], "matched": sel["matched"],
+                "returned": sel["returned"],
+                "omitted_by_filter": sel["omitted_by_filter"],
+                "omitted_by_limit": sel["omitted_by_limit"],
+                "locations": [_location_brief(l) for l in sel["locations"]],
+                "next": ["opl_location show, or opl_facts gather, with the "
+                         "harbor_id of the one you want"]}
+        note = _omission_note(sel, args.get("name_contains"))
+        if note:
+            # In prose as well as in the counts above. A session summarising
+            # this reads the sentence; the fields are what it can compute with,
+            # and the one thing that must survive both is that the list is
+            # partial.
+            body["note"] = note
+        return body
+
+    if action == "show":
+        harbor_id, = _need(args, "harbor_id")
+        loc = core.location(_client(args), harbor_id)
+        return {"location": _location_summary(loc),
+                "next": [f"opl_facts gather with harbor_id {harbor_id!r}"]}
 
     if action == "create":
         name, account_id, workspace_id = _need(args, "name", "account_id",
@@ -337,12 +368,63 @@ def _location(action, args):
 
 def _location_summary(loc):
     """A location as a session needs it: the ids it will pass on, and the two
-    fields that decide whether a bundle can be generated at all."""
+    fields that decide whether a bundle can be generated at all.
+
+    One location's worth, for `show` and `create`. A listing uses
+    _location_brief -- per-ship detail on 171 locations is the size problem
+    this pair exists to separate.
+    """
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "slots": loc.get("slots"), "func_ids": loc.get("funcIds"),
             "ships": [{"ship_id": s.get("id"), "name": s.get("name"),
-                       "state": s.get("state")}
+                       "state": s.get("state"),
+                       # null where the payload carried no heartbeat -- see
+                       # core.ship_reporting. opl_agent status is the authority.
+                       "reporting": core.ship_reporting(s)}
                       for s in loc.get("ships", [])]}
+
+
+def _location_brief(loc):
+    """One location as a *listing* entry: enough to pick one and go on.
+
+    An account with 171 locations and 221 ships listed the long way came back
+    at 84,779 characters, past the caller's result ceiling, so step 1 of the
+    path never completed. Almost all of it was per-ship detail about locations
+    the caller was never going to choose -- and choosing needs only whether
+    there is an agent there and whether anything is alive. `show` pays for the
+    detail on the one that gets picked.
+    """
+    ships = loc.get("ships") or []
+    reporting = [core.ship_reporting(s) for s in ships]
+    return {"harbor_id": loc.get("id"), "name": loc.get("name"),
+            "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
+            "ship_count": len(ships),
+            # null, not 0: a listing that carried no heartbeat cannot say an
+            # agent is silent, and 0 would have a session redeploy a working
+            # one. Counted, not summed to a bool, because "one of two" is the
+            # case somebody has to look at.
+            "ships_reporting": (None if any(r is None for r in reporting)
+                                else sum(reporting))}
+
+
+def _omission_note(sel, name_contains):
+    """The counts as a sentence, when something is missing from the list.
+
+    Absent when nothing was left out, so its presence means the list is
+    partial. A list that quietly stops reads as the whole account, and "that
+    location does not exist" about one that was merely omitted is a worse
+    answer than a response that was too big.
+    """
+    parts = []
+    if sel["omitted_by_filter"]:
+        parts.append(f"{sel['omitted_by_filter']} of the account's "
+                     f"{sel['total']} locations do not match "
+                     f"name_contains={name_contains!r}")
+    if sel["omitted_by_limit"]:
+        parts.append(f"{sel['omitted_by_limit']} matching locations are not in "
+                     f"this list -- narrow with name_contains, or raise limit "
+                     f"(default {core.DEFAULT_LOCATION_LIMIT})")
+    return ". ".join(parts) + "." if parts else None
 
 
 # -- opl_facts -----------------------------------------------------------------

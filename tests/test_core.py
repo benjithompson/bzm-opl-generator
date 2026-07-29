@@ -14,6 +14,7 @@ a change that moves one without the other should fail somewhere.
 import io
 import json
 import os
+import time
 import zipfile
 
 import pytest
@@ -31,9 +32,10 @@ class FakeClient:
     like. Methods no core test calls are here for that reason.
     """
 
-    def __init__(self, token="TOKEN-FROM-API", harbor=None):
+    def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None):
         self._token = token
         self._harbor = harbor if harbor is not None else {}
+        self._locations = locations
         self.calls = []
 
     def auth_token(self, harbor_id, ship_id):
@@ -50,12 +52,22 @@ class FakeClient:
 
     def private_locations(self, account_id=None, workspace_id=None):
         self.calls.append(("private_locations", account_id, workspace_id))
+        if self._locations is not None:
+            return self._locations
         return [{"id": "h1", "name": "loc", "slots": 2,
                  "funcIds": ["performance"],
                  "ships": [{"id": "s1", "name": "agent1", "state": "idle"}]}]
 
     def create_ship(self, harbor_id, name):
         return {"id": "s2", "name": name}
+
+    def create_private_location(self, name, account_id, workspace_ids,
+                                func_ids=("performance",), slots=1,
+                                threads_per_engine=None):
+        self.calls.append(("create_private_location", name, account_id))
+        # A fresh harbor has no ships, which is why create_ship exists.
+        return {"id": "h9", "name": name, "slots": slots,
+                "funcIds": list(func_ids), "ships": []}
 
     def delete_private_location(self, harbor_id):
         self.calls.append(("delete", harbor_id))
@@ -445,6 +457,72 @@ def test_listing_locations_needs_a_scope():
         core.require_location_scope(None, None)
     assert core.require_location_scope(account_id=1) is None
     assert core.require_location_scope(workspace_id=2) is None
+
+
+# -- narrowing a real account's listing ---------------------------------------
+
+def _locs(*names):
+    return [{"id": f"h{i}", "name": n} for i, n in enumerate(names)]
+
+
+def test_a_cap_accounts_for_what_it_left_out():
+    """The whole point of the numbers: a caller handed 2 of 5 with no count
+    reads the account as having 2, and then reports a location that is there as
+    missing."""
+    sel = core.select_locations(_locs("a", "b", "c", "d", "e"), limit=2)
+    assert [l["name"] for l in sel["locations"]] == ["a", "b"]
+    assert sel["total"] == 5 and sel["returned"] == 2
+    assert sel["matched"] == 5
+    assert sel["omitted_by_limit"] == 3 and sel["omitted_by_filter"] == 0
+
+
+def test_a_name_substring_matches_anywhere_and_ignores_case():
+    """Substring, not prefix: real location names lead with a customer or a
+    region, and the word someone knows is usually in the middle."""
+    sel = core.select_locations(_locs("EU-perf-1", "us-PERF-2", "eu-sv-3"),
+                                name_contains="perf")
+    assert [l["name"] for l in sel["locations"]] == ["EU-perf-1", "us-PERF-2"]
+    assert sel["total"] == 3 and sel["matched"] == 2
+    assert sel["omitted_by_filter"] == 1 and sel["omitted_by_limit"] == 0
+
+
+def test_the_two_kinds_of_omission_are_counted_separately():
+    """A filter is what the caller asked for; a cap is not. Summing them would
+    hide which of the two is worth undoing."""
+    sel = core.select_locations(_locs("perf-a", "perf-b", "perf-c", "sv-d"),
+                                name_contains="perf", limit=2)
+    assert sel["returned"] == 2
+    assert sel["omitted_by_filter"] == 1 and sel["omitted_by_limit"] == 1
+
+
+def test_no_cap_returns_the_whole_account():
+    sel = core.select_locations(_locs("a", "b", "c"), limit=None)
+    assert sel["returned"] == 3 and sel["omitted_by_limit"] == 0
+
+
+def test_a_cap_below_one_is_refused_rather_than_returning_nothing():
+    """`limit=0` reads as "no limit" to whoever passed it and as "nothing
+    matched" in the answer."""
+    with pytest.raises(core.BadRequest):
+        core.select_locations(_locs("a"), limit=0)
+
+
+def test_a_location_with_no_name_is_not_a_crash():
+    """Names are not guaranteed by the API and a filter must not be the thing
+    that discovers that."""
+    sel = core.select_locations([{"id": "h1"}], name_contains="perf")
+    assert sel["returned"] == 0 and sel["omitted_by_filter"] == 1
+
+
+def test_a_ship_with_no_heartbeat_field_is_unknown_not_silent():
+    """The listing endpoint is not the per-location read, and a payload that
+    never carried a heartbeat cannot be evidence that an agent is dead --
+    "could not tell" and "not reporting" want different next steps."""
+    assert core.ship_reporting({"id": "s1", "state": "idle"}) is None
+    assert core.ship_reporting({"id": "s1", "state": "idle",
+                                "lastHeartBeat": 0}) is False
+    assert core.ship_reporting({"id": "s1", "state": "idle",
+                                "lastHeartBeat": time.time()}) is True
 
 
 # -- where a key might be -----------------------------------------------------
