@@ -193,8 +193,12 @@ class GenerateIn(BaseModel):
 
 
 def _generate(g: GenerateIn):
+    # `rotate_token`, because that is what the fetch does. Nothing else about
+    # this route has moved yet: the field this UI posts is still `fetch_token`
+    # and still defaults to true, which after #64 is the one caller left that
+    # mints as a side effect of asking for a bundle.
     return _answer(core.generate_bundle, g.facts, g.options,
-                   client=_state["client"], fetch_token=g.fetch_token)
+                   client=_state["client"], rotate_token=g.fetch_token)
 
 
 @app.post("/api/generate")

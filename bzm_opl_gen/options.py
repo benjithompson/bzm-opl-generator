@@ -152,18 +152,24 @@ OPTIONS = [
     # ---- Credentials ---------------------------------------------------
     Option(
         "auth_token", "string", "Credentials",
-        summary="The ship's AUTH_TOKEN. Fetched from the API when an API key is given.",
+        summary="The ship's AUTH_TOKEN. Never minted unless you ask; --rotate-token is the ask.",
         doc="The agent's `AUTH_TOKEN`, which is what identifies this deployment "
-            "as that ship. Left as the placeholder unless `--api-key` fetches it "
-            "or `--auth-token` supplies it, and it is the one option stripped from "
-            "`out/profile.json`. **Fetching issues a new token and invalidates the "
-            "previous one** -- for an agent already running, either re-apply the "
-            "whole bundle including the Secret, or pass the existing token. A crane "
-            "left holding a stale one logs `404` on `/ships/<id>/status` and sits at "
-            "`0/1`, which reads like a deleted ship. Supplying it is also the way "
-            "past an account that refuses the fetch outright -- some allow the token "
-            "endpoint only from BlazeMeter's own gateway, and the agent's install "
-            "command in the BlazeMeter UI carries the same value."),
+            "as that ship. Resolved in four steps, and only the second one calls "
+            "BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with "
+            "`--api-key`) issues a **new** one; otherwise the token already "
+            "written into the output directory is reused, provided that bundle's "
+            "`profile.json` names the same ship; otherwise the placeholder stays "
+            "and the command says where a real token comes from. It is the one "
+            "option stripped from `out/profile.json`, and it stays stripped -- a "
+            "profile is a file people commit and hand over. **Minting invalidates "
+            "the previous token**, and an agent left holding a stale one does not "
+            "report an auth error: crane answers `404`, logs `Sleeping for 300` "
+            "and never starts its health service, so the pod sits `0/1 Running` "
+            "and reads as a slow boot. Re-apply the whole bundle, Secret "
+            "included, after any rotation. Supplying the token is also the way "
+            "past an account that refuses the fetch outright -- some allow the "
+            "token endpoint only from BlazeMeter's own gateway, and the agent's "
+            "install command in the BlazeMeter UI carries the same value."),
     Option(
         "use_secret", "boolean", "Credentials",
         summary="Put AUTH_TOKEN in a Secret; off puts it in the ConfigMap instead.",

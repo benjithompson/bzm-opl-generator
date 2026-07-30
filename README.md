@@ -76,13 +76,14 @@ create things (`create-location`, `create-ship`, `livetest`).
 # 0. find (or create) the location and agent
 bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
 bzm-opl-gen create-ship --api-key api-key.json --harbor-id <HARBOR_ID> \
-    --name my-k8s-agent        # prints ship_id + AUTH_TOKEN
+    --name my-k8s-agent        # prints ship_id + AUTH_TOKEN -- keep the token
 
 # 1. gather the location's facts from the account
 bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>
 
-# 2. generate manifests (--api-key fetches AUTH_TOKEN automatically)
-bzm-opl-gen generate --namespace my-project --api-key api-key.json -o out/
+# 2. generate manifests. The token comes from you, not from the API: generate
+#    never mints one, because minting revokes the token a running agent holds
+bzm-opl-gen generate --namespace my-project --auth-token <AUTH_TOKEN> -o out/
 
 # 3. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
@@ -101,10 +102,15 @@ Other things you'll reach for: `--format helm` for a chart instead of flat YAML
 to a local cluster and wait for the agent to report online
 ([docs/live-test.md](docs/live-test.md)).
 
-> **Re-generating against a live agent:** `--api-key` fetches the AUTH_TOKEN,
-> and that endpoint **issues a new token and invalidates the previous one**. If
-> an agent is already running for that ship, either re-apply the whole bundle
-> (Secret included) or pass `--auth-token <existing>` instead.
+> **Re-generating against a live agent is safe, and that is new.** `generate`
+> never issues an AUTH_TOKEN as a side effect: it takes `--auth-token`, or reads
+> back the token already in `-o` (checking that bundle is for the same ship), or
+> leaves the placeholder and says where a real one comes from. `--rotate-token`
+> is the only thing that mints, and it warns first — the endpoint **issues a new
+> token and invalidates the previous one**, so after a rotation the whole bundle
+> has to be re-applied, Secret included, or that agent sits at `0/1 Running`.
+> `--api-key` on its own no longer does anything to `generate`;
+> [docs/options.md](docs/options.md) has the four-step resolution in full.
 
 ### Without a BlazeMeter account
 

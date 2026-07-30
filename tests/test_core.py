@@ -19,7 +19,7 @@ import zipfile
 
 import pytest
 
-from bzm_opl_gen import api, core
+from bzm_opl_gen import api, core, generate as gen
 from test_generate import FACTS
 
 
@@ -140,50 +140,171 @@ def test_an_unclassified_failure_does_not_blame_the_caller():
                for e in (core.BadRequest, core.NotFound, core.UpstreamError))
 
 
-# -- generate: when is a token fetched ----------------------------------------
+# -- where a bundle's AUTH_TOKEN comes from -----------------------------------
+# Four branches, one rule, and only one of them mints. Minting *rotates*: the
+# previous token dies and the agent holding it sits at 0/1 Running, so a bundle
+# regenerated to look at it used to revoke a working agent's credential (#64).
 
-def test_generate_fetches_the_token_for_an_unambiguous_ship():
+def _bundle(tmp_path, **opts):
+    """A written bundle, as a predecessor for the reuse branch to read back."""
+    files = gen.generate(dict(FACTS), {"namespace": "ns1", **opts})
+    gen.write(files, str(tmp_path))
+    return files
+
+
+def test_generate_mints_nothing_by_default_even_holding_a_key():
+    """The whole of #64: a client is no longer permission to rotate. Generating
+    twice against an account used to hand back two different tokens, the second
+    of which quietly killed the agent running on the first."""
     c = FakeClient()
     files = core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c)
+    assert c.calls == []
+    assert gen.DEFAULT_OPTIONS["auth_token"] in files["bzm_secret.yaml"]
+
+
+def test_a_token_in_the_options_wins_outright_and_a_rotation_is_not_silent():
+    """Both flags together is a contradiction with one safe reading -- minting
+    and then writing the supplied value over it revokes the token that was
+    passed and puts nothing usable in the bundle. So the rotation loses, and
+    says it lost: a flag quietly dropped is the shape of this whole bug."""
+    c = FakeClient()
+    opts = {"namespace": "ns1", "auth_token": "MINE"}
+    src = core.resolve_auth_token(FACTS, opts, client=c, rotate=True)
+    assert src.branch == core.TOKEN_GIVEN
+    assert opts["auth_token"] == "MINE" and c.calls == []
+    assert "--rotate-token was NOT acted on" in src.message
+    assert "--rotate-token" not in core.resolve_auth_token(
+        FACTS, dict(opts)).message
+
+
+def test_rotating_mints_and_names_the_ship_it_was_for():
+    """`rotate=True` is the one branch that calls the endpoint, and the ship
+    comes back so the caller can say whose credential just changed -- which the
+    MCP surface answered as `warnings: []` before this."""
+    c = FakeClient()
+    opts = {"namespace": "ns1"}
+    src = core.resolve_auth_token(FACTS, opts, client=c, rotate=True)
     assert c.calls == [("auth_token", "aaa111", "bbb222")]
-    assert "TOKEN-FROM-API" in files["bzm_secret.yaml"]
+    assert (src.branch, src.ship_id) == (core.TOKEN_ROTATED, "bbb222")
+    assert "bbb222" in src.message
+    assert opts["auth_token"] == "TOKEN-FROM-API"
 
 
-def test_generate_leaves_a_token_that_was_given_alone():
-    """Fetching rotates the token, so a value the caller already holds must
-    never be replaced by a fresh one that breaks their running agent."""
+def test_rotating_warns_before_it_acts_not_after():
+    """After is a report: the agent's credential is already dead by then. The
+    announcement has to reach the caller ahead of the call, which is why
+    `announce` is a parameter of the resolution rather than something the
+    caller is trusted to remember."""
+    said = []
+
+    class Announcing(FakeClient):
+        def auth_token(self, harbor_id, ship_id):
+            said.append("MINTED")
+            return super().auth_token(harbor_id, ship_id)
+
+    core.resolve_auth_token(FACTS, {"namespace": "ns1"}, client=Announcing(),
+                            rotate=True, announce=said.append)
+    assert said[0] == core.rotation_warning("bbb222")
+    assert said[1] == "MINTED"
+    assert "0/1" in said[0] and "re-appl" in said[0]
+
+
+def test_rotating_without_a_credential_says_which_one_it_needs():
+    with pytest.raises(core.BadRequest) as caught:
+        core.resolve_auth_token(FACTS, {"namespace": "ns1"}, rotate=True)
+    assert "--api-key" in str(caught.value)
+
+
+def test_rotating_never_guesses_between_two_ships():
+    """Rotating the wrong one revokes the credential of an agent nobody
+    mentioned, and the mistake is invisible until that pod is looked at."""
     c = FakeClient()
-    files = core.generate_bundle(
-        FACTS, {"namespace": "ns1", "auth_token": "MINE"}, client=c)
-    assert c.calls == []
-    assert "MINE" in files["bzm_secret.yaml"]
-
-
-def test_generate_does_not_guess_between_two_ships():
-    """Two ships and no ship_id: there is no right answer, and fetching for
-    the wrong one rotates a token belonging to an agent nobody asked about."""
-    c = FakeClient()
-    facts = dict(FACTS, ships=FACTS["ships"] * 2)
-    with pytest.raises(core.BadRequest):
-        core.generate_bundle(facts, {"namespace": "ns1"}, client=c)
+    facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
+                               dict(FACTS["ships"][0], id="b2")])
+    with pytest.raises(core.BadRequest) as caught:
+        core.resolve_auth_token(facts, {"namespace": "ns1"}, client=c,
+                                rotate=True)
+    assert "b1" in str(caught.value) and "b2" in str(caught.value)
     assert c.calls == []
 
 
-def test_generate_fetches_for_the_ship_it_was_told_about():
+def test_rotating_uses_the_ship_it_was_told_about():
     c = FakeClient()
     facts = dict(FACTS, ships=[dict(FACTS["ships"][0]),
                                dict(FACTS["ships"][0], id="ccc333")])
-    core.generate_bundle(facts, {"namespace": "ns1", "ship_id": "ccc333"}, client=c)
+    core.resolve_auth_token(facts, {"namespace": "ns1", "ship_id": "ccc333"},
+                            client=c, rotate=True)
     assert c.calls == [("auth_token", "aaa111", "ccc333")]
 
 
-def test_generate_asks_for_no_token_when_told_not_to():
-    """The manual-entry path: the token was typed, and a key left over from an
-    earlier connect must not be asked for one belonging to someone else."""
+def test_the_token_already_in_the_output_directory_is_reused(tmp_path):
+    """`generate.existing_auth_token` was written for exactly this and had no
+    production caller at all -- so every regenerate fell through to a mint."""
+    _bundle(tmp_path, auth_token="TOKENVALUE")
     c = FakeClient()
-    core.generate_bundle(FACTS, {"namespace": "ns1", "auth_token": "TYPED"},
-                         client=c, fetch_token=False)
-    assert c.calls == []
+    opts = {"namespace": "ns1"}
+    src = core.resolve_auth_token(FACTS, opts, client=c, out_dir=str(tmp_path))
+    assert (src.branch, src.ship_id) == (core.TOKEN_REUSED, "bbb222")
+    assert opts["auth_token"] == "TOKENVALUE" and c.calls == []
+
+
+def test_regenerating_a_bundle_twice_is_byte_identical(tmp_path):
+    """#64's own acceptance criterion. It holds because the second render reads
+    the first one's token back instead of issuing a new one -- and it covers
+    profile.json too, which is the file a reviewer would diff."""
+    first = _bundle(tmp_path, auth_token="TOKENVALUE")
+    opts = {"namespace": "ns1"}
+    core.resolve_auth_token(FACTS, opts, client=FakeClient(),
+                            out_dir=str(tmp_path))
+    second = core.generate_bundle(FACTS, opts, out_dir=str(tmp_path))
+    assert second == first
+
+
+def test_a_bundle_for_another_ship_is_not_reused_and_says_so(tmp_path):
+    """Reusing across ships writes another location's credential into this
+    bundle, and the agent then sits at 0/1 with a token that was never its own.
+    Loud rather than silent: the directory is the only place the mistake shows."""
+    facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
+                               dict(FACTS["ships"][0], id="b2")])
+    gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
+                                   "auth_token": "B1TOKEN"}), str(tmp_path))
+    opts = {"namespace": "ns1", "ship_id": "b2"}
+    src = core.resolve_auth_token(facts, opts, out_dir=str(tmp_path))
+    assert src.branch == core.TOKEN_PLACEHOLDER
+    assert "b1" in src.message and "b2" in src.message
+    assert "B1TOKEN" not in opts.get("auth_token", "")
+
+
+def test_a_bundle_whose_ship_cannot_be_confirmed_is_not_reused(tmp_path):
+    """An older bundle, or a hand-assembled directory: there is a token in it
+    and nothing that says whose. Not the same as a mismatch -- the remedy is to
+    pass the token rather than to look at another directory -- but it is equally
+    not a reuse."""
+    _bundle(tmp_path, auth_token="TOKENVALUE")
+    os.remove(os.path.join(str(tmp_path), gen.PROFILE_FILE))
+    opts = {"namespace": "ns1"}
+    src = core.resolve_auth_token(FACTS, opts, out_dir=str(tmp_path))
+    assert src.branch == core.TOKEN_PLACEHOLDER
+    assert "auth_token" not in opts
+    assert gen.PROFILE_FILE in src.message
+
+
+def test_no_token_anywhere_says_where_a_real_one_comes_from(tmp_path):
+    """The placeholder is a fine bundle to read and an unusable one to apply,
+    so the branch that produces it has to name both sources of a real token.
+    The kubectl is *named*, never run: nothing here reads a cluster."""
+    src = core.resolve_auth_token(FACTS, {"namespace": "ns1"},
+                                  out_dir=str(tmp_path))
+    assert src.branch == core.TOKEN_PLACEHOLDER
+    assert "create-ship" in src.message
+    assert "kubectl -n ns1 get secret" in src.message
+    assert "base64 -d" in src.message
+
+
+def test_the_placeholder_branch_needs_no_output_directory():
+    """The MCP and UI callers generate before they have anywhere to write."""
+    assert (core.resolve_auth_token(FACTS, {"namespace": "ns1"}).branch
+            == core.TOKEN_PLACEHOLDER)
 
 
 def test_generate_needs_no_client_at_all():
@@ -221,10 +342,14 @@ class RefusingClient(FakeClient):
 # it into a BadRequest, or letting the raw body past -- would pass a test that
 # only drove the helper.
 REFUSED_CALLS = {
-    "fetch_auth_token":
-        lambda c: core.fetch_auth_token(c, FACTS, {"namespace": "ns1"}),
+    "rotate_auth_token":
+        lambda c: core.rotate_auth_token(c, FACTS, {"namespace": "ns1"}),
+    "resolve_auth_token":
+        lambda c: core.resolve_auth_token(FACTS, {"namespace": "ns1"},
+                                          client=c, rotate=True),
     "generate_bundle":
-        lambda c: core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c),
+        lambda c: core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c,
+                                       rotate_token=True),
     "reveal_token":
         lambda c: core.reveal_token(c, "aaa111", "bbb222"),
 }

@@ -745,6 +745,13 @@ TOKEN_FIELDS = ("AUTH_TOKEN", "authToken")
 # The files those fields are written into, in the order a bundle is read.
 TOKEN_FILES = ("bzm_secret.yaml", "bzm_configmap.yaml", "bzm-opl-values.yaml")
 
+# The Secret holding it, named in templates/secret.yaml and defaulted by the
+# chart's `bzm-opl.secretName`. Here as a constant because a bundle with no
+# token has to be able to say where one is recoverable from -- `kubectl get
+# secret <this> -o jsonpath=...` on an agent already deployed -- and that
+# sentence must name the object this generator actually emits.
+SECRET_NAME = "blazemeter-secret"
+
 AUTH_TOKEN_RE = re.compile(
     r'^\s*(?:' + "|".join(TOKEN_FIELDS) + r'):\s*"?([^"\s]+)"?\s*$', re.M)
 
@@ -1150,7 +1157,8 @@ def _helm_readme(facts, o):
     token = ""
     if not o["auth_token"] or o["auth_token"] == DEFAULT_OPTIONS["auth_token"]:
         token = (" \\\n    --set-string authToken=<AUTH_TOKEN>"
-                 "   # not in the values file;\n    # generate with --api-key to embed it")
+                 "   # not in the values file;\n    # re-generate with "
+                 "--auth-token <token> to embed it")
     return f"""{_bundle_table(facts, o)}
 ## Deploy
 
@@ -1255,7 +1263,7 @@ def generate(facts, options):
         "CRANE_EPHEMERAL_STORAGE": (o["crane_ephemeral_storage"]
                                     or CRANE_EPHEMERAL_STORAGE),
         "SECRET_REF_BLOCK": (
-            "            - secretRef:\n                name: blazemeter-secret\n"
+            f"            - secretRef:\n                name: {SECRET_NAME}\n"
             if o["use_secret"] else ""
         ),
         "SCHEDULING_BLOCK": _scheduling_block(o),
@@ -1435,8 +1443,12 @@ SECRET_OPTIONS = frozenset({"auth_token"})
 
 def _profile_json(o):
     """The resolved options, replayable with `generate --profile`. AUTH_TOKEN is
-    left out on purpose -- it is re-fetched from the API, so this file can be
-    committed or handed over without leaking the agent credential."""
+    left out on purpose, and stays out: #64's wording offered to source the token
+    from "--auth-token, or a profile", and that half is superseded. A profile is
+    the file people commit, diff, paste into tickets and hand to a colleague, and
+    a credential written into one reaches everybody who ever sees it, for as long
+    as the file exists. The token in the *bundle beside it* is what a regenerate
+    reads back instead -- see core.resolve_auth_token."""
     return json.dumps(
         {k: v for k, v in sorted(o.items()) if k not in SECRET_OPTIONS},
         indent=2) + "\n"

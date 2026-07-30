@@ -156,9 +156,11 @@ def test_sv_expose_refuses_without_a_wildcard_domain(fake_cluster, monkeypatch,
     assert not out.exists()
 
 
-# -- generate: the ship a token would be fetched for ---------------------------
-# The rule moved to core.token_ship_id so that the three callers of it cannot
-# disagree. These drive it the way a user hits it, through the flags.
+# -- generate: which token the bundle gets, and what minted it -----------------
+# The rule is core.resolve_auth_token so the four callers of it cannot disagree.
+# These drive it the way a user hits it, through the flags -- including the one
+# that matters most, which is that no flag combination except --rotate-token
+# reaches the endpoint at all.
 
 def _facts_file(tmp_path, ships):
     f = json.load(open("examples/facts.example.json"))
@@ -169,6 +171,92 @@ def _facts_file(tmp_path, ships):
     path = tmp_path / "facts.json"
     path.write_text(json.dumps(f))
     return str(path)
+
+
+def _generate(monkeypatch, tmp_path, *extra, ships=("b1",), out=None,
+              client=None):
+    """`generate` with a faked account, run the way a user runs it."""
+    monkeypatch.setattr(cli.api, "BzmClient",
+                        lambda *a, **k: client or FakeClient())
+    _run(monkeypatch, "generate", "--facts", _facts_file(tmp_path, list(ships)),
+         "-o", str(out or (tmp_path / "out")), *extra)
+
+
+def test_generate_with_an_api_key_alone_mints_nothing(monkeypatch, tmp_path,
+                                                      capsys):
+    """The break in #64. `--api-key` used to be enough to rotate the credential
+    of a running agent, which is why regenerating a bundle to look at it took an
+    agent down. The flag now means only "the credential for --rotate-token", and
+    on its own it says so rather than doing nothing quietly."""
+    c = FakeClient()
+    _generate(monkeypatch, tmp_path, "--api-key",
+              "examples/api-key.example.json", client=c)
+    assert c.calls == []
+    out = capsys.readouterr()
+    assert "--api-key has no effect" in out.err
+    assert "--rotate-token" in out.err
+    assert (gen.DEFAULT_OPTIONS["auth_token"]
+            in (tmp_path / "out" / "bzm_secret.yaml").read_text())
+
+
+def test_generate_rotates_only_when_told_to(monkeypatch, tmp_path, capsys):
+    c = FakeClient()
+    _generate(monkeypatch, tmp_path, "--api-key",
+              "examples/api-key.example.json", "--rotate-token", client=c)
+    assert [(name, ship) for name, _, ship in c.calls] == [("auth_token", "b1")]
+    assert "rotated" in capsys.readouterr().out
+    assert ("TOKEN-FROM-API"
+            in (tmp_path / "out" / "bzm_secret.yaml").read_text())
+
+
+def test_generate_warns_before_it_rotates(monkeypatch, tmp_path, capsys):
+    """Ordering, not wording: printed afterwards this is a post-mortem. The
+    warning and the mint both go to stdout so that the order survives a pipe --
+    across two streams it does not."""
+    class Loud(FakeClient):
+        def auth_token(self, harbor_id, ship_id):
+            print("MINTED")
+            return super().auth_token(harbor_id, ship_id)
+
+    _generate(monkeypatch, tmp_path, "--api-key",
+              "examples/api-key.example.json", "--rotate-token", client=Loud())
+    out = capsys.readouterr().out
+    assert "0/1" in out and "re-appl" in out.split("MINTED")[0]
+    assert out.index("ROTATING") < out.index("MINTED")
+
+
+def test_rotate_token_needs_the_key_that_does_it(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit) as caught:
+        _generate(monkeypatch, tmp_path, "--rotate-token")
+    assert "--api-key" in str(caught.value)
+
+
+def test_generating_twice_into_the_same_directory_changes_nothing(
+        monkeypatch, tmp_path, capsys):
+    """#64's acceptance criterion, at the surface a user drives: the second run
+    reads the first run's token back rather than issuing one, so the bundle --
+    profile.json included -- comes out byte for byte the same and the agent
+    deployed from it keeps working."""
+    out = tmp_path / "out"
+    _generate(monkeypatch, tmp_path, "--auth-token", "REALTOKEN", out=out)
+    first = {p.name: p.read_bytes() for p in out.iterdir()}
+    c = FakeClient()
+    _generate(monkeypatch, tmp_path, "--api-key",
+              "examples/api-key.example.json", out=out, client=c)
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == first
+    assert c.calls == []
+    assert "reused" in capsys.readouterr().out
+
+
+def test_generate_says_where_a_real_token_comes_from(monkeypatch, tmp_path,
+                                                    capsys):
+    """A placeholder bundle reads fine and cannot be applied, so the run that
+    produces one has to name both places a real token comes from. Neither is
+    this command reading a cluster -- the kubectl is printed, not run."""
+    _generate(monkeypatch, tmp_path, "--namespace", "ns1")
+    out = capsys.readouterr().out
+    assert "create-ship" in out
+    assert "kubectl -n ns1 get secret" in out and "base64 -d" in out
 
 
 def test_generate_says_which_ship_it_needs_rather_than_raising(monkeypatch,
@@ -183,8 +271,8 @@ def test_generate_says_which_ship_it_needs_rather_than_raising(monkeypatch,
         cli.main()
 
 
-def test_generate_fetches_no_token_without_an_api_key(monkeypatch, tmp_path,
-                                                      capsys):
+def test_generate_mints_nothing_without_an_api_key(monkeypatch, tmp_path,
+                                                   capsys):
     """No --api-key is not a degraded run: the manifests come out with the
     placeholder, which is the whole no-account path."""
     out = tmp_path / "out"
@@ -192,7 +280,7 @@ def test_generate_fetches_no_token_without_an_api_key(monkeypatch, tmp_path,
         "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, ["b1"]),
         "-o", str(out)])
     cli.main()
-    assert "fetched AUTH_TOKEN" not in capsys.readouterr().out
+    assert "rotated" not in capsys.readouterr().out
     assert gen.DEFAULT_OPTIONS["auth_token"] in (out / "bzm_secret.yaml").read_text()
 
 
@@ -214,6 +302,20 @@ def test_create_ship_prints_the_agent_and_its_token(monkeypatch, capsys):
     assert "auth_token: TOKEN-FROM-API" in out
 
 
+def test_create_ship_says_its_token_is_the_thing_to_keep(monkeypatch, capsys):
+    """This is now the only command that issues a credential as a matter of
+    course, and its output is the only copy: nothing here stores it, and
+    `generate` will not go and get another one. So the durability has to be said
+    out loud, and the next step has to be one that takes the token rather than
+    one that mints a second -- `generate --api-key` used to be printed here and
+    would now write a placeholder bundle."""
+    _create_ship(monkeypatch, FakeClient())
+    out = capsys.readouterr().out
+    assert "Keep" in out and "durable" in out
+    assert "generate" in out and "--auth-token" in out
+    assert "generate --api-key" not in out
+
+
 def test_create_ship_reports_a_refused_credential_and_the_ship_it_made(
         monkeypatch, capsys):
     """`create-ship` is one of the two callers that keep fetching a token, and
@@ -231,29 +333,27 @@ def test_generate_reports_a_refused_credential_rather_than_tracebacking(
         monkeypatch, tmp_path, capsys):
     """The refusal is only worth writing if it is what the caller sees.
 
-    `generate --api-key` is the other caller that fetches, and it had no guard:
-    against a real account that refuses the endpoint the sentence arrived at the
-    foot of a seventy-line traceback, which is a worse answer than the raw 403
-    it replaced. Found by running the command, not by a test -- every test until
-    now called core directly.
+    `generate --rotate-token` is the other caller that mints, and it had no
+    guard: against a real account that refuses the endpoint the sentence arrived
+    at the foot of a seventy-line traceback, which is a worse answer than the raw
+    403 it replaced. Found by running the command, not by a test -- every test
+    until now called core directly.
     """
-    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: RefusingClient())
     with pytest.raises(SystemExit) as caught:
-        _run(monkeypatch, "generate",
-             "--facts", _facts_file(tmp_path, ["b1"]),
-             "--api-key", "examples/api-key.example.json",
-             "-o", str(tmp_path / "out"))
+        _generate(monkeypatch, tmp_path, "--api-key",
+                  "examples/api-key.example.json", "--rotate-token",
+                  client=RefusingClient())
     assert "could not be issued" in str(caught.value)
     assert "--auth-token" in str(caught.value)
     assert "Traceback" not in capsys.readouterr().err
 
 
 def test_generate_never_asks_which_of_two_ships(monkeypatch, tmp_path):
-    """Two ships and no --ship-id: fetching for the wrong one rotates a token
-    belonging to an agent nobody named, so nothing is fetched and the command
-    says so instead."""
-    monkeypatch.setattr("sys.argv", [
-        "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, ["b1", "b2"]),
-        "--api-key", "examples/api-key.example.json", "-o", str(tmp_path / "out")])
-    with pytest.raises(ValueError, match="ship_id required"):
-        cli.main()
+    """Two ships and no --ship-id: rotating the wrong one revokes a token
+    belonging to an agent nobody named, so nothing is minted and the command
+    names both instead."""
+    with pytest.raises(SystemExit) as caught:
+        _generate(monkeypatch, tmp_path, "--api-key",
+                  "examples/api-key.example.json", "--rotate-token",
+                  ships=("b1", "b2"))
+    assert "b1" in str(caught.value) and "b2" in str(caught.value)

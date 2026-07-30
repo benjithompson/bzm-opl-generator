@@ -98,8 +98,19 @@ def cmd_create_ship(a):
     except core.CoreError as e:
         sys.exit(str(e))
     print(f"auth_token: {token}")
+    # This is the one command that issues a credential as a matter of course,
+    # and its output is the only copy: nothing here stores it, and `generate`
+    # deliberately will not go and get another one -- fetching mints, and minting
+    # revokes whatever is deployed. So say the durability out loud, and hand on a
+    # next step that *takes* the token. `generate --api-key` was printed here,
+    # and after #64 that would write a placeholder bundle.
+    print("\nKeep that auth_token: it is the durable artifact of this command. "
+          "Nothing here records it, and issuing another one (reveal_token, or "
+          "generate --rotate-token) invalidates this one along with any agent "
+          "running on it.")
     print(f"\nnext: bzm-opl-gen facts --api-key {a.api_key} --harbor-id {a.harbor_id}")
-    print(f"      bzm-opl-gen generate --ship-id {ship['id']} --api-key {a.api_key} ...")
+    print(f"      bzm-opl-gen generate --ship-id {ship['id']} "
+          f"--auth-token <the auth_token above> ...")
 
 
 def cmd_facts(a):
@@ -182,14 +193,27 @@ def cmd_generate(a):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
-    # Both which ship and the fetch itself are core's -- see core.token_ship_id
-    # for what each clause is protecting, and core.fetch_auth_token for why the
-    # call that rotates the credential exists once. Asked first so the client is
-    # built only when there is something to ask it: a bad key file should not be
-    # read on a run that was never going to fetch.
-    if a.api_key and core.token_ship_id(f, opts):
-        ship_id = core.fetch_auth_token(api.BzmClient(a.api_key), f, opts)
-        print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
+    # Where the token comes from is core.resolve_auth_token's, all four
+    # branches of it. What is left here is the flags: a client is built only
+    # for the one that mints, so a bad key file is not read on a run that was
+    # never going to touch the account.
+    client = api.BzmClient(a.api_key) if a.api_key and a.rotate_token else None
+    if a.api_key and not a.rotate_token:
+        print("note: --api-key has no effect on `generate`. It no longer "
+              "fetches an AUTH_TOKEN, because that fetch issues a new one and "
+              "revokes the token the running agent holds -- it is the "
+              "credential for --rotate-token, and nothing else here mints.",
+              file=sys.stderr)
+    # announce=print, on stdout beside the report rather than on stderr: the
+    # warning is only worth anything ahead of the mint, and two streams do not
+    # keep their order in a pipe or a CI log.
+    source = core.resolve_auth_token(f, opts, client=client,
+                                     rotate=a.rotate_token, out_dir=a.output,
+                                     announce=print)
+    # Always, for every branch, and unprefixed -- each message names the token
+    # itself. Which of the four happened decides whether an agent is still
+    # running, and the run that said nothing was the one that rotated (#64).
+    print(source.message)
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
@@ -494,7 +518,18 @@ def main():
 
     g = sub.add_parser("generate", help="render manifests from facts")
     g.add_argument("--facts", default="facts.json")
-    g.add_argument("--api-key", help="fetch AUTH_TOKEN from the API if not given")
+    g.add_argument("--api-key",
+                   help="the credential for --rotate-token, and nothing else "
+                        "here: on its own it changes nothing, because fetching "
+                        "an AUTH_TOKEN issues a new one and kills the agent "
+                        "running on the old")
+    g.add_argument("--rotate-token", dest="rotate_token", action="store_true",
+                   help="issue a NEW AUTH_TOKEN for the ship (needs --api-key). "
+                        "The previous one stops working at once and the agent "
+                        "holding it sits at 0/1 Running until this bundle is "
+                        "re-applied, Secret included. Without this flag the "
+                        "token comes from --auth-token, or from the bundle "
+                        "already in -o, or stays the placeholder")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
     g.add_argument("--format", dest="output_format",
                    choices=list(gen_mod.OUTPUT_FORMATS),
@@ -505,7 +540,11 @@ def main():
     g.add_argument("--platform", choices=["openshift", "k8s"])
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")
-    g.add_argument("--auth-token", dest="auth_token")
+    g.add_argument("--auth-token", dest="auth_token",
+                   help="the agent's AUTH_TOKEN, as create-ship printed it or "
+                        "as the BlazeMeter UI shows it on the agent. Wins over "
+                        "every other source and issues nothing, so an agent "
+                        "already running on it keeps working")
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
     # Tri-state so profile.json records which of the two a bundle asked for,
