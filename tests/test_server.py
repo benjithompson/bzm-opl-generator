@@ -143,6 +143,40 @@ def test_no_route_mints_unless_it_was_asked_to(connected, route, tmp_path):
     assert connected.calls == []
 
 
+def test_the_preview_can_say_a_save_would_reuse_the_folder_s_token(
+        connected, tmp_path):
+    """The preview took no out_dir, so its branch could never be `reused` -- and
+    the page reported "placeholder, fill it in before applying" over a folder
+    whose own token a save was about to keep. Misleading in the one direction
+    that matters: it invites a rotation nothing needed."""
+    out = str(tmp_path / "bundle")
+    ship = FACTS["ships"][0]["id"]
+    client.post("/api/generate/save", json={
+        "facts": FACTS, "out_dir": out,
+        "options": {"namespace": "ns1", "ship_id": ship,
+                    "auth_token": "ALREADY-THERE"}})
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "out_dir": out,
+        "options": {"namespace": "ns1", "ship_id": ship}})
+    assert r.json()["token"]["branch"] == core.TOKEN_REUSED
+    assert connected.calls == []
+
+
+def test_a_folder_it_will_refuse_is_refused_before_anything_is_issued(
+        connected):
+    """The save route resolved the token first and hit the relative-path refusal
+    afterwards, so a rotation that was then thrown away had already killed the
+    running agent -- the exact failure #64 exists to prevent, on the one surface
+    that had no guard. `require_absolute_out_dir` says so itself, and the MCP
+    already ordered it this way; this is the missing half of "one copy of the
+    rule, two moments"."""
+    r = client.post("/api/generate/save", json={
+        "facts": FACTS, "out_dir": "some/relative/dir", "rotate_token": True,
+        "options": {"namespace": "ns1", "ship_id": FACTS["ships"][0]["id"]}})
+    assert r.status_code == 400
+    assert connected.calls == [], "it minted a credential it then threw away"
+
+
 def test_a_page_still_asking_for_the_old_fetch_mints_nothing(connected):
     """`fetch_token` is gone from the request model, and a browser holding the
     previously-shipped bundle posts it on every download. Ignored rather than

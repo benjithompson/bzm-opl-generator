@@ -402,12 +402,18 @@ def agent_status(client, harbor_id, ship_id):
 # refusal rather than left to the reader: BlazeMeter shows the token on the agent
 # itself, and a bundle built with one supplied fetches nothing (token_ship_id
 # returns None), so a closed endpoint stops nothing except the convenience.
-TOKEN_ELSEWHERE = (
-    "The AUTH_TOKEN can be supplied instead of fetched: read it from the "
-    "agent's install command in the BlazeMeter UI (Settings -> Private "
-    "Locations -> the location -> the agent) and pass it as the auth_token "
-    "option (--auth-token on the command line), which also stops it being "
-    "rotated. Nothing else about the deployment needs this endpoint.")
+#
+# There is one sentence for this and it is token_recovery_hint, below. There were
+# two, and `resolve_auth_token` used one in its no-client branch and the other
+# everywhere else -- so which sources a caller was told about depended on which
+# way the same function had failed. The refusal path was the worse of the two: it
+# named the BlazeMeter UI and not the agent already deployed, which is the one
+# source needing no account access, and an account that just refused the endpoint
+# is exactly the thing the caller cannot rely on.
+TOKEN_CANNOT_BE_FETCHED = (
+    "The AUTH_TOKEN can be supplied instead of fetched, and a bundle built with "
+    "one supplied fetches nothing, so a closed endpoint costs only the "
+    "convenience.")
 
 
 def fetch_ship_token(client, harbor_id, ship_id):
@@ -433,7 +439,8 @@ def fetch_ship_token(client, harbor_id, ship_id):
             f"not be issued: BlazeMeter refused the credential fetch itself, "
             f"not the operation you asked for. Some accounts allow this "
             f"endpoint only from BlazeMeter's own gateway, in which case every "
-            f"attempt from here fails whatever it sends. {TOKEN_ELSEWHERE} "
+            f"attempt from here fails whatever it sends. "
+            f"{TOKEN_CANNOT_BE_FETCHED} {token_recovery_hint()} "
             f"BlazeMeter said: {e}", str(e))
 
 
@@ -544,7 +551,9 @@ def token_recovery_hint(options=None):
     return (
         f"A real one comes from what was shown when the agent was created "
         f"(`create-ship` prints it; the web page puts it in the field) -- keep "
-        f"it, nothing here stores it -- or out of an agent already deployed:\n"
+        f"it, nothing here stores it -- or from the agent's install command in "
+        f"the BlazeMeter UI (Settings -> Private Locations -> the location -> "
+        f"the agent), or out of an agent already deployed:\n"
         f"    kubectl -n {ns} get secret {gen_mod.SECRET_NAME} "
         f"-o jsonpath='{{.data.AUTH_TOKEN}}' | base64 -d\n"
         f"  Supply it as the bundle's auth_token -- `--auth-token` on the "
@@ -620,7 +629,8 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
             raise BadRequest(
                 "rotating the AUTH_TOKEN needs a BlazeMeter API key -- pass "
                 "--api-key (the CLI) or connect first. Without one the bundle "
-                "can still be completed by hand: " + TOKEN_ELSEWHERE)
+                "can still be completed by hand: "
+                + TOKEN_CANNOT_BE_FETCHED + " " + token_recovery_hint(options))
         ship_id = token_ship_id(facts, options)
         if not ship_id:
             ships = [s["id"] for s in facts.get("ships") or []]
@@ -661,9 +671,19 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
             # escape is to say what *this* bundle's token is -- a supplied or
             # rotated token never reads the directory at all -- so replacing
             # another ship's bundle stays available to whoever means it.
-            named = (f"a bundle for ship {theirs}, not {want}" if theirs
-                     else f"a bundle whose {gen_mod.PROFILE_FILE} does not say "
-                          f"which ship its AUTH_TOKEN belongs to")
+            # Three ways to get here, and each names what is actually unknown.
+            # `want` is None when the location has several agents and none was
+            # named -- reporting that as "not None" invents a ship and buries the
+            # remedy, which is to say which one this bundle is for.
+            if theirs and not want:
+                named = (f"a bundle for ship {theirs}, and nothing here says "
+                         f"which ship the new one is for -- this location has "
+                         f"several agents, so pass ship_id (--ship-id)")
+            elif theirs:
+                named = f"a bundle for ship {theirs}, not {want}"
+            else:
+                named = (f"a bundle whose {gen_mod.PROFILE_FILE} does not say "
+                         f"which ship its AUTH_TOKEN belongs to")
             remedy = ("Pass --auth-token (auth_token) to say what this "
                       "bundle's credential is, or --rotate-token to issue a "
                       "fresh one -- either makes replacing that bundle "

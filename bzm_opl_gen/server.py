@@ -223,6 +223,15 @@ class GenerateIn(BaseModel):
     # ignores it, which is what a browser holding the previous bundle needs, and
     # ignoring it errs towards not minting.
     rotate_token: bool = False
+    # Optional here, required on SaveIn. The preview and the zip take it so they
+    # can answer the question the page is actually asking -- "what will the
+    # bundle I am about to save carry?" -- because a folder that already holds
+    # this ship's bundle supplies its own token. Without it the preview could
+    # only ever say `placeholder`, and a page reporting "fill it in before
+    # applying" over a folder whose token a save was about to keep invites a
+    # rotation nothing needed, which is the harm this whole change is about.
+    # Read only: nothing is written unless the route is the save one.
+    out_dir: str | None = None
 
 
 class SaveIn(GenerateIn):
@@ -240,10 +249,16 @@ def _generate(g: GenerateIn, out_dir=None):
     twice.
 
     `out_dir` is the directory a bundle is about to be written to, and it is read
-    (never written) for the token its predecessor holds. Only the save route has
-    one, which is why it is a parameter here rather than a field of the model: a
-    zip has no destination on this machine, and a preview has none at all.
+    (never written) for the token its predecessor holds. The save route passes
+    the one it is about to write; the *preview* passes whatever folder the page
+    has typed, so it can answer for the bundle that would be saved rather than
+    for a hypothetical one with no history. The zip deliberately does not: it
+    lands in a browser's downloads directory, and borrowing a token from an
+    unrelated folder on the server would be a different bundle than the one
+    asked for. The parameter wins over the model's field, because by then the
+    save route has expanded `~`.
     """
+    out_dir = out_dir or g.out_dir
     opts = dict(g.options)
     source = _answer(core.resolve_auth_token, g.facts, opts,
                      client=_state["client"], rotate=g.rotate_token,
@@ -334,6 +349,13 @@ def generate_save(g: SaveIn):
     save working.
     """
     out_dir = os.path.expanduser(g.out_dir)
+    # Before the generation, not at the write: with rotate_token set, resolving
+    # first meant a credential was issued and *then* thrown away by the path
+    # refusal -- which has already taken the running agent down, for a request
+    # that produced nothing. write_bundle checks it again, which is the point of
+    # require_absolute_out_dir being its own function: one copy of the rule, two
+    # moments. The MCP's generate orders it the same way.
+    _answer(core.require_absolute_out_dir, out_dir)
     files, source = _generate(g, out_dir=out_dir)
     written = _answer(core.write_bundle, files, out_dir)
     return {"out_dir": out_dir, "files": written,

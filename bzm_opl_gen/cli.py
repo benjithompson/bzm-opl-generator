@@ -397,6 +397,22 @@ def cmd_livetest(a):
             f"where that account will not exist. Re-generate without "
             f"--no-create-service-account, or create '{sa}' in {a.namespace} "
             f"yourself before starting the run")
+    # Third guard of the same shape, and the one the mint below cannot cover: a
+    # run that re-renders nothing deploys what is on disk, so if that bundle
+    # carries the placeholder the agent can never authenticate. Every object
+    # applies, no heartbeat arrives, and the run spends its whole 12-20 minutes
+    # reporting only that the agent never came online. Checked here because the
+    # paths that *do* re-render write a fresh token over it, so a placeholder on
+    # disk is not a problem for them -- see the mint below.
+    if not (a.local_proxy or a.run_test) and not a.auth_token \
+            and gen_mod.existing_auth_token(a.manifests) is None:
+        sys.exit(
+            f"{a.manifests}/ carries no usable AUTH_TOKEN -- it is still the "
+            f"{gen_mod.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
+            f"re-renders nothing, so it would deploy that. The agent could not "
+            f"authenticate, and the rig would wait out its whole timeout to say "
+            f"only that it never came online. "
+            f"{core.token_recovery_hint(opts)}")
     proxy_user = proxy_pass = None
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
         sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "

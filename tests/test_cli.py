@@ -176,6 +176,18 @@ def test_images_pull_plans_the_mirror_without_crashing(monkeypatch, tmp_path,
     assert "DRY-RUN: docker pull" in out and "DRY-RUN: docker push" in out
 
 
+def test_listing_images_touches_no_docker_at_all(monkeypatch, tmp_path, capsys):
+    """Without --pull this only lists, and must reach nothing. It returns before
+    the mirror block, so the crash that block used to raise never reached anyone
+    listing -- which is also why nobody noticed the crash."""
+    monkeypatch.setattr(core, "_docker", lambda *a, **k: pytest.fail(
+        "listing images ran docker"))
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: pytest.fail(
+        "listing images shelled out"))
+    _run(monkeypatch, "images", "--facts", _facts_file(tmp_path, ["b1"]))
+    assert "gcr.io/" in capsys.readouterr().out, "it listed nothing"
+
+
 def test_the_cli_never_runs_docker_itself(monkeypatch, tmp_path):
     """core.mirror_images does the pull/tag/push, and the loop here only prints
     what it did -- the command's own comment says core owns it so this and the
@@ -467,6 +479,35 @@ def test_livetest_refuses_to_deploy_a_placeholder_token(monkeypatch, tmp_path):
     _, _, exit = _livetest(monkeypatch, tmp_path, FakeClient(), "--auth-token",
                            gen.DEFAULT_OPTIONS["auth_token"])
     assert "create-ship" in str(exit)
+
+
+def test_livetest_refuses_a_placeholder_bundle_with_nothing_to_re_render(
+        monkeypatch, tmp_path):
+    """A plain run -- no --local-proxy, no --run-test -- renders nothing and
+    deploys the bundle exactly as it sits on disk. The placeholder check lived
+    inside the branch that mints, so this path had none: every object applies,
+    the agent can never come online, and the run waits out its whole 12-20
+    minutes to report only that it did not. Same guard as the Helm and
+    ServiceAccount ones, for the same reason.
+
+    Every other livetest test passes --run-test, which is why this went unseen.
+    """
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    # No auth_token, so the bundle carries the placeholder -- what `generate`
+    # writes when nobody supplied one.
+    gen.write(gen.generate(facts, {"namespace": "ns1"}), str(manifests))
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it deployed a bundle whose token can never authenticate"))
+    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key",
+             "examples/api-key.example.json",
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1")
+    assert "AUTH_TOKEN" in str(caught.value)
 
 
 def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):

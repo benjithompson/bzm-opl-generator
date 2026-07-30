@@ -307,7 +307,10 @@ export default function App() {
     previewTimer.current = window.setTimeout(async () => {
       try {
         const opts = { ...options, ship_id: shipId ?? undefined };
-        const r = await api.generate(facts, opts);
+        // The typed save folder goes with it: if it already holds this ship's
+        // bundle, the save will keep that token, and the preview should say so
+        // rather than announcing a placeholder over a bundle that has one.
+        const r = await api.generate(facts, opts, saveDir.trim() || undefined);
         setFiles(r.files);
         setPreviewToken(r.token);
         setGenErr(null);
@@ -318,7 +321,10 @@ export default function App() {
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
-  }, [facts, options, shipId]);
+    // saveDir is a dependency because it changes the answer: point the folder at
+    // a bundle this ship already has and the token branch becomes `reused`. The
+    // 250ms debounce above is what keeps that from being a request per keystroke.
+  }, [facts, options, shipId, saveDir]);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever

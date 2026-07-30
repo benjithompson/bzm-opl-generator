@@ -102,9 +102,15 @@ export const api = {
    *  looking at manifests may touch the account. `token` says what the bundle
    *  currently carries, which is how the page knows a download would be a
    *  placeholder before anyone clicks it. */
-  generate: (facts: Facts, options: Options) =>
+  /** `outDir` is the folder a save would land in, when one has been typed. It is
+   *  read, never written: a folder already holding this ship's bundle supplies
+   *  its own token, so sending it is what lets the preview say `reused` instead
+   *  of `placeholder`. Without it the page warned "fill it in before applying"
+   *  over a folder whose token the save was about to keep -- which invites a
+   *  rotation nothing needed. */
+  generate: (facts: Facts, options: Options, outDir?: string) =>
     req<{ files: GeneratedFile[]; token: TokenReport }>("POST", "/api/generate",
-      { facts, options, rotate_token: false }),
+      { facts, options, rotate_token: false, out_dir: outDir ?? null }),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),

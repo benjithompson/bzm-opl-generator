@@ -292,6 +292,23 @@ def test_saying_what_this_bundle_s_token_is_makes_the_overwrite_deliberate(
     assert src.branch == core.TOKEN_GIVEN and opts["auth_token"] == "B2TOKEN"
 
 
+def test_the_refusal_never_names_a_ship_called_None(tmp_path):
+    """Two agents and no --ship-id: `want` is None, and the sentence came out as
+    "holds a bundle for ship b1, not None" -- naming a ship that does not exist
+    and burying the actual remedy, which is to say which ship this bundle is
+    for. The ambiguity is the thing to report, not the directory."""
+    facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
+                               dict(FACTS["ships"][0], id="b2")])
+    gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
+                                   "auth_token": "B1TOKEN"}), str(tmp_path))
+    with pytest.raises(core.BadRequest) as caught:
+        core.resolve_auth_token(facts, {"namespace": "ns1"},
+                               out_dir=str(tmp_path))
+    said = str(caught.value)
+    assert "None" not in said, said
+    assert "ship_id" in said, "the remedy is to say which ship"
+
+
 def test_a_bundle_whose_ship_cannot_be_confirmed_is_refused_too(tmp_path):
     """An older bundle, or a hand-assembled directory: there is a token in it
     and nothing that says whose. Refused on the same ground as the mismatch --
@@ -338,6 +355,28 @@ def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
     assert "auth_token" in msg, "the option itself, which every surface has"
     assert "--auth-token" in msg, "the command line"
     assert "field" in msg.lower(), "the page"
+
+
+def test_one_sentence_names_every_place_a_token_can_be_got_from():
+    """There were two of these -- one naming the BlazeMeter UI's install command,
+    one naming create-ship and a deployed Secret -- and `resolve_auth_token` used
+    each in a different branch. Three real sources, so one sentence carries all
+    three; a caller who never ran create-ship still has somewhere to go."""
+    msg = core.token_recovery_hint({"namespace": "ns1"})
+    assert "create-ship" in msg, "what was printed when the agent was made"
+    assert "Private Locations" in msg, "the BlazeMeter UI's install command"
+    assert "kubectl -n ns1 get secret" in msg, "an agent already deployed"
+
+
+def test_a_refused_endpoint_says_where_else_a_token_lives():
+    """The refusal path used the other sentence, so it named the BlazeMeter UI
+    and not the agent already running -- which is the source that needs no
+    account access at all, and the account is precisely what just refused."""
+    c = RefusingClient()
+    with pytest.raises(core.TokenRefused) as caught:
+        core.fetch_ship_token(c, "h1", "s1")
+    assert "Private Locations" in str(caught.value)
+    assert "get secret" in str(caught.value)
 
 
 def test_the_placeholder_branch_needs_no_output_directory():

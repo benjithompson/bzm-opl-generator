@@ -36,6 +36,31 @@ CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDL
    `blazemeter.com` lines in the proxy log — online *without* them means the
    agent bypassed the proxy, which fails the test.
 
+## The credential a run uses
+
+**A run issues one AUTH_TOKEN, and issuing it revokes the one before it.** That
+is the whole of the rotation cost, and it is unavoidable here: the rig exists to
+bring an agent online, so it needs a credential that works. There is no
+`--rotate-token` on this command for the same reason — running it at all is the
+consent.
+
+One per *run*, though, not one per render. The re-render steps (`--local-proxy`
+adds the proxy's CA, `--run-test` the engine sizing) used to fetch a fresh token
+each time they fired, and a run fires them three or four times — so the agent
+deployed from an earlier render was left holding a revoked credential, sitting
+`0/1 Running` in a way the rig cannot tell from a slow boot. If you are chasing
+an intermittent rig failure from before this changed, that is a candidate.
+
+`--auth-token <token>` skips the mint for a caller already holding one — what
+`create-ship` printed, say. Use it when a run must not disturb the agent that is
+already deployed there.
+
+A run that re-renders nothing (no `--local-proxy`, no `--run-test`) deploys the
+bundle exactly as it sits in `--manifests`, and so mints nothing at all. If that
+bundle still carries the `<YOUR_AUTH_TOKEN>` placeholder the command refuses up
+front, rather than deploying an agent that cannot authenticate and reporting,
+twelve to twenty minutes later, only that it never came online.
+
 ## What a pass actually proves
 
 "Agent online" is a weak claim on its own — plenty of wrong configurations still
