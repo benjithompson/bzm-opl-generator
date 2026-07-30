@@ -64,11 +64,14 @@ function featState(p: ProtoProps, f: Feature): FeatState {
   return p.locFeatures.includes(f.id) ? "runs" : "not-run";
 }
 
+// Two words, because there are two answers. The state used to be spelled out
+// per case ("this location runs it", "not enabled here") which is the same
+// sentence the section header already implies, said again on every card.
 const STATE_CHIP: Record<FeatState, { text: string; cls: string } | null> = {
-  runs: { text: "this location runs it", cls: "bg-emerald-100 text-emerald-700" },
-  declared: { text: "declared", cls: "bg-bzm/15 text-bzm-dark" },
-  "not-run": { text: "not enabled here", cls: "bg-slate-200 text-slate-500" },
-  undeclared: null,
+  runs: { text: "Enabled", cls: "bg-emerald-100 text-emerald-700" },
+  declared: { text: "Enabled", cls: "bg-bzm/15 text-bzm-dark" },
+  "not-run": { text: "Not enabled", cls: "bg-slate-200 text-slate-500" },
+  undeclared: { text: "Not enabled", cls: "bg-slate-200 text-slate-500" },
   unknown: null,
 };
 
@@ -131,7 +134,7 @@ export function VariantA(p: ProtoProps) {
     <div className="space-y-5">
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-          Every deployment
+          Deployment settings
         </h3>
         <div className="rounded-xl border border-slate-200 p-3 space-y-3">
           <div id="proto-core" className="scroll-mt-4"><CoreFields {...p} /></div>
@@ -144,7 +147,7 @@ export function VariantA(p: ProtoProps) {
 
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-          What this agent serves
+          Deployment features
         </h3>
         {/* Stacked, not side by side: the configure column is ~600px and two
             cards of group rows in it read as two cramped tables. */}
@@ -161,25 +164,25 @@ export function VariantA(p: ProtoProps) {
                   ? "border-slate-200 bg-slate-50/70"
                   : "border-bzm/40 bg-bzm/[0.03]")}>
                 <div className="px-3 py-2.5 border-b border-slate-100">
-                  <p className={"text-sm font-medium " + (dim ? "text-slate-500" : "text-slate-900")}>
-                    {f.label}
-                    {chip && (
-                      <span className={"ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 " + chip.cls}>
-                        {chip.text}
-                      </span>
-                    )}
-                  </p>
-                  <p className="text-[11px] text-slate-400">{f.hint}</p>
-                  {/* Manual mode has no account to read the answer off, so the
-                      card asks for it in place -- rather than a row of buttons
-                      above that also happen to move the view. */}
-                  {p.sourceMode === "manual" && (
-                    <label className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-600">
+                  {/* State first: whether the feature is on is what the card is
+                      about, and it used to be a footnote under the hint.
+                      Manual mode has no account to read the answer off, so
+                      there it is the control rather than a chip. */}
+                  {p.sourceMode === "manual" ? (
+                    <label className="flex items-center gap-2 text-[11px] font-medium text-slate-600 mb-1">
                       <input type="radio" checked={p.feature === f.id}
                         onChange={() => p.pickFeature(f.id)} />
-                      this location runs {f.label.toLowerCase()}
+                      Enabled
                     </label>
+                  ) : chip && (
+                    <span className={"inline-block mb-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 " + chip.cls}>
+                      {chip.text}
+                    </span>
                   )}
+                  <p className={"text-sm font-medium " + (dim ? "text-slate-500" : "text-slate-900")}>
+                    {f.label}
+                  </p>
+                  <p className="text-[11px] text-slate-400">{f.hint}</p>
                 </div>
                 <div className={dim ? "opacity-60" : ""}>
                   {own.length
@@ -217,7 +220,7 @@ export function VariantA(p: ProtoProps) {
 export function VariantD(p: ProtoProps) {
   const secs = [
     { id: "core", label: "Placement", gs: [] as OptionGroup[] },
-    { id: "shared", label: "Every deployment", gs: SHARED },
+    { id: "shared", label: "Configure agent", gs: SHARED },
     ...p.features.map((f) => ({
       id: "f-" + f.id, label: f.label, gs: ownedBy(f.id),
     })),
