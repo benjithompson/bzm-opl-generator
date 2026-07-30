@@ -407,7 +407,14 @@ export default function App() {
   // Settled means: an agent is chosen and its facts are in. Collapsing then
   // keeps three steps of pickers from sitting above the configuration for the
   // rest of the session; "Change" reopens it.
+  //
+  // THROWAWAY: not in a step flow. There the pickers are a step of their own
+  // and nothing is stacked below them, so collapsing buys nothing and costs the
+  // thing you came back for -- picking a location swaps the panel for a summary
+  // the moment its lone agent is auto-selected, and the agent list you were
+  // about to choose from is gone.
   useEffect(() => {
+    if (PROTO_STEPS) return;
     if (sourceMode === "connect" && facts && shipId) setSourceOpen(false);
   }, [sourceMode, facts, shipId]);
 
