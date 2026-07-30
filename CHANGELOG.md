@@ -180,6 +180,17 @@ anything that breaks.
 
 ### Fixed
 
+- **`images --pull` runs at all.** It raised `NameError: name 'dry' is not
+  defined` on every invocation, with or without `--mirror`, with or without
+  `--dry-run` — a guard at the end of the command tested a name that never
+  existed, and it was evaluated unconditionally once `--pull` was given. Behind
+  it sat a second bug: a `subprocess.run` on the loop variable *after* the loop,
+  which would have re-run the last command on its own. Both are gone;
+  `core.mirror_images` was always the thing doing the pull/tag/push, and the loop
+  in the command only reports what it did. Nothing covered this path, which is
+  how a crash on the happy path survived. Plain `images` (listing only) was never
+  affected, and neither was the MCP `opl_bundle images` action.
+
 - **An account that refuses to issue an agent credential now says so, and says
   what still works.** Some accounts serve the token endpoint only from
   BlazeMeter's own gateway and answer everything else `403 Forbidden: Should

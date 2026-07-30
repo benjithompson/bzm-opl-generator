@@ -15,7 +15,6 @@ Subcommands:
 
 import argparse
 import json
-import subprocess
 import sys
 
 from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
@@ -327,12 +326,14 @@ def cmd_images(a):
     if not a.pull:
         return
     # The pull/tag/push is core's, so this command and the MCP tool cannot
-    # disagree about which name the target registry gets.
+    # disagree about which name the target registry gets -- and core is the only
+    # thing that shells out. This loop reports what it did; it does not do it.
+    # There used to be a `subprocess.run` after the loop, on the loop variable,
+    # guarded by a name that did not exist -- so every `images --pull` raised
+    # NameError, and had it not, it would have re-run just the last command.
     for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
                                   dry_run=a.dry_run)["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
-    if not dry:
-        subprocess.run(cmd, check=True)
 
 
 def _regenerator(facts, a, ship_id, auth_token):

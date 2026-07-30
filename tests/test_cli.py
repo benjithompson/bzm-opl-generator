@@ -16,7 +16,7 @@ import os
 import pytest
 import yaml
 
-from bzm_opl_gen import cli, generate as gen, livetest
+from bzm_opl_gen import cli, core, generate as gen, livetest
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -161,6 +161,41 @@ def test_sv_expose_refuses_without_a_wildcard_domain(fake_cluster, monkeypatch,
 # These drive it the way a user hits it, through the flags -- including the one
 # that matters most, which is that no flag combination except --rotate-token
 # reaches the endpoint at all.
+
+def test_images_pull_plans_the_mirror_without_crashing(monkeypatch, tmp_path,
+                                                       capsys):
+    """`images --pull` raised `NameError: name 'dry' is not defined` on every
+    invocation -- the guard at the end of the command tested a name that never
+    existed, and it is evaluated unconditionally once --pull is given. Nothing
+    covered this path, which is how a crash on the happy path survived."""
+    monkeypatch.setattr(core, "_docker", lambda args, dry_run: " ".join(
+        ["docker"] + args))
+    _run(monkeypatch, "images", "--facts", _facts_file(tmp_path, ["b1"]),
+         "--pull", "--dry-run", "--mirror", "reg.local/bzm")
+    out = capsys.readouterr().out
+    assert "DRY-RUN: docker pull" in out and "DRY-RUN: docker push" in out
+
+
+def test_the_cli_never_runs_docker_itself(monkeypatch, tmp_path):
+    """core.mirror_images does the pull/tag/push, and the loop here only prints
+    what it did -- the command's own comment says core owns it so this and the
+    MCP tool cannot disagree. The old code also called subprocess on the loop
+    variable *after* the loop, re-running just the last command."""
+    ran = []
+    monkeypatch.setattr(core, "_docker",
+                        lambda args, dry_run: ran.append(args) or "docker")
+    # Patched on the module, not on cli's reference to it: cli no longer imports
+    # subprocess at all, and this way the assertion holds for any path that
+    # starts shelling out later, wherever it lives.
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: pytest.fail(
+        "the CLI ran docker itself; core.mirror_images is the only path"))
+    _run(monkeypatch, "images", "--facts", _facts_file(tmp_path, ["b1"]),
+         "--pull", "--mirror", "reg.local/bzm")
+    verbs = [a[0] for a in ran]
+    assert verbs, "nothing was mirrored at all"
+    assert verbs.count("pull") == verbs.count("tag") == verbs.count("push"), \
+        f"one pull, tag and push per image; got {verbs}"
+
 
 def _facts_file(tmp_path, ships):
     f = json.load(open("examples/facts.example.json"))
