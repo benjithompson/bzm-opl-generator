@@ -29,7 +29,7 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Left as the placeholder unless `--api-key` fetches it or `--auth-token` supplies it, and it is the one option stripped from `out/profile.json`. **Fetching issues a new token and invalidates the previous one** -- for an agent already running, either re-apply the whole bundle including the Secret, or pass the existing token. A crane left holding a stale one logs `404` on `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship. |
+| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Left as the placeholder unless `--api-key` fetches it or `--auth-token` supplies it, and it is the one option stripped from `out/profile.json`. **Fetching issues a new token and invalidates the previous one** -- for an agent already running, either re-apply the whole bundle including the Secret, or pass the existing token. A crane left holding a stale one logs `404` on `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship. Supplying it is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified). Proxy credentials follow it: with `use_secret` on, the credentialed proxy URLs live in the Secret too. |
 
 ### Private registry

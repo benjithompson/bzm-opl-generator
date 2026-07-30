@@ -42,7 +42,8 @@ from typing import Any, Literal
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-from . import __version__, core, generate as gen_mod, facts as facts_mod, livetest
+from . import (__version__, core, doctor, generate as gen_mod,
+               facts as facts_mod, livetest)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -60,7 +61,12 @@ Kubernetes or OpenShift, from a real account rather than from a template.
 
 The path through it:
 
-  1. opl_location list          -- find the location and its ship (agent)
+  1. opl_location list          -- find the location, then `show` for its ship
+                                   (agent). Accounts hold hundreds of
+                                   locations, so `list` is one line each and
+                                   capped: narrow it with name_contains, and
+                                   read the omitted counts it comes back with
+                                   rather than treating the list as the account.
   2. opl_facts gather           -- the images and ids that location actually uses
   3. opl_preflight doctor       -- will this cluster take it? (needs evidence)
   4. opl_bundle generate        -- write the manifests to a directory
@@ -251,13 +257,17 @@ def _client(args):
 
 # -- opl_location --------------------------------------------------------------
 
-LOCATION_ACTIONS = ("list", "whoami", "create", "create_ship", "reveal_token",
-                    "delete")
+LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_ship",
+                    "reveal_token", "delete")
 
 DESCRIPTIONS["opl_location"] = (
     "BlazeMeter private locations (harbors) and their agents (ships).\n"
-    "  list         -- locations in an account or workspace, with their "
-    "ships. Defaults to this key's own account.\n"
+    "  list         -- one line per location {account_id?, workspace_id?, "
+    "name_contains?, limit?}. Defaults to this key's own account and to the "
+    f"first {core.DEFAULT_LOCATION_LIMIT}; accounts hold hundreds, so narrow "
+    "with name_contains rather than raising limit. Whatever it leaves out is "
+    "counted in the response.\n"
+    "  show         -- one location with its ships in full {harbor_id}\n"
     "  whoami       -- who this API key is, and its default account\n"
     "  create       -- a new private location {name, account_id, "
     "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
@@ -288,9 +298,38 @@ def _location(action, args):
             account_id = (core.user(client).get("defaultProject") or {}).get("accountId")
             core.require_location_scope(account_id, workspace_id)
         locs = core.locations(client, account_id, workspace_id)
-        return {"account_id": account_id,
-                "locations": [_location_summary(l) for l in locs],
-                "next": ["opl_facts gather, with the harbor_id of the one you want"]}
+        # `.get(key, default)` fills in only an *absent* key, and `{"limit":
+        # null}` is an ordinary way for a client to say "unset" -- which reached
+        # core as "no cap" and handed back the whole account this action exists
+        # to keep out of a result. Uncapped is not offered here on purpose:
+        # raising the cap is a number, and there is no size a session's result
+        # budget cannot be broken by.
+        limit = args.get("limit")
+        sel = core.select_locations(
+            locs, name_contains=args.get("name_contains"),
+            limit=core.DEFAULT_LOCATION_LIMIT if limit is None else limit)
+        body = {"account_id": account_id, "workspace_id": workspace_id,
+                "total": sel["total"], "matched": sel["matched"],
+                "returned": sel["returned"],
+                "omitted_by_filter": sel["omitted_by_filter"],
+                "omitted_by_limit": sel["omitted_by_limit"],
+                "locations": [_location_brief(l) for l in sel["locations"]],
+                "next": ["opl_location show, or opl_facts gather, with the "
+                         "harbor_id of the one you want"]}
+        note = _omission_note(sel, args.get("name_contains"))
+        if note:
+            # In prose as well as in the counts above. A session summarising
+            # this reads the sentence; the fields are what it can compute with,
+            # and the one thing that must survive both is that the list is
+            # partial.
+            body["note"] = note
+        return body
+
+    if action == "show":
+        harbor_id, = _need(args, "harbor_id")
+        loc = core.location(_client(args), harbor_id)
+        return {"location": _location_summary(loc),
+                "next": [f"opl_facts gather with harbor_id {harbor_id!r}"]}
 
     if action == "create":
         name, account_id, workspace_id = _need(args, "name", "account_id",
@@ -337,12 +376,71 @@ def _location(action, args):
 
 def _location_summary(loc):
     """A location as a session needs it: the ids it will pass on, and the two
-    fields that decide whether a bundle can be generated at all."""
+    fields that decide whether a bundle can be generated at all.
+
+    One location's worth, for `show` and `create`. A listing uses
+    _location_brief -- per-ship detail on 171 locations is the size problem
+    this pair exists to separate.
+    """
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "slots": loc.get("slots"), "func_ids": loc.get("funcIds"),
             "ships": [{"ship_id": s.get("id"), "name": s.get("name"),
-                       "state": s.get("state")}
+                       "state": s.get("state"),
+                       # null where the payload carried no heartbeat -- see
+                       # core.ship_reporting. opl_agent status is the authority.
+                       "reporting": core.ship_reporting(s)}
                       for s in loc.get("ships", [])]}
+
+
+def _location_brief(loc):
+    """One location as a *listing* entry: enough to pick one and go on.
+
+    An account with 171 locations and 221 ships listed the long way came back
+    at 84,779 characters, past the caller's result ceiling, so step 1 of the
+    path never completed. Almost all of it was per-ship detail about locations
+    the caller was never going to choose -- and choosing needs only whether
+    there is an agent there and whether anything is alive. `show` pays for the
+    detail on the one that gets picked.
+    """
+    ships = loc.get("ships") or []
+    reporting = [core.ship_reporting(s) for s in ships]
+    return {"harbor_id": loc.get("id"), "name": loc.get("name"),
+            "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
+            "ship_count": len(ships),
+            # Two counts, because one cannot carry both facts. `ships_reporting`
+            # counts only agents the payload vouches for, so a location with one
+            # live agent and one heartbeat-less record still shows the live one
+            # -- reporting the pair as wholly unknown lost exactly the "one of
+            # two" signal a count exists to give. `ships_unknown` is how a
+            # reader tells 0-because-we-looked from 0-because-we-could-not, so
+            # nobody redeploys a working agent on the strength of a zero. Where
+            # nothing at all is vouched for, `ships_reporting` is null rather
+            # than 0: with every ship unknown there is no count to give, and a 0
+            # beside it would be read as "none alive".
+            "ships_reporting": (None if reporting and all(r is None
+                                                          for r in reporting)
+                                else sum(1 for r in reporting if r)),
+            "ships_unknown": sum(1 for r in reporting if r is None)}
+
+
+def _omission_note(sel, name_contains):
+    """The counts as a sentence, when something is missing from the list.
+
+    Absent when nothing was left out, so its presence means the list is
+    partial. A list that quietly stops reads as the whole account, and "that
+    location does not exist" about one that was merely omitted is a worse
+    answer than a response that was too big.
+    """
+    parts = []
+    if sel["omitted_by_filter"]:
+        parts.append(f"{sel['omitted_by_filter']} of the account's "
+                     f"{sel['total']} locations do not match "
+                     f"name_contains={name_contains!r}")
+    if sel["omitted_by_limit"]:
+        parts.append(f"{sel['omitted_by_limit']} matching locations are not in "
+                     f"this list -- narrow with name_contains, or raise limit "
+                     f"(default {core.DEFAULT_LOCATION_LIMIT})")
+    return ". ".join(parts) + "." if parts else None
 
 
 # -- opl_facts -----------------------------------------------------------------
@@ -534,12 +632,16 @@ PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
 DESCRIPTIONS["opl_preflight"] = (
     "Will this land? Checks that run before anything is applied.\n"
     "  doctor    -- the cluster against this configuration {facts, "
-    "evidence, options?, namespace?}. `evidence` is the JSON file the "
-    "customer collects; this server never runs kubectl itself.\n"
+    "evidence, options?, namespace?}. This server never runs kubectl "
+    "itself.\n"
     "  suggest   -- what that same evidence implies the options should "
     "be {evidence, options?}\n"
     "  toolcheck -- this machine's own tools, for the live rig "
     "{cluster?, local_registry?, local_proxy?}\n"
+    "`evidence` is the JSON a customer collects: pass the PATH of the "
+    "file they sent, which is read here, or the object itself if you "
+    "already have it parsed -- do not read a file's contents through "
+    "yourself to turn one into the other.\n"
     "A denied read is a WARN, not a FAIL: a cluster that refused a "
     "probe is not a cluster that failed one, and `ok` already knows the "
     "difference.")
@@ -553,18 +655,31 @@ def _preflight(action, args):
             options["namespace"] = args["namespace"]
         evidence = args.get("evidence")
         if evidence is None:
+            # The collector is named from doctor's own constant rather than
+            # spelled out here. This message used to offer `doctor --collect`, a
+            # flag that existed in this string and nowhere else in the tool --
+            # and a session with no checkout has no way to find that out.
             raise core.BadRequest(
-                "doctor needs `evidence`: the JSON a customer collects with "
-                "`bzm-opl-gen doctor --collect` (see the preflight doc). This "
-                "server never runs kubectl, so without a file there is no "
-                "cluster to check against -- and a preflight of no cluster "
-                "would report nothing wrong with one you have not seen.")
-        report = core.preflight(facts, options, evidence)
+                f"doctor needs `evidence`: the JSON produced by "
+                f"{doctor.EVIDENCE_SCRIPT}, which someone with cluster "
+                f"access runs read-only and sends back "
+                f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
+                f"for). Pass the path of the file they sent, or the object "
+                f"itself. This server never runs kubectl, so without one there "
+                f"is no cluster to check against -- and a preflight of no "
+                f"cluster would report nothing wrong with one you have not "
+                f"seen.")
+        # A path is resolved here rather than inside core.preflight: this is the
+        # transport whose caller shares a filesystem with the server, so it is
+        # the one that may name a local file. See core.evidence_document.
+        report = core.preflight(facts, options,
+                                core.evidence_document(evidence))
         return dict(report, next=_after_doctor(report, options))
 
     if action == "suggest":
         evidence, = _need(args, "evidence")
-        found = core.suggestions_from_evidence(evidence, args.get("options"))
+        found = core.suggestions_from_evidence(
+            core.evidence_document(evidence), args.get("options"))
         return dict(found, next=[
             "apply the ones you agree with as opl_bundle generate options -- "
             "nothing here is applied for you",

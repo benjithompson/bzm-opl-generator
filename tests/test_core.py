@@ -14,11 +14,12 @@ a change that moves one without the other should fail somewhere.
 import io
 import json
 import os
+import time
 import zipfile
 
 import pytest
 
-from bzm_opl_gen import core
+from bzm_opl_gen import api, core
 from test_generate import FACTS
 
 
@@ -31,9 +32,10 @@ class FakeClient:
     like. Methods no core test calls are here for that reason.
     """
 
-    def __init__(self, token="TOKEN-FROM-API", harbor=None):
+    def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None):
         self._token = token
         self._harbor = harbor if harbor is not None else {}
+        self._locations = locations
         self.calls = []
 
     def auth_token(self, harbor_id, ship_id):
@@ -50,12 +52,22 @@ class FakeClient:
 
     def private_locations(self, account_id=None, workspace_id=None):
         self.calls.append(("private_locations", account_id, workspace_id))
+        if self._locations is not None:
+            return self._locations
         return [{"id": "h1", "name": "loc", "slots": 2,
                  "funcIds": ["performance"],
                  "ships": [{"id": "s1", "name": "agent1", "state": "idle"}]}]
 
     def create_ship(self, harbor_id, name):
         return {"id": "s2", "name": name}
+
+    def create_private_location(self, name, account_id, workspace_ids,
+                                func_ids=("performance",), slots=1,
+                                threads_per_engine=None):
+        self.calls.append(("create_private_location", name, account_id))
+        # A fresh harbor has no ships, which is why create_ship exists.
+        return {"id": "h9", "name": name, "slots": slots,
+                "funcIds": list(func_ids), "ships": []}
 
     def delete_private_location(self, harbor_id):
         self.calls.append(("delete", harbor_id))
@@ -182,6 +194,90 @@ def test_generate_needs_no_client_at_all():
 def test_generate_refuses_options_it_cannot_render():
     with pytest.raises(core.BadRequest):
         core.generate_bundle(FACTS, {"service_account_name": ""}, client=None)
+
+
+# -- a credential the account will not issue ----------------------------------
+
+# What a restricted account really answers, in the wording api.BzmClient hands
+# on: the token endpoint is allowed only from BlazeMeter's own gateway, so every
+# attempt fails and no argument to it would have helped.
+TOKEN_403 = ('POST /private-locations/aaa111/ships/bbb222/docker-command -> '
+             'HTTP 403: {"error": {"code": 403, "message": "Forbidden: Should '
+             'access from Private-Data gateway"}}')
+
+
+class RefusingClient(FakeClient):
+    """An account whose token endpoint is closed. Shared with tests/test_cli.py,
+    which drives the other surviving caller of the fetch."""
+
+    def auth_token(self, harbor_id, ship_id):
+        self.calls.append(("auth_token", harbor_id, ship_id))
+        raise api.BzmApiError(TOKEN_403)
+
+
+# Every path that still reaches the endpoint. Parametrised rather than tested
+# once through the fetch helper: the point of the refusal is that it arrives
+# whole at whoever asked, and a caller that unwrapped it on the way -- turning
+# it into a BadRequest, or letting the raw body past -- would pass a test that
+# only drove the helper.
+REFUSED_CALLS = {
+    "fetch_auth_token":
+        lambda c: core.fetch_auth_token(c, FACTS, {"namespace": "ns1"}),
+    "generate_bundle":
+        lambda c: core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c),
+    "reveal_token":
+        lambda c: core.reveal_token(c, "aaa111", "bbb222"),
+}
+
+
+def _refusal(name):
+    with pytest.raises(core.CoreError) as caught:
+        REFUSED_CALLS[name](RefusingClient())
+    return caught.value
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_names_the_ship_and_what_failed(name):
+    """The 403 body names no ship and does not say which of the two things went
+    wrong -- the credential, or the operation the caller asked for. On an
+    account that restricts the endpoint every attempt fails, so a message that
+    reads as "your request was wrong" sends the reader to look at their
+    arguments."""
+    msg = str(_refusal(name))
+    assert "bbb222" in msg              # the ship, which the body never names
+    assert "AUTH_TOKEN" in msg
+    assert "could not be issued" in msg
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_says_the_token_can_be_supplied_instead(name):
+    """A refusal with no way forward dead-ends the whole operation, and this one
+    has one: the token is on the agent in the BlazeMeter UI, and every generate
+    takes it as an option."""
+    msg = str(_refusal(name))
+    assert "auth_token" in msg and "--auth-token" in msg
+    assert "BlazeMeter UI" in msg
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_keeps_the_upstream_reason(name):
+    """Written over, not swallowed: "Should access from Private-Data gateway" is
+    the only clue that the account is configured this way deliberately, so it
+    stays both in the message and reachable on the error."""
+    e = _refusal(name)
+    assert e.upstream == TOKEN_403
+    assert TOKEN_403 in str(e)
+    assert str(e) != TOKEN_403          # ...but is no longer the whole message
+
+
+@pytest.mark.parametrize("name", list(REFUSED_CALLS))
+def test_a_refused_credential_is_not_a_malformed_request(name):
+    """An upstream refusal, so 502: nothing the caller sent was wrong, and a 400
+    would have the web UI and the MCP session both blame the person asking."""
+    e = _refusal(name)
+    assert isinstance(e, core.UpstreamError)
+    assert e.status == 502
+    assert not isinstance(e, core.BadRequest)
 
 
 # -- the zip ------------------------------------------------------------------
@@ -338,6 +434,88 @@ def test_preflight_reaches_no_cluster(monkeypatch):
     assert core.preflight(LOC_FACTS, {"namespace": "blazemeter"}, _evidence())["checks"]
 
 
+# -- evidence as the file it is -----------------------------------------------
+# The collector's output is an artifact somebody sends, so a caller may name it
+# rather than restate it. The two refusals below are the point of the helper:
+# a file that could not be read and a file that was read and is not evidence
+# have different remedies, and one message covering both hides which happened.
+
+def _written(tmp_path, text, name="cluster-evidence.json"):
+    path = tmp_path / name
+    path.write_text(text)
+    return str(path)
+
+
+def test_evidence_may_be_the_path_of_the_file_it_is(tmp_path):
+    doc = _evidence()
+    assert core.evidence_document(_written(tmp_path, json.dumps(doc))) == doc
+
+
+def test_evidence_already_in_hand_passes_straight_through():
+    doc = _evidence()
+    assert core.evidence_document(doc) is doc
+
+
+def test_a_path_with_no_file_there_is_unread_rather_than_not_evidence(tmp_path):
+    """The distinction the whole helper exists for: nothing was read, so
+    nothing can be said about whether it was evidence."""
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(str(tmp_path / "nope.json"))
+    assert "nope.json" in str(e.value)
+
+
+def test_a_file_that_is_not_json_is_unread_too(tmp_path):
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(_written(tmp_path, "{not json"))
+    assert "JSON" in str(e.value)
+
+
+def test_a_path_that_is_not_a_file_at_all_is_unread_too(tmp_path):
+    """A directory, or a file nothing may open. Neither is "not evidence", and
+    neither may arrive here as the IsADirectoryError no caller expected."""
+    with pytest.raises(core.EvidenceUnreadable) as e:
+        core.evidence_document(str(tmp_path))
+    assert str(tmp_path) in str(e.value)
+
+
+def test_a_file_that_was_read_and_is_not_evidence_is_a_different_refusal(tmp_path):
+    """Pointing this at a facts file is the likely mistake. It parsed, so the
+    refusal names the document rather than the read -- and must not arrive as
+    the type that means the file could not be opened."""
+    path = _written(tmp_path, json.dumps({"harbor_id": "h1", "images": {}}))
+    doc = core.evidence_document(path)             # read, and read fine
+    with pytest.raises(core.BadRequest) as e:
+        core.preflight(LOC_FACTS, {"namespace": "blazemeter"}, doc)
+    assert "schema" in str(e.value)
+    assert not isinstance(e.value, core.EvidenceUnreadable)
+
+
+def test_the_two_evidence_refusals_are_not_each_other():
+    """Neither catches the other, so no `except` in any transport can collapse
+    "could not read it" into "read it and it was the wrong document"."""
+    assert not issubclass(core.EvidenceUnreadable, core.BadRequest)
+    assert not issubclass(core.BadRequest, core.EvidenceUnreadable)
+    assert issubclass(core.EvidenceUnreadable, core.CoreError)
+
+
+def test_a_wrong_typed_value_is_refused_as_a_type_not_as_a_path():
+    """A number or a list is neither a path nor a document, and saying "no file
+    there" about one would send the caller looking for a file they never named."""
+    for bad in ([1, 2, 3], 7, True):
+        with pytest.raises(core.BadRequest):
+            core.preflight(LOC_FACTS, {}, core.evidence_document(bad))
+
+
+def test_a_path_and_its_contents_preflight_identically(tmp_path):
+    """Nothing downstream may learn which way the evidence arrived -- the same
+    rule facts.manual() keeps on the account side."""
+    doc = _evidence()
+    path = _written(tmp_path, json.dumps(doc))
+    opts = {"namespace": "blazemeter"}
+    assert (core.preflight(LOC_FACTS, opts, core.evidence_document(path))
+            == core.preflight(LOC_FACTS, opts, doc))
+
+
 # -- the endpoint probe -------------------------------------------------------
 
 @pytest.mark.parametrize("bad", ["", "http://host/", "a host", "host/path",
@@ -361,6 +539,72 @@ def test_listing_locations_needs_a_scope():
         core.require_location_scope(None, None)
     assert core.require_location_scope(account_id=1) is None
     assert core.require_location_scope(workspace_id=2) is None
+
+
+# -- narrowing a real account's listing ---------------------------------------
+
+def _locs(*names):
+    return [{"id": f"h{i}", "name": n} for i, n in enumerate(names)]
+
+
+def test_a_cap_accounts_for_what_it_left_out():
+    """The whole point of the numbers: a caller handed 2 of 5 with no count
+    reads the account as having 2, and then reports a location that is there as
+    missing."""
+    sel = core.select_locations(_locs("a", "b", "c", "d", "e"), limit=2)
+    assert [l["name"] for l in sel["locations"]] == ["a", "b"]
+    assert sel["total"] == 5 and sel["returned"] == 2
+    assert sel["matched"] == 5
+    assert sel["omitted_by_limit"] == 3 and sel["omitted_by_filter"] == 0
+
+
+def test_a_name_substring_matches_anywhere_and_ignores_case():
+    """Substring, not prefix: real location names lead with a customer or a
+    region, and the word someone knows is usually in the middle."""
+    sel = core.select_locations(_locs("EU-perf-1", "us-PERF-2", "eu-sv-3"),
+                                name_contains="perf")
+    assert [l["name"] for l in sel["locations"]] == ["EU-perf-1", "us-PERF-2"]
+    assert sel["total"] == 3 and sel["matched"] == 2
+    assert sel["omitted_by_filter"] == 1 and sel["omitted_by_limit"] == 0
+
+
+def test_the_two_kinds_of_omission_are_counted_separately():
+    """A filter is what the caller asked for; a cap is not. Summing them would
+    hide which of the two is worth undoing."""
+    sel = core.select_locations(_locs("perf-a", "perf-b", "perf-c", "sv-d"),
+                                name_contains="perf", limit=2)
+    assert sel["returned"] == 2
+    assert sel["omitted_by_filter"] == 1 and sel["omitted_by_limit"] == 1
+
+
+def test_no_cap_returns_the_whole_account():
+    sel = core.select_locations(_locs("a", "b", "c"), limit=None)
+    assert sel["returned"] == 3 and sel["omitted_by_limit"] == 0
+
+
+def test_a_cap_below_one_is_refused_rather_than_returning_nothing():
+    """`limit=0` reads as "no limit" to whoever passed it and as "nothing
+    matched" in the answer."""
+    with pytest.raises(core.BadRequest):
+        core.select_locations(_locs("a"), limit=0)
+
+
+def test_a_location_with_no_name_is_not_a_crash():
+    """Names are not guaranteed by the API and a filter must not be the thing
+    that discovers that."""
+    sel = core.select_locations([{"id": "h1"}], name_contains="perf")
+    assert sel["returned"] == 0 and sel["omitted_by_filter"] == 1
+
+
+def test_a_ship_with_no_heartbeat_field_is_unknown_not_silent():
+    """The listing endpoint is not the per-location read, and a payload that
+    never carried a heartbeat cannot be evidence that an agent is dead --
+    "could not tell" and "not reporting" want different next steps."""
+    assert core.ship_reporting({"id": "s1", "state": "idle"}) is None
+    assert core.ship_reporting({"id": "s1", "state": "idle",
+                                "lastHeartBeat": 0}) is False
+    assert core.ship_reporting({"id": "s1", "state": "idle",
+                                "lastHeartBeat": time.time()}) is True
 
 
 # -- where a key might be -----------------------------------------------------

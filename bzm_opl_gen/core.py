@@ -84,10 +84,41 @@ class NotConfigured(CoreError):
     status = 401
 
 
+class EvidenceUnreadable(CoreError):
+    """A cluster-evidence file the caller named and nothing could be read from.
+
+    Its own type, and deliberately neither a BadRequest nor a NotFound, because
+    "could not read it" and "read it and it is not evidence" are the pair this
+    package has collapsed four times over. They have opposite remedies -- fix
+    the path, or get the file sent at all, versus stop pointing this at a facts
+    file -- so a transport catching one type for both would answer with
+    whichever sentence it happened to be holding.
+
+    400 rather than 404: the file is often there and merely unparseable, and
+    what the caller has to change is the argument either way.
+    """
+    status = 400
+
+
 class UpstreamError(CoreError):
     """BlazeMeter answered, and what it said was an error. 502 because the
     caller's request was fine; something upstream of us was not."""
     status = 502
+
+
+class TokenRefused(UpstreamError):
+    """BlazeMeter would not issue an agent credential.
+
+    An UpstreamError because that is what it is -- nothing the caller sent was
+    wrong, and on an account that restricts the token endpoint no argument to it
+    would have worked -- but its own type so the message can be written here
+    instead of being the endpoint's body. `.upstream` keeps that body, because
+    the point is to say more than it does, not less: see fetch_ship_token.
+    """
+
+    def __init__(self, message, upstream):
+        super().__init__(message)
+        self.upstream = upstream
 
 
 def _upstream(fn, *args, **kw):
@@ -218,6 +249,63 @@ def locations(client, account_id=None, workspace_id=None):
     return _upstream(client.private_locations, account_id, workspace_id)
 
 
+def location(client, harbor_id):
+    """One location with its ships -- the per-ship detail a listing leaves out,
+    paid for on the one the caller has chosen."""
+    return _upstream(client.private_location, harbor_id)
+
+
+# How many locations a listing hands back when the caller did not say. The
+# account this was built against has two; a customer's has 171 with 221 ships,
+# which came back as 84,779 characters -- past an MCP caller's result ceiling,
+# so it was truncated to a file and never read. A cap is only safe because
+# select_locations counts what it left out; see its docstring.
+DEFAULT_LOCATION_LIMIT = 50
+
+
+def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
+    """Narrow a listing, and account for every location that does not come back.
+
+    The counts are the point, not decoration. A caller handed 50 of 171 with no
+    numbers reads the account as having 50, and then reports a location that is
+    right there as missing -- which is a worse failure than the response being
+    too big, because it looks like an answer. Filter and cap are counted apart:
+    one is what the caller asked for and the other is not, so only the numbers
+    say which is worth undoing.
+
+    Here rather than in a response layer because what a partial answer owes its
+    caller is the same wherever the request came from, while how each entry is
+    *shaped* differs by caller and belongs to them. The CLI deliberately does
+    not narrow -- a terminal scrolls, and it is the caller with a result ceiling
+    that cannot afford 171 of these -- so `limit=None` (no cap at all) exists
+    for it and for anyone else who genuinely wants the lot.
+    """
+    if limit is not None:
+        # Before the comparison, because a model writing `"10"` is likelier
+        # than one writing 10, and `"10" < 1` is a TypeError -- not a CoreError,
+        # so it escapes the transports as an internal error instead of a
+        # sentence. bool is an int subclass and `limit=True` is nobody's intent.
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise BadRequest(
+                f"limit must be a whole number, not {limit!r}. Omit it for the "
+                f"default of {DEFAULT_LOCATION_LIMIT}")
+        if limit < 1:
+            # `limit=0` means "no limit" to whoever passed it and "nothing
+            # matched" in the answer; nothing good is downstream of guessing.
+            raise BadRequest("limit must be at least 1, or omitted for the "
+                             f"default of {DEFAULT_LOCATION_LIMIT}")
+    needle = (name_contains or "").strip().lower()
+    matched = [l for l in locs
+               if not needle or needle in (l.get("name") or "").lower()]
+    kept = matched if limit is None else matched[:limit]
+    return {"locations": kept,
+            "total": len(locs),
+            "matched": len(matched),
+            "returned": len(kept),
+            "omitted_by_filter": len(locs) - len(matched),
+            "omitted_by_limit": len(matched) - len(kept)}
+
+
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
@@ -260,6 +348,22 @@ HEARTBEAT_FRESH_S = 120
 ONLINE_STATES = ("idle", "running")
 
 
+def ship_reporting(ship):
+    """Whether one ship is reporting now -- or None where the payload cannot say.
+
+    None is not "no". A locations *listing* is not the same read as a single
+    location, and a payload that never carried `lastHeartBeat` is no evidence
+    that an agent has stopped: answering False there would have a session
+    redeploy an agent that is working. Present-and-stale is False; absent is
+    unknown, and the caller has to go and ask.
+    """
+    if "lastHeartBeat" not in ship:
+        return None
+    hb = ship.get("lastHeartBeat") or 0
+    return bool(hb and time.time() - hb < HEARTBEAT_FRESH_S
+                and ship.get("state") in ONLINE_STATES)
+
+
 def agent_status(client, harbor_id, ship_id):
     """Is this agent actually reporting, as opposed to merely remembered?
 
@@ -279,9 +383,57 @@ def agent_status(client, harbor_id, ship_id):
         # want different next steps.
         "heartbeat_age_s": int(time.time() - hb) if hb else None,
         "installed_version": ship.get("installedVersion"),
-        "online": bool(hb and time.time() - hb < HEARTBEAT_FRESH_S
-                       and ship.get("state") in ONLINE_STATES),
+        # A bool, and it does not carry the third case on its own: an agent that
+        # has never reported answers False here exactly as one that went quiet
+        # does. `heartbeat_age_s` above is what separates them -- null for the
+        # first, a number for the second -- and it is the pair a caller reads,
+        # which is why the two get different `next` steps and why a test pins
+        # that rather than this comment promising it. Not widened to null:
+        # `online` is a boolean in the web API's own contract, and squeezing
+        # "unknown" into it would break a consumer that already branches on it.
+        "online": bool(ship_reporting(ship)),
     }
+
+
+# -- the agent credential ------------------------------------------------------
+
+# The way forward when the fetch cannot happen at all. Worth stating in the
+# refusal rather than left to the reader: BlazeMeter shows the token on the agent
+# itself, and a bundle built with one supplied fetches nothing (token_ship_id
+# returns None), so a closed endpoint stops nothing except the convenience.
+TOKEN_ELSEWHERE = (
+    "The AUTH_TOKEN can be supplied instead of fetched: read it from the "
+    "agent's install command in the BlazeMeter UI (Settings -> Private "
+    "Locations -> the location -> the agent) and pass it as the auth_token "
+    "option (--auth-token on the command line), which also stops it being "
+    "rotated. Nothing else about the deployment needs this endpoint.")
+
+
+def fetch_ship_token(client, harbor_id, ship_id):
+    """The ship's AUTH_TOKEN, or a refusal that says what to do without one.
+
+    The single place the token endpoint is called, because what is interesting
+    about it is the failure. Some accounts refuse /docker-command outright --
+    observed as `HTTP 403 {"message": "Forbidden: Should access from Private-Data
+    gateway"}` -- and through the generic upstream wrapper that body was the
+    whole message: it names no ship, does not distinguish the credential fetch
+    failing from the operation the caller asked for being wrong, and offers
+    nothing to do next, so an MCP session that hit it could not get past it.
+
+    The body still travels, in the message and on `.upstream`. It is the only
+    clue that the account is configured this way deliberately, and a refusal
+    that hid it would just be a differently-unhelpful message.
+    """
+    try:
+        return client.auth_token(harbor_id, ship_id)
+    except api.BzmApiError as e:
+        raise TokenRefused(
+            f"The AUTH_TOKEN for ship {ship_id} in location {harbor_id} could "
+            f"not be issued: BlazeMeter refused the credential fetch itself, "
+            f"not the operation you asked for. Some accounts allow this "
+            f"endpoint only from BlazeMeter's own gateway, in which case every "
+            f"attempt from here fails whatever it sends. {TOKEN_ELSEWHERE} "
+            f"BlazeMeter said: {e}", str(e))
 
 
 # -- generating a bundle -------------------------------------------------------
@@ -329,8 +481,8 @@ def fetch_auth_token(client, facts, options):
     """
     ship_id = token_ship_id(facts, options)
     if ship_id:
-        options["auth_token"] = _upstream(client.auth_token,
-                                          facts["harbor_id"], ship_id)
+        options["auth_token"] = fetch_ship_token(client, facts["harbor_id"],
+                                                 ship_id)
     return ship_id
 
 
@@ -498,6 +650,43 @@ def bundle_images(facts, all_images=False):
 
 # -- preflight -----------------------------------------------------------------
 
+def evidence_document(evidence):
+    """The evidence document, from either a path to the collector's file or the
+    parsed contents of one.
+
+    A path is accepted for the same reason `api_key_file` is: what a customer
+    sends back is a *file*, and the caller most likely to be holding one is the
+    one furthest from a shell. Inlining it costs several KB of node lists and
+    permission maps travelling through a model to reach a check that only needed
+    somewhere to read them from (#77).
+
+    Whose call this is, is the transport's -- the MCP server passes what its
+    caller sent, because that caller shares this filesystem; the web UI does not
+    offer it, since a browser has already parsed the file it uploaded and a path
+    posted from one would be read on the machine serving the page. Same division
+    as api_key_file: the rule and the refusals live here, offering the argument
+    does not.
+
+    A string is always a path and never JSON text. Reading it as either would
+    make a mistyped path come back as a complaint about JSON syntax, and no
+    caller has the text without the object -- one that parsed it passes the
+    object.
+
+    Anything else travels on untouched, so a list, a number or a facts file's
+    contents is refused further down by the check that names what it found. Only
+    the read is decided here, which is why its failure has a type of its own.
+    """
+    if not isinstance(evidence, str):
+        return evidence
+    try:
+        return doctor.load_evidence(os.path.expanduser(evidence))
+    except ValueError as e:
+        # Both of load_evidence's sentences -- no file there, and not JSON --
+        # mean nothing was read, so nothing can yet be said about whether what
+        # was named is evidence. That is the distinction this type carries.
+        raise EvidenceUnreadable(str(e))
+
+
 def preflight(facts, options, evidence):
     """The verdicts `doctor --cluster-evidence` prints, for one configuration.
 
@@ -603,7 +792,7 @@ def reveal_token(client, harbor_id, ship_id):
     its own named call and never something another action does on the way past.
     """
     return {"harbor_id": harbor_id, "ship_id": ship_id,
-            "auth_token": _upstream(client.auth_token, harbor_id, ship_id),
+            "auth_token": fetch_ship_token(client, harbor_id, ship_id),
             "warning": "this issued a NEW token and invalidated the previous "
                        "one. Any agent already running for this ship must be "
                        "re-applied with it, Secret included."}

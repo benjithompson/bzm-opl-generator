@@ -25,6 +25,14 @@ anything that breaks.
   served as resources, so a session can read the options table rather than guess
   at an option name.
 
+  `opl_location list` answers one line per location and the first 50 of them,
+  narrowable by `name_contains` and `limit`, with `show` for the agents of the
+  one you pick. An account with 171 locations and 221 ships listed in full came
+  to 84,779 characters — past a client's result ceiling, truncated to a file and
+  never read, which blocked every step behind it. Anything the cap or the filter
+  leaves out comes back as a count: a list that quietly stopped would read as
+  the whole account.
+
   Three things it will not do. **The AUTH_TOKEN never appears in a response** —
   `generate` writes the Secret and answers with file names and byte counts, and
   reading a bundle file back redacts the token rather than handing it over,
@@ -33,7 +41,10 @@ anything that breaks.
   get the value, and it is a whole action so it cannot happen by accident.
   **A secret is never a tool argument** — passing `auth_token` in the options is
   refused rather than written; a path may be named, and the key itself comes
-  from the server's environment. **Nothing applies to a cluster** — `kubectl
+  from the server's environment. Files are named the same way: `opl_preflight`
+  takes `evidence` as the path of the cluster-evidence JSON the customer sent as
+  readily as the parsed object, so a session need not read several KB of node
+  lists aloud to preflight one. **Nothing applies to a cluster** — `kubectl
   apply` stays in your shell, where you can see what is being applied. The one
   exception is `opl_agent livetest`, which deploys because that is all it does,
   and which is off by default.
@@ -79,6 +90,27 @@ anything that breaks.
   The three CA options and the two engine-limit options used to share a table
   row each, which is why `ca_configmap_key` had nowhere to be documented; the
   "pick exactly one" that grouping carried is now stated above the section.
+
+### Fixed
+
+- **An account that refuses to issue an agent credential now says so, and says
+  what still works.** Some accounts serve the token endpoint only from
+  BlazeMeter's own gateway and answer everything else `403 Forbidden: Should
+  access from Private-Data gateway`. That raw body used to be the whole message:
+  it names no ship, does not distinguish "the credential could not be issued"
+  from "your request was wrong", and offers no way on — so `generate --api-key`
+  and `create-ship` dead-ended on an account whose only real problem is that
+  tokens have to come from the UI. The refusal now names the location and the
+  ship, says which half failed, and points at `--auth-token`, which also stops
+  the token being rotated. The upstream reason is still quoted.
+
+- **A refusal on the command line is a sentence, not a traceback.** Anything
+  `bzm-opl-gen` refuses deliberately is written for the person who ran the
+  command, and `generate` had no guard around it — so on a refusing account the
+  message above arrived under seventy lines of Python stack, which is a worse
+  answer than the raw `403` it replaced. `main()` now renders any deliberate
+  refusal and exits non-zero; `create-ship` still catches its own first, so the
+  agent it just created is reported whatever the token endpoint answers.
 
 ### Added
 

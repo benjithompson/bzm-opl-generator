@@ -13,13 +13,14 @@ reports a clean pass having tested nothing.
 
 import json
 import os
+import time
 
 import anyio
 import mcp
 import pytest
 
 from bzm_opl_gen import core, mcp_server
-from test_core import FakeClient
+from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
 # What each tool promises a client about side effects. Asserted as a whole
@@ -218,6 +219,19 @@ def test_only_reveal_token_reveals_the_token(fake_account):
     assert "invalidated" in body["warning"]
 
 
+def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
+    """This is the caller the raw 403 stranded: a session with no checkout to
+    read, whose whole view of the failure is the text of the tool error. So the
+    refusal has to carry the alternative itself -- ask for the token, and pass
+    it as an option -- or the model has nowhere to go."""
+    monkeypatch.setattr(core, "client_from_env",
+                        lambda *a, **k: RefusingClient())
+    text = err("opl_location", "reveal_token",
+               {"harbor_id": "h1", "ship_id": "s1"})
+    assert "could not be issued" in text
+    assert "auth_token" in text and "BlazeMeter UI" in text
+
+
 def test_reading_the_secret_back_does_not_hand_over_the_token(fake_account,
                                                              tmp_path):
     """`read bzm_secret.yaml` was a second, quieter way to get the credential:
@@ -252,6 +266,200 @@ def test_a_file_with_no_token_is_returned_untouched(fake_account, tmp_path):
               {"out_dir": str(tmp_path), "name": "bzm_deployment.yaml"})
     assert body["redacted_fields"] == 0 and "note" not in body
     assert "kind: Deployment" in body["content"]
+
+
+# -- listing an account somebody actually has ---------------------------------
+# The account this was built against holds two locations. A customer's holds
+# 171 with 221 ships between them, which came back as 84,779 characters: past
+# the caller's tool-result ceiling, truncated to a file, never read -- and step
+# 1 of the documented path is the one that broke, so everything after it was
+# blocked too (#78).
+
+LOCATION_COUNT, SHIP_COUNT = 171, 221
+
+# What a client will accept in one tool result, in characters. Well under any
+# real ceiling on purpose: this is a listing a session reads and then keeps in
+# context while it does five more calls.
+RESULT_CEILING = 25_000
+
+
+def _big_account():
+    """171 locations, 221 ships, with ids and names the length real ones are --
+    most of the 84,779 characters was per-ship detail on locations the caller
+    was never going to pick."""
+    locs = []
+    for i in range(LOCATION_COUNT):
+        # The first 50 have two agents each, which is what makes 221.
+        n_ships = 2 if i < SHIP_COUNT - LOCATION_COUNT else 1
+        locs.append({
+            "id": f"harbor-6{i:023d}",
+            "name": f"acme-{'eu-west' if i % 2 else 'us-east'}-perf-{i:03d}",
+            "slots": 10, "funcIds": ["performance"],
+            "workspacesId": [123456],
+            "ships": [{"id": f"ship-7{i:02d}{j:021d}",
+                       "name": f"agent-{i:03d}-{j}", "state": "idle",
+                       "installedVersion": "3.7.55",
+                       "lastHeartBeat": 1700000000 if j else 0}
+                      for j in range(n_ships)],
+        })
+    return locs
+
+
+@pytest.fixture
+def big_account(monkeypatch):
+    c = FakeClient(locations=_big_account())
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    return c
+
+
+def test_a_real_account_s_listing_fits_in_a_result_and_says_what_it_left_out(
+        big_account):
+    """Both halves together, because either alone is a bug: a response that
+    fits by stopping early reads as the whole account, and acting on "that
+    location does not exist" when it was merely omitted is worse than the size
+    problem this fixes."""
+    r = call("opl_location", "list")
+    assert not r.is_error, r.content[0].text
+    text = r.content[0].text
+    assert len(text) < RESULT_CEILING, f"{len(text)} characters"
+
+    body = json.loads(text)
+    assert body["total"] == LOCATION_COUNT
+    assert body["returned"] == len(body["locations"]) < LOCATION_COUNT
+    assert (body["omitted_by_limit"]
+            == LOCATION_COUNT - body["returned"]) > 0
+    # And in prose as well as in a field, because the number is the thing a
+    # session has to act on rather than one key of many.
+    assert str(body["omitted_by_limit"]) in body["note"]
+
+
+def test_a_listing_entry_carries_what_choosing_a_location_needs(big_account):
+    """id to pass on, name to recognise, funcIds to know a bundle can be
+    generated at all, and whether there is an agent there and it is alive.
+    Not the ships themselves -- 221 of those is the size problem."""
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["harbor_id"].startswith("harbor-")
+    assert entry["name"].startswith("acme-")
+    assert entry["func_ids"] == ["performance"] and entry["slots"] == 10
+    assert entry["ship_count"] == 2
+    assert entry["ships_reporting"] == 0     # both heartbeats are from 2023
+    assert not isinstance(entry.get("ships"), list)
+
+
+def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
+        fake_account):
+    """A listing payload without `lastHeartBeat` cannot say an agent is dead.
+    Reported as null, so nobody redeploys an agent that was working."""
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["ship_count"] == 1 and entry["ships_reporting"] is None
+
+
+def test_an_explicit_null_limit_still_gets_the_default_cap(big_account):
+    """`{"limit": null}` is an ordinary way for a client to say "unset".
+
+    `args.get("limit", DEFAULT)` only defaults an *absent* key, so an explicit
+    null arrived as `limit=None`, which core reads as "no cap" -- handing back
+    the whole 171-location account this tool exists to keep out of a result.
+    """
+    body = ok("opl_location", "list", {"limit": None})
+    assert body["returned"] == core.DEFAULT_LOCATION_LIMIT
+    assert body["omitted_by_limit"] == 171 - core.DEFAULT_LOCATION_LIMIT
+
+
+def test_a_limit_that_is_not_a_number_is_refused_not_a_crash(big_account):
+    """A model writing `"10"` is likelier than a model writing 10.
+
+    Compared against 1, a string raises TypeError, which is not a CoreError and
+    so escapes `_answer` as an SDK internal error rather than a sentence."""
+    assert "limit" in err("opl_location", "list", {"limit": "10"}).lower()
+    assert "limit" in err("opl_location", "list", {"limit": 1.5}).lower()
+
+
+def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
+    """`ships_reporting` went null if *any* ship lacked a heartbeat, so a
+    location with a working agent and a heartbeat-less record reported wholly
+    unknown -- losing the "one of two" signal the count exists to give."""
+    c = FakeClient(locations=[{"id": "h9", "name": "mixed", "slots": 2,
+                               "funcIds": ["performance"], "ships": [
+        {"id": "live", "state": "idle", "lastHeartBeat": int(time.time())},
+        {"id": "nohb", "state": "idle"}]}])
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["ship_count"] == 2
+    assert entry["ships_reporting"] == 1, "the live agent must still show"
+    assert entry["ships_unknown"] == 1, "and the one nobody can vouch for"
+
+
+def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
+    """Both answer `online: false`, so the pair with `heartbeat_age_s` is what
+    keeps them apart -- and only a test keeps that structural. Redeploying is
+    the answer to one and not the other."""
+    def status_of(ship):
+        c = FakeClient(harbor={"id": "h1", "name": "loc", "ships": [ship]})
+        monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+        return ok("opl_agent", "status", {"harbor_id": "h1", "ship_id": "s1"})
+
+    never = status_of({"id": "s1", "state": "created"})
+    quiet = status_of({"id": "s1", "state": "idle", "lastHeartBeat": 1})
+    assert never["online"] is False and quiet["online"] is False
+    assert never["heartbeat_age_s"] is None and quiet["heartbeat_age_s"]
+    assert "not reached BlazeMeter" in " ".join(never["next"])
+    assert "gone quiet" in " ".join(quiet["next"])
+
+
+def test_narrowing_by_name_counts_what_the_filter_removed(big_account):
+    """Somebody who knows the name should not receive 170 others -- and must
+    still be told the account holds them."""
+    body = ok("opl_location", "list", {"name_contains": "eu-west"})
+    assert body["locations"], "the filter matched nothing"
+    assert all("eu-west" in l["name"] for l in body["locations"])
+    assert body["total"] == LOCATION_COUNT
+    assert body["omitted_by_filter"] == LOCATION_COUNT - body["matched"]
+    assert "eu-west" in body["note"]
+
+
+def test_a_caller_can_raise_the_cap_and_is_told_when_nothing_is_missing(
+        big_account):
+    body = ok("opl_location", "list", {"limit": LOCATION_COUNT})
+    assert body["returned"] == LOCATION_COUNT
+    assert body["omitted_by_limit"] == 0 and body["omitted_by_filter"] == 0
+    assert "note" not in body, "announced an omission that did not happen"
+
+
+def test_a_cap_that_returns_nothing_is_refused(big_account):
+    assert "limit" in err("opl_location", "list", {"limit": 0})
+
+
+def test_creating_a_location_still_answers_in_full(fake_account):
+    """`create` returns one location, so it has no size problem, and the detail
+    is the confirmation that what exists is what was asked for. It happens to
+    have shared a helper with the listing -- compacting that must not reach
+    here, hence the shape is pinned rather than left to the helper."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99})
+    loc = body["location"]
+    assert loc["harbor_id"] == "h9" and loc["name"] == "scratch"
+    assert loc["func_ids"] == ["performance"] and loc["slots"] == 1
+    # The per-ship list itself, not a count of one.
+    assert loc["ships"] == [] and "ship_count" not in loc
+
+
+def test_the_listing_names_the_account_it_actually_listed(fake_account):
+    """Neither id given means the key's default account, and that default is
+    easy to be wrong about -- the key to hand defaults to a two-location
+    account while the one wanted holds 171. An empty list has to be
+    distinguishable from the wrong account being read."""
+    assert ok("opl_location", "list")["account_id"] == 7
+
+
+def test_per_ship_detail_is_reachable_for_the_location_that_was_picked(
+        fake_account):
+    """What `list` stopped paying for on all 171. `show` is one location, so
+    the detail costs what it is worth."""
+    body = ok("opl_location", "show", {"harbor_id": "h1"})
+    ships = body["location"]["ships"]
+    assert [s["ship_id"] for s in ships] == ["s1"]
+    assert ships[0]["state"] == "idle"
 
 
 # -- the bundle on disk -------------------------------------------------------
@@ -347,6 +555,109 @@ def test_suggest_answers_the_other_question_about_the_same_file():
     from test_cluster_evidence import _evidence
     body = ok("opl_preflight", "suggest", {"evidence": _evidence()})
     assert "suggestions" in body
+
+
+# -- evidence as the file the customer sent -----------------------------------
+# The artifact is a file, and this is the surface whose audience was *sent* one
+# and has no checkout. Inlining it means several KB of node lists and permission
+# maps travelling through the model to reach a check that only needed the path,
+# which is why `api_key_file` is a path here too.
+
+def _evidence_file(tmp_path, **kw):
+    from test_cluster_evidence import _evidence
+    path = tmp_path / "cluster-evidence.json"
+    path.write_text(json.dumps(_evidence(**kw)))
+    return str(path)
+
+
+def test_doctor_takes_the_evidence_file_as_the_path_it_is(tmp_path, monkeypatch):
+    from test_doctor import FACTS as LOC_FACTS
+    monkeypatch.setattr(core.livetest, "cli_tool",
+                        lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
+    body = ok("opl_preflight", "doctor",
+              {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
+               "evidence": _evidence_file(tmp_path)})
+    assert body["checks"] and body["evidence"]["namespace"] == "blazemeter"
+
+
+def test_a_path_and_the_object_it_holds_give_the_same_preflight(tmp_path):
+    """Both forms stay accepted, and neither is a second opinion about the
+    file: a caller with the document in hand loses nothing by inlining it."""
+    from test_cluster_evidence import _evidence
+    from test_doctor import FACTS as LOC_FACTS
+    args = {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"}}
+    from_path = ok("opl_preflight", "doctor",
+                   dict(args, evidence=_evidence_file(tmp_path)))
+    inlined = ok("opl_preflight", "doctor", dict(args, evidence=_evidence()))
+    assert from_path == inlined
+
+
+def test_suggest_takes_the_path_too(tmp_path):
+    """The other half of the same file. A path accepted by one action and
+    refused by the next is worse than neither accepting it."""
+    body = ok("opl_preflight", "suggest",
+              {"evidence": _evidence_file(tmp_path)})
+    assert "suggestions" in body
+
+
+def test_a_path_with_nothing_there_says_the_file_could_not_be_read(tmp_path):
+    """And says how to get one, because the likely cause is that it was never
+    sent -- not that what was sent is the wrong document."""
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor",
+               {"facts": LOC_FACTS, "evidence": str(tmp_path / "absent.json")})
+    assert "absent.json" in text and "cluster-evidence" in text
+    assert "schema" not in text, "a file nobody read cannot be the wrong schema"
+
+
+def test_a_file_that_is_not_json_names_the_read_rather_than_the_schema(tmp_path):
+    path = tmp_path / "cluster-evidence.json"
+    path.write_text("kind: NodeList\n")           # somebody sent YAML
+    text = err("opl_preflight", "suggest", {"evidence": str(path)})
+    assert "not valid JSON" in text
+    assert "schema" not in text
+
+
+def test_a_facts_file_is_refused_as_the_wrong_document(tmp_path):
+    """The likely mistake, and the one where half-parsing would produce
+    verdicts about a cluster nobody described. Distinct from the refusals
+    above: this file was read, and what it says is that it is not evidence."""
+    from test_cluster_evidence import EXAMPLE_FACTS
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor",
+               {"facts": LOC_FACTS, "evidence": EXAMPLE_FACTS})
+    assert "schema" in text
+    assert "could not" not in text and "not valid JSON" not in text
+
+
+def test_an_inlined_value_that_is_no_document_at_all_is_still_refused():
+    """The refusal the issue was raised against must survive for values that
+    are neither a path nor an object."""
+    text = err("opl_preflight", "suggest", {"evidence": [1, 2, 3]})
+    assert "JSON object" in text
+
+
+def test_asking_for_evidence_names_a_collector_that_exists():
+    """This refusal used to send the session to `bzm-opl-gen doctor --collect`,
+    a flag that appeared in that one string and nowhere else in the tool. With
+    no checkout there is nothing to check it against, so the name is asserted
+    against doctor's own constant and the invented flag against its absence."""
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor", {"facts": LOC_FACTS})
+    assert core.doctor.EVIDENCE_SCRIPT in text
+    assert "--collect" not in text
+    assert "path" in text, "and it should say the file may be named, not pasted"
+    assert os.path.isfile(os.path.join(os.path.dirname(__file__), "..",
+                                       core.doctor.EVIDENCE_SCRIPT))
+
+
+def test_the_preflight_description_offers_both_forms():
+    """The description is the whole documentation this session has, so one that
+    calls `evidence` a file while refusing a path is the bug itself (#77).
+    Both forms named, since a session told only about the path would read a
+    document it already holds back out to a file to pass one."""
+    text = listing()["tools"]["opl_preflight"].description.lower()
+    assert "path" in text and "object" in text, text
 
 
 # -- what a session is told to do next ----------------------------------------

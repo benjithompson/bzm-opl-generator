@@ -56,13 +56,45 @@ second shape.
 
 | tool | actions |
 |---|---|
-| `opl_location` | `list` · `whoami` · `create` · `create_ship` · `reveal_token` · `delete`\* |
+| `opl_location` | `list` · `show` · `whoami` · `create` · `create_ship` · `reveal_token` · `delete`\* |
 | `opl_facts` | `gather` · `manual` |
 | `opl_bundle` | `generate` · `read` · `options` · `images` |
 | `opl_preflight` | `doctor` · `suggest` · `toolcheck` |
 | `opl_agent` | `status` · `livetest`\* |
 
 \* off unless an environment variable is set — see [The gates](#the-gates).
+
+**Listing locations is deliberately compact.** `opl_location list` gives one
+line per location — its id, name, `funcIds`, slots, how many agents it has and
+how many of those are reporting — and the first 50 of them. Real accounts hold
+hundreds: one with 171 locations and 221 ships listed in full came to 84,779
+characters, over a client's result ceiling, so the first step of the path never
+completed. Narrow with `name_contains` (a case-insensitive substring of the
+name) rather than raising `limit`, and use `show` for the ships of the one you
+pick. Whatever the cap or the filter left out comes back as a count with a
+sentence saying so — a listing that quietly stopped would read as the whole
+account, and "that location does not exist" is a worse answer than a response
+that was too big.
+
+Two counts describe the agents, because one cannot carry both facts.
+`ships_reporting` counts only the agents the payload vouches for, and
+`ships_unknown` those it carried no heartbeat to judge by — so a location with
+one live agent and one heartbeat-less record reports `1` and `1` rather than
+hiding the live one. A `0` beside a non-zero `ships_unknown` means "none that we
+could see", not "none alive", and where *nothing* is vouched for
+`ships_reporting` is `null` rather than `0`. Don't redeploy on the strength of a
+zero: `opl_agent status` is the authority on a single agent, and `show` gives
+the per-ship detail (each with its own `reporting`) for the location you pick.
+
+`opl_preflight doctor` and `suggest` take `evidence` as either the **path** of
+the cluster-evidence JSON the customer sent — read here, on the machine running
+the server — or as the parsed object, for a caller already holding one. A path
+is neither a secret nor bulk, which is why `api_key_file` is one too; inlining a
+real collector file means several KB of node lists and permission maps
+travelling through the model to reach a check that only needed somewhere to read
+them from. The two ways a path can be wrong are separate refusals, because the
+remedies differ: one names the file that could not be read, the other names the
+`schema` a file that *was* read does not carry.
 
 The reference pages under `docs/` are served as resources at
 `bzm-opl://docs/<name>.md`, so a session can read [options.md](options.md) or
