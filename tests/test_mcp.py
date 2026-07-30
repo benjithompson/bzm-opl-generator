@@ -503,6 +503,109 @@ def test_suggest_answers_the_other_question_about_the_same_file():
     assert "suggestions" in body
 
 
+# -- evidence as the file the customer sent -----------------------------------
+# The artifact is a file, and this is the surface whose audience was *sent* one
+# and has no checkout. Inlining it means several KB of node lists and permission
+# maps travelling through the model to reach a check that only needed the path,
+# which is why `api_key_file` is a path here too.
+
+def _evidence_file(tmp_path, **kw):
+    from test_cluster_evidence import _evidence
+    path = tmp_path / "cluster-evidence.json"
+    path.write_text(json.dumps(_evidence(**kw)))
+    return str(path)
+
+
+def test_doctor_takes_the_evidence_file_as_the_path_it_is(tmp_path, monkeypatch):
+    from test_doctor import FACTS as LOC_FACTS
+    monkeypatch.setattr(core.livetest, "cli_tool",
+                        lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
+    body = ok("opl_preflight", "doctor",
+              {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"},
+               "evidence": _evidence_file(tmp_path)})
+    assert body["checks"] and body["evidence"]["namespace"] == "blazemeter"
+
+
+def test_a_path_and_the_object_it_holds_give_the_same_preflight(tmp_path):
+    """Both forms stay accepted, and neither is a second opinion about the
+    file: a caller with the document in hand loses nothing by inlining it."""
+    from test_cluster_evidence import _evidence
+    from test_doctor import FACTS as LOC_FACTS
+    args = {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"}}
+    from_path = ok("opl_preflight", "doctor",
+                   dict(args, evidence=_evidence_file(tmp_path)))
+    inlined = ok("opl_preflight", "doctor", dict(args, evidence=_evidence()))
+    assert from_path == inlined
+
+
+def test_suggest_takes_the_path_too(tmp_path):
+    """The other half of the same file. A path accepted by one action and
+    refused by the next is worse than neither accepting it."""
+    body = ok("opl_preflight", "suggest",
+              {"evidence": _evidence_file(tmp_path)})
+    assert "suggestions" in body
+
+
+def test_a_path_with_nothing_there_says_the_file_could_not_be_read(tmp_path):
+    """And says how to get one, because the likely cause is that it was never
+    sent -- not that what was sent is the wrong document."""
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor",
+               {"facts": LOC_FACTS, "evidence": str(tmp_path / "absent.json")})
+    assert "absent.json" in text and "cluster-evidence" in text
+    assert "schema" not in text, "a file nobody read cannot be the wrong schema"
+
+
+def test_a_file_that_is_not_json_names_the_read_rather_than_the_schema(tmp_path):
+    path = tmp_path / "cluster-evidence.json"
+    path.write_text("kind: NodeList\n")           # somebody sent YAML
+    text = err("opl_preflight", "suggest", {"evidence": str(path)})
+    assert "not valid JSON" in text
+    assert "schema" not in text
+
+
+def test_a_facts_file_is_refused_as_the_wrong_document(tmp_path):
+    """The likely mistake, and the one where half-parsing would produce
+    verdicts about a cluster nobody described. Distinct from the refusals
+    above: this file was read, and what it says is that it is not evidence."""
+    from test_cluster_evidence import EXAMPLE_FACTS
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor",
+               {"facts": LOC_FACTS, "evidence": EXAMPLE_FACTS})
+    assert "schema" in text
+    assert "could not" not in text and "not valid JSON" not in text
+
+
+def test_an_inlined_value_that_is_no_document_at_all_is_still_refused():
+    """The refusal the issue was raised against must survive for values that
+    are neither a path nor an object."""
+    text = err("opl_preflight", "suggest", {"evidence": [1, 2, 3]})
+    assert "JSON object" in text
+
+
+def test_asking_for_evidence_names_a_collector_that_exists():
+    """This refusal used to send the session to `bzm-opl-gen doctor --collect`,
+    a flag that appeared in that one string and nowhere else in the tool. With
+    no checkout there is nothing to check it against, so the name is asserted
+    against doctor's own constant and the invented flag against its absence."""
+    from test_doctor import FACTS as LOC_FACTS
+    text = err("opl_preflight", "doctor", {"facts": LOC_FACTS})
+    assert core.doctor.EVIDENCE_SCRIPT in text
+    assert "--collect" not in text
+    assert "path" in text, "and it should say the file may be named, not pasted"
+    assert os.path.isfile(os.path.join(os.path.dirname(__file__), "..",
+                                       core.doctor.EVIDENCE_SCRIPT))
+
+
+def test_the_preflight_description_offers_both_forms():
+    """The description is the whole documentation this session has, so one that
+    calls `evidence` a file while refusing a path is the bug itself (#77).
+    Both forms named, since a session told only about the path would read a
+    document it already holds back out to a file to pass one."""
+    text = listing()["tools"]["opl_preflight"].description.lower()
+    assert "path" in text and "object" in text, text
+
+
 # -- what a session is told to do next ----------------------------------------
 
 def test_gathering_facts_points_at_the_next_call(fake_account):

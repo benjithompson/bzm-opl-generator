@@ -78,6 +78,16 @@ that was too big. `ships_reporting` is `null`, not `0`, where the payload
 carried no heartbeat to judge by; `opl_agent status` is the authority on a
 single agent.
 
+`opl_preflight doctor` and `suggest` take `evidence` as either the **path** of
+the cluster-evidence JSON the customer sent — read here, on the machine running
+the server — or as the parsed object, for a caller already holding one. A path
+is neither a secret nor bulk, which is why `api_key_file` is one too; inlining a
+real collector file means several KB of node lists and permission maps
+travelling through the model to reach a check that only needed somewhere to read
+them from. The two ways a path can be wrong are separate refusals, because the
+remedies differ: one names the file that could not be read, the other names the
+`schema` a file that *was* read does not carry.
+
 The reference pages under `docs/` are served as resources at
 `bzm-opl://docs/<name>.md`, so a session can read [options.md](options.md) or
 [preflight.md](preflight.md) rather than guessing at an option name.

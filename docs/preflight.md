@@ -86,6 +86,14 @@ A file whose `schema` is missing or unrecognised is refused by name — pointing
 `--cluster-evidence` at `facts.json` is the likely mistake, and half-parsing it
 would produce verdicts about a cluster nobody described.
 
+Over the [MCP server](mcp.md) the file is named rather than restated:
+`opl_preflight doctor` and `suggest` take `evidence` as the **path** of the file
+the customer sent — read on the machine running the server — or as the parsed
+object, for a caller already holding one. The two ways it can be wrong stay
+separate refusals, because they have separate remedies: a path that is not there
+or does not parse is a read that did not happen, and a document that was read
+and carries no recognised `schema` is the wrong file.
+
 The [web UI](web-ui.md) takes the same file under Download & verify and shows
 the same verdicts against the configuration on screen, re-run as you edit it —
 no API key and no kubecontext, the same "no access to anything" path manual

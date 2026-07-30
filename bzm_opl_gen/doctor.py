@@ -777,6 +777,14 @@ def load_evidence(path):
     except json.JSONDecodeError as e:
         raise ValueError(f"'{path}' is not valid JSON ({e}). It should be the "
                          f"unedited output of {EVIDENCE_SCRIPT}")
+    except OSError as e:
+        # A directory, an unreadable file, a dead symlink. Named rather than
+        # raised: every caller of this turns a ValueError into a sentence
+        # somebody can act on, and an IsADirectoryError traceback out of a
+        # server is the one shape none of them expected.
+        raise ValueError(f"'{path}' could not be read ({e}). It should be the "
+                         f"file {EVIDENCE_SCRIPT} wrote on the customer's "
+                         f"machine")
 
 
 def cluster_from_evidence(doc, namespace=None):
