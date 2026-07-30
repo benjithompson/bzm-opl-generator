@@ -8,7 +8,7 @@ the failure is otherwise invisible: the manifests apply cleanly, the agent goes
 the service.
 
 ```
-bzm-opl-gen generate --facts facts.json --api-key api-key.json \
+bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
     --namespace my-sv --sv-ingress nginx \
     --sv-subdomain apps.example.com --sv-tls-secret wildcard-credential
 ```

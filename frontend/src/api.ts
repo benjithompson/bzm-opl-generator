@@ -29,6 +29,27 @@ export interface AgentStatus {
 }
 export interface Options { [k: string]: unknown }
 
+/** Which of four ways a bundle's AUTH_TOKEN arrived, from core.resolve_auth_token.
+ *  GIVEN: the token in the form. ROTATED: a new one was issued and the previous
+ *  one is dead. REUSED: the one already in the folder being saved to. PLACEHOLDER:
+ *  none, so the bundle cannot be applied as it stands.
+ *
+ *  Declared rather than served, for the reason Strength gives below: this set is
+ *  closed. A fifth branch is not a list entry, it is a case the page has to grow
+ *  a sentence for, and a union is what makes the compiler point at it. */
+export type TokenBranch = "given" | "rotated" | "reused" | "placeholder";
+
+/** What happened to the credential, carried on every answer that generates a
+ *  bundle. `message` is core's own sentence and is shown as-is -- composing one
+ *  here from `branch` would be a second copy of the rule that decided it, in a
+ *  language that cannot see the first. It never contains the token value. */
+export interface TokenReport {
+  branch: TokenBranch;
+  /** The ship the token belongs to, where that is known. */
+  ship_id: string | null;
+  message: string;
+}
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
     method,
@@ -58,8 +79,17 @@ export const api = {
     name: string; account_id: number; workspace_id: number;
     func_ids: string[]; slots: number; threads_per_engine: number;
   }) => req<Location>("POST", "/api/locations", body),
+  /** Create an agent, and take the credential it comes with.
+   *
+   *  The one call here that issues a token, and the reason nothing else has to:
+   *  a ship created a moment ago has no previous credential for the issue to
+   *  invalidate, so this is the free moment to capture it. `auth_token` is null
+   *  with `token_error` set on an account whose token endpoint is closed -- the
+   *  agent exists either way, and losing its id is what a thrown error would
+   *  cost. */
   createShip: (harborId: string, name: string) =>
-    req<{ ship: Ship }>("POST", "/api/ships", { harbor_id: harborId, name }),
+    req<{ ship: Ship; auth_token: string | null; token_error: string | null }>(
+      "POST", "/api/ships", { harbor_id: harborId, name }),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
   /** Facts from the three values BlazeMeter shows on the agent, with no API key.
    *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */
@@ -67,9 +97,20 @@ export const api = {
     req<ManualFactsOut>("POST", "/api/facts/manual", body),
   status: (harborId: string, shipId: string) =>
     req<AgentStatus>("GET", `/api/status?harbor_id=${harborId}&ship_id=${shipId}`),
-  generate: (facts: Facts, options: Options) =>
-    req<{ files: GeneratedFile[] }>("POST", "/api/generate",
-      { facts, options, fetch_token: false }),
+  /** The live preview, which runs on every keystroke -- so `rotate_token` is sent
+   *  explicitly false rather than left to the server's default: nothing about
+   *  looking at manifests may touch the account. `token` says what the bundle
+   *  currently carries, which is how the page knows a download would be a
+   *  placeholder before anyone clicks it. */
+  /** `outDir` is the folder a save would land in, when one has been typed. It is
+   *  read, never written: a folder already holding this ship's bundle supplies
+   *  its own token, so sending it is what lets the preview say `reused` instead
+   *  of `placeholder`. Without it the page warned "fill it in before applying"
+   *  over a folder whose token the save was about to keep -- which invites a
+   *  rotation nothing needed. */
+  generate: (facts: Facts, options: Options, outDir?: string) =>
+    req<{ files: GeneratedFile[]; token: TokenReport }>("POST", "/api/generate",
+      { facts, options, rotate_token: false, out_dir: outDir ?? null }),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
@@ -274,33 +315,60 @@ export function saveBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(a.href);
 }
 
-/** `fetchToken` pulls AUTH_TOKEN from the API on the way out, which is what the
- *  connected flow relies on. It must be off for manually-entered facts: the
- *  token is already in `options`, and a stale key left over from an earlier
- *  connect would otherwise be asked for a token for someone else's agent. */
-export async function downloadZip(facts: Facts, options: Options, fetchToken = true) {
+/** Where the branch travels on a route that answers with bytes. A zip cannot
+ *  carry a JSON envelope and still be a zip, so the server puts it beside the
+ *  Content-Disposition; these two names are server.TOKEN_BRANCH_HEADER and
+ *  TOKEN_MESSAGE_HEADER, and tests/test_server.py pins the literals because a
+ *  rename on one side would quietly lose the sentence rather than fail. */
+const TOKEN_BRANCH_HEADER = "X-Bzm-Token-Branch";
+const TOKEN_MESSAGE_HEADER = "X-Bzm-Token-Message";
+
+function tokenFromHeaders(r: Response): TokenReport {
+  return {
+    branch: (r.headers.get(TOKEN_BRANCH_HEADER) ?? "placeholder") as TokenBranch,
+    ship_id: null,
+    message: r.headers.get(TOKEN_MESSAGE_HEADER) ?? "",
+  };
+}
+
+/** Download the bundle, and report what that did to the credential.
+ *
+ *  `rotateToken` issues a NEW AUTH_TOKEN and kills the one any deployed agent is
+ *  running on, so it is off unless the caller asked for exactly that. It used to
+ *  default to true — downloading a bundle to read it revoked a working agent's
+ *  credential, and the pod that broke looked like a slow boot (#64). */
+export async function downloadZip(
+  facts: Facts, options: Options, rotateToken = false,
+): Promise<TokenReport> {
   const r = await fetch("/api/generate/zip", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facts, options, fetch_token: fetchToken }),
+    body: JSON.stringify({ facts, options, rotate_token: rotateToken }),
   });
   if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
+  const token = tokenFromHeaders(r);
   saveBlob(await r.blob(),
     `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
+  return token;
 }
 
 export interface SavedBundle {
   out_dir: string;
   files: { name: string; bytes: number }[];
+  token: TokenReport;
 }
 
 /** Write the bundle to a directory on the machine running this server — the
  *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
- *  reads, so the folder is the handoff between this page and those. The token
- *  caveat is downloadZip's exactly: with fetchToken, every save rotates. */
+ *  reads, so the folder is the handoff between this page and those.
+ *
+ *  Saving twice into one folder is the ordinary way to use it, and it no longer
+ *  costs a rotation: the server generates *into* the directory, so the token
+ *  already there is reused and the agent deployed from the last save keeps
+ *  working. `token.branch` says which happened. */
 export function saveBundle(
-  facts: Facts, options: Options, outDir: string, fetchToken = true,
+  facts: Facts, options: Options, outDir: string, rotateToken = false,
 ): Promise<SavedBundle> {
   return req<SavedBundle>("POST", "/api/generate/save",
-    { facts, options, fetch_token: fetchToken, out_dir: outDir });
+    { facts, options, rotate_token: rotateToken, out_dir: outDir });
 }

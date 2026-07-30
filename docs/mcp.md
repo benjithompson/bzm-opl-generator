@@ -106,15 +106,56 @@ profile.json included, so a session pointed at that folder reads what was
 configured (`opl_bundle read` with `name=profile.json`) and carries on rather
 than starting over.
 
+## `generate` issues no credential unless you say `rotate_token`
+
+The argument used to be `fetch_token` and used to default to *true*, which meant
+generating a bundle — even just to look at one — POSTed for a new AUTH_TOKEN and
+invalidated the previous one. The agent already running on it does not report an
+error: crane answers a dead token with 404 on `/versions`, logs `Sleeping for
+300` and never starts its health service, so the pod sits `0/1 Running` and reads
+as a slow boot. That cost a live debugging session before anyone suspected the
+credential.
+
+The rename is the safeguard. A model reads JSON, not a terminal — there is no
+prompt it can be stopped at and no output it can be warned by — so the argument
+name has to be the warning, and the default has to be the branch that touches
+nothing. `fetch_token` is now **refused** rather than ignored: a session working
+from a cached description means to mint, and silently handing it a placeholder
+bundle would be a worse answer than one round trip spent on the new word.
+
+Every `generate` reports which of four ways its token arrived, as
+`token_source: {branch, ship_id, message}`:
+
+| branch | what happened |
+|---|---|
+| `given` | the `auth_token` option was already set — nothing was issued |
+| `rotated` | `rotate_token: true` — a **new** token, and the previous one is dead |
+| `reused` | `out_dir` already held a bundle for this ship; its token was read back, so the bytes are identical and the running agent is unaffected |
+| `placeholder` | no token available — the bundle cannot be applied as it stands, and the message names both places a real one comes from |
+
+A rotation is also in `warnings`, not only in `token_source`. A session scanning
+for what went wrong would otherwise miss the one event in a generate that takes a
+working agent down — and that is not hypothetical: a live rotation on this surface
+answered `warnings: []` and named no ship at all.
+
+The token itself is still never in the response, on any branch. The *ship* is,
+because naming the agent whose credential was just replaced is the point.
+
+`opl_location create_ship` is where a new agent's first token comes from in
+practice: create the ship, then `generate` once with `rotate_token: true`, and
+every later regenerate into the same directory takes the `reused` branch.
+
 ## Three rules the server keeps
 
 **The AUTH_TOKEN is never in a response.** `generate` writes the Secret to disk
 and answers with file names and byte counts — not the YAML. A response goes into
 a transcript, gets summarised, and is quoted back later; a credential that
-*rotates every time it is fetched* must not travel that way. `opl_location
+*rotates every time it is issued* must not travel that way. `opl_location
 reveal_token` is the single exception, and it is a whole action precisely so it
 cannot happen as a side effect of something else. It says what it did, because
-what it did was invalidate the previous token.
+what it did was invalidate the previous token. `generate` with `rotate_token`
+issues one too, and it also says so — but it says which *ship*, and puts the
+value in the Secret on disk rather than in the answer.
 
 **A secret is never a tool argument.** A *path* may be (`api_key_file`); the id
 and secret come from the environment. Arguments pass through everything between

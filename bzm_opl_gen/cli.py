@@ -15,7 +15,6 @@ Subcommands:
 
 import argparse
 import json
-import subprocess
 import sys
 
 from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
@@ -98,8 +97,19 @@ def cmd_create_ship(a):
     except core.CoreError as e:
         sys.exit(str(e))
     print(f"auth_token: {token}")
+    # This is the one command that issues a credential as a matter of course,
+    # and its output is the only copy: nothing here stores it, and `generate`
+    # deliberately will not go and get another one -- fetching mints, and minting
+    # revokes whatever is deployed. So say the durability out loud, and hand on a
+    # next step that *takes* the token. `generate --api-key` was printed here,
+    # and after #64 that would write a placeholder bundle.
+    print("\nKeep that auth_token: it is the durable artifact of this command. "
+          "Nothing here records it, and issuing another one (reveal_token, or "
+          "generate --rotate-token) invalidates this one along with any agent "
+          "running on it.")
     print(f"\nnext: bzm-opl-gen facts --api-key {a.api_key} --harbor-id {a.harbor_id}")
-    print(f"      bzm-opl-gen generate --ship-id {ship['id']} --api-key {a.api_key} ...")
+    print(f"      bzm-opl-gen generate --ship-id {ship['id']} "
+          f"--auth-token <the auth_token above> ...")
 
 
 def cmd_facts(a):
@@ -182,14 +192,27 @@ def cmd_generate(a):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
-    # Both which ship and the fetch itself are core's -- see core.token_ship_id
-    # for what each clause is protecting, and core.fetch_auth_token for why the
-    # call that rotates the credential exists once. Asked first so the client is
-    # built only when there is something to ask it: a bad key file should not be
-    # read on a run that was never going to fetch.
-    if a.api_key and core.token_ship_id(f, opts):
-        ship_id = core.fetch_auth_token(api.BzmClient(a.api_key), f, opts)
-        print(f"fetched AUTH_TOKEN for ship {ship_id} from BlazeMeter API")
+    # Where the token comes from is core.resolve_auth_token's, all four
+    # branches of it. What is left here is the flags: a client is built only
+    # for the one that mints, so a bad key file is not read on a run that was
+    # never going to touch the account.
+    client = api.BzmClient(a.api_key) if a.api_key and a.rotate_token else None
+    if a.api_key and not a.rotate_token:
+        print("note: --api-key has no effect on `generate`. It no longer "
+              "fetches an AUTH_TOKEN, because that fetch issues a new one and "
+              "revokes the token the running agent holds -- it is the "
+              "credential for --rotate-token, and nothing else here mints.",
+              file=sys.stderr)
+    # announce=print, on stdout beside the report rather than on stderr: the
+    # warning is only worth anything ahead of the mint, and two streams do not
+    # keep their order in a pipe or a CI log.
+    source = core.resolve_auth_token(f, opts, client=client,
+                                     rotate=a.rotate_token, out_dir=a.output,
+                                     announce=print)
+    # Always, for every branch, and unprefixed -- each message names the token
+    # itself. Which of the four happened decides whether an agent is still
+    # running, and the run that said nothing was the one that rotated (#64).
+    print(source.message)
     files = gen_mod.generate(f, opts)
     written = gen_mod.write(files, a.output)
     print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
@@ -303,25 +326,35 @@ def cmd_images(a):
     if not a.pull:
         return
     # The pull/tag/push is core's, so this command and the MCP tool cannot
-    # disagree about which name the target registry gets.
+    # disagree about which name the target registry gets -- and core is the only
+    # thing that shells out. This loop reports what it did; it does not do it.
+    # There used to be a `subprocess.run` after the loop, on the loop variable,
+    # guarded by a name that did not exist -- so every `images --pull` raised
+    # NameError, and had it not, it would have re-run just the last command.
     for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
                                   dry_run=a.dry_run)["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
-    if not dry:
-        subprocess.run(cmd, check=True)
 
 
-def _regenerator(client, facts, a, ship_id):
+def _regenerator(facts, a, ship_id, auth_token):
     """Re-render the manifests in place with extra generate() options merged
     onto the ones they were built from (out/profile.json). Used by
-    --local-proxy, whose CA and address only exist once the rig is up."""
+    --local-proxy, whose CA and address only exist once the rig is up.
+
+    `auth_token` is one value for the whole run, passed in rather than fetched
+    here. It used to call the token endpoint on every invocation, and a run
+    makes several -- the negative control renders twice, then --run-test and
+    --local-proxy each do -- so each render minted a credential that revoked the
+    one the previous deploy was running on. The agent then sat `0/1 Running`,
+    which the rig cannot tell from a slow boot; plausibly a real source of its
+    intermittent failures.
+    """
     def regenerate(overlay):
         opts = gen_mod.load_profile(a.manifests)
         opts.update(overlay)
         opts["namespace"] = a.namespace
         opts["ship_id"] = opts.get("ship_id") or ship_id
-        opts["auth_token"] = core.fetch_ship_token(client, facts["harbor_id"],
-                                                   opts["ship_id"])
+        opts["auth_token"] = auth_token
         written = gen_mod.write(gen_mod.generate(facts, opts), a.manifests)
         print(f"regenerated {len(written)} files in {a.manifests}/ with "
               f"proxy + CA trust: " + ", ".join(written))
@@ -364,12 +397,23 @@ def cmd_livetest(a):
             f"where that account will not exist. Re-generate without "
             f"--no-create-service-account, or create '{sa}' in {a.namespace} "
             f"yourself before starting the run")
+    # Third guard of the same shape, and the one the mint below cannot cover: a
+    # run that re-renders nothing deploys what is on disk, so if that bundle
+    # carries the placeholder the agent can never authenticate. Every object
+    # applies, no heartbeat arrives, and the run spends its whole 12-20 minutes
+    # reporting only that the agent never came online. Checked here because the
+    # paths that *do* re-render write a fresh token over it, so a placeholder on
+    # disk is not a problem for them -- see the mint below.
+    if not (a.local_proxy or a.run_test) and not a.auth_token \
+            and gen_mod.existing_auth_token(a.manifests) is None:
+        sys.exit(
+            f"{a.manifests}/ carries no usable AUTH_TOKEN -- it is still the "
+            f"{gen_mod.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
+            f"re-renders nothing, so it would deploy that. The agent could not "
+            f"authenticate, and the rig would wait out its whole timeout to say "
+            f"only that it never came online. "
+            f"{core.token_recovery_hint(opts)}")
     proxy_user = proxy_pass = None
-    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
-    # the engine sizing); the callback needs a profile to merge onto, so it is
-    # only available when one was found.
-    regenerate = (_regenerator(client, f, a, ship_id)
-                  if opts is not None and (a.local_proxy or a.run_test) else None)
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
         sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "
                  "the policy denies everything except DNS, the apiserver, and "
@@ -380,6 +424,43 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
+    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
+    # the engine sizing); the callback needs a profile to merge onto, so it is
+    # only available when one was found.
+    #
+    # And a run with neither renders nothing, so it deploys the bundle exactly as
+    # it sits on disk -- which is why the mint below is inside this condition
+    # rather than at the top of the command. Issuing a token a run is never going
+    # to write would revoke the one that bundle is carrying, i.e. break the
+    # deployment this rig is here to verify.
+    regenerate = None
+    if opts is not None and (a.local_proxy or a.run_test):
+        # One credential for the whole run, minted here rather than per render,
+        # and after every guard above so a run that is about to exit does not
+        # rotate anything first. No flag asks for it: bringing an agent online is
+        # what this command is for, so a rotation is implied by running it --
+        # --auth-token is how a caller who already holds one keeps it, and
+        # resolve_auth_token's first branch is what honours that.
+        #
+        # out_dir is deliberately not passed. Reusing whatever token
+        # a.manifests already holds looks appealing and is the wrong risk here:
+        # it may have been rotated since that bundle was written, and a dead
+        # token is exactly the `0/1 Running` this rig cannot tell from a slow
+        # boot -- so the rig would fail with no way to say why.
+        token_opts = {"ship_id": ship_id}
+        if a.auth_token:
+            token_opts["auth_token"] = a.auth_token
+        source = core.resolve_auth_token(f, token_opts, client=client,
+                                         rotate=not a.auth_token,
+                                         announce=print)
+        print(source.message)
+        if source.branch == core.TOKEN_PLACEHOLDER:
+            # Reachable one way: --auth-token given the placeholder string
+            # itself. Rendering it deploys an agent that can never come online,
+            # and the run's only report would be that it never did -- so the
+            # message resolve_auth_token already wrote becomes the exit.
+            sys.exit(source.message)
+        regenerate = _regenerator(f, a, ship_id, token_opts["auth_token"])
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
                       cluster=a.cluster, timeout=a.timeout, keep=a.keep,
                       facts=f, local_registry=a.local_registry,
@@ -494,7 +575,18 @@ def main():
 
     g = sub.add_parser("generate", help="render manifests from facts")
     g.add_argument("--facts", default="facts.json")
-    g.add_argument("--api-key", help="fetch AUTH_TOKEN from the API if not given")
+    g.add_argument("--api-key",
+                   help="the credential for --rotate-token, and nothing else "
+                        "here: on its own it changes nothing, because fetching "
+                        "an AUTH_TOKEN issues a new one and kills the agent "
+                        "running on the old")
+    g.add_argument("--rotate-token", dest="rotate_token", action="store_true",
+                   help="issue a NEW AUTH_TOKEN for the ship (needs --api-key). "
+                        "The previous one stops working at once and the agent "
+                        "holding it sits at 0/1 Running until this bundle is "
+                        "re-applied, Secret included. Without this flag the "
+                        "token comes from --auth-token, or from the bundle "
+                        "already in -o, or stays the placeholder")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
     g.add_argument("--format", dest="output_format",
                    choices=list(gen_mod.OUTPUT_FORMATS),
@@ -505,7 +597,11 @@ def main():
     g.add_argument("--platform", choices=["openshift", "k8s"])
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")
-    g.add_argument("--auth-token", dest="auth_token")
+    g.add_argument("--auth-token", dest="auth_token",
+                   help="the agent's AUTH_TOKEN, as create-ship printed it or "
+                        "as the BlazeMeter UI shows it on the agent. Wins over "
+                        "every other source and issues nothing, so an agent "
+                        "already running on it keeps working")
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
     # Tri-state so profile.json records which of the two a bundle asked for,
@@ -667,6 +763,12 @@ def main():
     t.add_argument("--manifests", default="out")
     t.add_argument("--namespace", required=True)
     t.add_argument("--ship-id", dest="ship_id")
+    t.add_argument("--auth-token", dest="auth_token",
+                   help="the agent's AUTH_TOKEN, if you are holding the one "
+                        "create-ship printed. Without it the run issues exactly "
+                        "one, once, and every render it makes uses that -- "
+                        "which revokes the credential of anything already "
+                        "deployed against this agent")
     t.add_argument("--cluster", choices=["current", "kind", "minikube"], default="current")
     t.add_argument("--timeout", type=int, default=600)
     t.add_argument("--keep", action="store_true", help="skip teardown")

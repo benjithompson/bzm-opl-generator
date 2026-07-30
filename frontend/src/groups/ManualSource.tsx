@@ -12,7 +12,7 @@
 // Identity only. What the location *runs* is declared once, in the Configure
 // step -- asking it here as well made one fact two questions in two
 // vocabularies (funcIds here, features there).
-import { Field, TextInput } from "../components";
+import { Field, SecretInput, TextInput } from "../components";
 
 export function ManualSource(props: {
   harborId: string;
@@ -42,9 +42,12 @@ export function ManualSource(props: {
           value={props.shipId} onChange={props.onShipId} />
       </Field>
 
+      {/* Masked: the same field the connected path now has, and the same reason
+          -- see SecretInput. Left empty the bundle still generates, with the
+          placeholder and a banner beside the download saying so. */}
       <Field label="Auth token"
         hint="AUTH_TOKEN — goes into the Secret. Anyone holding it can register as this agent.">
-        <TextInput mono placeholder="af1736ce6c96ec3ecd2c3838ad20ed3c…"
+        <SecretInput placeholder="af1736ce6c96ec3ecd2c3838ad20ed3c…"
           value={props.authToken} onChange={props.onAuthToken} />
       </Field>
 

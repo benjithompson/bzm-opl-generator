@@ -157,7 +157,33 @@ class ShipIn(BaseModel):
 
 @app.post("/api/ships")
 def ship_create(s: ShipIn):
-    return {"ship": _answer(core.create_ship, _client(), s.harbor_id, s.name)}
+    """Create the agent, and issue its credential with it.
+
+    The one place in this server that mints as a matter of course, and #64's
+    reason the rest of it no longer does: the token is captured at the single
+    moment it is free, when the ship is new and has no previous credential for a
+    fetch to invalidate. `core.create_ship` deliberately does not fetch -- for an
+    existing ship that would rotate a live agent's token on an action whose name
+    says nothing about credentials -- and the reservation does not apply here, so
+    this mirrors what `bzm-opl-gen create-ship` has always done.
+
+    A refusal is reported *with* the ship rather than instead of it. Some accounts
+    allow the token endpoint only from BlazeMeter's own gateway; answering 502
+    here would leave the created agent's id nowhere but a browser console, and the
+    next click makes a second agent in the same location. Same ordering, same
+    reason, as the CLI printing the ids before it fetches.
+    """
+    client = _client()
+    ship = _answer(core.create_ship, client, s.harbor_id, s.name)
+    token, refused = None, None
+    try:
+        token = core.fetch_ship_token(client, s.harbor_id, ship["id"])
+    except core.CoreError as e:
+        # The sentence core wrote, which names the ship and says a token read off
+        # the agent in BlazeMeter's own UI works just as well. Not _answer'd:
+        # this is the one refusal here that must not become the response.
+        refused = str(e)
+    return {"ship": ship, "auth_token": token, "token_error": refused}
 
 
 @app.get("/api/facts")
@@ -189,31 +215,104 @@ def agent_status(harbor_id: str, ship_id: str):
 class GenerateIn(BaseModel):
     facts: dict
     options: dict = {}
-    fetch_token: bool = True      # pull AUTH_TOKEN via docker-command endpoint
-
-
-def _generate(g: GenerateIn):
-    return _answer(core.generate_bundle, g.facts, g.options,
-                   client=_state["client"], fetch_token=g.fetch_token)
-
-
-@app.post("/api/generate")
-def generate_preview(g: GenerateIn):
-    files = _generate(g)
-    return {"files": [{"name": n, "content": files[n]}
-                      for n in core.preview_order(files)]}
-
-
-@app.post("/api/generate/zip")
-def generate_zip(g: GenerateIn):
-    body = core.zip_bundle(_generate(g))
-    name = core.zip_filename(g.options)
-    return Response(body, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    # Off, and named for what the endpoint does rather than for its HTTP verb:
+    # asking BlazeMeter for an AUTH_TOKEN *issues* one, and the previous one dies
+    # with the request. `fetch_token: true` was the default here, so a download
+    # taken to read the manifests revoked the credential of the agent already
+    # running (#64). A page still posting that field is not refused -- pydantic
+    # ignores it, which is what a browser holding the previous bundle needs, and
+    # ignoring it errs towards not minting.
+    rotate_token: bool = False
+    # Optional here, required on SaveIn. The preview and the zip take it so they
+    # can answer the question the page is actually asking -- "what will the
+    # bundle I am about to save carry?" -- because a folder that already holds
+    # this ship's bundle supplies its own token. Without it the preview could
+    # only ever say `placeholder`, and a page reporting "fill it in before
+    # applying" over a folder whose token a save was about to keep invites a
+    # rotation nothing needed, which is the harm this whole change is about.
+    # Read only: nothing is written unless the route is the save one.
+    out_dir: str | None = None
 
 
 class SaveIn(GenerateIn):
     out_dir: str
+
+
+def _generate(g: GenerateIn, out_dir=None):
+    """The bundle, and which of four ways its AUTH_TOKEN arrived.
+
+    Resolved here rather than left to `generate_bundle` alone, because the branch
+    is the answer: the four have different consequences for an agent that is
+    already running, and the one that revokes its credential used to happen in
+    silence. Resolving and then generating is core's own documented pairing --
+    the resolved token wins outright the second time round, so nothing is issued
+    twice.
+
+    `out_dir` is the directory a bundle is about to be written to, and it is read
+    (never written) for the token its predecessor holds. The save route passes
+    the one it is about to write; the *preview* passes whatever folder the page
+    has typed, so it can answer for the bundle that would be saved rather than
+    for a hypothetical one with no history. The zip deliberately does not: it
+    lands in a browser's downloads directory, and borrowing a token from an
+    unrelated folder on the server would be a different bundle than the one
+    asked for. The parameter wins over the model's field, because by then the
+    save route has expanded `~`.
+    """
+    out_dir = out_dir or g.out_dir
+    opts = dict(g.options)
+    source = _answer(core.resolve_auth_token, g.facts, opts,
+                     client=_state["client"], rotate=g.rotate_token,
+                     out_dir=out_dir)
+    files = _answer(core.generate_bundle, g.facts, opts,
+                    client=_state["client"], rotate_token=g.rotate_token,
+                    out_dir=out_dir)
+    return files, source
+
+
+# The zip route answers with bytes, so the one thing a download must not lose
+# travels beside the filename in the headers. Not in the body: a zip wrapped in a
+# JSON envelope is not a zip, and the browser saves whatever it is handed.
+TOKEN_BRANCH_HEADER = "X-Bzm-Token-Branch"
+TOKEN_MESSAGE_HEADER = "X-Bzm-Token-Message"
+
+
+def _wire_safe(headers):
+    """Header values in what an HTTP header can actually hold.
+
+    latin-1 by the spec, and starlette raises encoding anything else -- which
+    would lose the download itself rather than the header on it. Both values this
+    route sets are a person's typing away from that: the filename carries the
+    namespace and so does the token message. A namespace is an RFC 1123 label on
+    any cluster that would take the bundle, so nothing worth keeping is replaced
+    here; the zip is worth keeping.
+    """
+    return {k: v.encode("latin-1", "replace").decode("latin-1")
+            for k, v in headers.items()}
+
+
+def _token_headers(source):
+    """The same report, on one line each -- which is what a header is, and the
+    recovery hint is three lines with a kubectl in it."""
+    return {TOKEN_BRANCH_HEADER: source.branch,
+            TOKEN_MESSAGE_HEADER: " ".join(source.message.split())}
+
+
+@app.post("/api/generate")
+def generate_preview(g: GenerateIn):
+    files, source = _generate(g)
+    return {"files": [{"name": n, "content": files[n]}
+                      for n in core.preview_order(files)],
+            "token": source._asdict()}
+
+
+@app.post("/api/generate/zip")
+def generate_zip(g: GenerateIn):
+    files, source = _generate(g)
+    name = core.zip_filename(g.options)
+    return Response(core.zip_bundle(files), media_type="application/zip",
+                    headers=_wire_safe({
+                        "Content-Disposition": f'attachment; filename="{name}"',
+                        **_token_headers(source)}))
 
 
 @app.post("/api/generate/save")
@@ -229,11 +328,25 @@ def generate_save(g: SaveIn):
     `~` is expanded here rather than in core: this path was typed by a person
     into a browser, and `~` is how people name their home directory. Core's
     callers pass paths a program chose, and core still refuses a relative one.
+
+    The directory goes into the generation as well as being written to, which is
+    what reaches core's reuse branch: saving again into a folder that already
+    holds this ship's bundle keeps that bundle's token instead of issuing one, so
+    re-rendering with an option changed leaves the agent deployed from the last
+    save working.
     """
     out_dir = os.path.expanduser(g.out_dir)
-    files = _generate(g)
+    # Before the generation, not at the write: with rotate_token set, resolving
+    # first meant a credential was issued and *then* thrown away by the path
+    # refusal -- which has already taken the running agent down, for a request
+    # that produced nothing. write_bundle checks it again, which is the point of
+    # require_absolute_out_dir being its own function: one copy of the rule, two
+    # moments. The MCP's generate orders it the same way.
+    _answer(core.require_absolute_out_dir, out_dir)
+    files, source = _generate(g, out_dir=out_dir)
     written = _answer(core.write_bundle, files, out_dir)
-    return {"out_dir": out_dir, "files": written}
+    return {"out_dir": out_dir, "files": written,
+            "token": source._asdict()}
 
 
 # -- preflight ----------------------------------------------------------------
@@ -336,16 +449,17 @@ else:
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 
 # Said at startup rather than left to the README: by the time the bind is wrong
-# the page is already reachable, and the expensive mistake behind it is not
-# reading manifests -- it is the download button, which fetches an AUTH_TOKEN
-# and thereby rotates it, leaving any agent already running for that ship on a
-# token the API no longer accepts (it logs 404 on /ships/<id>/status and sits
-# at 0/1, which reads like a deleted ship).
+# the page is already reachable, and reading manifests is not the expensive
+# mistake behind it. Two things are -- creating locations and agents in a real
+# account, and asking for a new AUTH_TOKEN, which revokes the one a running agent
+# holds (crane logs 404 on /versions and the pod sits at 0/1, which reads like a
+# deleted ship). Neither happens by accident on this page any more; both are one
+# click for whoever reaches it.
 EXPOSED_WARNING = """\
 !! bzm-opl-gen ui is bound to {host}, so it is reachable from outside this
-!! machine. Anyone who reaches it can act as your BlazeMeter API key -- and
-!! downloading a bundle fetches an AUTH_TOKEN, which ROTATES it and breaks
-!! whatever agent is already running for that ship.
+!! machine. Anyone who reaches it can act as your BlazeMeter API key: create
+!! locations and agents, and issue a new AUTH_TOKEN, which REVOKES the one
+!! whatever agent is already running for that ship is using.
 !! Prefer the default 127.0.0.1 plus an SSH tunnel:
 !!   ssh -L {port}:127.0.0.1:{port} <this-machine>
 """

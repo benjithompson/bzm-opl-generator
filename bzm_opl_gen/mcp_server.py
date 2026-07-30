@@ -115,10 +115,15 @@ hand the person the BlazeMeter UI step instead.
 
 Two things about credentials. The API key comes from this server's environment
 ({core.KEY_FILE_ENV}, or {core.KEY_ID_ENV} and {core.KEY_SECRET_ENV}) -- never
-pass a secret as a tool argument. And fetching an agent's AUTH_TOKEN *rotates*
+pass a secret as a tool argument. And issuing an agent's AUTH_TOKEN *rotates*
 it: the previous token stops working, and an agent already running on it sits at
 0/1 logging 404 on its status endpoint, which reads like a deleted ship. That is
-why the token is written into the bundle and never returned to you.
+why the token is written into the bundle and never returned to you, and why the
+two actions that can issue one -- `opl_bundle generate` with rotate_token=true,
+and `opl_location reveal_token` -- have to be asked for by name. Generating
+without rotate_token touches no credential at all: it reuses the token already in
+out_dir, or leaves a placeholder and says so. Every generate reports which of
+those happened as `token_source`; read it before you deploy.
 """
 
 
@@ -229,18 +234,41 @@ def _no_secrets(options):
     here the damage is upstream, and the only thing left worth doing is to
     refuse loudly enough that nobody sends the next one.
 
-    The token this generator wants is fetched from the account, which is the
-    path that does not involve anybody typing one.
+    Where the token should come from instead is the point of the refusal, and
+    since #64 that is no longer "the account, automatically" -- the alternatives
+    are a bundle already in out_dir, the value set on disk afterwards, or
+    rotate_token, which issues a new one and revokes whatever is running.
     """
     sent = sorted(set(options) & set(gen_mod.SECRET_OPTIONS))
     if sent:
         raise core.BadRequest(
             f"{', '.join(sent)} is a credential and must not be passed as a "
             f"tool argument -- it goes through the model and into the "
-            f"transcript on the way here. Leave it out and it is fetched from "
-            f"the account, or set it in the bundle yourself afterwards; "
+            f"transcript on the way here. Leave it out: a bundle already in "
+            f"out_dir has its token read back, or set the value in the written "
+            f"Secret yourself, or pass rotate_token=true to issue a fresh one "
+            f"(which stops the running agent until you re-apply). "
             f"opl_location reveal_token is how you read the current value.")
     return options
+
+
+# The argument this used to take. Kept named rather than dropped, because a
+# session working from a cached tool description would send it, get a bundle with
+# a placeholder in it where it expected a working credential, and be told
+# nothing. Refusing costs one round trip and says what the word is now.
+_RENAMED_TOKEN_ARG = "fetch_token"
+
+
+def _no_stale_fetch_token(args):
+    if _RENAMED_TOKEN_ARG in args:
+        raise core.BadRequest(
+            f"{_RENAMED_TOKEN_ARG} is no longer an argument -- it is "
+            f"`rotate_token`, and it defaults to false. The rename is the "
+            f"warning: that call POSTs for a new AUTH_TOKEN and the previous one "
+            f"stops working, so any agent running on it sits at 0/1 Running "
+            f"until the bundle is re-applied. Pass rotate_token=true only to "
+            f"replace a credential on purpose; leave it out to generate without "
+            f"touching the account.")
 
 
 def _gate(env, what):
@@ -350,11 +378,16 @@ def _location(action, args):
         ship = core.create_ship(_client(args), harbor_id, name)
         return {"harbor_id": harbor_id, "ship": ship,
                 "next": [f"opl_facts gather with harbor_id {harbor_id!r}"],
-                # Not fetched here on purpose: it would rotate a token on an
-                # action whose name says nothing about credentials.
-                "note": "the AUTH_TOKEN is not fetched by this call. "
-                        "opl_bundle generate puts it in the bundle; "
-                        "opl_location reveal_token returns it and rotates it."}
+                # Not issued here on purpose: it would rotate a token on an
+                # action whose name says nothing about credentials. And nothing
+                # else issues one by accident either, so the session has to be
+                # told which action to ask for -- `generate` on its own leaves a
+                # placeholder in the Secret.
+                "note": "this call issues no AUTH_TOKEN, and neither does "
+                        "opl_bundle generate unless you pass rotate_token=true "
+                        "(which is how this new agent gets its first one). "
+                        "opl_location reveal_token returns the value, and "
+                        "rotates it."}
 
     if action == "reveal_token":
         harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
@@ -505,9 +538,14 @@ BUNDLE_ACTIONS = ("generate", "read", "options", "images")
 
 DESCRIPTIONS["opl_bundle"] = (
     "The manifests, written to a directory you name.\n"
-    "  generate -- {facts, out_dir (ABSOLUTE), options?, fetch_token?}. "
+    "  generate -- {facts, out_dir (ABSOLUTE), options?, rotate_token?}. "
     "Writes the bundle and answers with file names and sizes, never the "
     "YAML and never the AUTH_TOKEN. Read a file back with `read`.\n"
+    "             rotate_token (default false) ISSUES A NEW AUTH_TOKEN and "
+    "kills the old one: an agent already running goes to 0/1 Running until "
+    "this bundle is re-applied. Without it the token comes from the "
+    "auth_token option, or from a bundle already in out_dir, or stays a "
+    "placeholder -- `token_source` in the response says which, every time.\n"
     "  read     -- one file out of a written bundle {out_dir, name}\n"
     "  options  -- every generate option, its default and what it does\n"
     "  images   -- the image references this bundle pulls {facts, "
@@ -528,20 +566,40 @@ def _bundle(action, args):
 
     if action == "generate":
         facts, out_dir = _need(args, "facts", "out_dir")
+        _no_stale_fetch_token(args)
+        # Before the resolution below, not at the write: a rotation that is then
+        # thrown away by a path refusal has still killed a running agent.
+        core.require_absolute_out_dir(out_dir)
         options = _no_secrets(args.get("options") or {})
-        files = core.generate_bundle(
-            facts, options,
-            # A client only when a token is actually wanted: with fetch_token
-            # false, or a token already in the options, there is nothing to ask
-            # an account and no reason to require one.
-            client=(_client(args)
-                    if args.get("fetch_token", True)
-                    and core.token_ship_id(facts, options) else None),
-            fetch_token=args.get("fetch_token", True))
+        rotate = bool(args.get("rotate_token"))
+        # Resolved here rather than left to generate_bundle so the branch can be
+        # reported: which of the four ways the token arrived decides whether an
+        # agent is still running, and this surface used to answer a rotation with
+        # `warnings: []`. A copy, because resolving mutates -- and the caller's
+        # own `args` must not come back carrying a credential.
+        resolved = dict(options)
+        # `announce` is left unset on purpose: stdout is the JSON-RPC channel
+        # here, so there is nowhere to say a thing *before* it happens. The
+        # ordering the warning exists for cannot be had, and `token_source`
+        # afterwards is what a session gets instead.
+        source = core.resolve_auth_token(
+            facts, resolved,
+            # A client only for the one branch that needs an account. Anything
+            # else must not require a key, and must not be able to spend one.
+            client=_client(args) if rotate else None,
+            rotate=rotate, out_dir=out_dir)
+        # out_dir to both, so the second resolution inside generate_bundle takes
+        # the same branch this one did rather than a different one.
+        files = core.generate_bundle(facts, resolved, out_dir=out_dir)
         written = core.write_bundle(files, out_dir)
         return {"out_dir": out_dir, "files": written,
                 "profile": json.loads(files[gen_mod.PROFILE_FILE]),
-                "warnings": _facts_warnings(facts) + _bundle_warnings(options),
+                # The branch and the ship, never the value: naming the agent
+                # whose credential was just replaced is the whole point, and it
+                # is not a secret.
+                "token_source": source._asdict(),
+                "warnings": (_facts_warnings(facts) + _bundle_warnings(options)
+                             + _token_warnings(source)),
                 "next": _after_generate(out_dir, options)}
 
     if action == "read":
@@ -607,6 +665,20 @@ def _after_doctor(report, options):
                 "cluster refused, not a check that failed."]
     return [f"opl_bundle generate with these options and an absolute out_dir "
             f"(namespace {options.get('namespace', 'blazemeter')!r})"]
+
+
+def _token_warnings(source):
+    """A rotation, in the field a session actually reads.
+
+    `token_source` says it too, but a caller that scans `warnings` for what went
+    wrong would miss the one event here that takes a working agent down -- and
+    that is exactly what happened: the issue reports a live rotation answering
+    `warnings: []`. Only the rotation warns; the other three branches change
+    nothing about what is deployed.
+    """
+    if source.branch != core.TOKEN_ROTATED:
+        return []
+    return [core.rotation_warning(source.ship_id)]
 
 
 def _bundle_warnings(options):

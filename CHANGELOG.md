@@ -11,6 +11,116 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `generate --api-key` no longer fetches an AUTH_TOKEN.** It fetched
+  one before, and that fetch *mints*: BlazeMeter issues a fresh token and
+  invalidates the previous one. So regenerating a bundle — even just to look at
+  it — revoked the credential of the agent already running from the last one, and
+  it failed silently. Crane answers a dead token with `404`, logs `Sleeping for
+  300`, and never starts its health service, so the pod sits `0/1 Running` and
+  reads as a slow boot rather than a revoked credential. That cost a live
+  debugging session before the cause was found.
+
+  Two harms, and neither is secrecy — crane logs the token in plaintext, and
+  anyone who can read a pod log in that namespace can read the Secret anyway.
+  The first is **permanence and reach**: a token in a model transcript or a
+  shared `profile.json` reaches people who never had access, for as long as the
+  file exists. The second is **rotation**, above.
+
+  `generate` now resolves the token in four steps, prints which one it took, and
+  reaches BlazeMeter only in the second:
+
+  1. `--auth-token <token>` wins outright.
+  2. `--rotate-token` (new, and needs `--api-key`) issues a new one. It warns
+     before it acts, naming the ship and the consequence. There is no
+     confirmation prompt — the flag is the confirmation.
+  3. Otherwise the token already written into `-o` is read back and reused,
+     provided that bundle's `profile.json` names the same `ship_id`. This is what
+     makes regenerating a bundle byte-identical.
+
+     If `-o` holds a bundle for a *different* ship, or one whose `profile.json`
+     cannot say whose token it is, **the command refuses and writes nothing.**
+     Generating there would overwrite that bundle, and its AUTH_TOKEN cannot be
+     fetched again afterwards — the only endpoint that returns one issues a new
+     one — so it would survive nowhere but inside an agent still running on it.
+     Pass `--auth-token` (or `--rotate-token`) and the directory is not consulted
+     at all, which is how you replace such a bundle deliberately.
+  4. Otherwise the `<YOUR_AUTH_TOKEN>` placeholder stays, and the command names
+     the two places a real token comes from — what `create-ship` printed, or
+     `kubectl -n <ns> get secret blazemeter-secret -o
+     jsonpath='{.data.AUTH_TOKEN}' | base64 -d` for an agent already deployed.
+     That command is printed, never run: nothing here reads your cluster.
+
+  **What to change:** anywhere you ran `generate --api-key`, pass `--auth-token`
+  instead, or drop the flag and let the bundle in `-o` supply its own token. On
+  its own `--api-key` now warns that it has no effect. `out/profile.json` still
+  does not carry the token and will not start doing so.
+
+  `create-ship` is unchanged except in what it says: the token it prints is the
+  durable artifact, nothing here records it, and the `next:` line it prints now
+  passes `--auth-token` rather than `--api-key` (which would produce a
+  placeholder bundle).
+
+  **BREAKING on the MCP surface: `opl_bundle generate`'s `fetch_token` argument
+  is now `rotate_token`, and defaults to `false`.** It defaulted to minting, so
+  every generate revoked the running agent's credential — and a session there has
+  no terminal to be warned in and no prompt to be stopped at. The rename is the
+  safeguard: a model reads the argument name, so the argument name has to be the
+  warning. `fetch_token` is *refused* rather than ignored, because a caller
+  working from a cached description means to mint and a silently-placeholder
+  bundle is a worse answer than one round trip.
+
+  Every generate now reports `token_source: {branch, ship_id, message}` — one of
+  `given`, `rotated`, `reused`, `placeholder` — and a rotation is repeated in
+  `warnings`, naming the ship whose credential was replaced. A live rotation on
+  this surface used to answer `warnings: []` and name nothing at all. The token
+  itself still never appears in a response, on any branch. `generate` also
+  passes `out_dir` through now, so an MCP session reaches the `reused` branch:
+  regenerating into a directory that already holds this ship's bundle issues
+  nothing and comes out byte-identical. It could not reach that branch before.
+  `opl_location reveal_token` is unchanged — the sanctioned way to read a token,
+  and a whole action so it cannot happen as a side effect.
+
+  **The web UI follows the same rule**, and the button that used to break a
+  running agent was the download: it fetched an AUTH_TOKEN on the way out, so
+  taking a copy of the bundle to read it rotated the credential of the install
+  already running. Downloading and **Save to folder** now mint nothing, and both
+  say which of the four ways their bundle got its token.
+
+  Where the token comes from instead: **creating an agent issues it once, there,
+  and puts it in a field on the page** — a ship created a moment ago has no
+  previous credential to invalidate, which is why that is the one action that
+  still fetches. The field is masked with a *Show* toggle, and nothing writes it
+  down, so that page is the copy to keep.
+
+  **Pointing at an agent that already exists leaves the field empty**, because
+  no API reads an existing token back. Paste what you kept, or tick *Issue a NEW
+  AUTH_TOKEN with this bundle* — which says, before you download, that it kills
+  the credential the running agent holds. A download with neither is a
+  placeholder bundle, and the page says so over the button rather than leaving
+  you to find out at `kubectl apply`.
+
+  **Saving twice into the same folder no longer rotates.** The bundle already
+  there supplies its own token — same folder, same ship, same bytes — so
+  re-rendering with one option changed leaves the agent deployed from the last
+  save working.
+
+- **`livetest` issues one credential per run instead of one per render.** Its
+  regenerate step called the token endpoint every time it was invoked, and a run
+  invokes it three or four times — the negative control renders twice, then
+  `--run-test` and `--local-proxy` each do — so a single run minted four
+  credentials, each invalidating the last. Any agent deployed from an earlier
+  render was holding a revoked token and sat `0/1 Running`, which is
+  indistinguishable from a slow boot; this is plausibly a real source of the
+  rig's intermittent failures. One token now, minted at the start, printed with
+  the ship it was for, and threaded through every render.
+
+  There is no `--rotate-token` on this command and there should not be: bringing
+  an agent online is its entire purpose, so the rotation is implied by running
+  it. New `--auth-token` skips the mint for a caller already holding one — the
+  token `create-ship` printed, say.
+
 ### Added
 
 - **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
@@ -37,8 +147,9 @@ anything that breaks.
   `generate` writes the Secret and answers with file names and byte counts, and
   reading a bundle file back redacts the token rather than handing it over,
   because a response is transcribed, summarised and quoted back, and this
-  credential rotates every time it is fetched. `reveal_token` is the one way to
-  get the value, and it is a whole action so it cannot happen by accident.
+  credential rotates every time it is issued. `reveal_token` is the one way to
+  get the value, and it is a whole action so it cannot happen by accident;
+  `generate` issues one only when asked, by name (see `rotate_token`, above).
   **A secret is never a tool argument** — passing `auth_token` in the options is
   refused rather than written; a path may be named, and the key itself comes
   from the server's environment. Files are named the same way: `opl_preflight`
@@ -92,6 +203,17 @@ anything that breaks.
   "pick exactly one" that grouping carried is now stated above the section.
 
 ### Fixed
+
+- **`images --pull` runs at all.** It raised `NameError: name 'dry' is not
+  defined` on every invocation, with or without `--mirror`, with or without
+  `--dry-run` — a guard at the end of the command tested a name that never
+  existed, and it was evaluated unconditionally once `--pull` was given. Behind
+  it sat a second bug: a `subprocess.run` on the loop variable *after* the loop,
+  which would have re-run the last command on its own. Both are gone;
+  `core.mirror_images` was always the thing doing the pull/tag/push, and the loop
+  in the command only reports what it did. Nothing covered this path, which is
+  how a crash on the happy path survived. Plain `images` (listing only) was never
+  affected, and neither was the MCP `opl_bundle images` action.
 
 - **An account that refuses to issue an agent credential now says so, and says
   what still works.** Some accounts serve the token endpoint only from

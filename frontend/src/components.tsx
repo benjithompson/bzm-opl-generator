@@ -46,6 +46,41 @@ export function TextInput(props: {
   );
 }
 
+/** A credential in a form: masked, with a deliberate reveal.
+ *
+ *  #64 moved the AUTH_TOKEN out of the download and into a field -- captured when
+ *  the agent is created, or pasted from what `create-ship` printed -- and that is
+ *  the one place the change makes a token more visible than it was, since it now
+ *  sits in the DOM instead of streaming into a zip. Masking is the mitigation: it
+ *  is not secrecy (crane logs the token, and anyone who can read a pod log in
+ *  that namespace can read the Secret) but permanence and reach, which is a
+ *  screen share and a screenshot.
+ *
+ *  `type=password` rather than a CSS mask, so a password manager and a screen
+ *  reader both understand what this is. */
+export function SecretInput(props: {
+  value: string; onChange: (v: string) => void; placeholder?: string;
+}) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div className="flex gap-1.5 items-start">
+      <input
+        className={inputCls + " font-mono text-xs"}
+        type={shown ? "text" : "password"}
+        autoComplete="off" spellCheck={false}
+        value={props.value}
+        placeholder={props.placeholder}
+        onChange={(e) => props.onChange(e.target.value)}
+      />
+      <button type="button" aria-pressed={shown} onClick={() => setShown(!shown)}
+        className={"mt-0.5 shrink-0 rounded-md border border-slate-300 px-2 py-1.5 "
+          + "text-xs font-medium text-slate-600 hover:bg-slate-50"}>
+        {shown ? "Hide" : "Show"}
+      </button>
+    </div>
+  );
+}
+
 export function Check(props: {
   label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string;
 }) {
@@ -284,6 +319,16 @@ export function SearchSelect(props: {
 export function ErrorMsg({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return <p className="text-xs text-red-600 mt-1.5 break-words">{msg}</p>;
+}
+
+/** Something the operator has to act on, where the thing they asked for still
+ *  happened. Distinct from ErrorMsg on purpose: an agent that was created but
+ *  whose credential the account refused to issue is not a failed creation, and
+ *  showing it in red invites a second click that makes a second agent. */
+export function NoticeMsg({ msg }: { msg: string | null }) {
+  if (!msg) return null;
+  return <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200
+                       rounded-md px-2 py-1.5 mt-1.5 break-words">{msg}</p>;
 }
 
 export function JsonArea(props: {

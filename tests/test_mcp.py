@@ -19,9 +19,12 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, mcp_server
+from bzm_opl_gen import core, generate as gen_mod, mcp_server
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
+
+# The one ship in FACTS, and the ship a rotation therefore names.
+SHIP = FACTS["ships"][0]["id"]
 
 # What each tool promises a client about side effects. Asserted as a whole
 # table rather than a few hand-picked cells: a client that asks before running
@@ -179,7 +182,6 @@ def test_a_credential_passed_as_an_option_is_refused(fake_account, tmp_path):
 def test_the_refused_set_is_the_generator_s_own():
     """Not a list restated here: generate.SECRET_OPTIONS is what profile.json
     omits, and the two must mean the same thing."""
-    from bzm_opl_gen import generate as gen_mod
     assert gen_mod.SECRET_OPTIONS
     for name in gen_mod.SECRET_OPTIONS:
         with pytest.raises(core.BadRequest):
@@ -199,9 +201,14 @@ def test_only_a_path_may_name_a_key(fake_account, tmp_path):
 
 def test_generating_a_bundle_never_returns_the_token(fake_account, tmp_path):
     """The Secret is written to disk with the token in it. The *response* is
-    file names and sizes, so a token cannot end up in a transcript."""
+    file names and sizes, so a token cannot end up in a transcript.
+
+    `rotate_token` is what puts a real token in the bundle at all now, so it is
+    what this has to pass to have anything to leak.
+    """
     body = ok("opl_bundle", "generate",
-              {"facts": FACTS, "out_dir": str(tmp_path), "options": {"namespace": "ns1"}})
+              {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True,
+               "options": {"namespace": "ns1"}})
     assert "SECRET-TOKEN-VALUE" not in json.dumps(body)
     assert "SECRET-TOKEN-VALUE" in (tmp_path / "bzm_secret.yaml").read_text()
 
@@ -237,7 +244,8 @@ def test_reading_the_secret_back_does_not_hand_over_the_token(fake_account,
     """`read bzm_secret.yaml` was a second, quieter way to get the credential:
     it does not look like asking for one, which is exactly why reveal_token is
     a whole action. The file is readable, the value is not."""
-    ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    ok("opl_bundle", "generate",
+       {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
     body = ok("opl_bundle", "read",
               {"out_dir": str(tmp_path), "name": "bzm_secret.yaml"})
     assert "SECRET-TOKEN-VALUE" not in body["content"]
@@ -252,7 +260,7 @@ def test_the_chart_overlay_hides_its_token_too(fake_account, tmp_path):
     """The helm format carries the token in bzm-opl-values.yaml instead, under
     a different key -- so redacting only the Secret would have missed it."""
     ok("opl_bundle", "generate",
-       {"facts": FACTS, "out_dir": str(tmp_path),
+       {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True,
         "options": {"output_format": "helm"}})
     body = ok("opl_bundle", "read",
               {"out_dir": str(tmp_path), "name": "bzm-opl-values.yaml"})
@@ -266,6 +274,87 @@ def test_a_file_with_no_token_is_returned_untouched(fake_account, tmp_path):
               {"out_dir": str(tmp_path), "name": "bzm_deployment.yaml"})
     assert body["redacted_fields"] == 0 and "note" not in body
     assert "kind: Deployment" in body["content"]
+
+
+# -- and the one thing that must not happen as a side effect ------------------
+# #64 on this surface. The harm is not secrecy -- crane logs the token in
+# plaintext -- it is that minting *revokes* the previous one, and a session with
+# no terminal to read gets no hint that it happened. So the default must be the
+# branch that mints nothing, and the argument that does is named for the effect.
+
+def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
+                                                                tmp_path):
+    """Zero calls to the token endpoint, counted rather than inferred. Holding
+    an API key is no longer permission to replace a running agent's credential;
+    the bundle comes out with the placeholder in it and says so."""
+    body = ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    assert fake_account.calls == []
+    assert (gen_mod.DEFAULT_OPTIONS["auth_token"]
+            in (tmp_path / "bzm_secret.yaml").read_text())
+    assert body["token_source"]["branch"] == core.TOKEN_PLACEHOLDER
+    # And where a real one comes from, since this bundle cannot be applied yet.
+    assert "create-ship" in body["token_source"]["message"]
+
+
+def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
+                                                              tmp_path):
+    """The explicit ask on the issue: the one action that silently revokes a
+    running agent's credential was the one that said least about it, answering
+    `warnings: []`. The token still never travels -- the ship does."""
+    body = ok("opl_bundle", "generate",
+              {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
+    assert [c[0] for c in fake_account.calls] == ["auth_token"]
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(body)
+    assert body["token_source"]["branch"] == core.TOKEN_ROTATED
+    assert body["token_source"]["ship_id"] == SHIP
+    # In the warnings too, not only in a field a reader has to know to look at.
+    assert any(SHIP in w and "0/1" in w for w in body["warnings"]), body["warnings"]
+
+
+def test_generating_twice_into_the_same_directory_mints_once(fake_account,
+                                                            tmp_path):
+    """The branch this surface could not reach at all: regenerating into a
+    directory that already holds this ship's bundle reads that token back. One
+    mint across two calls, and the second bundle is byte-identical -- so an
+    agent deployed from the first keeps working."""
+    ok("opl_bundle", "generate",
+       {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
+    first = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    body = ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
+    assert len(fake_account.calls) == 1, fake_account.calls
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == first
+    assert body["token_source"]["branch"] == core.TOKEN_REUSED
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(body)
+
+
+def test_the_old_fetch_token_argument_is_refused_rather_than_ignored(
+        fake_account, tmp_path):
+    """A session working from a cached description would otherwise send
+    `fetch_token: true`, get a placeholder bundle, and have been told nothing.
+    Refused by name, because the caller meant to mint and needs to know the
+    word changed -- and refused before anything is written or issued."""
+    text = err("opl_bundle", "generate",
+               {"facts": FACTS, "out_dir": str(tmp_path), "fetch_token": True})
+    assert "fetch_token" in text and "rotate_token" in text
+    assert fake_account.calls == []
+    assert not list(tmp_path.iterdir()), "it wrote the bundle anyway"
+
+
+def test_a_relative_out_dir_is_refused_before_anything_is_issued(fake_account):
+    """The refusal already existed, at the write -- by which point the mint had
+    happened and a running agent was already broken, for a mistake in an argument
+    that had nothing to do with the credential. Checked first now."""
+    text = err("opl_bundle", "generate",
+               {"facts": FACTS, "out_dir": "out", "rotate_token": True})
+    assert "absolute" in text
+    assert fake_account.calls == []
+
+
+def test_the_generate_description_names_the_argument_that_rotates():
+    """The argument name is the whole warning a model gets -- it reads JSON, not
+    a terminal -- so the description has to carry the new one and not the old."""
+    text = listing()["tools"]["opl_bundle"].description
+    assert "rotate_token" in text and "fetch_token" not in text
 
 
 # -- listing an account somebody actually has ---------------------------------
@@ -495,8 +584,7 @@ def test_generate_warns_about_the_gap_it_cannot_close(tmp_path):
                 "func_ids": ["performance", "functionalGui"]})
     assert facts["warnings"], "the facts themselves did not flag the gap"
     body = ok("opl_bundle", "generate",
-              {"facts": facts["facts"], "out_dir": str(tmp_path),
-               "fetch_token": False})
+              {"facts": facts["facts"], "out_dir": str(tmp_path)})
     assert any("browser" in w.lower() for w in body["warnings"]), body["warnings"]
 
 

@@ -1,14 +1,19 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, downloadZip, saveBundle, Account, AgentStatus, Facts, Feature,
-  GeneratedFile, ManualFactsOut, SavedBundle,
+  GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section,
-  SegmentedControl, SubSection, Switch, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, NoticeMsg, SearchSelect,
+  Section, SecretInput, SegmentedControl, SubSection, Switch, TextInput,
 } from "./components";
+// What a download is about to do to the agent's credential. The branch a bundle's
+// token arrived by is core's and comes back on the answer; this decides what to
+// say about the click that has not happened yet, which is the only moment a
+// rotation can still be reconsidered (#64).
+import { downloadPlan } from "./token";
 import { Preview } from "./Preview";
 import { SvCtx } from "./SvPrereqs";
 // The option groups of step 4: one declaration each (title, hint, the option
@@ -95,6 +100,10 @@ export default function App() {
   const [showCreateShip, setShowCreateShip] = useState(false);
   const [newShipName, setNewShipName] = useState("");
   const [shipErr, setShipErr] = useState<string | null>(null);
+  // Separate from shipErr: the agent WAS created, and only its credential
+  // was refused. In the red error slot that reads as a failed creation, and
+  // the next click makes a second agent in the same location.
+  const [shipTokenNotice, setShipTokenNotice] = useState<string | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
 
   // -- where the three account values come from -------------------------------
@@ -134,6 +143,20 @@ export default function App() {
   // typing a space -- so the two are separate rather than one with a flag.
   const raw = useCallback(
     (k: string) => String(options[k] ?? ""), [options]);
+  /** Drop the credential and everything said about it.
+   *
+   *  One function because it is one fact -- the token, the rotate choice and the
+   *  report of the last download all belong to one agent, and leaving any of them
+   *  behind when the target changes is how a bundle ends up carrying, or claiming
+   *  to carry, another agent's credential. Called from every place the target
+   *  moves: a different location, a different agent, the switch to manual entry.
+   *  Declared with the readers above rather than beside `set` so that the effects
+   *  further down can reach it. */
+  const forgetToken = useCallback(() => {
+    setOptions((o) => ({ ...o, auth_token: null }));
+    setRotate(false);
+    setLastTokenReport(null);
+  }, []);
 
   const [files, setFiles] = useState<GeneratedFile[]>([]);
   const [genErr, setGenErr] = useState<string | null>(null);
@@ -153,6 +176,19 @@ export default function App() {
     useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
   const [dlErr, setDlErr] = useState<string | null>(null);
+  // What the preview's bundle currently does for a credential, straight from
+  // core: the preview never rotates, so its answer is a free look at what a
+  // download would carry. Read rather than re-derived here -- the rule has four
+  // branches and one of them revokes a running agent's token.
+  const [previewToken, setPreviewToken] = useState<TokenReport | null>(null);
+  // Whether the next download/save should issue a new credential. Off, always,
+  // until asked: it is the one action here that breaks a deployment that is
+  // currently working, and it used to be what the download button did by itself.
+  const [rotate, setRotate] = useState(false);
+  // What the last download or save actually did, in core's own words. Said
+  // afterwards as well as before, because a rotation is worth confirming: the
+  // bundle in the browser's downloads folder is now the only copy of that token.
+  const [lastTokenReport, setLastTokenReport] = useState<TokenReport | null>(null);
   // Saving to a folder, beside downloading: the typed directory, and where the
   // last save actually landed (the server echoes the expanded path, which is
   // what a kubectl command can be copied against -- `~` is not).
@@ -236,6 +272,11 @@ export default function App() {
 
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
+    // A token belongs to one agent. Carried into another location's bundle it
+    // applies cleanly and leaves that agent at 0/1 with a credential that was
+    // never its own -- so changing location empties the field, and so does
+    // picking a different agent below.
+    forgetToken();
     if (!harborId) return;
     api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message));
   }, [harborId]);
@@ -261,13 +302,21 @@ export default function App() {
   // debounced live preview
   const previewTimer = useRef<number>();
   useEffect(() => {
-    if (!facts) { setFiles([]); return; }
+    // The token report goes with the files: it describes the bundle those came
+    // from, and left behind it announces a placeholder in a bundle that no longer
+    // exists -- which is exactly what switching source mode used to leave on
+    // screen.
+    if (!facts) { setFiles([]); setPreviewToken(null); return; }
     window.clearTimeout(previewTimer.current);
     previewTimer.current = window.setTimeout(async () => {
       try {
         const opts = { ...options, ship_id: shipId ?? undefined };
-        const r = await api.generate(facts, opts);
+        // The typed save folder goes with it: if it already holds this ship's
+        // bundle, the save will keep that token, and the preview should say so
+        // rather than announcing a placeholder over a bundle that has one.
+        const r = await api.generate(facts, opts, saveDir.trim() || undefined);
         setFiles(r.files);
+        setPreviewToken(r.token);
         setGenErr(null);
         // Keep the open file open across the re-render every option edit
         // causes; fall back to the first manifest only once the one being read
@@ -276,7 +325,10 @@ export default function App() {
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
-  }, [facts, options, shipId]);
+    // saveDir is a dependency because it changes the answer: point the folder at
+    // a bundle this ship already has and the token branch becomes `reused`. The
+    // 250ms debounce above is what keeps that from being a request per keystroke.
+  }, [facts, options, shipId, saveDir]);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
@@ -372,9 +424,9 @@ export default function App() {
     setSourceMode(mode);
     setFacts(null); setShipId(null); setStatus(null); setGenErr(null);
     setSourceOpen(true);
-    // The token is fetched on download when connected, and typed when not --
-    // so it must not survive the switch either way.
-    set("auth_token", null);
+    // Both modes now hold a typed-or-captured token, and it belongs to the agent
+    // the other mode was about -- so it must not survive the switch either way.
+    forgetToken();
   };
 
   const exportProfile = () => {
@@ -526,6 +578,11 @@ export default function App() {
   // overlay. Both render the same objects -- the choice is how you install and
   // upgrade -- except that the chart is performance-only, so an SV location is
   // held to manifests and the segment says why instead of disappearing.
+  // What the download and save buttons will do about the credential: the hint
+  // beside them, the banner over them, and whether the request rotates at all.
+  // One derivation because those three answer one question, and three of them
+  // could disagree -- see token.ts.
+  const tokenPlan = downloadPlan(previewToken, rotate, shipId);
   const format = String(options.output_format ?? "manifests");
   const helmBlocked = svRequired
     ? "Not for this location — service virtualization needs an ingress, its RBAC "
@@ -796,7 +853,7 @@ export default function App() {
                 onChange={switchMode}
                 options={[
                   { value: "connect", label: "Connect to BlazeMeter",
-                    hint: "Pick a location and agent; the token is fetched on download." },
+                    hint: "Pick a location and agent; a new agent's token is issued once, when you create it." },
                   { value: "manual", label: "Enter values manually",
                     hint: "For an account you cannot reach — generation only, nothing is checked." },
                 ]} />
@@ -1038,7 +1095,7 @@ export default function App() {
               different consequences, so the hint names the one you are in. */}
           <SubSection title="Agent (ship)" done={!!shipId}
             hint={creatingShip
-              ? "Creating a new agent identity (new ship_id + AUTH_TOKEN, same harbor) — what a new deployment needs. The token is fetched automatically on download."
+              ? "Creating a new agent identity (new ship_id + AUTH_TOKEN, same harbor) — what a new deployment needs. Its token is issued once, here, and kept in the field below."
               : "Reusing an identity means replacing the install it is already running. The location's existing agents are below; creating a new one instead is free."}>
             <div className="space-y-3">
               {creatingShip ? (
@@ -1058,6 +1115,14 @@ export default function App() {
                           const ls = await api.locations(workspaceId!);
                           setLocations(ls); setShipId(r.ship.id); setNewShipName("");
                           setShowCreateShip(false);
+                          // The whole point of #64: the credential is captured at
+                          // the one moment it is free -- a ship created a second
+                          // ago has no previous token for the issue to invalidate
+                          // -- so every download from here on carries it without
+                          // asking BlazeMeter for another. Nothing stores it, so
+                          // the field below is the copy to keep.
+                          setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+                          setShipTokenNotice(r.token_error);
                           api.facts(harborId!).then(setFacts).catch(() => {});
                         } catch (e) { setShipErr(String((e as Error).message)); }
                       }}>Create</Button>
@@ -1082,7 +1147,7 @@ export default function App() {
                       {ships.map((s) => (
                         <button key={s.id}
                           className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
-                          onClick={() => setShipId(s.id)}>
+                          onClick={() => { setShipId(s.id); forgetToken(); }}>
                           {s.name || s.id}{" "}
                           <span className={`text-xs ${shipOnline(s) ? "text-emerald-600" : "text-slate-400"}`}>
                             ({shipOnline(s) ? "online" : s.state})
@@ -1105,12 +1170,13 @@ export default function App() {
                     ) : null;
                   })()}
                   <Button kind="ghost" disabled={!harborId}
-                    onClick={() => { setShipErr(null); setShowCreateShip(true); }}>
+                    onClick={() => { setShipErr(null); setShipTokenNotice(null); setShowCreateShip(true); }}>
                     + New agent identity (recommended)
                   </Button>
                 </>
               )}
               <ErrorMsg msg={shipErr} />
+              <NoticeMsg msg={shipTokenNotice} />
               {facts && (
                 <p className="text-xs text-slate-500">
                   image inventory: {facts.images_source} · features: {facts.func_ids?.join(", ")}
@@ -1119,6 +1185,34 @@ export default function App() {
             </div>
           </SubSection>
               </>
+              )}
+
+              {/* The credential, outside the collapsible pickers on purpose: it
+                  is filled in by creating an agent and read back by whoever
+                  deploys, and the step above folds itself away the moment an
+                  agent is chosen. Manual mode has the same field inside
+                  ManualSource, where it is one of the three typed values. */}
+              {sourceMode === "connect" && shipId && (
+                <div className="border-t border-slate-100 pt-3 space-y-1.5">
+                  <Field label="Agent AUTH_TOKEN"
+                    hint="Goes into the Secret. Held for this browser session only — nothing here writes it down.">
+                    <SecretInput value={raw("auth_token")}
+                      onChange={(v) => set("auth_token", v || null)}
+                      placeholder="paste the token this agent was created with" />
+                  </Field>
+                  {/* Empty is the honest state for an agent that already exists:
+                      BlazeMeter will not show an old token again, and asking for
+                      one issues a new one. What to do about it is core's sentence,
+                      shown beside the download rather than restated here. */}
+                  {!raw("auth_token") && (
+                    <p className="text-[11px] text-slate-500">
+                      Empty for an existing agent, deliberately — its token was
+                      issued once, when it was created, and nothing can read that
+                      one back. Paste what you kept, or see the note beside the
+                      download button.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </Section>
@@ -1338,9 +1432,10 @@ export default function App() {
               <div className="flex gap-2 items-center">
                 <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
-                    setDlErr(null);
+                    setDlErr(null); setLastTokenReport(null);
                     downloadZip(facts!, { ...options, ship_id: shipId },
-                                sourceMode === "connect")
+                                tokenPlan.rotates)
+                      .then(setLastTokenReport)
                       .catch((e) => setDlErr(String(e.message)));
                   }}>
                   ⬇ Download bundle (.zip)
@@ -1350,11 +1445,50 @@ export default function App() {
                     ? "helm/ + bzm-opl-values.yaml + README"
                     : "manifests + README"}
                   {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
-                  {sourceMode === "connect"
-                    ? " AUTH_TOKEN fetched on download"
-                    : " AUTH_TOKEN as entered above"}
+                  {" "}{tokenPlan.hint}
                 </span>
               </div>
+              {/* What the bundle does about the credential, before the click.
+                  Three states, and the one that used to be silent is the one that
+                  breaks a working install: a download that mints. `incomplete`
+                  carries core's own sentence -- where a real token comes from,
+                  kubectl included -- rather than a copy of it in TypeScript. */}
+              {tokenPlan.incomplete && previewToken && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-amber-800">
+                    This bundle carries a placeholder AUTH_TOKEN — fill it in
+                    before applying it.
+                  </p>
+                  <p className="text-[11px] text-amber-700 whitespace-pre-line mt-1">
+                    {previewToken.message}
+                  </p>
+                </div>
+              )}
+              {/* Rotating is an action of its own, offered only where it is the
+                  only way forward: an agent nobody kept a token for. Not a
+                  by-product of downloading, which is what it used to be -- and
+                  hidden once a token is in the field, because core answers that
+                  contradiction by ignoring the rotation rather than performing
+                  it. Needs the account: minting is an API call. */}
+              {!!who && sourceMode === "connect" && !!shipId && !raw("auth_token") && (
+                <div className="space-y-1.5">
+                  <Check checked={rotate} onChange={setRotate}
+                    label="Issue a NEW AUTH_TOKEN with this bundle (rotates)"
+                    hint="For an agent whose token nobody kept. It replaces the credential rather than reading it — there is no API that reads one back." />
+                  {tokenPlan.warning && (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                      {tokenPlan.warning}
+                    </p>
+                  )}
+                </div>
+              )}
+              {/* Afterwards as well as before: once a rotation has happened the
+                  bundle just handed over is the only copy of that credential. */}
+              {lastTokenReport && (
+                <p className="text-xs text-slate-600 whitespace-pre-line">
+                  {lastTokenReport.message}
+                </p>
+              )}
               {/* The zip is for handing the bundle to somebody; saving writes
                   the same files (profile.json included) to a folder on this
                   machine -- the shape livetest re-renders from and an MCP
@@ -1367,12 +1501,12 @@ export default function App() {
                   onChange={(e) => setSaveDir(e.target.value)} />
                 <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
-                    setSaveErr(null); setSaved(null);
+                    setSaveErr(null); setSaved(null); setLastTokenReport(null);
                     const dir = saveDir.trim() ||
                       `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
                     saveBundle(facts!, { ...options, ship_id: shipId }, dir,
-                               sourceMode === "connect")
-                      .then(setSaved)
+                               tokenPlan.rotates)
+                      .then((s) => { setSaved(s); setLastTokenReport(s.token); })
                       .catch((e) => setSaveErr(String(e.message)));
                   }}>
                   💾 Save to folder
