@@ -537,7 +537,11 @@ def _bundle(action, args):
             client=(_client(args)
                     if args.get("fetch_token", True)
                     and core.token_ship_id(facts, options) else None),
-            fetch_token=args.get("fetch_token", True))
+            # `rotate_token`, because that is what the fetch does. The argument
+            # this tool takes is still `fetch_token` and still defaults to
+            # minting, which #64 says it should not -- that half is the MCP
+            # surface's own change and has not been made here yet.
+            rotate_token=args.get("fetch_token", True))
         written = core.write_bundle(files, out_dir)
         return {"out_dir": out_dir, "files": written,
                 "profile": json.loads(files[gen_mod.PROFILE_FILE]),

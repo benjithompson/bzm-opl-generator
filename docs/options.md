@@ -29,7 +29,7 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Left as the placeholder unless `--api-key` fetches it or `--auth-token` supplies it, and it is the one option stripped from `out/profile.json`. **Fetching issues a new token and invalidates the previous one** -- for an agent already running, either re-apply the whole bundle including the Secret, or pass the existing token. A crane left holding a stale one logs `404` on `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship. Supplying it is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
+| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Resolved in four steps, and only the second one calls BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with `--api-key`) issues a **new** one; otherwise the token already written into the output directory is reused, provided that bundle's `profile.json` names the same ship; otherwise the placeholder stays and the command says where a real token comes from. It is the one option stripped from `out/profile.json`, and it stays stripped -- a profile is a file people commit and hand over. **Minting invalidates the previous token**, and an agent left holding a stale one does not report an auth error: crane answers `404`, logs `Sleeping for 300` and never starts its health service, so the pod sits `0/1 Running` and reads as a slow boot. Re-apply the whole bundle, Secret included, after any rotation. Supplying the token is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified). Proxy credentials follow it: with `use_secret` on, the credentialed proxy URLs live in the Secret too. |
 
 ### Private registry
@@ -128,13 +128,37 @@ performance engines always ship; browser/grid (functionalGui), mock-service
 when that feature is enabled on the location. `images --all` lists everything.
 
 `generate` also writes `out/profile.json` — the fully resolved options, minus
-`auth_token` (re-fetched from the API, so the file is safe to commit or hand
-over). Replay it with `generate --profile out/profile.json`; `livetest
+`auth_token`, which is left out so the file can be committed, diffed and handed
+over. Replay it with `generate --profile out/profile.json`; `livetest
 --local-proxy` reads it to re-render the manifests with the rig's proxy and CA.
 
-> **Re-generating against a live agent:** `--api-key` fetches the AUTH_TOKEN,
-> and that endpoint **issues a new token and invalidates the previous one**. If
-> an agent is already running for that ship, either re-apply the whole bundle
-> (Secret included) or pass `--auth-token <existing>` instead. A crane left with
-> a stale token does not report an auth error — it logs `404` on
-> `/ships/<id>/status` and sits at `0/1`, which reads like a deleted ship.
+## Where the AUTH_TOKEN comes from
+
+`generate` never mints one as a side effect. It resolves the token in four
+steps, says which one it took, and only the second reaches BlazeMeter:
+
+1. **`--auth-token <token>`** wins outright — the value you already hold is
+   never replaced.
+2. **`--rotate-token`** (with `--api-key`) issues a new one. Warned before it
+   happens, because it cannot be undone.
+3. **The bundle already in `-o`** — the token in `out/bzm_secret.yaml` (or the
+   ConfigMap, or the chart overlay) is read back and reused, provided that
+   directory's `profile.json` names the same `ship_id`. This is what makes
+   regenerating a bundle produce byte-identical output. A bundle for a
+   *different* ship is refused loudly rather than borrowed from: writing another
+   location's credential into this one deploys cleanly and leaves the agent at
+   `0/1`.
+4. **The placeholder**, `<YOUR_AUTH_TOKEN>` — with a message naming the two
+   places a real one comes from: what `create-ship` printed, or an agent already
+   deployed, `kubectl -n <ns> get secret blazemeter-secret -o
+   jsonpath='{.data.AUTH_TOKEN}' | base64 -d`. That command is printed for you
+   to run; nothing here reads your cluster.
+
+> **Why `--api-key` alone does nothing here.** It used to fetch the token, and
+> that endpoint **issues a new one and invalidates the previous one** — so
+> regenerating a bundle merely to look at it revoked the credential of an agent
+> already running from the last one. Silently: a crane left with a stale token
+> does not report an auth error. It answers `404`, logs `Sleeping for 300`,
+> never starts its health service, and the pod sits `0/1 Running` looking like a
+> slow boot. That cost a live debugging session. `--api-key` is now the
+> credential for `--rotate-token` and has no other effect on `generate`.

@@ -32,6 +32,7 @@ that a token is blanked on the way out. Those are the same rules for every
 caller, and the one that has them wrong is the one that would never say so.
 """
 
+import collections
 import http.client
 import io
 import json
@@ -452,32 +453,33 @@ def sole_ship_id(facts, explicit=None):
 
 
 def token_ship_id(facts, options):
-    """Which ship an AUTH_TOKEN would be fetched for, or None to fetch none.
+    """Which ship an AUTH_TOKEN would be *rotated* for, or None for no rotation.
 
-    Fetching a token *rotates* it -- the previous one stops working, and
-    whatever agent holds it starts logging 404 on /ships/<id>/status while
-    sitting at 0/1, which reads like a deleted ship. So this adds one clause to
-    sole_ship_id: a token already in the options is the caller's, and must
-    never be replaced by a fresh one that breaks their running agent.
+    Minting a token rotates it -- the previous one stops working, and whatever
+    agent holds it sits at 0/1 Running -- so this adds one clause to
+    sole_ship_id: a token already in the options is the caller's, and must never
+    be replaced by a fresh one that breaks their running agent.
 
-    Where the ship is ambiguous nothing is fetched and generate() refuses the
-    ambiguity itself, with a sentence naming both.
+    Where the ship is ambiguous nothing is minted; resolve_auth_token refuses
+    the ambiguity by name when a rotation was actually asked for, and otherwise
+    generate() refuses it, with a sentence naming both ships.
     """
     if options.get("auth_token"):
         return None
     return sole_ship_id(facts, options.get("ship_id"))
 
 
-def fetch_auth_token(client, facts, options):
-    """Put a freshly-issued AUTH_TOKEN into `options`, if one is wanted.
+def rotate_auth_token(client, facts, options):
+    """Put a freshly-minted AUTH_TOKEN into `options`, if one is wanted.
 
-    Returns the ship it was fetched for, or None if nothing was fetched --
-    which is what a caller that wants to say so out loud needs, and is why the
-    call is here rather than inlined into generate_bundle. It mutates
-    `options`, because every caller's next move is to render from them.
+    Returns the ship it was minted for, or None if nothing was -- which is what
+    a caller that wants to say so out loud needs, and is why the call is here
+    rather than inlined into the resolution. It mutates `options`, because every
+    caller's next move is to render from them.
 
-    This is the call that rotates the credential, so it is deliberately the
-    only copy of it.
+    Named for what it does to the account rather than for the HTTP verb: the
+    endpoint is a fetch and the effect is a rotation, and it was the verb that
+    made `fetch_token=True` read like a harmless default for years.
     """
     ship_id = token_ship_id(facts, options)
     if ship_id:
@@ -486,17 +488,198 @@ def fetch_auth_token(client, facts, options):
     return ship_id
 
 
-def generate_bundle(facts, options=None, client=None, fetch_token=True):
+# Which of the four ways a bundle's AUTH_TOKEN arrived. Named, and reported, so
+# that every caller can say which happened without restating the rule: the four
+# have wildly different consequences for an agent that is already running, and
+# the one that revokes its credential used to be the default and to say nothing
+# at all (the MCP surface answered `warnings: []`).
+TOKEN_GIVEN = "given"
+TOKEN_ROTATED = "rotated"
+TOKEN_REUSED = "reused"
+TOKEN_PLACEHOLDER = "placeholder"
+
+# `message` is always a sentence for whoever asked -- there is no branch worth
+# taking silently. `ship_id` is the ship the token belongs to where that is
+# known, following rotate_auth_token's precedent of handing the ship back for a
+# caller that wants to name it (an affordance that existed and was discarded by
+# both callers, which is how a rotation got reported as `warnings: []`).
+TokenSource = collections.namedtuple("TokenSource", "branch ship_id message")
+
+
+def rotation_warning(ship_id):
+    """What a rotation is about to do, for a caller to say *before* it happens.
+
+    Before, because afterwards this is a post-mortem: the credential is already
+    dead and the pod is already broken. And it has to be said at all because the
+    failure is silent at every layer -- crane answers a dead token with 404 on
+    /versions, logs `Sleeping for 300` and never starts its health service, so
+    the pod sits `0/1 Running` and reads as a slow boot rather than as a revoked
+    credential. That cost a live debugging session.
+    """
+    return (
+        f"ROTATING the AUTH_TOKEN for ship {ship_id}: BlazeMeter issues a new "
+        f"one and the previous one stops working immediately. Any agent already "
+        f"running on it will start answering 404 and sit at `0/1 Running`, "
+        f"which looks like a slow boot, until you re-apply this bundle -- "
+        f"Secret included.")
+
+
+def token_recovery_hint(options=None):
+    """Where a real AUTH_TOKEN comes from, for a bundle that has no token.
+
+    Two sources, and neither of them is this tool going and getting one: what
+    `create-ship` printed when the agent was made -- the durable copy, and the
+    reason that command prints it -- or the Secret of an agent already running.
+    The kubectl for the second is *named*, never run: nothing in this package
+    reads a cluster to build a bundle, and the person at the terminal is the one
+    who can see what their own cluster answers.
+    """
+    o = options or {}
+    ns = o.get("namespace") or gen_mod.DEFAULT_OPTIONS["namespace"]
+    return (
+        f"A real one comes from what `create-ship` printed for this agent (keep "
+        f"that output -- nothing here stores it), or out of an agent already "
+        f"deployed:\n"
+        f"    kubectl -n {ns} get secret {gen_mod.SECRET_NAME} "
+        f"-o jsonpath='{{.data.AUTH_TOKEN}}' | base64 -d\n"
+        f"  Pass it as --auth-token (auth_token) and this bundle is complete. "
+        f"--rotate-token issues a fresh one instead, which takes down whatever "
+        f"is running on the current one until you re-apply.")
+
+
+def _bundle_ship_id(out_dir):
+    """Which ship the bundle in `out_dir` was generated for, or None.
+
+    Absent and unreadable collapse into None here, deliberately: both mean the
+    ship cannot be *confirmed*, and the remedy for both is the same -- do not
+    reuse that directory's token. What must stay apart, and does, is either of
+    those from a ship id that is present and different, which is the value
+    itself and gets a refusal naming both ships.
+    """
+    try:
+        return gen_mod.load_profile(out_dir).get("ship_id") or None
+    except (OSError, ValueError):
+        # FileNotFoundError for a directory no generate has written, ValueError
+        # for a profile.json that will not parse.
+        return None
+
+
+def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
+                       announce=None):
+    """Put the AUTH_TOKEN into `options`, and say which of four ways it arrived.
+
+    The one copy of #64's rule, in precedence order:
+
+      1. a token already in the options wins outright -- it is the caller's, and
+         replacing it is what broke running agents;
+      2. `rotate` mints a new one, and is the only thing here that does;
+      3. otherwise the token already written into `out_dir` is reused, but only
+         if that bundle names the same ship;
+      4. otherwise the placeholder stays, with a message saying where a real
+         token comes from.
+
+    `announce` is called with `rotation_warning(...)` immediately before the
+    mint. A parameter rather than something each caller remembers to do first,
+    because the ordering is the whole value of the warning and only this
+    function knows when the call is about to happen. A caller with nowhere to say
+    it -- JSON-RPC, where stdout is the protocol -- leaves it unset and reports
+    `.message` afterwards.
+
+    Idempotent: resolving twice takes branch 1 the second time, which is what
+    lets a caller that wants the report resolve here and still hand the options
+    to generate_bundle.
+
+    `out_dir` need not exist and need not be absolute -- it is read, not
+    written; write_bundle is where the absolute-path rule belongs.
+    """
+    placeholder = gen_mod.DEFAULT_OPTIONS["auth_token"]
+    held = options.get("auth_token")
+    if held and held != placeholder:
+        # A rotation asked for *alongside* a token is a contradiction with one
+        # safe reading, so it is answered rather than refused: minting and then
+        # writing the supplied value over it would kill the agent holding the
+        # supplied one and put nothing usable in the bundle. Said out loud,
+        # because a flag that was quietly dropped is the shape of this whole bug.
+        ignored = (" --rotate-token was NOT acted on: rotating would have "
+                   "revoked the very token you passed." if rotate else "")
+        return TokenSource(TOKEN_GIVEN, sole_ship_id(facts,
+                                                     options.get("ship_id")),
+                           "AUTH_TOKEN as supplied -- nothing was issued, so "
+                           "an agent already running on it keeps working."
+                           + ignored)
+
+    if rotate:
+        if client is None:
+            raise BadRequest(
+                "rotating the AUTH_TOKEN needs a BlazeMeter API key -- pass "
+                "--api-key (the CLI) or connect first. Without one the bundle "
+                "can still be completed by hand: " + TOKEN_ELSEWHERE)
+        ship_id = token_ship_id(facts, options)
+        if not ship_id:
+            ships = [s["id"] for s in facts.get("ships") or []]
+            raise BadRequest(
+                f"say which ship to rotate the AUTH_TOKEN for: this location "
+                f"has {len(ships)} agents ({ships}). Rotating the wrong one "
+                f"revokes the credential of an agent nobody mentioned, and that "
+                f"agent then sits at 0/1 Running -- so nothing is guessed here. "
+                f"Pass --ship-id.")
+        if announce:
+            announce(rotation_warning(ship_id))
+        rotate_auth_token(client, facts, options)
+        return TokenSource(
+            TOKEN_ROTATED, ship_id,
+            f"rotated: a NEW AUTH_TOKEN was issued for ship {ship_id} and the "
+            f"previous one is now dead. Re-apply this whole bundle, Secret "
+            f"included, or that agent stays at 0/1.")
+
+    want = sole_ship_id(facts, options.get("ship_id"))
+    if out_dir:
+        found = gen_mod.existing_auth_token(out_dir)
+        theirs = _bundle_ship_id(out_dir) if found else None
+        if found and want and theirs == want:
+            options["auth_token"] = found
+            return TokenSource(
+                TOKEN_REUSED, want,
+                f"reused the AUTH_TOKEN already in {out_dir} (ship {want}) -- "
+                f"nothing was issued, so this bundle is byte-identical to the "
+                f"last one and the agent running from it is unaffected.")
+        if found:
+            # Loud, and the loudest of the four: the alternative is writing
+            # another location's credential into this bundle, which deploys
+            # cleanly and leaves the agent at 0/1 with a token that was never
+            # its own. The directory is the only place that mistake is visible.
+            named = (f"a bundle for ship {theirs}, not {want}" if theirs
+                     else f"a bundle whose {gen_mod.PROFILE_FILE} does not say "
+                          f"which ship its AUTH_TOKEN belongs to")
+            return TokenSource(
+                TOKEN_PLACEHOLDER, want,
+                f"{out_dir} holds {named}, so its token was NOT reused -- the "
+                f"placeholder is in this bundle instead, and this bundle is "
+                f"what that directory ends up holding. "
+                f"{token_recovery_hint(options)}")
+    return TokenSource(
+        TOKEN_PLACEHOLDER, want,
+        f"AUTH_TOKEN left as {placeholder}, so this bundle cannot be applied "
+        f"as it stands. {token_recovery_hint(options)}")
+
+
+def generate_bundle(facts, options=None, client=None, rotate_token=False,
+                    out_dir=None):
     """The manifests, as {name: content}.
 
     `client=None` is a first-class case, not a degraded one: the manual-entry
-    path has no account to ask, and `fetch_token=False` is the caller saying
-    the token was typed and a key left over from an earlier connect must not be
-    asked for one belonging to somebody else's agent.
+    path has no account to ask, and holding a client is no longer permission to
+    mint -- `rotate_token=True` is, and it is the caller saying "replace the
+    credential of whatever is running", which is why it defaults to off.
+
+    `out_dir` is where the bundle is about to be written, and is read for the
+    token its predecessor holds. A caller that wants to report which branch the
+    resolution took calls resolve_auth_token itself and passes the options on;
+    doing both is harmless, since a resolved token wins outright the second time.
     """
     opts = dict(options or {})
-    if fetch_token and client is not None:
-        fetch_auth_token(client, facts, opts)
+    resolve_auth_token(facts, opts, client=client, rotate=rotate_token,
+                       out_dir=out_dir)
     try:
         return gen_mod.generate(facts, opts)
     except (ValueError, KeyError) as e:

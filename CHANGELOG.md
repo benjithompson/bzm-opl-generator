@@ -11,6 +11,52 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `generate --api-key` no longer fetches an AUTH_TOKEN.** It fetched
+  one before, and that fetch *mints*: BlazeMeter issues a fresh token and
+  invalidates the previous one. So regenerating a bundle — even just to look at
+  it — revoked the credential of the agent already running from the last one, and
+  it failed silently. Crane answers a dead token with `404`, logs `Sleeping for
+  300`, and never starts its health service, so the pod sits `0/1 Running` and
+  reads as a slow boot rather than a revoked credential. That cost a live
+  debugging session before the cause was found.
+
+  Two harms, and neither is secrecy — crane logs the token in plaintext, and
+  anyone who can read a pod log in that namespace can read the Secret anyway.
+  The first is **permanence and reach**: a token in a model transcript or a
+  shared `profile.json` reaches people who never had access, for as long as the
+  file exists. The second is **rotation**, above.
+
+  `generate` now resolves the token in four steps, prints which one it took, and
+  reaches BlazeMeter only in the second:
+
+  1. `--auth-token <token>` wins outright.
+  2. `--rotate-token` (new, and needs `--api-key`) issues a new one. It warns
+     before it acts, naming the ship and the consequence. There is no
+     confirmation prompt — the flag is the confirmation.
+  3. Otherwise the token already written into `-o` is read back and reused,
+     provided that bundle's `profile.json` names the same `ship_id`. This is what
+     makes regenerating a bundle byte-identical. A bundle belonging to a
+     *different* ship is refused out loud rather than borrowed from: writing
+     another location's credential into this one applies cleanly and leaves the
+     agent at `0/1` with a token that was never its own.
+  4. Otherwise the `<YOUR_AUTH_TOKEN>` placeholder stays, and the command names
+     the two places a real token comes from — what `create-ship` printed, or
+     `kubectl -n <ns> get secret blazemeter-secret -o
+     jsonpath='{.data.AUTH_TOKEN}' | base64 -d` for an agent already deployed.
+     That command is printed, never run: nothing here reads your cluster.
+
+  **What to change:** anywhere you ran `generate --api-key`, pass `--auth-token`
+  instead, or drop the flag and let the bundle in `-o` supply its own token. On
+  its own `--api-key` now warns that it has no effect. `out/profile.json` still
+  does not carry the token and will not start doing so.
+
+  `create-ship` is unchanged except in what it says: the token it prints is the
+  durable artifact, nothing here records it, and the `next:` line it prints now
+  passes `--auth-token` rather than `--api-key` (which would produce a
+  placeholder bundle).
+
 ### Added
 
 - **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
