@@ -596,8 +596,11 @@ def test_options_are_described_without_any_credential():
     body = ok("opl_bundle", "options")
     assert body["namespace"]["default"] == "blazemeter"
     assert body["namespace"]["summary"]
+    # The four backends, and the third state that says "this location runs
+    # mockServices and I want the performance bundle anyway" -- a session with
+    # no checkout has only this schema to learn that from.
     assert body["sv_ingress"]["choices"] == ["nginx", "istio", "contour",
-                                             "openshift"]
+                                             "openshift", "none"]
 
 
 def test_option_help_is_available_as_a_resource():

@@ -337,6 +337,18 @@ def test_service_virtualization_is_refused():
     assert "manifests" in str(e.value)
 
 
+def test_a_declined_sv_location_may_have_the_chart():
+    """The refusal is about what the chart cannot carry, not about the location.
+
+    Declared performance-only, there is no ingress, no SV RBAC and no TLS secret
+    to drop -- so the chart carries everything this bundle asks for, and holding
+    such a location to manifests would be refusing what generate() accepts.
+    """
+    sv_facts = dict(FACTS, func_ids=["mockServices"])
+    files = gen.generate(sv_facts, {**BASE, "sv_ingress": gen.SV_INGRESS_NONE})
+    assert gen.HELM_VALUES_FILE in files
+
+
 def test_service_virtualization_still_works_as_manifests():
     sv_facts = dict(FACTS, func_ids=["mockServices"])
     files = gen.generate(sv_facts, {**BASE, "output_format": "manifests",

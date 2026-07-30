@@ -663,6 +663,18 @@ def test_a_suggestive_suggestion_is_settled_by_any_of_its_candidates():
         == suggest.SETTLED
 
 
+def test_declining_the_ingress_settles_it_rather_than_conflicting():
+    """`none` is in no shortlist and is not a departure to argue with: the
+    location is being generated for performance alone, and a cluster that can
+    serve contour has nothing to say about that. Left to the default rules it
+    reads as a chosen value the evidence did not pick -- CONFLICT, on a row
+    offering to replace a decision the evidence knows nothing about."""
+    doc = _evidence(api_groups=dict(API_GROUPS, contour=True))
+    m = _merge(doc, "sv_ingress", {"sv_ingress": suggest.SV_INGRESS_NONE})
+    assert m.state == suggest.SETTLED
+    assert m.current == suggest.SV_INGRESS_NONE
+
+
 def test_a_configured_value_the_cluster_rules_out_is_a_conflict():
     """The loudest disagreement this can report, and the one worth importing an
     evidence file for: the ingress the bundle is configured for is not served

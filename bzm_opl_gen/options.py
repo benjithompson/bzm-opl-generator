@@ -99,7 +99,8 @@ GROUPS = [
     ("Networking", None),
     ("Service virtualization",
      "Only meaningful for a location whose funcIds include `mockServices`, and "
-     "for such a location `sv_ingress` is **required**; see "
+     "for such a location `sv_ingress` is **required** -- either a backend, or "
+     "`none` to generate it for performance testing alone; see "
      "[Service virtualization](service-virtualization.md)."),
     ("CA trust",
      "Pick **exactly one** of the three modes -- inline PEM, an existing "
@@ -294,13 +295,17 @@ OPTIONS = [
     # ---- Service virtualization ----------------------------------------
     Option(
         "sv_ingress", "string", "Service virtualization",
-        choices=list(gen.SV_INGRESS_TYPES),
-        summary="Which ingress the mock services are published through. Required for a mockServices location.",
+        choices=list(gen.SV_INGRESS_TYPES) + [gen.SV_INGRESS_NONE],
+        summary="Which ingress the mock services are published through, or `none` for performance only.",
         doc="`nginx` | `istio` | `contour` | `openshift` -- **required** for a "
             "`mockServices` location; `openshift` needs `platform: openshift`; "
             "`contour` and `istio` are refused with `service_type: NODEPORT`. Each "
             "backend grants a different set of resources in crane's Role, so this "
-            "picks the RBAC as well as the objects."),
+            "picks the RBAC as well as the objects. `none` is the third state and "
+            "means *performance only*: a location carrying `mockServices` "
+            "generates without any of the above, and virtual services deployed to "
+            "it stall at `WAITING_FOR_DOMAIN`. Unset is not that -- it is nobody "
+            "having answered, which is what such a location is refused for."),
     Option(
         "sv_subdomain", "string", "Service virtualization",
         summary="Wildcard domain your ingress controller serves; the endpoint host suffix.",

@@ -7,7 +7,9 @@ import { OptionGroup } from "../optionGroups";
  *
  *  `required` is the one thing about a row that the options cannot say -- an SV
  *  location needs its group whatever is configured -- so it arrives as a prop
- *  and picks the declaration's `requiredHint`.
+ *  and picks the declaration's `requiredHint`. `declined` is that same demand
+ *  answered no: the row keeps saying which location it is, and says what the
+ *  bundle gives up, instead of reading like a group nobody ever needed.
  *
  *  `applies` is the group's attribution, rendered on every row including the
  *  ones that belong to no feature: with only some rows badged, an unbadged row
@@ -18,13 +20,19 @@ export function GroupRow(props: {
   group: OptionGroup;
   on: boolean;
   required?: boolean;
+  /** Required by the location, and switched off anyway. Never true with
+   *  `required`: they are the two answers to one question. */
+  declined?: boolean;
   /** Which features this group belongs to, always shown -- every row is
    *  attributed, so no option is on screen without saying why. */
   applies: string;
   onFlip: (on: boolean) => void;
   children: ReactNode;
 }) {
-  const { group, on, required, applies } = props;
+  const { group, on, required, declined, applies } = props;
+  const hint = required ? (group.requiredHint ?? group.hint)
+    : declined ? (group.declinedHint ?? group.hint)
+    : group.hint;
   return (
     <div className="px-3 py-2.5">
       <div className="flex items-center gap-3">
@@ -37,14 +45,19 @@ export function GroupRow(props: {
                 required
               </span>
             )}
+            {declined && (
+              <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-amber-600">
+                declined
+              </span>
+            )}
             {applies && (
               <span className="ml-2 text-[10px] font-medium tracking-wide rounded bg-slate-100 text-slate-500 px-1.5 py-0.5 align-middle">
                 {applies}
               </span>
             )}
           </p>
-          <p className="text-[11px] text-slate-400 truncate">
-            {required && group.requiredHint ? group.requiredHint : group.hint}
+          <p className={`text-[11px] truncate ${declined ? "text-amber-700" : "text-slate-400"}`}>
+            {hint}
           </p>
         </div>
       </div>

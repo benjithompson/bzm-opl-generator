@@ -235,6 +235,9 @@ export interface SvBackend {
 }
 export type SvConstants = {
   func_ids: string[];
+  /** The backends only. What `sv_ingress` holds when such a location is
+   *  generated for performance alone is optionGroups.SV_NONE, and it is
+   *  deliberately not here: this is what the picker is built from. */
   ingress_types: string[];
   backends: Record<string, SvBackend>;
 };

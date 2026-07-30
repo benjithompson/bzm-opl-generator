@@ -65,11 +65,11 @@ of these options that cluster decides and which it only narrows —
 
 ### Service virtualization
 
-Only meaningful for a location whose funcIds include `mockServices`, and for such a location `sv_ingress` is **required**; see [Service virtualization](service-virtualization.md).
+Only meaningful for a location whose funcIds include `mockServices`, and for such a location `sv_ingress` is **required** -- either a backend, or `none` to generate it for performance testing alone; see [Service virtualization](service-virtualization.md).
 
 | Option | Default | Meaning |
 |---|---|---|
-| `sv_ingress` | -- | `nginx` \| `istio` \| `contour` \| `openshift` -- **required** for a `mockServices` location; `openshift` needs `platform: openshift`; `contour` and `istio` are refused with `service_type: NODEPORT`. Each backend grants a different set of resources in crane's Role, so this picks the RBAC as well as the objects. |
+| `sv_ingress` | -- | `nginx` \| `istio` \| `contour` \| `openshift` -- **required** for a `mockServices` location; `openshift` needs `platform: openshift`; `contour` and `istio` are refused with `service_type: NODEPORT`. Each backend grants a different set of resources in crane's Role, so this picks the RBAC as well as the objects. `none` is the third state and means *performance only*: a location carrying `mockServices` generates without any of the above, and virtual services deployed to it stall at `WAITING_FOR_DOMAIN`. Unset is not that -- it is nobody having answered, which is what such a location is refused for. |
 | `sv_subdomain` | -- | Wildcard domain your ingress controller serves; required with `sv_ingress`. Every virtual service gets a host under it, and the endpoint BlazeMeter advertises is built from it -- so it has to resolve from wherever the tests run, not just inside the cluster. |
 | `sv_tls_secret` | -- | Wildcard TLS secret in the agent namespace; required with `sv_ingress`, **even for HTTP** -- crane names it unconditionally, and an ingress referencing a Secret that is not there is accepted and then never serves. |
 | `sv_istio_gateway` | -- | istio only, optional; unset means crane creates a Gateway per virtual service. Rejected with any other `sv_ingress`, since only crane's istio backend reads it. A Gateway whose selector matches no pod fails exactly like a wrong port would -- crane hardcodes `istio: ingressgateway`. |

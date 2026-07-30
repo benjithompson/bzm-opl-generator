@@ -183,7 +183,8 @@ DOC_SUMMARIES = {
                     "collect, and what each verdict means.",
     "helm.md": "The chart output format, and managing the release afterwards.",
     "service-virtualization.md": "Mock-service locations: the ingress backends, "
-                                 "and which combinations are refused.",
+                                 "which combinations are refused, and how to "
+                                 "generate such a location for performance alone.",
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
     "live-test.md": "The live rig: what it proves and what it costs.",

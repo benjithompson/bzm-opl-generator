@@ -5,7 +5,8 @@ import {
   featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
   serviceAccountOk, unavailableFeatures,
   OPTION_GROUPS, OptionGroup,
-  setButHidden, startFeature, suggestNamespace, unclaimedFuncIds, visibleGroups,
+  setButHidden, startFeature, suggestNamespace, SV_NONE, svConfigured,
+  unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 
 // The lifecycle of a group is data in, data out -- a detect over the options, a
@@ -141,7 +142,7 @@ describe("detection", () => {
 describe("switching a group off", () => {
   it.each(OPTION_GROUPS.map((g) => [g.id] as const))(
     "%s touches only the keys it declares", (id) => {
-      const patch = GROUP_BY_ID[id].disable(FULL);
+      const patch = GROUP_BY_ID[id].disable(FULL, false);
       expect(Object.keys(patch).sort())
         .toEqual(Object.keys(patch).filter((k) => GROUP_BY_ID[id].keys.includes(k)).sort());
       const after = { ...FULL, ...patch };
@@ -150,8 +151,25 @@ describe("switching a group off", () => {
       }
     });
 
+  it("records the decision when the location demanded the group", () => {
+    // The bug this fixes: SV came back on the moment it was switched off. The
+    // location demands the group, `null` is "nobody answered", detectGroups
+    // ORs the demand back in, and generate() refuses -- so an account whose
+    // location carries both funcIds could not produce a performance bundle at
+    // all. SV_NONE is the answer, and it has to be written by the switch,
+    // because that click is the whole of the user saying it.
+    expect(GROUP_BY_ID.sv.disable(FULL, true)).toEqual({
+      sv_ingress: SV_NONE, sv_subdomain: null, sv_tls_secret: null,
+      sv_istio_gateway: null,
+    });
+    const after = { ...FULL, ...GROUP_BY_ID.sv.disable(FULL, true) };
+    expect(detectGroups(after, allGroupsOff(), { sv: false }).sv).toBe(false);
+  });
+
   // The exact wipes, spelled out: "clears what it used to clear" is the whole
   // acceptance test of this refactor, and a generic assertion cannot state it.
+  // `required` false throughout: that is every group but SV, and SV's other
+  // answer is the test above.
   it("clears exactly what it cleared before", () => {
     const wipes: Record<GroupId, Options> = {
       registry: { private_registry: null, pull_secret: null, registry_auth: false },
@@ -173,20 +191,20 @@ describe("switching a group off", () => {
         sv_istio_gateway: null,
       },
     };
-    for (const g of OPTION_GROUPS) expect(g.disable(FULL)).toEqual(wipes[g.id]);
+    for (const g of OPTION_GROUPS) expect(g.disable(FULL, false)).toEqual(wipes[g.id]);
   });
 
   it("leaves service_type alone when service virtualization goes off", () => {
     // It never writes service_type in either direction now -- but a wipe that
     // reached it would still silently rewrite the user's choice, so pin it.
-    expect(GROUP_BY_ID.sv.disable(FULL)).not.toHaveProperty("service_type");
+    expect(GROUP_BY_ID.sv.disable(FULL, false)).not.toHaveProperty("service_type");
   });
 
   it("re-detects nothing from what it left behind", () => {
     // The point of the wipe: an off group must not be dragged open again by the
     // effect that watches the options.
     for (const g of OPTION_GROUPS) {
-      const after = { ...FULL, ...g.disable(FULL) };
+      const after = { ...FULL, ...g.disable(FULL, false) };
       expect(detectGroups(after, allGroupsOff())[g.id]).toBe(false);
     }
   });
@@ -497,6 +515,30 @@ describe("a group declares whether its own configuration is finished", () => {
 
   it("is incomplete when the location requires it and nothing is set", () => {
     expect(sv.incomplete?.({}, true)).toBe(true);
+  });
+
+  it("is finished once the location's demand has been declined", () => {
+    // generate() accepts SV_NONE for a mockServices location, so blocking the
+    // download on it would be the UI refusing what the backend allows -- and
+    // `required` is still true here, because the location has not changed.
+    expect(sv.incomplete?.({ sv_ingress: SV_NONE }, true)).toBe(false);
+    expect(sv.incomplete?.({ sv_ingress: SV_NONE }, false)).toBe(false);
+    // ...and no field of an ingress that is not configured can revive it.
+    expect(sv.incomplete?.(
+      { sv_ingress: SV_NONE, sv_subdomain: "", sv_tls_secret: "" },
+      true, BACKENDS)).toBe(false);
+  });
+
+  it("does not treat the decline as a configuration", () => {
+    // detect keeps the group closed for it, so an imported profile that
+    // declined does not open a panel offering to configure what it declined --
+    // and enable() has to pick a real backend, not echo the sentinel into the
+    // select and leave it showing nginx over a value that is not nginx.
+    expect(sv.detect({ sv_ingress: SV_NONE })).toBe(false);
+    expect(sv.enable({ sv_ingress: SV_NONE })).toEqual({ sv_ingress: "nginx" });
+    expect(svConfigured(SV_NONE)).toBe(false);
+    expect(svConfigured("nginx")).toBe(true);
+    expect(svConfigured(null)).toBe(false);
   });
 
   // Deliberately NOT the real backend names. Which backends publish over

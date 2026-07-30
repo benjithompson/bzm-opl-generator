@@ -35,7 +35,7 @@ import json
 
 from . import doctor
 from .doctor import CRANE_INGRESS_CLASS
-from .generate import DEFAULT_OPTIONS, SV_INGRESS_TYPES
+from .generate import DEFAULT_OPTIONS, SV_INGRESS_NONE, SV_INGRESS_TYPES
 
 # option:     the generate option this is about
 # strength:   DECISIVE | SUGGESTIVE (see the module docstring)
@@ -519,6 +519,13 @@ def _holds(s, current):
     A suggestive suggestion is satisfied by any of its candidates: the shortlist
     is the whole of what it has to say, so a configuration already holding one
     is neither something to nag about nor a disagreement."""
+    # Declined counts as answered, though it is in no shortlist: sv_ingress=none
+    # says this location is being generated for performance alone, and which
+    # backends the cluster could serve has nothing to add to that. Without this
+    # it lands in _chosen and reports CONFLICT -- the cluster contradicting a
+    # decision it knows nothing about.
+    if s.option == "sv_ingress" and current == SV_INGRESS_NONE:
+        return True
     return current == s.value if s.strength == DECISIVE \
         else current in s.candidates
 

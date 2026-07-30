@@ -88,6 +88,15 @@ agent hides the list of existing ones until you finish or cancel. Reusing an
 agent identity that is already running somewhere conflicts with that install,
 so the two paths are kept apart deliberately.
 
+A location carrying `mockServices` opens with **Service virtualization** on and
+marked *required*, because a bundle without an ingress stalls at
+`WAITING_FOR_DOMAIN` — but the switch does turn off, and that is how you
+generate a location that offers both for performance alone. Switched off it
+reads *declined*, the row says what was given up, and the download unblocks;
+the profile records it as `sv_ingress: none`, which is a decision rather than a
+gap, so re-importing it does not put you back where you started. See
+[Not using it on a location that offers it](service-virtualization.md#not-using-it-on-a-location-that-offers-it).
+
 For a location with SV enabled, the page names every prerequisite the bundle
 does *not* create (the wildcard TLS secret, an Istio Gateway when one is named,
 the controller itself) and what the chosen backend does with each, plus the

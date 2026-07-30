@@ -33,8 +33,8 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       SV_INGRESS_BACKENDS, engine_size, proxy_env,
-                       service_account)
+                       SV_INGRESS_BACKENDS, SV_INGRESS_NONE, engine_size,
+                       proxy_env, service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -606,8 +606,12 @@ def check_ingress_class(facts, opts, cluster):
     the default outcome there rather than an unlucky one.
     """
     ingress = opts.get("sv_ingress")
-    if not ingress:
-        return []                     # not an SV deployment; nothing to say
+    if not ingress or ingress == SV_INGRESS_NONE:
+        # Not an SV deployment -- either unconfigured, or configured for
+        # performance alone -- so there is no Ingress to preflight. The two are
+        # still different states everywhere it matters; here they genuinely
+        # share an answer, because neither publishes an object.
+        return []
     backend = SV_INGRESS_BACKENDS.get(ingress)
     if backend is None:
         # generate() rejects anything outside SV_INGRESS_TYPES, so this only

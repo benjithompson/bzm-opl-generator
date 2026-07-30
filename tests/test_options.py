@@ -87,7 +87,11 @@ def test_choices_track_generate_enumerations():
     """The two enumerations generate() actually branches on. Restating them
     here is the drift the registry exists to prevent, so they are read from
     generate -- this asserts nothing added a third copy by hand."""
-    assert opt.BY_NAME["sv_ingress"].choices == tuple(gen.SV_INGRESS_TYPES)
+    assert opt.BY_NAME["sv_ingress"].choices == (
+        tuple(gen.SV_INGRESS_TYPES) + (gen.SV_INGRESS_NONE,))
+    # The sentinel is offered but is not a backend: anything iterating the
+    # backends to pick one must not find it among them.
+    assert gen.SV_INGRESS_NONE not in gen.SV_INGRESS_TYPES
 
 
 def test_secret_options_are_the_ones_profile_json_omits():

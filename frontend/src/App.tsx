@@ -24,8 +24,8 @@ import {
   allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
   enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
   incompleteGroups, serviceAccountOk,
-  setButHidden, startFeature, suggestNamespace, unavailableFeatures,
-  unclaimedFuncIds, visibleGroups,
+  setButHidden, startFeature, suggestNamespace, SV_NONE, svConfigured,
+  unavailableFeatures, unclaimedFuncIds, visibleGroups,
 } from "./optionGroups";
 // The preflight panel's own decisions -- how a verdict list reads, what a
 // picked file has to be, what a refused import leaves behind. No verdict is
@@ -339,7 +339,7 @@ export default function App() {
   // and depending on them would tear down and restart the interval on every
   // keystroke in the namespace field.
   const svWatchRef = useRef({ on: false, ns: "", dom: "" });
-  svWatchRef.current = { on: !!txt("sv_ingress"), ns: txt("namespace"),
+  svWatchRef.current = { on: svConfigured(txt("sv_ingress")), ns: txt("namespace"),
                          dom: txt("sv_subdomain") };
   useEffect(() => {
     if (!polling || !harborId || !shipId) return;
@@ -470,12 +470,19 @@ export default function App() {
   // Surface it as required rather than letting the user find out later. The
   // funcIds come from generate.SV_FUNC_IDS over /api/sv-constants rather than a
   // copy here, so adding one cannot leave the UI silently disagreeing.
-  const svRequired = !!facts?.func_ids?.some(
+  const svLocation = !!facts?.func_ids?.some(
     (f) => svConst.func_ids.includes(f));
+  // ...and answered: a location can carry mockServices and be wanted for
+  // performance alone, which is a decision the options can hold (SV_NONE) and
+  // generate() accepts. Required is therefore the demand *not yet answered* --
+  // the state that blocks -- and declined is the same demand answered no.
+  const svDeclined = options.sv_ingress === SV_NONE;
+  const svRequired = svLocation && !svDeclined;
   // What a group cannot read off the options: SV is required by the location,
   // not by anything configured. Keyed by group id so the walk below never has
   // to test for one by name.
   const grpRequired: Partial<GroupFlags> = { sv: svRequired };
+  const grpDeclined: Partial<GroupFlags> = { sv: svLocation && svDeclined };
   // Sticky: this only ever opens groups, so a group the user opened by hand
   // stays open with nothing set in it. svRequired is the dependency; the record
   // above is derived from it, which is why it is not one.
@@ -518,7 +525,9 @@ export default function App() {
     setGrpOn((g) => ({ ...g, [id]: on }));
     const group = GROUP_BY_ID[id];
     setOptions((o) => {
-      const patch = on ? group.enable(o) : group.disable(o);
+      // `required` reaches disable so a group the location demands can record
+      // being switched off rather than merely emptied -- see the SV group.
+      const patch = on ? group.enable(o) : group.disable(o, !!grpRequired[id]);
       // A group that seeds nothing must hand back the same object: a fresh
       // identity would re-run the preview effect and re-POST /api/generate for
       // options that did not change.
@@ -1377,6 +1386,7 @@ export default function App() {
                 {visibleGroups(feature).map((g) => (
                   <GroupRow key={g.id} group={g} on={grpOn[g.id]}
                     required={!!grpRequired[g.id]}
+                    declined={!!grpDeclined[g.id]}
                     applies={appliesTo(g, features)}
                     onFlip={(v) => flipGroup(g.id, v)}>
                     {groupBody[g.id]}
@@ -1697,7 +1707,7 @@ export default function App() {
                     became reachable, which is the part of an SV deploy that
                     actually stalls. Only for an SV deployment -- the
                     performance panel is exactly as it was. */}
-                {polling && !!txt("sv_ingress") && svMocks && (
+                {polling && svConfigured(txt("sv_ingress")) && svMocks && (
                   <div className="mt-3">
                     <p className="text-xs font-medium text-slate-600 mb-1">
                       Virtual services in {svMocks.ns}

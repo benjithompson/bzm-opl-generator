@@ -13,7 +13,13 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Same RUNNER_LABELS switch as tests.yml, where it is explained. It applies
+    # here too rather than pinning releases to GitHub-hosted, because the account
+    # problem that motivated it blocks this workflow just as completely -- a
+    # release that cannot run is not safer than one that runs on your own
+    # machine. Worth knowing that it *is* your machine, though: this job builds
+    # the wheel and creates the Release.
+    runs-on: ${{ vars.RUNNER_LABELS || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
