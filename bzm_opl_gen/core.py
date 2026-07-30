@@ -510,6 +510,13 @@ TOKEN_PLACEHOLDER = "placeholder"
 # known, following rotate_auth_token's precedent of handing the ship back for a
 # caller that wants to name it (an affordance that existed and was discarded by
 # both callers, which is how a rotation got reported as `warnings: []`).
+#
+# Serialisable as it stands -- `_asdict()` is what both transports answer with,
+# rather than either of them listing the three fields again. All three are safe
+# to put in a response: none of the four messages carries a token value, which is
+# the only reason this can be a response field at all, and a transport composing
+# its own summary from `branch` would be a second copy of the rule above in
+# whatever language it was written in.
 TokenSource = collections.namedtuple("TokenSource", "branch ship_id message")
 
 

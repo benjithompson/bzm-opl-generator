@@ -1,5 +1,6 @@
 import io
 import os
+import pathlib
 import re
 import zipfile
 
@@ -244,14 +245,41 @@ def test_a_namespace_no_header_could_carry_does_not_fail_the_download(connected)
     assert zipfile.ZipFile(io.BytesIO(r.content)).namelist()
 
 
+BRANCHES = {core.TOKEN_GIVEN, core.TOKEN_ROTATED, core.TOKEN_REUSED,
+            core.TOKEN_PLACEHOLDER}
+
+
 def test_the_four_branch_names_are_what_the_page_switches_on():
     """frontend/src/api.ts declares this union rather than fetching it -- a closed
     set, like Strength and MergeState -- so the four spellings are load-bearing
     across two languages. Renamed here, one arrives in a browser as a branch no
     sentence covers, and the compiler over there cannot see it."""
-    assert (core.TOKEN_GIVEN, core.TOKEN_ROTATED, core.TOKEN_REUSED,
-            core.TOKEN_PLACEHOLDER) == ("given", "rotated", "reused",
-                                        "placeholder")
+    assert BRANCHES == {"given", "rotated", "reused", "placeholder"}
+
+
+def test_the_page_declares_the_same_four_branches_this_does():
+    """Read out of the TypeScript, not restated here.
+
+    This test used to compare core's four constants against four literals and
+    say in its docstring that api.ts declared the same union -- which nothing
+    checked. A rename on either side left the other compiling: TypeScript cannot
+    see Python, and a literal in a Python test cannot see TypeScript. So the
+    union and the map that must cover it are parsed from the files themselves,
+    and this fails on whichever side moves first.
+    """
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    union = re.search(r"export type TokenBranch\s*=\s*([^;]+);",
+                      (src / "api.ts").read_text())
+    assert union, "TokenBranch union not found -- was it renamed or moved?"
+    assert set(re.findall(r'"([^"]+)"', union.group(1))) == BRANCHES
+
+    # The map keyed by that union: every branch needs the sentence beside the
+    # button, and TypeScript's Record<TokenBranch, string> only enforces that
+    # against whatever the union happens to say.
+    carries = re.search(r"const CARRIES: Record<TokenBranch, string> = \{(.*?)\}",
+                        (src / "token.ts").read_text(), re.S)
+    assert carries, "CARRIES not found -- was it renamed or moved?"
+    assert set(re.findall(r"^\s*(\w+):", carries.group(1), re.M)) == BRANCHES
 
 
 # -- issuing the credential once, where the agent is made ----------------------

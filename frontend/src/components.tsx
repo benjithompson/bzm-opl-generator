@@ -321,6 +321,16 @@ export function ErrorMsg({ msg }: { msg: string | null }) {
   return <p className="text-xs text-red-600 mt-1.5 break-words">{msg}</p>;
 }
 
+/** Something the operator has to act on, where the thing they asked for still
+ *  happened. Distinct from ErrorMsg on purpose: an agent that was created but
+ *  whose credential the account refused to issue is not a failed creation, and
+ *  showing it in red invites a second click that makes a second agent. */
+export function NoticeMsg({ msg }: { msg: string | null }) {
+  if (!msg) return null;
+  return <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200
+                       rounded-md px-2 py-1.5 mt-1.5 break-words">{msg}</p>;
+}
+
 export function JsonArea(props: {
   label: string; value: unknown; placeholder: string;
   onValid: (v: unknown) => void; rows?: number;

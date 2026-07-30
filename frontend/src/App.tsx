@@ -6,8 +6,8 @@ import {
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, SearchSelect, Section,
-  SecretInput, SegmentedControl, SubSection, Switch, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, NoticeMsg, SearchSelect,
+  Section, SecretInput, SegmentedControl, SubSection, Switch, TextInput,
 } from "./components";
 // What a download is about to do to the agent's credential. The branch a bundle's
 // token arrived by is core's and comes back on the answer; this decides what to
@@ -100,6 +100,10 @@ export default function App() {
   const [showCreateShip, setShowCreateShip] = useState(false);
   const [newShipName, setNewShipName] = useState("");
   const [shipErr, setShipErr] = useState<string | null>(null);
+  // Separate from shipErr: the agent WAS created, and only its credential
+  // was refused. In the red error slot that reads as a failed creation, and
+  // the next click makes a second agent in the same location.
+  const [shipTokenNotice, setShipTokenNotice] = useState<string | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
 
   // -- where the three account values come from -------------------------------
@@ -151,7 +155,7 @@ export default function App() {
   const forgetToken = useCallback(() => {
     setOptions((o) => ({ ...o, auth_token: null }));
     setRotate(false);
-    setDlToken(null);
+    setLastTokenReport(null);
   }, []);
 
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -184,7 +188,7 @@ export default function App() {
   // What the last download or save actually did, in core's own words. Said
   // afterwards as well as before, because a rotation is worth confirming: the
   // bundle in the browser's downloads folder is now the only copy of that token.
-  const [dlToken, setDlToken] = useState<TokenReport | null>(null);
+  const [lastTokenReport, setLastTokenReport] = useState<TokenReport | null>(null);
   // Saving to a folder, beside downloading: the typed directory, and where the
   // last save actually landed (the server echoes the expanded path, which is
   // what a kubectl command can be copied against -- `~` is not).
@@ -1118,7 +1122,7 @@ export default function App() {
                           // asking BlazeMeter for another. Nothing stores it, so
                           // the field below is the copy to keep.
                           setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-                          setShipErr(r.token_error);
+                          setShipTokenNotice(r.token_error);
                           api.facts(harborId!).then(setFacts).catch(() => {});
                         } catch (e) { setShipErr(String((e as Error).message)); }
                       }}>Create</Button>
@@ -1166,12 +1170,13 @@ export default function App() {
                     ) : null;
                   })()}
                   <Button kind="ghost" disabled={!harborId}
-                    onClick={() => { setShipErr(null); setShowCreateShip(true); }}>
+                    onClick={() => { setShipErr(null); setShipTokenNotice(null); setShowCreateShip(true); }}>
                     + New agent identity (recommended)
                   </Button>
                 </>
               )}
               <ErrorMsg msg={shipErr} />
+              <NoticeMsg msg={shipTokenNotice} />
               {facts && (
                 <p className="text-xs text-slate-500">
                   image inventory: {facts.images_source} · features: {facts.func_ids?.join(", ")}
@@ -1427,10 +1432,10 @@ export default function App() {
               <div className="flex gap-2 items-center">
                 <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
-                    setDlErr(null); setDlToken(null);
+                    setDlErr(null); setLastTokenReport(null);
                     downloadZip(facts!, { ...options, ship_id: shipId },
                                 tokenPlan.rotates)
-                      .then(setDlToken)
+                      .then(setLastTokenReport)
                       .catch((e) => setDlErr(String(e.message)));
                   }}>
                   ⬇ Download bundle (.zip)
@@ -1479,9 +1484,9 @@ export default function App() {
               )}
               {/* Afterwards as well as before: once a rotation has happened the
                   bundle just handed over is the only copy of that credential. */}
-              {dlToken && (
+              {lastTokenReport && (
                 <p className="text-xs text-slate-600 whitespace-pre-line">
-                  {dlToken.message}
+                  {lastTokenReport.message}
                 </p>
               )}
               {/* The zip is for handing the bundle to somebody; saving writes
@@ -1496,12 +1501,12 @@ export default function App() {
                   onChange={(e) => setSaveDir(e.target.value)} />
                 <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
-                    setSaveErr(null); setSaved(null); setDlToken(null);
+                    setSaveErr(null); setSaved(null); setLastTokenReport(null);
                     const dir = saveDir.trim() ||
                       `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
                     saveBundle(facts!, { ...options, ship_id: shipId }, dir,
                                tokenPlan.rotates)
-                      .then((s) => { setSaved(s); setDlToken(s.token); })
+                      .then((s) => { setSaved(s); setLastTokenReport(s.token); })
                       .catch((e) => setSaveErr(String(e.message)));
                   }}>
                   💾 Save to folder

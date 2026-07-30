@@ -269,19 +269,6 @@ def _generate(g: GenerateIn, out_dir=None):
     return files, source
 
 
-def _token_report(source):
-    """What the page says happened to the credential, as JSON.
-
-    The whole tuple, message included: `branch` is what the UI branches on and
-    the sentence is what a person reads, and a UI left to compose its own from
-    the branch is a second copy of core's rule in TypeScript. It carries no token
-    value -- none of core's four messages does -- which is why it can be a
-    response field at all.
-    """
-    return {"branch": source.branch, "ship_id": source.ship_id,
-            "message": source.message}
-
-
 # The zip route answers with bytes, so the one thing a download must not lose
 # travels beside the filename in the headers. Not in the body: a zip wrapped in a
 # JSON envelope is not a zip, and the browser saves whatever it is handed.
@@ -315,7 +302,7 @@ def generate_preview(g: GenerateIn):
     files, source = _generate(g)
     return {"files": [{"name": n, "content": files[n]}
                       for n in core.preview_order(files)],
-            "token": _token_report(source)}
+            "token": source._asdict()}
 
 
 @app.post("/api/generate/zip")
@@ -359,7 +346,7 @@ def generate_save(g: SaveIn):
     files, source = _generate(g, out_dir=out_dir)
     written = _answer(core.write_bundle, files, out_dir)
     return {"out_dir": out_dir, "files": written,
-            "token": _token_report(source)}
+            "token": source._asdict()}
 
 
 # -- preflight ----------------------------------------------------------------

@@ -597,9 +597,7 @@ def _bundle(action, args):
                 # The branch and the ship, never the value: naming the agent
                 # whose credential was just replaced is the whole point, and it
                 # is not a secret.
-                "token_source": {"branch": source.branch,
-                                 "ship_id": source.ship_id,
-                                 "message": source.message},
+                "token_source": source._asdict(),
                 "warnings": (_facts_warnings(facts) + _bundle_warnings(options)
                              + _token_warnings(source)),
                 "next": _after_generate(out_dir, options)}
