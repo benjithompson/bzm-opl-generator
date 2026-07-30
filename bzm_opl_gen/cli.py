@@ -732,7 +732,17 @@ def main():
     u.set_defaults(fn=cmd_ui)
 
     a = p.parse_args()
-    a.fn(a)
+    try:
+        a.fn(a)
+    except core.CoreError as e:
+        # One place turns a refusal into an exit, for the same reason
+        # `server._answer` is the only thing that turns one into an
+        # HTTPException: a CoreError is already a sentence written for whoever
+        # ran the command, and a traceback around it only buries it. Commands
+        # that need to print something *before* exiting still catch it
+        # themselves -- `create-ship` does, so the agent it just made is
+        # reported whatever the token endpoint answers.
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

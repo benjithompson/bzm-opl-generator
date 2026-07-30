@@ -91,6 +91,27 @@ anything that breaks.
   row each, which is why `ca_configmap_key` had nowhere to be documented; the
   "pick exactly one" that grouping carried is now stated above the section.
 
+### Fixed
+
+- **An account that refuses to issue an agent credential now says so, and says
+  what still works.** Some accounts serve the token endpoint only from
+  BlazeMeter's own gateway and answer everything else `403 Forbidden: Should
+  access from Private-Data gateway`. That raw body used to be the whole message:
+  it names no ship, does not distinguish "the credential could not be issued"
+  from "your request was wrong", and offers no way on — so `generate --api-key`
+  and `create-ship` dead-ended on an account whose only real problem is that
+  tokens have to come from the UI. The refusal now names the location and the
+  ship, says which half failed, and points at `--auth-token`, which also stops
+  the token being rotated. The upstream reason is still quoted.
+
+- **A refusal on the command line is a sentence, not a traceback.** Anything
+  `bzm-opl-gen` refuses deliberately is written for the person who ran the
+  command, and `generate` had no guard around it — so on a refusing account the
+  message above arrived under seventy lines of Python stack, which is a worse
+  answer than the raw `403` it replaced. `main()` now renders any deliberate
+  refusal and exits non-zero; `create-ship` still catches its own first, so the
+  agent it just created is reported whatever the token endpoint answers.
+
 ### Added
 
 - **`GET /api/option-docs`** — one line per option, plus its type, whether it

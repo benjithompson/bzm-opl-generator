@@ -227,6 +227,27 @@ def test_create_ship_reports_a_refused_credential_and_the_ship_it_made(
     assert "s2" in capsys.readouterr().out
 
 
+def test_generate_reports_a_refused_credential_rather_than_tracebacking(
+        monkeypatch, tmp_path, capsys):
+    """The refusal is only worth writing if it is what the caller sees.
+
+    `generate --api-key` is the other caller that fetches, and it had no guard:
+    against a real account that refuses the endpoint the sentence arrived at the
+    foot of a seventy-line traceback, which is a worse answer than the raw 403
+    it replaced. Found by running the command, not by a test -- every test until
+    now called core directly.
+    """
+    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: RefusingClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "generate",
+             "--facts", _facts_file(tmp_path, ["b1"]),
+             "--api-key", "examples/api-key.example.json",
+             "-o", str(tmp_path / "out"))
+    assert "could not be issued" in str(caught.value)
+    assert "--auth-token" in str(caught.value)
+    assert "Traceback" not in capsys.readouterr().err
+
+
 def test_generate_never_asks_which_of_two_ships(monkeypatch, tmp_path):
     """Two ships and no --ship-id: fetching for the wrong one rotates a token
     belonging to an agent nobody named, so nothing is fetched and the command
