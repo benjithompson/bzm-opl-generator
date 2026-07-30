@@ -16,7 +16,7 @@
 // workspace selects and the create-location block are App's own, passed in as
 // nodes, because they are not what is being judged and a second copy would rot.
 
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Facts, Location, Ship } from "../api";
 import { Button, ErrorMsg, NoticeMsg, SubSection, TextInput } from "../components";
 // The rotation's consequence, in the words the download step already uses --
@@ -63,7 +63,25 @@ export interface AgentStepProps {
    *  created)? Then nothing has to be regenerated, and core would ignore a
    *  rotation anyway -- the token in the form wins. */
   hasToken: boolean;
+  /** Writes the AUTH_TOKEN field. M fills it in from the Regenerate button, so
+   *  the credential is in hand before the download rather than issued by it. */
+  setAuthToken: (v: string) => void;
 }
+
+// -- the Regenerate action ---------------------------------------------------
+// STUB. Issuing a token for an existing ship is a real, destructive write to
+// the account -- it kills the credential the running agent is using -- and
+// there is no HTTP route for it here: rotation happens inside generate/download
+// (`rotate_token`), never on its own. Shipping this button therefore needs one
+// new route over core.rotate_auth_token; until then it mints something that
+// could not possibly be mistaken for a credential, so the flow can be judged
+// without touching anybody's agent.
+const stubToken = (shipId: string) => `PROTOTYPE_STUB_NOT_A_REAL_TOKEN_${shipId}`;
+
+/** Where the confirm button has got to. Per ship, and reset by changing ship:
+ *  "Regenerated" is a statement about one identity, and carrying it to the next
+ *  row would claim a rotation that never happened. */
+type Arm = "idle" | "armed" | "done";
 
 /** What a location's agents amount to, in one place: three variants say it and
  *  they must not word it differently. `none` is the case this prototype exists
@@ -344,14 +362,24 @@ function VariantL(p: AgentStepProps) {
 function VariantM(p: AgentStepProps) {
   const empty = !!p.location && p.ships.length === 0;
   const ship = p.ships.find((s) => s.id === p.shipId);
-  // An identity that already existed, with no credential in hand for it. Not
-  // "did the user click a row": the lone-agent auto-pick lands in exactly the
-  // same state, and it would be the one case that regenerated a token without
-  // saying so. A freshly created agent is excluded by hasToken -- its token was
-  // issued when it was created, and core's `given` branch would ignore a
-  // rotation anyway.
+  // An identity that already existed, with no credential in hand for it: its
+  // token was issued once, when it was created, and no API reads one back.
+  // Selecting the row does NOT rotate -- that is what the button below is for.
   const reusing = !!ship && !p.hasToken;
-  useEffect(() => { if (reusing) p.setRotate(true); }, [reusing, p.shipId]);
+  const [arm, setArm] = useState<Arm>("idle");
+  // Disarm on every change of ship, so a half-pressed confirm never carries to
+  // the next identity.
+  useEffect(() => { setArm("idle"); }, [p.shipId]);
+  const regenerate = () => {
+    if (arm === "done") return;
+    if (arm === "idle") { setArm("armed"); return; }
+    p.setAuthToken(stubToken(String(p.shipId)));
+    // The token is now in hand, so the download must not issue a second one --
+    // core's rule is that a token in the form wins, and leaving the rotate box
+    // ticked would have the page promise a rotation that will not happen.
+    p.setRotate(false);
+    setArm("done");
+  };
   const seg = (label: string, value: string | null, warn = false) => (
     <span className="flex items-center gap-1.5">
       <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
@@ -423,10 +451,15 @@ function VariantM(p: AgentStepProps) {
               <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
                 {p.ships.map((s) => {
                   const up = p.shipOnline(s);
+                  const on = s.id === p.shipId;
                   return (
-                    <button key={s.id} onClick={() => p.pickShip(s.id)}
-                      className={"w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 "
-                        + (s.id === p.shipId ? "bg-bzm/10 border-l-4 border-bzm" : "")}>
+                    // A div, not a button: the row is clickable and so is the
+                    // action inside it, and a button inside a button is not
+                    // valid HTML -- the browser unnests it and the inner one
+                    // stops receiving its own clicks.
+                    <div key={s.id} onClick={() => p.pickShip(s.id)}
+                      className={"w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 cursor-pointer "
+                        + (on ? "bg-bzm/10 border-l-4 border-bzm" : "")}>
                       <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
                         + (up ? "bg-emerald-500" : "bg-slate-300")} />
                       <span className="font-medium">{s.name || s.id}</span>
@@ -434,32 +467,72 @@ function VariantM(p: AgentStepProps) {
                         {up ? "online" : s.state}
                       </span>
                       <span className="grow" />
-                      <span className="text-[11px] text-amber-700">
-                        {s.id === p.shipId ? "selected — token regenerated" : "reuse"}
-                      </span>
-                    </button>
+                      {/* The regeneration is an act, not a consequence of
+                          having clicked the row: nothing about this identity
+                          changes until this button is pressed twice. */}
+                      {/* `done` keeps the button: regenerating fills the token
+                          field, which makes `reusing` false, and swapping the
+                          control out at that exact moment would leave the
+                          press with nothing to show for itself. */}
+                      {on && (reusing || arm === "done") && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); regenerate(); }}
+                          className={"text-[11px] font-semibold rounded px-2 py-1 " + ({
+                            idle: "bg-red-600 text-white hover:bg-red-700",
+                            armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
+                            done: "bg-slate-200 text-slate-500 cursor-default",
+                          })[arm]}>
+                          {{ idle: "Regenerate token", armed: "Are you sure?",
+                             done: "Regenerated" }[arm]}
+                        </button>
+                      )}
+                      {on && !reusing && arm !== "done" && (
+                        <span className="text-[11px] text-emerald-700">
+                          token in hand
+                        </span>
+                      )}
+                      {!on && <span className="text-[11px] text-slate-400">reuse</span>}
+                    </div>
                   );
                 })}
               </div>
-              {/* Reusing an identity is a rotation, so the row that says
-                  "reuse" and the box in step 3 are now one decision -- ticking
-                  it here is what makes the download carry a credential this
-                  agent can actually use. */}
-              {reusing && (
-                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
-                  <p className="text-xs text-amber-900">
-                    <b>{ship?.name || p.shipId}</b> already exists, so this
-                    bundle regenerates its AUTH_TOKEN — there is no other way to
-                    get a credential for an identity you did not just create.
+              {/* Three states, three things worth saying: why a token is
+                  needed at all, what the click is about to cost, and what it
+                  did. The middle one is the download step's own sentence, so
+                  the warning here and the warning there cannot drift. */}
+              {reusing && arm === "idle" && (
+                <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
+                  <b>{ship?.name || p.shipId}</b> already exists and nothing here
+                  has its AUTH_TOKEN — it was issued once, when the agent was
+                  created, and no API reads one back. Paste it in the field
+                  below, or regenerate it.
+                </p>
+              )}
+              {reusing && arm === "armed" && (
+                <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2">
+                  <p className="text-xs font-semibold text-red-900">
+                    This takes down whatever is running as{" "}
+                    {ship?.name || p.shipId}.
                   </p>
-                  <p className="text-[11px] text-amber-700 mt-0.5">
+                  <p className="text-[11px] text-red-800 mt-0.5">
                     {rotateHazard(p.shipId)}
                   </p>
-                  <p className="text-[11px] text-amber-700 mt-0.5">
+                  <p className="text-[11px] text-red-800 mt-0.5">
                     Creating a new agent instead costs nothing and leaves that
-                    install alone.
+                    install alone. Press again to confirm.
                   </p>
                 </div>
+              )}
+              {arm === "done" && (
+                <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
+                  A new AUTH_TOKEN was issued for{" "}
+                  <b>{ship?.name || p.shipId}</b> and put in the field below —
+                  this bundle is the only copy. The previous one is dead:
+                  re-apply this bundle wherever that agent was running.
+                  {" "}<span className="font-semibold">PROTOTYPE: the value is a
+                  stub, not a credential — issuing a real one needs an endpoint
+                  this build does not have.</span>
+                </p>
               )}
               <OnlineWarning {...p} />
               <Button kind="ghost" onClick={() => p.setCreating(true)}>

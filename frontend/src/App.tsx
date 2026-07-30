@@ -1126,6 +1126,7 @@ export default function App() {
               createShip={createShipNow} shipErr={shipErr}
               rotate={rotate} setRotate={setRotate}
               hasToken={!!txt("auth_token")}
+              setAuthToken={(v) => set("auth_token", v || null)}
               shipTokenNotice={shipTokenNotice} facts={facts} who={who}
               accountWorkspace={accountWorkspaceNode}
               createLocationBlock={showCreateLoc ? null : createLocationNode} />
