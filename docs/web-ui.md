@@ -9,9 +9,8 @@ Installed from the release wheel with the `[ui]` extra (see the
 
 Single page: Agent details — either connect (key stays local) and pick or create
 a location & agent, or enter the harbor id, ship id and token by hand → choose
-what the location runs → configure → live manifest preview → download zip
-(AUTH_TOKEN fetched on download when connected, as entered when not) → watch the
-agent flip online. Profile JSON import/export round-trips with
+what the location runs → configure → live manifest preview → download zip →
+watch the agent flip online. Profile JSON import/export round-trips with
 `generate --profile`.
 
 **Save to folder** writes the same bundle (profile.json included) to a
@@ -19,8 +18,37 @@ directory on the machine running the server, instead of a browser download.
 That directory is the shape `bzm-opl-gen livetest` re-renders from and an MCP
 session's `opl_bundle` reads, so it is the handoff between the UI and both:
 configure here, then `kubectl apply` / livetest / ask an AI session to carry
-on from the same folder. The token caveat is the download button's exactly —
-when connected, every save fetches (and so rotates) the AUTH_TOKEN.
+on from the same folder. Saving into a folder that already holds this ship's
+bundle reuses the token already there, so a re-render with one option changed is
+the same bytes and leaves the deployed agent alone.
+
+### The AUTH_TOKEN, and where it comes from
+
+**Nothing on this page issues a credential except creating an agent.** Asking
+BlazeMeter for a token *mints* one and the previous one dies with the request, so
+the download button used to break the install it was being downloaded for: crane
+answers a dead token with `404`, logs `Sleeping for 300`, never starts its health
+service, and the pod sits `0/1 Running` looking like a slow boot. Downloading and
+saving now mint nothing, and each says which of four ways its bundle got a token
+(as entered · newly issued · reused from that folder · placeholder).
+
+- **Creating an agent captures its token**, in a masked field with a *Show*
+  toggle. That is the one moment issuing one is free — a new ship has no previous
+  credential to invalidate — and it is the only copy: nothing here writes it down.
+  Keep it as you would what `create-ship` prints.
+- **Pointing at an agent that already exists leaves the field empty**, because no
+  API reads an existing token back. Paste what you kept — or tick *Issue a NEW
+  AUTH_TOKEN with this bundle*, which names, before the download, the agent whose
+  credential it kills and what that looks like when it happens.
+- **A download with neither is a placeholder bundle**, which is a fine thing to
+  read and an unusable thing to apply, so the page says so over the button and
+  names both places a real token comes from — including the `kubectl … get secret`
+  for an agent already deployed. That command is printed, never run.
+
+The field is masked because this is the one place the change makes a token *more*
+visible: it now sits on a page rather than streaming into a zip. Masking is not
+secrecy — crane logs the token, and anyone who can read a pod log in that
+namespace can read the Secret — it is about a screen share and a screenshot.
 
 **Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
 writes a LaunchAgent that serves the UI from login onward with whatever
@@ -130,9 +158,9 @@ normal answer rather than an error — it says which of *no CLI*, *no context*,
 keeps working either way. Nothing else in the UI needs a cluster at all.
 
 **It binds this machine only, on purpose.** The server holds your API key in
-process memory, so reaching the page is equivalent to holding the key — and the
-download button fetches an AUTH_TOKEN, which *rotates* it and leaves any agent
-already running for that ship on a token the API no longer accepts. To use it
+process memory, so reaching the page is equivalent to holding the key: whoever
+reaches it can create locations and agents in your account, and can ask for a new
+AUTH_TOKEN, which revokes the one a running agent holds. To use it
 from another device, prefer a tunnel to the default bind, which keeps the
 listener local and lets your existing SSH auth decide who gets in:
 

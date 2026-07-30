@@ -82,6 +82,30 @@ anything that breaks.
   `opl_location reveal_token` is unchanged — the sanctioned way to read a token,
   and a whole action so it cannot happen as a side effect.
 
+  **The web UI follows the same rule**, and the button that used to break a
+  running agent was the download: it fetched an AUTH_TOKEN on the way out, so
+  taking a copy of the bundle to read it rotated the credential of the install
+  already running. Downloading and **Save to folder** now mint nothing, and both
+  say which of the four ways their bundle got its token.
+
+  Where the token comes from instead: **creating an agent issues it once, there,
+  and puts it in a field on the page** — a ship created a moment ago has no
+  previous credential to invalidate, which is why that is the one action that
+  still fetches. The field is masked with a *Show* toggle, and nothing writes it
+  down, so that page is the copy to keep.
+
+  **Pointing at an agent that already exists leaves the field empty**, because
+  no API reads an existing token back. Paste what you kept, or tick *Issue a NEW
+  AUTH_TOKEN with this bundle* — which says, before you download, that it kills
+  the credential the running agent holds. A download with neither is a
+  placeholder bundle, and the page says so over the button rather than leaving
+  you to find out at `kubectl apply`.
+
+  **Saving twice into the same folder no longer rotates.** The bundle already
+  there supplies its own token — same folder, same ship, same bytes — so
+  re-rendering with one option changed leaves the agent deployed from the last
+  save working.
+
 - **`livetest` issues one credential per run instead of one per render.** Its
   regenerate step called the token endpoint every time it was invoked, and a run
   invokes it three or four times — the negative control renders twice, then
