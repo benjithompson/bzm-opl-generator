@@ -273,15 +273,27 @@ def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
     one is what the caller asked for and the other is not, so only the numbers
     say which is worth undoing.
 
-    Here rather than in a response layer because the narrowing is the same
-    question whoever is asking -- the CLI prints the same listing -- while how
-    each entry is *shaped* differs by caller and belongs to them.
+    Here rather than in a response layer because what a partial answer owes its
+    caller is the same wherever the request came from, while how each entry is
+    *shaped* differs by caller and belongs to them. The CLI deliberately does
+    not narrow -- a terminal scrolls, and it is the caller with a result ceiling
+    that cannot afford 171 of these -- so `limit=None` (no cap at all) exists
+    for it and for anyone else who genuinely wants the lot.
     """
-    if limit is not None and limit < 1:
-        # `limit=0` means "no limit" to whoever passed it and "nothing matched"
-        # in the answer; nothing good is downstream of guessing which.
-        raise BadRequest("limit must be at least 1, or omitted for the default "
-                         f"of {DEFAULT_LOCATION_LIMIT}")
+    if limit is not None:
+        # Before the comparison, because a model writing `"10"` is likelier
+        # than one writing 10, and `"10" < 1` is a TypeError -- not a CoreError,
+        # so it escapes the transports as an internal error instead of a
+        # sentence. bool is an int subclass and `limit=True` is nobody's intent.
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise BadRequest(
+                f"limit must be a whole number, not {limit!r}. Omit it for the "
+                f"default of {DEFAULT_LOCATION_LIMIT}")
+        if limit < 1:
+            # `limit=0` means "no limit" to whoever passed it and "nothing
+            # matched" in the answer; nothing good is downstream of guessing.
+            raise BadRequest("limit must be at least 1, or omitted for the "
+                             f"default of {DEFAULT_LOCATION_LIMIT}")
     needle = (name_contains or "").strip().lower()
     matched = [l for l in locs
                if not needle or needle in (l.get("name") or "").lower()]
@@ -371,8 +383,14 @@ def agent_status(client, harbor_id, ship_id):
         # want different next steps.
         "heartbeat_age_s": int(time.time() - hb) if hb else None,
         "installed_version": ship.get("installedVersion"),
-        # This read does carry the heartbeat, so the unknown ship_reporting
-        # allows for cannot arise here -- a bool is what a status answers with.
+        # A bool, and it does not carry the third case on its own: an agent that
+        # has never reported answers False here exactly as one that went quiet
+        # does. `heartbeat_age_s` above is what separates them -- null for the
+        # first, a number for the second -- and it is the pair a caller reads,
+        # which is why the two get different `next` steps and why a test pins
+        # that rather than this comment promising it. Not widened to null:
+        # `online` is a boolean in the web API's own contract, and squeezing
+        # "unknown" into it would break a consumer that already branches on it.
         "online": bool(ship_reporting(ship)),
     }
 

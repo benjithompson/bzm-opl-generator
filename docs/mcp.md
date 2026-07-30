@@ -74,9 +74,17 @@ name) rather than raising `limit`, and use `show` for the ships of the one you
 pick. Whatever the cap or the filter left out comes back as a count with a
 sentence saying so — a listing that quietly stopped would read as the whole
 account, and "that location does not exist" is a worse answer than a response
-that was too big. `ships_reporting` is `null`, not `0`, where the payload
-carried no heartbeat to judge by; `opl_agent status` is the authority on a
-single agent.
+that was too big.
+
+Two counts describe the agents, because one cannot carry both facts.
+`ships_reporting` counts only the agents the payload vouches for, and
+`ships_unknown` those it carried no heartbeat to judge by — so a location with
+one live agent and one heartbeat-less record reports `1` and `1` rather than
+hiding the live one. A `0` beside a non-zero `ships_unknown` means "none that we
+could see", not "none alive", and where *nothing* is vouched for
+`ships_reporting` is `null` rather than `0`. Don't redeploy on the strength of a
+zero: `opl_agent status` is the authority on a single agent, and `show` gives
+the per-ship detail (each with its own `reporting`) for the location you pick.
 
 `opl_preflight doctor` and `suggest` take `evidence` as either the **path** of
 the cluster-evidence JSON the customer sent — read here, on the machine running

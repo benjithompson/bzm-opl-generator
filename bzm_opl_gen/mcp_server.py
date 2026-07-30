@@ -42,7 +42,8 @@ from typing import Any, Literal
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-from . import __version__, core, generate as gen_mod, facts as facts_mod, livetest
+from . import (__version__, core, doctor, generate as gen_mod,
+               facts as facts_mod, livetest)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -297,9 +298,16 @@ def _location(action, args):
             account_id = (core.user(client).get("defaultProject") or {}).get("accountId")
             core.require_location_scope(account_id, workspace_id)
         locs = core.locations(client, account_id, workspace_id)
+        # `.get(key, default)` fills in only an *absent* key, and `{"limit":
+        # null}` is an ordinary way for a client to say "unset" -- which reached
+        # core as "no cap" and handed back the whole account this action exists
+        # to keep out of a result. Uncapped is not offered here on purpose:
+        # raising the cap is a number, and there is no size a session's result
+        # budget cannot be broken by.
+        limit = args.get("limit")
         sel = core.select_locations(
             locs, name_contains=args.get("name_contains"),
-            limit=args.get("limit", core.DEFAULT_LOCATION_LIMIT))
+            limit=core.DEFAULT_LOCATION_LIMIT if limit is None else limit)
         body = {"account_id": account_id, "workspace_id": workspace_id,
                 "total": sel["total"], "matched": sel["matched"],
                 "returned": sel["returned"],
@@ -399,12 +407,20 @@ def _location_brief(loc):
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
             "ship_count": len(ships),
-            # null, not 0: a listing that carried no heartbeat cannot say an
-            # agent is silent, and 0 would have a session redeploy a working
-            # one. Counted, not summed to a bool, because "one of two" is the
-            # case somebody has to look at.
-            "ships_reporting": (None if any(r is None for r in reporting)
-                                else sum(reporting))}
+            # Two counts, because one cannot carry both facts. `ships_reporting`
+            # counts only agents the payload vouches for, so a location with one
+            # live agent and one heartbeat-less record still shows the live one
+            # -- reporting the pair as wholly unknown lost exactly the "one of
+            # two" signal a count exists to give. `ships_unknown` is how a
+            # reader tells 0-because-we-looked from 0-because-we-could-not, so
+            # nobody redeploys a working agent on the strength of a zero. Where
+            # nothing at all is vouched for, `ships_reporting` is null rather
+            # than 0: with every ship unknown there is no count to give, and a 0
+            # beside it would be read as "none alive".
+            "ships_reporting": (None if reporting and all(r is None
+                                                          for r in reporting)
+                                else sum(1 for r in reporting if r)),
+            "ships_unknown": sum(1 for r in reporting if r is None)}
 
 
 def _omission_note(sel, name_contains):
@@ -645,7 +661,7 @@ def _preflight(action, args):
             # and a session with no checkout has no way to find that out.
             raise core.BadRequest(
                 f"doctor needs `evidence`: the JSON produced by "
-                f"{core.doctor.EVIDENCE_SCRIPT}, which someone with cluster "
+                f"{doctor.EVIDENCE_SCRIPT}, which someone with cluster "
                 f"access runs read-only and sends back "
                 f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
                 f"for). Pass the path of the file they sent, or the object "

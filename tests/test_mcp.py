@@ -13,6 +13,7 @@ reports a clean pass having tested nothing.
 
 import json
 import os
+import time
 
 import anyio
 import mcp
@@ -351,6 +352,59 @@ def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
     Reported as null, so nobody redeploys an agent that was working."""
     entry = ok("opl_location", "list")["locations"][0]
     assert entry["ship_count"] == 1 and entry["ships_reporting"] is None
+
+
+def test_an_explicit_null_limit_still_gets_the_default_cap(big_account):
+    """`{"limit": null}` is an ordinary way for a client to say "unset".
+
+    `args.get("limit", DEFAULT)` only defaults an *absent* key, so an explicit
+    null arrived as `limit=None`, which core reads as "no cap" -- handing back
+    the whole 171-location account this tool exists to keep out of a result.
+    """
+    body = ok("opl_location", "list", {"limit": None})
+    assert body["returned"] == core.DEFAULT_LOCATION_LIMIT
+    assert body["omitted_by_limit"] == 171 - core.DEFAULT_LOCATION_LIMIT
+
+
+def test_a_limit_that_is_not_a_number_is_refused_not_a_crash(big_account):
+    """A model writing `"10"` is likelier than a model writing 10.
+
+    Compared against 1, a string raises TypeError, which is not a CoreError and
+    so escapes `_answer` as an SDK internal error rather than a sentence."""
+    assert "limit" in err("opl_location", "list", {"limit": "10"}).lower()
+    assert "limit" in err("opl_location", "list", {"limit": 1.5}).lower()
+
+
+def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
+    """`ships_reporting` went null if *any* ship lacked a heartbeat, so a
+    location with a working agent and a heartbeat-less record reported wholly
+    unknown -- losing the "one of two" signal the count exists to give."""
+    c = FakeClient(locations=[{"id": "h9", "name": "mixed", "slots": 2,
+                               "funcIds": ["performance"], "ships": [
+        {"id": "live", "state": "idle", "lastHeartBeat": int(time.time())},
+        {"id": "nohb", "state": "idle"}]}])
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    entry = ok("opl_location", "list")["locations"][0]
+    assert entry["ship_count"] == 2
+    assert entry["ships_reporting"] == 1, "the live agent must still show"
+    assert entry["ships_unknown"] == 1, "and the one nobody can vouch for"
+
+
+def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
+    """Both answer `online: false`, so the pair with `heartbeat_age_s` is what
+    keeps them apart -- and only a test keeps that structural. Redeploying is
+    the answer to one and not the other."""
+    def status_of(ship):
+        c = FakeClient(harbor={"id": "h1", "name": "loc", "ships": [ship]})
+        monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+        return ok("opl_agent", "status", {"harbor_id": "h1", "ship_id": "s1"})
+
+    never = status_of({"id": "s1", "state": "created"})
+    quiet = status_of({"id": "s1", "state": "idle", "lastHeartBeat": 1})
+    assert never["online"] is False and quiet["online"] is False
+    assert never["heartbeat_age_s"] is None and quiet["heartbeat_age_s"]
+    assert "not reached BlazeMeter" in " ".join(never["next"])
+    assert "gone quiet" in " ".join(quiet["next"])
 
 
 def test_narrowing_by_name_counts_what_the_filter_removed(big_account):
