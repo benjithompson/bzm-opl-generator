@@ -51,9 +51,12 @@ import { SvGroup } from "./groups/SvGroup";
 // THROWAWAY (?variant=A|B|C) -- three layouts for the configure step's feature
 // and group split. Delete src/prototype/ and these three references with it.
 import { VariantA, VariantB, VariantC, VariantD } from "./prototype/ConfigureVariants";
-import { PrototypeSwitcher, shellFor, stepFor, variantFromUrl } from "./prototype/PrototypeSwitcher";
+import {
+  agentFor, PrototypeSwitcher, shellFor, stepFor, variantFromUrl,
+} from "./prototype/PrototypeSwitcher";
 import { PreviewShell } from "./prototype/ShellVariants";
 import { StepFlow } from "./prototype/StepVariants";
+import { AgentStep } from "./prototype/AgentStepVariants";
 
 const PROTO_VARIANT = variantFromUrl();
 // D onwards take the preview out of the right-hand column, so the page is one
@@ -61,6 +64,8 @@ const PROTO_VARIANT = variantFromUrl();
 const PROTO_SHELL = shellFor(PROTO_VARIANT);
 // H-J additionally show one step at a time.
 const PROTO_STEPS = stepFor(PROTO_VARIANT);
+// K-M rebuild step 1's location and agent panels on top of that.
+const PROTO_AGENT = agentFor(PROTO_VARIANT);
 
 // Why performance and service virtualization want separate agents, and so
 // separate namespaces: one agent serving both puts mocks and load engines in a
@@ -311,6 +316,26 @@ export default function App() {
   // it. The same derivation is why Cancel appears only when there is a list to
   // go back to.
   const creatingShip = showCreateShip || ships.length === 0;
+
+  // Creating the agent identity. A named function rather than the button's own
+  // handler because the step-1 prototypes render their own button and this is a
+  // real write to the account -- one copy of it, or they drift.
+  const createShipNow = async () => {
+    try {
+      const r = await api.createShip(harborId!, newShipName);
+      const ls = await api.locations(workspaceId!);
+      setLocations(ls); setShipId(r.ship.id); setNewShipName("");
+      setShowCreateShip(false);
+      // The whole point of #64: the credential is captured at the one moment
+      // it is free -- a ship created a second ago has no previous token for
+      // the issue to invalidate -- so every download from here on carries it
+      // without asking BlazeMeter for another. Nothing stores it, so the field
+      // below is the copy to keep.
+      setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+      setShipTokenNotice(r.token_error);
+      api.facts(harborId!).then(setFacts).catch(() => {});
+    } catch (e) { setShipErr(String((e as Error).message)); }
+  };
 
   // debounced live preview
   const previewTimer = useRef<number>();
@@ -845,6 +870,84 @@ export default function App() {
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
 
+  // THROWAWAY: the two bits of step 1 the K/L/M prototypes reuse rather than
+  // restate -- neither is what they are changing, and a second copy of the
+  // create-location form would be a second place to fix.
+  const accountWorkspaceNode = (
+    <div className="grid grid-cols-2 gap-2">
+      <Field label="Account">
+        <SearchSelect
+          options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+          value={accountId} disabled={!who}
+          onChange={(v) => setAccountId(Number(v))} />
+      </Field>
+      <Field label="Workspace">
+        <SearchSelect
+          options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
+          value={workspaceId} disabled={!who || workspaces.length === 0}
+          onChange={(v) => setWorkspaceId(Number(v))} />
+      </Field>
+    </div>
+  );
+  const createLocationNode = (
+    <>
+      <ErrorMsg msg={locErr} />
+      <Button kind="ghost" disabled={!who}
+        onClick={() => { setLocErr(null); setShowCreateLoc(true); }}>
+        + New location (new harbor_id)
+      </Button>
+    </>
+  );
+  // Lifted out of the Private location panel so both it and a prototype panel
+  // can show the same form -- it is the shipped one, moved, not a copy.
+  const createLocationFormNode = (
+    <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
+      <p className="text-xs font-semibold text-slate-700">
+        New private location
+      </p>
+      <Field label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
+        <TextInput value={newLoc.name}
+          onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
+      <div className="flex gap-4 items-end">
+        <div className="flex gap-3 flex-wrap">
+          {funcIdChoices.map((c) => (
+            <Check key={c.id} label={c.label}
+              checked={newLoc.func_ids.includes(c.id)}
+              onChange={(on) => setNewLoc({
+                ...newLoc,
+                func_ids: on ? [...newLoc.func_ids, c.id]
+                  : newLoc.func_ids.filter((x) => x !== c.id),
+              })} />
+          ))}
+        </div>
+        <Field label="Slots" hint="concurrent engines">
+          <input type="number" min={1} className={inputCls + " w-20"}
+            value={newLoc.slots}
+            onChange={(e) => setNewLoc({ ...newLoc, slots: Number(e.target.value) })} />
+        </Field>
+        <Field label="Threads per engine" hint="required — tests can't start without it">
+          <input type="number" min={1} className={inputCls + " w-24"}
+            value={newLoc.threads_per_engine}
+            onChange={(e) => setNewLoc({ ...newLoc, threads_per_engine: Number(e.target.value) })} />
+        </Field>
+      </div>
+      <div className="flex gap-2">
+        <Button disabled={!newLoc.name || !newLoc.workspace_id}
+          onClick={async () => {
+            try {
+              const l = await api.createLocation({ ...newLoc, account_id: accountId! });
+              const ls = await api.locations(workspaceId!);
+              setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
+            } catch (e) { setLocErr(String((e as Error).message)); }
+          }}>Create</Button>
+        <Button kind="ghost"
+          onClick={() => { setLocErr(null); setShowCreateLoc(false); }}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen">
       <header className="bg-white border-b border-slate-200 px-6 py-3 sticky top-0 z-10">
@@ -1001,6 +1104,23 @@ export default function App() {
           {/* Picking and creating are one-of, and the hint says which you are
               in: with both on screen at once it was never obvious which half
               of the step you were meant to fill in. */}
+          {/* THROWAWAY: K/L/M rebuild the location and agent panels. The
+              create-location form below stays App's, and shows over either. */}
+          {PROTO_AGENT ? (
+            <AgentStep variant={PROTO_AGENT}
+              locations={locations} filteredLocs={filteredLocs}
+              locFilter={locFilter} setLocFilter={setLocFilter}
+              harborId={harborId} setHarborId={setHarborId} location={location}
+              ships={ships} shipId={shipId}
+              pickShip={(id) => { setShipId(id); forgetToken(); }}
+              shipOnline={shipOnline} locLabels={locLabels}
+              creating={creatingShip} setCreating={setShowCreateShip}
+              newShipName={newShipName} setNewShipName={setNewShipName}
+              createShip={createShipNow} shipErr={shipErr}
+              shipTokenNotice={shipTokenNotice} facts={facts} who={who}
+              accountWorkspace={accountWorkspaceNode}
+              createLocationBlock={showCreateLoc ? null : createLocationNode} />
+          ) : (<>
           <SubSection title="Private location" done={!!harborId}
             hint={showCreateLoc
               ? "Creating a new location — the existing ones are hidden until you create or cancel. Cancel keeps whatever you had selected."
@@ -1076,53 +1196,7 @@ export default function App() {
                 </>
               )}
               <ErrorMsg msg={locErr} />
-              {showCreateLoc && (
-                <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
-                  <p className="text-xs font-semibold text-slate-700">
-                    New private location
-                  </p>
-                  <Field label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
-                    <TextInput value={newLoc.name}
-                      onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
-                  <div className="flex gap-4 items-end">
-                    <div className="flex gap-3 flex-wrap">
-                      {funcIdChoices.map((c) => (
-                        <Check key={c.id} label={c.label}
-                          checked={newLoc.func_ids.includes(c.id)}
-                          onChange={(on) => setNewLoc({
-                            ...newLoc,
-                            func_ids: on ? [...newLoc.func_ids, c.id]
-                              : newLoc.func_ids.filter((x) => x !== c.id),
-                          })} />
-                      ))}
-                    </div>
-                    <Field label="Slots" hint="concurrent engines">
-                      <input type="number" min={1} className={inputCls + " w-20"}
-                        value={newLoc.slots}
-                        onChange={(e) => setNewLoc({ ...newLoc, slots: Number(e.target.value) })} />
-                    </Field>
-                    <Field label="Threads per engine" hint="required — tests can't start without it">
-                      <input type="number" min={1} className={inputCls + " w-24"}
-                        value={newLoc.threads_per_engine}
-                        onChange={(e) => setNewLoc({ ...newLoc, threads_per_engine: Number(e.target.value) })} />
-                    </Field>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button disabled={!newLoc.name || !newLoc.workspace_id}
-                      onClick={async () => {
-                        try {
-                          const l = await api.createLocation({ ...newLoc, account_id: accountId! });
-                          const ls = await api.locations(workspaceId!);
-                          setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
-                        } catch (e) { setLocErr(String((e as Error).message)); }
-                      }}>Create</Button>
-                    <Button kind="ghost"
-                      onClick={() => { setLocErr(null); setShowCreateLoc(false); }}>
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              )}
+              {showCreateLoc && createLocationFormNode}
             </div>
           </SubSection>
 
@@ -1145,23 +1219,7 @@ export default function App() {
                   </Field>
                   <div className="flex gap-2">
                     <Button disabled={!harborId || !newShipName}
-                      onClick={async () => {
-                        try {
-                          const r = await api.createShip(harborId!, newShipName);
-                          const ls = await api.locations(workspaceId!);
-                          setLocations(ls); setShipId(r.ship.id); setNewShipName("");
-                          setShowCreateShip(false);
-                          // The whole point of #64: the credential is captured at
-                          // the one moment it is free -- a ship created a second
-                          // ago has no previous token for the issue to invalidate
-                          // -- so every download from here on carries it without
-                          // asking BlazeMeter for another. Nothing stores it, so
-                          // the field below is the copy to keep.
-                          setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-                          setShipTokenNotice(r.token_error);
-                          api.facts(harborId!).then(setFacts).catch(() => {});
-                        } catch (e) { setShipErr(String((e as Error).message)); }
-                      }}>Create</Button>
+                      onClick={createShipNow}>Create</Button>
                     {/* Only where there is a list to come back to -- see
                         creatingShip. The selection it comes back to is shipId,
                         which nothing in this form touches. */}
@@ -1220,6 +1278,7 @@ export default function App() {
               )}
             </div>
           </SubSection>
+          </>)}
               </>
               )}
 

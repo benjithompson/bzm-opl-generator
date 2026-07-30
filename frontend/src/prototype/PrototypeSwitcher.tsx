@@ -1,7 +1,8 @@
 // THROWAWAY. Floating variant switcher for the configure-step prototype.
 // Delete with the rest of src/prototype/ once a layout is picked.
 
-const KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"] as const;
+const KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+              "K", "L", "M"] as const;
 export type VariantKey = (typeof KEYS)[number];
 
 export const VARIANT_NAMES: Record<VariantKey, string> = {
@@ -18,6 +19,11 @@ export const VARIANT_NAMES: Record<VariantKey, string> = {
   H: "G · one step, collapsed neighbours, footer controls",
   I: "G · one step, top stepper, controls in the bar",
   J: "G · one step, arrows at the middle of each edge",
+  // K-M keep I+G (the chosen flow) and change step 1: how a location's agents
+  // are shown, and what an empty location looks like.
+  K: "I+G · agent count on every location row",
+  L: "I+G · locations left, that location's agents right",
+  M: "I+G · a path line that names the missing agent",
 };
 
 /** Which preview placement a variant uses -- itself for D-G, and G for the
@@ -27,13 +33,22 @@ export type ShellKey = "D" | "E" | "F" | "G";
 export function shellFor(v: VariantKey | null): ShellKey | null {
   if (!v) return null;
   if ("DEFG".includes(v)) return v as ShellKey;
-  return "HIJ".includes(v) ? "G" : null;
+  return "HIJKLM".includes(v) ? "G" : null;
 }
 
-/** Which step flow, if any. A-G leave the three panels stacked. */
+/** Which step flow, if any. A-G leave the three panels stacked; K-M inherit I,
+ *  the chosen one, because they are prototyping something inside it. */
 export type StepKey = "H" | "I" | "J";
-export const stepFor = (v: VariantKey | null): StepKey | null =>
-  v && "HIJ".includes(v) ? (v as StepKey) : null;
+export function stepFor(v: VariantKey | null): StepKey | null {
+  if (!v) return null;
+  if ("HIJ".includes(v)) return v as StepKey;
+  return "KLM".includes(v) ? "I" : null;
+}
+
+/** Which rebuild of step 1's location/agent panels, if any. */
+export type AgentKey = "K" | "L" | "M";
+export const agentFor = (v: VariantKey | null): AgentKey | null =>
+  v && "KLM".includes(v) ? (v as AgentKey) : null;
 
 /** Which variant the URL asks for, or null for the shipped layout. Read from
  *  the location rather than state: there is no router in this app, and a
