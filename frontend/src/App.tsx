@@ -51,13 +51,16 @@ import { SvGroup } from "./groups/SvGroup";
 // THROWAWAY (?variant=A|B|C) -- three layouts for the configure step's feature
 // and group split. Delete src/prototype/ and these three references with it.
 import { VariantA, VariantB, VariantC, VariantD } from "./prototype/ConfigureVariants";
-import { isShell, PrototypeSwitcher, variantFromUrl } from "./prototype/PrototypeSwitcher";
+import { PrototypeSwitcher, shellFor, stepFor, variantFromUrl } from "./prototype/PrototypeSwitcher";
 import { PreviewShell } from "./prototype/ShellVariants";
+import { StepFlow } from "./prototype/StepVariants";
 
 const PROTO_VARIANT = variantFromUrl();
-// D-G take the preview out of the right-hand column, so the page is one column
-// and the shell decides where the preview goes.
-const PROTO_SHELL = isShell(PROTO_VARIANT) ? PROTO_VARIANT : null;
+// D onwards take the preview out of the right-hand column, so the page is one
+// column and the shell decides where the preview goes.
+const PROTO_SHELL = shellFor(PROTO_VARIANT);
+// H-J additionally show one step at a time.
+const PROTO_STEPS = stepFor(PROTO_VARIANT);
 
 // Why performance and service virtualization want separate agents, and so
 // separate namespaces: one agent serving both puts mocks and load engines in a
@@ -865,7 +868,14 @@ export default function App() {
       <main className={PROTO_SHELL
         ? "max-w-screen-xl mx-auto p-6"
         : "max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6"}>
-        <div className="space-y-5">
+        {/* THROWAWAY: with no step variant this is the same `space-y-5` div it
+            has always been. `done` is what the panels cannot say for
+            themselves -- whether the step is finished enough to leave. */}
+        <StepFlow variant={PROTO_STEPS} done={[
+          !!facts && !!shipId,
+          namespaceOk && saOk && incomplete.length === 0,
+          false,
+        ]}>
           {/* 1 · Where the harbor id, ship id and token come from.
               Three steps folded into one: connected they are picked from the
               account, manually they are typed. Both end at the same three
@@ -1804,7 +1814,7 @@ export default function App() {
               </div>
             </div>
           </Section>
-        </div>
+        </StepFlow>
 
         {/* THROWAWAY: the preview column exists only where the preview is
             beside the form. A shell owns it instead. */}

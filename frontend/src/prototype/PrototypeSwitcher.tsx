@@ -1,7 +1,7 @@
 // THROWAWAY. Floating variant switcher for the configure-step prototype.
 // Delete with the rest of src/prototype/ once a layout is picked.
 
-const KEYS = ["A", "B", "C", "D", "E", "F", "G"] as const;
+const KEYS = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"] as const;
 export type VariantKey = (typeof KEYS)[number];
 
 export const VARIANT_NAMES: Record<VariantKey, string> = {
@@ -13,14 +13,27 @@ export const VARIANT_NAMES: Record<VariantKey, string> = {
   E: "A+rail · preview inline at the end",
   F: "A+rail · preview slides over the right",
   G: "A+rail · Configure / Preview tabs",
+  // H-J keep G (the chosen preview placement) and change the steps instead:
+  // one panel open at a time, controls that never move.
+  H: "G · one step, collapsed neighbours, footer controls",
+  I: "G · one step, top stepper, controls in the bar",
+  J: "G · one step, arrows at the middle of each edge",
 };
 
-/** The four that take the preview out of the right-hand column and give the
- *  form the whole width. Shared with App, which drops its two-column grid for
- *  them. */
-export const SHELL_KEYS = ["D", "E", "F", "G"] as const;
-export const isShell = (v: VariantKey | null): v is "D" | "E" | "F" | "G" =>
-  !!v && (SHELL_KEYS as readonly string[]).includes(v);
+/** Which preview placement a variant uses -- itself for D-G, and G for the
+ *  step-flow variants built on top of it. Null keeps the shipped two-column
+ *  page. Shared with App, which drops its grid whenever this is set. */
+export type ShellKey = "D" | "E" | "F" | "G";
+export function shellFor(v: VariantKey | null): ShellKey | null {
+  if (!v) return null;
+  if ("DEFG".includes(v)) return v as ShellKey;
+  return "HIJ".includes(v) ? "G" : null;
+}
+
+/** Which step flow, if any. A-G leave the three panels stacked. */
+export type StepKey = "H" | "I" | "J";
+export const stepFor = (v: VariantKey | null): StepKey | null =>
+  v && "HIJ".includes(v) ? (v as StepKey) : null;
 
 /** Which variant the URL asks for, or null for the shipped layout. Read from
  *  the location rather than state: there is no router in this app, and a
