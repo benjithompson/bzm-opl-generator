@@ -120,12 +120,10 @@ function EmptyLocation({ name }: { name: string }) {
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
       <p className="text-xs text-amber-900">
-        <b>{name}</b> has no agents yet — nothing is deployed to it and no
-        bundle can name one.
+        <b>{name}</b> has no agents yet — nothing is deployed to it.
       </p>
       <p className="text-[11px] text-amber-700 mt-0.5">
-        Create the first agent below. Its AUTH_TOKEN is issued once, at that
-        moment, and kept in the field under this step.
+        Create the first one below; its AUTH_TOKEN is issued then, once.
       </p>
     </div>
   );
@@ -458,7 +456,7 @@ function VariantM(p: AgentStepProps) {
       </div>
 
       <SubSection title="Private location" done={!!p.harborId}
-        hint="The location = harbor. Agents belong to it.">
+        hint="A location holds agents.">
         <div className="space-y-3">
           {p.accountWorkspace}
           {/* Above the list, like the agent panel below: the two pickers now
@@ -503,7 +501,7 @@ function VariantM(p: AgentStepProps) {
       </SubSection>
 
       <SubSection title="Agent (ship)" done={!!p.shipId}
-        hint="One agent = one deployment. It lives inside the location above.">
+        hint="One agent = one deployment, inside the location above.">
         <div className="space-y-3">
           {/* Reading the location: its agents and its image inventory arrive
               together, and an empty list before they land would read as an
@@ -600,13 +598,24 @@ function VariantM(p: AgentStepProps) {
                               })[arm]}>
                               {issuing && <Spinner className="text-white" />}
                               {issuing ? "Regenerating…"
-                                : { idle: "Regenerate token", armed: "Are you sure?",
+                                : { idle: "Regenerate token", armed: "I'm sure",
                                     done: "Regenerated" }[arm]}
                             </button>
+                            {/* Armed has to have a way out. Without it the only
+                                exits are pressing the destructive button or
+                                clicking the row shut, and one of those does the
+                                thing you were backing away from. */}
+                            {arm === "armed" && !issuing && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setArm("idle"); }}
+                                className="text-[11px] font-medium rounded px-2 py-1 border border-slate-300 text-slate-600 hover:bg-slate-100">
+                                Cancel
+                              </button>
+                            )}
                             {!p.hasToken && arm === "idle" && (
                               <span className="text-[11px] text-slate-500">
-                                its token was issued once, when this agent was
-                                created, and no API reads one back
+                                its token was issued once, at creation, and cannot
+                                be read back
                               </span>
                             )}
                           </div>
@@ -617,34 +626,27 @@ function VariantM(p: AgentStepProps) {
                           {arm === "armed" && (
                             <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2">
                               <p className="text-xs font-semibold text-red-900">
-                                This takes down whatever is running as{" "}
-                                {s.name || s.id}.
+                                This kills the token {s.name || s.id} is running on.
                               </p>
                               <p className="text-[11px] text-red-800 mt-0.5">
-                                {rotateHazard(s.id)}
-                              </p>
-                              <p className="text-[11px] text-red-800 mt-0.5">
-                                Creating a new agent instead costs nothing and
-                                leaves that install alone. Press again to confirm.
+                                {rotateHazard(s.id)} A new agent instead costs
+                                nothing and leaves that install alone.
                               </p>
                             </div>
                           )}
                           {arm === "done" && (
                             <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
-                              A new AUTH_TOKEN was issued for <b>{s.name || s.id}</b>{" "}
-                              and put in the field above — this bundle is the only
-                              copy. The previous one is dead: re-apply this bundle
-                              wherever that agent was running.{" "}
-                              <span className="font-semibold">PROTOTYPE: the value
-                              is a stub, not a credential — issuing a real one needs
-                              an endpoint this build does not have.</span>
+                              New AUTH_TOKEN for <b>{s.name || s.id}</b>, in the
+                              field above — this bundle is the only copy. Re-apply
+                              it wherever that agent was running.{" "}
+                              <span className="font-semibold">PROTOTYPE: a stub,
+                              not a credential.</span>
                             </p>
                           )}
                           {up && (
                             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                              <b>{s.name || s.id}</b> is online — it is already
-                              running somewhere. Deploying a second agent on this
-                              identity will conflict.
+                              <b>{s.name || s.id}</b> is online — already running
+                              somewhere. A second deployment on it will conflict.
                             </p>
                           )}
                         </div>

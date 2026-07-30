@@ -18,10 +18,9 @@ import { TokenBranch, TokenReport } from "./api";
  *  copy is not that one: it is said while the box is being ticked, which is the
  *  only moment at which anybody can still decide not to. */
 export const rotateHazard = (shipId: string | null) =>
-  `Issuing a new AUTH_TOKEN${shipId ? ` for agent ${shipId}` : ""} kills the `
-  + "current one immediately. Any agent already running on it starts answering "
-  + "404 and sits at 0/1 Running — which looks like a slow boot — until this "
-  + "bundle is re-applied, Secret included.";
+  `A new AUTH_TOKEN${shipId ? ` for agent ${shipId}` : ""} kills the current one `
+  + "at once: anything already running on it answers 404 and sits at 0/1 "
+  + "Running until this bundle is re-applied, Secret included.";
 
 export interface DownloadPlan {
   /** Whether asking for the bundle will issue a credential. */

@@ -1006,7 +1006,7 @@ export default function App() {
               values, so they belong in one place rather than three that only
               one mode ever uses. */}
           <Section n={1} title="Agent details" done={!!facts && !!shipId}
-            hint="harbor_id, ship_id and AUTH_TOKEN — read from your account, or entered by hand.">
+            hint="harbor_id, ship_id and AUTH_TOKEN — from your account, or typed.">
             <div className="space-y-3">
               <SegmentedControl
                 value={sourceMode}
@@ -1098,7 +1098,7 @@ export default function App() {
                   </Button>
                 </div>
                 <Check label="Remember this key on this machine" checked={saveKey} onChange={setSaveKey}
-                  hint="applies to Browse & paste — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
+                  hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
                 <details className="text-sm">
                   <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
                   <div className="mt-2 space-y-2">
@@ -1319,7 +1319,7 @@ export default function App() {
               {sourceMode === "connect" && shipId && PROTO_AGENT !== "M" && (
                 <div className="border-t border-slate-100 pt-3 space-y-1.5">
                   <Field label="Agent AUTH_TOKEN"
-                    hint="Goes into the Secret. Held for this browser session only — nothing here writes it down.">
+                    hint="Goes into the Secret. Held for this browser session only.">
                     <SecretInput value={raw("auth_token")}
                       onChange={(v) => set("auth_token", v || null)}
                       placeholder="paste the token this agent was created with" />
@@ -1330,10 +1330,9 @@ export default function App() {
                       shown beside the download rather than restated here. */}
                   {!raw("auth_token") && (
                     <p className="text-[11px] text-slate-500">
-                      Empty for an existing agent, deliberately — its token was
-                      issued once, when it was created, and nothing can read that
-                      one back. Paste what you kept, or see the note beside the
-                      download button.
+                      Empty for an existing agent: its token was issued once, at
+                      creation, and cannot be read back. Paste what you kept, or
+                      see the note by the download button.
                     </p>
                   )}
                 </div>
@@ -1429,17 +1428,14 @@ export default function App() {
                       has to change with the mode rather than claim both. */}
                   {sourceMode === "manual" ? (
                     <p className="text-[11px] text-slate-400 mt-1">
-                      Declared here, not read from an account — it decides which
-                      images the bundle names. A feature stands for one funcId
-                      here; the location's other features are not offered yet.
+                      Declared, not read from an account — it decides which images
+                      the bundle names. One funcId per feature here.
                     </p>
                   ) : (
                     <p className="text-[11px] text-slate-400 mt-1">
-                      The location's own features decide what the manifests
-                      contain. Anything already set under a feature stays set and
-                      stays in the bundle — including under one this location
-                      does not run, which is why those say so rather than
-                      silently dropping it.
+                      The location's features decide what the manifests contain.
+                      Anything set under a feature stays in the bundle, including
+                      one this location does not run — those rows say so.
                     </p>
                   )}
                   {locUnclaimed.length > 0 && (
@@ -1467,9 +1463,8 @@ export default function App() {
                   {namespaceOk && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-sm">✓</span>}
                 </div>
                 <span className="text-[11px] text-slate-400">
-                  the only required setting — every group below is optional. One
-                  is suggested per feature, because {KIND_COUPLING}; anything
-                  you type here outranks the suggestion.
+                  the only required setting. One is suggested per feature, because{" "}
+                  {KIND_COUPLING}; what you type wins.
                 </span>
               </label>
 
@@ -1490,25 +1485,23 @@ export default function App() {
                     placeholder="e.g. crane"
                     onChange={(e) => set("service_account_name", e.target.value)} />
                   <span className="text-[11px] text-slate-400">
-                    what the agent runs as, and what the RoleBinding grants to —
-                    used whether or not the bundle creates it
+                    what the agent runs as, and what the RoleBinding grants to
                   </span>
                 </label>
                 <div className="pt-5 w-56">
                   <Check label="Create it"
                     hint={saCreate
                       ? "the bundle includes the ServiceAccount"
-                      : "already exists: referenced, not created — nothing here creates it, and the agent pod is never scheduled if the name is wrong"}
+                      : "referenced, not created — a wrong name leaves the agent pod unscheduled"}
                     checked={saCreate}
                     onChange={(v) => set("service_account_create", v)} />
                 </div>
               </div>
               {facts && (
                 <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                  Images are selected automatically from the location's enabled
-                  features ({facts.func_ids?.join(", ") || "performance"}) —
-                  performance engines always; browser/grid, mock-service, SV and
-                  recorder images only when that feature is on.
+                  Images follow the location's features
+                  ({facts.func_ids?.join(", ") || "performance"}): engines always;
+                  browser/grid, mock-service, SV and recorder only when on.
                 </p>
               )}
 
@@ -1535,7 +1528,7 @@ export default function App() {
                 </summary>
                 <div className="px-4 pb-3 pt-1 grid grid-cols-2 gap-3">
                   <Field label="Security posture"
-                    hint="the SCC-friendly posture works on both OpenShift and vanilla k8s; the pinned-UID variant exists only for clusters that reject it">
+                    hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
                     <select className={inputCls} value={String(options.platform)}
                       onChange={(e) => set("platform", e.target.value)}>
                       <option value="openshift">Unified SCC-friendly (recommended)</option>
@@ -1619,7 +1612,7 @@ export default function App() {
                 <div className="space-y-1.5">
                   <Check checked={rotate} onChange={setRotate}
                     label="Issue a NEW AUTH_TOKEN with this bundle (rotates)"
-                    hint="For an agent whose token nobody kept. It replaces the credential rather than reading it — there is no API that reads one back." />
+                    hint="For an agent whose token nobody kept — it replaces the credential; none can be read back." />
                   {tokenPlan.warning && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
                       {tokenPlan.warning}
@@ -1702,12 +1695,11 @@ export default function App() {
                       Preflight the target cluster
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      Nothing here reads a cluster: have someone with access run{" "}
+                      Nothing here reads a cluster. Have someone with access run{" "}
                       <code className="font-mono">{EVIDENCE_SCRIPT}</code>{" "}
-                      (read-only, creates nothing, reads no secret value) and
-                      pick the file it wrote. The checks are the ones{" "}
-                      <code className="font-mono">bzm-opl-gen doctor</code> runs,
-                      against the configuration above.
+                      (read-only, reads no secret value) and pick the file it
+                      wrote — the same checks{" "}
+                      <code className="font-mono">bzm-opl-gen doctor</code> runs.
                     </p>
                   </div>
                   {/* A label rather than a Button so the file dialog is the
@@ -1731,9 +1723,8 @@ export default function App() {
                 </div>
                 {!facts && (
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Needs the agent details above — these checks measure the
-                    cluster against the location's slots, engine size and
-                    namespace.
+                    Needs the agent details above: the checks measure the cluster
+                    against this location's slots, engine size and namespace.
                   </p>
                 )}
                 <ErrorMsg msg={preflight.error} />
@@ -1830,7 +1821,7 @@ export default function App() {
                 <>
                 <div className="flex items-center gap-3">
                   <Check label="Watch agent status" checked={polling} onChange={setPolling}
-                    hint="polls the BlazeMeter API every 10s — flips green once your applied deployment heartbeats" />
+                    hint="polls every 10s — green once the applied deployment heartbeats" />
                   {status && (
                     <span className={`text-sm font-medium px-2.5 py-1 rounded-full ${status.online ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
                       {status.online ? "● online" : "○ waiting"} — {status.state}
