@@ -29,6 +29,34 @@ crane's istio backend reads it — setting it elsewhere would silently do nothin
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
 already exist (the generator names it, it does not create it).
 
+## Not using it on a location that offers it
+
+Accounts routinely have locations carrying `mockServices` alongside
+`performance` because somebody enabled both when the location was created, and
+then run nothing but tests on them. `--sv-ingress none` is that, said out loud:
+
+```
+bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
+    --namespace blazemeter --sv-ingress none
+```
+
+The bundle is then the performance one — no ingress, no SV RBAC, no TLS secret,
+and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and `--format helm` is
+available again, since there is nothing left for the chart to be missing. What
+you give up is what the refusal was protecting: deploy a virtual service to
+this location and it will stall at `WAITING_FOR_DOMAIN`, exactly as described
+above. Nothing else changes, including the images — which image set the agent
+runs is a fact about the location, so the mock image is still in
+`IMAGE_OVERRIDES`.
+
+Unset is *not* this. An `sv_ingress` nobody has answered is still refused for
+such a location: the whole value of the refusal is that it arrives before an
+afternoon has gone into a healthy-looking mock pod that never serves, and it
+would be worth nothing if the way past it were to say nothing. In the web UI
+the switch on the **Service virtualization** group is the same decision — it
+now turns off on such a location, and the row says what was given up rather
+than going quiet.
+
 ## Which one to pick
 
 **Prefer anything but `nginx`** — on the default `service_type: CLUSTERIP`,

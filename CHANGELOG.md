@@ -123,6 +123,27 @@ anything that breaks.
 
 ### Added
 
+- **`--sv-ingress none`, for a location that offers service virtualization when
+  you only want performance.** A location carrying `mockServices` was refused
+  without an ingress, full stop — and plenty of accounts have locations carrying
+  both funcIds because somebody enabled them together, then run nothing but
+  tests on them. In the web UI the Service virtualization switch was marked
+  *required* and snapped straight back on, so there was no bundle to be had at
+  all.
+
+  The refusal stays, because unset means nobody answered and the failure it
+  catches is invisible on a cluster. `none` is the answer: the bundle is the
+  performance one — no ingress, no SV RBAC, no TLS secret — and `--format helm`
+  works again, since there is nothing left for the chart to be missing. What it
+  costs is stated rather than hidden: deploy a virtual service to such a
+  location and it stalls at `WAITING_FOR_DOMAIN`, which is what the refusal was
+  protecting you from. The images do not change — which set the agent runs is a
+  fact about the location, not about this option.
+
+  In the UI the switch now turns off, the row reads *declined* and says what was
+  given up, and `profile.json` records `sv_ingress: none`, so re-importing a
+  bundle does not land back on the refusal.
+
 - **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
   deployment without a checkout of this repo: find the location, read its real
   image references, preflight a cluster from an evidence file, and write the

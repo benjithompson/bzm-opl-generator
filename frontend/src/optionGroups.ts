@@ -30,6 +30,11 @@ export interface OptionGroup {
   hint: string;
   /** Shown instead of `hint` on a row the caller flags as required. */
   requiredHint?: string;
+  /** Shown instead of `hint` on a row the location demands and the user has
+   *  switched off anyway. A group that can be required and declined has to say
+   *  what was given up, or the row goes quiet at exactly the moment it stopped
+   *  blocking the download. */
+  declinedHint?: string;
   /** Every option key this group writes. Overlap is legal and would be listed
    *  by each owner, so the sharing is visible here rather than only to someone
    *  who reads two lifecycle functions -- there is none at present, since
@@ -50,8 +55,11 @@ export interface OptionGroup {
    *  fields it does not have to seed. */
   enable: (o: Options) => OptionPatch;
   /** Applied when the switch goes off. OFF hides the fields AND wipes their
-   *  options, so nothing hidden ever reaches the manifests. */
-  disable: (o: Options) => OptionPatch;
+   *  options, so nothing hidden ever reaches the manifests. `required` is the
+   *  location's demand, as in `incomplete`: switching a group off that the
+   *  location asks for is a decision, and only the group knows whether its
+   *  options can record one (SV's can -- see SV_NONE). */
+  disable: (o: Options, required: boolean) => OptionPatch;
   /** Is this group in use but not yet finished, so the bundle cannot generate?
    *  Declared here with everything else about the group, because the page
    *  holding one group's rule is how "adding a feature needs no frontend
@@ -122,6 +130,31 @@ export function enginePreset(o: Options): string {
  *  pod in the namespace. */
 export function serviceAccountOk(o: Options): boolean {
   return !!String(o.service_account_name ?? "").trim();
+}
+
+// -- service virtualization --------------------------------------------------
+
+/** `sv_ingress` when the location advertises mockServices and the bundle is
+ *  wanted for performance alone. It is *not* an ingress type: unset means
+ *  nobody has answered and is refused for such a location, this means answered
+ *  no.
+ *
+ *  generate.SV_INGRESS_NONE is the authority. It is not served on
+ *  /api/sv-constants the way `ingress_types` is -- that response is what the
+ *  backend picker is built from, and this is not a backend -- and the functions
+ *  below are handed options and nothing else, so it could not arrive that way
+ *  regardless. So it is a literal, and tests/test_server.py parses it out of
+ *  this file and holds it equal to the generator's, the same way the
+ *  TokenBranch union is pinned: a rename on either side otherwise leaves both
+ *  compiling. */
+export const SV_NONE = "none";
+
+/** Is this an SV configuration at all? "none" is a value like any other to
+ *  everything that reads options, so the one place that knows better is here
+ *  rather than at each `!!o.sv_ingress` -- which is what the row, the group's
+ *  own detection and the mock-status poll were all separately getting wrong. */
+export function svConfigured(ingress: unknown): boolean {
+  return !!ingress && ingress !== SV_NONE;
 }
 
 // -- the groups, in the order the form shows them ----------------------------
@@ -218,6 +251,12 @@ export const OPTION_GROUPS: OptionGroup[] = [
     title: "Service virtualization",
     hint: "only for locations with the mockServices feature",
     requiredHint: "this location runs mockServices — virtual services need an ingress",
+    // Switched off on a location that runs mockServices. Allowed, because a
+    // location often carries both funcIds and the customer runs tests on it and
+    // no virtual services at all -- but the bundle it produces really is the
+    // performance one, so the row says what it costs rather than falling silent
+    // the moment it stopped blocking the download.
+    declinedHint: "performance only — virtual services deployed here will stall at WAITING_FOR_DOMAIN",
     features: ["sv"],
     // service_type is *not* here. This group used to own it as well, to force
     // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
@@ -226,8 +265,10 @@ export const OPTION_GROUPS: OptionGroup[] = [
     keys: ["sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"],
     // The ingress is what the group is: a domain or TLS secret arriving without
     // one is not an SV configuration, and an SV *location* is flagged required
-    // by the caller rather than found in the options at all.
-    detect: (o) => !!o.sv_ingress,
+    // by the caller rather than found in the options at all. SV_NONE is an
+    // answer, not a configuration, so it leaves the group closed -- an imported
+    // profile that declined must not re-open it.
+    detect: (o) => svConfigured(o.sv_ingress),
     // Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and
     // the TLS secret are both mandatory (the secret even for plain HTTP --
     // crane validates it at startup), and NODEPORT is refused for a backend
@@ -241,18 +282,28 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // broken. Blocking on any of them would grey out the download for a
     // configuration that generates fine, and generate() refuses authoritatively
     // in the case that is actually broken.
-    incomplete: (o, required, backends) => (o.sv_ingress
-      ? !String(o.sv_subdomain ?? "").trim()
-        || !String(o.sv_tls_secret ?? "").trim()
-        || (o.service_type != null && o.service_type !== "CLUSTERIP"
-            && backends?.[String(o.sv_ingress)]?.nodeport_ok === false)
-      : required),
+    // SV_NONE is finished by declaration -- generate() accepts it for a
+    // mockServices location, so blocking the download on it would be the UI
+    // refusing what the backend allows.
+    incomplete: (o, required, backends) => (o.sv_ingress === SV_NONE ? false
+      : o.sv_ingress
+        ? !String(o.sv_subdomain ?? "").trim()
+          || !String(o.sv_tls_secret ?? "").trim()
+          || (o.service_type != null && o.service_type !== "CLUSTERIP"
+              && backends?.[String(o.sv_ingress)]?.nodeport_ok === false)
+        : required),
     // `{}` when an ingress is already chosen, like every other group that has
     // nothing to seed: a patch with a key in it mints a fresh options identity
     // and re-POSTs /api/generate for a configuration that did not change.
-    enable: (o) => (o.sv_ingress ? {} : { sv_ingress: "nginx" }),
-    disable: () => ({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
-      sv_istio_gateway: null }),
+    // SV_NONE is not a chosen one -- switching the group back on has to pick a
+    // real backend or the select would show nginx over a value that is not it.
+    enable: (o) => (svConfigured(o.sv_ingress) ? {} : { sv_ingress: "nginx" }),
+    // On a location that demands SV, off is a decision and is recorded as one:
+    // null would be "not answered", which generate() refuses, so the switch
+    // would snap back on and the download stay blocked -- which is exactly what
+    // it used to do. Everywhere else null is still right: nobody asked.
+    disable: (_o, required) => ({ sv_ingress: required ? SV_NONE : null,
+      sv_subdomain: null, sv_tls_secret: null, sv_istio_gateway: null }),
   },
 ];
 

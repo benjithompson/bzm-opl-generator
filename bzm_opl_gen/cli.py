@@ -633,9 +633,11 @@ def main():
                         "reference it from the Deployment and the RBAC subjects, "
                         "but do not emit the object")
     g.add_argument("--sv-ingress", dest="sv_ingress",
-                   choices=list(gen_mod.SV_INGRESS_TYPES),
+                   choices=list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE],
                    help="service virtualization: ingress controller to publish "
-                        "virtual services through (required for a mockServices location)")
+                        "virtual services through (required for a mockServices "
+                        f"location, or {gen_mod.SV_INGRESS_NONE} to generate such "
+                        "a location for performance testing alone)")
     g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",
                    help="wildcard domain your ingress controller serves, e.g. apps.example.com")
     g.add_argument("--sv-tls-secret", dest="sv_tls_secret", metavar="NAME",

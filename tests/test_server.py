@@ -282,6 +282,24 @@ def test_the_page_declares_the_same_four_branches_this_does():
     assert set(re.findall(r"^\s*(\w+):", carries.group(1), re.M)) == BRANCHES
 
 
+def test_the_page_spells_the_declined_ingress_the_way_generate_does():
+    """Read out of the TypeScript for the same reason as the union above.
+
+    optionGroups.ts is pure data functions -- `detect(o)` is handed options and
+    nothing else -- so the sentinel cannot arrive there from /api/sv-constants
+    the way `ingress_types` does; it is a literal, and a literal in one language
+    cannot see a constant in the other. Renamed on either side without this, the
+    switch writes a value generate() refuses and the group snaps back on, which
+    is the whole bug this option exists to fix.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    m = re.search(r'export const SV_NONE = "([^"]+)"',
+                  (src / "optionGroups.ts").read_text())
+    assert m, "SV_NONE not found -- was it renamed or moved?"
+    assert m.group(1) == gen_mod.SV_INGRESS_NONE
+
+
 # -- issuing the credential once, where the agent is made ----------------------
 
 def test_creating_an_agent_issues_its_credential_with_it(connected):
@@ -352,7 +370,8 @@ def test_option_docs_describe_every_option():
     body = client.get("/api/option-docs").json()
     assert set(body) == set(gen_mod.DEFAULT_OPTIONS)
     assert all(e["summary"] for e in body.values())
-    assert body["sv_ingress"]["choices"] == list(gen_mod.SV_INGRESS_TYPES)
+    assert body["sv_ingress"]["choices"] == (
+        list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE])
     assert body["private_registry"]["nullable"] is True
     # The UI must be able to tell which field not to echo back into a form it
     # might save; only the credential is marked.
@@ -375,6 +394,13 @@ def test_sv_constants_are_served_from_the_generator():
     assert body["func_ids"] == list(gen_mod.SV_FUNC_IDS)
     assert body["ingress_types"] == list(gen_mod.SV_INGRESS_TYPES)
     assert "openshift" in body["ingress_types"]     # the newest one reaches the UI
+    # The decline is NOT here. It is not a backend, and this response is what
+    # the picker is built from -- offering it would be offering an ingress that
+    # is not one. Where a caller learns it is the option registry's `choices`,
+    # which is where the rest of what a value may be already lives.
+    assert gen_mod.SV_INGRESS_NONE not in body["ingress_types"]
+    assert gen_mod.SV_INGRESS_NONE in client.get(
+        "/api/option-docs").json()["sv_ingress"]["choices"]
     # Kept out of option-defaults: that response is spread into the options the
     # UI submits, and these are not options.
     assert "ingress_types" not in client.get("/api/option-defaults").json()

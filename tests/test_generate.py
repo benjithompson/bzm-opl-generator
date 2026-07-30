@@ -601,8 +601,53 @@ SV_OPTS = {"namespace": "ns1", "sv_ingress": "nginx",
 
 
 def test_sv_location_without_ingress_refuses():
-    with pytest.raises(ValueError, match="WAITING_FOR_DOMAIN"):
+    with pytest.raises(ValueError, match="WAITING_FOR_DOMAIN") as e:
         gen.generate(SV_FACTS, {"namespace": "ns1"})
+    # ...and names the way out, because "not answered" is the only state that
+    # blocks and the answer "no" is not obvious from a list of four backends.
+    assert f"sv_ingress={gen.SV_INGRESS_NONE}" in str(e.value)
+
+
+def test_sv_location_declining_an_ingress_generates_the_performance_bundle():
+    """A location can carry mockServices and be wanted for performance alone.
+
+    Unset is "nobody answered" and stays refused; SV_INGRESS_NONE is the answer,
+    and what it buys is only that -- the manifests are byte-identical to the
+    ones a location with no ingress options would produce, so nothing about the
+    decision leaks into the bundle except the profile that records it.
+    """
+    declined = gen.generate(SV_FACTS, {"namespace": "ns1",
+                                       "sv_ingress": gen.SV_INGRESS_NONE})
+    data = yaml.safe_load(declined["bzm_configmap.yaml"])["data"]
+    assert "KUBERNETES_WEB_EXPOSE_TYPE" not in data
+    assert "networking.k8s.io" not in _role_groups(declined)
+    # No object the SV path adds, either: the same file set a location that
+    # never ran mockServices produces.
+    assert declined.keys() == gen.generate(FACTS, {"namespace": "ns1"}).keys()
+    # The images still follow the location, not the option: what this location
+    # runs is a fact about the account, whatever this bundle publishes.
+    mirrored = gen.generate(SV_FACTS, {"namespace": "ns1", "private_registry": "reg.local",
+                                       "sv_ingress": gen.SV_INGRESS_NONE})
+    ov = json.loads(yaml.safe_load(
+        mirrored["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    assert "blazemeter/service-mock:latest" in ov
+
+
+def test_declining_an_ingress_is_recorded_in_the_profile():
+    """livetest and the UI re-render from profile.json, so a decision that only
+    lived in the session would come back as the refusal on the next render."""
+    files = gen.generate(SV_FACTS, {"namespace": "ns1",
+                                    "sv_ingress": gen.SV_INGRESS_NONE})
+    assert json.loads(files[gen.PROFILE_FILE])["sv_ingress"] == gen.SV_INGRESS_NONE
+
+
+def test_declining_an_ingress_on_a_location_that_never_asked_is_accepted():
+    """No funcId demands it, so the value says nothing -- and must not be a new
+    way to fail. A profile carrying it moves between locations freely."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "sv_ingress": gen.SV_INGRESS_NONE})
+    assert "KUBERNETES_WEB_EXPOSE_TYPE" not in yaml.safe_load(
+        files["bzm_configmap.yaml"])["data"]
 
 
 def test_retired_sv_bridge_funcid_demands_nothing():

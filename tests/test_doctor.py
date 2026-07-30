@@ -546,6 +546,15 @@ def test_ingress_class_silent_without_service_virtualization():
     assert doctor.check_ingress_class(FACTS, {}, {"ingressclasses": []}) == []
 
 
+def test_ingress_class_silent_when_the_ingress_was_declined():
+    """`none` is a value, so the unrecognised-value WARN below would claim it
+    otherwise -- telling someone who deliberately took the SV path off that
+    their ingress path is unverified, about an ingress there is not."""
+    assert doctor.check_ingress_class(
+        FACTS, {"sv_ingress": doctor.SV_INGRESS_NONE},
+        {"ingressclasses": []}) == []
+
+
 def test_ingress_class_present_passes():
     checks = doctor.check_ingress_class(
         FACTS, SV_NGINX, {"ingressclasses": [_ingressclass("nginx"),

@@ -47,7 +47,9 @@ DEFAULT_OPTIONS = {
     # Service virtualization ingress. Only meaningful for a location whose
     # funcIds include mockServices; see _sv_cfg for why all three are required
     # together. service_type is not among them -- see the note there.
-    "sv_ingress": None,              # None, or one of SV_INGRESS_TYPES
+    # None is "not answered" and is refused for such a location; SV_INGRESS_NONE
+    # is "answered: performance only".
+    "sv_ingress": None,              # None, SV_INGRESS_NONE, or an SV_INGRESS_TYPE
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
     "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
     "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
@@ -225,6 +227,24 @@ SV_INGRESS_BACKENDS = {
 # WAITING_FOR_DOMAIN.
 SV_INGRESS_TYPES = tuple(SV_INGRESS_BACKENDS)
 
+# The third state of `sv_ingress`, and the reason it is a value rather than a
+# separate flag: unset means "nobody has answered yet", which is what makes the
+# refusal below right for a mockServices location, and this means "answered: no
+# ingress, deliberately". Collapsing the two -- the shape this generator refuses
+# everywhere else -- is what made an SV-capable location impossible to configure
+# for performance alone, which plenty of accounts want: a location often carries
+# both funcIds because somebody enabled them together, and the customer runs
+# tests on it and no virtual services at all.
+#
+# What it buys is only the refusal. Nothing else changes: no SV RBAC, no
+# KUBERNETES_WEB_EXPOSE_* env, and the mock images the location's funcIds select
+# are still in the ConfigMap, because those are read off the location and not
+# off this option. A virtual service deployed to a location generated this way
+# still stalls at WAITING_FOR_DOMAIN -- that is the trade being declared, not a
+# problem being fixed.
+SV_INGRESS_NONE = "none"
+assert SV_INGRESS_NONE not in SV_INGRESS_BACKENDS  # a backend may not claim it
+
 
 def _sv_cfg(facts, o):
     """Resolve the service-virtualization ingress options, or None.
@@ -238,13 +258,20 @@ def _sv_cfg(facts, o):
     """
     ingress = o["sv_ingress"]
     sv_funcs = [f for f in (facts.get("func_ids") or []) if f in SV_FUNC_IDS]
+    if ingress == SV_INGRESS_NONE:
+        # Declared, so not refused. See SV_INGRESS_NONE for what is and is not
+        # being said by it.
+        return None
     if not ingress:
         if sv_funcs:
             raise ValueError(
                 f"location advertises funcId(s) {', '.join(sv_funcs)} but no "
                 "service-virtualization ingress was configured. Pass sv_ingress "
                 f"({'|'.join(SV_INGRESS_TYPES)}) + sv_subdomain + sv_tls_secret, "
-                "or virtual services will deploy and stall at WAITING_FOR_DOMAIN."
+                "or virtual services will deploy and stall at WAITING_FOR_DOMAIN. "
+                f"To generate this location for performance testing alone, pass "
+                f"sv_ingress={SV_INGRESS_NONE}: the bundle is then the same as a "
+                "non-SV location's, and virtual services deployed to it stall."
             )
         return None
     if ingress not in SV_INGRESS_TYPES:
