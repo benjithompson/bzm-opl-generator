@@ -270,8 +270,20 @@ export default function App() {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
     setLocations([]); setHarborId(null); setLocErr(null);
     if (workspaceId == null) return;
-    api.locations(workspaceId).then(setLocations).catch((e) => setLocErr(e.message));
+    // THROWAWAY: `locBusy` only so a prototype can say "reading" rather than
+    // show an empty list that means nothing yet. An empty workspace and an
+    // unfetched one look identical without it.
+    setLocBusy(true);
+    api.locations(workspaceId).then(setLocations)
+      .catch((e) => setLocErr(e.message))
+      .finally(() => setLocBusy(false));
   }, [workspaceId]);
+
+  // THROWAWAY: what is currently being fetched, for the prototypes' spinners.
+  // Two flags rather than one: they are two requests, and a location list that
+  // has arrived while its facts are still coming is a real state to show.
+  const [locBusy, setLocBusy] = useState(false);
+  const [factsBusy, setFactsBusy] = useState(false);
 
   const location = useMemo(
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
@@ -296,7 +308,9 @@ export default function App() {
     // picking a different agent below.
     forgetToken();
     if (!harborId) return;
-    api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message));
+    setFactsBusy(true);
+    api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message))
+      .finally(() => setFactsBusy(false));
   }, [harborId]);
 
   const shipOnline = (s: Ship) =>
@@ -1126,10 +1140,13 @@ export default function App() {
               createShip={createShipNow} shipErr={shipErr}
               rotate={rotate} setRotate={setRotate}
               hasToken={!!txt("auth_token")}
+              authToken={raw("auth_token")}
               setAuthToken={(v) => set("auth_token", v || null)}
+              locBusy={locBusy} factsBusy={factsBusy}
               shipTokenNotice={shipTokenNotice} facts={facts} who={who}
               accountWorkspace={accountWorkspaceNode}
-              createLocationBlock={showCreateLoc ? null : createLocationNode} />
+              createLocationBlock={
+                showCreateLoc ? createLocationFormNode : createLocationNode} />
           ) : (<>
           <SubSection title="Private location" done={!!harborId}
             hint={showCreateLoc
@@ -1297,7 +1314,9 @@ export default function App() {
                   deploys, and the step above folds itself away the moment an
                   agent is chosen. Manual mode has the same field inside
                   ManualSource, where it is one of the three typed values. */}
-              {sourceMode === "connect" && shipId && (
+              {/* THROWAWAY: M moves this field into the expanded agent row, so
+                  the credential sits with the identity it belongs to. */}
+              {sourceMode === "connect" && shipId && PROTO_AGENT !== "M" && (
                 <div className="border-t border-slate-100 pt-3 space-y-1.5">
                   <Field label="Agent AUTH_TOKEN"
                     hint="Goes into the Secret. Held for this browser session only — nothing here writes it down.">

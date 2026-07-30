@@ -16,9 +16,11 @@
 // workspace selects and the create-location block are App's own, passed in as
 // nodes, because they are not what is being judged and a second copy would rot.
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { Facts, Location, Ship } from "../api";
-import { Button, ErrorMsg, NoticeMsg, SubSection, TextInput } from "../components";
+import {
+  Button, ErrorMsg, NoticeMsg, SecretInput, Spinner, SubSection, TextInput,
+} from "../components";
 // The rotation's consequence, in the words the download step already uses --
 // said here as well because this is where the identity is chosen, and the
 // download is where it is too late to choose differently.
@@ -45,7 +47,7 @@ export interface AgentStepProps {
   setCreating: (v: boolean) => void;
   newShipName: string;
   setNewShipName: (v: string) => void;
-  createShip: () => void;
+  createShip: () => void | Promise<void>;
   shipErr: string | null;
   shipTokenNotice: string | null;
   facts: Facts | null;
@@ -66,6 +68,13 @@ export interface AgentStepProps {
   /** Writes the AUTH_TOKEN field. M fills it in from the Regenerate button, so
    *  the credential is in hand before the download rather than issued by it. */
   setAuthToken: (v: string) => void;
+  /** The credential itself. M keeps the field inside the expanded agent row --
+   *  it belongs to that identity, and nowhere else on the page says so. */
+  authToken: string;
+  /** Requests in flight. Two, not one: a location list that has arrived while
+   *  its facts are still coming is a state worth showing as itself. */
+  locBusy: boolean;
+  factsBusy: boolean;
 }
 
 // -- the Regenerate action ---------------------------------------------------
@@ -77,6 +86,12 @@ export interface AgentStepProps {
 // could not possibly be mistaken for a credential, so the flow can be judged
 // without touching anybody's agent.
 const stubToken = (shipId: string) => `PROTOTYPE_STUB_NOT_A_REAL_TOKEN_${shipId}`;
+
+/** The wait a real rotation would cost, so the spinner is on screen long enough
+ *  to be judged. A stub that returned instantly would make the loading state
+ *  untestable, which is half of what was asked for. */
+const stubIssue = (shipId: string) => new Promise<string>((resolve) =>
+  setTimeout(() => resolve(stubToken(shipId)), 900));
 
 /** Where the confirm button has got to. Per ship, and reset by changing ship:
  *  "Regenerated" is a statement about one identity, and carrying it to the next
@@ -118,7 +133,7 @@ function EmptyLocation({ name }: { name: string }) {
 
 /** The create-agent form, identical in all three -- it is App's action with a
  *  name field in front of it, and not the thing being prototyped. */
-function CreateAgent(p: AgentStepProps & { first: boolean }) {
+function CreateAgent(p: AgentStepProps & { first: boolean; busy?: boolean }) {
   return (
     <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
       <p className="text-xs font-semibold text-slate-700">
@@ -129,11 +144,16 @@ function CreateAgent(p: AgentStepProps & { first: boolean }) {
         <TextInput value={p.newShipName} onChange={p.setNewShipName}
           placeholder="e.g. k8s-prod-cluster" />
       </label>
-      <div className="flex gap-2">
-        <Button disabled={!p.harborId || !p.newShipName} onClick={p.createShip}>
-          Create
+      <div className="flex gap-2 items-center">
+        {/* Creating a ship is a round trip that also issues its token; the
+            button says so while it waits rather than looking ignored, which is
+            how a second click -- and a second agent -- happens. */}
+        <Button disabled={!p.harborId || !p.newShipName || p.busy}
+          onClick={p.createShip}>
+          {p.busy ? "Creating…" : "Create"}
         </Button>
-        {p.ships.length > 0 && (
+        {p.busy && <Spinner className="text-bzm" />}
+        {p.ships.length > 0 && !p.busy && (
           <Button kind="ghost" onClick={() => p.setCreating(false)}>Cancel</Button>
         )}
       </div>
@@ -367,18 +387,51 @@ function VariantM(p: AgentStepProps) {
   // Selecting the row does NOT rotate -- that is what the button below is for.
   const reusing = !!ship && !p.hasToken;
   const [arm, setArm] = useState<Arm>("idle");
-  // Disarm on every change of ship, so a half-pressed confirm never carries to
-  // the next identity.
-  useEffect(() => { setArm("idle"); }, [p.shipId]);
-  const regenerate = () => {
-    if (arm === "done") return;
+  const [issuing, setIssuing] = useState(false);
+  // Which row is open. Separate from `shipId` on purpose: closing a row is a
+  // view action and must not un-choose the agent the bundle is for.
+  const [open, setOpen] = useState<string | null>(null);
+  const [makingShip, setMakingShip] = useState(false);
+  // Disarm on every change of ship, and open that ship's row. Keyed on shipId
+  // rather than on the click so the lone-agent auto-pick opens its row too --
+  // and so collapsing a row (which leaves shipId alone) stays collapsed instead
+  // of springing back open.
+  useEffect(() => { setArm("idle"); setOpen(p.shipId); }, [p.shipId]);
+  // One open row at a time, which is what a single `open` id is: opening the
+  // second closes the first without either of them being asked to.
+  const toggle = (id: string) => {
+    if (p.shipId !== id) { p.pickShip(id); return; }
+    setOpen((cur) => (cur === id ? null : id));
+  };
+  // The row on its way out. Its body has to stay mounted for the length of the
+  // transition, or switching agents collapses the old row in one frame while
+  // the new one animates -- which is the jump the animation exists to remove.
+  const [closing, setClosing] = useState<string | null>(null);
+  const wasOpen = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = wasOpen.current;
+    wasOpen.current = open;
+    if (!prev || prev === open) return;
+    setClosing(prev);
+    const t = setTimeout(() => setClosing(null), 200);
+    return () => clearTimeout(t);
+  }, [open]);
+  const regenerate = async () => {
+    if (arm === "done" || issuing) return;
     if (arm === "idle") { setArm("armed"); return; }
-    p.setAuthToken(stubToken(String(p.shipId)));
+    setIssuing(true);
+    const token = await stubIssue(String(p.shipId));
+    p.setAuthToken(token);
     // The token is now in hand, so the download must not issue a second one --
     // core's rule is that a token in the form wins, and leaving the rotate box
     // ticked would have the page promise a rotation that will not happen.
     p.setRotate(false);
+    setIssuing(false);
     setArm("done");
+  };
+  const createShip = async () => {
+    setMakingShip(true);
+    try { await p.createShip(); } finally { setMakingShip(false); }
   };
   const seg = (label: string, value: string | null, warn = false) => (
     <span className="flex items-center gap-1.5">
@@ -408,17 +461,30 @@ function VariantM(p: AgentStepProps) {
         hint="The location = harbor. Agents belong to it.">
         <div className="space-y-3">
           {p.accountWorkspace}
+          {/* Above the list, like the agent panel below: the two pickers now
+              read the same way down the page -- make one, or choose one. */}
+          {p.createLocationBlock}
           {p.locations.length > 8 && (
             <TextInput value={p.locFilter} onChange={p.setLocFilter}
               placeholder={`filter ${p.locations.length} locations…`} />
           )}
-          <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-            {p.filteredLocs.map((l) => {
+          {p.locBusy && (
+            <p className="flex items-center gap-2 text-xs text-slate-500">
+              <Spinner className="text-bzm" /> reading this workspace&apos;s locations…
+            </p>
+          )}
+          {/* A list has to look like one. Zebra banding plus a divider a shade
+              darker than the card's own borders is enough -- rows that share a
+              background and a hairline read as one block of text. */}
+          <div className={"max-h-56 overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
+            + (p.locBusy ? "opacity-40" : "")}>
+            {p.filteredLocs.map((l, i) => {
               const a = agentSummary(l, p.shipOnline);
               return (
                 <button key={l.id} onClick={() => p.setHarborId(l.id)}
-                  className={"w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 "
-                    + (l.id === p.harborId ? "bg-bzm/10 border-l-4 border-bzm" : "")}>
+                  className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 "
+                    + (l.id === p.harborId ? "bg-bzm/10 border-l-4 border-bzm"
+                      : i % 2 ? "bg-slate-50/70" : "bg-white")}>
                   <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
                     + (a.none ? "bg-amber-400" : "bg-emerald-500")} />
                   <span className="font-medium">{l.name}</span>
@@ -433,114 +499,167 @@ function VariantM(p: AgentStepProps) {
               );
             })}
           </div>
-          {p.createLocationBlock}
         </div>
       </SubSection>
 
       <SubSection title="Agent (ship)" done={!!p.shipId}
         hint="One agent = one deployment. It lives inside the location above.">
         <div className="space-y-3">
-          {empty && <EmptyLocation name={p.location!.name} />}
-          {!empty && p.location && !p.creating && (
+          {/* Reading the location: its agents and its image inventory arrive
+              together, and an empty list before they land would read as an
+              empty location -- the one thing this variant exists to say
+              clearly. */}
+          {p.factsBusy && (
+            <p className="flex items-center gap-2 text-xs text-slate-500">
+              <Spinner className="text-bzm" /> reading this location&apos;s agents…
+            </p>
+          )}
+          {!p.factsBusy && empty && <EmptyLocation name={p.location!.name} />}
+          {!p.factsBusy && !empty && p.location && (
             <>
-              {/* The same list as the locations above, row for row: one
-                  bordered list, a dot, the name, its state, and the selected
-                  row marked the same way. Two pickers a line apart that look
-                  nothing alike is how the second one reads as something else
-                  entirely. */}
-              <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-                {p.ships.map((s) => {
+              {/* Above the list, not under it: creating a new identity is the
+                  recommended path, and a button below a scrolling list is the
+                  last thing found and reads as an afterthought. */}
+              {!p.creating && (
+                <Button kind="ghost" onClick={() => p.setCreating(true)}>
+                  + New agent identity (recommended)
+                </Button>
+              )}
+              {p.creating && <CreateAgent {...p} first={false} createShip={createShip} busy={makingShip} />}
+
+              {/* One row open at a time. Everything about an identity -- its
+                  credential, and the button that replaces it -- is inside the
+                  row it belongs to, so nothing on the page refers to "the
+                  selected agent" from somewhere else. */}
+              <div className="border border-slate-300 rounded-md divide-y divide-slate-200">
+                {p.ships.map((s, i) => {
                   const up = p.shipOnline(s);
                   const on = s.id === p.shipId;
+                  const isOpen = open === s.id;
                   return (
-                    // A div, not a button: the row is clickable and so is the
-                    // action inside it, and a button inside a button is not
-                    // valid HTML -- the browser unnests it and the inner one
-                    // stops receiving its own clicks.
-                    <div key={s.id} onClick={() => p.pickShip(s.id)}
-                      className={"w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 cursor-pointer "
-                        + (on ? "bg-bzm/10 border-l-4 border-bzm" : "")}>
-                      <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
-                        + (up ? "bg-emerald-500" : "bg-slate-300")} />
-                      <span className="font-medium">{s.name || s.id}</span>
-                      <span className="text-xs text-slate-400 truncate">
-                        {up ? "online" : s.state}
-                      </span>
-                      <span className="grow" />
-                      {/* The regeneration is an act, not a consequence of
-                          having clicked the row: nothing about this identity
-                          changes until this button is pressed twice. */}
-                      {/* `done` keeps the button: regenerating fills the token
-                          field, which makes `reusing` false, and swapping the
-                          control out at that exact moment would leave the
-                          press with nothing to show for itself. */}
-                      {on && (reusing || arm === "done") && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); regenerate(); }}
-                          className={"text-[11px] font-semibold rounded px-2 py-1 " + ({
-                            idle: "bg-red-600 text-white hover:bg-red-700",
-                            armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
-                            done: "bg-slate-200 text-slate-500 cursor-default",
-                          })[arm]}>
-                          {{ idle: "Regenerate token", armed: "Are you sure?",
-                             done: "Regenerated" }[arm]}
-                        </button>
-                      )}
-                      {on && !reusing && arm !== "done" && (
-                        <span className="text-[11px] text-emerald-700">
-                          token in hand
+                    // Banded like the location list above, for the same reason
+                    // and in the same shades.
+                    <div key={s.id} className={on ? "bg-bzm/5"
+                      : i % 2 ? "bg-slate-50/70" : "bg-white"}>
+                      {/* A div, not a button: the row is clickable and so are
+                          the controls inside it, and a button inside a button
+                          is not valid HTML -- the browser unnests it and the
+                          inner one stops receiving its own clicks. */}
+                      <div onClick={() => toggle(s.id)}
+                        className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 cursor-pointer "
+                          + (on ? "border-l-4 border-bzm" : "")}>
+                        <span className="text-slate-400 text-xs w-3 shrink-0">
+                          {isOpen ? "▾" : "▸"}
                         </span>
-                      )}
-                      {!on && <span className="text-[11px] text-slate-400">reuse</span>}
+                        <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
+                          + (up ? "bg-emerald-500" : "bg-slate-300")} />
+                        <span className="font-medium">{s.name || s.id}</span>
+                        <span className="text-xs text-slate-400 truncate">
+                          {up ? "online" : s.state}
+                        </span>
+                        <span className="grow" />
+                        {on && (p.hasToken || arm === "done") && (
+                          <span className="text-[11px] text-emerald-700">
+                            {arm === "done" ? "token regenerated" : "token in hand"}
+                          </span>
+                        )}
+                        {!on && <span className="text-[11px] text-slate-400">reuse</span>}
+                      </div>
+
+                      {/* Animated open/close. The grid-rows 0fr -> 1fr trick
+                          because the panel's height is not knowable in advance
+                          and `height: auto` does not transition. 180ms: enough
+                          to see which row moved, not enough to wait for. The
+                          body stays mounted while the row is closing, or a
+                          switch between two agents would collapse the old one
+                          instantly and animate only the new one. */}
+                      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+                        + (isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                        <div className="overflow-hidden">
+                        {(isOpen || closing === s.id) && (
+                        <div className="px-3 pb-3 pl-10 space-y-2">
+                          <label className="block">
+                            <span className="text-xs font-medium text-slate-600">
+                              Agent AUTH_TOKEN
+                            </span>
+                            <SecretInput value={p.authToken}
+                              onChange={p.setAuthToken}
+                              placeholder="paste the token this agent was created with" />
+                          </label>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {/* The regeneration is an act, not a consequence of
+                                having clicked the row: nothing about this
+                                identity changes until this is pressed twice. */}
+                            <button
+                              disabled={issuing || arm === "done"}
+                              onClick={(e) => { e.stopPropagation(); regenerate(); }}
+                              className={"text-[11px] font-semibold rounded px-2 py-1 flex items-center gap-1.5 " + ({
+                                idle: "bg-red-600 text-white hover:bg-red-700",
+                                armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
+                                done: "bg-slate-200 text-slate-500 cursor-default",
+                              })[arm]}>
+                              {issuing && <Spinner className="text-white" />}
+                              {issuing ? "Regenerating…"
+                                : { idle: "Regenerate token", armed: "Are you sure?",
+                                    done: "Regenerated" }[arm]}
+                            </button>
+                            {!p.hasToken && arm === "idle" && (
+                              <span className="text-[11px] text-slate-500">
+                                its token was issued once, when this agent was
+                                created, and no API reads one back
+                              </span>
+                            )}
+                          </div>
+
+                          {/* What the press is about to cost, and what it did.
+                              The hazard is the download step\'s own sentence, so
+                              the two cannot drift. */}
+                          {arm === "armed" && (
+                            <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2">
+                              <p className="text-xs font-semibold text-red-900">
+                                This takes down whatever is running as{" "}
+                                {s.name || s.id}.
+                              </p>
+                              <p className="text-[11px] text-red-800 mt-0.5">
+                                {rotateHazard(s.id)}
+                              </p>
+                              <p className="text-[11px] text-red-800 mt-0.5">
+                                Creating a new agent instead costs nothing and
+                                leaves that install alone. Press again to confirm.
+                              </p>
+                            </div>
+                          )}
+                          {arm === "done" && (
+                            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
+                              A new AUTH_TOKEN was issued for <b>{s.name || s.id}</b>{" "}
+                              and put in the field above — this bundle is the only
+                              copy. The previous one is dead: re-apply this bundle
+                              wherever that agent was running.{" "}
+                              <span className="font-semibold">PROTOTYPE: the value
+                              is a stub, not a credential — issuing a real one needs
+                              an endpoint this build does not have.</span>
+                            </p>
+                          )}
+                          {up && (
+                            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                              <b>{s.name || s.id}</b> is online — it is already
+                              running somewhere. Deploying a second agent on this
+                              identity will conflict.
+                            </p>
+                          )}
+                        </div>
+                        )}
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
               </div>
-              {/* Three states, three things worth saying: why a token is
-                  needed at all, what the click is about to cost, and what it
-                  did. The middle one is the download step's own sentence, so
-                  the warning here and the warning there cannot drift. */}
-              {reusing && arm === "idle" && (
-                <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                  <b>{ship?.name || p.shipId}</b> already exists and nothing here
-                  has its AUTH_TOKEN — it was issued once, when the agent was
-                  created, and no API reads one back. Paste it in the field
-                  below, or regenerate it.
-                </p>
-              )}
-              {reusing && arm === "armed" && (
-                <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2">
-                  <p className="text-xs font-semibold text-red-900">
-                    This takes down whatever is running as{" "}
-                    {ship?.name || p.shipId}.
-                  </p>
-                  <p className="text-[11px] text-red-800 mt-0.5">
-                    {rotateHazard(p.shipId)}
-                  </p>
-                  <p className="text-[11px] text-red-800 mt-0.5">
-                    Creating a new agent instead costs nothing and leaves that
-                    install alone. Press again to confirm.
-                  </p>
-                </div>
-              )}
-              {arm === "done" && (
-                <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2">
-                  A new AUTH_TOKEN was issued for{" "}
-                  <b>{ship?.name || p.shipId}</b> and put in the field below —
-                  this bundle is the only copy. The previous one is dead:
-                  re-apply this bundle wherever that agent was running.
-                  {" "}<span className="font-semibold">PROTOTYPE: the value is a
-                  stub, not a credential — issuing a real one needs an endpoint
-                  this build does not have.</span>
-                </p>
-              )}
-              <OnlineWarning {...p} />
-              <Button kind="ghost" onClick={() => p.setCreating(true)}>
-                + New agent identity (recommended)
-              </Button>
             </>
           )}
-          {p.location && (empty || p.creating) && <CreateAgent {...p} first={empty} />}
+          {!p.factsBusy && p.location && empty && (
+            <CreateAgent {...p} first createShip={createShip} busy={makingShip} />
+          )}
           {!p.location && (
             <p className="text-xs text-slate-400">Pick a location above first.</p>
           )}
