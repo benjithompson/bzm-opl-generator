@@ -324,9 +324,20 @@ def test_no_token_anywhere_says_where_a_real_one_comes_from(tmp_path):
     src = core.resolve_auth_token(FACTS, {"namespace": "ns1"},
                                   out_dir=str(tmp_path))
     assert src.branch == core.TOKEN_PLACEHOLDER
-    assert "create-ship" in src.message
     assert "kubectl -n ns1 get secret" in src.message
     assert "base64 -d" in src.message
+
+
+def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
+    """This sentence is not the CLI's. The web UI renders it verbatim under the
+    download button and an MCP session quotes it, so a tail that named only
+    `--auth-token` and `--rotate-token` told a browser to type flags it has no
+    prompt for. It names the option and both registers, or it is wrong somewhere.
+    """
+    msg = core.token_recovery_hint({"namespace": "ns1"})
+    assert "auth_token" in msg, "the option itself, which every surface has"
+    assert "--auth-token" in msg, "the command line"
+    assert "field" in msg.lower(), "the page"
 
 
 def test_the_placeholder_branch_needs_no_output_directory():

@@ -536,15 +536,22 @@ def token_recovery_hint(options=None):
     """
     o = options or {}
     ns = o.get("namespace") or gen_mod.DEFAULT_OPTIONS["namespace"]
+    # Named in every register, because this sentence is not the CLI's: the web UI
+    # renders it verbatim under the download button and an MCP session quotes it
+    # back. A tail that said only `--auth-token` told a browser to type a flag it
+    # has no prompt for -- so the *option* leads, and each surface's own spelling
+    # of it follows in brackets.
     return (
-        f"A real one comes from what `create-ship` printed for this agent (keep "
-        f"that output -- nothing here stores it), or out of an agent already "
-        f"deployed:\n"
+        f"A real one comes from what was shown when the agent was created "
+        f"(`create-ship` prints it; the web page puts it in the field) -- keep "
+        f"it, nothing here stores it -- or out of an agent already deployed:\n"
         f"    kubectl -n {ns} get secret {gen_mod.SECRET_NAME} "
         f"-o jsonpath='{{.data.AUTH_TOKEN}}' | base64 -d\n"
-        f"  Pass it as --auth-token (auth_token) and this bundle is complete. "
-        f"--rotate-token issues a fresh one instead, which takes down whatever "
-        f"is running on the current one until you re-apply.")
+        f"  Supply it as the bundle's auth_token -- `--auth-token` on the "
+        f"command line, the AUTH_TOKEN field on the web page -- and the bundle "
+        f"is complete. Issuing a fresh one instead (`--rotate-token`, or the "
+        f"tick-box that says so on the page) takes down whatever is running on "
+        f"the current one until you re-apply.")
 
 
 def _bundle_ship_id(out_dir):
