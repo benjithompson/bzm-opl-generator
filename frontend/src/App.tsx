@@ -1124,6 +1124,8 @@ export default function App() {
               creating={creatingShip} setCreating={setShowCreateShip}
               newShipName={newShipName} setNewShipName={setNewShipName}
               createShip={createShipNow} shipErr={shipErr}
+              rotate={rotate} setRotate={setRotate}
+              hasToken={!!txt("auth_token")}
               shipTokenNotice={shipTokenNotice} facts={facts} who={who}
               accountWorkspace={accountWorkspaceNode}
               createLocationBlock={showCreateLoc ? null : createLocationNode} />

@@ -16,9 +16,13 @@
 // workspace selects and the create-location block are App's own, passed in as
 // nodes, because they are not what is being judged and a second copy would rot.
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import { Facts, Location, Ship } from "../api";
 import { Button, ErrorMsg, NoticeMsg, SubSection, TextInput } from "../components";
+// The rotation's consequence, in the words the download step already uses --
+// said here as well because this is where the identity is chosen, and the
+// download is where it is too late to choose differently.
+import { rotateHazard } from "../token";
 
 export type AgentKey = "K" | "L" | "M";
 
@@ -48,6 +52,17 @@ export interface AgentStepProps {
   who: unknown;
   accountWorkspace: ReactNode;
   createLocationBlock: ReactNode;
+  /** Whether the next download issues a new AUTH_TOKEN, and the setter. M turns
+   *  it on by choosing an identity that already exists: reusing one means the
+   *  bundle needs a credential for it, and the only way to get one is to issue
+   *  a new one -- which is the same thing as saying the running install stops
+   *  working until this bundle is applied. */
+  rotate: boolean;
+  setRotate: (v: boolean) => void;
+  /** Is a token already in hand (pasted, or issued when this agent was
+   *  created)? Then nothing has to be regenerated, and core would ignore a
+   *  rotation anyway -- the token in the form wins. */
+  hasToken: boolean;
 }
 
 /** What a location's agents amount to, in one place: three variants say it and
@@ -329,6 +344,14 @@ function VariantL(p: AgentStepProps) {
 function VariantM(p: AgentStepProps) {
   const empty = !!p.location && p.ships.length === 0;
   const ship = p.ships.find((s) => s.id === p.shipId);
+  // An identity that already existed, with no credential in hand for it. Not
+  // "did the user click a row": the lone-agent auto-pick lands in exactly the
+  // same state, and it would be the one case that regenerated a token without
+  // saying so. A freshly created agent is excluded by hasToken -- its token was
+  // issued when it was created, and core's `given` branch would ignore a
+  // rotation anyway.
+  const reusing = !!ship && !p.hasToken;
+  useEffect(() => { if (reusing) p.setRotate(true); }, [reusing, p.shipId]);
   const seg = (label: string, value: string | null, warn = false) => (
     <span className="flex items-center gap-1.5">
       <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
@@ -392,7 +415,52 @@ function VariantM(p: AgentStepProps) {
           {empty && <EmptyLocation name={p.location!.name} />}
           {!empty && p.location && !p.creating && (
             <>
-              <AgentChips {...p} />
+              {/* The same list as the locations above, row for row: one
+                  bordered list, a dot, the name, its state, and the selected
+                  row marked the same way. Two pickers a line apart that look
+                  nothing alike is how the second one reads as something else
+                  entirely. */}
+              <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
+                {p.ships.map((s) => {
+                  const up = p.shipOnline(s);
+                  return (
+                    <button key={s.id} onClick={() => p.pickShip(s.id)}
+                      className={"w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex items-center gap-2 "
+                        + (s.id === p.shipId ? "bg-bzm/10 border-l-4 border-bzm" : "")}>
+                      <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
+                        + (up ? "bg-emerald-500" : "bg-slate-300")} />
+                      <span className="font-medium">{s.name || s.id}</span>
+                      <span className="text-xs text-slate-400 truncate">
+                        {up ? "online" : s.state}
+                      </span>
+                      <span className="grow" />
+                      <span className="text-[11px] text-amber-700">
+                        {s.id === p.shipId ? "selected — token regenerated" : "reuse"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Reusing an identity is a rotation, so the row that says
+                  "reuse" and the box in step 3 are now one decision -- ticking
+                  it here is what makes the download carry a credential this
+                  agent can actually use. */}
+              {reusing && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-900">
+                    <b>{ship?.name || p.shipId}</b> already exists, so this
+                    bundle regenerates its AUTH_TOKEN — there is no other way to
+                    get a credential for an identity you did not just create.
+                  </p>
+                  <p className="text-[11px] text-amber-700 mt-0.5">
+                    {rotateHazard(p.shipId)}
+                  </p>
+                  <p className="text-[11px] text-amber-700 mt-0.5">
+                    Creating a new agent instead costs nothing and leaves that
+                    install alone.
+                  </p>
+                </div>
+              )}
               <OnlineWarning {...p} />
               <Button kind="ghost" onClick={() => p.setCreating(true)}>
                 + New agent identity (recommended)
