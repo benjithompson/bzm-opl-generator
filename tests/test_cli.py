@@ -357,3 +357,92 @@ def test_generate_never_asks_which_of_two_ships(monkeypatch, tmp_path):
                   "examples/api-key.example.json", "--rotate-token",
                   ships=("b1", "b2"))
     assert "b1" in str(caught.value) and "b2" in str(caught.value)
+
+
+# -- livetest's one credential ------------------------------------------------
+# The rig is the one command that is *supposed* to mint: bringing an agent
+# online is its whole purpose. What it must not do is mint per render. Its
+# regenerator called the endpoint on every invocation, and a run makes several
+# -- the negative control renders twice, then --run-test and --local-proxy each
+# do -- so every render revoked the credential the previous deploy was holding,
+# and the agent sat 0/1 for a reason nothing in the rig reports. That is
+# plausibly where the intermittent failures came from.
+
+SHIP = "6c5b4a39281706f5e4d3c2b1"        # the sole agent in examples/facts
+
+
+def _livetest(monkeypatch, tmp_path, client, *extra):
+    """`livetest` with the rig itself faked, handing back the regenerate
+    callback it was given so a test can drive it as many times as a real run
+    would -- plus the SystemExit, since one of these runs is a refusal."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1"}), str(manifests))
+    captured = {}
+
+    def fake_run(*a, **kw):
+        captured["regenerate"] = kw["regenerate"]
+        return True
+
+    monkeypatch.setattr(cli.livetest, "run", fake_run)
+    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: client)
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key",
+             "examples/api-key.example.json",
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             # --run-test is what makes the rig want a regenerator at all; the
+             # test id is never used, because livetest.run is faked.
+             "--run-test", "12345", *extra)
+    return captured.get("regenerate"), manifests, caught.value
+
+
+def test_livetest_mints_one_credential_for_a_whole_run(monkeypatch, tmp_path):
+    """The defect, as a count. Four renders, one mint -- and every render writes
+    the same token, so an agent deployed from any of them is still holding a live
+    credential when the next one lands."""
+    c = FakeClient()
+    regenerate, manifests, exit = _livetest(monkeypatch, tmp_path, c)
+    assert exit.code == 0
+    for overlay in ({"ca_bundle": None}, {"ca_bundle": "PEM"},
+                    {"engine_cpu_limit": "1"}, {}):
+        regenerate(overlay)
+    assert [(name, ship) for name, _, ship in c.calls] == [("auth_token", SHIP)]
+    assert "TOKEN-FROM-API" in (manifests / "bzm_secret.yaml").read_text()
+
+
+def test_livetest_says_which_ship_it_rotated_before_it_deploys(monkeypatch,
+                                                               tmp_path, capsys):
+    """Named, and named up front: the run is about to replace the credential of
+    whatever is already deployed against that agent, and afterwards the sentence
+    is a post-mortem."""
+    _livetest(monkeypatch, tmp_path, FakeClient())
+    out = capsys.readouterr().out
+    assert SHIP in out
+    assert "ROTATING" in out and out.index("ROTATING") < out.index("rotated")
+
+
+def test_livetest_refuses_to_deploy_a_placeholder_token(monkeypatch, tmp_path):
+    """The one way past the mint that lands nothing usable: --auth-token given
+    the placeholder string. The rig would deploy it, wait out its whole timeout
+    and report only that the agent never came online -- so it is a sentence here
+    instead."""
+    _, _, exit = _livetest(monkeypatch, tmp_path, FakeClient(), "--auth-token",
+                           gen.DEFAULT_OPTIONS["auth_token"])
+    assert "create-ship" in str(exit)
+
+
+def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
+    """--auth-token is the way out for a caller who already holds one -- the
+    token `create-ship` printed, say. Minting over it would revoke the very
+    credential they passed."""
+    c = FakeClient()
+    regenerate, manifests, exit = _livetest(monkeypatch, tmp_path, c,
+                                            "--auth-token", "HELD-ALREADY")
+    assert exit.code == 0
+    regenerate({})
+    regenerate({"ca_bundle": "PEM"})
+    assert c.calls == []
+    assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()

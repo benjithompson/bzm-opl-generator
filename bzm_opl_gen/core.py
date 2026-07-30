@@ -735,23 +735,36 @@ def zip_filename(options):
     return f"{ZIP_PREFIX}-{(options or {}).get('namespace', 'blazemeter')}.zip"
 
 
-def write_bundle(files, out_dir):
-    """Write a generated bundle to `out_dir`, and say what landed where.
+def require_absolute_out_dir(out_dir):
+    """Refuse a relative bundle directory, and say why it cannot be one.
 
     Absolute paths only. Every caller of this but a shell is somewhere it did
     not choose -- a server's working directory is whatever launched it -- so a
     relative path resolves against a directory nobody named, and the files turn
     up somewhere the caller then cannot describe.
 
-    Returns [{name, bytes}] rather than the content: a bundle is ~40KB of YAML
-    with a CA bundle sometimes far larger, and a caller that wanted to read one
-    file should read that one file.
+    Reachable on its own, and not only from write_bundle, because a caller that
+    might *rotate* the AUTH_TOKEN has to fail this before it mints: the refusal
+    used to arrive at the write, by which point a running agent's credential had
+    already been revoked over a mistake in an argument that has nothing to do
+    with the credential. One copy of the rule, two moments it can be applied.
     """
     if not os.path.isabs(out_dir):
         raise BadRequest(
             f"out_dir must be an absolute path, not {out_dir!r} -- a relative "
             f"one resolves against this process's working directory, which is "
             f"whatever started it rather than anywhere you chose")
+    return out_dir
+
+
+def write_bundle(files, out_dir):
+    """Write a generated bundle to `out_dir`, and say what landed where.
+
+    Returns [{name, bytes}] rather than the content: a bundle is ~40KB of YAML
+    with a CA bundle sometimes far larger, and a caller that wanted to read one
+    file should read that one file.
+    """
+    require_absolute_out_dir(out_dir)
     gen_mod.write(files, out_dir)
     return [{"name": n, "bytes": len(files[n].encode())} for n in preview_order(files)]
 

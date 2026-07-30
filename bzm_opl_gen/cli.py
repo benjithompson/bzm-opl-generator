@@ -335,17 +335,25 @@ def cmd_images(a):
         subprocess.run(cmd, check=True)
 
 
-def _regenerator(client, facts, a, ship_id):
+def _regenerator(facts, a, ship_id, auth_token):
     """Re-render the manifests in place with extra generate() options merged
     onto the ones they were built from (out/profile.json). Used by
-    --local-proxy, whose CA and address only exist once the rig is up."""
+    --local-proxy, whose CA and address only exist once the rig is up.
+
+    `auth_token` is one value for the whole run, passed in rather than fetched
+    here. It used to call the token endpoint on every invocation, and a run
+    makes several -- the negative control renders twice, then --run-test and
+    --local-proxy each do -- so each render minted a credential that revoked the
+    one the previous deploy was running on. The agent then sat `0/1 Running`,
+    which the rig cannot tell from a slow boot; plausibly a real source of its
+    intermittent failures.
+    """
     def regenerate(overlay):
         opts = gen_mod.load_profile(a.manifests)
         opts.update(overlay)
         opts["namespace"] = a.namespace
         opts["ship_id"] = opts.get("ship_id") or ship_id
-        opts["auth_token"] = core.fetch_ship_token(client, facts["harbor_id"],
-                                                   opts["ship_id"])
+        opts["auth_token"] = auth_token
         written = gen_mod.write(gen_mod.generate(facts, opts), a.manifests)
         print(f"regenerated {len(written)} files in {a.manifests}/ with "
               f"proxy + CA trust: " + ", ".join(written))
@@ -389,11 +397,6 @@ def cmd_livetest(a):
             f"--no-create-service-account, or create '{sa}' in {a.namespace} "
             f"yourself before starting the run")
     proxy_user = proxy_pass = None
-    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
-    # the engine sizing); the callback needs a profile to merge onto, so it is
-    # only available when one was found.
-    regenerate = (_regenerator(client, f, a, ship_id)
-                  if opts is not None and (a.local_proxy or a.run_test) else None)
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
         sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "
                  "the policy denies everything except DNS, the apiserver, and "
@@ -404,6 +407,43 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
+    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
+    # the engine sizing); the callback needs a profile to merge onto, so it is
+    # only available when one was found.
+    #
+    # And a run with neither renders nothing, so it deploys the bundle exactly as
+    # it sits on disk -- which is why the mint below is inside this condition
+    # rather than at the top of the command. Issuing a token a run is never going
+    # to write would revoke the one that bundle is carrying, i.e. break the
+    # deployment this rig is here to verify.
+    regenerate = None
+    if opts is not None and (a.local_proxy or a.run_test):
+        # One credential for the whole run, minted here rather than per render,
+        # and after every guard above so a run that is about to exit does not
+        # rotate anything first. No flag asks for it: bringing an agent online is
+        # what this command is for, so a rotation is implied by running it --
+        # --auth-token is how a caller who already holds one keeps it, and
+        # resolve_auth_token's first branch is what honours that.
+        #
+        # out_dir is deliberately not passed. Reusing whatever token
+        # a.manifests already holds looks appealing and is the wrong risk here:
+        # it may have been rotated since that bundle was written, and a dead
+        # token is exactly the `0/1 Running` this rig cannot tell from a slow
+        # boot -- so the rig would fail with no way to say why.
+        token_opts = {"ship_id": ship_id}
+        if a.auth_token:
+            token_opts["auth_token"] = a.auth_token
+        source = core.resolve_auth_token(f, token_opts, client=client,
+                                         rotate=not a.auth_token,
+                                         announce=print)
+        print(source.message)
+        if source.branch == core.TOKEN_PLACEHOLDER:
+            # Reachable one way: --auth-token given the placeholder string
+            # itself. Rendering it deploys an agent that can never come online,
+            # and the run's only report would be that it never did -- so the
+            # message resolve_auth_token already wrote becomes the exit.
+            sys.exit(source.message)
+        regenerate = _regenerator(f, a, ship_id, token_opts["auth_token"])
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
                       cluster=a.cluster, timeout=a.timeout, keep=a.keep,
                       facts=f, local_registry=a.local_registry,
@@ -706,6 +746,12 @@ def main():
     t.add_argument("--manifests", default="out")
     t.add_argument("--namespace", required=True)
     t.add_argument("--ship-id", dest="ship_id")
+    t.add_argument("--auth-token", dest="auth_token",
+                   help="the agent's AUTH_TOKEN, if you are holding the one "
+                        "create-ship printed. Without it the run issues exactly "
+                        "one, once, and every render it makes uses that -- "
+                        "which revokes the credential of anything already "
+                        "deployed against this agent")
     t.add_argument("--cluster", choices=["current", "kind", "minikube"], default="current")
     t.add_argument("--timeout", type=int, default=600)
     t.add_argument("--keep", action="store_true", help="skip teardown")
