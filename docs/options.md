@@ -144,10 +144,17 @@ steps, says which one it took, and only the second reaches BlazeMeter:
 3. **The bundle already in `-o`** — the token in `out/bzm_secret.yaml` (or the
    ConfigMap, or the chart overlay) is read back and reused, provided that
    directory's `profile.json` names the same `ship_id`. This is what makes
-   regenerating a bundle produce byte-identical output. A bundle for a
-   *different* ship is refused loudly rather than borrowed from: writing another
-   location's credential into this one deploys cleanly and leaves the agent at
-   `0/1`.
+   regenerating a bundle produce byte-identical output.
+
+   If that directory holds a bundle for a *different* ship — or one whose
+   `profile.json` cannot say which ship its token belongs to — **the command
+   refuses and writes nothing.** Not because borrowing the token would be wrong,
+   though it would: generating there at all would *overwrite* that bundle, and
+   its AUTH_TOKEN cannot be read back from BlazeMeter afterwards, because the
+   only endpoint that returns one issues a new one. The token would survive only
+   inside an agent already running on it. Say what this bundle's credential is —
+   `--auth-token`, or `--rotate-token` for a fresh one — and neither reads the
+   directory at all, so replacing it stays available to anyone who means to.
 4. **The placeholder**, `<YOUR_AUTH_TOKEN>` — with a message naming the two
    places a real one comes from: what `create-ship` printed, or an agent already
    deployed, `kubectl -n <ns> get secret blazemeter-secret -o

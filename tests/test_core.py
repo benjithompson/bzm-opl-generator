@@ -260,33 +260,61 @@ def test_regenerating_a_bundle_twice_is_byte_identical(tmp_path):
     assert second == first
 
 
-def test_a_bundle_for_another_ship_is_not_reused_and_says_so(tmp_path):
-    """Reusing across ships writes another location's credential into this
-    bundle, and the agent then sits at 0/1 with a token that was never its own.
-    Loud rather than silent: the directory is the only place the mistake shows."""
+def test_a_bundle_for_another_ship_is_refused_rather_than_overwritten(tmp_path):
+    """Reusing across ships would write another location's credential into this
+    bundle. Warning and carrying on is not enough, because carrying on
+    *overwrites that directory* -- and the API only mints, so the bundle was the
+    only copy of that token outside a running cluster. Refused, and the file is
+    still there afterwards."""
     facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                                dict(FACTS["ships"][0], id="b2")])
     gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
                                    "auth_token": "B1TOKEN"}), str(tmp_path))
     opts = {"namespace": "ns1", "ship_id": "b2"}
+    with pytest.raises(core.BadRequest) as caught:
+        core.resolve_auth_token(facts, opts, out_dir=str(tmp_path))
+    assert "b1" in str(caught.value) and "b2" in str(caught.value)
+    assert "B1TOKEN" in (tmp_path / "bzm_secret.yaml").read_text(), \
+        "the refusal must not have destroyed the token it was protecting"
+
+
+def test_saying_what_this_bundle_s_token_is_makes_the_overwrite_deliberate(
+        tmp_path):
+    """The escape from the refusal above, and why it is not a dead end: a token
+    passed for *this* ship never looks at the directory at all, so replacing
+    another ship's bundle stays possible for whoever means it."""
+    facts = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
+                               dict(FACTS["ships"][0], id="b2")])
+    gen.write(gen.generate(facts, {"namespace": "ns1", "ship_id": "b1",
+                                   "auth_token": "B1TOKEN"}), str(tmp_path))
+    opts = {"namespace": "ns1", "ship_id": "b2", "auth_token": "B2TOKEN"}
     src = core.resolve_auth_token(facts, opts, out_dir=str(tmp_path))
-    assert src.branch == core.TOKEN_PLACEHOLDER
-    assert "b1" in src.message and "b2" in src.message
-    assert "B1TOKEN" not in opts.get("auth_token", "")
+    assert src.branch == core.TOKEN_GIVEN and opts["auth_token"] == "B2TOKEN"
 
 
-def test_a_bundle_whose_ship_cannot_be_confirmed_is_not_reused(tmp_path):
+def test_a_bundle_whose_ship_cannot_be_confirmed_is_refused_too(tmp_path):
     """An older bundle, or a hand-assembled directory: there is a token in it
-    and nothing that says whose. Not the same as a mismatch -- the remedy is to
-    pass the token rather than to look at another directory -- but it is equally
-    not a reuse."""
+    and nothing that says whose. Refused on the same ground as the mismatch --
+    writing over it destroys a credential nothing can re-read -- but the reason
+    given differs, because so does the remedy: pass the token rather than go
+    looking at another directory."""
     _bundle(tmp_path, auth_token="TOKENVALUE")
     os.remove(os.path.join(str(tmp_path), gen.PROFILE_FILE))
     opts = {"namespace": "ns1"}
-    src = core.resolve_auth_token(FACTS, opts, out_dir=str(tmp_path))
-    assert src.branch == core.TOKEN_PLACEHOLDER
+    with pytest.raises(core.BadRequest) as caught:
+        core.resolve_auth_token(FACTS, opts, out_dir=str(tmp_path))
+    assert gen.PROFILE_FILE in str(caught.value)
     assert "auth_token" not in opts
-    assert gen.PROFILE_FILE in src.message
+    assert "TOKENVALUE" in (tmp_path / "bzm_secret.yaml").read_text()
+
+
+def test_an_empty_directory_is_not_a_bundle_to_protect(tmp_path):
+    """The refusals above must not have turned a first run into an error: a
+    directory with no token in it is the ordinary case, and generating into a
+    fresh or nonexistent path stays the placeholder branch."""
+    src = core.resolve_auth_token(FACTS, {"namespace": "ns1"},
+                                  out_dir=str(tmp_path / "nothing-here"))
+    assert src.branch == core.TOKEN_PLACEHOLDER
 
 
 def test_no_token_anywhere_says_where_a_real_one_comes_from(tmp_path):

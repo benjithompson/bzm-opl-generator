@@ -644,19 +644,33 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
                 f"nothing was issued, so this bundle is byte-identical to the "
                 f"last one and the agent running from it is unaffected.")
         if found:
-            # Loud, and the loudest of the four: the alternative is writing
-            # another location's credential into this bundle, which deploys
-            # cleanly and leaves the agent at 0/1 with a token that was never
-            # its own. The directory is the only place that mistake is visible.
+            # Refused, not warned. Reusing across ships would write another
+            # agent's credential into this bundle -- but simply declining to
+            # reuse is not enough, because the next thing that happens is
+            # write_bundle overwriting this directory, and the API only ever
+            # mints: that bundle was the only copy of that token outside a
+            # running cluster. So carrying on with a warning trades one silent
+            # 0/1 for a credential nothing can get back, which is worse. The
+            # escape is to say what *this* bundle's token is -- a supplied or
+            # rotated token never reads the directory at all -- so replacing
+            # another ship's bundle stays available to whoever means it.
             named = (f"a bundle for ship {theirs}, not {want}" if theirs
                      else f"a bundle whose {gen_mod.PROFILE_FILE} does not say "
                           f"which ship its AUTH_TOKEN belongs to")
-            return TokenSource(
-                TOKEN_PLACEHOLDER, want,
-                f"{out_dir} holds {named}, so its token was NOT reused -- the "
-                f"placeholder is in this bundle instead, and this bundle is "
-                f"what that directory ends up holding. "
-                f"{token_recovery_hint(options)}")
+            remedy = ("Pass --auth-token (auth_token) to say what this "
+                      "bundle's credential is, or --rotate-token to issue a "
+                      "fresh one -- either makes replacing that bundle "
+                      "deliberate. Or generate somewhere else and keep it."
+                      if theirs else
+                      f"Pass --auth-token (auth_token) with the token that "
+                      f"bundle belongs to, and it will be written back. "
+                      f"{token_recovery_hint(options)}")
+            raise BadRequest(
+                f"{out_dir} already holds {named}, and generating here would "
+                f"overwrite it. Its AUTH_TOKEN cannot be read back from "
+                f"BlazeMeter afterwards -- the only endpoint that returns one "
+                f"issues a new one -- so that token would be recoverable only "
+                f"from an agent already running on it. {remedy}")
     return TokenSource(
         TOKEN_PLACEHOLDER, want,
         f"AUTH_TOKEN left as {placeholder}, so this bundle cannot be applied "

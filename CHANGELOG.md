@@ -37,10 +37,15 @@ anything that breaks.
      confirmation prompt — the flag is the confirmation.
   3. Otherwise the token already written into `-o` is read back and reused,
      provided that bundle's `profile.json` names the same `ship_id`. This is what
-     makes regenerating a bundle byte-identical. A bundle belonging to a
-     *different* ship is refused out loud rather than borrowed from: writing
-     another location's credential into this one applies cleanly and leaves the
-     agent at `0/1` with a token that was never its own.
+     makes regenerating a bundle byte-identical.
+
+     If `-o` holds a bundle for a *different* ship, or one whose `profile.json`
+     cannot say whose token it is, **the command refuses and writes nothing.**
+     Generating there would overwrite that bundle, and its AUTH_TOKEN cannot be
+     fetched again afterwards — the only endpoint that returns one issues a new
+     one — so it would survive nowhere but inside an agent still running on it.
+     Pass `--auth-token` (or `--rotate-token`) and the directory is not consulted
+     at all, which is how you replace such a bundle deliberately.
   4. Otherwise the `<YOUR_AUTH_TOKEN>` placeholder stays, and the command names
      the two places a real token comes from — what `create-ship` printed, or
      `kubectl -n <ns> get secret blazemeter-secret -o
