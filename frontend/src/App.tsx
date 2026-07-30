@@ -48,6 +48,12 @@ import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
 import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
+// THROWAWAY (?variant=A|B|C) -- three layouts for the configure step's feature
+// and group split. Delete src/prototype/ and these three references with it.
+import { VariantA, VariantB, VariantC } from "./prototype/ConfigureVariants";
+import { PrototypeSwitcher, variantFromUrl } from "./prototype/PrototypeSwitcher";
+
+const PROTO_VARIANT = variantFromUrl();
 
 // Why performance and service virtualization want separate agents, and so
 // separate namespaces: one agent serving both puts mocks and load engines in a
@@ -1240,6 +1246,22 @@ export default function App() {
                 </label>
               </div>
 
+              {/* THROWAWAY: ?variant= swaps this whole block for one of the
+                  prototype layouts. Everything above and below it -- the
+                  preview, the download guard, the preflight -- is untouched, so
+                  a variant is judged against the real page. */}
+              {PROTO_VARIANT ? (() => {
+                const proto = {
+                  features, feature, pickFeature, sourceMode,
+                  locFeatures, unavailable, locUnclaimed,
+                  funcIds: facts?.func_ids ?? [],
+                  options, set, grpOn, grpRequired, grpDeclined, flipGroup,
+                  groupBody, incomplete, namespaceOk, saOk, saCreate,
+                };
+                return PROTO_VARIANT === "A" ? <VariantA {...proto} />
+                  : PROTO_VARIANT === "B" ? <VariantB {...proto} />
+                  : <VariantC {...proto} />;
+              })() : (<>
               {/* The feature in view. Served list, so a feature added to the
                   backend vocabulary appears here with nothing changed in this
                   file -- and one with no group tagged to it still shows the
@@ -1393,6 +1415,7 @@ export default function App() {
                   </GroupRow>
                 ))}
               </div>
+              </>)}
 
               <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
                 <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-slate-500">
@@ -1800,6 +1823,7 @@ export default function App() {
             setActiveFile={setActiveFile} genErr={genErr} />
         </div>
       </main>
+      <PrototypeSwitcher current={PROTO_VARIANT} />
     </div>
   );
 }
