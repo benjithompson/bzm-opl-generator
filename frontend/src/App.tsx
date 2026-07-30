@@ -50,10 +50,14 @@ import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 // THROWAWAY (?variant=A|B|C) -- three layouts for the configure step's feature
 // and group split. Delete src/prototype/ and these three references with it.
-import { VariantA, VariantB, VariantC } from "./prototype/ConfigureVariants";
-import { PrototypeSwitcher, variantFromUrl } from "./prototype/PrototypeSwitcher";
+import { VariantA, VariantB, VariantC, VariantD } from "./prototype/ConfigureVariants";
+import { isShell, PrototypeSwitcher, variantFromUrl } from "./prototype/PrototypeSwitcher";
+import { PreviewShell } from "./prototype/ShellVariants";
 
 const PROTO_VARIANT = variantFromUrl();
+// D-G take the preview out of the right-hand column, so the page is one column
+// and the shell decides where the preview goes.
+const PROTO_SHELL = isShell(PROTO_VARIANT) ? PROTO_VARIANT : null;
 
 // Why performance and service virtualization want separate agents, and so
 // separate namespaces: one agent serving both puts mocks and load engines in a
@@ -853,7 +857,14 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {/* THROWAWAY: a shell variant wraps the whole work area and puts the
+          preview somewhere of its own; `main` is then one column, because
+          nothing is reserving half the page for a pane that is not there. */}
+      <PreviewShell variant={PROTO_SHELL} files={files} activeFile={activeFile}
+        setActiveFile={setActiveFile} genErr={genErr}>
+      <main className={PROTO_SHELL
+        ? "max-w-screen-xl mx-auto p-6"
+        : "max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6"}>
         <div className="space-y-5">
           {/* 1 · Where the harbor id, ship id and token come from.
               Three steps folded into one: connected they are picked from the
@@ -1260,7 +1271,10 @@ export default function App() {
                 };
                 return PROTO_VARIANT === "A" ? <VariantA {...proto} />
                   : PROTO_VARIANT === "B" ? <VariantB {...proto} />
-                  : <VariantC {...proto} />;
+                  : PROTO_VARIANT === "C" ? <VariantC {...proto} />
+                  // D-G share the chosen configure layout and differ only in
+                  // where the preview lives.
+                  : <VariantD {...proto} />;
               })() : (<>
               {/* The feature in view. Served list, so a feature added to the
                   backend vocabulary appears here with nothing changed in this
@@ -1792,6 +1806,9 @@ export default function App() {
           </Section>
         </div>
 
+        {/* THROWAWAY: the preview column exists only where the preview is
+            beside the form. A shell owns it instead. */}
+        {!PROTO_SHELL && (
         <div className="space-y-2">
           {/* What is in the bundle from a feature that is not in view. Here
               rather than in step 4 because this is where "what does this bundle
@@ -1822,7 +1839,9 @@ export default function App() {
           <Preview files={files} activeFile={activeFile}
             setActiveFile={setActiveFile} genErr={genErr} />
         </div>
+        )}
       </main>
+      </PreviewShell>
       <PrototypeSwitcher current={PROTO_VARIANT} />
     </div>
   );

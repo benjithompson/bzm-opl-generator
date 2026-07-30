@@ -134,8 +134,9 @@ export function VariantA(p: ProtoProps) {
           Every deployment
         </h3>
         <div className="rounded-xl border border-slate-200 p-3 space-y-3">
-          <CoreFields {...p} />
-          <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
+          <div id="proto-core" className="scroll-mt-4"><CoreFields {...p} /></div>
+          <div id="proto-shared"
+            className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
             {rows(p, SHARED, "")}
           </div>
         </div>
@@ -155,8 +156,8 @@ export function VariantA(p: ProtoProps) {
             const dim = st === "not-run" && p.sourceMode === "connect";
             const stranded = dim ? own.filter((g) => g.detect(p.options)) : [];
             return (
-              <div key={f.id}
-                className={"rounded-xl border " + (dim
+              <div key={f.id} id={"proto-f-" + f.id}
+                className={"scroll-mt-4 rounded-xl border " + (dim
                   ? "border-slate-200 bg-slate-50/70"
                   : "border-bzm/40 bg-bzm/[0.03]")}>
                 <div className="px-3 py-2.5 border-b border-slate-100">
@@ -204,6 +205,62 @@ export function VariantA(p: ProtoProps) {
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+// == D -- A's cards with B's rail, full width =================================
+// The chosen pair: A's split (shared deck, then a card per feature, nothing
+// hidden) with B's rail beside it, now that the preview no longer owns half the
+// page. The rail is not navigation with a status dot bolted on -- it NAMES what
+// is set, so "what is in this bundle" is answered without scrolling the form.
+export function VariantD(p: ProtoProps) {
+  const secs = [
+    { id: "core", label: "Placement", gs: [] as OptionGroup[] },
+    { id: "shared", label: "Every deployment", gs: SHARED },
+    ...p.features.map((f) => ({
+      id: "f-" + f.id, label: f.label, gs: ownedBy(f.id),
+    })),
+  ];
+  return (
+    <div className="grid grid-cols-[13rem_1fr] gap-6 items-start">
+      <nav className="sticky top-4 space-y-1">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-2">
+          In this bundle
+        </p>
+        {secs.map((s) => {
+          // The switches, not detect(): the rail is orientation, and a group
+          // the user just turned on and has not filled in yet has to appear
+          // here or the rail contradicts the form beside it.
+          const set = s.gs.filter((g) => p.grpOn[g.id]);
+          const todo = s.id === "core"
+            ? !(p.namespaceOk && p.saOk)
+            : s.gs.some((g) => p.incomplete.includes(g));
+          // What each line says, in order of what the reader needs: unfinished
+          // first, then what is actually set, then nothing-yet.
+          const detail = todo ? "needs attention"
+            : s.id === "core" ? String(p.options.namespace ?? "")
+            : set.length ? set.map((g) => g.title).join(", ")
+            : "defaults";
+          return (
+            <a key={s.id} href={"#proto-" + s.id}
+              className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+              <span className={"mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full "
+                + (todo ? "bg-red-500" : set.length || s.id === "core"
+                  ? "bg-emerald-500" : "bg-slate-300")} />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium text-slate-700">{s.label}</span>
+                <span className={"block text-[10px] " + (todo ? "text-red-600" : "text-slate-400")}>
+                  {detail}
+                </span>
+              </span>
+            </a>
+          );
+        })}
+      </nav>
+      <div className="min-w-0">
+        <VariantA {...p} />
+      </div>
     </div>
   );
 }
