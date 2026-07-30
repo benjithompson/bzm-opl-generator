@@ -57,6 +57,41 @@ anything that breaks.
   passes `--auth-token` rather than `--api-key` (which would produce a
   placeholder bundle).
 
+  **BREAKING on the MCP surface: `opl_bundle generate`'s `fetch_token` argument
+  is now `rotate_token`, and defaults to `false`.** It defaulted to minting, so
+  every generate revoked the running agent's credential — and a session there has
+  no terminal to be warned in and no prompt to be stopped at. The rename is the
+  safeguard: a model reads the argument name, so the argument name has to be the
+  warning. `fetch_token` is *refused* rather than ignored, because a caller
+  working from a cached description means to mint and a silently-placeholder
+  bundle is a worse answer than one round trip.
+
+  Every generate now reports `token_source: {branch, ship_id, message}` — one of
+  `given`, `rotated`, `reused`, `placeholder` — and a rotation is repeated in
+  `warnings`, naming the ship whose credential was replaced. A live rotation on
+  this surface used to answer `warnings: []` and name nothing at all. The token
+  itself still never appears in a response, on any branch. `generate` also
+  passes `out_dir` through now, so an MCP session reaches the `reused` branch:
+  regenerating into a directory that already holds this ship's bundle issues
+  nothing and comes out byte-identical. It could not reach that branch before.
+  `opl_location reveal_token` is unchanged — the sanctioned way to read a token,
+  and a whole action so it cannot happen as a side effect.
+
+- **`livetest` issues one credential per run instead of one per render.** Its
+  regenerate step called the token endpoint every time it was invoked, and a run
+  invokes it three or four times — the negative control renders twice, then
+  `--run-test` and `--local-proxy` each do — so a single run minted four
+  credentials, each invalidating the last. Any agent deployed from an earlier
+  render was holding a revoked token and sat `0/1 Running`, which is
+  indistinguishable from a slow boot; this is plausibly a real source of the
+  rig's intermittent failures. One token now, minted at the start, printed with
+  the ship it was for, and threaded through every render.
+
+  There is no `--rotate-token` on this command and there should not be: bringing
+  an agent online is its entire purpose, so the rotation is implied by running
+  it. New `--auth-token` skips the mint for a caller already holding one — the
+  token `create-ship` printed, say.
+
 ### Added
 
 - **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
@@ -83,8 +118,9 @@ anything that breaks.
   `generate` writes the Secret and answers with file names and byte counts, and
   reading a bundle file back redacts the token rather than handing it over,
   because a response is transcribed, summarised and quoted back, and this
-  credential rotates every time it is fetched. `reveal_token` is the one way to
-  get the value, and it is a whole action so it cannot happen by accident.
+  credential rotates every time it is issued. `reveal_token` is the one way to
+  get the value, and it is a whole action so it cannot happen by accident;
+  `generate` issues one only when asked, by name (see `rotate_token`, above).
   **A secret is never a tool argument** — passing `auth_token` in the options is
   refused rather than written; a path may be named, and the key itself comes
   from the server's environment. Files are named the same way: `opl_preflight`
