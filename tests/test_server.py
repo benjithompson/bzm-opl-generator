@@ -10,13 +10,18 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from bzm_opl_gen import core, server  # noqa: E402
 from test_generate import FACTS  # noqa: E402
+# The same fakes tests/test_core.py and tests/test_cli.py drive, for the same
+# reason they share them: three surfaces call the same core functions, and a
+# fake per suite is how two of them end up disagreeing about what an account
+# answers. `calls` is what makes "nothing was minted" assertable at all.
+from test_core import FakeClient, RefusingClient  # noqa: E402
 
 client = TestClient(server.app)
 
 
 def test_generate_preview_no_key_needed():
     r = client.post("/api/generate", json={
-        "facts": FACTS, "options": {"namespace": "ns1"}, "fetch_token": False})
+        "facts": FACTS, "options": {"namespace": "ns1"}})
     assert r.status_code == 200
     names = [f["name"] for f in r.json()["files"]]
     assert names[0] == "bzm_serviceaccount.yaml"      # apply order
@@ -26,8 +31,7 @@ def test_generate_preview_no_key_needed():
 def test_generate_zip_mirror_script_executable():
     r = client.post("/api/generate/zip", json={
         "facts": FACTS,
-        "options": {"namespace": "ns1", "private_registry": "reg.local/bzm"},
-        "fetch_token": False})
+        "options": {"namespace": "ns1", "private_registry": "reg.local/bzm"}})
     assert r.status_code == 200
     z = zipfile.ZipFile(io.BytesIO(r.content))
     info = z.getinfo("bzm-opl/bzm-opl-image-mirror.sh")
@@ -39,8 +43,7 @@ def test_generate_preview_helm_format():
     """The preview leads with the values overlay -- the only file in a chart
     bundle that came from the account, and so the one worth reading first."""
     r = client.post("/api/generate", json={
-        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"},
-        "fetch_token": False})
+        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"}})
     assert r.status_code == 200
     names = [f["name"] for f in r.json()["files"]]
     assert names[0] == "bzm-opl-values.yaml"
@@ -52,8 +55,7 @@ def test_generate_zip_helm_keeps_the_chart_directory():
     """Names carry directories in this format, and a zip that flattened them
     would download as a pile of files no helm command can install."""
     r = client.post("/api/generate/zip", json={
-        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"},
-        "fetch_token": False})
+        "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"}})
     assert r.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
     assert "bzm-opl/helm/Chart.yaml" in names
@@ -66,7 +68,7 @@ def test_generate_helm_rejects_service_virtualization_400():
     an imported profile can arrive set to helm."""
     facts = dict(FACTS, func_ids=["mockServices"])
     r = client.post("/api/generate", json={
-        "facts": facts, "fetch_token": False,
+        "facts": facts,
         "options": {"namespace": "ns1", "output_format": "helm",
                     "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
                     "sv_tls_secret": "wildcard"}})
@@ -94,17 +96,161 @@ def test_manual_facts_flag_the_gui_image_gap():
 
 
 def test_manual_facts_generate_without_a_token_fetch():
-    """The UI posts fetch_token=false in this mode -- the token was typed, and a
-    key left over from an earlier connect must not be asked for one belonging to
-    somebody else's agent."""
+    """The typed token is the bundle's, and a key left over from an earlier
+    connect must not be asked for one belonging to somebody else's agent. Free
+    now that no route mints unasked, and asserted anyway: this mode is where a
+    stray mint would be least visible, since there is no agent on screen."""
     facts = client.post("/api/facts/manual", json={
         "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]}).json()["facts"]
     r = client.post("/api/generate", json={
-        "facts": facts, "fetch_token": False,
+        "facts": facts,
         "options": {"namespace": "cust", "auth_token": "TOK", "ship_id": "S1"}})
     assert r.status_code == 200
     names = [f["name"] for f in r.json()["files"]]
     assert "bzm_deployment.yaml" in names and "bzm_secret.yaml" in names
+    assert r.json()["token"]["branch"] == core.TOKEN_GIVEN
+
+
+# -- what a download does to a running agent's credential ----------------------
+# The UI half of #64. Which of the four branches a token arrives by is core's
+# rule and is tested in tests/test_core.py; what these pin is that no route here
+# takes the one that mints unless it was asked to, and that the answer says which
+# one it took. The download button was the last caller that rotated a live
+# agent's credential as a side effect of being asked for a zip -- silently, and
+# the pod it broke reads as a slow boot.
+
+@pytest.fixture
+def connected(monkeypatch):
+    """A browser session holding an API key, counting what it was asked for.
+
+    Holding one is the whole hazard: every assertion below is about a route that
+    *could* mint and must not, so a fixture with no client would pass for the
+    wrong reason.
+    """
+    c = FakeClient()
+    monkeypatch.setitem(server._state, "client", c)
+    return c
+
+
+@pytest.mark.parametrize("route", ["/api/generate", "/api/generate/zip",
+                                   "/api/generate/save"])
+def test_no_route_mints_unless_it_was_asked_to(connected, route, tmp_path):
+    """All three, parametrised: the preview was already safe, and the two that
+    hand a bundle over were not. A rule that holds on one of them is the bug."""
+    r = client.post(route, json={"facts": FACTS, "out_dir": str(tmp_path / "b"),
+                                 "options": {"namespace": "ns1"}})
+    assert r.status_code == 200
+    assert connected.calls == []
+
+
+def test_a_page_still_asking_for_the_old_fetch_mints_nothing(connected):
+    """`fetch_token` is gone from the request model, and a browser holding the
+    previously-shipped bundle posts it on every download. Ignored rather than
+    refused: a 422 would break that page, and the field only ever meant mint."""
+    r = client.post("/api/generate/zip", json={
+        "facts": FACTS, "options": {"namespace": "ns1"}, "fetch_token": True})
+    assert r.status_code == 200 and connected.calls == []
+
+
+def test_rotating_mints_once_and_names_whose_credential_it_replaced(connected):
+    """Once, not twice: the route resolves the token itself to report the branch
+    and then generates from the same options, so a resolution that did not stick
+    would issue two tokens and leave the bundle holding the older one."""
+    r = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1"}, "rotate_token": True})
+    assert connected.calls == [("auth_token", "aaa111", "bbb222")]
+    token = r.json()["token"]
+    assert (token["branch"], token["ship_id"]) == (core.TOKEN_ROTATED, "bbb222")
+    assert "bbb222" in token["message"]
+    secret = next(f for f in r.json()["files"] if f["name"] == "bzm_secret.yaml")
+    assert "TOKEN-FROM-API" in secret["content"]
+
+
+def test_a_bundle_with_no_token_says_so_rather_than_looking_finished(connected):
+    """The default download for an agent nobody pasted a token for. It is a fine
+    bundle to read and an unusable one to apply, and the only thing standing
+    between those two readings is this sentence reaching the page."""
+    body = client.post("/api/generate", json={
+        "facts": FACTS, "options": {"namespace": "ns1"}}).json()
+    assert body["token"]["branch"] == core.TOKEN_PLACEHOLDER
+    assert "create-ship" in body["token"]["message"]
+
+
+def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
+    """A zip's body is the bundle, so the branch travels beside the filename in
+    the headers -- wrapping the bytes in an envelope would mean the browser
+    saving something that is not a zip."""
+    r = client.post("/api/generate/zip", json={
+        "facts": FACTS, "options": {"namespace": "ns1"}})
+    # The literals, because the frontend reads these two names off the response
+    # and a rename on one side loses the sentence silently rather than failing.
+    assert (server.TOKEN_BRANCH_HEADER, server.TOKEN_MESSAGE_HEADER) == (
+        "X-Bzm-Token-Branch", "X-Bzm-Token-Message")
+    assert r.headers[server.TOKEN_BRANCH_HEADER] == core.TOKEN_PLACEHOLDER
+    message = r.headers[server.TOKEN_MESSAGE_HEADER]
+    assert "create-ship" in message
+    # One line, because a header is one line -- the recovery hint is three.
+    assert "\n" not in message
+    assert "bzm-opl/bzm_secret.yaml" in zipfile.ZipFile(
+        io.BytesIO(r.content)).namelist()
+
+
+def test_a_namespace_no_header_could_carry_does_not_fail_the_download(connected):
+    """Both this route's headers quote the namespace -- the token message does and
+    the zip's filename always did -- and a person types that into a browser. A
+    header is latin-1 by the HTTP spec and starlette raises on anything else, so
+    an unencodable character lost the whole download, which is a worse answer than
+    a mangled filename. Fixed by the route, not by the namespace: a namespace a
+    cluster would accept is an RFC 1123 label, so this is a typo either way."""
+    r = client.post("/api/generate/zip", json={
+        "facts": FACTS, "options": {"namespace": "blazemeter-平"}})
+    assert r.status_code == 200
+    assert r.headers[server.TOKEN_BRANCH_HEADER] == core.TOKEN_PLACEHOLDER
+    assert "attachment" in r.headers["Content-Disposition"]
+    assert zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+
+
+def test_the_four_branch_names_are_what_the_page_switches_on():
+    """frontend/src/api.ts declares this union rather than fetching it -- a closed
+    set, like Strength and MergeState -- so the four spellings are load-bearing
+    across two languages. Renamed here, one arrives in a browser as a branch no
+    sentence covers, and the compiler over there cannot see it."""
+    assert (core.TOKEN_GIVEN, core.TOKEN_ROTATED, core.TOKEN_REUSED,
+            core.TOKEN_PLACEHOLDER) == ("given", "rotated", "reused",
+                                        "placeholder")
+
+
+# -- issuing the credential once, where the agent is made ----------------------
+
+def test_creating_an_agent_issues_its_credential_with_it(connected):
+    """#64's point, and the reason the rest of the UI can stop minting: the token
+    is captured at the one moment it costs nothing, when the ship is new and has
+    no previous credential to invalidate. core.create_ship does not fetch,
+    because for an *existing* ship it would rotate one on an action whose name
+    says nothing about credentials; `bzm-opl-gen create-ship` fetches for exactly
+    this reason, and this is the same command with a browser in front of it."""
+    body = client.post("/api/ships", json={
+        "harbor_id": "aaa111", "name": "agent1"}).json()
+    assert body["ship"]["id"] == "s2"
+    assert body["auth_token"] == "TOKEN-FROM-API"
+    assert body["token_error"] is None
+    # For the ship it just made, not for whatever was selected before it.
+    assert connected.calls == [("auth_token", "aaa111", "s2")]
+
+
+def test_an_agent_whose_credential_was_refused_is_still_reported(monkeypatch):
+    """The ship exists before the fetch, and some accounts refuse the token
+    endpoint outright. A 502 would leave the new agent's id nowhere but a browser
+    console -- and the next click creates a second agent in the same location."""
+    monkeypatch.setitem(server._state, "client", RefusingClient())
+    r = client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ship"]["id"] == "s2" and body["auth_token"] is None
+    assert "could not be issued" in body["token_error"]
+    # The way on, not just the failure: a bundle takes a token that was read off
+    # the agent in the BlazeMeter UI just as happily as a fetched one.
+    assert "auth_token" in body["token_error"]
 
 
 def test_func_ids_mark_which_ones_change_the_images():
@@ -154,7 +300,7 @@ def test_option_docs_describe_every_option():
 def test_generate_invalid_options_400():
     facts = dict(FACTS, ships=FACTS["ships"] * 2)    # ambiguous ship
     r = client.post("/api/generate", json={
-        "facts": facts, "options": {}, "fetch_token": False})
+        "facts": facts, "options": {}})
     assert r.status_code == 400
 
 
@@ -360,8 +506,7 @@ def test_no_cluster_access_leaves_the_rest_of_the_api_working(fake_cluster):
     all, every other route answers exactly as it does with one."""
     fake_cluster(tools=())
     assert client.post("/api/generate", json={
-        "facts": FACTS, "options": {"namespace": "ns1"},
-        "fetch_token": False}).status_code == 200
+        "facts": FACTS, "options": {"namespace": "ns1"}}).status_code == 200
     assert client.get("/api/option-defaults").status_code == 200
     assert client.get("/api/sv-constants").status_code == 200
 
@@ -926,7 +1071,7 @@ def test_generate_save_writes_the_bundle_where_asked(tmp_path):
     out = str(tmp_path / "bundle")
     r = client.post("/api/generate/save", json={
         "facts": FACTS, "options": {"namespace": "ns1"},
-        "fetch_token": False, "out_dir": out})
+        "out_dir": out})
     assert r.status_code == 200
     body = r.json()
     assert body["out_dir"] == out
@@ -943,7 +1088,7 @@ def test_generate_save_expands_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     r = client.post("/api/generate/save", json={
         "facts": FACTS, "options": {"namespace": "ns1"},
-        "fetch_token": False, "out_dir": "~/bundle"})
+        "out_dir": "~/bundle"})
     assert r.status_code == 200
     assert r.json()["out_dir"] == str(tmp_path / "bundle")
     assert os.path.isfile(tmp_path / "bundle" / "bzm_deployment.yaml")
@@ -954,6 +1099,44 @@ def test_generate_save_refuses_a_relative_dir():
     must arrive as this transport's 400, not a 500."""
     r = client.post("/api/generate/save", json={
         "facts": FACTS, "options": {"namespace": "ns1"},
-        "fetch_token": False, "out_dir": "some/relative/dir"})
+        "out_dir": "some/relative/dir"})
     assert r.status_code == 400
     assert "absolute" in r.json()["detail"]
+
+
+def test_saving_twice_into_the_same_folder_reuses_the_token(connected, tmp_path):
+    """The reuse branch, which this route only reaches because it passes the
+    directory it is about to write. Saving again -- to re-render with one option
+    changed, which is what the folder handoff is for -- must leave the agent
+    running from the last save alone, and produce the same bytes."""
+    out = str(tmp_path / "bundle")
+    first = client.post("/api/generate/save", json={
+        "facts": FACTS, "out_dir": out,
+        "options": {"namespace": "ns1", "auth_token": "TOKENVALUE"}})
+    assert first.json()["token"]["branch"] == core.TOKEN_GIVEN
+    secret = os.path.join(out, "bzm_secret.yaml")
+    was = open(secret).read()
+    again = client.post("/api/generate/save", json={
+        "facts": FACTS, "out_dir": out, "options": {"namespace": "ns1"}})
+    token = again.json()["token"]
+    assert (token["branch"], token["ship_id"]) == (core.TOKEN_REUSED, "bbb222")
+    assert out in token["message"]
+    assert open(secret).read() == was and connected.calls == []
+
+
+def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
+        connected, tmp_path):
+    """The loud half of the same branch. Reusing across ships writes one agent's
+    credential into another's bundle, which applies cleanly and sits at 0/1 --
+    and the folder is the only place that mistake is visible."""
+    out = str(tmp_path / "bundle")
+    two = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
+                             dict(FACTS["ships"][0], id="b2")])
+    client.post("/api/generate/save", json={
+        "facts": two, "out_dir": out,
+        "options": {"namespace": "ns1", "ship_id": "b1", "auth_token": "B1TOKEN"}})
+    again = client.post("/api/generate/save", json={
+        "facts": two, "out_dir": out,
+        "options": {"namespace": "ns1", "ship_id": "b2"}})
+    assert again.json()["token"]["branch"] == core.TOKEN_PLACEHOLDER
+    assert "B1TOKEN" not in open(os.path.join(out, "bzm_secret.yaml")).read()

@@ -57,6 +57,30 @@ anything that breaks.
   passes `--auth-token` rather than `--api-key` (which would produce a
   placeholder bundle).
 
+  **The web UI follows the same rule**, and the button that used to break a
+  running agent was the download: it fetched an AUTH_TOKEN on the way out, so
+  taking a copy of the bundle to read it rotated the credential of the install
+  already running. Downloading and **Save to folder** now mint nothing, and both
+  say which of the four ways their bundle got its token.
+
+  Where the token comes from instead: **creating an agent issues it once, there,
+  and puts it in a field on the page** — a ship created a moment ago has no
+  previous credential to invalidate, which is why that is the one action that
+  still fetches. The field is masked with a *Show* toggle, and nothing writes it
+  down, so that page is the copy to keep.
+
+  **Pointing at an agent that already exists leaves the field empty**, because
+  no API reads an existing token back. Paste what you kept, or tick *Issue a NEW
+  AUTH_TOKEN with this bundle* — which says, before you download, that it kills
+  the credential the running agent holds. A download with neither is a
+  placeholder bundle, and the page says so over the button rather than leaving
+  you to find out at `kubectl apply`.
+
+  **Saving twice into the same folder no longer rotates.** The bundle already
+  there supplies its own token — same folder, same ship, same bytes — so
+  re-rendering with one option changed leaves the agent deployed from the last
+  save working.
+
 ### Added
 
 - **`bzm-opl-gen mcp` — an MCP server**, so an AI session can do the whole OPL
