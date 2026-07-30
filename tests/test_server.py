@@ -1126,9 +1126,10 @@ def test_saving_twice_into_the_same_folder_reuses_the_token(connected, tmp_path)
 
 def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
         connected, tmp_path):
-    """The loud half of the same branch. Reusing across ships writes one agent's
-    credential into another's bundle, which applies cleanly and sits at 0/1 --
-    and the folder is the only place that mistake is visible."""
+    """The loud half of the same branch, and it is a refusal rather than a
+    placeholder: saving into that folder would *overwrite* the other agent's
+    bundle, and no API reads an AUTH_TOKEN back, so that folder was the only copy
+    of it outside a running cluster. Refused, and the file is intact after."""
     out = str(tmp_path / "bundle")
     two = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                              dict(FACTS["ships"][0], id="b2")])
@@ -1138,5 +1139,7 @@ def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
     again = client.post("/api/generate/save", json={
         "facts": two, "out_dir": out,
         "options": {"namespace": "ns1", "ship_id": "b2"}})
-    assert again.json()["token"]["branch"] == core.TOKEN_PLACEHOLDER
-    assert "B1TOKEN" not in open(os.path.join(out, "bzm_secret.yaml")).read()
+    assert again.status_code == 400
+    assert "b1" in again.json()["detail"] and "b2" in again.json()["detail"]
+    assert "B1TOKEN" in open(os.path.join(out, "bzm_secret.yaml")).read(), \
+        "the refusal must not have destroyed the token it was protecting"
