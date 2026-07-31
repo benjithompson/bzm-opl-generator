@@ -29,12 +29,16 @@ from . import livetest
 # Aliased because every check takes a `facts` argument, which takes the name.
 from . import facts as facts_mod
 from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
-from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
+from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
+                       CRANE_MEM_REQUEST, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       SV_INGRESS_BACKENDS, SV_INGRESS_NONE, engine_size,
-                       proxy_env, service_account)
+                       NODEPOOLS_FILE, SV_INGRESS_BACKENDS, SV_INGRESS_NONE,
+                       TYPICAL_SYSTEM_PODS, crane_scheduling, engine_requests,
+                       engines_per_node,
+                       engine_scheduling, engine_size, proxy_env,
+                       separate_pools, service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -172,14 +176,19 @@ def _tolerates(toleration, taint):
     return toleration.get("value", "") == taint.get("value", "")
 
 
-def eligible_nodes(nodes, opts):
-    """Nodes an engine could actually land on: Ready, uncordoned, matching the
-    configured nodeSelector, and with every blocking taint tolerated.
+def eligible_nodes(nodes, opts, placement=None):
+    """Nodes a pod could actually land on: Ready, uncordoned, matching the
+    nodeSelector, and with every blocking taint tolerated.
+
+    `placement` is a (selector, tolerations) pair -- engine_scheduling(opts) or
+    crane_scheduling(opts). It defaults to the engines' placement because every
+    caller here is asking about engines; crane's pod is one, theirs are the ones
+    that fail to schedule. On a two-pool location the two answers are different
+    sets of nodes, so a caller that means crane has to say so.
 
     PreferNoSchedule is a preference, not a rejection, so it does not exclude.
     """
-    selector = opts.get("node_selector") or {}
-    tolerations = opts.get("tolerations") or []
+    selector, tolerations = placement or engine_scheduling(opts)
     out = []
     for n in nodes:
         spec, meta = n.get("spec", {}), n.get("metadata", {})
@@ -208,16 +217,68 @@ def _engine_str(cpu, mem):
     return f"{format_cpu(cpu)} CPU / {format_memory(mem)}"
 
 
-def _scope(opts):
+def _scope(opts, placement=None):
+    """How the eligible-node set was narrowed, for a detail string. Defaults to
+    the engines' placement, matching eligible_nodes()."""
+    selector, tolerations = placement or engine_scheduling(opts)
     bits = []
-    if opts.get("node_selector"):
-        bits.append(f"nodeSelector {json.dumps(opts['node_selector'])}")
-    if opts.get("tolerations"):
-        bits.append(f"{len(opts['tolerations'])} toleration(s)")
+    if selector:
+        bits.append(f"nodeSelector {json.dumps(selector)}")
+    if tolerations:
+        bits.append(f"{len(tolerations)} toleration(s)")
     return ", ".join(bits) or "no nodeSelector/tolerations"
 
 
 # -- capacity -----------------------------------------------------------------
+
+def check_crane_pool(facts, opts, cluster):
+    """The crane pool can hold crane.
+
+    Only asked when the pools are split, because otherwise check_capacity
+    already spends crane's share out of the one set of nodes it measures. Split,
+    nothing was checking the crane side at all: every capacity check here is
+    about engines, and a crane pool too small to run crane fails in the way that
+    is hardest to attribute -- the agent goes offline mid-run, and BlazeMeter
+    reports a test that stopped.
+
+    The case that motivated it is not exotic. `e2-medium` is the obvious choice
+    for "small always-on node" and reports **940m** allocatable CPU: crane
+    schedules on its 250m request and can never reach its 1 CPU limit, so it is
+    throttled exactly when a run makes it busy.
+    """
+    if not separate_pools(opts):
+        return []
+    unread = _unread_section(
+        cluster, "nodes", "crane pool",
+        "the cluster's nodes could not be read, so whether the crane pool can "
+        "hold crane is unverified")
+    if unread:
+        return unread
+    placement = crane_scheduling(opts)
+    nodes = eligible_nodes(cluster.get("nodes") or [], opts, placement)
+    want_cpu, want_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
+    want = _engine_str(want_cpu, want_mem)
+    if not nodes:
+        return [Check("crane pool", FAIL,
+                      f"no Ready, schedulable node matches {_scope(opts, placement)} "
+                      f"-- the crane pod has nowhere to run, and an agent that "
+                      f"never starts is a location that never comes online")]
+    fits = [n for n in nodes if _allocatable(n) >= (want_cpu, want_mem)]
+    if fits:
+        return [Check("crane pool", PASS,
+                      f"{len(fits)}/{len(nodes)} crane-pool node(s) hold crane's "
+                      f"{want} (allocatable, not free)")]
+    best = max(nodes, key=lambda n: _allocatable(n))
+    cpu, mem = _allocatable(best)
+    return [Check("crane pool", WARN,
+                  f"no crane-pool node has crane's full {want} allocatable; the "
+                  f"largest is {best['metadata']['name']} with "
+                  f"{format_cpu(cpu)} CPU / {human_memory(mem)}. Crane schedules "
+                  f"anyway -- it requests only {CRANE_CPU_REQUEST}/"
+                  f"{CRANE_MEM_REQUEST} -- but is throttled at its limit exactly "
+                  f"when a run makes it busy, and an agent that stops "
+                  f"heartbeating mid-run reads as a test that stopped")]
+
 
 def check_capacity(facts, opts, cluster):
     """slots x engine size vs what the eligible nodes can hold.
@@ -238,6 +299,30 @@ def check_capacity(facts, opts, cluster):
         return unread
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
+        if separate_pools(opts):
+            # An engine pool aimed at its own nodes is *supposed* to sit at zero
+            # between runs -- that is the saving the split exists for. From
+            # `get nodes` alone an empty autoscaling pool and a pool that was
+            # never created look identical, and they are opposite verdicts, so
+            # this cannot be the FAIL it is on a single-pool cluster. Observed
+            # on a correctly-built GKE pool at min-nodes 0, where the old FAIL
+            # said "engines have nowhere to run" about a cluster that was right.
+            #
+            # The cluster-autoscaler does publish its node groups
+            # (kube-system/cluster-autoscaler-status), but names them by
+            # instance-group URL and carries none of their labels, so it cannot
+            # settle which group answers this selector either. Hence a WARN that
+            # says what to look at rather than a guess in either direction.
+            return [Check("capacity: eligible nodes", WARN,
+                          f"no node currently matches {_scope(opts)}. With a "
+                          f"dedicated engine pool that is expected between runs "
+                          f"-- a pool at min-nodes 0 has none until a test asks "
+                          f"for one -- but it looks the same as a pool that was "
+                          f"never created, and nothing in `get nodes` tells them "
+                          f"apart. Confirm the pool exists and can scale: "
+                          f"`kubectl -n kube-system get cm "
+                          f"cluster-autoscaler-status -o yaml` lists the node "
+                          f"groups with their minSize/maxSize")]
         return [Check("capacity: eligible nodes", FAIL,
                       f"no Ready, schedulable node matches {_scope(opts)} -- "
                       f"engines have nowhere to run")]
@@ -259,15 +344,21 @@ def check_capacity(facts, opts, cluster):
                             f"{human_memory(biggest[1][1])}. An engine is one pod; "
                             f"it cannot be split across nodes"))
 
-    # Crane occupies the namespace alongside the engines; the quota check counts
-    # its pod, so the capacity maths has to spend its share too.
+    # Crane's own pod is spent out of the engine pool only when it is *on* it.
+    # With engines pointed at their own pool crane is somewhere else entirely,
+    # and charging the engine pool for it understates the capacity by a whole
+    # crane -- which on a small pool is the difference between a PASS and a FAIL
+    # that sends someone resizing nodes they did not need to touch.
+    crane_here = not separate_pools(opts) or _crane_on(nodes, opts)
     crane_cpu, crane_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
-    tot_cpu = max(sum(c for c, _ in sizes.values()) - crane_cpu, 0)
-    tot_mem = max(sum(m for _, m in sizes.values()) - crane_mem, 0)
+    spent_cpu, spent_mem = (crane_cpu, crane_mem) if crane_here else (0, 0)
+    tot_cpu = max(sum(c for c, _ in sizes.values()) - spent_cpu, 0)
+    tot_mem = max(sum(m for _, m in sizes.values()) - spent_mem, 0)
     holds = min(tot_cpu // cpu, tot_mem // mem)
+    after = (f" after crane's own {_engine_str(crane_cpu, crane_mem)}"
+             if crane_here else " (crane is on its own pool and spends none of it)")
     total = (f"{len(nodes)} eligible node(s) leave {format_cpu(tot_cpu)} CPU / "
-             f"{human_memory(tot_mem)} after crane's own "
-             f"{_engine_str(crane_cpu, crane_mem)} -- an upper bound, other "
+             f"{human_memory(tot_mem)}{after} -- an upper bound, other "
              f"workloads already use part of the rest")
     if holds < slots:
         checks.append(Check("capacity: aggregate", FAIL,
@@ -279,6 +370,326 @@ def check_capacity(facts, opts, cluster):
                             f"slots={slots} needs {format_cpu(cpu * slots)} CPU / "
                             f"{format_memory(mem * slots)}; {total} ({holds} engine(s))"))
     return checks
+
+
+MB = 1024 ** 2
+
+# The engine sizing model, calibrated entirely from the one configuration
+# BlazeMeter documents: 500 threads on 2 CPU / 8Gi with a 4096MB heap.
+#
+#   HEAP_MB_PER_THREAD   4096 / 500  = 8.192
+#   CONTAINER_HEAP_RATIO 8Gi  / 4096 = 2.0
+#
+# Neither number is invented, and that is the whole reason they are these two
+# rather than a physically explicit heap + threads*stack + overhead model: the
+# stack and overhead terms of that model would have been guesses wearing the
+# costume of a measurement.
+#
+# Note what the documented 500 actually tracks. 500 * 8.192MB is exactly the
+# 4096MB *heap*, not the 8Gi container -- so the heap is the unit of capacity
+# and the container is derived from it, not the reverse. This check previously
+# compared the heap against a flat 75% of the container limit, which fired on
+# BlazeMeter's own default pairing (4096MB in 8Gi is exactly half) while saying
+# nothing about a 4096MB heap on a 50-thread location, where it is ten times
+# oversized. The threads are the signal; the ratio never was.
+#
+# What these constants are NOT: a measurement of what an engine needs.
+#
+# BlazeMeter's "2 CPU / 8Gi" is a system *requirement* in the dumbed-down sense
+# -- a floor chosen so that things work consistently across every customer and
+# every script, not a figure anyone optimised. The 2.0 ratio is round because it
+# is somebody's rule of thumb. So both constants encode a safety margin of
+# unknown size, and scaling them linearly carries that margin to every thread
+# count rather than removing it.
+#
+# That makes this model safe by construction and no better: a recommendation it
+# produces is exactly as conservative as BlazeMeter's own default, proportionally
+# -- which is the right *default* to ship, because it cannot be less safe than
+# what the vendor already tells people to run. It is also why the numbers here
+# cannot deliver an optimised cluster on their own. Getting below the vendor's
+# margin needs observed usage, which is what the calibration loop in #89 is for;
+# until that exists, treat every value this produces as an upper bound that
+# happens to be defensible, not as a measured requirement.
+#
+# Anyone revising these should record what they measured, on what, right here.
+HEAP_MB_PER_THREAD = 8.192
+CONTAINER_HEAP_RATIO = 2.0
+
+# The floor, and it is not an edge case -- it is very nearly the whole answer.
+#
+# Measured by bisecting a real engine's container limit until it broke, on a
+# Docker agent with a light script (small HTML, 1s think-time). Verdict is the
+# Taurus exit code, because nothing else distinguishes the cases:
+#
+#   threads  limit   result
+#     300    1024MB  never starts -- JVM cannot initialise
+#     300    1536MB  starts, dies as the ramp completes   (1,139 samples)
+#     300    2048MB  starts, dies as the ramp completes   (2,435 samples)
+#     300    2560MB  starts, dies halfway                (31,130 samples)
+#     300    3072MB  runs the whole test                 (61,348 samples)
+#     300    4096MB  runs the whole test                 (61,139 samples)
+#      50    1536MB  starts, dies partway                 (1,926 samples)
+#      50    2560MB  starts, dies partway                 (6,019 samples)
+#
+# Two things fall out, and both contradict the model above.
+#
+# **The requirement is essentially fixed.** 50 threads and 300 threads have the
+# same floor, 2560 < floor <= 3072. Six times the load, no measurable change:
+# what costs the memory is the JVM, Taurus and JMeter existing at all, not the
+# threads. So `threads * HEAP_MB_PER_THREAD` has the wrong shape -- it is a
+# large constant with a small per-thread term, and this "floor" is doing nearly
+# all the work across the range anyone runs. Restructuring it needs more than
+# two thread counts on one script against one target; see #89.
+#
+# **Above the floor, more memory buys nothing.** 3072 and 4096 are
+# indistinguishable (61,348 vs 61,139 samples). It is a knee, not a slope, so
+# the right recommendation sits just above it and paying for headroom is waste.
+#
+# 3072 is the smallest measured pass. The previous 1536 was set from an engine
+# *consuming* 1220MB, and consumption is not a requirement -- 1536 fails at both
+# thread counts. That mistake has now been made three times in this file's
+# history; a reading of what an engine used is never a floor for what it needs.
+MIN_HEAP_MB = 256
+MIN_CONTAINER_MB = 3072
+
+
+def engine_heap_mb(threads):
+    """The heap a JVM needs to carry `threads` of load, in MB."""
+    return max(int(threads * HEAP_MB_PER_THREAD), MIN_HEAP_MB)
+
+
+def engine_container_mb(heap_mb):
+    """The container the heap has to live in, in MB -- heap plus what the JVM
+    needs outside it (metaspace, thread stacks, code cache, direct buffers, and
+    the GC's own structures)."""
+    return max(int(heap_mb * CONTAINER_HEAP_RATIO), MIN_CONTAINER_MB)
+
+
+def check_engine_heap(facts, opts, cluster):
+    """The location's JVM heap against the threads it must carry, and against
+    the container the bundle gives it.
+
+    Two comparisons, because they fail differently and only one of them was
+    being made before:
+
+    * **heap vs threads.** The heap is what runs the load, and what it must
+      hold scales with `threadsPerEngine`. A heap short of the threads OOMKills
+      mid-run; a heap far over them reserves node capacity the JVM can never
+      address, which on a dedicated autoscaling engine pool is most of what the
+      pool costs. Both are invisible to a scheduler, so nothing else here sees
+      them. This is the comparison that was missing: 4096MB is right for 500
+      threads and ten times too much for 50, and a ratio against the container
+      cannot tell those apart.
+    * **heap vs container.** Whatever the heap is, the JVM needs room outside
+      it. A heap at or above the whole limit is an OOMKill reported as a test
+      that stopped rather than as a resource error.
+
+    The heap and the threads are *location* settings and the limit is a bundle
+    option, so this is where the two sources of truth for engine size meet.
+    Unknown heap is a WARN naming where to look, never a pass: the default is
+    4096MB on almost every location, and the one that has been retuned is
+    exactly the one somebody is generating a bundle for.
+    """
+    xmx = facts.get("engine_xmx_mb")
+    threads = facts.get("threads_per_engine")
+    _, mem = engine_size(opts)
+    limit = format_memory(mem)
+    if xmx is None:
+        if facts_mod.from_manual_entry(facts):
+            return [Check("engine heap", WARN,
+                          f"the location's engineXmx is unknown (facts entered by "
+                          f"hand), so nothing here can tell whether a JVM fits the "
+                          f"{limit} limit. Read it from the location's Advanced "
+                          f"settings in BlazeMeter")]
+        return [Check("engine heap", WARN,
+                      f"the location has no engineXmx set, so the engine JVM's "
+                      f"heap against the {limit} limit is unverified")]
+
+    heap = xmx * MB
+    # Fits in its box at all? Independent of the threads, and the loudest way
+    # to be wrong, so it is asked first.
+    if heap >= mem:
+        return [Check("engine heap", FAIL,
+                      f"engineXmx={xmx}MB against a {limit} container limit: the "
+                      f"heap is at or above the whole limit, so the JVM is "
+                      f"OOMKilled once it fills -- mid-run, reported as a test "
+                      f"that stopped rather than a resource error. Raise "
+                      f"engine_mem_limit to at least "
+                      f"{engine_container_mb(xmx)}MB, or lower the heap")]
+
+    if not threads:
+        # check_location has already FAILed on an unset threadsPerEngine; the
+        # sizing comparison simply cannot be made, and saying so beats implying
+        # the heap was checked against the load.
+        return [Check("engine heap", WARN,
+                      f"engineXmx={xmx}MB fits the {limit} limit, but "
+                      f"threadsPerEngine is unset, so whether the heap matches "
+                      f"the load it must carry is unverified")]
+
+    want_heap = engine_heap_mb(threads)
+    want_container = engine_container_mb(xmx)
+    pair = f"engineXmx={xmx}MB for {threads} threads"
+    # A factor either way before complaining: these constants come from a single
+    # vendor data point, so a verdict on a 10% difference would be false
+    # precision.
+    if xmx < want_heap / 1.5:
+        # WARN, not FAIL, and the wording says why: this rests on
+        # HEAP_MB_PER_THREAD, whose *shape* the bisection refuted -- 50 and 300
+        # threads measured the same requirement, so per-thread scaling is not
+        # how this behaves in the range we have data for. Above that range it
+        # may well be right, but "may well be" does not earn a non-zero exit.
+        # The heap-exceeds-the-limit FAIL above is untouched: that one is
+        # arithmetic, not a model.
+        return [Check("engine heap", WARN,
+                      f"{pair}: that load needs about {want_heap}MB of heap "
+                      f"({HEAP_MB_PER_THREAD}MB a thread, from BlazeMeter's "
+                      f"documented 500 threads on a 4096MB heap), so the JVM "
+                      f"fills and is OOMKilled partway up the ramp -- reported "
+                      f"as a test that stopped. Raise engineXmx to {want_heap}MB "
+                      f"and engine_mem_limit to {engine_container_mb(want_heap)}MB. "
+                      f"Treat the figure as indicative: it comes from a "
+                      f"per-thread model that measured *flat* between 50 and 300 "
+                      f"threads, so what this load actually needs above that "
+                      f"range is unverified (#89)")]
+    if xmx > want_heap * 1.5:
+        return [Check("engine heap", WARN,
+                      f"{pair}: that load needs only about {want_heap}MB of heap, "
+                      f"so every engine pod reserves memory the JVM cannot "
+                      f"address -- on a dedicated engine pool that is most of "
+                      f"what it costs. Either lower engineXmx toward {want_heap}MB "
+                      f"(and engine_mem_limit to {engine_container_mb(want_heap)}MB), "
+                      f"or raise threadsPerEngine if the engines can carry more")]
+    if mem < want_container * MB:
+        return [Check("engine heap", WARN,
+                      f"{pair}: the heap suits the load, but a {limit} container "
+                      f"leaves under what the JVM needs outside it (thread "
+                      f"stacks, metaspace, direct buffers). Raise "
+                      f"engine_mem_limit to about {want_container}MB")]
+    return [Check("engine heap", PASS,
+                  f"{pair}: heap suits the load (~{want_heap}MB) and fits the "
+                  f"{limit} container")]
+
+
+def _crane_on(engine_nodes, opts):
+    """Whether the crane pod could also land on the engine pool. Asked of the
+    already-filtered engine nodes, so it answers about the overlap rather than
+    about the cluster: two pools configured separately may still both accept
+    crane, and then its share really is spent out of this set."""
+    return bool(eligible_nodes(engine_nodes, opts, crane_scheduling(opts)))
+
+
+def _pod_ceiling(node):
+    """`allocatable.pods`, the kubelet's maxPods as the node reports it. Absent
+    on a node whose status was trimmed, which is not zero -- None says so."""
+    raw = node.get("status", {}).get("allocatable", {}).get("pods")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_engine_packing(facts, opts, cluster):
+    """How many engines the scheduler will put on one node, versus how many
+    can actually run there.
+
+    Both the scheduler and the cluster autoscaler place pods by *requests*, so
+    a node with room for one engine's limits is offered as many as its requests
+    divide into it. What sets those requests is the **location's** overrideCPU
+    and overrideMemory, not this bundle and not anything in these manifests --
+    confirmed live, where a location at 1 CPU / 4096MB against a bundle asking
+    2 CPU / 8Gi produced requests {1, 4Gi} and limits {2, 8Gi} on the same pod.
+    Unset, they default to 250m/256Mi, which is how nearly every location runs
+    and why engines pack.
+
+    So the fix this check points at is the location's overrides; the engine
+    pool's maxPods is the backstop for when they are not set. `allocatable.pods`
+    is how the node reports that ceiling.
+
+    WARN, never FAIL: the engines do start, and a small test may never notice.
+    What it costs is the validity of the numbers -- engines throttling against
+    each other report the load generator's latency, not the system's.
+    """
+    unread = _unread_section(
+        cluster, "nodes", "engine packing",
+        "the cluster's nodes could not be read, so nothing here knows how many "
+        "engines would share one")
+    if unread:
+        return unread
+    nodes = eligible_nodes(cluster.get("nodes") or [], opts)
+    if not nodes:
+        return []            # check_capacity already FAILed on the empty set
+    cpu, mem = engine_size(opts)
+    # The requests the engine will really carry, from the location -- not the
+    # default, which is only what an unset location produces.
+    req_cpu_s, req_mem_s = engine_requests(facts)
+    req_cpu, req_mem = parse_cpu(req_cpu_s), parse_memory(req_mem_s)
+    overridden = bool(facts.get("override_cpu") or facts.get("override_memory"))
+
+    worst = None
+    for n in nodes:
+        alloc_cpu, alloc_mem = _allocatable(n)
+        # What the scheduler will accept, by the requests the pod carries.
+        by_req = min(alloc_cpu // req_cpu, alloc_mem // req_mem)
+        # ...capped by the node's own pod ceiling, less the DaemonSets that land
+        # on every node. That subtraction is an assumption, not a measurement:
+        # `allocatable.pods` counts all pods and nothing here collects
+        # DaemonSets, so the number is named in the verdict for the reader to
+        # correct rather than buried. TYPICAL_SYSTEM_PODS is the same constant
+        # the generated recipe sizes maxPods from, so a pool built to that
+        # recipe is judged by the arithmetic that produced it. It counts what
+        # actually lands on a tainted node, which is not the DaemonSet count --
+        # see the constant.
+        ceiling = _pod_ceiling(n)
+        if ceiling is not None:
+            by_req = min(by_req, max(ceiling - TYPICAL_SYSTEM_PODS, 1))
+        # What can actually run: the limits the engine was configured with,
+        # but never counted above what the pool was *designed* to hold. A node
+        # sized for 2 engines is not over-packed by taking 2, and judging it
+        # against its raw capacity would WARN on a pool built exactly to spec.
+        runs = min(alloc_cpu // cpu, alloc_mem // mem, engines_per_node(opts))
+        if by_req > max(runs, 1) and (worst is None or by_req > worst[1]):
+            worst = (n["metadata"]["name"], by_req, runs, ceiling)
+
+    want = _engine_str(cpu, mem)
+    if not worst:
+        return [Check("engine packing", PASS,
+                      f"no eligible node would take more {want} engine(s) than "
+                      f"it can run. Engines request {req_cpu_s}/{req_mem_s}"
+                      + (" (the location's overrideCPU/overrideMemory)"
+                         if overridden else
+                         " (crane's default -- the location sets no "
+                         "overrideCPU/overrideMemory)")
+                      + f"; assuming ~{TYPICAL_SYSTEM_PODS} system pods a node "
+                      f"against its allocatable.pods, which you can count with "
+                      f"`kubectl get pods -A --field-selector "
+                      f"spec.nodeName=<NODE>`")]
+
+    name, packs, runs, ceiling = worst
+    lever = (f"allocatable.pods={ceiling}, less ~{TYPICAL_SYSTEM_PODS} for "
+             f"system pods" if ceiling is not None
+             else "the node reports no pod ceiling")
+    return [Check("engine packing", WARN,
+                  f"node {name} would accept {packs} engine(s) but can only run "
+                  f"{runs} at {want}: engines request {req_cpu_s}/{req_mem_s} and "
+                  f"both the scheduler and the cluster autoscaler place on "
+                  f"requests, not limits ({lever}). Engines sharing a node "
+                  f"throttle against each other, so the run reports the load "
+                  f"generator's latency rather than the system's. "
+                  + ("Raise the location's overrideCPU/overrideMemory to match "
+                     f"the engine limits ({format_cpu(cpu)} / "
+                     f"{mem // (1024 ** 2)}MB) -- they set the pod's requests, "
+                     "and matching them is what makes the scheduler place "
+                     "engines truthfully."
+                     if not overridden else
+                     "The location's overrideCPU/overrideMemory are set but "
+                     f"still below the limits; matching them ({format_cpu(cpu)} "
+                     f"/ {mem // (1024 ** 2)}MB) closes this.")
+                  + f" Failing that, cap the engine pool's maxPods at the pods "
+                  f"a node of it actually runs plus one -- counted with "
+                  f"`kubectl get pods -A --field-selector spec.nodeName=<NODE>`, "
+                  f"not `get ds`, which counts nodeAffinity-gated variants that "
+                  f"never land. No manifest can set maxPods, so it belongs on "
+                  f"the node pool (see the generated {NODEPOOLS_FILE})")]
 
 
 def check_disk(facts, opts, cluster):
@@ -991,7 +1402,8 @@ def _oneshot_curl(cli, namespace, targets, opts):
 
 # Every check takes the same (facts, opts, cluster) so adding one is a single
 # edit here, not a new argument order to remember.
-CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
+CHECKS = (check_location, check_threads_per_engine, check_engine_heap,
+          check_crane_pool, check_capacity, check_engine_packing, check_disk,
           check_limitrange, check_resourcequota, check_admission,
           check_service_account, check_ingress_class, check_egress)
 

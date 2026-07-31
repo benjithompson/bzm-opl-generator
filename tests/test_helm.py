@@ -171,6 +171,48 @@ def test_scheduling_survives_as_yaml_not_a_json_blob():
     assert "- key: " in files[gen.HELM_VALUES_FILE]
 
 
+def test_engine_placement_is_written_out_not_left_for_the_chart_to_derive():
+    """The chart renders a values file and cannot see the options that produced
+    it, so "engines follow crane" has to be resolved here. With no engine
+    override the two pairs are equal -- and that equality is a *copy*, not a
+    fallback the chart performs."""
+    tol = [{"key": "lifecycle", "operator": "Equal", "value": "spot",
+            "effect": "NoSchedule"}]
+    v, _ = _values(tolerations=tol, node_selector={"workload": "perf"})
+    assert v["engineNodeSelector"] == v["nodeSelector"] == {"workload": "perf"}
+    assert v["engineTolerations"] == v["tolerations"] == tol
+
+
+def test_engine_pool_overrides_cranes_in_the_overlay():
+    v, files = _values(node_selector={"pool": "crane"},
+                       engine_node_selector={"pool": "bzm-engines"},
+                       engine_tolerations=[{"key": "bzm.io/engines",
+                                            "operator": "Equal", "value": "true",
+                                            "effect": "NoSchedule"}])
+    assert v["nodeSelector"] == {"pool": "crane"}
+    assert v["engineNodeSelector"] == {"pool": "bzm-engines"}
+    assert v["engineTolerations"][0]["key"] == "bzm.io/engines"
+    assert v["tolerations"] == []          # crane's pool needs no taint
+    # Hand-editable, same as crane's list.
+    assert "- key: " in files[gen.HELM_VALUES_FILE]
+    # The chart carries the recipe for the pool it now selects.
+    assert gen.NODEPOOLS_FILE in files
+
+
+def test_explicitly_unpinned_engines_are_empty_in_the_overlay_not_cranes():
+    """The case a fallback in the chart would destroy: crane pinned to a tainted
+    infra pool, engines deliberately free. `{}` has to reach the values file as
+    `{}`, because `{{- with .Values.engineNodeSelector }}` is the only thing
+    standing between that and every engine inheriting crane's taint."""
+    v, _ = _values(node_selector={"pool": "infra"},
+                   tolerations=[{"key": "infra", "operator": "Exists",
+                                 "effect": "NoSchedule"}],
+                   engine_node_selector={}, engine_tolerations=[])
+    assert v["nodeSelector"] == {"pool": "infra"}
+    assert v["engineNodeSelector"] == {}
+    assert v["engineTolerations"] == []
+
+
 @pytest.mark.parametrize("opts,mode,extra", [
     ({"ca_bundle": "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"},
      "inline", {"pem": "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n"}),

@@ -18,7 +18,7 @@ went unnoticed for a while. Install `.venv/bin/pip install -e ".[dev]"`, which
 is `[test]` + `[ui]`; `fastapi` is now in `[test]` too, and CI asserts the
 optional deps import rather than trusting a green run.
 
-**Helm parity (`python tests/helm_parity.py`)** — renders 23 option
+**Helm parity (`python tests/helm_parity.py`)** — renders 28 option
 combinations as both `--format manifests` and `--format helm` and requires the
 same objects out of each. Deliberately *not* a pytest module: it shells out to
 `helm`, and a test that skips when a binary is missing is the fastapi problem
@@ -198,7 +198,7 @@ the classes of problem it can't fix for you.
 - **A new option needs a row in `bzm_opl_gen/options.py`, and the doc table is
   generated from it.** `DEFAULT_OPTIONS` is still the only source of the default
   *value*; the registry carries what the option is *for*, in two lengths —
-  `summary` (≤20 words, capped because all thirty-one land in every MCP
+  `summary` (≤20 words, capped because all thirty-four land in every MCP
   session's context) and `doc` (the full argued paragraph, which is the
   `docs/options.md` cell). Regenerate with `python -m bzm_opl_gen.options`;
   editing the table between the markers fails `tests/test_options.py`, as does
@@ -282,7 +282,10 @@ the classes of problem it can't fix for you.
 - **This generator emits no LimitRange, and shouldn't.** It used to, opt-in, and
   it was removed after a live install showed both halves of why. It cannot
   change engine requests: crane sets the engine pod's requests explicitly to
-  250m/256Mi, and a LimitRange's `defaultRequest` only fills fields a pod leaves
+  what the location's `overrideCPU`/`overrideMemory` say (250m/256Mi when it
+  says nothing -- **not** a fixed value, as this file used to claim; a live run
+  showed a location at 1/4096 producing requests {1, 4Gi} against limits
+  {2, 8Gi}), and a LimitRange's `defaultRequest` only fills fields a pod leaves
   unset — the `r-v4-*` engine pod comes back with no
   `kubernetes.io/limit-ranger` annotation at all. And what it *did* reach was
   crane's `test-job-*` pods, which declare nothing and so were handed a full

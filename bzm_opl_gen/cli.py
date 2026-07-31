@@ -171,6 +171,15 @@ def cmd_generate(a):
         opts["tolerations"] = json.loads(a.tolerations)
     if a.node_selector:
         opts["node_selector"] = json.loads(a.node_selector)
+    # `is not None`, not truthiness: `--engine-node-selector '{}'` means "engines
+    # take no selector even though crane has one", which is a different bundle
+    # from not passing the flag at all (engines follow crane).
+    if a.engines_per_node is not None:
+        opts["engines_per_node"] = a.engines_per_node
+    if a.engine_tolerations is not None:
+        opts["engine_tolerations"] = json.loads(a.engine_tolerations)
+    if a.engine_node_selector is not None:
+        opts["engine_node_selector"] = json.loads(a.engine_node_selector)
     if a.ca_bundle:
         with open(a.ca_bundle) as fh:
             opts["ca_bundle"] = fh.read()
@@ -647,8 +656,14 @@ def main():
     g.add_argument("--sv-istio-gateway", dest="sv_istio_gateway", metavar="NAME",
                    help="istio only, optional: reuse this Gateway instead of one per service")
     g.add_argument("--no-secret", action="store_true", help="AUTH_TOKEN in ConfigMap")
-    g.add_argument("--tolerations", help='JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
-    g.add_argument("--node-selector", dest="node_selector", help='JSON object, e.g. \'{"pool":"loadtest"}\'')
+    g.add_argument("--tolerations", help='crane pod (and engines, unless --engine-tolerations). JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
+    g.add_argument("--node-selector", dest="node_selector", help='crane pod (and engines, unless --engine-node-selector). JSON object, e.g. \'{"pool":"crane"}\'')
+    g.add_argument("--engine-tolerations", dest="engine_tolerations",
+                   help='engines only, overriding --tolerations. JSON list. Pass \'[]\' for "no tolerations, even though crane has some".')
+    g.add_argument("--engines-per-node", dest="engines_per_node", type=int,
+                   help="how many engines a node of the engine pool should hold (default 1). Sizes nodepools.md; reaches no manifest.")
+    g.add_argument("--engine-node-selector", dest="engine_node_selector",
+                   help='engines only, overriding --node-selector -- the dedicated engine pool. JSON object, e.g. \'{"pool":"bzm-engines"}\'. Pass \'{}\' to let engines land anywhere.')
     g.add_argument("--ca-bundle", dest="ca_bundle", metavar="PEM_FILE",
                    help="inline CA mode: PEM file -> generator creates the ConfigMap")
     g.add_argument("--ca-configmap", dest="ca_configmap", metavar="NAME[:KEY]",

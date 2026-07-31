@@ -27,6 +27,11 @@ const DETECTS: [GroupId, string, unknown][] = [
   ["ca", "ca_openshift_inject", true],
   ["sched", "tolerations", [{ key: "lifecycle" }]],
   ["sched", "node_selector", { pool: "loadtest" }],
+  // Engine placement is detected on `!= null`, not truthiness: {} and [] are
+  // real settings ("engines take neither, even though crane does") and falsy,
+  // so a truthy detect would collapse the group on a bundle that has them.
+  ["sched", "engine_tolerations", []],
+  ["sched", "engine_node_selector", {}],
   ["sizing", "engine_cpu_limit", "2"],
   ["sizing", "engine_mem_limit", "8Gi"],
   ["security", "use_secret", false],
@@ -175,7 +180,8 @@ describe("switching a group off", () => {
         ca_existing_configmap: null, ca_configmap_key: null,
         ca_bundle: null, ca_openshift_inject: false,
       },
-      sched: { tolerations: null, node_selector: null },
+      sched: { tolerations: null, node_selector: null,
+               engine_tolerations: null, engine_node_selector: null },
       sizing: { engine_cpu_limit: null, engine_mem_limit: null },
       security: { use_secret: true, cluster_rbac: false,
                   service_type: "CLUSTERIP", restrict_engines: true,

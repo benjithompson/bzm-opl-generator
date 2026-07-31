@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import sys
 
 import pytest
@@ -322,6 +323,164 @@ def test_tolerations_node_selector_in_pod_and_configmap():
     cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
     assert json.loads(cm["KUBERNETES_TOLERATIONS_JSON"]) == tol
     assert json.loads(cm["KUBERNETES_NODE_SELECTOR_JSON"]) == {"pool": "loadtest"}
+
+
+# -- two node pools: crane small and always-on, engines large and ephemeral ---
+#
+# The split is the whole point of these options, and it is invisible in a single
+# object: crane's placement is the Deployment's podspec, the engines' is the
+# KUBERNETES_*_JSON env crane reads. A regression that fed one from the other
+# would still produce a bundle that applies.
+
+CRANE_POOL = {"pool": "crane"}
+ENGINE_POOL = {"pool": "bzm-engines"}
+ENGINE_TOL = [{"key": "bzm.io/engines", "operator": "Equal", "value": "true",
+               "effect": "NoSchedule"}]
+
+
+def _placement(files):
+    """(crane nodeSelector, crane tolerations, engine selector, engine tolerations)
+    as the two mechanisms actually carry them."""
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    return (spec.get("nodeSelector"), spec.get("tolerations"),
+            json.loads(cm["KUBERNETES_NODE_SELECTOR_JSON"])
+            if "KUBERNETES_NODE_SELECTOR_JSON" in cm else None,
+            json.loads(cm["KUBERNETES_TOLERATIONS_JSON"])
+            if "KUBERNETES_TOLERATIONS_JSON" in cm else None)
+
+
+def test_engine_pool_is_separate_from_cranes():
+    files = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL,
+                                 "engine_node_selector": ENGINE_POOL,
+                                 "engine_tolerations": ENGINE_TOL})
+    _all_yaml_parse(files)
+    crane_sel, crane_tol, eng_sel, eng_tol = _placement(files)
+    assert crane_sel == CRANE_POOL      # crane stays on its own small pool
+    assert crane_tol is None            # ...which needs no taint
+    assert eng_sel == ENGINE_POOL       # engines are aimed elsewhere
+    assert eng_tol == ENGINE_TOL
+
+
+def test_engines_follow_crane_when_no_engine_override():
+    """The one-pool shape, and what every bundle generated before these options
+    did. Unset has to keep meaning "inherit", or an upgrade silently unpins
+    every existing location's engines."""
+    tol = [{"key": "lifecycle", "operator": "Exists", "effect": "NoSchedule"}]
+    files = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL,
+                                 "tolerations": tol})
+    crane_sel, crane_tol, eng_sel, eng_tol = _placement(files)
+    assert (eng_sel, eng_tol) == (crane_sel, crane_tol) == (CRANE_POOL, tol)
+
+
+def test_empty_engine_placement_is_not_the_same_as_unset():
+    """`{}` says "engines take no selector even though crane has one" -- the
+    crane-on-a-tainted-infra-pool case. Collapsing it into unset would make
+    that shape unsayable, and would silently pin engines to crane's pool."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL,
+                                 "tolerations": ENGINE_TOL,
+                                 "engine_node_selector": {},
+                                 "engine_tolerations": []})
+    crane_sel, crane_tol, eng_sel, eng_tol = _placement(files)
+    assert (crane_sel, crane_tol) == (CRANE_POOL, ENGINE_TOL)
+    # Absent from the ConfigMap entirely, so crane stamps nothing on the engines.
+    assert eng_sel is None and eng_tol is None
+
+
+def test_nodepool_recipe_only_when_the_pools_differ():
+    """It is emitted for the shape it describes and not otherwise -- a one-pool
+    bundle gaining a file about node pools it does not have is one more thing to
+    read before reaching the part that applies."""
+    one_pool = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL})
+    assert gen.NODEPOOLS_FILE not in one_pool
+
+    two_pool = gen.generate(FACTS, {"namespace": "ns1", "node_selector": CRANE_POOL,
+                                    "engine_node_selector": ENGINE_POOL,
+                                    "engine_tolerations": ENGINE_TOL,
+                                    "engine_cpu_limit": "2",
+                                    "engine_mem_limit": "8Gi"})
+    md = two_pool[gen.NODEPOOLS_FILE]
+    # The label and taint the manifests actually use, so the commands create the
+    # pool this bundle selects rather than a worked example of a different one.
+    assert "pool=bzm-engines" in md
+    assert "bzm.io/engines=true:NoSchedule" in md
+    # The stamped-request trap and the only lever that closes it.
+    assert gen.ENGINE_STAMPED_REQUEST_CPU in md and "maxPods" in md
+    for flavour in ("GKE", "EKS", "AKS", "OpenShift", "kubeadm"):
+        assert flavour in md
+
+
+def test_gke_maxpods_respects_the_floor_the_api_enforces():
+    """GKE refuses --max-pods-per-node below 8 ("must be at least 8 and at most
+    256"), verified against the API. The recipe wanted 7 (6 system pods + 1
+    engine) and emitted a command that could not run -- worse than no recipe,
+    because it looks authoritative."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "engine_node_selector": ENGINE_POOL,
+                                 "engine_cpu_limit": "2", "engine_mem_limit": "8Gi"})
+    md = files[gen.NODEPOOLS_FILE]
+    gke = md[md.index("### GKE"):md.index("### EKS")]
+    emitted = int(re.search(r"--max-pods-per-node (\d+)", gke).group(1))
+    assert emitted >= gen.GKE_MIN_MAX_PODS
+    # And having been forced up, it says what that costs rather than still
+    # claiming one engine per node.
+    assert "will not go below" in gke
+    assert f"{gen._engines_per_node(gen.TYPICAL_SYSTEM_PODS + 1, gen.GKE_MIN_MAX_PODS)} engines a node" in gke
+
+
+def test_gke_node_is_sized_for_the_engines_the_floor_permits():
+    """The two halves have to agree: a maxPods that admits 2 engines and a
+    machine sized for 1 is the over-commit this file exists to prevent."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "engine_node_selector": ENGINE_POOL,
+                                 "engine_cpu_limit": "2", "engine_mem_limit": "8Gi"})
+    md = files[gen.NODEPOOLS_FILE]
+    gke = md[md.index("### GKE"):md.index("### EKS")]
+    per_node = gen._engines_per_node(gen.TYPICAL_SYSTEM_PODS + 1, gen.GKE_MIN_MAX_PODS)
+    cpu = int(re.search(r"--machine-type <at least (\d+) vCPU", gke).group(1))
+    assert cpu >= 2 * per_node          # 2 CPU of engine each, plus overhead
+
+
+def test_nodepool_recipe_emits_no_dangling_continuations():
+    """Every command is copy-pasteable. The conditional flags (labels, taints)
+    drop out on a bundle that has none, and a `\\` left behind by an omitted
+    line makes the shell swallow whatever follows it."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "engine_node_selector": {},
+                                 "engine_tolerations": []})
+    md = files[gen.NODEPOOLS_FILE]
+    in_block, blocks = False, []
+    for line in md.splitlines():
+        if line.startswith("```"):
+            in_block = not in_block
+            continue
+        if in_block:
+            blocks.append(line)
+    assert blocks, "the recipe emitted no commands at all"
+    # A trailing backslash must be continued by a real command line, never by
+    # the end of the block or a blank.
+    for i, line in enumerate(blocks):
+        if line.rstrip().endswith("\\"):
+            assert i + 1 < len(blocks) and blocks[i + 1].strip(), \
+                f"dangling continuation at {line!r}"
+
+
+@pytest.mark.parametrize("extra,expected", [
+    ({}, []),
+    ({"private_registry": "reg.example.com/bzm"}, ["1. Mirror", "2. Apply"]),
+    ({"engine_node_selector": {"pool": "e"}}, ["1. Create the node pools", "2. Apply"]),
+    ({"private_registry": "reg.example.com/bzm", "engine_node_selector": {"pool": "e"}},
+     ["1. Create the node pools", "2. Mirror", "3. Apply"]),
+])
+def test_deploy_steps_are_numbered_once_across_both_prerequisites(extra, expected):
+    """Both prerequisites are optional and independent, so neither can number
+    itself -- with a private registry *and* split pools they each used to
+    produce their own "1." and "2."."""
+    md = gen.generate(FACTS, {"namespace": "ns1", **extra})["README.md"]
+    for marker in expected:
+        assert f"**{marker}" in md
+    if not expected:
+        assert "**1." not in md          # nothing to do before applying
 
 
 def _crane_ephemeral(files):

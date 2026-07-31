@@ -360,7 +360,10 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     # "is there a WARN" assertion. Every section of this file is null, so the
     # number is what says each one was noticed. Update it deliberately when a
     # check is added -- that is the point of pinning it.
-    assert out.count("WARN") == 7, out
+    # 9: +1 for check_engine_packing, which reads the same unread `nodes`
+    # section as capacity and disk and says so separately rather than borrowing
+    # theirs, and +1 for check_engine_heap, which has no engineXmx to read.
+    assert out.count("WARN") == 9, out
 
 
 def test_doctor_takes_the_namespace_from_the_evidence(monkeypatch, capsys):

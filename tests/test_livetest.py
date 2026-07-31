@@ -271,6 +271,170 @@ def test_engine_config_catches_missing_proxy_env():
     assert any("bypassing the customer's proxy" in f for f in fails)
 
 
+# -- engine size and pool, the two halves of "did it get what we configured" --
+
+SPLIT_OPTS = {"node_selector": {"pool": "crane"},
+              "engine_node_selector": {"pool": "bzm-engines"},
+              "engine_cpu_limit": "2", "engine_mem_limit": "8Gi"}
+
+
+def _placed_pod(node="e1", limits=None):
+    pod = _engine_pod(resources={"limits": limits or {"cpu": "2", "memory": "8Gi"},
+                                 "requests": {"cpu": "250m", "memory": "256Mi"}})
+    pod["spec"]["nodeName"] = node
+    return pod
+
+
+def _node(name="e1", labels=None):
+    return {"metadata": {"name": name, "labels": labels or {"pool": "bzm-engines"}}}
+
+
+def test_engine_size_matches_what_the_bundle_configured():
+    assert livetest.assert_engine_size(_placed_pod(), SPLIT_OPTS) == []
+
+
+def test_engine_size_catches_limits_the_configmap_never_delivered():
+    """A 2 CPU / 8Gi bundle whose engine comes back at crane's default means the
+    ConfigMap never reached the engine -- indistinguishable from a good run
+    until someone reads the numbers it produced."""
+    pod = _placed_pod(limits={"cpu": "1", "memory": "4Gi"})
+    fails = livetest.assert_engine_size(pod, SPLIT_OPTS)
+    assert any("CPU limit of 1" in f for f in fails)
+    assert any("memory limit of 4Gi" in f for f in fails)
+
+
+def test_engine_landed_on_the_pool_it_was_aimed_at():
+    assert livetest.assert_engine_pool(_placed_pod(), _node(), SPLIT_OPTS) == []
+
+
+def test_engine_on_the_wrong_pool_is_a_failure():
+    """The one part of the two-pool shape only a spawned engine can confirm:
+    the manifests carry the selector and the node carries the labels, but
+    whether crane joined them up is invisible until it does."""
+    wrong = _node("c1", labels={"pool": "crane"})
+    fails = livetest.assert_engine_pool(_placed_pod(node="c1"), wrong, SPLIT_OPTS)
+    assert any("does not carry the engine pool's labels" in f for f in fails)
+
+
+def test_unread_node_is_not_a_wrong_pool():
+    """Unreadable and mismatched are different findings and only one is a
+    failure -- a livetest without node read access must not invent a placement
+    error."""
+    assert livetest.assert_engine_pool(_placed_pod(), None, SPLIT_OPTS) == []
+
+
+def test_engine_pool_is_not_asserted_on_a_one_pool_bundle():
+    """Nothing was aimed anywhere, so there is nothing to be wrong about."""
+    assert livetest.assert_engine_pool(
+        _placed_pod(), _node("n1", labels={}), {"node_selector": {"pool": "x"}}) == []
+
+
+# -- the engine finished, versus the run being reported as finished -----------
+#
+# Every fixture below is a real master from a memory bisection: the engine was
+# starved by degrees and each run reached ENDED with ZERO failures. The starved
+# ones report better latency than the healthy one, because an engine that dies
+# early only samples the gentle part of the ramp.
+
+class _EventClient:
+    def __init__(self, messages, summary=None):
+        self._m, self._s = messages, summary or {}
+
+    def master_status(self, master_id):
+        return {"status": "ENDED", "events": [{"message": m} for m in self._m]}
+
+    def master_summary(self, master_id):
+        return self._s
+
+
+CLEAN = ["Status changed to ENDED (140)", "Taurus completed (Exit: 0)"]
+DIED = ["Status changed to ENDED (140)", "Taurus completed (Exit: 1)"]
+
+
+def test_clean_exit_passes():
+    assert livetest.assert_engine_exited_cleanly(_EventClient(CLEAN), 1) == []
+
+
+def test_engine_that_died_partway_is_caught_despite_ending():
+    """Master 82869312: 2560MB, 31,130 samples, 0 failures, 322ms -- and exit 1
+    halfway through. ENDED and the summary both say it was fine."""
+    fails = livetest.assert_engine_exited_cleanly(_EventClient(DIED), 1)
+    assert any("exited 1" in f for f in fails)
+    assert any("reported as ENDED" in f for f in fails)
+
+
+def test_a_starved_run_looks_healthier_than_a_good_one():
+    """The reason the summary cannot be the criterion. Both of these pass
+    assert_engine_did_work; only the exit code separates them."""
+    starved = _EventClient(DIED, {"summary": [{"hits": 31130, "avg": 322, "failed": 0}]})
+    healthy = _EventClient(CLEAN, {"summary": [{"hits": 61348, "avg": 322, "failed": 21}]})
+    assert livetest.assert_engine_did_work(starved, 1) == []      # looks fine
+    assert livetest.assert_engine_did_work(healthy, 1) == []      # also fine
+    assert livetest.assert_engine_exited_cleanly(starved, 1) != []   # only this differs
+    assert livetest.assert_engine_exited_cleanly(healthy, 1) == []
+
+
+def test_a_missing_exit_status_is_unverified_not_passed():
+    """Absent is not zero -- an aged-out master or an unrecognised shape must
+    not read as a clean finish."""
+    fails = livetest.assert_engine_exited_cleanly(_EventClient(["Status changed to ENDED (140)"]), 1)
+    assert any("unverified" in f for f in fails)
+
+
+def _heap_pod(xmx, limit="8Gi", where="env"):
+    """An engine started with a heap. Crane does not write -Xmx -- it is a
+    location setting pushed by BlazeMeter -- so where it lands is not ours to
+    choose, and all three carriers are searched."""
+    pod = _engine_pod(resources={"limits": {"cpu": "2", "memory": limit}})
+    c = pod["spec"]["containers"][0]
+    if xmx is not None:
+        if where == "env":
+            c["env"].append({"name": "JVM_ARGS", "value": f"-Xms1g -Xmx{xmx}"})
+        elif where == "args":
+            c["args"] = ["-jar", "taurus.jar", f"-Xmx{xmx}"]
+        else:
+            c["command"] = ["java", f"-Xmx{xmx}", "-cp", "/x"]
+    return pod
+
+
+@pytest.mark.parametrize("where", ["env", "args", "command"])
+def test_engine_heap_is_found_wherever_the_location_put_it(where):
+    assert livetest.engine_heap_bytes(_heap_pod("6g", where=where)) == 6 * 1024 ** 3
+
+
+@pytest.mark.parametrize("xmx,expected", [
+    ("4096m", 4096 * 1024 ** 2), ("6g", 6 * 1024 ** 3),
+    ("1048576k", 1024 ** 3), ("2147483648", 2 * 1024 ** 3),
+])
+def test_engine_heap_units(xmx, expected):
+    assert livetest.engine_heap_bytes(_heap_pod(xmx)) == expected
+
+
+def test_unread_heap_is_not_a_matching_heap():
+    """None means "not found here", never "the default" -- an engine whose heap
+    could not be read must not be reported as one that fits."""
+    assert livetest.engine_heap_bytes(_heap_pod(None)) is None
+    assert "unread" in livetest.engine_heap_note(_heap_pod(None))
+
+
+def test_engine_heap_note_flags_a_heap_that_can_fill_the_limit():
+    note = livetest.engine_heap_note(_heap_pod("8g", limit="8Gi"))
+    assert "OOMKill" in note
+
+
+def test_engine_heap_note_flags_a_limit_the_jvm_cannot_reach():
+    """The default pairing: engineXmx 4096MB against the documented 8Gi limit,
+    so every engine pod reserves twice what its JVM can address."""
+    note = livetest.engine_heap_note(_heap_pod("4096m", limit="8Gi"))
+    assert "reserved and unused" in note and "50%" in note
+
+
+def test_engine_heap_note_is_quiet_when_the_pairing_is_sane():
+    note = livetest.engine_heap_note(_heap_pod("6g", limit="8Gi"))
+    assert "OOMKill" not in note and "unused" not in note
+    assert "6Gi" in note and "8Gi" in note
+
+
 def _sized_pod(requests, limits, annotations=None):
     """A real engine pod, sized as crane sizes it."""
     return _engine_pod(resources={"requests": requests, "limits": limits},

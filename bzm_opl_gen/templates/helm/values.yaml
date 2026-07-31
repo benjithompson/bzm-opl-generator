@@ -144,11 +144,28 @@ serviceAccount:
 # k8s only; on openshift the SCC assigns an in-range UID and this is ignored.
 runAsUser: 1337
 
-# Scheduling for the crane pod. Engines inherit both through
-# KUBERNETES_TOLERATIONS_JSON / KUBERNETES_NODE_SELECTOR_JSON, so setting them
-# here covers the whole location.
+# Scheduling for the crane pod itself -- one small, always-on pod.
 nodeSelector: {}
 tolerations: []
+
+# Scheduling for the engines crane spawns, passed down as
+# KUBERNETES_NODE_SELECTOR_JSON / KUBERNETES_TOLERATIONS_JSON. Separate from
+# the pair above because crane and its engines want opposite things from a
+# node: crane is one small pod that must never move, an engine is 1-n large
+# pods that exist only for the length of a run. Pointing these at a tainted,
+# autoscaling pool is what lets that pool scale to zero between tests.
+#
+# bzm-opl-gen writes the *effective* placement here: generated with no engine
+# override, these repeat nodeSelector/tolerations above. Editing the chart by
+# hand, set them yourself -- they do not fall back to crane's, so leaving them
+# empty puts engines on any node the cluster will take them.
+#
+# Engine *requests* are stamped by crane at 250m/256Mi whatever the limits say,
+# and a cluster autoscaler scales on requests -- so a dedicated pool still
+# packs many engines onto one node unless the pool's maxPods stops it. See the
+# generated nodepools.md.
+engineNodeSelector: {}
+engineTolerations: []
 
 podAnnotations: {}
 podLabels: {}

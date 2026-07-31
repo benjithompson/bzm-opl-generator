@@ -194,12 +194,19 @@ export const OPTION_GROUPS: OptionGroup[] = [
   {
     id: "sched",
     title: "Scheduling",
-    hint: "tolerations + nodeSelector for crane & engines",
+    hint: "node pools for crane & engines (separate pools optional)",
     features: [],
-    keys: ["tolerations", "node_selector"],
-    detect: (o) => !!(o.tolerations || o.node_selector),
+    keys: ["tolerations", "node_selector", "engine_tolerations",
+           "engine_node_selector"],
+    // `!= null`, not truthiness: an engine override of {} or [] is a real
+    // setting ("engines take neither, even though crane does") and a falsy one,
+    // so a truthy detect would leave the group collapsed on a bundle that has
+    // it and then clear it on the next save.
+    detect: (o) => !!(o.tolerations || o.node_selector)
+      || o.engine_tolerations != null || o.engine_node_selector != null,
     enable: () => ({}),
-    disable: () => ({ tolerations: null, node_selector: null }),
+    disable: () => ({ tolerations: null, node_selector: null,
+                      engine_tolerations: null, engine_node_selector: null }),
   },
   {
     id: "sizing",
