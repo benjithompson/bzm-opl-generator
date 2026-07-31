@@ -1038,12 +1038,17 @@ export default function App() {
   );
   // Lifted out of the Private location panel so both it and a prototype panel
   // can show the same form -- it is the shipped one, moved, not a copy.
+  // What Create is waiting for, as the sentence it shows rather than as a
+  // silently greyed button.
+  const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
+    : !newLoc.workspace_id ? "pick a workspace above first" : "";
   const createLocationFormNode = (
     <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
       <p className="text-xs font-semibold text-slate-700">
         New private location
       </p>
-      <Field label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
+      <Field required={!!newLoc.name.trim()}
+        label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
         <TextInput value={newLoc.name}
           onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
       <div className="flex gap-4 items-end">
@@ -1069,8 +1074,11 @@ export default function App() {
             onChange={(e) => setNewLoc({ ...newLoc, threads_per_engine: Number(e.target.value) })} />
         </Field>
       </div>
-      <div className="flex gap-2">
-        <Button disabled={!newLoc.name || !newLoc.workspace_id}
+      {/* Create stays put and greys out, and says which of the two things it is
+          waiting for -- a button that disables itself without a reason is the
+          same dead end as one that disappears. */}
+      <div className="flex gap-2 items-center">
+        <Button disabled={!!createLocBlockedBy}
           onClick={async () => {
             try {
               const l = await api.createLocation({ ...newLoc, account_id: accountId! });
@@ -1082,6 +1090,9 @@ export default function App() {
           onClick={() => { setLocErr(null); setShowCreateLoc(false); }}>
           Cancel
         </Button>
+        {createLocBlockedBy && (
+          <span className="text-[11px] text-amber-700">{createLocBlockedBy}</span>
+        )}
       </div>
     </div>
   );

@@ -122,7 +122,7 @@ export function PlanPanel(props: {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Virtual users"
+          <Field label="Virtual users" required={!!inputs.users.trim()}
             hint="the load the test has to reach">
             <input type="number" min={1} className={inputCls}
               placeholder="5000" value={inputs.users}
@@ -175,53 +175,66 @@ export function PlanPanel(props: {
         <ErrorMsg msg={err} />
       </div>
 
-      {plan && <PlanResult plan={plan} busy={busy} showDoc={showDoc}
-                           setShowDoc={setShowDoc} onDownload={download}
-                           onCopy={copy} copied={copied}
-                           onUse={() => props.onUse({
-                             slots: plan.location.slots,
-                             threadsPerEngine: plan.location.threads_per_engine,
-                             engineCpuLimit: plan.engine.cpu,
-                             engineMemLimit: plan.engine.memory,
-                             enginesPerNode: plan.engines_per_node,
-                           })} />}
+      <PlanResult plan={plan} busy={busy} showDoc={showDoc}
+                  setShowDoc={setShowDoc} onDownload={download}
+                  onCopy={copy} copied={copied}
+                  onUse={() => plan && props.onUse({
+                    slots: plan.location.slots,
+                    threadsPerEngine: plan.location.threads_per_engine,
+                    engineCpuLimit: plan.engine.cpu,
+                    engineMemLimit: plan.engine.memory,
+                    enginesPerNode: plan.engines_per_node,
+                  })} />
     </div>
   );
 }
 
+/** The plan, and the three things you can do with one.
+ *
+ *  `plan` is null until there is a load target to size. The controls stay on
+ *  screen anyway, disabled, with one line saying what they are waiting for:
+ *  a call to action that appears only once it works leaves the panel looking
+ *  finished when it is not, and gives nobody anything to aim at. Same rule the
+ *  step flow's Next follows, and the same amber sentence under it.
+ */
 function PlanResult(props: {
-  plan: CapacityPlan; busy: boolean; showDoc: boolean;
+  plan: CapacityPlan | null; busy: boolean; showDoc: boolean;
   setShowDoc: (v: boolean) => void; onDownload: () => void; onCopy: () => void;
   copied: boolean; onUse: () => void;
 }) {
   const p = props.plan;
+  const waiting = p ? "" : "enter a virtual user target above to size a plan";
   return (
     <div className={"space-y-4 transition-opacity "
       + (props.busy ? "opacity-50" : "")}>
       <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat n={p.engines} unit={p.engines === 1 ? "engine" : "engines"}
-            sub={`${p.engine.cpu} CPU / ${p.engine.memory} each`} />
-          <Stat n={p.nodes} unit={p.nodes === 1 ? "node" : "nodes"}
-            sub={`${p.node.cpu} vCPU / ${p.node.memory} each`} />
-          <Stat n={p.peak.cpu} unit="vCPU at peak" sub={`${p.peak.memory} RAM`} />
-          <Stat n={0} unit="when idle"
+          {/* Em-dashes rather than zeroes: nothing has been worked out yet, and
+              "0 engines" is an answer. */}
+          <Stat n={p ? p.engines : "—"}
+            unit={p && p.engines === 1 ? "engine" : "engines"}
+            sub={p ? `${p.engine.cpu} CPU / ${p.engine.memory} each` : " "} />
+          <Stat n={p ? p.nodes : "—"}
+            unit={p && p.nodes === 1 ? "node" : "nodes"}
+            sub={p ? `${p.node.cpu} vCPU / ${p.node.memory} each` : " "} />
+          <Stat n={p ? p.peak.cpu : "—"} unit="vCPU at peak"
+            sub={p ? `${p.peak.memory} RAM` : " "} />
+          <Stat n={p ? 0 : "—"} unit="when idle"
             sub="the pool exists only during a run" />
         </div>
-        <p className="text-xs text-slate-500">
-          Plus one small always-on node for the agent
-          ({p.crane.cpu_limit} CPU / {p.crane.memory_limit}), and outbound HTTPS
-          to {p.egress.map((h, i) => (
-            <span key={h}>{i > 0 && ", "}<code>{h}</code></span>
-          ))}. Each engine also needs {p.engine.disk_gb}GB of disk,
-          {" "}{p.engine.tmp_gb}GB of it under <code>/tmp</code>.
-        </p>
+        {p ? (
+          <p className="text-xs text-slate-500">
+            Plus one small always-on node for the agent
+            ({p.crane.cpu_limit} CPU / {p.crane.memory_limit}), and outbound HTTPS
+            to {p.egress.map((h, i) => (
+              <span key={h}>{i > 0 && ", "}<code>{h}</code></span>
+            ))}. Each engine also needs {p.engine.disk_gb}GB of disk,
+            {" "}{p.engine.tmp_gb}GB of it under <code>/tmp</code>.
+          </p>
+        ) : <p className="text-xs text-amber-700">{waiting}</p>}
       </div>
 
-      {/* The assumption, in the panel and not only in the document. Somebody
-          who reads the node count off the screen and never opens the request
-          is exactly who this has to reach. */}
-      {p.vus_per_engine_assumed && (
+      {p?.vus_per_engine_assumed && (
         <div className="border border-amber-300 bg-amber-50 rounded-lg p-3">
           <p className="text-xs text-amber-900">
             <b>{p.vus_per_engine.toLocaleString()} virtual users per engine is
@@ -234,7 +247,7 @@ function PlanResult(props: {
         </div>
       )}
 
-      {p.warnings.map((w) => (
+      {(p?.warnings ?? []).map((w) => (
         <div key={w} className="border border-slate-200 bg-slate-50 rounded-lg p-3">
           <p className="text-xs text-slate-600">{w}</p>
         </div>
@@ -252,15 +265,22 @@ function PlanResult(props: {
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          <Button onClick={props.onDownload}>Download {p.document_file}</Button>
-          <Button kind="ghost" onClick={props.onCopy}>
+          <Button onClick={props.onDownload} disabled={!p}>
+            Download {p ? p.document_file : "capacity-request.md"}
+          </Button>
+          <Button kind="ghost" onClick={props.onCopy} disabled={!p}>
             {props.copied ? "Copied" : "Copy as Markdown"}
           </Button>
-          <Button kind="ghost" onClick={() => props.setShowDoc(!props.showDoc)}>
+          <Button kind="ghost" onClick={() => props.setShowDoc(!props.showDoc)}
+            disabled={!p}>
             {props.showDoc ? "Hide" : "Preview"}
           </Button>
         </div>
-        {props.showDoc && (
+        {/* No amber line here: the stats card directly above already carries it,
+            and three copies of one sentence on one screen reads as three
+            different problems. The last CTA gets its own, because it is far
+            enough down to be reached without the first in view. */}
+        {props.showDoc && p && (
           <pre className="text-[11px] font-mono bg-slate-50 border border-slate-200
                           rounded-md p-3 overflow-auto max-h-96 whitespace-pre-wrap">
             {p.document}
@@ -272,31 +292,43 @@ function PlanResult(props: {
         <h3 className="text-sm font-semibold text-slate-800">
           Carry this into the deployment
         </h3>
-        <p className="text-xs text-slate-500">
-          Fills in what this plan decided, so the numbers are not retyped: a new
-          location is set to run <b>{p.location.slots} concurrent engines</b>
-          {" "}(its <code>slots</code>) at{" "}
-          <b>{p.location.threads_per_engine.toLocaleString()} virtual users
-          each</b> (<code>threadsPerEngine</code>), and the bundle asks for{" "}
-          <b>{p.engine.cpu} CPU / {p.engine.memory}</b> engines at{" "}
-          {p.engines_per_node} per node. Nothing is created or changed by this —
-          it moves you to step 1 with the fields already filled.
-        </p>
-        <p className="text-xs text-slate-500">
-          The two request fields — <code>overrideCPU {p.location.override_cpu}</code>
-          {" "}and <code>overrideMemory {p.location.override_memory_mb}</code> — are
-          set in BlazeMeter rather than here, and the document says why they
-          matter.
-        </p>
-        {/* An empty location and an agent that has never reported are normal
-            states, not a half-finished setup -- so the wait for a cluster is
-            setup time rather than dead time. */}
-        <p className="text-xs text-slate-500">
-          None of this waits for the cluster: the location and its agent can be
-          created in BlazeMeter now, and the agent simply reports nothing until
-          its manifests are applied.
-        </p>
-        <Button onClick={props.onUse}>Use this plan</Button>
+        {p ? (
+          <>
+            <p className="text-xs text-slate-500">
+              Fills in what this plan decided, so the numbers are not retyped: a
+              new location is set to run <b>{p.location.slots} concurrent
+              engines</b> (its <code>slots</code>) at{" "}
+              <b>{p.location.threads_per_engine.toLocaleString()} virtual users
+              each</b> (<code>threadsPerEngine</code>), and the bundle asks for{" "}
+              <b>{p.engine.cpu} CPU / {p.engine.memory}</b> engines at{" "}
+              {p.engines_per_node} per node. Nothing is created or changed by
+              this — it moves you to step 1 with the fields already filled.
+            </p>
+            <p className="text-xs text-slate-500">
+              The two request fields —{" "}
+              <code>overrideCPU {p.location.override_cpu}</code> and{" "}
+              <code>overrideMemory {p.location.override_memory_mb}</code> — are
+              set in BlazeMeter rather than here, and the document says why they
+              matter.
+            </p>
+            {/* An empty location and an agent that has never reported are normal
+                states, not a half-finished setup -- so the wait for a cluster is
+                setup time rather than dead time. */}
+            <p className="text-xs text-slate-500">
+              None of this waits for the cluster: the location and its agent can
+              be created in BlazeMeter now, and the agent simply reports nothing
+              until its manifests are applied.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-slate-500">
+            Carries the plan's concurrent engines, virtual users per engine and
+            engine size into the deployment steps. Nothing is created or changed
+            by it.
+          </p>
+        )}
+        <Button onClick={props.onUse} disabled={!p}>Use this plan</Button>
+        {waiting && <p className="text-[11px] text-amber-700">{waiting}</p>}
       </div>
     </div>
   );

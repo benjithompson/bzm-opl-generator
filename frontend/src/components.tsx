@@ -19,10 +19,36 @@ export function Section(props: {
   );
 }
 
-export function Field(props: { label: string; hint?: string; children: ReactNode }) {
+/** Whether a field that *must* be filled in has been.
+ *
+ *  A badge rather than an asterisk, and red rather than grey, because the rule
+ *  it serves is that required input is obvious before anything is clicked: a
+ *  disabled button explains nothing if the field it is waiting on looks the
+ *  same as the four optional ones beside it. Lifted out of ConfigurePanel,
+ *  which had the only copy, when the planner needed the same thing.
+ *
+ *  Reads "required" while empty rather than "missing": nothing has gone wrong
+ *  yet on a form nobody has filled in. */
+export function RequiredBadge({ ok }: { ok: boolean }) {
+  const cls = "text-[10px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 ";
+  return ok
+    ? <span className={cls + "bg-emerald-100 text-emerald-700"}>✓ set</span>
+    : <span className={cls + "bg-red-100 text-red-700"}>required</span>;
+}
+
+export function Field(props: {
+  label: string; hint?: string; children: ReactNode;
+  /** Omit for an optional field. Present means the field is required, and the
+   *  value says whether it has been given -- so the badge is there from the
+   *  first render rather than appearing once something is wrong. */
+  required?: boolean;
+}) {
   return (
     <label className="block">
-      <span className="text-xs font-medium text-slate-600">{props.label}</span>
+      <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
+        {props.label}
+        {props.required !== undefined && <RequiredBadge ok={props.required} />}
+      </span>
       {props.children}
       {props.hint && <span className="text-[11px] text-slate-400">{props.hint}</span>}
     </label>

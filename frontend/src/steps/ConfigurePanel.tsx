@@ -12,7 +12,9 @@
 // "what is in this bundle" is answered without scrolling the form.
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
-import { Button, Check, Field, inputCls, Switch } from "../components";
+import {
+  Button, Check, Field, inputCls, RequiredBadge, Switch,
+} from "../components";
 import { GroupRow } from "../groups/GroupRow";
 import {
   GroupFlags, GroupId, groupsOf, OptionGroup, SHARED_GROUPS,
@@ -64,9 +66,9 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
  *  here: every deployment has both, and putting the required half of a pair
  *  behind a toggle makes it look optional. */
 function CoreFields(p: ConfigurePanelProps) {
-  const ok = (good: boolean) => good
-    ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
-    : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>;
+  // The badge itself is components.RequiredBadge now -- the planner needed the
+  // same one, and two copies of "what required looks like" is how they drift.
+  const ok = (good: boolean) => <RequiredBadge ok={good} />;
   return (
     <div className="space-y-3">
       <label className="block">
