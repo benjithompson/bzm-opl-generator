@@ -97,6 +97,15 @@ anything that breaks.
   that came back unchanged are reported as not stored, in amber, beside the ones
   that saved.
 
+  **The capacity plan feeds it.** A plan on the Plan capacity view offers
+  *Fill from the plan* on the selected location's settings, which puts its
+  concurrent engines, virtual users per engine and engine requests into the
+  form and leaves the saving to you -- so a re-plan after a measured run lands
+  on the location it has to change rather than on a create form. Filling is not
+  saving: one write control, one warning, one re-read. The engine request
+  fields are left alone when the plan's engine CPU is not a whole number of
+  cores, which is all `overrideCPU` takes.
+
   Only changed fields are sent, so a page left open does not write back three
   values somebody else has since edited; blank means "leave alone", so there is
   no way to *clear* a setting here; and `funcIds` is deliberately not in the set

@@ -10,7 +10,7 @@
 // downstream is generated from, and the effects that clear the token when
 // either moves live there too.
 import { useEffect, useRef, useState } from "react";
-import { Facts, Location, Ship } from "../api";
+import { CapacityPlan, Facts, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -66,6 +66,9 @@ export interface AgentPanelProps {
   /** The location came back changed: App owns the list and the selection, so
    *  it is App that puts it back. */
   onLocationUpdated: (loc: Location) => void;
+  /** The capacity plan, if one is on screen in the other view -- offered as a
+   *  fill on the selected location's settings. */
+  plan?: CapacityPlan | null;
   setShowCreateLoc: (v: boolean) => void;
   createLocationForm: React.ReactNode;
   // -- the agents in it
@@ -386,7 +389,7 @@ export function AgentPanel(p: AgentPanelProps) {
                   it changes is, rather than in a settings screen of its own. */}
               {p.location && (
                 <LocationSettings location={p.location}
-                  onUpdated={p.onLocationUpdated} />
+                  onUpdated={p.onLocationUpdated} plan={p.plan} />
               )}
             </div>
           </SubSection>

@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, saveBundle, Account, AgentStatus, Facts, Feature,
+  api, downloadZip, saveBundle, Account, AgentStatus, CapacityPlan, Facts,
+  Feature,
   GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
@@ -197,6 +198,10 @@ export default function App() {
   // back does not empty the form.
   const [view, setView] = useState<"flow" | "plan">("flow");
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
+  // The plan itself, reported up by the panel that computes it. Held here
+  // because the place a *re-plan* lands is the settings of a location that
+  // already exists, which is step 1's -- not the planner's own view.
+  const [plan, setPlan] = useState<CapacityPlan | null>(null);
   const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
@@ -1144,7 +1149,7 @@ export default function App() {
         // empty preview pane next to it would suggest this step produces some.
         <main className="max-w-screen-lg mx-auto p-6">
           <PlanPanel inputs={planInputs} setInputs={setPlanInputs}
-                     onUse={usePlan} />
+                     onUse={usePlan} onPlan={setPlan} />
         </main>
       ) : (
       <WorkArea files={files} activeFile={activeFile}
@@ -1189,7 +1194,7 @@ export default function App() {
               harborId={harborId} setHarborId={setHarborId} location={location}
               locBusy={locBusy} locErr={locErr} showCreateLoc={showCreateLoc}
               setShowCreateLoc={setShowCreateLoc}
-              onLocationUpdated={locationUpdated}
+              onLocationUpdated={locationUpdated} plan={plan}
               createLocationForm={createLocationFormNode}
               ships={ships} shipId={shipId}
               pickShip={(id) => { setShipId(id); forgetToken(); }}

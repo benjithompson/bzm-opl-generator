@@ -15,7 +15,9 @@
 // core.update_location re-reads for exactly that reason.
 import { useEffect, useState } from "react";
 
-import { api, Location, LocationSettings as Settings, LocationUpdate } from "../api";
+import {
+  api, CapacityPlan, Location, LocationSettings as Settings, LocationUpdate,
+} from "../api";
 import { Button, ErrorMsg, Field, inputCls } from "../components";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
@@ -57,6 +59,11 @@ export function LocationSettings(props: {
   location: Location;
   /** Put the changed location back into the page's own list and selection. */
   onUpdated: (loc: Location) => void;
+  /** The capacity plan currently on the Plan capacity view, if there is one.
+   *  A re-plan lands here rather than on a new location: the numbers change,
+   *  and this is the location they have to change on. Filling is not saving --
+   *  it writes the draft, and the same Save below sends it. */
+  plan?: CapacityPlan | null;
 }) {
   const { location } = props;
   const [draft, setDraft] = useState<Draft>(() => draftOf(location));
@@ -97,6 +104,32 @@ export function LocationSettings(props: {
     }
   };
 
+  // What the plan would put in these fields. overrideCPU is whole cores on the
+  // accounts this has been read on, so a fractional engine limit (500m, say)
+  // has no legitimate value to offer here -- fill the two that always apply and
+  // say why the others were left.
+  const planFill = props.plan && {
+    slots: String(props.plan.location.slots),
+    threads_per_engine: String(props.plan.location.threads_per_engine),
+    whole: /^\d+$/.test(props.plan.location.override_cpu),
+    override_cpu: props.plan.location.override_cpu,
+    override_memory: String(props.plan.location.override_memory_mb),
+  };
+
+  const fillFromPlan = () => {
+    if (!planFill) return;
+    setResult(null);
+    setDraft({
+      ...draft,
+      slots: planFill.slots,
+      threads_per_engine: planFill.threads_per_engine,
+      ...(planFill.whole
+        ? { override_cpu: planFill.override_cpu,
+            override_memory: planFill.override_memory }
+        : {}),
+    });
+  };
+
   const field = (k: keyof Draft, hint: string) => (
     <Field label={LABELS[k]} hint={hint}>
       <input type="number" min={1} className={inputCls}
@@ -117,6 +150,26 @@ export function LocationSettings(props: {
           applies to the next test that starts.
         </p>
       </div>
+
+      {planFill && (
+        <div className="rounded-md border border-bzm/40 bg-bzm/5 p-2.5 space-y-1.5">
+          <p className="text-[11px] text-slate-600">
+            The capacity plan sizes this at <b>{planFill.slots} concurrent
+            engines</b> × <b>{Number(planFill.threads_per_engine).toLocaleString()}
+            {" "}virtual users</b>
+            {planFill.whole
+              ? <>, requesting <b>{planFill.override_cpu} CPU /
+                  {" "}{Number(planFill.override_memory).toLocaleString()}MB</b> per
+                  engine.</>
+              : <>. Its engine CPU ({props.plan?.engine.cpu}) is not a whole
+                  number of cores, which is all `overrideCPU` takes, so the two
+                  request fields are left alone.</>}
+          </p>
+          <Button kind="ghost" onClick={fillFromPlan}>
+            Fill from the plan
+          </Button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         {field("slots", "engines this location may run at once")}

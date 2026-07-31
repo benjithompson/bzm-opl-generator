@@ -50,6 +50,12 @@ export function PlanPanel(props: {
    *  bundle options that match. Undefined while nothing is connected yet is
    *  fine -- the button says what it will do either way. */
   onUse: (h: PlanHandover) => void;
+  /** The plan as it changes, so the rest of the page can offer it where it is
+   *  useful -- specifically the settings of a location that already exists,
+   *  which is where a re-plan actually lands. Reported rather than fetched
+   *  twice: two calls could answer differently, and then two parts of the page
+   *  would be describing different plans. */
+  onPlan?: (p: CapacityPlan | null) => void;
 }) {
   const { inputs, setInputs } = props;
   const [plan, setPlan] = useState<CapacityPlan | null>(null);
@@ -66,7 +72,9 @@ export function PlanPanel(props: {
   // state the panel opens in -- so it clears rather than refusing.
   const timer = useRef<number>();
   useEffect(() => {
-    if (!inputs.users.trim()) { setPlan(null); setErr(null); return; }
+    if (!inputs.users.trim()) {
+      setPlan(null); setErr(null); props.onPlan?.(null); return;
+    }
     window.clearTimeout(timer.current);
     setBusy(true);
     timer.current = window.setTimeout(() => {
@@ -75,8 +83,10 @@ export function PlanPanel(props: {
         engine_cpu: inputs.engineCpu, engine_mem: inputs.engineMem,
         engines_per_node: inputs.enginesPerNode,
       })
-        .then((p) => { setPlan(p); setErr(null); })
-        .catch((e: Error) => { setErr(e.message); setPlan(null); })
+        .then((p) => { setPlan(p); props.onPlan?.(p); setErr(null); })
+        .catch((e: Error) => {
+          setErr(e.message); setPlan(null); props.onPlan?.(null);
+        })
         .finally(() => setBusy(false));
     }, 250);
     return () => window.clearTimeout(timer.current);
@@ -318,6 +328,15 @@ function PlanResult(props: {
               None of this waits for the cluster: the location and its agent can
               be created in BlazeMeter now, and the agent simply reports nothing
               until its manifests are applied.
+            </p>
+            {/* The re-plan case, which is the common one after a first run: the
+                location exists, so these two numbers are a change to it rather
+                than to a form. The write lives on that location's own settings
+                -- one Save, one warning, one re-read -- and this says where. */}
+            <p className="text-xs text-slate-500">
+              Already have the location? Step 1 offers <b>Fill from the plan</b>
+              {" "}on its settings, which puts these numbers in and leaves the
+              saving to you.
             </p>
           </>
         ) : (
