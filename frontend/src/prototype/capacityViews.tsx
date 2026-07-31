@@ -27,6 +27,7 @@ export const VARIANTS = [
   { id: "A", name: "Ledger — every location, by workspace" },
   { id: "B", name: "Composition — where the capacity is" },
   { id: "C", name: "Answer first, details on demand" },
+  { id: "D", name: "Bars + per-location table (A×B)" },
 ] as const;
 
 export type VariantId = typeof VARIANTS[number]["id"];
@@ -323,7 +324,10 @@ function Header({ cap }: { cap: Capacity }) {
         <div className="text-[11px] text-slate-500 mt-0.5">account rated VUs</div>
       </div>
       <div className="text-xs text-slate-500">
-        {cap.locations.length} locations · {cap.workspaces.length} workspaces
+        {/* Workspaces that hold a location. The account has far more, and
+            counting those said "100 workspaces" about 36 that matter. */}
+        {cap.locations.length} locations ·{" "}
+        {new Set(cap.locations.flatMap((l) => l.workspace_ids)).size} workspaces
         {shared > 0 && <> · <b className="text-amber-700">{shared} shared</b></>}
       </div>
     </div>
@@ -333,7 +337,133 @@ function Header({ cap }: { cap: Capacity }) {
 export function Variant(props: { id: VariantId; cap: Capacity }) {
   if (props.id === "A") return <VariantA cap={props.cap} />;
   if (props.id === "B") return <VariantB cap={props.cap} />;
-  return <VariantC cap={props.cap} />;
+  if (props.id === "C") return <VariantC cap={props.cap} />;
+  return <VariantD cap={props.cap} />;
+}
+
+// -- D -- the bars, and the table that is their legend ------------------------
+// A's numbers with B's shape. The swatch in the table's first column is what
+// ties the two together: the bar says which location holds the capacity, the
+// row it lines up with says how. A separate legend under the bar would repeat
+// the table immediately below it, so the table *is* the legend -- and it also
+// carries the agents, engines and per-engine figures a legend cannot.
+//
+// Shared locations are striped rather than given a colour of their own, which
+// is B's mistake fixed: amber was both "shared" and the fifth palette entry, so
+// a shared segment and an ordinary one were the same swatch.
+
+const STRIPE = "repeating-linear-gradient(45deg, rgba(255,255,255,.55) 0 3px,"
+  + " rgba(255,255,255,0) 3px 7px)";
+
+function Swatch({ i, shared }: { i: number; shared: boolean }) {
+  return (
+    <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 "
+      + BAND[i % BAND.length] + (shared ? " ring-1 ring-amber-600" : "")}
+      style={shared ? { backgroundImage: STRIPE } : undefined} />
+  );
+}
+
+export function VariantD({ cap }: { cap: Capacity }) {
+  const spaces = byWorkspace(cap);
+  const widest = Math.max(...spaces.map((w) => w.total), 1);
+  return (
+    <div className="space-y-4">
+      <Header cap={cap} />
+      {spaces.map((w) => {
+        const locs = w.locs.slice()
+          .sort((a, b) => (b.rated_vus ?? 0) - (a.rated_vus ?? 0));
+        return (
+          <div key={w.id} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <div className="px-3 pt-2.5 pb-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-semibold text-slate-800">{w.name}</span>
+                {w.shared.length > 0 && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide
+                                   bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
+                    {w.shared.length} shared
+                  </span>
+                )}
+                <span className="text-xs text-slate-400">
+                  {w.locs.length} location{w.locs.length === 1 ? "" : "s"}
+                </span>
+                <span className="grow" />
+                <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
+                <span className="text-[11px] text-slate-400">
+                  {Math.round((w.total / cap.rated_vus) * 100)}% of the account
+                </span>
+              </div>
+              {/* Width against the biggest workspace, so the bars compare with
+                  each other and not just within themselves. */}
+              <div className="flex h-5 rounded overflow-hidden bg-slate-100 mt-1.5"
+                   style={{ width: `${Math.max((w.total / widest) * 100, 2)}%` }}>
+                {locs.map((l, i) => (
+                  <div key={l.id}
+                    title={`${l.name} — ${n(l.rated_vus ?? 0)} rated VUs`
+                      + (l.shared ? " (shared)" : "")}
+                    className={BAND[i % BAND.length] + " h-full"}
+                    style={{
+                      width: `${((l.rated_vus ?? 0) / (w.total || 1)) * 100}%`,
+                      backgroundImage: l.shared ? STRIPE : undefined,
+                    }} />
+                ))}
+              </div>
+            </div>
+            <table className="w-full text-xs border-t border-slate-100">
+              <thead className="text-slate-500">
+                <tr className="border-b border-slate-100">
+                  <th className="text-left font-medium px-3 py-1.5">location</th>
+                  <th className="text-right font-medium px-2">agents</th>
+                  <th className="text-right font-medium px-2">engines/agent</th>
+                  <th className="text-right font-medium px-2">engines</th>
+                  <th className="text-right font-medium px-2">VUs/engine</th>
+                  <th className="text-right font-medium px-3">rated VUs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {locs.map((l, i) => (
+                  <tr key={l.id} className={i % 2 ? "bg-slate-50/60" : ""}>
+                    <td className="px-3 py-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <Swatch i={i} shared={l.shared} />
+                        <span className="font-medium text-slate-800">{l.name}</span>
+                        {l.shared && (
+                          <span className="text-[10px] text-amber-700">
+                            also in {l.workspace_names.filter((x) => x !== w.name).join(", ")}
+                          </span>
+                        )}
+                        {l.agents_reporting < l.agents && (
+                          <span className="text-[10px] text-slate-400">
+                            {l.agents - l.agents_reporting} not reporting
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="text-right px-2 tabular-nums">{l.agents}</td>
+                    <td className="text-right px-2 tabular-nums text-slate-500">{l.slots ?? "—"}</td>
+                    <td className="text-right px-2 tabular-nums">{l.engines}</td>
+                    <td className="text-right px-2 tabular-nums text-slate-500">
+                      {l.threads_per_engine ?? "—"}
+                    </td>
+                    <td className="text-right px-3 tabular-nums font-medium">
+                      {l.rated_vus === null ? "—" : n(l.rated_vus)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {w.shared.length > 0 && (
+              <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200">
+                Striped segments are shared — {n(w.sharedVus)} of this
+                workspace&apos;s {n(w.total)} is claimable from another workspace
+                too. Running it there leaves none of it here, and the account
+                total counts it once.
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function PrototypeSwitcher({ current }: { current: VariantId }) {
