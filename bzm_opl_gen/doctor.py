@@ -415,28 +415,42 @@ MB = 1024 ** 2
 HEAP_MB_PER_THREAD = 8.192
 CONTAINER_HEAP_RATIO = 2.0
 
-# The floors, and they turn out to be load-bearing rather than an edge case.
+# The floor, and it is not an edge case -- it is very nearly the whole answer.
 #
-# Measured on a real engine at ONE thread (BlazeMeter's engine-health metrics):
-# 1030MB at start, settling ~1110MB and still drifting up to 1220MB when the
-# 60s run ended, with a 1320MB transient during JVM/JMeter startup. So an engine
-# costs about 1.2GB simply to exist, before it carries any load at all.
+# Measured by bisecting a real engine's container limit until it broke, on a
+# Docker agent with a light script (small HTML, 1s think-time). Verdict is the
+# Taurus exit code, because nothing else distinguishes the cases:
 #
-# That is fatal to a model that is linear through the origin, which this one
-# still is: 8.192MB/thread was obtained by dividing the whole 4096MB heap by 500
-# threads, silently assuming a baseline of zero. The real shape is
-# `baseline + threads * slope`, and below a few hundred threads the baseline
-# dominates. MIN_CONTAINER_MB was 1024 -- under the measured floor -- so the
-# model would have recommended less memory than an idle engine uses and OOMed
-# the low-thread locations it was meant to right-size.
+#   threads  limit   result
+#     300    1024MB  never starts -- JVM cannot initialise
+#     300    1536MB  starts, dies as the ramp completes   (1,139 samples)
+#     300    2048MB  starts, dies as the ramp completes   (2,435 samples)
+#     300    2560MB  starts, dies halfway                (31,130 samples)
+#     300    3072MB  runs the whole test                 (61,348 samples)
+#     300    4096MB  runs the whole test                 (61,139 samples)
+#      50    1536MB  starts, dies partway                 (1,926 samples)
+#      50    2560MB  starts, dies partway                 (6,019 samples)
 #
-# 1536 clears the observed drift and the startup transient with a little margin.
-# It is a floor, not a fix: the run never reached steady state and one data
-# point cannot give both an intercept and a gradient. A run at 200-500 threads,
-# long enough to plateau, yields the slope and lets the baseline become an
-# explicit term instead of a floor. See #89.
+# Two things fall out, and both contradict the model above.
+#
+# **The requirement is essentially fixed.** 50 threads and 300 threads have the
+# same floor, 2560 < floor <= 3072. Six times the load, no measurable change:
+# what costs the memory is the JVM, Taurus and JMeter existing at all, not the
+# threads. So `threads * HEAP_MB_PER_THREAD` has the wrong shape -- it is a
+# large constant with a small per-thread term, and this "floor" is doing nearly
+# all the work across the range anyone runs. Restructuring it needs more than
+# two thread counts on one script against one target; see #89.
+#
+# **Above the floor, more memory buys nothing.** 3072 and 4096 are
+# indistinguishable (61,348 vs 61,139 samples). It is a knee, not a slope, so
+# the right recommendation sits just above it and paying for headroom is waste.
+#
+# 3072 is the smallest measured pass. The previous 1536 was set from an engine
+# *consuming* 1220MB, and consumption is not a requirement -- 1536 fails at both
+# thread counts. That mistake has now been made three times in this file's
+# history; a reading of what an engine used is never a floor for what it needs.
 MIN_HEAP_MB = 256
-MIN_CONTAINER_MB = 1536
+MIN_CONTAINER_MB = 3072
 
 
 def engine_heap_mb(threads):

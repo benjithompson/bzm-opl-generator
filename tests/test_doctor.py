@@ -295,6 +295,23 @@ def test_the_model_reproduces_the_documented_point_exactly():
     assert doctor.engine_container_mb(4096) == 8192
 
 
+def test_the_floor_is_the_measured_one_not_a_consumption_reading():
+    """3072MB is the smallest container limit measured to survive a whole run,
+    at BOTH 50 and 300 threads. The previous 1536 came from an engine
+    *consuming* 1220MB, and it fails at both -- consumption is not a
+    requirement. Pinned because that conflation has now been made three times."""
+    assert doctor.MIN_CONTAINER_MB == 3072
+
+
+def test_the_model_never_recommends_below_the_measured_floor():
+    """The property that matters, across the whole range anyone runs. At 50
+    threads the unfloored arithmetic gives 818MB, which died partway through a
+    real run; the floor is what stops the tool recommending it."""
+    for threads in (1, 10, 50, 100, 250, 300):
+        got = doctor.engine_container_mb(doctor.engine_heap_mb(threads))
+        assert got >= 3072, f"{threads} threads -> {got}MB, under the measured floor"
+
+
 def test_the_low_thread_floor_keeps_the_container_startable():
     """Below ~50 threads the ratio alone produces a container no JVM starts in
     (10 threads -> 164MB). The floor covers that edge; at 50 threads, the common

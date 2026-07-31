@@ -329,6 +329,58 @@ def test_engine_pool_is_not_asserted_on_a_one_pool_bundle():
         _placed_pod(), _node("n1", labels={}), {"node_selector": {"pool": "x"}}) == []
 
 
+# -- the engine finished, versus the run being reported as finished -----------
+#
+# Every fixture below is a real master from a memory bisection: the engine was
+# starved by degrees and each run reached ENDED with ZERO failures. The starved
+# ones report better latency than the healthy one, because an engine that dies
+# early only samples the gentle part of the ramp.
+
+class _EventClient:
+    def __init__(self, messages, summary=None):
+        self._m, self._s = messages, summary or {}
+
+    def master_status(self, master_id):
+        return {"status": "ENDED", "events": [{"message": m} for m in self._m]}
+
+    def master_summary(self, master_id):
+        return self._s
+
+
+CLEAN = ["Status changed to ENDED (140)", "Taurus completed (Exit: 0)"]
+DIED = ["Status changed to ENDED (140)", "Taurus completed (Exit: 1)"]
+
+
+def test_clean_exit_passes():
+    assert livetest.assert_engine_exited_cleanly(_EventClient(CLEAN), 1) == []
+
+
+def test_engine_that_died_partway_is_caught_despite_ending():
+    """Master 82869312: 2560MB, 31,130 samples, 0 failures, 322ms -- and exit 1
+    halfway through. ENDED and the summary both say it was fine."""
+    fails = livetest.assert_engine_exited_cleanly(_EventClient(DIED), 1)
+    assert any("exited 1" in f for f in fails)
+    assert any("reported as ENDED" in f for f in fails)
+
+
+def test_a_starved_run_looks_healthier_than_a_good_one():
+    """The reason the summary cannot be the criterion. Both of these pass
+    assert_engine_did_work; only the exit code separates them."""
+    starved = _EventClient(DIED, {"summary": [{"hits": 31130, "avg": 322, "failed": 0}]})
+    healthy = _EventClient(CLEAN, {"summary": [{"hits": 61348, "avg": 322, "failed": 21}]})
+    assert livetest.assert_engine_did_work(starved, 1) == []      # looks fine
+    assert livetest.assert_engine_did_work(healthy, 1) == []      # also fine
+    assert livetest.assert_engine_exited_cleanly(starved, 1) != []   # only this differs
+    assert livetest.assert_engine_exited_cleanly(healthy, 1) == []
+
+
+def test_a_missing_exit_status_is_unverified_not_passed():
+    """Absent is not zero -- an aged-out master or an unrecognised shape must
+    not read as a clean finish."""
+    fails = livetest.assert_engine_exited_cleanly(_EventClient(["Status changed to ENDED (140)"]), 1)
+    assert any("unverified" in f for f in fails)
+
+
 def _heap_pod(xmx, limit="8Gi", where="env"):
     """An engine started with a heap. Crane does not write -Xmx -- it is a
     location setting pushed by BlazeMeter -- so where it lands is not ours to

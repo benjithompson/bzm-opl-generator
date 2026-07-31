@@ -502,6 +502,50 @@ def assert_engine_did_work(client, master_id):
     return []
 
 
+TAURUS_CLEAN_EXIT = "Taurus completed (Exit: 0)"
+_TAURUS_EXIT = re.compile(r"Taurus completed \(Exit: (\d+)\)")
+
+
+def assert_engine_exited_cleanly(client, master_id):
+    """Did the engine finish, or did it die partway through and get reported as
+    a completed run?
+
+    This is the only honest signal there is, and nothing else in the API
+    carries it. Measured across a memory bisection where the engine was starved
+    by degrees -- every one of these reached ENDED, and every one reported
+    **zero failures**:
+
+        limit    samples   avg     exit
+        1536MB     1,139   338ms   1      died as the ramp completed
+        2048MB     2,435   297ms   1
+        2560MB    31,130   322ms   1      died halfway
+        3072MB    61,348   322ms   0      the whole run
+
+    The failing runs look *better* than the passing one: fewer errors, lower
+    latency, because an engine that dies early only ever samples the gentle
+    part of the ramp. Sample count is the only figure that gives it away, and
+    only against a baseline you would have to already know. So `ENDED` cannot
+    be the success criterion, and neither can the summary.
+    """
+    try:
+        events = (client.master_status(master_id) or {}).get("events") or []
+    except Exception as e:
+        return [f"could not read the run's events for master {master_id}: {e}"]
+    codes = [m.group(1) for m in
+             (_TAURUS_EXIT.search(e.get("message") or "") for e in events) if m]
+    if not codes:
+        # Absent is not zero: an old master whose events have aged out, or a
+        # shape this does not recognise, is unverified rather than passed.
+        return [f"no Taurus exit status in the events for master {master_id}, so "
+                f"whether the engine finished or died partway is unverified"]
+    if any(c != "0" for c in codes):
+        return [f"the engine exited {codes[0]}, not 0 -- it died partway through "
+                f"and the run was still reported as ENDED. The samples it did "
+                f"produce come from the part of the ramp it survived, so they "
+                f"read as *better* than a healthy run rather than worse"]
+    return []
+
+
 def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
                     engine_timeout=420, run_timeout=900):
     """Start a real BlazeMeter test on the location so crane actually spawns an
@@ -542,6 +586,10 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
         if opts.get("proxy"):
             fails += engine_proxy_evidence(before_upload)
         fails += assert_engine_did_work(client, master_id)
+        # After the summary, deliberately: a starved engine's summary looks
+        # healthier than a good one's, so the exit code has to be able to
+        # contradict it.
+        fails += assert_engine_exited_cleanly(client, master_id)
         if opts.get("proxy"):
             print(f"  non-BlazeMeter hosts the engine reached via the proxy: "
                   f"{sut_hosts_via_proxy() or '(none -- sampler traffic did not use it)'}")
