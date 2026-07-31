@@ -355,6 +355,7 @@ export function SearchSelect(props: {
   const [hi, setHi] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -384,6 +385,7 @@ export function SearchSelect(props: {
   return (
     <div ref={rootRef} className="relative">
       <input
+        ref={inputRef}
         className={inputCls + " pr-7"}
         disabled={props.disabled}
         placeholder={selected?.label ?? props.placeholder ?? "type to search…"}
@@ -398,7 +400,32 @@ export function SearchSelect(props: {
           else if (e.key === "Escape") { setOpen(false); setQuery(""); (e.target as HTMLInputElement).blur(); }
         }}
       />
-      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+      {/* Clear, in place of the chevron rather than beside it: while you are
+          typing, the list is already open and "this opens" is the one thing the
+          arrow no longer has to say. Only there when there is something to
+          clear, so the control never means "nothing happens".
+
+          It clears the *search*, not the selection -- onChange takes a value and
+          has no way to say "none", so an X that emptied the field would leave
+          the page showing a blank box for an account it is still using.
+
+          mousedown, and prevented: on click the input would blur first, and the
+          list would close under the pointer that was clearing it. */}
+      {open && query ? (
+        <button type="button" aria-label="Clear search"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400
+                     hover:text-slate-700 hover:bg-slate-100 rounded w-5 h-5
+                     flex items-center justify-center text-xs leading-none"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setQuery("");
+            inputRef.current?.focus();
+          }}>
+          ✕
+        </button>
+      ) : (
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+      )}
       {open && (
         <div ref={listRef}
           className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-md shadow-lg">
