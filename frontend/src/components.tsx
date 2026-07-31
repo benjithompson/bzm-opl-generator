@@ -130,13 +130,19 @@ export function Spinner({ className = "" }: { className?: string }) {
 export function Button(props: {
   onClick: () => void; children: ReactNode; kind?: "primary" | "ghost";
   disabled?: boolean;
+  /** Fill the width it is given, and centre the label in it. For a button
+   *  whose label changes -- Connect / Connecting… / Disconnect -- in a row
+   *  where a neighbour is `grow`: the caller fixes the width once and the
+   *  label stops moving everything beside it. */
+  block?: boolean;
   /** In flight: shows a spinner and stops a second click starting a second
    *  request. Separate from `disabled` so the caller does not have to conflate
    *  "not allowed" with "already going". */
   busy?: boolean;
 }) {
   const base = "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm "
-    + "font-medium transition-colors disabled:opacity-40";
+    + "font-medium transition-colors disabled:opacity-40"
+    + (props.block ? " w-full justify-center" : "");
   const kinds = {
     primary: "bg-bzm text-white hover:bg-bzm-dark",
     ghost: "border border-slate-300 text-slate-600 hover:bg-slate-50",

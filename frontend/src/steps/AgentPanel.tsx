@@ -231,7 +231,7 @@ export function AgentPanel(p: AgentPanelProps) {
               </details>
               <div className="flex gap-2 items-end">
                 <div className="grow">
-                  <Field label="api-key.json">
+                  <Field label="…or api-key.json">
                     <TextInput value={p.keyPath} onChange={p.setKeyPath} mono
                       disabled={connected}
                       placeholder="/path/to/api-key.json" />
@@ -266,13 +266,13 @@ export function AgentPanel(p: AgentPanelProps) {
                     three widths in a row whose text field is `grow` would
                     resize the field under the cursor every time the state
                     changed. */}
-                <div className="w-32 flex justify-end shrink-0">
+                <div className="w-32 shrink-0">
                   {/* One button for both ways in: a pasted id and secret if
                       there is one, the file otherwise. Two Connects meant two
                       places to look for the one that was going to work, and
                       the pasted pair is the deliberate act -- if it is filled
                       in, it is what was meant. */}
-                  <Button kind={connected ? "ghost" : "primary"}
+                  <Button block kind={connected ? "ghost" : "primary"}
                     onClick={connected ? p.disconnect
                       : () => p.connect(pasted
                         ? { id: p.pasteId, secret: p.pasteSecret, save: p.saveKey }
