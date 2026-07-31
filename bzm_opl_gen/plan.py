@@ -76,8 +76,17 @@ def supported_vus(cpu_millis, mem_bytes):
 
 
 def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=1):
+                  engine_mem=None, engines_per_node=1, agents=1):
     """What `users` concurrent users needs, as numbers.
+
+    **`slots` is per agent, not per location**, and this used to have it wrong.
+    BlazeMeter calls the field "Engines per agent" in its own UI -- "the number
+    of engines/tests that can run on one agent" -- so a location's total
+    concurrency is `agents x slots`, and real accounts lean on that: one here
+    has 17 agents at slots=1. Told a location needs 20 engines, the old answer
+    said `slots: 20`, which on a two-agent location is forty engines and twice
+    the cluster. `agents` is therefore an input, and `slots` an output divided
+    by it.
 
     `vus_per_engine` unset is assumed **from the engine size**, not from a
     fixed 500: 500 is BlazeMeter's figure for its 2 CPU / 8Gi engine, and a
@@ -95,6 +104,7 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     """
     users = _positive(users, "users")
     per_node = _positive(engines_per_node, "engines_per_node")
+    agents = _positive(agents, "agents")
 
     # Reuse generate's own parse-and-default so an engine size means exactly
     # what it will mean in the bundle, error message included. Before the
@@ -108,7 +118,16 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
            else _positive(vus_per_engine, "vus_per_engine"))
 
     engines = math.ceil(users / vus)
-    nodes = math.ceil(engines / per_node)
+    # Engines one agent runs -- the location's `slots`. Rounded up, so the
+    # agents together can always reach the target: 10 engines over 3 agents is
+    # 4 each, which is 12 available and 10 used, not 9 and a test that cannot
+    # start.
+    per_agent = math.ceil(engines / agents)
+    # Nodes are per agent, because an agent is one cluster: sizing the pool from
+    # the location's total would build one cluster big enough for every agent's
+    # share of the run.
+    nodes_per_agent = math.ceil(per_agent / per_node)
+    nodes = nodes_per_agent * agents
 
     # Capacity, not allocatable: what the infrastructure team buys is a machine,
     # and the kubelet's reservations come out of it before a pod sees any. This
@@ -122,7 +141,10 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         "vus_per_engine": vus,
         "vus_per_engine_assumed": assumed,
         "engines": engines,
+        "agents": agents,
+        "engines_per_agent": per_agent,
         "engines_per_node": per_node,
+        "nodes_per_agent": nodes_per_agent,
         "nodes": nodes,
         "engine": {
             "cpu": format_cpu(cpu),
@@ -143,12 +165,15 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         # The engine pool at full width. It is not a standing cost -- the pool
         # is meant to idle at zero between runs -- and the document says so
         # where an infrastructure team would otherwise price it as one.
+        # One agent's cluster at full width -- the thing a single infrastructure
+        # request is for. With several agents each cluster carries its own share
+        # rather than the whole run, which is the saving multiple agents buy.
         "peak": {
-            "cpu": format_cpu(node_cpu * nodes),
-            "memory": format_memory(node_mem * nodes),
-            "cpu_millis": node_cpu * nodes,
-            "memory_bytes": node_mem * nodes,
-            "disk_gb": ENGINE_DISK_GB * engines,
+            "cpu": format_cpu(node_cpu * nodes_per_agent),
+            "memory": format_memory(node_mem * nodes_per_agent),
+            "cpu_millis": node_cpu * nodes_per_agent,
+            "memory_bytes": node_mem * nodes_per_agent,
+            "disk_gb": ENGINE_DISK_GB * per_agent,
         },
         "crane": {
             "cpu_request": CRANE_CPU_REQUEST, "memory_request": CRANE_MEM_REQUEST,
@@ -160,7 +185,9 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         # leaves unset by default, which is the gap that has engines scheduled
         # at 250m and packed onto one node -- see requests_note() in generate.
         "location": {
-            "slots": engines,
+            # "Engines per agent" in BlazeMeter's own UI. See the docstring:
+            # this is the whole run divided by the agents that will serve it.
+            "slots": per_agent,
             "threads_per_engine": vus,
             "override_cpu": format_cpu(cpu),
             "override_memory_mb": mem // (1024 ** 2),
@@ -271,13 +298,16 @@ def plan_document(plan):
         "",
         "| | |",
         "|---|---|",
-        f"| Load-generator nodes | **{p['nodes']}** × {node['cpu']} vCPU / "
-        f"{node['memory']} RAM / {node['disk_gb']}GB disk |",
+        f"| Load-generator nodes | **{p['nodes_per_agent']}** × {node['cpu']} vCPU "
+        f"/ {node['memory']} RAM / {node['disk_gb']}GB disk"
+        + ("" if p["agents"] == 1
+           else f", in **each of {p['agents']} clusters** ({p['nodes']} in all)")
+        + " |",
         "| ...when idle | **0** — they exist only while a test runs, and should "
         "autoscale from zero |",
         f"| Agent node | 1 small node, always on ({p['crane']['cpu_limit']} vCPU / "
         f"{p['crane']['memory_limit']} for the agent pod) |",
-        f"| Peak, all {p['nodes']} nodes up | {peak['cpu']} vCPU / {peak['memory']} "
+        f"| Peak, per cluster | {peak['cpu']} vCPU / {peak['memory']} "
         f"/ {peak['disk_gb']}GB |",
         "| Kubernetes | any current version; one namespace, and the ability to "
         "create Deployments and Pods in it |",
@@ -286,8 +316,10 @@ def plan_document(plan):
         "",
         "The load-generator nodes are the whole cost, and they only exist while a",
         "test runs. If the cluster autoscales, a node pool with **minimum 0 and",
-        f"maximum {p['nodes']}** is the shape being asked for; if it does not, the",
-        f"{p['nodes']} nodes have to be standing when a test is scheduled.",
+        f"maximum {p['nodes_per_agent']}** is the shape being asked for; if it "
+        f"does not, the",
+        f"{p['nodes_per_agent']} nodes have to be standing when a test is "
+        f"scheduled.",
         "",
         "## How that number was reached",
         "",
@@ -301,9 +333,16 @@ def plan_document(plan):
         f"{'-' * 7}",
         f"{p['engines']:>7} engines, running at the same time"
         f"   ({p['users']:,} / {p['vus_per_engine']:,}, rounded up)",
+        f"{p['agents']:>7} agent(s) to run them",
+        f"{'-' * 7}",
+        f"{p['engines_per_agent']:>7} engines per agent"
+        + ("   (the location's `slots`)" if p["agents"] == 1
+           else f"   ({p['engines']} / {p['agents']}, rounded up -- the "
+                f"location's `slots`)"),
         f"{p['engines_per_node']:>7} engine(s) per node",
         f"{'-' * 7}",
-        f"{p['nodes']:>7} nodes",
+        f"{p['nodes_per_agent']:>7} nodes per agent"
+        + ("" if p["agents"] == 1 else f", {p['nodes']} in total"),
         "```",
         "",
         f"Each engine is one pod, sized **{eng['cpu']} CPU / {eng['memory']} / "

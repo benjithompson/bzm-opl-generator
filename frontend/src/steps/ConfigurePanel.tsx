@@ -249,7 +249,7 @@ function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
               location says it runs.
             </p>
             <div className="flex gap-2 mt-2">
-              <Button onClick={enable} busy={busy}>Enable on location</Button>
+              <Button onClick={enable} busy={busy}>Enable</Button>
               {!busy && (
                 <Button kind="ghost" onClick={() => setAsking(false)}>Cancel</Button>
               )}

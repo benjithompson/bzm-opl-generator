@@ -265,7 +265,7 @@ def cmd_plan(a):
         p = core.capacity_plan(
             a.users, vus_per_engine=a.vus_per_engine,
             engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
-            engines_per_node=a.engines_per_node)
+            engines_per_node=a.engines_per_node, agents=a.agents)
     except core.CoreError as e:
         sys.exit(str(e))
     if a.json:
@@ -281,15 +281,18 @@ def cmd_plan(a):
              if p["vus_per_engine_assumed"] else ""))
     print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
           f"{eng['disk_gb']}GB disk")
-    print(f"  {p['nodes']} node(s) of {node['cpu']} vCPU / {node['memory']} "
-          f"capacity, at {p['engines_per_node']} engine(s) each")
-    print(f"  peak {p['peak']['cpu']} vCPU / {p['peak']['memory']} across the "
-          f"pool; 0 between runs")
+    print(f"  {p['engines_per_agent']} engines per agent across {p['agents']} "
+          f"agent(s) -- the location's slots")
+    print(f"  {p['nodes_per_agent']} node(s) per agent of {node['cpu']} vCPU / "
+          f"{node['memory']} capacity, at {p['engines_per_node']} engine(s) each"
+          + (f" ({p['nodes']} nodes in all)" if p["agents"] > 1 else ""))
+    print(f"  peak {p['peak']['cpu']} vCPU / {p['peak']['memory']} per agent's "
+          f"cluster; 0 between runs")
     print(f"  agent: 1 small always-on node ({p['crane']['cpu_limit']} CPU / "
           f"{p['crane']['memory_limit']})")
     # The location block keeps BlazeMeter's own field names: it is what to type
     # into those fields, not a description of the plan.
-    print(f"  location: slots={p['location']['slots']} (concurrent engines), "
+    print(f"  location: slots={p['location']['slots']} (engines per agent), "
           f"threadsPerEngine={p['location']['threads_per_engine']} (virtual "
           f"users per engine),")
     print(f"            overrideCPU={p['location']['override_cpu']}, "
@@ -609,6 +612,10 @@ def main():
                     help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
     pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
                     help=f'engine memory limit (default {gen_mod.ENGINE_DEFAULT_MEM})')
+    pl.add_argument("--agents",
+                    help="agents that will serve this location (default 1). "
+                         "BlazeMeter's `slots` is engines per *agent*, so the "
+                         "run is divided by this")
     pl.add_argument("--engines-per-node", dest="engines_per_node",
                     help="engines to a node (default 1; more is cheaper and "
                          "they contend)")

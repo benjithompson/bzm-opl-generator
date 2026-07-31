@@ -26,12 +26,49 @@ def test_engines_are_the_target_over_threads_rounded_up():
     assert plan.capacity_plan(1)["engines"] == 1
 
 
-def test_slots_is_the_engine_count():
-    """The location field and the plan's engine count are the same number --
-    they are separate keys because one is advice about BlazeMeter and one is
-    the input to the node arithmetic, not because they can differ."""
-    p = plan.capacity_plan(5000)
-    assert p["location"]["slots"] == p["engines"] == 10
+def test_slots_is_engines_per_agent_not_the_whole_run():
+    """BlazeMeter's `slots` is "Engines per agent" in its own UI -- "the number
+    of engines/tests that can run on one agent" -- so a location's concurrency
+    is agents x slots.
+
+    This was wrong here first: `slots` was set to the whole engine count, which
+    on a two-agent location is twice the run and twice the cluster. Real
+    accounts lean on the multiplication -- one has 17 agents at slots=1.
+    """
+    one = plan.capacity_plan(5000)
+    assert one["engines"] == 10
+    assert one["location"]["slots"] == 10        # one agent: the same number
+
+    four = plan.capacity_plan(5000, agents=4)
+    assert four["engines"] == 10                 # the run has not changed
+    assert four["location"]["slots"] == 3        # 10 over 4, rounded up
+    assert four["engines_per_agent"] == 3
+
+
+def test_engines_per_agent_rounds_up_so_the_target_is_reachable():
+    """3 agents x 3 engines is 9, and the run needs 10. Rounding up gives 12
+    available for 10 used; rounding down gives a test that cannot start."""
+    p = plan.capacity_plan(5000, agents=3)
+    assert p["engines_per_agent"] == 4
+    assert p["engines_per_agent"] * p["agents"] >= p["engines"]
+
+
+def test_nodes_are_per_agent_because_an_agent_is_a_cluster():
+    """The infrastructure request is for one cluster. Sizing it from the
+    location's total would build every agent's share into each of them."""
+    p = plan.capacity_plan(5000, agents=2)
+    assert p["engines_per_agent"] == 5
+    assert p["nodes_per_agent"] == 5
+    assert p["nodes"] == 10
+
+
+def test_more_agents_do_not_change_the_total_nodes_needed():
+    """The work is the same; it is spread. What changes is how much of it any
+    one cluster has to hold."""
+    for agents in (1, 2, 5):
+        p = plan.capacity_plan(5000, agents=agents)
+        assert p["nodes"] >= p["engines"], agents
+        assert p["nodes_per_agent"] * agents == p["nodes"]
 
 
 def test_nodes_divide_by_engines_per_node_and_round_up():
@@ -106,6 +143,7 @@ def test_doctor_judges_against_the_same_ratio_the_planner_sizes_from():
 
 @pytest.mark.parametrize("kwargs", [
     {"users": 0},
+    {"users": 100, "agents": 0},
     {"users": -5},
     {"users": 100, "vus_per_engine": 0},
     {"users": 100, "engines_per_node": 0},
@@ -284,3 +322,21 @@ def test_document_says_the_blazemeter_side_does_not_wait_for_the_cluster():
     doc = plan.plan_document(plan.capacity_plan(5000))
     assert "None of that waits for the cluster" in doc
     assert "never" in doc and "heartbeat" in doc
+
+
+def test_document_shows_the_division_across_agents():
+    """A reader who knows the run needs 20 engines has to be able to see why
+    the location is being set to 7."""
+    doc = plan.plan_document(plan.capacity_plan(10000, vus_per_engine=500,
+                                                agents=3))
+    assert "3 agent(s) to run them" in doc
+    assert "7 engines per agent" in doc
+    assert "20 / 3, rounded up" in doc
+    assert "each of 3 clusters" in doc
+
+
+def test_document_does_not_mention_agents_when_there_is_one():
+    """The common case stays the simple case."""
+    doc = plan.plan_document(plan.capacity_plan(5000))
+    assert "clusters" not in doc
+    assert "the location's `slots`" in doc

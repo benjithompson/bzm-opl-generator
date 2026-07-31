@@ -337,7 +337,7 @@ export function AgentPanel(p: AgentPanelProps) {
           <SubSection title="Private location" done={!!p.harborId}
             {...fold("location")}
             summary={p.location
-              ? `${p.location.name} · ${p.location.slots ?? "?"} engine(s)`
+              ? `${p.location.name} · ${p.location.slots ?? "?"} engine(s)/agent`
               : "none selected"}
             hint="A location holds agents. Open one to size it and change its settings.">
             <div className="space-y-3">
@@ -364,7 +364,7 @@ export function AgentPanel(p: AgentPanelProps) {
                   <ErrorMsg msg={p.locErr} />
                   <Button kind="ghost" disabled={!p.who}
                     onClick={() => p.setShowCreateLoc(true)}>
-                    + New location (new harbor_id)
+                    + New location
                   </Button>
                 </>
               )}
@@ -400,7 +400,7 @@ export function AgentPanel(p: AgentPanelProps) {
                           + (n ? "bg-emerald-500" : "bg-amber-400")} />
                         <span className="font-medium">{l.name}</span>
                         <span className="text-xs text-slate-400 truncate">
-                          {l.slots} engine{l.slots === 1 ? "" : "s"}
+                          {l.slots} engine{l.slots === 1 ? "" : "s"}/agent
                           {l.threadsPerEngine
                             ? ` × ${l.threadsPerEngine.toLocaleString()} VUs` : ""}
                         </span>

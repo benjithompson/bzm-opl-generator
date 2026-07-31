@@ -20,9 +20,12 @@ bzm-opl-gen plan --users 5000
 
 **The vocabulary, because two of those field names fight it.** A private
 **location** holds **agents**; an agent runs **engines**; each engine drives some
-number of **virtual users**. `slots` is the location's cap on concurrent
-engines, and `threadsPerEngine` is virtual users per engine — those are the two
-fields' names, not the terms to think in.
+number of **virtual users**. `threadsPerEngine` is virtual users per engine, and
+`slots` is **engines per agent** — BlazeMeter's own UI calls it "Engines per
+agent", "the number of engines/tests that can run on one agent". A location's
+concurrency is therefore `agents × slots`, which is why `--agents` divides the
+run rather than multiplying anything: 20 engines over 3 agents is `slots: 7`,
+and 7 nodes in each of their three clusters rather than 21 in one.
 
 **No API key, no facts file, no cluster.** That is the point: the customer who
 needs this most has none of them, because the cluster is a ticket they have not
@@ -75,6 +78,7 @@ re-run `plan` with the number that comes out. That first step needs one node.
 | `--users` | *required* | virtual users the test has to reach |
 | `--vus-per-engine` | what the engine size is rated for | virtual users one engine carries (BlazeMeter's `threadsPerEngine`) — see above |
 | `--engine-cpu-limit` / `--engine-mem-limit` | `2` / `8Gi` | the same two flags `generate` takes, so a plan and the bundle it leads to are one vocabulary |
+| `--agents` | 1 | agents that will serve the location; `slots` is per agent, so this divides the run |
 | `--engines-per-node` | 1 | more is cheaper (a node spends ~1 CPU / 2Gi on itself) and they contend — see [`engines_per_node`](options.md) |
 | `-o DIR` / `--markdown` / `--json` | – | write the document / print it / the whole plan as data |
 
@@ -90,7 +94,7 @@ The plan's `location` block is what has to be set in BlazeMeter under
 
 | setting | from the plan |
 |---|---|
-| Concurrent engines (`slots`) | the engine count — below it the test cannot reach the target |
+| Engines per agent (`slots`) | the run divided by the agents that serve it — below it the test cannot reach the target |
 | Virtual users per engine (`threadsPerEngine`) | the figure the plan used; unset, every start fails 403 *Not enough available resources* |
 | overrideCPU / overrideMemory | the engine's **requests**, matched to the limits the bundle sets |
 

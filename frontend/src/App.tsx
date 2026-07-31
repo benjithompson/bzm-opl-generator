@@ -1036,7 +1036,7 @@ export default function App() {
       <ErrorMsg msg={locErr} />
       <Button kind="ghost" disabled={!who}
         onClick={() => { setLocErr(null); setShowCreateLoc(true); }}>
-        + New location (new harbor_id)
+        + New location
       </Button>
     </>
   );

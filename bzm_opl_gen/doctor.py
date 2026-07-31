@@ -108,8 +108,11 @@ def check_location(facts, opts, cluster):
                             "the location advertises no slots -- BlazeMeter has "
                             "nowhere to place a run"))
     else:
+        # "Engines per agent" in BlazeMeter's UI: a location's concurrency is
+        # agents x slots. check_capacity measures one cluster, which is one
+        # agent, so slots is the right number to size it against.
         checks.append(Check("location slots", PASS,
-                            f"{slots} concurrent engine(s)"))
+                            f"{slots} engine(s) per agent"))
     tpe = facts.get("threads_per_engine")
     if tpe is None and typed_by_hand:
         checks.append(Check("location threadsPerEngine", WARN,

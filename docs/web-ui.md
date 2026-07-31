@@ -75,7 +75,9 @@ as it stands would cost: 5,000 virtual users at 50 an engine is 100 engines and
 100 nodes, which is the argument for raising the figure rather than the pool.
 It answers in engines, **nodes** and peak vCPU, flags the users-per-engine
 figure as an assumption when nothing supplied one, and *Apply* fills the fields
-above. Applying is not saving: the location is untouched until **Save**, which
+above. It also asks how many **agents** will serve the location, defaulting to
+the number it has: `slots` is engines per *agent*, so the run divides across
+them and each agent's cluster only has to hold its share. Applying is not saving: the location is untouched until **Save**, which
 is still the only control that writes.
 
 The standalone **Plan capacity** view remains, and is the one for a location

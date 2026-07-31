@@ -1012,7 +1012,7 @@ def bundle_images(facts, all_images=False):
 # -- planning, before any of the above exists ---------------------------------
 
 def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=None):
+                  engine_mem=None, engines_per_node=None, agents=None):
     """What a load target needs, as numbers and as a document to request it with.
 
     The only thing here that reaches nothing at all -- no key, no account, no
@@ -1031,7 +1031,8 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         p = plan.capacity_plan(
             users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
-            engines_per_node=1 if engines_per_node is None else engines_per_node)
+            engines_per_node=1 if engines_per_node is None else engines_per_node,
+            agents=1 if agents is None else agents)
     except ValueError as e:
         # Every one of these is the caller's number rather than a failure here,
         # and each names the field it is about. 400, not 500.
@@ -1039,6 +1040,25 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     return dict(p,
                 document=plan.plan_document(p),
                 document_file=plan.DOCUMENT_FILE)
+
+
+def engine_vus(engine_cpu=None, engine_mem=None):
+    """How many virtual users an engine of this size is rated for.
+
+    The same ratio capacity_plan assumes from and doctor judges against, asked
+    on its own so a form can *suggest* the figure beside the field rather than
+    leaving "virtual users per engine" as a number the user has to know. 500 is
+    only right for the 2 CPU / 8Gi engine, which is exactly the mistake the
+    planner's own default used to make.
+    """
+    try:
+        cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
+                                        "engine_mem_limit": engine_mem})
+    except ValueError as e:
+        raise BadRequest(str(e))
+    return {"cpu": gen_mod.format_cpu(cpu),
+            "memory": gen_mod.format_memory(mem),
+            "supported_vus": plan.supported_vus(cpu, mem)}
 
 
 # -- preflight -----------------------------------------------------------------

@@ -122,7 +122,7 @@ export function PlanPanel(props: {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Virtual users" required
+          <Field label="Virtual user target" required
             hint="the load the test has to reach">
             <input type="number" min={1} className={inputCls}
               placeholder="5000" value={inputs.users}
@@ -266,10 +266,10 @@ function PlanResult(props: {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button onClick={props.onDownload} disabled={!p}>
-            Download {p ? p.document_file : "capacity-request.md"}
+            Download
           </Button>
           <Button kind="ghost" onClick={props.onCopy} disabled={!p}>
-            {props.copied ? "Copied" : "Copy as Markdown"}
+            {props.copied ? "Copied" : "Copy"}
           </Button>
           <Button kind="ghost" onClick={() => props.setShowDoc(!props.showDoc)}
             disabled={!p}>
@@ -337,7 +337,7 @@ function PlanResult(props: {
             by it.
           </p>
         )}
-        <Button onClick={props.onUse} disabled={!p}>Use this plan</Button>
+        <Button onClick={props.onUse} disabled={!p}>Use</Button>
         {waiting && <p className="text-[11px] text-amber-700">{waiting}</p>}
       </div>
     </div>

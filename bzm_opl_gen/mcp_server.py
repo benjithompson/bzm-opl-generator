@@ -727,7 +727,7 @@ DESCRIPTIONS["opl_plan"] = (
     "How much infrastructure a load target needs, before any of it "
     "exists.\n"
     "  capacity -- {users, vus_per_engine?, engine_cpu?, engine_mem?, "
-    "engines_per_node?}\n"
+    "engines_per_node?, agents?}\n"
     "The one tool here that reaches nothing: no API key, no account, no "
     "cluster. Use it when someone asks 'what would we need to test N "
     "users?' -- typically before there is a cluster to deploy to, "
@@ -739,6 +739,10 @@ DESCRIPTIONS["opl_plan"] = (
     "`users` is virtual users. A location holds agents, an agent runs "
     "engines, and each engine drives some number of virtual users -- "
     "that is the vocabulary to answer in.\n"
+    "`slots` is engines per *agent*, not per location, so a location's "
+    "concurrency is agents x slots and `agents` divides the run. Pass "
+    "how many agents will serve it; the returned `location.slots` is "
+    "already the per-agent figure.\n"
     "`vus_per_engine` is the input everything multiplies by and the one "
     "thing arithmetic cannot reach: it depends on what the script does "
     "between requests. Unset, what an engine of that size is rated for "
@@ -757,7 +761,8 @@ def _plan(action, args):
             vus_per_engine=args.get("vus_per_engine"),
             engine_cpu=args.get("engine_cpu"),
             engine_mem=args.get("engine_mem"),
-            engines_per_node=args.get("engines_per_node"))
+            engines_per_node=args.get("engines_per_node"),
+            agents=args.get("agents"))
 
     raise _unknown(action, PLAN_ACTIONS)
 

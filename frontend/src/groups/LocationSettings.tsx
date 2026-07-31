@@ -48,7 +48,7 @@ function draftOf(loc: Location): Draft {
 }
 
 const LABELS: Record<keyof Draft, string> = {
-  slots: "Concurrent engines",
+  slots: "Engines per agent",
   threads_per_engine: "Virtual users per engine",
   override_cpu: "Engine CPU request",
   override_memory: "Engine memory request (MB)",
@@ -79,6 +79,7 @@ export function LocationSettings(props: {
   }, [location.id, location.slots, location.threadsPerEngine,
       location.overrideCPU, location.overrideMemory]);
 
+  const agentCount = Math.max((location.ships ?? []).length, 1);
   const current = draftOf(location);
   const edited = (Object.keys(EMPTY) as (keyof Draft)[])
     .filter((k) => draft[k].trim() !== current[k]);
@@ -131,24 +132,23 @@ export function LocationSettings(props: {
   return (
     <div className="border border-slate-200 rounded-md p-3 space-y-3 bg-slate-50">
       <div>
-        <div className="flex items-baseline gap-2">
-          <p className="text-xs font-semibold text-slate-700">
-            Location settings
-          </p>
-          <span className="grow" />
-          {/* Beside the heading, not below the fields: it is how you decide what
-              the fields should say, so it belongs where you would look before
-              typing rather than after. */}
-          <Button kind="ghost" onClick={() => setSizing(!sizing)}>
-            {sizing ? "Hide calculator" : "Calculate…"}
-          </Button>
-        </div>
+        <p className="text-xs font-semibold text-slate-700">
+          Location settings
+        </p>
         <p className="text-[11px] text-slate-500">
           What this location may run, in BlazeMeter. None of it is in the
           manifests, so a change here needs no regenerate and no redeploy — it
-          applies to the next test that starts. <b>Calculate</b> works out these
-          numbers from a virtual user target, and what they cost in nodes.
+          applies to the next test that starts.
         </p>
+        {/* Left, under the heading, and the primary blue: it is how you decide
+            what the fields below should say, so it comes before them in the
+            reading order and looks like the thing to press. As a ghost button
+            on the right it read as a secondary action on the panel. */}
+        <div className="pt-0.5">
+          <Button onClick={() => setSizing(!sizing)}>
+            {sizing ? "Hide" : "Calculate"}
+          </Button>
+        </div>
       </div>
 
       {/* Open/close on the same 0fr -> 1fr grid as everything else that expands
@@ -164,11 +164,34 @@ export function LocationSettings(props: {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        {field("slots", "engines this location may run at once")}
+        {field("slots", "BlazeMeter's `slots` — one agent's engines, not the "
+                        + "location's total")}
         {field("threads_per_engine", "unset, every test start fails with 403")}
-        {field("override_cpu", "what an engine pod requests; blank = 250m")}
-        {field("override_memory", "in MB; blank = 256Mi")}
+        {field("override_cpu",
+               "match the engine's CPU — 2 for a standard engine. Blank = 250m")}
+        {field("override_memory",
+               "match the engine's memory in MB — 8192 for a standard engine. "
+               + "Blank = 256Mi")}
       </div>
+
+      <p className="text-[11px] text-slate-500">
+        <b>Engines per agent</b> multiplies: this location&apos;s concurrency is
+        agents × that figure, so {agentCount} agent{agentCount === 1 ? "" : "s"}
+        {" "}at {draft.slots || "?"} each is{" "}
+        {Number(draft.slots) > 0
+          ? `${agentCount * Number(draft.slots)} engines at once`
+          : "however many you set"}. Each agent runs its share in its own
+        cluster.
+      </p>
+
+      <p className="text-[11px] text-slate-500">
+        The two requests are what the Kubernetes scheduler and the autoscaler
+        place engines on; the limits they run at come from the manifests. Left
+        blank they default to <b>250m / 256Mi</b>, so every engine asks for a
+        fraction of what it uses, the autoscaler adds one node, and a whole run
+        packs onto it. Setting them to the engine&apos;s own size is what keeps
+        the engines apart.
+      </p>
 
       <p className="text-[11px] text-amber-700">
         Saving changes the location for <b>every agent in it</b> and every test
@@ -177,7 +200,7 @@ export function LocationSettings(props: {
 
       <div className="flex gap-2 items-center">
         <Button onClick={save} busy={busy} disabled={edited.length === 0}>
-          Save to BlazeMeter
+          Save
         </Button>
         <Button kind="ghost" disabled={edited.length === 0}
           onClick={() => { setDraft(draftOf(location)); setResult(null); }}>

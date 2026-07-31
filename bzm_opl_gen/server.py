@@ -478,6 +478,7 @@ class PlanIn(BaseModel):
     engine_cpu: Optional[str] = None
     engine_mem: Optional[str] = None
     engines_per_node: Any = None
+    agents: Any = None
 
 
 @app.post("/api/plan", description=core.capacity_plan.__doc__)
@@ -493,7 +494,8 @@ def capacity_plan(p: PlanIn):
                    vus_per_engine=_typed(p.vus_per_engine),
                    engine_cpu=_typed(p.engine_cpu),
                    engine_mem=_typed(p.engine_mem),
-                   engines_per_node=_typed(p.engines_per_node))
+                   engines_per_node=_typed(p.engines_per_node),
+                   agents=_typed(p.agents))
 
 
 # -- preflight ----------------------------------------------------------------
@@ -555,6 +557,13 @@ def sv_check(host: str, scheme: str = "http"):
 # rather than restating it. The prose is about what the answer means, which is
 # core's to say; a second copy here is what goes stale, and /api/docs is
 # exactly where nobody would notice.
+
+@app.get("/api/engine-vus", description=core.engine_vus.__doc__)
+def engine_vus(cpu: Optional[str] = None, mem: Optional[str] = None):
+    """What an engine of this size is rated for, for a field that wants to
+    suggest it. No key: it is arithmetic over two numbers the caller sent."""
+    return _answer(core.engine_vus, _typed(cpu), _typed(mem))
+
 
 @app.get("/api/option-defaults", description=core.option_defaults.__doc__)
 def option_defaults():

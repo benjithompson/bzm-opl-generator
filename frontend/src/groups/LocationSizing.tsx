@@ -36,6 +36,11 @@ function seed(loc: Location) {
     vus: "",
     vusPerEngine: loc.threadsPerEngine ? String(loc.threadsPerEngine) : "",
     engine: size?.id ?? "standard",
+    // The agents this location already has, because `slots` is engines per
+    // agent: sizing against one when the location has three sets it to three
+    // times the run. An empty location has none yet, and one is what it will
+    // have when the first is created.
+    agents: String(Math.max((loc.ships ?? []).length, 1)),
   };
 }
 
@@ -53,6 +58,18 @@ export function LocationSizing(props: {
 
   const size = ENGINE_SIZES.find((s) => s.id === form.engine) ?? ENGINE_SIZES[1];
 
+  // What this engine size is rated for, asked as soon as the size changes
+  // rather than waiting for a plan: the suggestion is most use *before* the
+  // target is typed, and 500 is only right for the standard engine.
+  const [rated, setRated] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.engineVus(size.cpu, size.mem)
+      .then((r) => { if (live) setRated(r.supported_vus); })
+      .catch(() => { if (live) setRated(null); });
+    return () => { live = false; };
+  }, [size.cpu, size.mem]);
+
   // Debounced for the reason the standalone panel is: typing "5000" passes
   // through 5, 50 and 500, and three answers nobody wanted arrive first.
   const timer = useRef<number>();
@@ -62,13 +79,14 @@ export function LocationSizing(props: {
     setBusy(true);
     timer.current = window.setTimeout(() => {
       api.plan({ users: form.vus, vus_per_engine: form.vusPerEngine,
-                 engine_cpu: size.cpu, engine_mem: size.mem })
+                 engine_cpu: size.cpu, engine_mem: size.mem,
+                 agents: form.agents })
         .then((p) => { setPlan(p); setErr(null); })
         .catch((e: Error) => { setErr(e.message); setPlan(null); })
         .finally(() => setBusy(false));
     }, 250);
     return () => window.clearTimeout(timer.current);
-  }, [form.vus, form.vusPerEngine, size.cpu, size.mem]);
+  }, [form.vus, form.vusPerEngine, size.cpu, size.mem, form.agents]);
 
   const apply = () => {
     if (!plan) return;
@@ -95,19 +113,19 @@ export function LocationSizing(props: {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Field label="Virtual users" required
+      <div className="grid grid-cols-4 gap-3">
+        <Field label="Virtual user target" required
           hint="the load this location has to run">
           <input type="number" min={1} className={inputCls} placeholder="5000"
             value={form.vus}
             onChange={(e) => setForm({ ...form, vus: e.target.value })} />
         </Field>
         <Field label="Virtual users per engine"
-          hint={props.location.threadsPerEngine
-            ? "this location's current figure"
+          hint={rated
+            ? `a ${size.cpu} CPU / ${size.mem} engine is rated for ${rated.toLocaleString()}`
             : "blank uses what the engine size is rated for"}>
           <input type="number" min={1} className={inputCls}
-            placeholder={String(plan?.engine.supported_vus ?? 500)}
+            placeholder={rated ? String(rated) : "500"}
             value={form.vusPerEngine}
             onChange={(e) => setForm({ ...form, vusPerEngine: e.target.value })} />
         </Field>
@@ -119,7 +137,27 @@ export function LocationSizing(props: {
             ))}
           </select>
         </Field>
+        <Field label="Agents"
+          hint={`this location has ${(props.location.ships ?? []).length}`}>
+          <input type="number" min={1} className={inputCls}
+            value={form.agents}
+            onChange={(e) => setForm({ ...form, agents: e.target.value })} />
+        </Field>
       </div>
+
+      {rated != null && props.location.threadsPerEngine != null
+        && props.location.threadsPerEngine !== rated && (
+        <p className="text-[11px] text-slate-500">
+          This location currently runs{" "}
+          <b>{props.location.threadsPerEngine.toLocaleString()}</b> virtual users
+          an engine, against a rating of <b>{rated.toLocaleString()}</b> for the
+          engine size above.{" "}
+          {props.location.threadsPerEngine < rated
+            ? "Raising it needs fewer engines for the same load."
+            : "The engines will throttle or OOM part-way up the ramp unless the "
+              + "engine size goes up with it."}
+        </p>
+      )}
 
       <ErrorMsg msg={err} />
 
@@ -130,13 +168,11 @@ export function LocationSizing(props: {
       </div>
 
       <div className="flex gap-2 items-center">
-        <Button onClick={apply} disabled={!plan}>
-          Apply to the fields above
-        </Button>
+        <Button onClick={apply} disabled={!plan}>Apply</Button>
         <Button kind="ghost" onClick={props.onClose}>Close</Button>
         {plan && (
           <span className="text-[11px] text-slate-500">
-            fills concurrent engines, virtual users per engine, and both engine
+            fills engines per agent, virtual users per engine and both engine
             requests — nothing is saved until you press Save
           </span>
         )}
@@ -154,19 +190,28 @@ export function LocationSizing(props: {
 function Guidance({ plan }: { plan: CapacityPlan }) {
   return (
     <>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <Figure n={plan.engines} unit={plan.engines === 1 ? "engine" : "engines"}
           sub={`${plan.engine.cpu} CPU / ${plan.engine.memory} each`} />
-        <Figure n={plan.nodes} unit={plan.nodes === 1 ? "node" : "nodes"}
+        <Figure n={plan.engines_per_agent} unit="per agent"
+          sub={plan.agents === 1 ? "one agent" : `over ${plan.agents} agents`} />
+        <Figure n={plan.nodes_per_agent}
+          unit={plan.nodes_per_agent === 1 ? "node/agent" : "nodes/agent"}
           sub={`${plan.node.cpu} vCPU / ${plan.node.memory} each`} />
         <Figure n={plan.peak.cpu} unit="vCPU at peak"
-          sub={`${plan.peak.memory} across the pool`} />
+          sub={`${plan.peak.memory}, per cluster`} />
       </div>
       <p className="text-[11px] text-slate-500">
-        The cluster has to be able to schedule that at once, plus{" "}
-        {plan.engine.disk_gb}GB of disk an engine. Setting this location above
-        what the cluster can hold is a test that sits waiting for pods rather
-        than one that fails.
+        {plan.agents === 1
+          ? <>This agent&apos;s cluster has to schedule{" "}
+              <b>{plan.engines_per_agent}</b> engines at once, plus{" "}
+              {plan.engine.disk_gb}GB of disk each.</>
+          : <>Each of the <b>{plan.agents} agents</b> runs{" "}
+              <b>{plan.engines_per_agent}</b> of the {plan.engines} engines, so
+              every one of their clusters has to schedule that many at once,
+              plus {plan.engine.disk_gb}GB of disk each.</>}
+        {" "}Setting this location above what a cluster can hold is a test that
+        sits waiting for pods rather than one that fails.
       </p>
       {plan.vus_per_engine_assumed && (
         <p className="text-[11px] text-amber-700">

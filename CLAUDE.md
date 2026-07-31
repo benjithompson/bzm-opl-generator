@@ -307,6 +307,17 @@ the classes of problem it can't fix for you.
   actually free needs every pod's requests summed per node, which is a much
   bigger read for a preflight. Say "upper bound" in any detail string you add.
 
+- **`slots` is engines per *agent*, not per location.** BlazeMeter's own UI
+  calls the field "Engines per agent" -- "the number of engines/tests that can
+  run on one agent" -- so a location's concurrency is `agents x slots`, and real
+  accounts lean on it: one has a location with 17 agents at slots=1, another 2
+  agents at slots=10. `doctor` was right all along (it measures `slots x engine
+  size` against one cluster, which is one agent); the planner was not, and told
+  a two-agent location to set `slots` to the whole run -- twice the engines and
+  twice the cluster. `plan.capacity_plan` takes `agents` and divides by it, and
+  nodes are reported per agent because an agent is a cluster. Verified against
+  the API docs and the account, not assumed.
+
 - **`plan.py` reaches nothing, and that is the requirement rather than a
   property.** It sizes a load target — users → engines → nodes → machine size —
   for somebody who has no cluster and often no account, because the answer is
@@ -363,6 +374,12 @@ the classes of problem it can't fix for you.
 
 - Comments explain *why*, especially where a non-obvious environment fact drove
   the code. Match the existing density; don't narrate the obvious.
+- **Button labels are concise — one word wherever one will do.** `Calculate`,
+  `Apply`, `Save`, `Download`, `Copy`, `Use`. Not `Calculate from a virtual user
+  target`, not `Save to BlazeMeter`, not `Apply to the fields above`. What a
+  control costs or reaches goes in the sentence beside it, which is where this
+  page already puts every other warning — a label carrying the explanation makes
+  the button wide, the row ragged, and the sentence redundant.
 - Never push to `main`. Commit on a branch, push that, open a PR. `.githooks/`
   holds a pre-push guard, but it only applies where someone ran
   `git config core.hooksPath .githooks` — assume it is *not* active and don't

@@ -97,6 +97,17 @@ anything that breaks.
   that came back unchanged are reported as not stored, in amber, beside the ones
   that saved.
 
+  **`slots` is engines per agent, and the calculator divides by them.**
+  BlazeMeter's UI calls the field "Engines per agent" — "the number of
+  engines/tests that can run on one agent" — so a location's concurrency is
+  `agents × slots`. The planner had it as the location's total, which on a
+  two-agent location asks for twice the engines and twice the cluster. It now
+  takes the agent count (the UI defaults to the number the location has), sets
+  `slots` to the run divided by it, and reports **nodes per agent**, because one
+  agent is one cluster and the infrastructure request is for one of them. The
+  field is labelled "Engines per agent" throughout, and `doctor` — which
+  measures one cluster, so was right all along — says "engine(s) per agent" too.
+
   **The settings open out of the location, and size themselves.** Selecting a
   location expands it the way an agent row does, and the settings are inside it
   — they belong to the one that is selected and to nothing else. **Calculate**,

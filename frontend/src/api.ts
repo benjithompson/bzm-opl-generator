@@ -76,7 +76,12 @@ export interface CapacityPlan {
   vus_per_engine: number;
   vus_per_engine_assumed: boolean;
   engines: number;
+  /** `slots` is engines per *agent*, so a location's concurrency is
+   *  agents x slots. These carry the division. */
+  agents: number;
+  engines_per_agent: number;
   engines_per_node: number;
+  nodes_per_agent: number;
   nodes: number;
   engine: {
     cpu: string; memory: string; disk_gb: number; tmp_gb: number;
@@ -210,8 +215,14 @@ export const api = {
    *  Blank fields are sent as typed; the server reads "" as "not given". */
   plan: (body: {
     users: string; vus_per_engine?: string; engine_cpu?: string;
-    engine_mem?: string; engines_per_node?: string;
+    engine_mem?: string; engines_per_node?: string; agents?: string;
   }) => req<CapacityPlan>("POST", "/api/plan", body),
+  /** What an engine of this size is rated for, so a field can suggest it. The
+   *  ratio stays on the server -- doctor judges locations against the same one,
+   *  and a second copy here is how the two come to disagree. */
+  engineVus: (cpu: string, mem: string) =>
+    req<{ cpu: string; memory: string; supported_vus: number }>(
+      "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),

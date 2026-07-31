@@ -535,7 +535,7 @@ def test_plan_needs_no_account_and_no_facts(monkeypatch, capsys):
     _run(monkeypatch, "plan", "--users", "5000")
     out = capsys.readouterr().out
     assert "10 engines" in out
-    assert "10 node(s) of 3 vCPU / 10Gi" in out
+    assert "10 node(s) per agent of 3 vCPU / 10Gi" in out
     assert "slots=10" in out
 
 
@@ -602,3 +602,14 @@ def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "4 engines of 4 CPU / 16Gi" in out
     assert "overrideMemory=16384" in out
+
+
+def test_plan_divides_the_run_across_agents(monkeypatch, capsys):
+    """`slots` is engines per *agent*, so the same run on three agents is a
+    third of the location's setting -- and a third of each cluster."""
+    _run(monkeypatch, "plan", "--users", "10000", "--vus-per-engine", "500",
+         "--agents", "3")
+    out = capsys.readouterr().out
+    assert "20 engines" in out
+    assert "7 engines per agent across 3 agent(s)" in out
+    assert "slots=7 (engines per agent)" in out

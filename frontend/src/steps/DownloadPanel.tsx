@@ -231,7 +231,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     {g.requiredHint ?? g.hint}.
                   </p>
                   <Button kind="ghost" onClick={goToConfigure}>
-                    Back to Configure
+                    Configure
                   </Button>
                 </div>
               ))}
