@@ -373,29 +373,80 @@ def check_capacity(facts, opts, cluster):
 
 
 MB = 1024 ** 2
-# A JVM needs more than its heap: metaspace, thread stacks, code cache, direct
-# buffers and the GC's own structures. 25% of the container limit is the usual
-# working allowance, i.e. a heap at or below 75% of the limit.
-HEAP_HEADROOM = 0.75
+
+# The engine sizing model, calibrated entirely from the one configuration
+# BlazeMeter documents: 500 threads on 2 CPU / 8Gi with a 4096MB heap.
+#
+#   HEAP_MB_PER_THREAD   4096 / 500  = 8.192
+#   CONTAINER_HEAP_RATIO 8Gi  / 4096 = 2.0
+#
+# Neither number is invented, and that is the whole reason they are these two
+# rather than a physically explicit heap + threads*stack + overhead model: the
+# stack and overhead terms of that model would have been guesses wearing the
+# costume of a measurement.
+#
+# Note what the documented 500 actually tracks. 500 * 8.192MB is exactly the
+# 4096MB *heap*, not the 8Gi container -- so the heap is the unit of capacity
+# and the container is derived from it, not the reverse. This check previously
+# compared the heap against a flat 75% of the container limit, which fired on
+# BlazeMeter's own default pairing (4096MB in 8Gi is exactly half) while saying
+# nothing about a 4096MB heap on a 50-thread location, where it is ten times
+# oversized. The threads are the signal; the ratio never was.
+#
+# Both are inferred from a single vendor data point, and 2.0 is round enough to
+# be a rule of thumb rather than a measurement. It is *their* rule of thumb and
+# reproducing it exactly is the point -- but anyone revising these should record
+# what they measured, on what, right here. See #89.
+HEAP_MB_PER_THREAD = 8.192
+CONTAINER_HEAP_RATIO = 2.0
+
+# Below roughly 50 threads the ratio produces a container no JVM will start in
+# (10 threads -> 164MB), so these floor it. They cover an edge rather than
+# modelling anything: at 50 threads -- the common low value, on 55 locations in
+# one real account -- the ratio needs no help.
+MIN_HEAP_MB = 256
+MIN_CONTAINER_MB = 1024
+
+
+def engine_heap_mb(threads):
+    """The heap a JVM needs to carry `threads` of load, in MB."""
+    return max(int(threads * HEAP_MB_PER_THREAD), MIN_HEAP_MB)
+
+
+def engine_container_mb(heap_mb):
+    """The container the heap has to live in, in MB -- heap plus what the JVM
+    needs outside it (metaspace, thread stacks, code cache, direct buffers, and
+    the GC's own structures)."""
+    return max(int(heap_mb * CONTAINER_HEAP_RATIO), MIN_CONTAINER_MB)
 
 
 def check_engine_heap(facts, opts, cluster):
-    """The location's JVM heap against the container limit the bundle sets.
+    """The location's JVM heap against the threads it must carry, and against
+    the container the bundle gives it.
 
-    Two silent failures live in this gap and neither is a scheduling problem,
-    so nothing else in doctor can see them. A heap above the limit is an
-    OOMKill mid-run, which surfaces as a test that stopped rather than as a
-    resource error. A heap far below it reserves node capacity the JVM will
-    never touch -- which on a dedicated, autoscaling engine pool is the whole
-    cost of the pool, paid for nothing.
+    Two comparisons, because they fail differently and only one of them was
+    being made before:
 
-    The heap is a *location* setting and the limit is a bundle option, so this
-    is the one check that compares the two sources of truth for engine size
-    directly. Unknown heap is a WARN naming where to look, never a pass: the
-    default is 4096MB on almost every location, and the one that has been
-    retuned is exactly the one somebody is generating a bundle for.
+    * **heap vs threads.** The heap is what runs the load, and what it must
+      hold scales with `threadsPerEngine`. A heap short of the threads OOMKills
+      mid-run; a heap far over them reserves node capacity the JVM can never
+      address, which on a dedicated autoscaling engine pool is most of what the
+      pool costs. Both are invisible to a scheduler, so nothing else here sees
+      them. This is the comparison that was missing: 4096MB is right for 500
+      threads and ten times too much for 50, and a ratio against the container
+      cannot tell those apart.
+    * **heap vs container.** Whatever the heap is, the JVM needs room outside
+      it. A heap at or above the whole limit is an OOMKill reported as a test
+      that stopped rather than as a resource error.
+
+    The heap and the threads are *location* settings and the limit is a bundle
+    option, so this is where the two sources of truth for engine size meet.
+    Unknown heap is a WARN naming where to look, never a pass: the default is
+    4096MB on almost every location, and the one that has been retuned is
+    exactly the one somebody is generating a bundle for.
     """
     xmx = facts.get("engine_xmx_mb")
+    threads = facts.get("threads_per_engine")
     _, mem = engine_size(opts)
     limit = format_memory(mem)
     if xmx is None:
@@ -410,30 +461,57 @@ def check_engine_heap(facts, opts, cluster):
                       f"heap against the {limit} limit is unverified")]
 
     heap = xmx * MB
-    room = int(mem * HEAP_HEADROOM)
-    pair = (f"engineXmx={xmx}MB against a {limit} container limit")
+    # Fits in its box at all? Independent of the threads, and the loudest way
+    # to be wrong, so it is asked first.
     if heap >= mem:
         return [Check("engine heap", FAIL,
-                      f"{pair}: the heap is at or above the whole limit, so the "
-                      f"JVM is OOMKilled once it fills -- mid-run, reported as a "
-                      f"test that stopped rather than a resource error. Set the "
-                      f"heap at or below {int(room / MB)}MB, or raise "
-                      f"engine_mem_limit")]
-    if heap > room:
+                      f"engineXmx={xmx}MB against a {limit} container limit: the "
+                      f"heap is at or above the whole limit, so the JVM is "
+                      f"OOMKilled once it fills -- mid-run, reported as a test "
+                      f"that stopped rather than a resource error. Raise "
+                      f"engine_mem_limit to at least "
+                      f"{engine_container_mb(xmx)}MB, or lower the heap")]
+
+    if not threads:
+        # check_location has already FAILed on an unset threadsPerEngine; the
+        # sizing comparison simply cannot be made, and saying so beats implying
+        # the heap was checked against the load.
         return [Check("engine heap", WARN,
-                      f"{pair}: leaves under 25% for the JVM's non-heap memory "
-                      f"(metaspace, thread stacks, direct buffers), so a busy "
-                      f"engine can still be OOMKilled. {int(room / MB)}MB is the "
-                      f"comfortable ceiling at this limit")]
-    if heap * 2 <= mem:
+                      f"engineXmx={xmx}MB fits the {limit} limit, but "
+                      f"threadsPerEngine is unset, so whether the heap matches "
+                      f"the load it must carry is unverified")]
+
+    want_heap = engine_heap_mb(threads)
+    want_container = engine_container_mb(xmx)
+    pair = f"engineXmx={xmx}MB for {threads} threads"
+    # A factor either way before complaining: these constants come from a single
+    # vendor data point, so a verdict on a 10% difference would be false
+    # precision.
+    if xmx < want_heap / 1.5:
+        return [Check("engine heap", FAIL,
+                      f"{pair}: that load needs about {want_heap}MB of heap "
+                      f"({HEAP_MB_PER_THREAD}MB a thread, from BlazeMeter's "
+                      f"documented 500 threads on a 4096MB heap), so the JVM "
+                      f"fills and is OOMKilled partway up the ramp -- reported "
+                      f"as a test that stopped. Raise engineXmx to {want_heap}MB "
+                      f"and engine_mem_limit to {engine_container_mb(want_heap)}MB")]
+    if xmx > want_heap * 1.5:
         return [Check("engine heap", WARN,
-                      f"{pair}: the JVM cannot use more than half of what every "
-                      f"engine pod reserves, so the rest is node capacity nobody "
-                      f"consumes -- on a dedicated engine pool that is most of "
-                      f"what it costs. Either lower engine_mem_limit toward "
-                      f"{int(heap / MB * 4 / 3)}MB or raise the heap")]
+                      f"{pair}: that load needs only about {want_heap}MB of heap, "
+                      f"so every engine pod reserves memory the JVM cannot "
+                      f"address -- on a dedicated engine pool that is most of "
+                      f"what it costs. Either lower engineXmx toward {want_heap}MB "
+                      f"(and engine_mem_limit to {engine_container_mb(want_heap)}MB), "
+                      f"or raise threadsPerEngine if the engines can carry more")]
+    if mem < want_container * MB:
+        return [Check("engine heap", WARN,
+                      f"{pair}: the heap suits the load, but a {limit} container "
+                      f"leaves under what the JVM needs outside it (thread "
+                      f"stacks, metaspace, direct buffers). Raise "
+                      f"engine_mem_limit to about {want_container}MB")]
     return [Check("engine heap", PASS,
-                  f"{pair}: within the ~25% the JVM needs beyond its heap")]
+                  f"{pair}: heap suits the load (~{want_heap}MB) and fits the "
+                  f"{limit} container")]
 
 
 def _crane_on(engine_nodes, opts):

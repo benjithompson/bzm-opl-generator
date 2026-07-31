@@ -229,28 +229,73 @@ def test_engine_heap_fails_when_the_jvm_can_fill_the_whole_limit():
     assert "OOMKilled" in c.detail
 
 
-def test_engine_heap_warns_when_non_heap_memory_has_no_room():
-    c = _find(doctor.check_engine_heap(_heap_facts(7000), {"engine_mem_limit": "8Gi"},
-                                       {}), "engine heap")
-    assert c.status == doctor.WARN
-    assert "metaspace" in c.detail
-
-
-def test_engine_heap_warns_when_the_pod_reserves_what_the_jvm_cannot_use():
-    """The default pairing on a real account: engineXmx is 4096MB on 160 of 171
-    locations, and the documented engine limit is 8Gi. Every engine pod reserves
-    twice what its JVM can address -- on a dedicated autoscaling pool that is
-    most of what the pool costs."""
+def test_the_vendor_default_pairing_passes():
+    """THE regression this model exists to fix. 500 threads on a 4096MB heap in
+    an 8Gi container is the configuration BlazeMeter documents and ships, and
+    the previous fixed-ratio check WARNed on it -- 4096 is exactly half of 8Gi.
+    A preflight that flags the vendor's own default teaches people to ignore
+    it."""
     c = _find(doctor.check_engine_heap(_heap_facts(4096), {"engine_mem_limit": "8Gi"},
                                        {}), "engine heap")
-    assert c.status == doctor.WARN
-    assert "nobody consumes" in c.detail
-
-
-def test_engine_heap_passes_when_the_heap_fits_with_jvm_headroom():
-    c = _find(doctor.check_engine_heap(_heap_facts(6144), {"engine_mem_limit": "8Gi"},
-                                       {}), "engine heap")
     assert c.status == doctor.PASS
+
+
+def test_engine_heap_fails_when_the_heap_cannot_carry_the_threads():
+    """The 1000-thread case, live on 24 locations in one real account: they
+    declare double the documented threads and almost all still carry the
+    default 4096MB heap, so they OOM partway up the ramp."""
+    facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=1000)
+    c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
+              "engine heap")
+    assert c.status == doctor.FAIL
+    assert "8192MB" in c.detail          # what 1000 threads actually need
+
+
+def test_engine_heap_warns_when_the_heap_dwarfs_the_threads():
+    """The 50-thread case, live on 55 locations: the default heap is ten times
+    what that load needs, and every engine pod reserves the difference."""
+    facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=50)
+    c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
+              "engine heap")
+    assert c.status == doctor.WARN
+    assert "cannot address" in c.detail
+
+
+def test_engine_heap_warns_when_the_container_is_short_for_the_heap():
+    """Heap suits the load, but the box does not suit the heap -- the JVM still
+    needs stacks, metaspace and direct buffers outside it."""
+    facts = dict(FACTS, engine_xmx_mb=6144, threads_per_engine=750)
+    c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
+              "engine heap")
+    assert c.status == doctor.WARN
+    assert "outside it" in c.detail
+
+
+def test_engine_heap_is_not_judged_against_load_when_threads_are_unset():
+    """threadsPerEngine unset is check_location's FAIL, not this one's. Saying
+    the heap fits the load when there is no load to compare it to would be a
+    verdict on a comparison that never happened."""
+    facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=None)
+    c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
+              "engine heap")
+    assert c.status == doctor.WARN
+    assert "unverified" in c.detail
+
+
+def test_the_model_reproduces_the_documented_point_exactly():
+    """If it ever stops returning BlazeMeter's own numbers for BlazeMeter's own
+    thread count, the model is the bug -- both constants are derived from this
+    single point and nothing else calibrates them."""
+    assert doctor.engine_heap_mb(500) == 4096
+    assert doctor.engine_container_mb(4096) == 8192
+
+
+def test_the_low_thread_floor_keeps_the_container_startable():
+    """Below ~50 threads the ratio alone produces a container no JVM starts in
+    (10 threads -> 164MB). The floor covers that edge; at 50 threads, the common
+    low value, it is not needed."""
+    assert doctor.engine_container_mb(doctor.engine_heap_mb(10)) == doctor.MIN_CONTAINER_MB
+    assert doctor.engine_heap_mb(50) > doctor.MIN_HEAP_MB
 
 
 def test_unknown_heap_is_a_warn_not_a_pass():

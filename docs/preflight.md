@@ -18,8 +18,11 @@ registry, proxy/CA — so it checks the deployment you actually generated.
 |---|---|---|
 | location | `slots` or `threadsPerEngine` unset (every start 403s "Not enough available resources") | facts entered by hand: neither is readable without the account, so both are reported unknown rather than failed |
 | threadsPerEngine vs engine size | – | more threads than the size supports (500 threads is BlazeMeter's own pairing with 2 CPU / 8Gi) |
+| engine heap | `engineXmx` at or above the container limit (OOMKill mid-run, reported as a test that stopped), or a heap too small for `threadsPerEngine` to fill the ramp | a heap far larger than the threads need — every engine pod reserves memory the JVM cannot address; or `engineXmx`/`threadsPerEngine` unknown, so the comparison could not be made |
+| crane pool | split pools and no Ready node matches crane's own selector — the agent has nowhere to run | no crane-pool node holds crane's full 1 CPU / 2Gi, so it schedules on its 250m request and throttles when busy |
+| engine packing | – | a node would accept more engines than it can run at their limits — engines sharing a node throttle against each other and the run reports the load generator's latency |
 | capacity: per-node fit | no eligible node holds **one** engine — a pod cannot be split across nodes | – |
-| capacity: aggregate | eligible nodes can't hold `slots ×` engine | the nodes could not be read at all |
+| capacity: aggregate | eligible nodes can't hold `slots ×` engine | the nodes could not be read at all; or a dedicated engine pool currently has no nodes, which is expected between runs and indistinguishable from a pool that was never created |
 | node disk | – | short of the documented 60GB (40GB `/tmp`) per engine — an engine that fills it is evicted mid-run |
 | limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size; none exists and none is emitted; or they could not be read |
 | resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults, or the quotas could not be read |
