@@ -14,7 +14,6 @@ import {
 // say about the click that has not happened yet, which is the only moment a
 // rotation can still be reconsidered (#64).
 import { downloadPlan } from "./token";
-import { Preview } from "./Preview";
 import { SvCtx } from "./SvPrereqs";
 // The option groups of step 4: one declaration each (title, hint, the option
 // keys it owns, the features it belongs to, and its detect/enable/disable),
@@ -39,6 +38,7 @@ import {
 // stands against the options is suggest.merge()'s -- both arrive on the row.
 import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 import { SuggestionList } from "./SuggestionList";
+import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
 import { GroupRow } from "./groups/GroupRow";
@@ -52,18 +52,13 @@ import { SvGroup } from "./groups/SvGroup";
 // and group split. Delete src/prototype/ and these three references with it.
 import { VariantA, VariantB, VariantC, VariantD } from "./prototype/ConfigureVariants";
 import {
-  agentFor, PrototypeSwitcher, shellFor, stepFor, variantFromUrl,
+  agentFor, PrototypeSwitcher, variantFromUrl,
 } from "./prototype/PrototypeSwitcher";
-import { PreviewShell } from "./prototype/ShellVariants";
-import { StepFlow } from "./prototype/StepVariants";
+import { WorkArea } from "./layout/WorkArea";
+import { StepFlow } from "./layout/StepFlow";
 import { AgentStep } from "./prototype/AgentStepVariants";
 
 const PROTO_VARIANT = variantFromUrl();
-// D onwards take the preview out of the right-hand column, so the page is one
-// column and the shell decides where the preview goes.
-const PROTO_SHELL = shellFor(PROTO_VARIANT);
-// H-J additionally show one step at a time.
-const PROTO_STEPS = stepFor(PROTO_VARIANT);
 // K-M rebuild step 1's location and agent panels on top of that.
 const PROTO_AGENT = agentFor(PROTO_VARIANT);
 
@@ -422,15 +417,12 @@ export default function App() {
   // keeps three steps of pickers from sitting above the configuration for the
   // rest of the session; "Change" reopens it.
   //
-  // THROWAWAY: not in a step flow. There the pickers are a step of their own
-  // and nothing is stacked below them, so collapsing buys nothing and costs the
-  // thing you came back for -- picking a location swaps the panel for a summary
-  // the moment its lone agent is auto-selected, and the agent list you were
-  // about to choose from is gone.
-  useEffect(() => {
-    if (PROTO_STEPS) return;
-    if (sourceMode === "connect" && facts && shipId) setSourceOpen(false);
-  }, [sourceMode, facts, shipId]);
+  // ...and it no longer collapses. The pickers are a step of their own with
+  // nothing stacked below them, so folding them away buys nothing and costs the
+  // thing you came back for: picking a location auto-selects its lone offline
+  // agent, which used to swap the panel for a summary and take the agent list
+  // with it. `sourceOpen` stays because the summary is still the right thing to
+  // show in the one case that sets it -- see switchMode.
 
   // Manual mode declares the location's funcIds through the feature buttons, so
   // it needs to know which funcIds a feature stands for. Only the ones that
@@ -984,22 +976,23 @@ export default function App() {
         </div>
       </header>
 
-      {/* THROWAWAY: a shell variant wraps the whole work area and puts the
-          preview somewhere of its own; `main` is then one column, because
-          nothing is reserving half the page for a pane that is not there. */}
-      <PreviewShell variant={PROTO_SHELL} files={files} activeFile={activeFile}
+      <WorkArea files={files} activeFile={activeFile}
         setActiveFile={setActiveFile} genErr={genErr}>
-      <main className={PROTO_SHELL
-        ? "max-w-screen-xl mx-auto p-6"
-        : "max-w-screen-2xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-6"}>
-        {/* THROWAWAY: with no step variant this is the same `space-y-5` div it
-            has always been. `done` is what the panels cannot say for
-            themselves -- whether the step is finished enough to leave. */}
-        <StepFlow variant={PROTO_STEPS} done={[
-          !!facts && !!shipId,
-          namespaceOk && saOk && incomplete.length === 0,
-          false,
-        ]}>
+      <main className="max-w-screen-xl mx-auto p-6">
+        {/* `done` is what a step cannot say about itself -- whether it is
+            finished enough to leave. The last step never is: there is nothing
+            after the download to go on to. */}
+        <StepFlow
+          done={[
+            !!facts && !!shipId,
+            namespaceOk && saOk && incomplete.length === 0,
+            false,
+          ]}
+          blockedBy={[
+            "fill in the agent details to continue",
+            "namespace, service account and any unfinished group first",
+            "",
+          ]}>
           {/* 1 · Where the harbor id, ship id and token come from.
               Three steps folded into one: connected they are picked from the
               account, manually they are typed. Both end at the same three
@@ -1522,10 +1515,7 @@ export default function App() {
               </div>
               </>)}
 
-              {/* THROWAWAY: the prototypes carry Advanced as a row inside the
-                  deployment-settings list, so it is one of the forms rather
-                  than a dashed afterthought under them. */}
-              {!PROTO_STEPS && (
+              {(
               <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
                 <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-slate-500">
                   Advanced — you should not need this
@@ -1554,422 +1544,29 @@ export default function App() {
 
           {/* 3 · Download & verify */}
           <Section n={3} title="Download & verify">
-            <div className="space-y-3">
-              <SegmentedControl
-                label="Output format"
-                value={format}
-                onChange={(v) => set("output_format", v)}
-                options={[
-                  {
-                    value: "manifests",
-                    label: "Kubernetes manifests",
-                    hint: "Flat YAML you kubectl apply. Live-testable with bzm-opl-gen livetest.",
-                  },
-                  {
-                    value: "helm",
-                    label: "Helm chart",
-                    hint: "The chart plus a values overlay from this account. helm install / upgrade.",
-                    disabledReason: helmBlocked,
-                  },
-                ]} />
-              <div className="flex gap-2 items-center">
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
-                  onClick={() => {
-                    setDlErr(null); setLastTokenReport(null);
-                    downloadZip(facts!, { ...options, ship_id: shipId },
-                                tokenPlan.rotates)
-                      .then(setLastTokenReport)
-                      .catch((e) => setDlErr(String(e.message)));
-                  }}>
-                  ⬇ Download bundle (.zip)
-                </Button>
-                <span className="text-xs text-slate-400">
-                  {format === "helm"
-                    ? "helm/ + bzm-opl-values.yaml + README"
-                    : "manifests + README"}
-                  {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
-                  {" "}{tokenPlan.hint}
-                </span>
-              </div>
-              {/* What the bundle does about the credential, before the click.
-                  Three states, and the one that used to be silent is the one that
-                  breaks a working install: a download that mints. `incomplete`
-                  carries core's own sentence -- where a real token comes from,
-                  kubectl included -- rather than a copy of it in TypeScript. */}
-              {tokenPlan.incomplete && previewToken && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs font-semibold text-amber-800">
-                    This bundle carries a placeholder AUTH_TOKEN — fill it in
-                    before applying it.
-                  </p>
-                  <p className="text-[11px] text-amber-700 whitespace-pre-line mt-1">
-                    {previewToken.message}
-                  </p>
-                </div>
-              )}
-              {/* Rotating is an action of its own, offered only where it is the
-                  only way forward: an agent nobody kept a token for. Not a
-                  by-product of downloading, which is what it used to be -- and
-                  hidden once a token is in the field, because core answers that
-                  contradiction by ignoring the rotation rather than performing
-                  it. Needs the account: minting is an API call. */}
-              {!!who && sourceMode === "connect" && !!shipId && !raw("auth_token") && (
-                <div className="space-y-1.5">
-                  <Check checked={rotate} onChange={setRotate}
-                    label="Issue a NEW AUTH_TOKEN with this bundle (rotates)"
-                    hint="For an agent whose token nobody kept — it replaces the credential; none can be read back." />
-                  {tokenPlan.warning && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                      {tokenPlan.warning}
-                    </p>
-                  )}
-                </div>
-              )}
-              {/* Afterwards as well as before: once a rotation has happened the
-                  bundle just handed over is the only copy of that credential. */}
-              {lastTokenReport && (
-                <p className="text-xs text-slate-600 whitespace-pre-line">
-                  {lastTokenReport.message}
-                </p>
-              )}
-              {/* The zip is for handing the bundle to somebody; saving writes
-                  the same files (profile.json included) to a folder on this
-                  machine -- the shape livetest re-renders from and an MCP
-                  session's opl_bundle reads, so the folder is the shared
-                  state between this page and those. */}
-              <div className="flex gap-2 items-end">
-                <label className="grow block">
-                  <span className="text-xs font-medium text-slate-600">Folder</span>
-                  <input className={inputCls + " font-mono"}
-                    placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
-                    value={saveDir}
-                    onChange={(e) => setSaveDir(e.target.value)} />
-                </label>
-                {/* A plain button of the same size as every other one here. The
-                    label is typed rather than browsed because a browser cannot
-                    hand back an absolute directory path -- webkitdirectory
-                    yields file names relative to the folder, which is not what
-                    the server needs -- and `~` is expanded server-side. */}
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
-                  onClick={() => {
-                    setSaveErr(null); setSaved(null); setLastTokenReport(null);
-                    const dir = saveDir.trim() ||
-                      `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
-                    saveBundle(facts!, { ...options, ship_id: shipId }, dir,
-                               tokenPlan.rotates)
-                      .then((s) => { setSaved(s); setLastTokenReport(s.token); })
-                      .catch((e) => setSaveErr(String(e.message)));
-                  }}>
-                  Save to folder
-                </Button>
-              </div>
-              {saved && (
-                <p className="text-xs text-emerald-700">
-                  Wrote {saved.files.length} files to{" "}
-                  <code className="font-mono">{saved.out_dir}</code>. Apply with{" "}
-                  <code className="font-mono">
-                    {format === "helm"
-                      ? `helm install bzm-opl ${saved.out_dir}/helm -f ${saved.out_dir}/bzm-opl-values.yaml`
-                      : `kubectl apply -f ${saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
-                  </code>
-                  {" "}— or point <code className="font-mono">livetest</code> or
-                  an MCP session at the folder.
-                </p>
-              )}
-              <ErrorMsg msg={saveErr} />
-              {/* Why the button is disabled, when the reason is not on screen.
-                  A disabled button whose cause is somewhere else on the page is
-                  the failure the feature view is meant to remove, so the block
-                  names the feature and offers the switch to it. A group in view
-                  is absent from `blockers` -- it shows its own error. */}
-              {blockers.map((g) => (
-                <div key={g.id}
-                  className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs text-amber-800 grow">
-                    <b>{appliesTo(g, features)}</b> is not finished, and its
-                    settings are not in view: {g.requiredHint ?? g.hint}.
-                  </p>
-                  <Button kind="ghost" onClick={() => pickFeature(g.features[0])}>
-                    Configure {appliesTo(g, features)}
-                  </Button>
-                </div>
-              ))}
-              <ErrorMsg msg={dlErr} />
-
-              {/* Will the cluster take it? Answered from a file rather than
-                  from a cluster, because the person configuring this usually
-                  has access to neither the account nor the cluster -- so it
-                  sits here beside the download, needing no key and no
-                  kubecontext of its own. */}
-              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-                <div className="flex items-start gap-2 flex-wrap">
-                  <div className="grow min-w-[16rem]">
-                    <p className="text-sm font-semibold text-slate-800">
-                      Preflight the target cluster
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Nothing here reads a cluster. Have someone with access run{" "}
-                      <code className="font-mono">{EVIDENCE_SCRIPT}</code>{" "}
-                      (read-only, reads no secret value) and pick the file it
-                      wrote — the same checks{" "}
-                      <code className="font-mono">bzm-opl-gen doctor</code> runs.
-                    </p>
-                  </div>
-                  {/* A label rather than a Button so the file dialog is the
-                      click, as in Connect and Import above. */}
-                  <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
-                    + "border border-slate-300 text-slate-600 whitespace-nowrap "
-                    + (!facts || preflightBusy
-                      ? "opacity-40 pointer-events-none"
-                      : "hover:bg-slate-50 cursor-pointer")}>
-                    {preflightBusy ? "Checking…"
-                      : preflight.out ? "Choose another file…"
-                      : "Choose evidence file…"}
-                    <input type="file" accept=".json,application/json"
-                      className="hidden" disabled={!facts || preflightBusy}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        e.target.value = "";      // so the same file re-imports
-                        if (f) importEvidence(f);
-                      }} />
-                  </label>
-                </div>
-                {!facts && (
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Needs the agent details above: the checks measure the cluster
-                    against this location's slots, engine size and namespace.
-                  </p>
-                )}
-                <ErrorMsg msg={preflight.error} />
-                {preflight.out && evidence && (
-                  <div className="mt-2">
-                    {/* What was imported, before what it implies. All of this
-                        is in the leading verdict's prose as well, and that is
-                        not enough: a file collected by somebody with almost no
-                        access reads as a clean bill of health if the only place
-                        that says so is the tenth line of a list (#53). */}
-                    <p className="text-[11px] text-slate-500">
-                      <b className="text-slate-700">{preflight.file}</b>
-                      {" · collected "}
-                      <code className="font-mono">{evidence.collected}</code>
-                      {" · describes namespace "}
-                      <code className="font-mono">{evidence.describes}</code>
-                      {" · preflighting "}
-                      <code className="font-mono">{preflight.out.namespace}</code>
-                      {" · "}
-                      <span className={worstStatus(preflight.out.checks)
-                        ? STATUS_STYLE[worstStatus(preflight.out.checks)!].text
-                        : ""}>
-                        {verdictLine(preflight.out.checks)}
-                      </span>
-                    </p>
-                    {/* The namespaced verdicts -- LimitRanges, quotas,
-                        ServiceAccounts, the PSA labels -- are all about the
-                        namespace the file describes, whichever one is being
-                        configured here. */}
-                    {evidence.elsewhere && (
-                      <p className="text-[11px] text-amber-700">
-                        This file was collected for{" "}
-                        <code className="font-mono">{evidence.describes}</code>,
-                        so every namespaced verdict below describes that
-                        namespace and not{" "}
-                        <code className="font-mono">{preflight.out.namespace}</code>.
-                      </p>
-                    )}
-                    {evidence.unreadableLine && (
-                      <p className="text-[11px] text-amber-700">
-                        {evidence.unreadableLine}
-                      </p>
-                    )}
-                    {/* doctor's order, kept: where the answers came from leads,
-                        because every verdict under it is only as good as that
-                        one -- a file collected by someone with little access
-                        warns about each section it could not see, and a list
-                        sorted by severity would bury the reason for all of
-                        them. */}
-                    <ul className="mt-1.5 space-y-1">
-                      {preflight.out.checks.map((c, i) => (
-                        <li key={`${c.name}-${i}`}
-                          className="flex items-start gap-2 text-[11px] text-slate-500">
-                          <span className={"shrink-0 rounded px-1.5 py-0.5 "
-                            + "text-[10px] font-bold uppercase tracking-wide "
-                            + STATUS_STYLE[c.status].badge}>
-                            {STATUS_STYLE[c.status].label}
-                          </span>
-                          <span>
-                            <span className="font-medium text-slate-700">
-                              {c.name}
-                            </span>
-                            {" — "}{c.detail}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    {/* The same file's other half: not "would this survive the
-                        cluster" but "how should it have been configured".
-                        Nothing here is applied on import -- every value written
-                        from this list is a click on a row showing both the value
-                        it writes and the one it replaces. */}
-                    <SuggestionList
-                      suggestions={preflight.out.suggestions}
-                      whyNothing={preflight.out.why_nothing}
-                      options={options} applied={applied}
-                      onApply={applySuggestion} onUndo={undoSuggestion} />
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-slate-100 pt-3">
-                {sourceMode === "manual" ? (
-                  /* Watching needs the API this mode exists to do without. Said
-                     plainly, with the way to get it, rather than a dead
-                     checkbox. */
-                  <p className="text-xs text-slate-500">
-                    Agent status needs an API key — switch to
-                    {" "}<b>Connect to BlazeMeter</b> above to watch this agent
-                    come online, or check Settings → Private Locations in
-                    BlazeMeter after applying.
-                  </p>
-                ) : (
-                <>
-                {/* Built like an option-group row -- a Switch, a title, a
-                    sub-title -- because that is what it is: an on/off with one
-                    line of consequence. The status belongs to an agent, so the
-                    row names it; a bare "online" beside a page that has four
-                    other identities on it says less than it looks like it
-                    does. */}
-                <div className="rounded-xl border border-slate-200 px-3 py-2.5 flex items-center gap-3">
-                  <Switch on={polling} onChange={setPolling} />
-                  <div className="min-w-0 grow">
-                    <p className="text-sm font-medium text-slate-700">
-                      Watch agent status
-                      <span className="ml-2 font-mono text-[11px] text-slate-500">
-                        {ships.find((s) => s.id === shipId)?.name || shipId}
-                      </span>
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      {polling
-                        ? status
-                          ? `${status.state}`
-                            + (status.heartbeat_age_s != null
-                              ? ` · heartbeat ${status.heartbeat_age_s}s ago` : "")
-                          : "polling every 10s…"
-                        : "polls every 10s — green once the applied deployment heartbeats"}
-                    </p>
-                  </div>
-                  {polling && (
-                    <span className={"flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 "
-                      + (status?.online
-                        ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-500")}>
-                      <span className={"h-1.5 w-1.5 rounded-full "
-                        + (status?.online ? "bg-emerald-500" : "bg-slate-400 animate-pulse")} />
-                      {status?.online ? "Online" : "Waiting"}
-                    </span>
-                  )}
-                </div>
-                {/* An idle agent says nothing about whether its virtual services
-                    became reachable, which is the part of an SV deploy that
-                    actually stalls. Only for an SV deployment -- the
-                    performance panel is exactly as it was. */}
-                {polling && svConfigured(txt("sv_ingress")) && svMocks && (
-                  <div className="mt-3">
-                    <p className="text-xs font-medium text-slate-600 mb-1">
-                      Virtual services in {svMocks.ns}
-                    </p>
-                    {svMocks.read.mocks.length > 0 ? (
-                      <ul className="space-y-1.5">
-                        {svMocks.read.mocks.map((m) => {
-                          const chk = m.host ? svChecks[m.host] : undefined;
-                          return (
-                            <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
-                              <span className="font-medium text-slate-700">{m.name}</span>
-                              <span className="text-slate-400">:{m.port}</span>
-                              {m.host ? (
-                                <>
-                                  {" — "}
-                                  <a className="text-bzm hover:underline font-mono break-all"
-                                    href={`${svScheme}://${m.host}/`}
-                                    target="_blank" rel="noreferrer">
-                                    {svScheme}://{m.host}/
-                                  </a>
-                                  {/* The check is made from the machine serving
-                                      this page, against the host shown above --
-                                      never a second copy of that string. */}
-                                  <button type="button" disabled={chk?.busy}
-                                    onClick={() => checkEndpoint(m.host!)}
-                                    className="ml-2 align-baseline rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
-                                    {chk?.busy ? "checking…" : "check endpoint"}
-                                  </button>
-                                </>
-                              ) : <> — set a wildcard domain to get the endpoint host</>}
-                              {chk?.res && (
-                                <p className={`mt-0.5 ${svCheckTone(chk.res)}`}>
-                                  {chk.res.message}
-                                  {chk.res.status !== "ok" && chk.res.detail && (
-                                    <span className="block text-slate-400 font-mono break-all">
-                                      {chk.res.detail}
-                                    </span>
-                                  )}
-                                </p>
-                              )}
-                              {chk?.err && (
-                                <p className="mt-0.5 text-red-600">{chk.err}</p>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : (
-                      // "Nothing deployed" and "cannot look" are different
-                      // answers, and the second must not read as the first.
-                      <p className="text-[11px] text-slate-400">{svMocks.read.message}</p>
-                    )}
-                  </div>
-                )}
-                </>
-                )}
-              </div>
-            </div>
+            <DownloadPanel
+              facts={facts} shipId={shipId} ships={ships} sourceMode={sourceMode}
+              who={who} options={options} set={set} raw={raw} txt={txt}
+              saOk={saOk} svOk={svOk} genErr={genErr} features={features}
+              pickFeature={pickFeature} blockers={blockers} format={format}
+              helmBlocked={helmBlocked}
+              previewToken={previewToken} rotate={rotate} setRotate={setRotate}
+              tokenPlan={tokenPlan} lastTokenReport={lastTokenReport}
+              setLastTokenReport={setLastTokenReport}
+              dlErr={dlErr} setDlErr={setDlErr}
+              saveDir={saveDir} setSaveDir={setSaveDir} saved={saved}
+              setSaved={setSaved} saveErr={saveErr} setSaveErr={setSaveErr}
+              preflight={preflight} preflightBusy={preflightBusy}
+              importEvidence={importEvidence} evidence={evidence}
+              applied={applied} applySuggestion={applySuggestion}
+              undoSuggestion={undoSuggestion}
+              polling={polling} setPolling={setPolling} status={status}
+              svMocks={svMocks} svChecks={svChecks} svScheme={svScheme}
+              svCheckTone={svCheckTone} checkEndpoint={checkEndpoint} />
           </Section>
         </StepFlow>
-
-        {/* THROWAWAY: the preview column exists only where the preview is
-            beside the form. A shell owns it instead. */}
-        {!PROTO_SHELL && (
-        <div className="space-y-2">
-          {/* What is in the bundle from a feature that is not in view. Here
-              rather than in step 4 because this is where "what does this bundle
-              contain" is read, and the answer is more than the step above is
-              currently showing. Each is a way back to it. */}
-          {hiddenSet.length > 0 && (
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-[11px] text-slate-600">
-                <b>Also in this bundle</b>, set while configuring another
-                feature:{" "}
-                {hiddenSet.map((g, i) => (
-                  <span key={g.id}>
-                    {i > 0 && ", "}
-                    <button className="text-bzm hover:underline font-medium"
-                      onClick={() => pickFeature(g.features[0])}>
-                      {g.title}
-                    </button>
-                    <span className="text-slate-400">
-                      {" "}({appliesTo(g, features)})
-                    </span>
-                  </span>
-                ))}
-                . These still generate — the feature above is only what is on
-                screen.
-              </p>
-            </div>
-          )}
-          <Preview files={files} activeFile={activeFile}
-            setActiveFile={setActiveFile} genErr={genErr} />
-        </div>
-        )}
       </main>
-      </PreviewShell>
+      </WorkArea>
       <PrototypeSwitcher current={PROTO_VARIANT} />
     </div>
   );
