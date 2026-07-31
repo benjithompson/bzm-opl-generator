@@ -1320,9 +1320,9 @@ def test_plan_answers_a_browser_that_has_connected_to_nothing(monkeypatch):
 def test_plan_returns_the_document_with_the_numbers():
     """One call, one plan. Two would let a panel show numbers from one request
     and a document from another."""
-    body = client.post("/api/plan", json={"users": 5000, "name": "Checkout"}).json()
+    body = client.post("/api/plan", json={"users": 5000}).json()
     assert body["document"].startswith("# Infrastructure request")
-    assert "Checkout" in body["document"]
+    assert "5,000 virtual users" in body["document"]
     assert body["document_file"] == "capacity-request.md"
 
 
@@ -1339,11 +1339,11 @@ def test_plan_takes_the_empty_strings_a_form_posts():
     that has to mean 'not given' rather than a number that will not parse --
     otherwise the panel refuses the very first thing anyone types."""
     r = client.post("/api/plan", json={
-        "users": "5000", "threads_per_engine": "", "engine_cpu": "",
+        "users": "5000", "vus_per_engine": "", "engine_cpu": "",
         "engine_mem": "  ", "engines_per_node": ""})
     assert r.status_code == 200
     body = r.json()
-    assert body["threads_per_engine_assumed"] is True
+    assert body["vus_per_engine_assumed"] is True
     assert body["engines"] == 10 and body["engines_per_node"] == 1
     assert body["engine"]["memory"] == "8Gi"       # the documented default
 

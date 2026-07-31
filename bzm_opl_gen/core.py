@@ -934,8 +934,8 @@ def bundle_images(facts, all_images=False):
 
 # -- planning, before any of the above exists ---------------------------------
 
-def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=None, name=None):
+def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None):
     """What a load target needs, as numbers and as a document to request it with.
 
     The only thing here that reaches nothing at all -- no key, no account, no
@@ -952,7 +952,7 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
     """
     try:
         p = plan.capacity_plan(
-            users, threads_per_engine=threads_per_engine,
+            users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
             engines_per_node=1 if engines_per_node is None else engines_per_node)
     except ValueError as e:
@@ -960,7 +960,7 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
         # and each names the field it is about. 400, not 500.
         raise BadRequest(str(e))
     return dict(p,
-                document=plan.plan_document(p, name),
+                document=plan.plan_document(p),
                 document_file=plan.DOCUMENT_FILE)
 
 

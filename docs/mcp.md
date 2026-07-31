@@ -73,11 +73,13 @@ cluster is a ticket nobody has raised. Alongside the numbers it returns
 that has never heard of BlazeMeter. Offer that document — it is the deliverable,
 not a formatting of the numbers.
 
-Its `threads_per_engine` is the figure everything multiplies by and the one
-thing arithmetic cannot reach, since it depends on what the script does between
-requests. Unset, BlazeMeter's documented figure for the engine size is assumed
-and `threads_per_engine_assumed` comes back `true`; pass that qualifier on
-rather than reporting the node count as measured.
+Its `vus_per_engine` is the figure everything multiplies by and the one thing
+arithmetic cannot reach, since it depends on what the script does between
+requests. Unset, what an engine of that size is rated for is assumed and
+`vus_per_engine_assumed` comes back `true`; pass that qualifier on rather than
+reporting the node count as measured. Answer in BlazeMeter's own hierarchy — a
+location holds agents, an agent runs engines, each engine drives virtual users —
+and note that neither the location nor its agent needs a cluster to exist.
 [capacity-planning.md](capacity-planning.md) has the rest.
 
 **Listing locations is deliberately compact.** `opl_location list` gives one

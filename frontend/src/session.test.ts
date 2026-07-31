@@ -25,8 +25,8 @@ const BASE = {
   step: 1,
   view: "flow" as const,
   plan: {
-    users: "5000", threadsPerEngine: "", engineCpu: "2", engineMem: "8Gi",
-    enginesPerNode: "", name: "Checkout",
+    users: "5000", vusPerEngine: "", engineCpu: "2", engineMem: "8Gi",
+    enginesPerNode: "",
   },
 };
 
@@ -56,7 +56,7 @@ describe("what is remembered", () => {
     const back = load();
     expect(back?.view).toBe("plan");
     expect(back?.plan.users).toBe("5000");
-    expect(back?.plan.name).toBe("Checkout");
+    expect(back?.plan.engineMem).toBe("8Gi");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

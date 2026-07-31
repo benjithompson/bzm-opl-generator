@@ -37,18 +37,21 @@ export interface Options { [k: string]: unknown }
  *  the one failure this feature can have. A second copy in TypeScript would be
  *  a second engine footprint to keep in step.
  *
- *  `threads_per_engine_assumed` is the field the panel must never drop: the
- *  whole plan is that number multiplied out, and nothing here can measure it. */
+ *  `vus_per_engine_assumed` is the field the panel must never drop: the whole
+ *  plan is that number multiplied out, and nothing here can measure it. */
 export interface CapacityPlan {
+  /** Virtual users: the load target. A location holds agents, an agent runs
+   *  engines, and each engine drives virtual users -- that hierarchy is the
+   *  vocabulary this whole panel speaks. */
   users: number;
-  threads_per_engine: number;
-  threads_per_engine_assumed: boolean;
+  vus_per_engine: number;
+  vus_per_engine_assumed: boolean;
   engines: number;
   engines_per_node: number;
   nodes: number;
   engine: {
     cpu: string; memory: string; disk_gb: number; tmp_gb: number;
-    supported_threads: number;
+    supported_vus: number;
   };
   node: { cpu: string; memory: string; disk_gb: number };
   peak: { cpu: string; memory: string; disk_gb: number };
@@ -172,8 +175,8 @@ export const api = {
    *  planner panel works with nothing connected -- see core.capacity_plan.
    *  Blank fields are sent as typed; the server reads "" as "not given". */
   plan: (body: {
-    users: string; threads_per_engine?: string; engine_cpu?: string;
-    engine_mem?: string; engines_per_node?: string; name?: string;
+    users: string; vus_per_engine?: string; engine_cpu?: string;
+    engine_mem?: string; engines_per_node?: string;
   }) => req<CapacityPlan>("POST", "/api/plan", body),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),

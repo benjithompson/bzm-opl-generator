@@ -6,7 +6,7 @@ of this repository -- so the tool descriptions, the `instructions` block and the
 shipped docs are the entire documentation. Anything a session needs to know that
 is not in one of those three does not exist as far as it is concerned.
 
-Five tools, each dispatching on an `action`, which is the shape the sibling
+Six tools, each dispatching on an `action`, which is the shape the sibling
 BlazeMeter servers already use: a session that has those does not have to learn
 a second convention. The actions are a `Literal`, so they land in the schema as
 an enum and a wrong one is refused by the client's own validation, naming the
@@ -83,12 +83,20 @@ for `helm install` when the bundle is a chart. (The one tool that does deploy is
 opl_agent livetest, which is off unless its own variable is set.)
 
 Sizing before there is a cluster: `opl_plan capacity` turns a load target
-("we need to test 5,000 users") into engines, nodes and a machine size, plus a
-`document` written for the platform team who has to provide them. That request
-is often the actual blocker -- a customer with no cluster cannot start at step
-1, and this is what unblocks them. It assumes how many users one engine
-carries unless told; say that the figure is an assumption whenever you report
-what it produced.
+("we need to test 5,000 virtual users") into engines, nodes and a machine size,
+plus a `document` written for the platform team who has to provide them. That
+request is often the actual blocker -- a customer with no cluster cannot start
+at step 1, and this is what unblocks them. It assumes how many virtual users
+one engine carries unless told; say that the figure is an assumption whenever
+you report what it produced.
+
+The vocabulary, and it is worth keeping to: a **location** holds **agents**, an
+agent runs **engines**, and each engine drives some number of **virtual users**.
+"Slots" and "threadsPerEngine" are the names of two location *fields* (concurrent
+engines, and virtual users per engine) rather than terms to explain anything in.
+Neither a location nor an agent needs a cluster to exist -- both can be created
+in BlazeMeter first, and an agent that has never sent a heartbeat is the normal
+state until its manifests are applied.
 
 Facts without an account: `opl_facts manual` builds the same structure from a
 harbor id and ship id read off the BlazeMeter UI, so you can produce a bundle
@@ -718,8 +726,8 @@ PLAN_ACTIONS = ("capacity",)
 DESCRIPTIONS["opl_plan"] = (
     "How much infrastructure a load target needs, before any of it "
     "exists.\n"
-    "  capacity -- {users, threads_per_engine?, engine_cpu?, "
-    "engine_mem?, engines_per_node?, name?}\n"
+    "  capacity -- {users, vus_per_engine?, engine_cpu?, engine_mem?, "
+    "engines_per_node?}\n"
     "The one tool here that reaches nothing: no API key, no account, no "
     "cluster. Use it when someone asks 'what would we need to test N "
     "users?' -- typically before there is a cluster to deploy to, "
@@ -728,12 +736,17 @@ DESCRIPTIONS["opl_plan"] = (
     "infrastructure request written for a platform team that has never "
     "heard of BlazeMeter. Offer that document -- it is the deliverable, "
     "not a formatting of the numbers.\n"
-    "`threads_per_engine` is the input everything multiplies by and the "
-    "one thing arithmetic cannot reach: it depends on what the script "
-    "does between requests. Unset, BlazeMeter's documented figure for "
-    "that engine size is assumed and `threads_per_engine_assumed` says "
-    "so -- pass on that qualifier rather than reporting the node count "
-    "as measured.")
+    "`users` is virtual users. A location holds agents, an agent runs "
+    "engines, and each engine drives some number of virtual users -- "
+    "that is the vocabulary to answer in.\n"
+    "`vus_per_engine` is the input everything multiplies by and the one "
+    "thing arithmetic cannot reach: it depends on what the script does "
+    "between requests. Unset, what an engine of that size is rated for "
+    "is assumed and `vus_per_engine_assumed` says so -- pass on that "
+    "qualifier rather than reporting the node count as measured.\n"
+    "Nothing here waits for a cluster: the location and its agent can "
+    "be created in BlazeMeter now, and an agent that has never sent a "
+    "heartbeat is the expected state until the manifests are applied.")
 
 
 def _plan(action, args):
@@ -741,11 +754,10 @@ def _plan(action, args):
         users, = _need(args, "users")
         return core.capacity_plan(
             users,
-            threads_per_engine=args.get("threads_per_engine"),
+            vus_per_engine=args.get("vus_per_engine"),
             engine_cpu=args.get("engine_cpu"),
             engine_mem=args.get("engine_mem"),
-            engines_per_node=args.get("engines_per_node"),
-            name=args.get("name"))
+            engines_per_node=args.get("engines_per_node"))
 
     raise _unknown(action, PLAN_ACTIONS)
 

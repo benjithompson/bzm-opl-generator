@@ -263,9 +263,9 @@ def cmd_plan(a):
     """Size the infrastructure a load target needs, before any of it exists."""
     try:
         p = core.capacity_plan(
-            a.users, threads_per_engine=a.threads_per_engine,
+            a.users, vus_per_engine=a.vus_per_engine,
             engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
-            engines_per_node=a.engines_per_node, name=a.name)
+            engines_per_node=a.engines_per_node)
     except core.CoreError as e:
         sys.exit(str(e))
     if a.json:
@@ -276,9 +276,9 @@ def cmd_plan(a):
         return
 
     eng, node = p["engine"], p["node"]
-    print(f"{p['users']:,} concurrent users at {p['threads_per_engine']:,} per "
-          f"engine" + ("  (assumed -- BlazeMeter's default for this engine "
-                       "size)" if p["threads_per_engine_assumed"] else ""))
+    print(f"{p['users']:,} virtual users at {p['vus_per_engine']:,} per engine"
+          + ("  (assumed -- what an engine this size is rated for)"
+             if p["vus_per_engine_assumed"] else ""))
     print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
           f"{eng['disk_gb']}GB disk")
     print(f"  {p['nodes']} node(s) of {node['cpu']} vCPU / {node['memory']} "
@@ -287,9 +287,12 @@ def cmd_plan(a):
           f"pool; 0 between runs")
     print(f"  agent: 1 small always-on node ({p['crane']['cpu_limit']} CPU / "
           f"{p['crane']['memory_limit']})")
-    print(f"  location: slots={p['location']['slots']}, "
-          f"threadsPerEngine={p['location']['threads_per_engine']}, "
-          f"overrideCPU={p['location']['override_cpu']}, "
+    # The location block keeps BlazeMeter's own field names: it is what to type
+    # into those fields, not a description of the plan.
+    print(f"  location: slots={p['location']['slots']} (concurrent engines), "
+          f"threadsPerEngine={p['location']['threads_per_engine']} (virtual "
+          f"users per engine),")
+    print(f"            overrideCPU={p['location']['override_cpu']}, "
           f"overrideMemory={p['location']['override_memory_mb']}")
     for w in p["warnings"]:
         print(f"  ! {w}")
@@ -591,15 +594,17 @@ def main():
     pl = sub.add_parser("plan",
                         help="how much infrastructure a load target needs "
                              "(no account, no cluster)")
-    pl.add_argument("--users", required=True,
-                    help="concurrent users the test has to reach")
-    pl.add_argument("--threads-per-engine", dest="threads_per_engine",
-                    help=f"users one engine carries (default "
-                         f"{api.DEFAULT_THREADS_PER_ENGINE}, BlazeMeter's "
-                         f"figure for a {gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine). Your script "
-                         f"decides the real number -- measure it against one "
-                         f"engine and re-run this")
+    pl.add_argument("--users", required=True, metavar="N",
+                    help="virtual users the test has to reach")
+    pl.add_argument("--vus-per-engine", dest="vus_per_engine",
+                    help=f"virtual users one engine carries (BlazeMeter's "
+                         f"`threadsPerEngine`). Default is what an engine of "
+                         f"the chosen size is rated for -- "
+                         f"{api.DEFAULT_THREADS_PER_ENGINE} for the "
+                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
+                         f"there. Your script decides the real number: measure "
+                         f"it against one engine and re-run this")
     pl.add_argument("--engine-cpu-limit", dest="engine_cpu_limit",
                     help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
     pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
@@ -607,8 +612,6 @@ def main():
     pl.add_argument("--engines-per-node", dest="engines_per_node",
                     help="engines to a node (default 1; more is cheaper and "
                          "they contend)")
-    pl.add_argument("--name", help="what is being load tested, for the "
-                                   "document's title")
     pl.add_argument("-o", "--output", metavar="DIR",
                     help=f"write {plan.DOCUMENT_FILE} here")
     pl.add_argument("--markdown", action="store_true",

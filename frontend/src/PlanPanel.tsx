@@ -19,22 +19,23 @@ import { ENGINE_SIZES } from "./optionGroups";
 
 export interface PlanInputs {
   users: string;
-  threadsPerEngine: string;
+  vusPerEngine: string;
   engineCpu: string;
   engineMem: string;
   enginesPerNode: string;
-  name: string;
 }
 
 export const EMPTY_PLAN_INPUTS: PlanInputs = {
-  users: "", threadsPerEngine: "", engineCpu: "", engineMem: "",
-  enginesPerNode: "", name: "",
+  users: "", vusPerEngine: "", engineCpu: "", engineMem: "",
+  enginesPerNode: "",
 };
 
 /** The plan as the generator's own vocabulary: what the location has to
  *  advertise, and what the bundle has to ask for. Named here because this is
  *  where the translation is decided; App applies it. */
 export interface PlanHandover {
+  /** BlazeMeter's own field names, because this is what gets typed into them:
+   *  `slots` is concurrent engines, `threadsPerEngine` is virtual users each. */
   slots: number;
   threadsPerEngine: number;
   engineCpuLimit: string;
@@ -70,9 +71,9 @@ export function PlanPanel(props: {
     setBusy(true);
     timer.current = window.setTimeout(() => {
       api.plan({
-        users: inputs.users, threads_per_engine: inputs.threadsPerEngine,
+        users: inputs.users, vus_per_engine: inputs.vusPerEngine,
         engine_cpu: inputs.engineCpu, engine_mem: inputs.engineMem,
-        engines_per_node: inputs.enginesPerNode, name: inputs.name,
+        engines_per_node: inputs.enginesPerNode,
       })
         .then((p) => { setPlan(p); setErr(null); })
         .catch((e: Error) => { setErr(e.message); setPlan(null); })
@@ -121,18 +122,22 @@ export function PlanPanel(props: {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Concurrent users"
+          <Field label="Virtual users"
             hint="the load the test has to reach">
             <input type="number" min={1} className={inputCls}
               placeholder="5000" value={inputs.users}
               onChange={(e) => set("users", e.target.value)} />
           </Field>
-          <Field label="Users per engine"
-            hint="blank assumes BlazeMeter's figure for the engine size">
+          {/* The placeholder follows the engine size, because so does the
+              figure the plan assumes when this is blank. Showing a fixed 500
+              beside a Large engine said the plan would use 500 when it uses
+              1,000. */}
+          <Field label="Virtual users per engine"
+            hint="blank uses what an engine of this size is rated for">
             <input type="number" min={1} className={inputCls}
-              placeholder={String(plan?.engine.supported_threads ?? 500)}
-              value={inputs.threadsPerEngine}
-              onChange={(e) => set("threadsPerEngine", e.target.value)} />
+              placeholder={String(plan?.engine.supported_vus ?? 500)}
+              value={inputs.vusPerEngine}
+              onChange={(e) => set("vusPerEngine", e.target.value)} />
           </Field>
           <Field label="Engine size"
             hint="the pod limits every engine runs at">
@@ -166,11 +171,6 @@ export function PlanPanel(props: {
               </Field>
             </>
           )}
-          <Field label="What is being tested"
-            hint="optional — titles the request document">
-            <TextInput placeholder="Checkout API" value={inputs.name}
-              onChange={(v) => set("name", v)} />
-          </Field>
         </div>
         <ErrorMsg msg={err} />
       </div>
@@ -221,15 +221,15 @@ function PlanResult(props: {
       {/* The assumption, in the panel and not only in the document. Somebody
           who reads the node count off the screen and never opens the request
           is exactly who this has to reach. */}
-      {p.threads_per_engine_assumed && (
+      {p.vus_per_engine_assumed && (
         <div className="border border-amber-300 bg-amber-50 rounded-lg p-3">
           <p className="text-xs text-amber-900">
-            <b>{p.threads_per_engine} users per engine is assumed</b>, not
-            measured — it is BlazeMeter's figure for an engine this size. How
-            many users one engine really carries depends on what your script
-            does between requests, and every number above is that figure
-            multiplied out. Run the real script against one engine, find where
-            it saturates, and put that number in the field above.
+            <b>{p.vus_per_engine.toLocaleString()} virtual users per engine is
+            assumed</b>, not measured — it is what an engine of this size is
+            rated for. How many virtual users one engine really carries depends
+            on what your script does between requests, and every number above is
+            that figure multiplied out. Run the real script against one engine,
+            find where it saturates, and put that number in the field above.
           </p>
         </div>
       )}
@@ -274,17 +274,27 @@ function PlanResult(props: {
         </h3>
         <p className="text-xs text-slate-500">
           Fills in what this plan decided, so the numbers are not retyped: a new
-          location gets <b>slots {p.location.slots}</b> and
-          {" "}<b>{p.location.threads_per_engine} threads per engine</b>, and the
-          bundle asks for <b>{p.engine.cpu} CPU / {p.engine.memory}</b> engines
-          at {p.engines_per_node} per node. Nothing is created or changed by
-          this — it moves you to step 1 with the fields already filled.
+          location is set to run <b>{p.location.slots} concurrent engines</b>
+          {" "}(its <code>slots</code>) at{" "}
+          <b>{p.location.threads_per_engine.toLocaleString()} virtual users
+          each</b> (<code>threadsPerEngine</code>), and the bundle asks for{" "}
+          <b>{p.engine.cpu} CPU / {p.engine.memory}</b> engines at{" "}
+          {p.engines_per_node} per node. Nothing is created or changed by this —
+          it moves you to step 1 with the fields already filled.
         </p>
         <p className="text-xs text-slate-500">
           The two request fields — <code>overrideCPU {p.location.override_cpu}</code>
           {" "}and <code>overrideMemory {p.location.override_memory_mb}</code> — are
           set in BlazeMeter rather than here, and the document says why they
           matter.
+        </p>
+        {/* An empty location and an agent that has never reported are normal
+            states, not a half-finished setup -- so the wait for a cluster is
+            setup time rather than dead time. */}
+        <p className="text-xs text-slate-500">
+          None of this waits for the cluster: the location and its agent can be
+          created in BlazeMeter now, and the agent simply reports nothing until
+          its manifests are applied.
         </p>
         <Button onClick={props.onUse}>Use this plan</Button>
       </div>

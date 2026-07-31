@@ -22,27 +22,38 @@ anything that breaks.
   what they raise it with.
 
   ```
-  bzm-opl-gen plan --users 5000 --name "Checkout API" -o ./plan
+  bzm-opl-gen plan --users 5000 -o ./plan
   ```
 
-  5,000 users → 10 engines of 2 CPU / 8Gi → 10 nodes of 3 vCPU / 10Gi capacity,
-  a peak of 30 vCPU / 100Gi that idles at zero between runs, one small always-on
-  node for the agent, the egress hosts a firewall rule needs, and the four
-  BlazeMeter-side settings (`slots`, `threadsPerEngine`, `overrideCPU`,
+  5,000 virtual users → 10 engines of 2 CPU / 8Gi → 10 nodes of 3 vCPU / 10Gi
+  capacity, a peak of 30 vCPU / 100Gi that idles at zero between runs, one small
+  always-on node for the agent, the egress hosts a firewall rule needs, and the
+  four BlazeMeter-side settings (`slots`, `threadsPerEngine`, `overrideCPU`,
   `overrideMemory`) without which the cluster is provisioned and then not used.
+
+  **One vocabulary, BlazeMeter's own:** a location holds agents, an agent runs
+  engines, and each engine drives virtual users. `slots` and `threadsPerEngine`
+  appear only as the names of the two location *fields* they are — concurrent
+  engines, and virtual users per engine — rather than as terms anything is
+  explained in. The document says nothing about *what* is being tested: the
+  request is for capacity to run load tests from this cluster, and naming an
+  application invites the reply that it should be sized per application.
 
   `-o DIR` writes **`capacity-request.md`** — the same numbers written for a
   platform team that has never heard of BlazeMeter, showing the arithmetic so
   the request can be *checked* rather than only read. `--markdown` prints it,
   `--json` gives the whole plan as data.
 
-  **The users-per-engine figure is an assumption, and everything says so.** How
-  many users one engine carries is a property of the script, not of the engine —
-  a chatty API test with no think time exhausts one far sooner than a browsing
-  journey does — so unset, `--threads-per-engine` assumes BlazeMeter's documented
-  figure for the engine size (500 for 2 CPU / 8Gi, scaled linearly on whichever
-  of CPU and memory is tighter for any other size) and the plan carries
-  `threads_per_engine_assumed`. The document leads with it, the web panel shows
+  **The virtual-users-per-engine figure is an assumption, and everything says
+  so.** How many virtual users one engine carries is a property of the script,
+  not of the engine — a chatty API test with no think time exhausts one far
+  sooner than a browsing journey does — so unset, `--vus-per-engine` assumes what
+  an engine of the chosen size is *rated* for (500 for 2 CPU / 8Gi, scaled
+  linearly on whichever of CPU and memory is tighter for any other size) and the
+  plan carries `vus_per_engine_assumed`. It follows the engine size rather than
+  sitting at a flat 500: on the Small preset a flat 500 assumed load the engine
+  cannot carry — and then warned about the figure the planner itself had chosen —
+  and on Large it asked for twice the nodes needed. The document leads with it, the web panel shows
   it as a callout, and the MCP tool's description tells a model to pass the
   qualifier on. The honest sequence is plan → provision small → measure →
   re-plan, and the document says that too.
@@ -52,13 +63,20 @@ anything that breaks.
   everything step 1 asks for is what somebody sizing a cluster has not got yet),
   and **`opl_plan capacity`** on the MCP server, which returns the numbers and
   the document together. In the UI, *Use this plan* fills in the location's
-  slots and threads per engine and the bundle's engine size; it writes nothing
-  to BlazeMeter. Full reference in
+  concurrent engines and virtual users per engine, and the bundle's engine size;
+  it writes nothing to BlazeMeter. Full reference in
   [docs/capacity-planning.md](docs/capacity-planning.md).
 
-  `doctor` and the planner now share the threads-per-engine ratio
-  (`plan.supported_threads`) rather than each carrying it, so a plan the
-  preflight would then warn about cannot be produced.
+  **None of the BlazeMeter side waits for the cluster**, and the document says
+  so: a location and its agent are records in BlazeMeter, so both can be created
+  with the planned settings while the infrastructure request is still being read.
+  An agent that has never sent a heartbeat is the expected state until its
+  manifests are applied, not a half-finished setup — so the wait for nodes is
+  setup time rather than dead time.
+
+  `doctor` and the planner now share the virtual-users-per-engine ratio
+  (`plan.supported_vus`) rather than each carrying it, so a plan the preflight
+  would then warn about cannot be produced.
 
 ### Fixed
 

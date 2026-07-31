@@ -133,7 +133,7 @@ def check_location(facts, opts, cluster):
 def check_threads_per_engine(facts, opts, cluster):
     """Threads the location promises per engine vs what the engine is sized for.
 
-    The ratio itself is plan.supported_threads: BlazeMeter's own default pairs
+    The ratio itself is plan.supported_vus: BlazeMeter's own default pairs
     500 threads with a 2 CPU / 8Gi engine, scaled linearly on whichever of the
     two dimensions is tighter. 500 threads on a 1 CPU / 4Gi engine is not a
     runnable location, it is one that OOM-kills or throttles halfway up the
@@ -145,7 +145,7 @@ def check_threads_per_engine(facts, opts, cluster):
     if not tpe:
         return []                     # check_location has already reported it
     cpu, mem = engine_size(opts)
-    supported = plan.supported_threads(cpu, mem)
+    supported = plan.supported_vus(cpu, mem)
     size = _engine_str(cpu, mem)
     if tpe > supported:
         return [Check("threadsPerEngine vs engine size", WARN,

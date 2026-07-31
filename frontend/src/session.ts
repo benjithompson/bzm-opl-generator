@@ -48,11 +48,10 @@ export interface Session {
  *  for on the way back. */
 export interface PlanSnapshot {
   users: string;
-  threadsPerEngine: string;
+  vusPerEngine: string;
   engineCpu: string;
   engineMem: string;
   enginesPerNode: string;
-  name: string;
 }
 
 /** The options minus anything that must not be written down. Exported because

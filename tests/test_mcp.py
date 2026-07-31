@@ -946,17 +946,17 @@ def test_plan_needs_no_credential_at_all(monkeypatch):
 def test_plan_hands_back_the_document_to_send_on():
     """The deliverable is the request, not the arithmetic -- a session with no
     checkout has nothing else to turn these numbers into."""
-    body = ok("opl_plan", "capacity", {"users": 5000, "name": "Checkout API"})
+    body = ok("opl_plan", "capacity", {"users": 5000})
     assert body["document"].startswith("# Infrastructure request")
-    assert "Checkout API" in body["document"]
+    assert "5,000 virtual users" in body["document"]
 
 
 def test_plan_marks_the_assumption_a_model_would_otherwise_report_as_fact():
     body = ok("opl_plan", "capacity", {"users": 5000})
-    assert body["threads_per_engine_assumed"] is True
+    assert body["vus_per_engine_assumed"] is True
     supplied = ok("opl_plan", "capacity",
-                  {"users": 5000, "threads_per_engine": 250})
-    assert supplied["threads_per_engine_assumed"] is False
+                  {"users": 5000, "vus_per_engine": 250})
+    assert supplied["vus_per_engine_assumed"] is False
     assert supplied["engines"] == 20
 
 

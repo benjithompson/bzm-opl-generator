@@ -22,11 +22,12 @@ constants doctor judges against rather than restated here.
 What this cannot know, and says so rather than implying otherwise: how many
 users *one engine* really carries. That is a property of the script -- of what
 each thread does between requests -- and no amount of arithmetic here reaches
-it. BlazeMeter's own 500 is the documented pairing for a 2 CPU / 8Gi engine and
-is what this assumes when nobody says otherwise, but a plan that quietly turns
-an assumption into a node count is how an infrastructure request comes back
-wrong by a factor of three. Every returned plan therefore carries
-`threads_per_engine_assumed`, and the document leads with it.
+it. What it assumes instead is the engine's own capacity, scaled from
+BlazeMeter's documented pairing of 500 threads with a 2 CPU / 8Gi engine, so
+the assumption moves when the engine size does. A plan that quietly turns that
+assumption into a node count is how an infrastructure request comes back wrong
+by a factor of three, so every returned plan carries
+`vus_per_engine_assumed` and the document leads with it.
 """
 
 import math
@@ -51,14 +52,14 @@ API_HOST = API_BASE.split("/")[2]
 # The engine size BlazeMeter's 500 threads is quoted against. Anything else
 # scales from it, on whichever of CPU and memory is the tighter ratio: an
 # engine given twice the memory and the same CPU is not twice the engine.
-BASELINE_THREADS = DEFAULT_THREADS_PER_ENGINE
+BASELINE_VUS = DEFAULT_THREADS_PER_ENGINE
 
 DOCUMENT_FILE = "capacity-request.md"
 
 
-def supported_threads(cpu_millis, mem_bytes):
+def supported_vus(cpu_millis, mem_bytes):
     """Threads an engine of this size can carry, scaled from BlazeMeter's own
-    pairing of BASELINE_THREADS threads with ENGINE_DEFAULT_CPU/_MEM.
+    pairing of BASELINE_VUS threads with ENGINE_DEFAULT_CPU/_MEM.
 
     Linear on the smaller of the two ratios, and floored at 1: an engine sized
     below the baseline in either dimension carries proportionally less, and
@@ -71,16 +72,21 @@ def supported_threads(cpu_millis, mem_bytes):
     """
     base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
     ratio = min(cpu_millis / base_cpu, mem_bytes / base_mem)
-    return max(int(BASELINE_THREADS * ratio), 1)
+    return max(int(BASELINE_VUS * ratio), 1)
 
 
-def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
+def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
                   engine_mem=None, engines_per_node=1):
     """What `users` concurrent users needs, as numbers.
 
-    `threads_per_engine` unset means BlazeMeter's documented default, and the
-    plan says which of the two it was -- see the module docstring for why that
-    distinction is carried rather than resolved.
+    `vus_per_engine` unset is assumed **from the engine size**, not from a
+    fixed 500: 500 is BlazeMeter's figure for its 2 CPU / 8Gi engine, and a
+    plan that carried it onto any other size is wrong in both directions. On a
+    1 CPU / 4Gi engine it assumed 500 threads the engine cannot carry -- and
+    then warned about the very number it had chosen, which reads as the user's
+    mistake. On 4 CPU / 16Gi it assumed half what the engine holds and asked
+    for twice the nodes. Either way the plan says the figure was assumed; what
+    is assumed is now the engine's own.
 
     Raises ValueError on anything that cannot be a plan. A target of zero users
     is not a small plan, it is a question nobody asked; an engine size that does
@@ -89,18 +95,20 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
     """
     users = _positive(users, "users")
     per_node = _positive(engines_per_node, "engines_per_node")
-    assumed = threads_per_engine is None
-    threads = (DEFAULT_THREADS_PER_ENGINE if assumed
-               else _positive(threads_per_engine, "threads_per_engine"))
 
     # Reuse generate's own parse-and-default so an engine size means exactly
-    # what it will mean in the bundle, error message included.
+    # what it will mean in the bundle, error message included. Before the
+    # threads default, because that is now derived from it.
     cpu, mem = engine_size({"engine_cpu_limit": engine_cpu,
                             "engine_mem_limit": engine_mem})
+    supported = supported_vus(cpu, mem)
 
-    engines = math.ceil(users / threads)
+    assumed = vus_per_engine is None
+    vus = (supported if assumed
+           else _positive(vus_per_engine, "vus_per_engine"))
+
+    engines = math.ceil(users / vus)
     nodes = math.ceil(engines / per_node)
-    supported = supported_threads(cpu, mem)
 
     # Capacity, not allocatable: what the infrastructure team buys is a machine,
     # and the kubelet's reservations come out of it before a pod sees any. This
@@ -111,8 +119,8 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
 
     return {
         "users": users,
-        "threads_per_engine": threads,
-        "threads_per_engine_assumed": assumed,
+        "vus_per_engine": vus,
+        "vus_per_engine_assumed": assumed,
         "engines": engines,
         "engines_per_node": per_node,
         "nodes": nodes,
@@ -123,7 +131,7 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
             "memory_bytes": mem,
             "disk_gb": ENGINE_DISK_GB,
             "tmp_gb": ENGINE_TMP_GB,
-            "supported_threads": supported,
+            "supported_vus": supported,
         },
         "node": {
             "cpu": format_cpu(node_cpu),
@@ -153,12 +161,12 @@ def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
         # at 250m and packed onto one node -- see requests_note() in generate.
         "location": {
             "slots": engines,
-            "threads_per_engine": threads,
+            "threads_per_engine": vus,
             "override_cpu": format_cpu(cpu),
             "override_memory_mb": mem // (1024 ** 2),
         },
         "egress": [API_HOST, *ENGINE_UPLOAD_HOSTS, PUBLIC_REGISTRY.split("/")[0]],
-        "warnings": _warnings(threads, supported, cpu, mem, per_node, engines),
+        "warnings": _warnings(vus, supported, cpu, mem, per_node, engines),
     }
 
 
@@ -182,7 +190,7 @@ def _positive(value, name):
     return n
 
 
-def _warnings(threads, supported, cpu, mem, per_node, engines):
+def _warnings(vus, supported, cpu, mem, per_node, engines):
     """Everything true of this plan that a node count cannot express.
 
     Warnings, never refusals: each describes a plan that runs and reports
@@ -195,16 +203,16 @@ def _warnings(threads, supported, cpu, mem, per_node, engines):
     writing them once.
     """
     out = []
-    if threads > supported:
+    if vus > supported:
         out.append(
-            f"{threads} threads on a {format_cpu(cpu)} CPU / {format_memory(mem)} "
-            f"engine is more than that size carries, which is about {supported} "
-            f"({BASELINE_THREADS} per {ENGINE_DEFAULT_CPU} CPU / {ENGINE_DEFAULT_MEM}). "
-            f"The engines will throttle or OOM part-way up the ramp, and the run "
-            f"will report the load generator's latency rather than the system's. "
-            f"Either raise the engine size or lower threads per engine; the "
-            f"second needs more engines, so re-plan rather than only editing the "
-            f"location.")
+            f"{vus} virtual users on a {format_cpu(cpu)} CPU / "
+            f"{format_memory(mem)} engine is more than that size carries, which is "
+            f"about {supported} ({BASELINE_VUS} per {ENGINE_DEFAULT_CPU} CPU / "
+            f"{ENGINE_DEFAULT_MEM}). The engines will throttle or OOM part-way up "
+            f"the ramp, and the run will report the load generator's latency rather "
+            f"than the system's. Either raise the engine size or lower the virtual "
+            f"users per engine; the second needs more engines, so re-plan rather "
+            f"than only editing the location.")
     if per_node > 1:
         out.append(
             f"{per_node} engines share a node here. That is legitimate and "
@@ -226,7 +234,7 @@ def _warnings(threads, supported, cpu, mem, per_node, engines):
     return out
 
 
-def plan_document(plan, name=None):
+def plan_document(plan):
     """The plan as a document to hand to whoever provisions the cluster.
 
     Written for a reader who does not know what BlazeMeter is and is not going
@@ -235,19 +243,29 @@ def plan_document(plan, name=None):
     rather than in a meeting. The arithmetic is shown in full for the same
     reason. A capacity request that cannot be checked gets cut in half by
     somebody with a budget, and the half that goes is usually the node count.
+
+    Deliberately says nothing about *what* is being tested. The request is for
+    capacity to run load tests from this cluster, and naming an application
+    invites the reply that this should be sized per application -- which is a
+    conversation about the test plan, not about nodes.
+
+    One vocabulary throughout, and it is BlazeMeter's own: a private **location**
+    holds **agents**, an agent runs **engines**, and each engine drives some
+    number of **virtual users**. "Slots" and "threads" appear once each, in the
+    settings table, because those are what the fields are called -- not as terms
+    this document explains anything in.
     """
     p = plan
     eng, node, peak = p["engine"], p["node"], p["peak"]
-    title = f" for {name}" if name else ""
-    assumed = p["threads_per_engine_assumed"]
+    assumed = p["vus_per_engine_assumed"]
 
     lines = [
-        f"# Infrastructure request: load testing{title}",
+        "# Infrastructure request: load testing",
         "",
-        f"To run a **{p['users']:,} concurrent user** performance test on our own "
-        f"Kubernetes",
-        "cluster, using a BlazeMeter private location (the load generators run",
-        "here; only results leave).",
+        f"To run performance tests of up to **{p['users']:,} virtual users** from "
+        f"our own",
+        "Kubernetes cluster, using a BlazeMeter private location — the load",
+        "generators run here, and only results leave.",
         "",
         "## What is being asked for",
         "",
@@ -255,7 +273,7 @@ def plan_document(plan, name=None):
         "|---|---|",
         f"| Load-generator nodes | **{p['nodes']}** × {node['cpu']} vCPU / "
         f"{node['memory']} RAM / {node['disk_gb']}GB disk |",
-        "| ...when idle | **0** — the pool exists only during a test, and should "
+        "| ...when idle | **0** — they exist only while a test runs, and should "
         "autoscale from zero |",
         f"| Agent node | 1 small node, always on ({p['crane']['cpu_limit']} vCPU / "
         f"{p['crane']['memory_limit']} for the agent pod) |",
@@ -273,13 +291,16 @@ def plan_document(plan, name=None):
         "",
         "## How that number was reached",
         "",
+        "BlazeMeter runs a test from **engines** — one pod each — and each engine",
+        "drives a share of the virtual users:",
+        "",
         "```",
-        f"{p['users']:>7,} concurrent users",
-        f"{p['threads_per_engine']:>7,} users per engine"
+        f"{p['users']:>7,} virtual users",
+        f"{p['vus_per_engine']:>7,} virtual users per engine"
         + ("   (assumed -- see below)" if assumed else "   (supplied)"),
         f"{'-' * 7}",
-        f"{p['engines']:>7} engines, run at the same time"
-        f"   ({p['users']:,} / {p['threads_per_engine']:,}, rounded up)",
+        f"{p['engines']:>7} engines, running at the same time"
+        f"   ({p['users']:,} / {p['vus_per_engine']:,}, rounded up)",
         f"{p['engines_per_node']:>7} engine(s) per node",
         f"{'-' * 7}",
         f"{p['nodes']:>7} nodes",
@@ -291,7 +312,7 @@ def plan_document(plan, name=None):
         f"goes). A node",
         f"holding {p['engines_per_node']} of them therefore needs "
         f"{node['cpu']} vCPU and {node['memory']} of **capacity** —"
-        + (f" the engine's own"
+        + (" the engine's own"
            if p["engines_per_node"] == 1
            else f" {p['engines_per_node']} ×"),
         f"{eng['cpu']} CPU / {eng['memory']}, plus about "
@@ -323,16 +344,28 @@ def plan_document(plan, name=None):
     return "\n".join(lines)
 
 
+def eng_ratio(p):
+    """This engine against the baseline one, as words rather than a decimal.
+
+    "half" and "twice" are what a reader checks the arithmetic with; "0.5x"
+    invites them to wonder what was rounded.
+    """
+    r = p["vus_per_engine"] / BASELINE_VUS
+    return {0.25: "a quarter of that size", 0.5: "half that size",
+            2.0: "twice that size", 4.0: "four times that size"}.get(
+        r, f"{r:g}x that size")
+
+
 def _assumption_section(p):
     """The users-per-engine assumption, stated where it cannot be read past.
 
     It is the one input the whole document multiplies by, and the only one
     nothing here can verify. A reader who takes the node count and skips this
-    is the failure mode; a reader who disagrees with 500 and re-runs the plan
-    is the success.
+    is the failure mode; a reader who disagrees with the figure and re-runs the
+    plan is the success.
     """
-    threads = p["threads_per_engine"]
-    if not p["threads_per_engine_assumed"]:
+    threads = p["vus_per_engine"]
+    if not p["vus_per_engine_assumed"]:
         return [
             "## The assumption in this plan",
             "",
@@ -348,10 +381,16 @@ def _assumption_section(p):
     return [
         "## The assumption in this plan",
         "",
-        f"**{threads:,} users per engine is BlazeMeter's documented figure for an "
-        f"engine of",
-        f"this size, not a measurement of our test.** How many users one engine "
-        f"really",
+        f"**{threads:,} users per engine is what an engine of this size is rated "
+        f"for, not a",
+        f"measurement of our test.**"
+        + (f" {BASELINE_VUS:,} is BlazeMeter's figure for a"
+           if p["vus_per_engine"] != BASELINE_VUS
+           else " It is BlazeMeter's own figure for that size."),
+        (f"{ENGINE_DEFAULT_CPU} CPU / {ENGINE_DEFAULT_MEM} engine, and this one "
+         f"is {eng_ratio(p)}."
+         if p["vus_per_engine"] != BASELINE_VUS else ""),
+        f"How many users one engine really",
         "carries depends on what the script does between requests — a chatty API "
         "test",
         "with no think time exhausts an engine far sooner than a browsing journey "
@@ -386,15 +425,19 @@ def _blazemeter_section(p):
     return [
         "## The BlazeMeter side, so the cluster is actually used",
         "",
-        "Four fields on the private location, under **Settings → Private "
-        "Locations**:",
+        "A private **location** holds **agents**; an agent runs **engines**; each",
+        "engine drives **virtual users**. This cluster is where one location's",
+        "agent runs, and four of its settings have to match the plan above",
+        "(**Settings → Private Locations**):",
         "",
-        "| field | value | why |",
+        "| setting | value | why |",
         "|---|---|---|",
-        f"| Slots | `{loc['slots']}` | engines this location may run at once — "
-        f"below this the test cannot reach {p['users']:,} users |",
-        f"| Threads per engine | `{loc['threads_per_engine']}` | unset, every test "
-        f"start fails with 403 *Not enough available resources* |",
+        f"| Concurrent engines (`slots`) | `{loc['slots']}` | how many engines may "
+        f"run at once — below this the test cannot reach {p['users']:,} virtual "
+        f"users |",
+        f"| Virtual users per engine (`threadsPerEngine`) | "
+        f"`{loc['threads_per_engine']}` | unset, every test start fails with 403 "
+        f"*Not enough available resources* |",
         f"| overrideCPU | `{loc['override_cpu']}` | the engine pod's CPU "
         f"**request** |",
         f"| overrideMemory | `{loc['override_memory_mb']}` | the memory "
@@ -412,5 +455,19 @@ def _blazemeter_section(p):
         f"node instead of {p['nodes']}, and the whole run lands on it — on the "
         f"cluster this",
         "document was written to justify.",
+        "",
+        "**None of that waits for the cluster.** A private location and its agent "
+        "are",
+        "records in BlazeMeter, not things running here: the location can be "
+        "created with",
+        "these four values, and its agent added, while this request is still being "
+        "read.",
+        "The agent simply reports nothing until it is deployed — an agent that has "
+        "never",
+        "sent a heartbeat is the expected state before then, not a fault. So the "
+        "work",
+        "either side of the wait can be done during it, and the day the nodes exist "
+        "the",
+        "only step left is applying the manifests.",
         "",
     ]

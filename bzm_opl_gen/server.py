@@ -433,11 +433,10 @@ class PlanIn(BaseModel):
     # model rather than saying which number could not be a plan. core's refusal
     # says that, in the words the planner uses at the field itself.
     users: Any
-    threads_per_engine: Any = None
+    vus_per_engine: Any = None
     engine_cpu: Optional[str] = None
     engine_mem: Optional[str] = None
     engines_per_node: Any = None
-    name: Optional[str] = None
 
 
 def _typed(value):
@@ -464,11 +463,10 @@ def capacity_plan(p: PlanIn):
     it to or a cluster to point it at.
     """
     return _answer(core.capacity_plan, p.users,
-                   threads_per_engine=_typed(p.threads_per_engine),
+                   vus_per_engine=_typed(p.vus_per_engine),
                    engine_cpu=_typed(p.engine_cpu),
                    engine_mem=_typed(p.engine_mem),
-                   engines_per_node=_typed(p.engines_per_node),
-                   name=p.name)
+                   engines_per_node=_typed(p.engines_per_node))
 
 
 # -- preflight ----------------------------------------------------------------

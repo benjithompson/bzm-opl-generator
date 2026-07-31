@@ -539,19 +539,28 @@ def test_plan_needs_no_account_and_no_facts(monkeypatch, capsys):
     assert "slots=10" in out
 
 
-def test_plan_says_when_the_users_per_engine_figure_is_assumed(monkeypatch, capsys):
+def test_plan_says_when_the_vus_per_engine_figure_is_assumed(monkeypatch, capsys):
     _run(monkeypatch, "plan", "--users", "5000")
     assert "assumed" in capsys.readouterr().out
-    _run(monkeypatch, "plan", "--users", "5000", "--threads-per-engine", "500")
+    _run(monkeypatch, "plan", "--users", "5000", "--vus-per-engine", "500")
     assert "assumed" not in capsys.readouterr().out
+
+
+def test_plan_assumes_from_the_engine_size(monkeypatch, capsys):
+    """A Large engine carries twice what the standard one does, so a blank
+    figure has to follow the size rather than sit at BlazeMeter's 500."""
+    _run(monkeypatch, "plan", "--users", "10000",
+         "--engine-cpu-limit", "4", "--engine-mem-limit", "16Gi")
+    out = capsys.readouterr().out
+    assert "10,000 virtual users at 1,000 per engine" in out
+    assert "10 engines" in out
 
 
 def test_plan_writes_the_request_document(monkeypatch, capsys, tmp_path):
     out_dir = tmp_path / "plan"
-    _run(monkeypatch, "plan", "--users", "2500", "--name", "Checkout",
-         "-o", str(out_dir))
+    _run(monkeypatch, "plan", "--users", "2500", "-o", str(out_dir))
     doc = (out_dir / "capacity-request.md").read_text()
-    assert "# Infrastructure request: load testing for Checkout" in doc
+    assert doc.startswith("# Infrastructure request: load testing\n")
     assert "5** × 3 vCPU" in doc
     assert str(out_dir) in capsys.readouterr().out
 
@@ -588,7 +597,7 @@ def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
 def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):
     """Same two flag names as `generate`, so a plan and the bundle it leads to
     are described in one vocabulary."""
-    _run(monkeypatch, "plan", "--users", "1000", "--threads-per-engine", "250",
+    _run(monkeypatch, "plan", "--users", "1000", "--vus-per-engine", "250",
          "--engine-cpu-limit", "4", "--engine-mem-limit", "16Gi")
     out = capsys.readouterr().out
     assert "4 engines of 4 CPU / 16Gi" in out
