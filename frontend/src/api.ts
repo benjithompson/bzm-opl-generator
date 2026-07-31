@@ -10,6 +10,35 @@ export interface Ship {
 export interface Location {
   id: string; name: string; funcIds?: string[]; slots?: number; ships?: Ship[];
   workspacesId?: number[];
+  /** The three concurrency settings beyond `slots`, as BlazeMeter names them.
+   *  `overrideCPU` / `overrideMemory` are the engine pod's *requests* (memory
+   *  in MB) and are null on the great majority of locations, which is what
+   *  makes the scheduler place engines at 250m/256Mi. */
+  threadsPerEngine?: number | null;
+  overrideCPU?: number | null;
+  overrideMemory?: number | null;
+}
+
+/** The four settings this tool will change, as it names them. */
+export interface LocationSettings {
+  slots: number | null;
+  threads_per_engine: number | null;
+  override_cpu: number | null;
+  override_memory: number | null;
+}
+
+/** The answer to a settings change: what the account holds *now*.
+ *
+ *  `changed` is what moved, `ignored` is what was sent and came back unchanged
+ *  — a real case, since BlazeMeter's own POST accepts `threadsPerEngine` and
+ *  drops it. Reporting the request as the outcome is the failure this shape
+ *  exists to prevent; see core.update_location. */
+export interface LocationUpdate {
+  location: Location;
+  changed: Partial<LocationSettings>;
+  ignored: string[];
+  before: LocationSettings;
+  after: LocationSettings;
 }
 export interface Facts {
   harbor_id: string; harbor_name?: string; func_ids?: string[];
@@ -145,6 +174,11 @@ export const api = {
   issueToken: (harborId: string, shipId: string) =>
     req<{ auth_token: string }>(
       "POST", "/api/ships/token", { harbor_id: harborId, ship_id: shipId }),
+  /** Change a location's concurrency settings. A partial update: send only the
+   *  fields being changed. The answer says what the account holds afterwards,
+   *  which is not necessarily what was sent -- see LocationUpdate. */
+  updateLocation: (body: { harbor_id: string } & Record<string, string>) =>
+    req<LocationUpdate>("POST", "/api/locations/settings", body),
   /** Turn a feature on for a location. Additive and idempotent server-side --
    *  see core.add_func_id, which reads the location's own list first. */
   addFuncId: (harborId: string, funcId: string) =>

@@ -63,6 +63,20 @@ def _answer(fn, *args, **kw):
         raise HTTPException(e.status, str(e))
 
 
+def _typed(value):
+    """A form field the user left alone, as "not given".
+
+    An untouched `<input type=number>` posts "", and every optional field here
+    is one. Core cannot make this call for itself: a caller that means "no
+    figure, use the documented one" and a caller that sent a number which is
+    not a number must not arrive there as the same thing, and "" is only the
+    first of the two because a *browser* sent it. So the browser's transport
+    is where it is resolved -- the MCP server passes what its caller typed, and
+    an empty string from a model gets the planner's refusal.
+    """
+    return None if isinstance(value, str) and not value.strip() else value
+
+
 # -- key management -----------------------------------------------------------
 # Not core's: this is a browser session's credential lifetime -- where a pasted
 # key is kept, and for how long -- which is a fact about running a single-user
@@ -235,6 +249,33 @@ class FuncIdIn(BaseModel):
 @app.post("/api/locations/func-id", description=core.add_func_id.__doc__)
 def location_add_func_id(f: FuncIdIn):
     return _answer(core.add_func_id, _client(), f.harbor_id, f.func_id)
+
+
+class LocationSettingsIn(BaseModel):
+    harbor_id: str
+    # Every field optional and None-by-default: this is a partial update, and
+    # only what the browser sends is written. `Any` for the numbers, for the
+    # reason PlanIn gives -- an emptied number input posts "".
+    slots: Any = None
+    threads_per_engine: Any = None
+    override_cpu: Any = None
+    override_memory: Any = None
+
+
+@app.post("/api/locations/settings", description=core.update_location.__doc__)
+def location_update(s: LocationSettingsIn):
+    """Change the selected location's concurrency settings.
+
+    The third and last write this page makes to a customer's account, and like
+    the other two it is a call of its own rather than a flag on something else:
+    a change here reaches every agent in the location and every test that
+    starts on it, so it has to be the thing that was clicked.
+    """
+    return _answer(core.update_location, _client(), s.harbor_id,
+                   slots=_typed(s.slots),
+                   threads_per_engine=_typed(s.threads_per_engine),
+                   override_cpu=_typed(s.override_cpu),
+                   override_memory=_typed(s.override_memory))
 
 
 class TokenIn(BaseModel):
@@ -437,20 +478,6 @@ class PlanIn(BaseModel):
     engine_cpu: Optional[str] = None
     engine_mem: Optional[str] = None
     engines_per_node: Any = None
-
-
-def _typed(value):
-    """A form field the user left alone, as "not given".
-
-    An untouched `<input type=number>` posts "", and every optional field here
-    is one. Core cannot make this call for itself: a caller that means "no
-    figure, use the documented one" and a caller that sent a number which is
-    not a number must not arrive there as the same thing, and "" is only the
-    first of the two because a *browser* sent it. So the browser's transport
-    is where it is resolved -- the MCP server passes what its caller typed, and
-    an empty string from a model gets the planner's refusal.
-    """
-    return None if isinstance(value, str) and not value.strip() else value
 
 
 @app.post("/api/plan", description=core.capacity_plan.__doc__)

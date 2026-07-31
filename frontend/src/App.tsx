@@ -1038,6 +1038,17 @@ export default function App() {
   );
   // Lifted out of the Private location panel so both it and a prototype panel
   // can show the same form -- it is the shipped one, moved, not a copy.
+  /** Put a location that has just been changed back into the list.
+   *
+   *  In place rather than by re-fetching the workspace: the answer came from a
+   *  re-read of that location, so it is newer than anything a list call would
+   *  bring back, and re-fetching would also drop the ships the list is showing
+   *  for every other row. The selection does not move -- changing a location's
+   *  settings is not a reason to stop working on it. */
+  const locationUpdated = useCallback((loc: Location) => {
+    setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, ...loc } : l)));
+  }, []);
+
   // What Create is waiting for, as the sentence it shows rather than as a
   // silently greyed button.
   const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
@@ -1178,6 +1189,7 @@ export default function App() {
               harborId={harborId} setHarborId={setHarborId} location={location}
               locBusy={locBusy} locErr={locErr} showCreateLoc={showCreateLoc}
               setShowCreateLoc={setShowCreateLoc}
+              onLocationUpdated={locationUpdated}
               createLocationForm={createLocationFormNode}
               ships={ships} shipId={shipId}
               pickShip={(id) => { setShipId(id); forgetToken(); }}

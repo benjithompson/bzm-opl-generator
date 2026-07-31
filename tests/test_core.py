@@ -32,10 +32,15 @@ class FakeClient:
     like. Methods no core test calls are here for that reason.
     """
 
-    def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None):
+    def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None,
+                 ignores=()):
         self._token = token
         self._harbor = harbor if harbor is not None else {}
         self._locations = locations
+        # BlazeMeter fields this stand-in account accepts on a PATCH and then
+        # does not store, which is a real behaviour rather than an invented
+        # one: POST /private-locations does exactly that with threadsPerEngine.
+        self._ignores = set(ignores)
         self.calls = []
 
     def auth_token(self, harbor_id, ship_id):
@@ -73,12 +78,21 @@ class FakeClient:
         self.calls.append(("delete", harbor_id))
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None, func_ids=None):
+                                threads_per_engine=None, func_ids=None,
+                                override_cpu=None, override_memory=None):
         self.calls.append(("update_private_location", harbor_id, func_ids))
-        merged = dict(self._harbor)
+        # The write lands on the harbor this fake hands back, so a caller that
+        # re-reads sees what it wrote -- which is the whole point of
+        # core.update_location's second GET, and untestable against a fake
+        # whose state never moves.
+        sent = {"slots": slots, "threadsPerEngine": threads_per_engine,
+                "overrideCPU": override_cpu, "overrideMemory": override_memory}
+        for field, value in sent.items():
+            if value is not None and field not in self._ignores:
+                self._harbor[field] = value
         if func_ids is not None:
-            merged["funcIds"] = list(func_ids)
-        return merged
+            self._harbor["funcIds"] = list(func_ids)
+        return dict(self._harbor)
 
 
 # -- turning a feature on for a location --------------------------------------
@@ -962,3 +976,83 @@ def test_regenerating_a_chart_bundle_finds_the_token_it_wrote(tmp_path):
                       "auth_token": "TOKENVALUE"}, client=None)
     gen.write(files, str(tmp_path))
     assert gen.existing_auth_token(str(tmp_path)) == "TOKENVALUE"
+
+
+# -- changing a location's settings after the fact ----------------------------
+# The case: the location and agent are set up, and the virtual users per engine
+# turns out to be 1,000 rather than 500. None of these four values is in a
+# manifest, so this is the whole of that change -- nothing to regenerate.
+
+def _loc(**over):
+    base = {"id": "h1", "name": "loc", "slots": 2, "threadsPerEngine": 500,
+            "overrideCPU": None, "overrideMemory": None,
+            "funcIds": ["performance"]}
+    base.update(over)
+    return base
+
+
+def test_update_location_changes_what_it_was_asked_to():
+    client = FakeClient(harbor=_loc())
+    out = core.update_location(client, "h1", threads_per_engine=1000)
+    assert out["changed"] == {"threads_per_engine": 1000}
+    assert out["before"]["threads_per_engine"] == 500
+    assert out["after"]["threads_per_engine"] == 1000
+    assert out["ignored"] == []
+
+
+def test_update_location_leaves_alone_what_was_not_sent():
+    """A partial update. Sending only the field being changed is what stops a
+    form from writing back three values a browser has been holding."""
+    client = FakeClient(harbor=_loc())
+    out = core.update_location(client, "h1", threads_per_engine=1000)
+    assert out["after"]["slots"] == 2
+    assert out["location"]["funcIds"] == ["performance"]
+
+
+def test_update_location_reports_a_field_the_account_did_not_store():
+    """The failure this guards: POST /private-locations accepts
+    threadsPerEngine and drops it, and the location then 403s every test start.
+    A UI that echoed the request back would show the number the user typed
+    while the account held the old one."""
+    client = FakeClient(harbor=_loc(), ignores={"overrideCPU"})
+    out = core.update_location(client, "h1", threads_per_engine=1000,
+                               override_cpu=2)
+    assert out["changed"] == {"threads_per_engine": 1000}
+    assert out["ignored"] == ["override_cpu"]
+    assert out["after"]["override_cpu"] is None
+
+
+def test_update_location_re_reads_rather_than_trusting_the_write():
+    client = FakeClient(harbor=_loc())
+    core.update_location(client, "h1", slots=4)
+    kinds = [c[0] for c in client.calls]
+    # before, the write, and after -- the last is what the answer describes.
+    assert kinds == ["private_location", "update_private_location",
+                     "private_location"]
+
+
+def test_update_location_with_nothing_to_change_writes_nothing():
+    """A form submitted unchanged is a no-op, not an error, and must not spend
+    a write on the customer's account to find that out."""
+    client = FakeClient(harbor=_loc())
+    out = core.update_location(client, "h1")
+    assert out["changed"] == {} and out["ignored"] == []
+    assert [c for c in client.calls if c[0] == "update_private_location"] == []
+
+
+def test_update_location_refuses_a_setting_it_does_not_own():
+    """`funcIds` in particular: add_func_id is additive by construction, and a
+    general passthrough would let a caller replace the list wholesale."""
+    client = FakeClient(harbor=_loc())
+    with pytest.raises(core.BadRequest, match="funcIds"):
+        core.update_location(client, "h1", funcIds=["mockServices"])
+    assert [c for c in client.calls if c[0] == "update_private_location"] == []
+
+
+def test_update_location_says_a_value_was_already_what_was_asked_for():
+    """Unchanged because it already matched is not the same as refused, and the
+    two must not both come back as `ignored` -- one is a no-op, the other is an
+    account that would not take the value."""
+    client = FakeClient(harbor=_loc())
+    out = core.update_location(client, "h1", threads_per_engine=500)
+    assert out["changed"] == {} and out["ignored"] == []

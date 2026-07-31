@@ -218,10 +218,17 @@ the classes of problem it can't fix for you.
   `core`-style ownership holds on this side too. A group belongs to no feature
   (`SHARED_GROUPS`) or to one (`groupsOf`), and both are on screen at once:
   there is no `visibleGroups`/`setButHidden`/`hiddenBlockers` any more, and
-  nothing that hands back what a view was hiding. Two writes to the account come
-  from this page and nowhere else — `POST /api/ships/token` (regenerate) and
-  `POST /api/locations/func-id` (enable a feature on a location) — and both say
-  what they cost before they are pressed.
+  nothing that hands back what a view was hiding. **Three** writes to the
+  account come from this page and nowhere else — `POST /api/ships/token`
+  (regenerate), `POST /api/locations/func-id` (enable a feature) and
+  `POST /api/locations/settings` (slots, threadsPerEngine and the two engine
+  request overrides) — and each says what it costs before it is pressed. The
+  third re-reads the location afterwards and reports *that*, not the request:
+  BlazeMeter's own POST accepts `threadsPerEngine` and does not store it, so a
+  form echoing back what was typed would show a value the account never took.
+  `core.LOCATION_SETTINGS` is a closed set for the same reason `add_func_id`
+  exists — a general passthrough would let `funcIds` be replaced wholesale by a
+  caller that meant to add one.
 
 - **"Could not read" and "there is nothing there" must never share a
   representation.** This has been the same bug four times, and three of them

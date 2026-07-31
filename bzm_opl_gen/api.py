@@ -166,12 +166,28 @@ class BzmClient:
             h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None, func_ids=None):
+                                threads_per_engine=None, func_ids=None,
+                                override_cpu=None, override_memory=None):
+        """PATCH the location's settings. Only what is passed is sent.
+
+        `override_cpu` / `override_memory` are the engine pod's CPU and memory
+        *requests* (memory in MB), which the scheduler and the autoscaler place
+        on -- see generate.ENGINE_DEFAULT_REQUEST_CPU for why they matter more
+        than they look. They are read back from the location by facts.gather,
+        so the field names are known; that BlazeMeter accepts them on a PATCH
+        is not something this repo has proved on every account, which is why
+        core.update_location re-reads and reports what actually changed rather
+        than assuming the body was honoured.
+        """
         body = {}
         if slots is not None:
             body["slots"] = slots
         if threads_per_engine is not None:
             body["threadsPerEngine"] = threads_per_engine
+        if override_cpu is not None:
+            body["overrideCPU"] = override_cpu
+        if override_memory is not None:
+            body["overrideMemory"] = override_memory
         # The whole list, because PATCH replaces it: sending one funcId is how a
         # location that ran performance and mocks comes back running only mocks.
         # Callers add to what the location already has -- see core.add_func_id.

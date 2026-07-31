@@ -78,6 +78,33 @@ anything that breaks.
   (`plan.supported_vus`) rather than each carrying it, so a plan the preflight
   would then warn about cannot be produced.
 
+- **Change a location's settings from the web UI, after it exists.** The
+  correction that follows a setup: a location and its agent are built for 500
+  virtual users an engine, a real run says the figure is 1,000, and until now
+  the only answer was "go and edit it in BlazeMeter" — the one place this tool
+  otherwise never sends you.
+
+  Step 1 now edits the selected location's **concurrent engines** (`slots`),
+  **virtual users per engine** (`threadsPerEngine`) and the engine's CPU and
+  memory **requests** (`overrideCPU` / `overrideMemory`). None of those four is
+  in a manifest, so a change needs no regenerate, no re-apply and no restart —
+  it applies to the next test that starts, which the panel says.
+
+  **The answer is a re-read of the location, not an echo of the request.**
+  BlazeMeter's own create endpoint accepts `threadsPerEngine` and does not store
+  it — that is why a freshly created location 403s every test start — so a form
+  that reported what it sent would show a number the account never took. Fields
+  that came back unchanged are reported as not stored, in amber, beside the ones
+  that saved.
+
+  Only changed fields are sent, so a page left open does not write back three
+  values somebody else has since edited; blank means "leave alone", so there is
+  no way to *clear* a setting here; and `funcIds` is deliberately not in the set
+  (it is `add_func_id`'s, which is additive by construction — a passthrough
+  would let a caller replace the whole list by accident). This is the third and
+  last write the page makes to a customer's account, and like the other two it
+  is a control of its own that says what it costs first.
+
 ### Fixed
 
 - **The web UI's engine-sizing hint still claimed engine requests could not be

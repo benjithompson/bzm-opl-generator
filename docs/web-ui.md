@@ -50,6 +50,26 @@ report, and deleting it changes nothing. In a Helm bundle it is the chart's
 cluster** below the download button, which needs no cluster access at all — see
 [Preflight](preflight.md).
 
+### Changing a location after it exists
+
+The selected location's settings are editable under it in step 1: **concurrent
+engines** (`slots`), **virtual users per engine** (`threadsPerEngine`) and the
+engine's CPU and memory **requests** (`overrideCPU` / `overrideMemory`). The
+case is the correction rather than the setup — a location built for 500 virtual
+users an engine that a real run says should be 1,000.
+
+None of those four values is in a manifest, so changing one needs no
+regenerate, no re-apply and no restart; it applies to the next test that
+starts. Save sends only the fields that changed, and the answer is a **re-read
+of the location**, not an echo of the request: a field the account did not
+store comes back reported as not stored. That is not hypothetical — BlazeMeter's
+own create endpoint accepts `threadsPerEngine` and drops it, which is why a
+freshly created location 403s every test start until it is PATCHed.
+
+It changes the location for every agent in it and every test that starts on it,
+which the panel says before the button is pressed. Clearing a setting is not
+offered: blank means "leave this one alone", and the two are different intents.
+
 ### The AUTH_TOKEN, and where it comes from
 
 **Nothing on this page issues a credential except creating an agent.** Asking

@@ -343,6 +343,83 @@ def add_func_id(client, harbor_id, func_id):
                      func_ids=have + [func_id])
 
 
+# The location settings this tool will change, as {name: the field BlazeMeter
+# calls it}. A closed set on purpose: `funcIds` is add_func_id's, which is
+# additive by construction, and a general "PATCH whatever you send" would let a
+# caller replace it wholesale by accident -- the exact failure that function
+# exists to prevent.
+LOCATION_SETTINGS = {
+    "slots": "slots",
+    "threads_per_engine": "threadsPerEngine",
+    "override_cpu": "overrideCPU",
+    "override_memory": "overrideMemory",
+}
+
+
+def update_location(client, harbor_id, **settings):
+    """Change a location's concurrency settings, and report what actually took.
+
+    The case this exists for: the location and its agent were set up, a test
+    was planned against 500 virtual users per engine, and the real figure turns
+    out to be 1,000. That is a change to the *location*, not to the bundle --
+    none of these four values appears in a manifest, so nothing has to be
+    regenerated, re-applied or restarted for a new one to take effect on the
+    next test start.
+
+    **Reads back rather than trusting the write.** The answer names, per field,
+    what it was, what was asked for and what the location says afterwards --
+    because this API has already been caught accepting a field and not storing
+    it: `create_private_location` sends threadsPerEngine to POST, which ignores
+    it, and the location comes back null and 403s every test start. A UI that
+    reported the request as the outcome would show the number the user typed
+    while the account held something else, which is the same failure wearing a
+    tick. `ignored` is what came back unchanged.
+
+    Unknown settings are refused rather than passed through: a typo in a field
+    name would otherwise be a silent no-op that this function then reported as
+    "nothing changed", which reads as the account rejecting a legitimate value.
+
+    `None` means "leave this one alone", so there is deliberately no way to
+    *clear* a setting here -- an override that has been set can be changed but
+    not unset. Clearing one is a different intent from not mentioning it, and
+    collapsing the two is how a partial update wipes a field nobody named.
+    """
+    unknown = sorted(set(settings) - set(LOCATION_SETTINGS))
+    if unknown:
+        raise BadRequest(
+            f"not a location setting: {', '.join(unknown)} -- this changes "
+            f"{', '.join(sorted(LOCATION_SETTINGS))}. Features are "
+            f"add_func_id's, which is additive; anything else is BlazeMeter's "
+            f"own UI")
+    wanted = {k: v for k, v in settings.items() if v is not None}
+    before = _upstream(client.private_location, harbor_id)
+    # Snapshotted here, not after the write. Reading the four values out of
+    # `before` further down would be right only for as long as the client hands
+    # back a document nothing else holds a reference to -- and "what it was" is
+    # the one thing that cannot be re-derived once the PATCH has landed.
+    was = _settings_of(before)
+    if not wanted:
+        # Not an error: a form submitted with nothing changed is a no-op, and
+        # answering with the location keeps one shape for every caller.
+        return {"location": before, "changed": {}, "ignored": [],
+                "before": was, "after": dict(was)}
+    _upstream(client.update_private_location, harbor_id, **wanted)
+    # A second GET rather than the PATCH's own body: the response to a write is
+    # what the write claimed, and what this has to report is what the account
+    # now holds.
+    after = _upstream(client.private_location, harbor_id)
+    now = _settings_of(after)
+    changed = {k: now[k] for k in wanted if now[k] != was[k]}
+    ignored = sorted(k for k in wanted if now[k] == was[k] and wanted[k] != was[k])
+    return {"location": after, "changed": changed, "ignored": ignored,
+            "before": was, "after": now}
+
+
+def _settings_of(location):
+    """The four settings as this tool names them, from a location document."""
+    return {name: location.get(field) for name, field in LOCATION_SETTINGS.items()}
+
+
 def issue_auth_token(client, harbor_id, ship_id):
     """Mint a new AUTH_TOKEN for an existing agent, and return it.
 

@@ -1352,3 +1352,52 @@ def test_plan_still_refuses_a_target_that_was_never_typed():
     """`users` is the one field with no default, so blank is a refusal rather
     than an assumption -- there is no plan without a load target."""
     assert client.post("/api/plan", json={"users": ""}).status_code == 400
+
+
+# -- changing a location's settings -------------------------------------------
+
+def test_location_settings_reports_what_the_account_now_holds(monkeypatch):
+    """Not what was sent. The panel shows this answer, so a field the account
+    dropped has to arrive as dropped rather than as saved."""
+    c = FakeClient(harbor={"id": "h1", "name": "loc", "slots": 2,
+                           "threadsPerEngine": 500, "overrideCPU": None,
+                           "overrideMemory": None},
+                   ignores={"overrideCPU"})
+    monkeypatch.setitem(server._state, "client", c)
+    r = client.post("/api/locations/settings", json={
+        "harbor_id": "h1", "threads_per_engine": 1000, "override_cpu": 2})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["changed"] == {"threads_per_engine": 1000}
+    assert body["ignored"] == ["override_cpu"]
+    assert body["before"]["threads_per_engine"] == 500
+
+
+def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
+    """The browser sends only the fields it changed; the rest must not be
+    written back from a page that may have been open for an hour."""
+    c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
+                           "overrideCPU": None, "overrideMemory": None})
+    monkeypatch.setitem(server._state, "client", c)
+    body = client.post("/api/locations/settings", json={
+        "harbor_id": "h1", "threads_per_engine": 1000}).json()
+    assert body["after"]["slots"] == 2
+    assert body["changed"] == {"threads_per_engine": 1000}
+
+
+def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
+    """`funcIds` is add_func_id's, and that call is additive by construction."""
+    monkeypatch.setitem(server._state, "client", FakeClient(harbor={"id": "h1"}))
+    r = client.post("/api/locations/settings",
+                    json={"harbor_id": "h1", "funcIds": ["mockServices"]})
+    # Not a route argument at all, so the body is simply ignored by the model --
+    # what matters is that nothing was written.
+    assert r.status_code == 200
+    assert r.json()["changed"] == {}
+
+
+def test_location_settings_needs_a_key(monkeypatch):
+    monkeypatch.setitem(server._state, "client", None)
+    r = client.post("/api/locations/settings",
+                    json={"harbor_id": "h1", "slots": 3})
+    assert r.status_code == 401

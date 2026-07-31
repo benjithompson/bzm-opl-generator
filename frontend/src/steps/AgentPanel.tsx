@@ -15,6 +15,7 @@ import {
   Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
+import { LocationSettings } from "../groups/LocationSettings";
 import { ManualSource } from "../groups/ManualSource";
 import { rotateHazard } from "../token";
 
@@ -62,6 +63,9 @@ export interface AgentPanelProps {
   /** The create-location form: App's, because it owns the form's state and the
    *  call that writes to the account. Rendered in place of the button. */
   showCreateLoc: boolean;
+  /** The location came back changed: App owns the list and the selection, so
+   *  it is App that puts it back. */
+  onLocationUpdated: (loc: Location) => void;
   setShowCreateLoc: (v: boolean) => void;
   createLocationForm: React.ReactNode;
   // -- the agents in it
@@ -377,6 +381,13 @@ export function AgentPanel(p: AgentPanelProps) {
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>
                 )}
               </div>
+              {/* Under the list, for the location that is selected: this is a
+                  change to something that exists, so it belongs where the thing
+                  it changes is, rather than in a settings screen of its own. */}
+              {p.location && (
+                <LocationSettings location={p.location}
+                  onUpdated={p.onLocationUpdated} />
+              )}
             </div>
           </SubSection>
 
