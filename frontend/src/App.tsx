@@ -1067,6 +1067,19 @@ export default function App() {
   // silently greyed button.
   const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
     : !newLoc.workspace_id ? "pick a workspace above first" : "";
+  /** One segment of the summary line under the flow: a label nobody has to
+   *  read twice, and a value that says "none yet" in amber where the absence is
+   *  the thing worth knowing. */
+  const pathSeg = (label: string, value: string | null, warn = false) => (
+    <span className="flex items-center gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
+      <span className={"text-xs font-medium "
+        + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
+        {value ?? (warn ? "none yet" : "—")}
+      </span>
+    </span>
+  );
+
   const createLocationFormNode = (
     <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
       <p className="text-xs font-semibold text-slate-700">
@@ -1169,6 +1182,26 @@ export default function App() {
             after the download to go on to. */}
         <StepFlow
           at={step} onGo={setStep}
+          /* What all of step 1 adds up to, under the panel rather than inside
+             it. It was a line between two of the three sections, where it read
+             as a divider between them rather than as their result -- and it
+             answers "which location and agent am I generating for?", which is a
+             question you also have in steps 2 and 3. So it stays put as the
+             steps change. */
+          footer={sourceMode === "connect" ? (
+            <div className="mt-3 pt-2.5 border-t border-slate-200 flex items-center gap-2 flex-wrap">
+              {pathSeg("location", location?.name ?? null)}
+              <span className="text-slate-300">›</span>
+              {pathSeg("agent",
+                       ships.find((x) => x.id === shipId)?.name ?? null,
+                       !!location)}
+              {!!location && ships.length === 0 && (
+                <span className="text-[11px] text-amber-700 ml-1">
+                  — this location is empty; the first agent has to be created
+                </span>
+              )}
+            </div>
+          ) : undefined}
           done={[
             !!facts && !!shipId,
             namespaceOk && saOk && incomplete.length === 0,

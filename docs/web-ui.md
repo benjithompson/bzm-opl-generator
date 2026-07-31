@@ -50,6 +50,11 @@ report, and deleting it changes nothing. In a Helm bundle it is the chart's
 cluster** below the download button, which needs no cluster access at all — see
 [Preflight](preflight.md).
 
+Under the step, and outside its scroller so it does not move, is the summary
+line: which location and which agent everything is being generated for, and
+"none yet" in amber where one is missing. It stays as the steps change, because
+that is a question you have in step 2 and step 3 as much as in step 1.
+
 Step 1's three sections — **Connect**, **Private location**, **Agent (ship)** —
 are bordered panels that fold. The header is the control: a chevron on its left
 points right when closed and down when open, and the bar tints under the

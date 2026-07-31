@@ -28,6 +28,11 @@ interface StepFlowProps {
    *  field that is empty: the point of the fixed position is that the user is
    *  looking there, not up the page. "" for a step that never blocks. */
   blockedBy: string[];
+  /** A line under the step, outside its scroller and so always on screen --
+   *  what the flow adds up to rather than part of any one step. Inside the
+   *  scrolling area it would sit at the bottom of a panel taller than the
+   *  window, which is to say nowhere. */
+  footer?: ReactNode;
   children: ReactNode;
 }
 
@@ -39,7 +44,7 @@ const dotCls = (state: "done" | "now" | "todo") =>
     todo: "bg-slate-200 text-slate-500",
   })[state];
 
-export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps) {
+export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFlowProps) {
   // Steps the user has opened. Every step but the last is "done" on arrival --
   // the namespace and service account have defaults and no group is mandatory
   // -- so a tick on a step nobody has looked at claims something that did not
@@ -64,7 +69,17 @@ export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps)
       : done[i] && seen[i] ? "done" as const : "todo" as const;
 
   return (
-    <>
+    // A flex column of the height the page actually has, so the step scrolls
+    // inside it and the footer is the last thing on screen. It was a scroller
+    // of `100vh - 13rem` with the footer after it, and the arithmetic was
+    // always going to be wrong for somebody: on a 900px window it put the line
+    // 21px below the fold. What is above this varies -- the blocked-by sentence
+    // comes and goes -- so nothing here should be counting rem.
+    // 10rem is what is above and below this: the page header (3.25rem), the
+    // Configure/Preview tab bar (3.25rem), and main's own padding top and
+    // bottom (1.5rem each). Measured rather than guessed -- the first two
+    // attempts put the footer 21px and then 10px under the fold.
+    <div className="flex flex-col h-[calc(100vh-10rem)]">
       {/* Below the Configure/Preview tabs, which are sticky at the very top:
           two bars both claiming top-0 is one bar over the other. */}
       <div className="sticky top-[3.25rem] z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
@@ -107,10 +122,13 @@ export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps)
         <p className="text-[11px] text-amber-700 pt-2">{blockedBy[at]}</p>
       )}
       {/* The step owns the scrolling, not the page, so the bar above never
-          leaves the top of the window. */}
-      <div className="mt-3 overflow-y-auto h-[calc(100vh-11rem)] pr-1">
+          leaves the top of the window. The height leaves room for the footer,
+          which is outside the scroller for the same reason the stepper is above
+          it: it must not move. */}
+      <div className="mt-3 flex-1 min-h-0 overflow-y-auto pr-1">
         {steps[at]?.node}
       </div>
-    </>
+      {footer}
+    </div>
   );
 }

@@ -156,6 +156,13 @@ anything that breaks.
   caller has other ways to change the account — a cache there would answer
   "list the locations" with one that has since been deleted.
 
+- **The location/agent summary moved out of step 1 and under the flow.** It was
+  a line between the Connect and Private location panels, where it read as a
+  divider between two sections rather than as the result of all three. It is now
+  a footer under the step — outside the scrolling area, so it does not move, and
+  present on every step, because "which location and agent am I generating for?"
+  is as much a question in Configure and Download as in Agent details.
+
 - **The account and workspace dropdowns say when they are loading.** Both are a
   round trip to BlazeMeter over whatever network the user is on, and both were
   silent while it happened — an empty dropdown and a slow one look identical, so

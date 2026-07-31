@@ -177,16 +177,6 @@ export function AgentPanel(p: AgentPanelProps) {
     try { await p.createShip(); } finally { setMakingShip(false); }
   };
 
-  const pathSeg = (label: string, value: string | null, warn = false) => (
-    <span className="flex items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
-      <span className={"text-xs font-medium "
-        + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
-        {value ?? (warn ? "none yet" : "—")}
-      </span>
-    </span>
-  );
-
   return (
     <div className="space-y-3">
       <SegmentedControl
@@ -318,24 +308,6 @@ export function AgentPanel(p: AgentPanelProps) {
                 : <ErrorMsg msg={p.connErr} />}
             </div>
           </SubSection>
-
-          {/* Where you are, always, and what is still missing. A location with
-              no agent says so here rather than in a panel further down that you
-              have to reach before the absence is visible.
-
-              Borderless, unlike the three panels below it: with a card's border
-              it read as a fourth section between two of them, and it is not a
-              section -- it is the summary of what they add up to. */}
-          <div className="px-1 py-0.5 flex items-center gap-2 flex-wrap">
-            {pathSeg("location", p.location?.name ?? null)}
-            <span className="text-slate-300">›</span>
-            {pathSeg("agent", ship?.name ?? null, !!p.location)}
-            {empty && (
-              <span className="text-[11px] text-amber-700 ml-1">
-                — this location is empty; the first agent has to be created
-              </span>
-            )}
-          </div>
 
           <SubSection title="Private location" done={!!p.harborId}
             {...fold("location")}
