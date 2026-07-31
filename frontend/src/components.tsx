@@ -260,8 +260,15 @@ export function SubSection(props: {
           body's height is not knowable in advance and `height: auto` does not
           transition. Kept mounted while closed so what was typed into it is
           still there when it reopens. */}
-      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-        + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+      {/* `invisible` as well as zero-height, and that is not decoration: the body
+          stays mounted while closed so what was typed into it survives, and a
+          mounted body inside a 0fr row is still in the hit-testing and
+          accessibility trees. Its buttons took clicks aimed at whatever was
+          drawn over them, and a keyboard tab walked into a section nobody could
+          see. visibility:hidden takes it out of both while keeping the state. */}
+      <div aria-hidden={!open}
+        className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
         <div className="overflow-hidden">
           <div className="p-3">
             {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}

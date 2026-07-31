@@ -128,9 +128,23 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
-    let detail = r.statusText;
-    try { detail = (await r.json()).detail ?? detail; } catch { /* ignore */ }
-    throw new Error(detail);
+    let detail: string | null = null;
+    try { detail = (await r.json()).detail ?? null; } catch { /* not our JSON */ }
+    // 404/405 with no `detail` is not this API answering -- it is the SPA's
+    // static mount, which is what serves a path FastAPI has no route for and
+    // answers 405 to any POST. In practice that means one thing: the page is
+    // newer than the process serving it. The UI bundle is read from disk on
+    // every request, so a long-running server hands out a build whose calls it
+    // has never heard of, and the feature looks broken rather than stale.
+    // Twice now that has cost a debugging session, so it says so itself.
+    if (detail === null && (r.status === 404 || r.status === 405)) {
+      throw new Error(
+        `this page is newer than the server it is talking to — ${method} ${url} `
+        + `is not a route it knows (HTTP ${r.status}). Restart it: `
+        + `launchctl kickstart -k gui/$UID/com.blazemeter.bzm-opl-gen.ui, `
+        + `or stop and re-run \`bzm-opl-gen ui\``);
+    }
+    throw new Error(detail ?? r.statusText);
   }
   return r.json();
 }

@@ -141,6 +141,23 @@ anything that breaks.
 
 ### Fixed
 
+- **A collapsed step-1 section kept its controls clickable.** The body stays
+  mounted while folded so what was typed into it survives, but a mounted body
+  inside a zero-height row is still in the hit-testing and accessibility trees:
+  its buttons took clicks aimed at whatever was drawn over them, and a keyboard
+  tab walked into a section nobody could see. Folded sections are now
+  `visibility: hidden` as well as zero-height, which keeps the state and takes
+  them out of both.
+
+- **An API call the running server has never heard of now says so.** The UI
+  bundle is read from disk on every request, so a server left running for a day
+  serves a page whose calls it cannot answer — FastAPI has no route, the SPA's
+  static mount answers the POST with `405 Method Not Allowed`, and a working
+  feature looks broken. A 404 or 405 carrying no `detail` is exactly that case,
+  and the page now reports it as "this page is newer than the server it is
+  talking to" with the command to restart, rather than as the feature's own
+  error.
+
 - **The web UI's engine-sizing hint still claimed engine requests could not be
   set.** "Crane stamps them at 250m/256Mi and the scheduler packs nodes on
   those" was the belief a live GKE run disproved in the previous release — the
