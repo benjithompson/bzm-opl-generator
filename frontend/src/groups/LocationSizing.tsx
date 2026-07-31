@@ -36,11 +36,6 @@ function seed(loc: Location) {
     vus: "",
     vusPerEngine: loc.threadsPerEngine ? String(loc.threadsPerEngine) : "",
     engine: size?.id ?? "standard",
-    // The agents this location already has, because `slots` is engines per
-    // agent: sizing against one when the location has three sets it to three
-    // times the run. An empty location has none yet, and one is what it will
-    // have when the first is created.
-    agents: String(Math.max((loc.ships ?? []).length, 1)),
   };
 }
 
@@ -57,6 +52,11 @@ export function LocationSizing(props: {
   useEffect(() => setForm(seed(props.location)), [props.location.id]);
 
   const size = ENGINE_SIZES.find((s) => s.id === form.engine) ?? ENGINE_SIZES[1];
+  // Not a field: the location already says how many agents it has, and a box
+  // to retype it is a second source for the same fact -- one that can disagree
+  // with the row it sits under. An empty location counts as one, which is what
+  // it will have as soon as the first agent is created.
+  const agents = Math.max((props.location.ships ?? []).length, 1);
 
   // What this engine size is rated for, asked as soon as the size changes
   // rather than waiting for a plan: the suggestion is most use *before* the
@@ -80,13 +80,13 @@ export function LocationSizing(props: {
     timer.current = window.setTimeout(() => {
       api.plan({ users: form.vus, vus_per_engine: form.vusPerEngine,
                  engine_cpu: size.cpu, engine_mem: size.mem,
-                 agents: form.agents })
+                 agents: String(agents) })
         .then((p) => { setPlan(p); setErr(null); })
         .catch((e: Error) => { setErr(e.message); setPlan(null); })
         .finally(() => setBusy(false));
     }, 250);
     return () => window.clearTimeout(timer.current);
-  }, [form.vus, form.vusPerEngine, size.cpu, size.mem, form.agents]);
+  }, [form.vus, form.vusPerEngine, size.cpu, size.mem, agents]);
 
   const apply = () => {
     if (!plan) return;
@@ -107,13 +107,16 @@ export function LocationSizing(props: {
           Size this location
         </p>
         <p className="text-[11px] text-slate-500">
-          How many engines the load needs, and what they cost in nodes. Nothing
+          How many engines the load needs, and what they cost in nodes, across
+          this location&apos;s{" "}
+          <b>{(props.location.ships ?? []).length || "first"} agent
+          {(props.location.ships ?? []).length === 1 ? "" : "s"}</b>. Nothing
           here reaches BlazeMeter — it fills the fields above for you to review
           and save.
         </p>
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <Field label="Virtual user target" required
           hint="the load this location has to run">
           <input type="number" min={1} className={inputCls} placeholder="5000"
@@ -136,12 +139,6 @@ export function LocationSizing(props: {
               <option key={s.id} value={s.id}>{s.label}</option>
             ))}
           </select>
-        </Field>
-        <Field label="Agents"
-          hint={`this location has ${(props.location.ships ?? []).length}`}>
-          <input type="number" min={1} className={inputCls}
-            value={form.agents}
-            onChange={(e) => setForm({ ...form, agents: e.target.value })} />
         </Field>
       </div>
 

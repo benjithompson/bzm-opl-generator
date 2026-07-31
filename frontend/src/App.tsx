@@ -220,10 +220,16 @@ export default function App() {
   const [capErr, setCapErr] = useState<string | null>(null);
   useEffect(() => {
     if (view !== "capacity" || !accountId) return;
-    setCap(null); setCapErr(null);
+    // Not cleared first. The server holds this for a minute, so a re-entry is a
+    // few milliseconds -- but blanking it here showed "reading the account…"
+    // on every visit anyway, which is the thing a cache is supposed to stop.
+    // What is on screen stays until its replacement arrives, and only a change
+    // of account throws it away, because then it is another account's numbers.
+    setCapErr(null);
     api.capacity(accountId).then(setCap)
       .catch((e: Error) => setCapErr(e.message));
   }, [view, accountId]);
+  useEffect(() => { setCap(null); }, [accountId]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
@@ -334,6 +340,14 @@ export default function App() {
     setStatus(null); setPolling(false); setConnErr(null);
     forgetToken();
     session.clear();
+    // Land somewhere that still works. Two of the three views need a key --
+    // Account capacity has nothing to roll up, and Generate's "Connect to
+    // BlazeMeter" source has no account to read a location from -- so leaving
+    // the page where it was would leave it on a disabled control. Plan capacity
+    // needs nothing at all, which is what makes it the place to land.
+    setView("plan");
+    setSourceMode("manual");
+    setCap(null);
   };
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
@@ -343,6 +357,15 @@ export default function App() {
     try {
       const r = await api.keySet(body);
       setWho({ email: r.user.email, keyId: r.key_id });
+      // Connecting is the answer to "where do the three values come from", so
+      // it settles that question too: picking the account is now the way on,
+      // and leaving the page in manual entry would ask for ids by hand from
+      // someone who has just handed over the account they are in.
+      //
+      // Here rather than in an effect on `who`, deliberately: this is the
+      // deliberate act. A session restored with manual entry saved keeps it,
+      // because reloading a page is not choosing anything.
+      switchMode("connect");
       // Still connecting as far as the user is concerned: the key is accepted
       // but the account list is what the next step needs, and releasing the
       // button between the two would show a ready form with nothing in it.
