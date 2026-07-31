@@ -67,6 +67,15 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 export const api = {
   keyDetect: () =>
     req<{ candidates: KeyCandidate[]; active_key_id: string | null }>("GET", "/api/key/detect"),
+  /** The connection this server still holds, if any. The key lives in the
+   *  server process, so a refresh never disconnected anything -- this is how
+   *  the page finds out it is still connected. */
+  keyStatus: () =>
+    req<{ connected: boolean; user?: { email: string };
+          default_account_id?: number | null; key_id?: string }>(
+      "GET", "/api/key"),
+  /** Forget the key the server holds. A key saved to disk stays there. */
+  keyClear: () => req<{ connected: boolean }>("DELETE", "/api/key"),
   keySet: (body: { path?: string; id?: string; secret?: string; save?: boolean }) =>
     req<{ user: { email: string }; default_account_id: number | null; key_id: string }>(
       "POST", "/api/key", body),

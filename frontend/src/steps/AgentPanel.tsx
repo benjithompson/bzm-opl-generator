@@ -29,6 +29,8 @@ export interface AgentPanelProps {
   setSourceOpen: (v: boolean) => void;
   // -- the API key
   who: { email: string; keyId: string } | null;
+  /** Hand the key back. The server forgets it; a key saved to disk stays. */
+  disconnect: () => void;
   candidates: KeyCandidate[];
   keyPath: string;
   setKeyPath: (v: string) => void;
@@ -271,7 +273,17 @@ export function AgentPanel(p: AgentPanelProps) {
                 <ErrorMsg msg={p.connErr} />
               </div>
             ) : (
-              <p className="text-sm text-emerald-700">Connected as {p.who.email}</p>
+              // One row: who, and the way out at the other end of the pane.
+              // Disconnecting is rare enough to sit out of the way and common
+              // enough to need finding without a reload -- a key pasted by
+              // mistake, or the wrong account, otherwise costs a server
+              // restart.
+              <div className="flex items-center gap-3">
+                <p className="text-sm text-emerald-700 grow">
+                  Connected as {p.who.email}
+                </p>
+                <Button kind="ghost" onClick={p.disconnect}>Disconnect</Button>
+              </div>
             )}
           </SubSection>
 

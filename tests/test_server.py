@@ -300,6 +300,44 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     assert m.group(1) == gen_mod.SV_INGRESS_NONE
 
 
+# -- the connection outlives the page -----------------------------------------
+
+def test_key_status_reports_the_connection_the_process_still_holds(connected):
+    """A browser refresh never disconnected anything -- the page just forgot.
+    This is what it asks on load."""
+    body = client.get("/api/key").json()
+    assert body["connected"] is True
+    assert body["user"]["email"] == "se@example.com"
+    assert body["default_account_id"] == 7
+
+
+def test_key_status_says_no_when_nothing_is_held(monkeypatch):
+    monkeypatch.setitem(server._state, "client", None)
+    assert client.get("/api/key").json() == {"connected": False}
+
+
+def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
+    """Accepted once is not the same as working now. A key revoked since then
+    has to surface here, not on whichever call happens to be first."""
+    class Revoked:
+        def user(self):
+            raise core.CoreError("401 unauthorized")
+    monkeypatch.setitem(server._state, "client", Revoked())
+    assert client.get("/api/key").json() == {"connected": False}
+    # ...and it is dropped, rather than left for every later call to fail on.
+    assert server._state["client"] is None
+
+
+def test_disconnect_forgets_the_key_without_deleting_a_saved_one(connected, tmp_path):
+    """Only what is in memory. A key the user asked to save stays on disk --
+    deleting it is not what a Disconnect button on a web page should mean."""
+    saved = tmp_path / "api-key.json"
+    saved.write_text('{"id": "k", "secret": "s"}')
+    assert client.delete("/api/key").json() == {"connected": False}
+    assert server._state["client"] is None
+    assert saved.exists()
+
+
 # -- issuing the credential once, where the agent is made ----------------------
 
 def test_creating_an_agent_issues_its_credential_with_it(connected):
