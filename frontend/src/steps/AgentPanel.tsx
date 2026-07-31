@@ -48,6 +48,9 @@ export interface AgentPanelProps {
   accounts: { id: number; name: string }[];
   accountId: number | null;
   setAccountId: (id: number | null) => void;
+  /** The two lists are still arriving. */
+  accountsBusy: boolean;
+  workspacesBusy: boolean;
   workspaces: { id: number; name: string }[];
   workspaceId: number | null;
   setWorkspaceId: (id: number | null) => void;
@@ -346,13 +349,16 @@ export function AgentPanel(p: AgentPanelProps) {
                   <SearchSelect
                     options={p.accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
                     value={p.accountId} disabled={!p.who}
+                    busy={p.accountsBusy}
                     onChange={(v) => p.setAccountId(Number(v))}
                     onClear={() => p.setAccountId(null)} />
                 </Field>
                 <Field label="Workspace">
                   <SearchSelect
                     options={p.workspaces.map((w) => ({ value: w.id, label: w.name }))}
-                    value={p.workspaceId} disabled={!p.who || p.workspaces.length === 0}
+                    value={p.workspaceId}
+                    disabled={!p.who || (!p.workspacesBusy && p.workspaces.length === 0)}
+                    busy={p.workspacesBusy}
                     onChange={(v) => p.setWorkspaceId(Number(v))}
                     onClear={() => p.setWorkspaceId(null)} />
                 </Field>

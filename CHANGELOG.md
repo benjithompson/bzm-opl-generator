@@ -141,6 +141,13 @@ anything that breaks.
 
 ### Fixed
 
+- **The account and workspace dropdowns say when they are loading.** Both are a
+  round trip to BlazeMeter over whatever network the user is on, and both were
+  silent while it happened — an empty dropdown and a slow one look identical, so
+  the answer to "my account is not in the list" was to wait and try again. They
+  now show `loading…` and a small spinner inside the field, and cannot be
+  cleared or opened until the options arrive.
+
 - **A collapsed step-1 section kept its controls clickable.** The body stays
   mounted while folded so what was typed into it survives, but a mounted body
   inside a zero-height row is still in the hit-testing and accessibility trees:

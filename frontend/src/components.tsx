@@ -360,6 +360,11 @@ export function SearchSelect(props: {
   onClear?: () => void;
   placeholder?: string;
   disabled?: boolean;
+  /** The options are on their way. Shown in the box rather than beside it: an
+   *  empty dropdown and a slow one look identical, and the account and
+   *  workspace lists are a round trip to BlazeMeter over whatever network the
+   *  user is on. */
+  busy?: boolean;
 }) {
   const { options, value, onChange } = props;
   const selected = options.find((o) => o.value === value) ?? null;
@@ -394,7 +399,7 @@ export function SearchSelect(props: {
   // over a chosen account" to "nothing chosen" is the order people expect,
   // and it makes the first press undoable.
   const clearing: "query" | "selection" | null =
-    props.disabled ? null
+    (props.disabled || props.busy) ? null
       : query ? "query"
         : (selected && props.onClear) ? "selection" : null;
 
@@ -410,7 +415,8 @@ export function SearchSelect(props: {
         ref={inputRef}
         className={inputCls + " pr-7"}
         disabled={props.disabled}
-        placeholder={selected?.label ?? props.placeholder ?? "type to search…"}
+        placeholder={props.busy ? "loading…"
+          : selected?.label ?? props.placeholder ?? "type to search…"}
         value={open ? query : selected?.label ?? ""}
         onFocus={() => { setOpen(true); setQuery(""); }}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -436,7 +442,9 @@ export function SearchSelect(props: {
 
           mousedown, and prevented: on click the input would blur first, and the
           list would close under the pointer that was clearing it. */}
-      {clearing ? (
+      {props.busy ? (
+        <Spinner className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bzm" />
+      ) : clearing ? (
         <button type="button"
           aria-label={clearing === "query" ? "Clear search" : "Clear selection"}
           className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500

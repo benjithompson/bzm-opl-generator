@@ -90,8 +90,14 @@ export default function App() {
 
   // -- account tree ----------------------------------------------------------
   const [accounts, setAccounts] = useState<Account[]>([]);
+  // Both lists are a round trip to BlazeMeter, and both were silent while they
+  // arrived: an empty dropdown and a slow one look the same, so the answer to
+  // "why is my account not in here" was to wait and try again. See locBusy,
+  // which is the same flag for the location list below them.
+  const [accountsBusy, setAccountsBusy] = useState(false);
   const [accountId, setAccountId] = useState<number | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspacesBusy, setWorkspacesBusy] = useState(false);
   const [workspaceId, setWorkspaceId] = useState<number | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [locFilter, setLocFilter] = useState("");
@@ -261,7 +267,8 @@ export default function App() {
     api.keyStatus().then(async (r) => {
       if (!r.connected || !r.user) return;
       setWho({ email: r.user.email, keyId: r.key_id ?? "" });
-      const accts = await api.accounts();
+      setAccountsBusy(true);
+      const accts = await api.accounts().finally(() => setAccountsBusy(false));
       setAccounts(accts);
       pendingWorkspace.current = saved?.workspaceId ?? null;
       pendingHarbor.current = saved?.harborId ?? null;
@@ -317,7 +324,8 @@ export default function App() {
       // Still connecting as far as the user is concerned: the key is accepted
       // but the account list is what the next step needs, and releasing the
       // button between the two would show a ready form with nothing in it.
-      const accts = await api.accounts();
+      setAccountsBusy(true);
+      const accts = await api.accounts().finally(() => setAccountsBusy(false));
       setAccounts(accts);
       setAccountId(r.default_account_id ?? accts[0]?.id ?? null);
     } catch (e) { setConnErr(String((e as Error).message)); }
@@ -331,12 +339,14 @@ export default function App() {
     // belonging to an account nothing was pointing at any more.
     setWorkspaces([]); setWorkspaceId(null);
     if (!accountId || !who) return;
+    setWorkspacesBusy(true);
     api.workspaces(accountId).then((ws) => {
       setWorkspaces(ws);
       const want = pendingWorkspace.current;
       pendingWorkspace.current = null;
       setWorkspaceId(ws.find((w) => w.id === want)?.id ?? ws[0]?.id ?? null);
-    }).catch((e) => setLocErr(e.message));
+    }).catch((e) => setLocErr(e.message))
+      .finally(() => setWorkspacesBusy(false));
   }, [accountId, who]);
 
   useEffect(() => {
@@ -1186,6 +1196,7 @@ export default function App() {
               saveKey={saveKey} setSaveKey={setSaveKey} connect={connect}
               connErr={connErr} setConnErr={setConnErr} connecting={connecting}
               accounts={accounts} accountId={accountId} setAccountId={setAccountId}
+              accountsBusy={accountsBusy} workspacesBusy={workspacesBusy}
               workspaces={workspaces} workspaceId={workspaceId}
               setWorkspaceId={setWorkspaceId}
               locations={locations} filteredLocs={filteredLocs}
