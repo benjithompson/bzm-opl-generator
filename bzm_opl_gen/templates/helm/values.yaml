@@ -74,6 +74,14 @@ image:
 # sealed cluster wants anyway; it no longer keys off this value.
 privateRegistry: ""
 
+# github.com/Blazemeter/crane-hook -- a one-shot Pod, plus its own read-only
+# Role and RoleBinding, that checks the cluster against what the agent needs and
+# exits 0 or 1. Off by default: it is a check, not part of the agent. On, it is
+# the chart's `helm test` hook, so `helm test <release>` runs it and nothing
+# runs it at install time.
+craneHook:
+  enabled: false
+
 # Only read when privateRegistry is set. Maps BlazeMeter's image keys to the
 # refs in your registry -- a missing key silently falls back to the public
 # registry, so it has to be complete. Generate the exact map for this location:

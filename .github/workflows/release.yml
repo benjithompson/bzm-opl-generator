@@ -62,6 +62,9 @@ jobs:
                                  "bzm_opl_gen/templates/helm/Chart.yaml",
                                  "bzm_opl_gen/templates/helm/values.yaml",
                                  "bzm_opl_gen/templates/helm/templates/deployment.yaml",
+                                 # ...and its tests/ subdirectory, which needs
+                                 # its own glob for the same reason.
+                                 "bzm_opl_gen/templates/helm/templates/tests/cranehook.yaml",
                                  # A leading-dot file is not matched by `*` in
                                  # package-data and has to be named there.
                                  "bzm_opl_gen/templates/helm/.helmignore",

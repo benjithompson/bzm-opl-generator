@@ -480,6 +480,92 @@ def test_crane_resources_come_from_the_constants():
 
 
 
+# -- the cluster check --------------------------------------------------------
+
+def _hook_docs(out):
+    return {d["metadata"]["name"]: d
+            for d in yaml.safe_load_all(out[gen.HOOK_FILE])}
+
+
+def test_no_cluster_check_unless_asked_for():
+    """Off by default. It is a check, not part of the agent, and a bundle that
+    quietly carried an extra Pod would surprise whoever applies it."""
+    assert gen.HOOK_FILE not in gen.generate(FACTS, {"ship_id": "s1"})
+
+
+def test_the_cluster_check_is_told_what_the_bundle_decided():
+    """Upstream ships this manifest with `default` in every namespace field and
+    placeholders for the rest. Every one of those is a value the bundle already
+    has, so leaving them to be filled in by hand is two chances to disagree."""
+    out = gen.generate(FACTS, {"ship_id": "s1", "namespace": "ns1",
+                               "service_account_name": "bzm-agent",
+                               "crane_hook": True})
+    docs = _hook_docs(out)
+    assert sorted(docs) == ["bzm-cranehook", "bzm-cranehook-binding", "cranehook"]
+    assert [d["kind"] for d in docs.values()] == ["Role", "RoleBinding", "Pod"]
+    pod = docs["cranehook"]
+    assert pod["metadata"]["namespace"] == "ns1"
+    assert pod["spec"]["serviceAccountName"] == "bzm-agent"
+    # A failed check is the answer. Restarting would turn a red exit code into a
+    # CrashLoopBackOff, which reads like the check itself is broken.
+    assert pod["spec"]["restartPolicy"] == "Never"
+    env = {e["name"]: e["value"] for e in pod["spec"]["containers"][0]["env"]}
+    assert env["WORKING_NAMESPACE"] == "ns1"
+    assert env["SERVICE_ACCOUNT_NAME"] == "bzm-agent"
+    # It is told what its own Role is called, so the names it checks are the
+    # names that were emitted.
+    assert env["ROLE_NAME"] == docs["bzm-cranehook"]["metadata"]["name"]
+    assert env["ROLE_BINDING_NAME"] == docs["bzm-cranehook-binding"]["metadata"]["name"]
+
+
+def test_the_cluster_check_grants_itself_nothing_the_agent_needs():
+    """Its Role is its own and read-only. A check that could create is a check
+    that can break the thing it is checking."""
+    docs = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True}))
+    verbs = {v for rule in docs["bzm-cranehook"]["rules"] for v in rule["verbs"]}
+    assert verbs == {"get", "list"}
+    assert docs["bzm-cranehook-binding"]["roleRef"]["name"] == "bzm-cranehook"
+
+
+def test_the_cluster_check_follows_the_platform_uid_rule():
+    """Same rule as the agent: OpenShift's SCC assigns the UID and a pinned one
+    is refused, so it is pinned only where it is wanted."""
+    k8s = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
+                                          "platform": "k8s", "run_as_user": 1500}))
+    sc = k8s["cranehook"]["spec"]["containers"][0]["securityContext"]
+    assert sc["runAsUser"] == 1500 and sc["runAsGroup"] == 1500
+    ocp = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
+                                          "platform": "openshift"}))
+    assert "runAsUser" not in ocp["cranehook"]["spec"]["containers"][0]["securityContext"]
+
+
+def test_the_cluster_check_is_told_about_the_ingress_it_should_check():
+    """Only when there is one. Empty strings would have it check for an ingress
+    named "" and a TLS secret named "", which is a failure it invented."""
+    sv = gen.generate(dict(FACTS, func_ids=["mockServices"]),
+                      {"ship_id": "s1", "crane_hook": True, "sv_ingress": "nginx",
+                       "sv_subdomain": "apps.example.com", "sv_tls_secret": "wild"})
+    env = {e["name"]: e["value"] for e
+           in _hook_docs(sv)["cranehook"]["spec"]["containers"][0]["env"]}
+    assert env["KUBERNETES_WEB_EXPOSE_TYPE"] == "NGINX"
+    assert env["KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME"] == "wild"
+
+    perf = _hook_docs(gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True}))
+    env = {e["name"]: e["value"] for e
+           in perf["cranehook"]["spec"]["containers"][0]["env"]}
+    assert "KUBERNETES_WEB_EXPOSE_TYPE" not in env
+
+
+def test_the_cluster_check_image_is_mirrored_with_the_rest():
+    """It is not in the location's inventory -- the agent never runs it -- so an
+    air-gapped bundle would otherwise carry the one object that cannot pull."""
+    out = gen.generate(FACTS, {"ship_id": "s1", "crane_hook": True,
+                               "private_registry": "reg.local/bzm"})
+    assert "reg.local/bzm/cranehook:latest" in out["bzm-opl-image-mirror.sh"]
+    pod = _hook_docs(out)["cranehook"]
+    assert pod["spec"]["containers"][0]["image"] == "reg.local/bzm/cranehook:latest"
+
+
 def test_mirror_script_is_self_contained():
     """It is handed to someone who has neither this tool nor a BlazeMeter
     account, so it has to stand alone -- and it has to fail before transferring

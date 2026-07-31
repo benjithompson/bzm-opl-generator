@@ -306,6 +306,19 @@ def test_existing_service_account_reaches_the_overlay():
     assert v["serviceAccount"]["name"] == "platform-sa"
 
 
+def test_the_cluster_check_reaches_the_overlay_only_when_asked_for():
+    """The chart's default is off, and an overlay that restated every default
+    would stop being the record of what was chosen."""
+    on, files = _values(crane_hook=True)
+    assert on["craneHook"]["enabled"] is True
+    # ...and it is a chart file, not a flat manifest: the chart carries it as a
+    # `helm test` hook, so it is in templates/, not beside bzm_deployment.yaml.
+    assert "helm/templates/tests/cranehook.yaml" in files
+    assert gen.HOOK_FILE not in files
+    off, _ = _values()
+    assert "craneHook" not in off
+
+
 def test_helm_readme_names_a_service_account_it_will_not_create():
     _, files = _values(service_account_name="platform-sa",
                        service_account_create=False)
