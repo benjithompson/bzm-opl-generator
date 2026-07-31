@@ -57,7 +57,7 @@ export function PreviewDrawer(props: {
     <div ref={panel}
       className={"shrink-0 border-l border-slate-200 bg-slate-50 flex flex-col "
         + "transition-[width] duration-200 ease-out overflow-hidden "
-        + (open ? "w-[34rem]" : "w-10")}>
+        + (open ? "w-[52rem] max-w-[60vw]" : "w-10")}>
       {open ? (
         <>
           <div className="flex items-center h-12 px-3 gap-2 border-b border-slate-200 shrink-0">

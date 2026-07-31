@@ -482,6 +482,51 @@ export function SearchSelect(props: {
   );
 }
 
+/** A centred modal. Unlike the two drawers -- which are furniture and stay
+ *  where they are put -- this one is a question being asked, so it dims what is
+ *  behind it and both Escape and a click outside answer "not now".
+ *
+ *  Nothing is rendered while closed, because what it holds is a form whose
+ *  half-typed contents should not survive being dismissed. */
+export function Modal(props: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!props.open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") props.onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [props]);
+  if (!props.open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={props.onClose}>
+      <div className="absolute inset-0 bg-slate-900/40" />
+      <div role="dialog" aria-modal="true" aria-label={props.title}
+        onClick={(e) => e.stopPropagation()}
+        className="relative bg-white rounded-xl shadow-2xl w-full max-w-xl
+                   border border-slate-200">
+        <div className="flex items-baseline gap-2 px-4 py-3 border-b border-slate-200">
+          <h2 className="text-sm font-semibold text-slate-900">{props.title}</h2>
+          {props.hint && (
+            <span className="text-[11px] text-slate-500 truncate">{props.hint}</span>
+          )}
+          <span className="grow" />
+          <button onClick={props.onClose} aria-label="Close"
+            className="text-slate-400 hover:text-slate-700 text-sm leading-none px-1">
+            ✕
+          </button>
+        </div>
+        <div className="p-4">{props.children}</div>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorMsg({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return <p className="text-xs text-red-600 mt-1.5 break-words">{msg}</p>;

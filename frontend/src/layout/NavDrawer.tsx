@@ -49,6 +49,9 @@ export function NavDrawer(props: {
   setView: (v: ViewId) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
+  /** Without a key there is no account to roll up, so that view is out of
+   *  reach rather than empty -- and it says which button fixes that. */
+  connected: boolean;
 }) {
   const { open } = props;
   return (
@@ -88,17 +91,21 @@ export function NavDrawer(props: {
       <div className="p-2 space-y-1">
         {NAV.map((item) => {
           const on = props.view === item.id;
+          const off = item.id === "capacity" && !props.connected;
           return (
-            <button key={item.id} onClick={() => props.setView(item.id)}
+            <button key={item.id} onClick={() => !off && props.setView(item.id)}
               aria-current={on ? "page" : undefined}
+              disabled={off}
               // The label is the tooltip while collapsed, so the rail is
               // usable without opening it first.
-              title={open ? item.hint : item.label}
+              title={off ? "connect an account first — the Account button, top right"
+                : open ? item.hint : item.label}
               className={"w-full flex items-center gap-2.5 rounded-md text-left "
                 + "transition-colors h-9 "
                 + (open ? "px-2.5 " : "justify-center px-0 ")
                 + (on ? "bg-bzm text-white"
-                      : "text-slate-600 hover:bg-slate-100")}>
+                  : off ? "text-slate-300 cursor-not-allowed"
+                    : "text-slate-600 hover:bg-slate-100")}>
               {item.icon}
               {open && (
                 <span className="text-sm font-medium truncate">{item.label}</span>

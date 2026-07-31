@@ -62,6 +62,7 @@ import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
+import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 
 
@@ -1223,11 +1224,7 @@ export default function App() {
               sourceMode={sourceMode} switchMode={switchMode} manual={manual}
               setManual={setManual} sourceOpen={sourceOpen}
               setSourceOpen={setSourceOpen}
-              who={who} disconnect={disconnect} keyPath={keyPath}
-              setKeyPath={setKeyPath} pasteId={pasteId} setPasteId={setPasteId}
-              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
-              saveKey={saveKey} setSaveKey={setSaveKey} connect={connect}
-              connErr={connErr} setConnErr={setConnErr} connecting={connecting}
+              who={who}
               accounts={accounts} accountId={accountId} setAccountId={setAccountId}
               accountsBusy={accountsBusy} workspacesBusy={workspacesBusy}
               workspaces={workspaces} workspaceId={workspaceId}
@@ -1305,15 +1302,23 @@ export default function App() {
           <span className="text-xs text-slate-400 truncate">
             private-location Kubernetes / OpenShift manifests, from your real account
           </span>
-          {who && <span className="ml-auto text-xs text-slate-500 whitespace-nowrap">
-            {who.email} · key {who.keyId.slice(0, 8)}…</span>}
+          <span className="ml-auto shrink-0">
+            <AccountMenu
+              who={who} disconnect={disconnect}
+              keyPath={keyPath} setKeyPath={setKeyPath}
+              pasteId={pasteId} setPasteId={setPasteId}
+              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
+              saveKey={saveKey} setSaveKey={setSaveKey}
+              connect={connect} connErr={connErr} setConnErr={setConnErr}
+              connecting={connecting} />
+          </span>
         </div>
       </header>
 
       {/* The shell: the drawer picks the view, the view fills what is left, and
           the preview slides over the top of it from the right. */}
       <div className="flex grow min-h-0">
-        <NavDrawer view={view} setView={setView}
+        <NavDrawer view={view} setView={setView} connected={!!who}
           open={navOpen} setOpen={setNavOpen} />
         <div className="grow min-w-0 overflow-y-auto">{body}</div>
         {/* Only beside the view that produces manifests. On the two planning
