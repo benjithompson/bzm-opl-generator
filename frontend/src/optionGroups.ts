@@ -327,56 +327,21 @@ export function detectGroups(
     [g.id, prev[g.id] || g.detect(o) || !!required[g.id]])) as GroupFlags;
 }
 
-// -- the feature view --------------------------------------------------------
-// The configure step shows one feature at a time, chosen from the list
-// /api/features serves. Nothing here enumerates features: a group names the
-// feature ids it belongs to, and labels, suggested namespaces and which funcIds
-// mean which feature are all read off the served vocabulary. Adding functional
-// testing, secrets or API monitoring is then a backend entry plus a tag above.
-//
-// The selector is a VIEW, not a scope. One crane is deployed for the selected
-// location and that location's funcIds decide what ships, so nothing below
-// writes or clears an option -- every function here is a selection over the
-// declarations. suggestNamespace is the single exception, and it hands back a
-// string for the caller to apply only when the field still holds a suggestion.
+// -- the split the configure step is built on --------------------------------
+// Two buckets, derived from the declarations rather than listed anywhere: a
+// group belongs to no feature and is therefore in every bundle, or it belongs
+// to one and lives in that feature's card. Every group is in exactly one of
+// them, which is what stops a group being on screen twice or not at all -- the
+// failure the feature *view* had, where five of six groups were in both views.
 
-/** What a group with no features is attributed to, in one place because the row
- *  and any future summary must not word it differently. */
-export const ANY_DEPLOYMENT = "any deployment";
+/** Groups no feature owns: every deployment gets them. */
+export const SHARED_GROUPS = OPTION_GROUPS.filter((g) => !g.features.length);
 
-/** How a group's attribution reads. An id the vocabulary has not named falls
- *  back to the id itself -- the same choice /api/func-ids makes -- so a group
- *  tagged with a feature this backend does not serve is still attributed rather
- *  than silently unlabelled. */
-export function appliesTo(g: OptionGroup, features: Feature[]): string {
-  if (!g.features.length) return ANY_DEPLOYMENT;
-  return g.features
-    .map((id) => features.find((f) => f.id === id)?.label ?? id).join(" · ");
-}
-
-/** The groups on screen while `feature` is being configured: its own, plus the
- *  ones that apply to any deployment. `null` -- nothing chosen yet, or the
- *  vocabulary fetch failed -- shows everything: a view that cannot be chosen
- *  must not take options off the page. */
-export function visibleGroups(feature: string | null): OptionGroup[] {
-  if (!feature) return OPTION_GROUPS;
-  return OPTION_GROUPS.filter(
-    (g) => !g.features.length || g.features.includes(feature));
-}
-
-function hiddenGroups(feature: string | null): OptionGroup[] {
-  const shown = new Set(visibleGroups(feature));
-  return OPTION_GROUPS.filter((g) => !shown.has(g));
-}
-
-/** Groups holding configuration while off screen. Reported near the preview:
- *  what a hidden group owns still ships, and the point of the view being a view
- *  is that it never quietly drops it. `detect` is the test rather than the
- *  toggle state, because a group switched on with nothing in it adds nothing to
- *  the manifests and saying otherwise would be noise. */
-export function setButHidden(
-    o: Options, feature: string | null): OptionGroup[] {
-  return hiddenGroups(feature).filter((g) => g.detect(o));
+/** The groups a feature owns. Empty is legal and means the feature adds no
+ *  options of its own -- its card says so rather than being left out, because
+ *  "nothing to configure" and "not shown" are different answers. */
+export function groupsOf(featureId: string): OptionGroup[] {
+  return OPTION_GROUPS.filter((g) => g.features.includes(featureId));
 }
 
 /** Groups in use but not finished, so the download is blocked. Derived from the
@@ -388,18 +353,19 @@ export function incompleteGroups(
   return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
-/** Why the download is blocked when the reason is not on screen -- the failure
- *  this view is meant to remove is a disabled button whose cause is elsewhere
- *  on the page. Which groups are unfinished is `incompleteGroups`; this is the
- *  subset of those the current view is hiding. A group that applies to any
- *  deployment is never hidden, so it can never appear here -- and its feature
- *  to switch to is `g.features[0]`, with `appliesTo` giving the label, rather
- *  than a second label lookup that could disagree with the one beside it. */
-export function hiddenBlockers(
-    incomplete: OptionGroup[], feature: string | null): OptionGroup[] {
-  const hidden = new Set(hiddenGroups(feature));
-  return incomplete.filter((g) => hidden.has(g));
-}
+// -- the served vocabulary ---------------------------------------------------
+// Nothing here enumerates features: a group names the feature ids it belongs
+// to, and labels, suggested namespaces and which funcIds mean which feature are
+// all read off /api/features. Adding functional testing, secrets or API
+// monitoring is then a backend entry plus a tag on the groups it owns.
+//
+// The configure step shows every group at once -- the shared ones, then each
+// feature's own inside its card -- so nothing here selects a *view*. It used
+// to: visibleGroups, setButHidden and hiddenBlockers existed to work out what
+// the view was hiding and hand it back somewhere else, and went with the view.
+// Nothing below writes or clears an option; suggestNamespace comes closest, and
+// it hands a string back for the caller to apply only while the field still
+// holds a suggestion.
 
 /** The features a location's funcIds carry, in served order. funcIds the tool
  *  does not model (tdm, dataPublisher, delphix, secretsPrivateVault) match no
@@ -420,27 +386,6 @@ export function unclaimedFuncIds(
     funcIds: string[] | undefined, features: Feature[]): string[] {
   return (funcIds ?? []).filter(
     (id) => !features.some((f) => f.func_ids.includes(id)));
-}
-
-/** Features to show as unavailable, given what the location runs. Empty
- *  whenever the question cannot be answered, and every such case means "say
- *  nothing" rather than "say no":
- *
- *   - `known` false — manual entry declares the location's features rather than
- *     reading them, so nothing there is ever unavailable; and before a location
- *     is chosen an empty `locFeatures` means "not asked yet", not "none".
- *   - the location claims no feature at all. 10 of 169 locations in the account
- *     this was checked against are sv-bridge, tdm or dataPublisher only, and
- *     marking every feature unavailable for those leaves nothing configurable
- *     and no way forward.
- *
- *  Disabling hides the view but not the effect — options already set under a
- *  feature are still generated — so the caller has to say when that has
- *  happened. See the button's "still set here" line. */
-export function unavailableFeatures(
-    known: boolean, locFeatures: string[], features: Feature[]): string[] {
-  if (!known || locFeatures.length === 0) return [];
-  return features.map((f) => f.id).filter((id) => !locFeatures.includes(id));
 }
 
 /** Which feature to open a location on: the first served feature its funcIds

@@ -14,7 +14,7 @@ import {
 import {
   Button, Check, ErrorMsg, inputCls, SegmentedControl, Switch,
 } from "../components";
-import { appliesTo, OptionGroup, svConfigured } from "../optionGroups";
+import { OptionGroup, svConfigured } from "../optionGroups";
 import {
   EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, verdictLine,
   worstStatus,
@@ -38,9 +38,11 @@ export interface DownloadPanelProps {
   saOk: boolean;
   svOk: boolean;
   genErr: string | null;
-  features: Feature[];
-  pickFeature: (id: string) => void;
-  blockers: OptionGroup[];
+  /** Groups in use but unfinished. They are on the configure step, which is by
+   *  definition not this one, so the block names them and offers the way back
+   *  rather than pointing at a form nobody can see. */
+  unfinished: OptionGroup[];
+  goToConfigure: () => void;
   format: string;
   helmBlocked?: string;
   // -- the credential this bundle will carry
@@ -84,7 +86,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
   // how a move turns into a rewrite nobody diffed.
   const {
     facts, shipId, ships, sourceMode, who, options, set, raw, txt,
-    saOk, svOk, genErr, features, pickFeature, blockers, format, helmBlocked,
+    saOk, svOk, genErr, unfinished, goToConfigure, format, helmBlocked,
     previewToken, rotate, setRotate, tokenPlan, lastTokenReport,
     setLastTokenReport, dlErr, setDlErr,
     saveDir, setSaveDir, saved, setSaved, saveErr, setSaveErr,
@@ -217,20 +219,19 @@ export function DownloadPanel(p: DownloadPanelProps) {
                 </p>
               )}
               <ErrorMsg msg={saveErr} />
-              {/* Why the button is disabled, when the reason is not on screen.
-                  A disabled button whose cause is somewhere else on the page is
-                  the failure the feature view is meant to remove, so the block
-                  names the feature and offers the switch to it. A group in view
-                  is absent from `blockers` -- it shows its own error. */}
-              {blockers.map((g) => (
+              {/* Why the button is disabled, when the reason is a step back.
+                  A disabled button whose cause is elsewhere is the failure this
+                  is here to remove, so it names the group and offers the way
+                  to it. */}
+              {unfinished.map((g) => (
                 <div key={g.id}
                   className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                   <p className="text-xs text-amber-800 grow">
-                    <b>{appliesTo(g, features)}</b> is not finished, and its
-                    settings are not in view: {g.requiredHint ?? g.hint}.
+                    <b>{g.title}</b> is not finished:{" "}
+                    {g.requiredHint ?? g.hint}.
                   </p>
-                  <Button kind="ghost" onClick={() => pickFeature(g.features[0])}>
-                    Configure {appliesTo(g, features)}
+                  <Button kind="ghost" onClick={goToConfigure}>
+                    Back to Configure
                   </Button>
                 </div>
               ))}

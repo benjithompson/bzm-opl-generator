@@ -16,6 +16,12 @@ import {
 } from "react";
 
 interface StepFlowProps {
+  /** Which step is open, and how to move. Controlled from App because the
+   *  download step has to be able to send you back to the one holding an
+   *  unfinished group -- a step flow whose position only it can see leaves that
+   *  as a sentence instead of a button. */
+  at: number;
+  onGo: (i: number) => void;
   /** One per step, in order. `false` greys Next and shows `blockedBy`. */
   done: boolean[];
   /** Why Next is greyed, per step. Said on the control rather than only at the
@@ -33,8 +39,7 @@ const dotCls = (state: "done" | "now" | "todo") =>
     todo: "bg-slate-200 text-slate-500",
   })[state];
 
-export function StepFlow({ done, blockedBy, children }: StepFlowProps) {
-  const [at, setAt] = useState(0);
+export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps) {
   // Steps the user has opened. Every step but the last is "done" on arrival --
   // the namespace and service account have defaults and no group is mandatory
   // -- so a tick on a step nobody has looked at claims something that did not
@@ -50,7 +55,7 @@ export function StepFlow({ done, blockedBy, children }: StepFlowProps) {
 
   const go = (i: number) => {
     const to = Math.max(0, Math.min(steps.length - 1, i));
-    setAt(to);
+    onGo(to);
     setSeen((s) => ({ ...s, [to]: true }));
     window.scrollTo({ top: 0 });
   };

@@ -166,12 +166,17 @@ class BzmClient:
             h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None):
+                                threads_per_engine=None, func_ids=None):
         body = {}
         if slots is not None:
             body["slots"] = slots
         if threads_per_engine is not None:
             body["threadsPerEngine"] = threads_per_engine
+        # The whole list, because PATCH replaces it: sending one funcId is how a
+        # location that ran performance and mocks comes back running only mocks.
+        # Callers add to what the location already has -- see core.add_func_id.
+        if func_ids is not None:
+            body["funcIds"] = list(func_ids)
         if not body:
             return self.private_location(harbor_id)
         return self.patch(f"/private-locations/{harbor_id}", body)

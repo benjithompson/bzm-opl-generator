@@ -20,11 +20,10 @@ import { SvCtx } from "./SvPrereqs";
 // plus a body per group. This file only wires them -- what a group *is*, and
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, appliesTo, caModeOf, caModePatch, CaMode, detectGroups,
-  enginePreset, featuresOf, GROUP_BY_ID, GroupFlags, GroupId, hiddenBlockers,
-  incompleteGroups, serviceAccountOk,
-  setButHidden, startFeature, suggestNamespace, SV_NONE, svConfigured,
-  unavailableFeatures, unclaimedFuncIds, visibleGroups,
+  allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
+  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups,
+  serviceAccountOk, startFeature, suggestNamespace, SV_NONE, svConfigured,
+  unclaimedFuncIds,
 } from "./optionGroups";
 // The preflight panel's own decisions -- how a verdict list reads, what a
 // picked file has to be, what a refused import leaves behind. No verdict is
@@ -38,6 +37,8 @@ import {
 // stands against the options is suggest.merge()'s -- both arrive on the row.
 import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 import { SuggestionList } from "./SuggestionList";
+import { AgentPanel } from "./steps/AgentPanel";
+import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
 import { ManualSource } from "./groups/ManualSource";
@@ -48,19 +49,9 @@ import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
 import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
-// THROWAWAY (?variant=A|B|C) -- three layouts for the configure step's feature
-// and group split. Delete src/prototype/ and these three references with it.
-import { VariantA, VariantB, VariantC, VariantD } from "./prototype/ConfigureVariants";
-import {
-  agentFor, PrototypeSwitcher, variantFromUrl,
-} from "./prototype/PrototypeSwitcher";
 import { WorkArea } from "./layout/WorkArea";
 import { StepFlow } from "./layout/StepFlow";
-import { AgentStep } from "./prototype/AgentStepVariants";
 
-const PROTO_VARIANT = variantFromUrl();
-// K-M rebuild step 1's location and agent panels on top of that.
-const PROTO_AGENT = agentFor(PROTO_VARIANT);
 
 // Why performance and service virtualization want separate agents, and so
 // separate namespaces: one agent serving both puts mocks and load engines in a
@@ -188,6 +179,10 @@ export default function App() {
   const [svChecks, setSvChecks] =
     useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
   const [polling, setPolling] = useState(false);
+  // Which step is open. Here rather than in StepFlow because the download step
+  // sends you back to the configure step when a group it depends on is
+  // unfinished, and it cannot do that with a position it cannot see.
+  const [step, setStep] = useState(0);
   const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
@@ -326,9 +321,21 @@ export default function App() {
   // go back to.
   const creatingShip = showCreateShip || ships.length === 0;
 
+  /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
+   *
+   *  The rotate flag goes off as it lands: core's rule is that a token in the
+   *  form wins over a rotation, so leaving it on would have the download step
+   *  promise an issue that will not happen. */
+  const regenerateToken = async () => {
+    if (!harborId || !shipId) return;
+    const r = await api.issueToken(harborId, shipId);
+    setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+    setRotate(false);
+  };
+
   // Creating the agent identity. A named function rather than the button's own
-  // handler because the step-1 prototypes render their own button and this is a
-  // real write to the account -- one copy of it, or they drift.
+  // handler because the panel renders its own button and this is a real write
+  // to the account -- one copy of it, or the two drift.
   const createShipNow = async () => {
     try {
       const r = await api.createShip(harborId!, newShipName);
@@ -674,33 +681,36 @@ export default function App() {
   // and the two can disagree only if one of them is a copy.
   const svRbac = svConst.backends[txt("sv_ingress")];
 
-  // -- what the current view is not showing ----------------------------------
-  // The features this location carries, and the ones it carries that the tool
-  // has no options for. Locations already run tdm/dataPublisher/delphix; naming
-  // them is the honest version of a selector that quietly models five funcIds.
+  // -- what this location runs -----------------------------------------------
+  // The features it carries, and the funcIds it carries that the tool has no
+  // options for. Locations already run tdm/dataPublisher/delphix; naming them is
+  // the honest version of a page that quietly models five funcIds.
   const locFeatures = featuresOf(facts?.func_ids, features);
-  // Which feature buttons read as unavailable. The rule -- including every case
-  // where it must stay silent -- is in optionGroups, where it is tested as data.
-  const unavailable = unavailableFeatures(
-    sourceMode === "connect" && !!facts, locFeatures, features);
-  // Groups a feature owns that already hold settings. Only consulted for a
-  // feature we are about to make unreachable: those options are still generated,
-  // so they have to be named rather than quietly disappearing behind a disabled
-  // button.
-  const setUnderFeature = useCallback((featureId: string) =>
-    Object.values(GROUP_BY_ID)
-      .filter((g) => g.features.includes(featureId) && g.detect(options))
-      .map((g) => g.title), [options]);
   const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
-  // Configured, off screen, and still in the bundle -- reported beside the
-  // preview, which is where "what is in this bundle" is read.
-  const hiddenSet = setButHidden(options, feature);
+  // Features this location does not carry. Not "unavailable" any more: the card
+  // offers to turn one on, which is a real PATCH of the location's funcIds. The
+  // list is empty whenever the question has not been answered -- manual entry
+  // declares rather than reads, and before a location is chosen an empty
+  // locFeatures means "not asked yet", not "none".
+  const notEnabled = sourceMode === "connect" && !!facts && locFeatures.length
+    ? features.map((f) => f.id).filter((id) => !locFeatures.includes(id))
+    : [];
+  /** Turn a feature on for the selected location, then re-read the facts so the
+   *  card's state comes from the account rather than from local memory. */
+  const enableFeature = useCallback(async (id: string) => {
+    const funcId = features.find((f) => f.id === id)?.func_ids[0];
+    if (!harborId || !funcId) return;
+    await api.addFuncId(harborId, funcId);
+    const [ls, fresh] = await Promise.all([
+      workspaceId != null ? api.locations(workspaceId) : Promise.resolve(null),
+      api.facts(harborId),
+    ]);
+    if (ls) setLocations(ls);
+    setFacts(fresh);
+  }, [features, harborId, workspaceId]);
   // Which groups are in use but not finished. Each group declares its own rule,
-  // so a feature gaining required options later needs nothing here. Whether the
-  // reason is on screen is what decides between the group showing its own error
-  // and the download button having to explain itself.
+  // so a feature gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, { sv: svRequired }, svConst.backends);
-  const blockers = hiddenBlockers(incomplete, feature);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -983,6 +993,7 @@ export default function App() {
             finished enough to leave. The last step never is: there is nothing
             after the download to go on to. */}
         <StepFlow
+          at={step} onGo={setStep}
           done={[
             !!facts && !!shipId,
             namespaceOk && saOk && incomplete.length === 0,
@@ -1000,546 +1011,49 @@ export default function App() {
               one mode ever uses. */}
           <Section n={1} title="Agent details" done={!!facts && !!shipId}
             hint="harbor_id, ship_id and AUTH_TOKEN — from your account, or typed.">
-            <div className="space-y-3">
-              <SegmentedControl
-                value={sourceMode}
-                onChange={switchMode}
-                options={[
-                  { value: "connect", label: "Connect to BlazeMeter",
-                    hint: "Pick a location and agent; a new agent's token is issued once, when you create it." },
-                  { value: "manual", label: "Enter values manually",
-                    hint: "For an account you cannot reach — generation only, nothing is checked." },
-                ]} />
-
-              {sourceMode === "manual" ? (
-                /* `choices` is filtered to the funcIds that change which images
-                   the bundle names: here a funcId's only job is to pick images,
-                   and functionalApi picks exactly what performance does. The
-                   create-location form above still offers the full vocabulary,
-                   because BlazeMeter does distinguish them when creating one. */
-                <ManualSource
-                  harborId={manual.harbor_id}
-                  shipId={manual.ship_id}
-                  authToken={raw("auth_token")}
-                  onHarborId={(v) => setManual((m) => ({ ...m, harbor_id: v }))}
-                  onShipId={(v) => setManual((m) => ({ ...m, ship_id: v }))}
-                  onAuthToken={(v) => set("auth_token", v || null)} />
-              ) : !sourceOpen ? (
-                /* Settled: say what was chosen, and offer the way back. */
-                <div className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                  <p className="text-xs text-slate-600 grow">
-                    <b>{locations.find((l) => l.id === harborId)?.name ?? harborId}</b>
-                    {" · agent "}<code>{shipId}</code>
-                    <span className="block text-slate-400">
-                      {who?.email} · images: {facts?.images_source}
-                    </span>
-                  </p>
-                  <Button kind="ghost" onClick={() => setSourceOpen(true)}>Change</Button>
-                </div>
-              ) : (
-              <>
-          <SubSection title="Connect" done={!!who}
-            hint="API key stays on this machine; only used server-side.">
-            {!who ? (
-              <div className="space-y-3">
-                {candidates.length > 0 && (
-                  <Field label="Detected key files">
-                    <select className={inputCls} value={keyPath}
-                      onChange={(e) => setKeyPath(e.target.value)}>
-                      {candidates.map((c) => (
-                        <option key={c.path} value={c.path}>
-                          {c.path} (id {c.key_id.slice(0, 8)}…)
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                )}
-                <div className="flex gap-2 items-end">
-                  <div className="grow">
-                    <Field label="…or path to api-key.json">
-                      <TextInput value={keyPath} onChange={setKeyPath} mono
-                        placeholder="/path/to/api-key.json" />
-                    </Field>
-                  </div>
-                  {/* A label, not a Button, so it cannot be `disabled` -- while a
-                      connect is in flight it is taken out of reach instead, or a
-                      second key could be picked mid-request. */}
-                  <label className={"rounded-md px-3 py-1.5 text-sm font-medium border "
-                    + "border-slate-300 text-slate-600 whitespace-nowrap "
-                    + (connecting
-                      ? "opacity-40 pointer-events-none"
-                      : "hover:bg-slate-50 cursor-pointer")}>
-                    Browse…
-                    <input type="file" accept=".json,application/json" className="hidden"
-                      onChange={async (e) => {
-                        const f = e.target.files?.[0];
-                        if (!f) return;
-                        e.target.value = "";
-                        setConnErr(null);
-                        try {
-                          const d = JSON.parse(await f.text());
-                          if (!d.id || !d.secret) throw new Error();
-                          connect({ id: d.id, secret: d.secret, save: saveKey });
-                        } catch {
-                          setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
-                        }
-                      }} />
-                  </label>
-                  <Button onClick={() => connect({ path: keyPath })}
-                    disabled={!keyPath} busy={connecting}>
-                    {connecting ? "Connecting…" : "Connect"}
-                  </Button>
-                </div>
-                <Check label="Remember this key on this machine" checked={saveKey} onChange={setSaveKey}
-                  hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
-                  <div className="mt-2 space-y-2">
-                    <Field label="Key ID">
-                      <TextInput value={pasteId} onChange={setPasteId} mono /></Field>
-                    <Field label="Secret">
-                      <input type="password" className={inputCls + " font-mono text-xs"}
-                        value={pasteSecret} onChange={(e) => setPasteSecret(e.target.value)} />
-                    </Field>
-                    <Button onClick={() => connect({ id: pasteId, secret: pasteSecret, save: saveKey })}
-                      disabled={!pasteId || !pasteSecret} busy={connecting}>
-                      {connecting ? "Connecting…" : "Connect"}
-                    </Button>
-                  </div>
-                </details>
-                <ErrorMsg msg={connErr} />
-              </div>
-            ) : (
-              <p className="text-sm text-emerald-700">Connected as {who.email}</p>
-            )}
-          </SubSection>
-
-          {/* 2 · Location */}
-          {/* Picking and creating are one-of, and the hint says which you are
-              in: with both on screen at once it was never obvious which half
-              of the step you were meant to fill in. */}
-          {/* THROWAWAY: K/L/M rebuild the location and agent panels. The
-              create-location form below stays App's, and shows over either. */}
-          {PROTO_AGENT ? (
-            <AgentStep variant={PROTO_AGENT}
+            <AgentPanel
+              sourceMode={sourceMode} switchMode={switchMode} manual={manual}
+              setManual={setManual} sourceOpen={sourceOpen}
+              setSourceOpen={setSourceOpen}
+              who={who} candidates={candidates} keyPath={keyPath}
+              setKeyPath={setKeyPath} pasteId={pasteId} setPasteId={setPasteId}
+              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
+              saveKey={saveKey} setSaveKey={setSaveKey} connect={connect}
+              connErr={connErr} setConnErr={setConnErr} connecting={connecting}
+              accounts={accounts} accountId={accountId} setAccountId={setAccountId}
+              workspaces={workspaces} workspaceId={workspaceId}
+              setWorkspaceId={setWorkspaceId}
               locations={locations} filteredLocs={filteredLocs}
               locFilter={locFilter} setLocFilter={setLocFilter}
               harborId={harborId} setHarborId={setHarborId} location={location}
+              locBusy={locBusy} locErr={locErr} showCreateLoc={showCreateLoc}
+              setShowCreateLoc={setShowCreateLoc}
+              createLocationForm={createLocationFormNode}
               ships={ships} shipId={shipId}
               pickShip={(id) => { setShipId(id); forgetToken(); }}
-              shipOnline={shipOnline} locLabels={locLabels}
-              creating={creatingShip} setCreating={setShowCreateShip}
+              shipOnline={shipOnline} factsBusy={factsBusy} facts={facts}
+              creatingShip={creatingShip} setShowCreateShip={setShowCreateShip}
               newShipName={newShipName} setNewShipName={setNewShipName}
               createShip={createShipNow} shipErr={shipErr}
-              rotate={rotate} setRotate={setRotate}
-              hasToken={!!txt("auth_token")}
+              shipTokenNotice={shipTokenNotice}
               authToken={raw("auth_token")}
               setAuthToken={(v) => set("auth_token", v || null)}
-              locBusy={locBusy} factsBusy={factsBusy}
-              shipTokenNotice={shipTokenNotice} facts={facts} who={who}
-              accountWorkspace={accountWorkspaceNode}
-              createLocationBlock={
-                showCreateLoc ? createLocationFormNode : createLocationNode} />
-          ) : (<>
-          <SubSection title="Private location" done={!!harborId}
-            hint={showCreateLoc
-              ? "Creating a new location — the existing ones are hidden until you create or cancel. Cancel keeps whatever you had selected."
-              : "The location = harbor (harbor_id). Its agents live in step 3 — create a new location only for a genuinely new place to run tests."}>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Account">
-                  <SearchSelect
-                    options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
-                    value={accountId} disabled={!who}
-                    onChange={(v) => setAccountId(Number(v))} />
-                </Field>
-                <Field label="Workspace">
-                  <SearchSelect
-                    options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
-                    value={workspaceId} disabled={!who || workspaces.length === 0}
-                    onChange={(v) => setWorkspaceId(Number(v))} />
-                </Field>
-              </div>
-              {/* The whole picking half, hidden while the create form is open.
-                  Nothing here is unmounted state -- harborId lives above, so
-                  cancelling comes back to the same selection. */}
-              {!showCreateLoc && (
-                <>
-                  {locations.length > 8 && (
-                    <TextInput value={locFilter} onChange={setLocFilter}
-                      placeholder={`filter ${locations.length} locations…`} />
-                  )}
-                  <div className="max-h-56 overflow-y-auto border border-slate-200 rounded-md divide-y divide-slate-100">
-                    {filteredLocs.map((l) => {
-                      const labels = locLabels(l);
-                      return (
-                      <button key={l.id}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-slate-50 ${l.id === harborId ? "bg-bzm/10 border-l-4 border-bzm" : ""}`}
-                        onClick={() => setHarborId(l.id)}>
-                        <span className="font-medium">{l.name}</span>
-                        {labels.map((label) => (
-                          <span key={label}
-                            className="ml-2 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 bg-slate-100 text-slate-600">
-                            {label}
-                          </span>
-                        ))}
-                        <span className="text-xs text-slate-400 ml-2">
-                          {l.funcIds?.slice(0, 4).join(", ")}{(l.funcIds?.length ?? 0) > 4 && "…"} ·
-                          {" "}{l.slots} slot{l.slots === 1 ? "" : "s"} · {l.ships?.length ?? 0} agent(s)
-                        </span>
-                        {/* Said here rather than left to the badge's tooltip: this
-                            is where the location is being chosen, and a tooltip is
-                            invisible on touch and to the keyboard. */}
-                        {labels.length > 1 && (
-                          <span className="block text-[11px] text-amber-700 mt-0.5">
-                            one agent for both — {KIND_COUPLING}
-                          </span>
-                        )}
-                      </button>
-                      );
-                    })}
-                    {who && filteredLocs.length === 0 && (
-                      <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>)}
-                  </div>
-                  {location && locLabels(location).length > 1 && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                      <b>{location.name}</b> carries both performance and
-                      service-virtualization features, so one agent serves both:{" "}
-                      {KIND_COUPLING}. You can still generate for it — a location
-                      per kind is what avoids the coupling.
-                    </p>
-                  )}
-                  <Button kind="ghost" disabled={!who}
-                    onClick={() => { setLocErr(null); setShowCreateLoc(true); }}>
-                    + New location (new harbor_id)
-                  </Button>
-                </>
-              )}
-              <ErrorMsg msg={locErr} />
-              {showCreateLoc && createLocationFormNode}
-            </div>
-          </SubSection>
-
-          {/* 3 · Agent */}
-          {/* Same one-of as step 2, and it matters more here: the two paths have
-              different consequences, so the hint names the one you are in. */}
-          <SubSection title="Agent (ship)" done={!!shipId}
-            hint={creatingShip
-              ? "Creating a new agent identity (new ship_id + AUTH_TOKEN, same harbor) — what a new deployment needs. Its token is issued once, here, and kept in the field below."
-              : "Reusing an identity means replacing the install it is already running. The location's existing agents are below; creating a new one instead is free."}>
-            <div className="space-y-3">
-              {creatingShip ? (
-                <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
-                  <p className="text-xs font-semibold text-slate-700">
-                    New agent in this location
-                  </p>
-                  <Field label="Name">
-                    <TextInput value={newShipName} onChange={setNewShipName}
-                      placeholder="e.g. k8s-prod-cluster" />
-                  </Field>
-                  <div className="flex gap-2">
-                    <Button disabled={!harborId || !newShipName}
-                      onClick={createShipNow}>Create</Button>
-                    {/* Only where there is a list to come back to -- see
-                        creatingShip. The selection it comes back to is shipId,
-                        which nothing in this form touches. */}
-                    {ships.length > 0 && (
-                      <Button kind="ghost"
-                        onClick={() => { setShipErr(null); setShowCreateShip(false); }}>
-                        Cancel
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <p className="text-xs font-medium text-slate-600 mb-1.5">
-                      Reuse an existing agent identity (re-deploying / replacing it):
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {ships.map((s) => (
-                        <button key={s.id}
-                          className={`px-3 py-1.5 rounded-md border text-sm ${s.id === shipId ? "border-bzm bg-bzm/10 text-bzm-dark font-medium" : "border-slate-300 hover:bg-slate-50"}`}
-                          onClick={() => { setShipId(s.id); forgetToken(); }}>
-                          {s.name || s.id}{" "}
-                          <span className={`text-xs ${shipOnline(s) ? "text-emerald-600" : "text-slate-400"}`}>
-                            ({shipOnline(s) ? "online" : s.state})
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {/* The hazard, stated against the identity you have selected --
-                      which is why it belongs to this half of the step and not
-                      the create form, where nothing is being reused. */}
-                  {(() => {
-                    const sel = ships.find((s) => s.id === shipId);
-                    return sel && shipOnline(sel) ? (
-                      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                        <b>{sel.name}</b> is currently online — it's already running
-                        somewhere. Deploying a second agent with the same identity will
-                        conflict. Create a new agent unless you're replacing that install.
-                      </p>
-                    ) : null;
-                  })()}
-                  <Button kind="ghost" disabled={!harborId}
-                    onClick={() => { setShipErr(null); setShipTokenNotice(null); setShowCreateShip(true); }}>
-                    + New agent identity (recommended)
-                  </Button>
-                </>
-              )}
-              <ErrorMsg msg={shipErr} />
-              <NoticeMsg msg={shipTokenNotice} />
-              {facts && (
-                <p className="text-xs text-slate-500">
-                  image inventory: {facts.images_source} · features: {facts.func_ids?.join(", ")}
-                </p>
-              )}
-            </div>
-          </SubSection>
-          </>)}
-              </>
-              )}
-
-              {/* The credential, outside the collapsible pickers on purpose: it
-                  is filled in by creating an agent and read back by whoever
-                  deploys, and the step above folds itself away the moment an
-                  agent is chosen. Manual mode has the same field inside
-                  ManualSource, where it is one of the three typed values. */}
-              {/* THROWAWAY: M moves this field into the expanded agent row, so
-                  the credential sits with the identity it belongs to. */}
-              {sourceMode === "connect" && shipId && PROTO_AGENT !== "M" && (
-                <div className="border-t border-slate-100 pt-3 space-y-1.5">
-                  <Field label="Agent AUTH_TOKEN"
-                    hint="Goes into the Secret. Held for this browser session only.">
-                    <SecretInput value={raw("auth_token")}
-                      onChange={(v) => set("auth_token", v || null)}
-                      placeholder="paste the token this agent was created with" />
-                  </Field>
-                  {/* Empty is the honest state for an agent that already exists:
-                      BlazeMeter will not show an old token again, and asking for
-                      one issues a new one. What to do about it is core's sentence,
-                      shown beside the download rather than restated here. */}
-                  {!raw("auth_token") && (
-                    <p className="text-[11px] text-slate-500">
-                      Empty for an existing agent: its token was issued once, at
-                      creation, and cannot be read back. Paste what you kept, or
-                      see the note by the download button.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
+              regenerateToken={regenerateToken} />
           </Section>
 
           {/* 2 · Configure */}
           <Section n={2} title="Configure"
             hint="Everything re-renders the preview live.">
-            <div className="space-y-4">
-              <div className="flex gap-2 items-center flex-wrap">
-                <span className="flex-1" />
-                <Button kind="ghost" onClick={exportProfile}>Export</Button>
-                <label className="rounded-md px-3 py-1.5 text-sm font-medium border border-slate-300 text-slate-600 hover:bg-slate-50 cursor-pointer">
-                  Import
-                  <input type="file" accept=".json" className="hidden"
-                    onChange={(e) => e.target.files?.[0] && importProfile(e.target.files[0])} />
-                </label>
-              </div>
-
-              {/* THROWAWAY: ?variant= swaps this whole block for one of the
-                  prototype layouts. Everything above and below it -- the
-                  preview, the download guard, the preflight -- is untouched, so
-                  a variant is judged against the real page. */}
-              {PROTO_VARIANT ? (() => {
-                const proto = {
-                  features, feature, pickFeature, sourceMode,
-                  locFeatures, unavailable, locUnclaimed,
-                  funcIds: facts?.func_ids ?? [],
-                  options, set, grpOn, grpRequired, grpDeclined, flipGroup,
-                  groupBody, incomplete, namespaceOk, saOk, saCreate,
-                };
-                return PROTO_VARIANT === "A" ? <VariantA {...proto} />
-                  : PROTO_VARIANT === "B" ? <VariantB {...proto} />
-                  : PROTO_VARIANT === "C" ? <VariantC {...proto} />
-                  // D-G share the chosen configure layout and differ only in
-                  // where the preview lives.
-                  : <VariantD {...proto} />;
-              })() : (<>
-              {/* The feature in view. Served list, so a feature added to the
-                  backend vocabulary appears here with nothing changed in this
-                  file -- and one with no group tagged to it still shows the
-                  any-deployment groups rather than an empty step. */}
-              {features.length > 0 && (
-                <div>
-                  <p className="text-xs font-medium text-slate-600 mb-1.5">
-                    {sourceMode === "manual"
-                      ? "What does this location run?"
-                      : "Which feature are you configuring?"}
-                  </p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {features.map((f) => {
-                      // Enabled is the unremarkable case and says nothing; only
-                      // the absence is worth a word.
-                      const off = unavailable.includes(f.id);
-                      const stranded = off ? setUnderFeature(f.id) : [];
-                      return (
-                        <button key={f.id} disabled={off}
-                          onClick={() => !off && pickFeature(f.id)}
-                          className={"text-left px-3 py-2 rounded-md border text-sm "
-                            + (f.id === feature
-                              ? "border-bzm bg-bzm/10 text-bzm-dark font-medium"
-                              : off
-                                ? "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed"
-                                : "border-slate-300 hover:bg-slate-50")}>
-                          {f.label}
-                          {off && (
-                            <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-200 rounded px-1.5 py-0.5">
-                              not enabled
-                            </span>
-                          )}
-                          <span className="block text-[11px] font-normal text-slate-400">
-                            {f.hint}
-                          </span>
-                          {/* Disabling hides the view, not the effect: options
-                              set under this feature are still generated. Left
-                              unsaid they would ship from behind a button nobody
-                              can open. */}
-                          {stranded.length > 0 && (
-                            <span className="block text-[11px] font-normal text-amber-700 mt-0.5">
-                              {stranded.join(", ")} still set here — generated, but
-                              no longer reachable.
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* Connected, this is a view over a fact the account already
-                      settled. Manually there is no account, so the same buttons
-                      are the declaration -- which is why the sentence under them
-                      has to change with the mode rather than claim both. */}
-                  {sourceMode === "manual" ? (
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Declared, not read from an account — it decides which images
-                      the bundle names. One funcId per feature here.
-                    </p>
-                  ) : (
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      The location's features decide what the manifests contain.
-                      Anything set under a feature stays in the bundle, including
-                      one this location does not run — those rows say so.
-                    </p>
-                  )}
-                  {locUnclaimed.length > 0 && (
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      This location also runs{" "}
-                      <span className="font-mono">{locUnclaimed.join(", ")}</span>{" "}
-                      — there are no options here for those; nothing about them
-                      is generated or removed.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <label className="block">
-                <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-                  Namespace
-                  {namespaceOk
-                    ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
-                    : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>}
-                </span>
-                <div className="relative">
-                  <input className={inputCls + (namespaceOk ? " border-emerald-400" : " border-red-300")}
-                    value={String(options.namespace ?? "")} placeholder="e.g. blazemeter"
-                    onChange={(e) => set("namespace", e.target.value)} />
-                  {namespaceOk && <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-sm">✓</span>}
-                </div>
-                <span className="text-[11px] text-slate-400">
-                  the only required setting. One is suggested per feature, because{" "}
-                  {KIND_COUPLING}; what you type wins.
-                </span>
-              </label>
-
-              {/* Beside the namespace rather than in a group below: every
-                  deployment runs as some account, both fields are always sent,
-                  and putting the name behind a switch would make the required
-                  half of it look optional. */}
-              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
-                <label className="block">
-                  <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-                    Service account
-                    {saOk
-                      ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
-                      : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>}
-                  </span>
-                  <input className={inputCls + (saOk ? "" : " border-red-300")}
-                    value={String(options.service_account_name ?? "")}
-                    placeholder="e.g. crane"
-                    onChange={(e) => set("service_account_name", e.target.value)} />
-                  <span className="text-[11px] text-slate-400">
-                    what the agent runs as, and what the RoleBinding grants to
-                  </span>
-                </label>
-                <div className="pt-5 w-56">
-                  <Check label="Create it"
-                    hint={saCreate
-                      ? "the bundle includes the ServiceAccount"
-                      : "referenced, not created — a wrong name leaves the agent pod unscheduled"}
-                    checked={saCreate}
-                    onChange={(v) => set("service_account_create", v)} />
-                </div>
-              </div>
-              {facts && (
-                <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-                  Images follow the location's features
-                  ({facts.func_ids?.join(", ") || "performance"}): engines always;
-                  browser/grid, mock-service, SV and recorder only when on.
-                </p>
-              )}
-
-              {/* Only the groups the feature in view owns, plus the ones that
-                  apply to any deployment. A hidden group keeps its options --
-                  nothing here calls disable -- so the manifests are the same
-                  whichever feature is being looked at. */}
-              <div className="border border-slate-200 rounded-xl divide-y divide-slate-100">
-                {visibleGroups(feature).map((g) => (
-                  <GroupRow key={g.id} group={g} on={grpOn[g.id]}
-                    required={!!grpRequired[g.id]}
-                    declined={!!grpDeclined[g.id]}
-                    applies={appliesTo(g, features)}
-                    onFlip={(v) => flipGroup(g.id, v)}>
-                    {groupBody[g.id]}
-                  </GroupRow>
-                ))}
-              </div>
-              </>)}
-
-              {(
-              <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
-                <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-slate-500">
-                  Advanced — you should not need this
-                </summary>
-                <div className="px-4 pb-3 pt-1 grid grid-cols-2 gap-3">
-                  <Field label="Security posture"
-                    hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
-                    <select className={inputCls} value={String(options.platform)}
-                      onChange={(e) => set("platform", e.target.value)}>
-                      <option value="openshift">Unified SCC-friendly (recommended)</option>
-                      <option value="k8s">Legacy pinned-UID k8s</option>
-                    </select>
-                  </Field>
-                  {!openshift && (
-                    <Field label="runAsUser / runAsGroup">
-                      <input type="number" className={inputCls}
-                        value={Number(options.run_as_user ?? 1337)}
-                        onChange={(e) => set("run_as_user", Number(e.target.value))} />
-                    </Field>
-                  )}
-                </div>
-              </details>
-              )}
-            </div>
+            <ConfigurePanel
+              features={features} feature={feature} pickFeature={pickFeature}
+              sourceMode={sourceMode} locFeatures={locFeatures}
+              locUnclaimed={locUnclaimed} notEnabled={notEnabled}
+              enableFeature={enableFeature}
+              options={options} set={set}
+              grpOn={grpOn} grpRequired={grpRequired} grpDeclined={grpDeclined}
+              flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
+              namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
+              exportProfile={exportProfile} importProfile={importProfile} />
           </Section>
 
           {/* 3 · Download & verify */}
@@ -1547,8 +1061,9 @@ export default function App() {
             <DownloadPanel
               facts={facts} shipId={shipId} ships={ships} sourceMode={sourceMode}
               who={who} options={options} set={set} raw={raw} txt={txt}
-              saOk={saOk} svOk={svOk} genErr={genErr} features={features}
-              pickFeature={pickFeature} blockers={blockers} format={format}
+              saOk={saOk} svOk={svOk} genErr={genErr}
+              unfinished={incomplete} goToConfigure={() => setStep(1)}
+              format={format}
               helmBlocked={helmBlocked}
               previewToken={previewToken} rotate={rotate} setRotate={setRotate}
               tokenPlan={tokenPlan} lastTokenReport={lastTokenReport}
@@ -1567,7 +1082,6 @@ export default function App() {
         </StepFlow>
       </main>
       </WorkArea>
-      <PrototypeSwitcher current={PROTO_VARIANT} />
     </div>
   );
 }
