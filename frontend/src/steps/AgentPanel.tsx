@@ -47,10 +47,10 @@ export interface AgentPanelProps {
   // -- the account tree
   accounts: { id: number; name: string }[];
   accountId: number | null;
-  setAccountId: (id: number) => void;
+  setAccountId: (id: number | null) => void;
   workspaces: { id: number; name: string }[];
   workspaceId: number | null;
-  setWorkspaceId: (id: number) => void;
+  setWorkspaceId: (id: number | null) => void;
   locations: Location[];
   filteredLocs: Location[];
   locFilter: string;
@@ -346,13 +346,15 @@ export function AgentPanel(p: AgentPanelProps) {
                   <SearchSelect
                     options={p.accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
                     value={p.accountId} disabled={!p.who}
-                    onChange={(v) => p.setAccountId(Number(v))} />
+                    onChange={(v) => p.setAccountId(Number(v))}
+                    onClear={() => p.setAccountId(null)} />
                 </Field>
                 <Field label="Workspace">
                   <SearchSelect
                     options={p.workspaces.map((w) => ({ value: w.id, label: w.name }))}
                     value={p.workspaceId} disabled={!p.who || p.workspaces.length === 0}
-                    onChange={(v) => p.setWorkspaceId(Number(v))} />
+                    onChange={(v) => p.setWorkspaceId(Number(v))}
+                    onClear={() => p.setWorkspaceId(null)} />
                 </Field>
               </div>
               {/* Above the list, like the agent panel below: the two read the

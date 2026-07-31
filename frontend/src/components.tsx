@@ -345,6 +345,12 @@ export function SearchSelect(props: {
   options: SelectOption[];
   value: string | number | null;
   onChange: (v: string | number) => void;
+  /** Un-choose. Given, the clear button empties the box itself once the typed
+   *  search is gone -- because "clear the dropdown" means the value in it, and
+   *  onChange has no way to say "none". Without it the button only clears the
+   *  search, since a control that empties a field the page still depends on
+   *  would be worse than no control. */
+  onClear?: () => void;
   placeholder?: string;
   disabled?: boolean;
 }) {
@@ -376,6 +382,15 @@ export function SearchSelect(props: {
     listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
   }, [hi]);
 
+  // What the button would clear, or null when the box is already empty. The
+  // search wins while there is one: two presses to get from "typed a filter
+  // over a chosen account" to "nothing chosen" is the order people expect,
+  // and it makes the first press undoable.
+  const clearing: "query" | "selection" | null =
+    props.disabled ? null
+      : query ? "query"
+        : (selected && props.onClear) ? "selection" : null;
+
   const pick = (o: SelectOption) => {
     onChange(o.value);
     setOpen(false);
@@ -400,26 +415,32 @@ export function SearchSelect(props: {
           else if (e.key === "Escape") { setOpen(false); setQuery(""); (e.target as HTMLInputElement).blur(); }
         }}
       />
-      {/* Clear, in place of the chevron rather than beside it: while you are
-          typing, the list is already open and "this opens" is the one thing the
-          arrow no longer has to say. Only there when there is something to
-          clear, so the control never means "nothing happens".
+      {/* Clear, in place of the chevron rather than beside it: while the list is
+          open "this opens" is the one thing the arrow no longer has to say, and
+          two glyphs crowd a box this size.
 
-          It clears the *search*, not the selection -- onChange takes a value and
-          has no way to say "none", so an X that emptied the field would leave
-          the page showing a blank box for an account it is still using.
+          There whenever there is something to clear, which is the fix for the
+          first version of this: focusing the box empties it to show the full
+          list, so an X gated on the typed search appeared only *after* a
+          keystroke -- click in, and there was nothing there to find.
+
+          Two things to clear, in order. The search first, if one has been
+          typed; then the selection, if the caller gave us a way to un-choose.
 
           mousedown, and prevented: on click the input would blur first, and the
           list would close under the pointer that was clearing it. */}
-      {open && query ? (
-        <button type="button" aria-label="Clear search"
-          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400
-                     hover:text-slate-700 hover:bg-slate-100 rounded w-5 h-5
+      {clearing ? (
+        <button type="button"
+          aria-label={clearing === "query" ? "Clear search" : "Clear selection"}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500
+                     hover:text-slate-800 hover:bg-slate-200 rounded w-5 h-5
                      flex items-center justify-center text-xs leading-none"
           onMouseDown={(e) => {
             e.preventDefault();
             setQuery("");
+            if (clearing === "selection") props.onClear?.();
             inputRef.current?.focus();
+            setOpen(true);
           }}>
           ✕
         </button>

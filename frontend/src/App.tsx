@@ -325,8 +325,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!accountId || !who) return;
+    // Cleared first, then the guard -- the shape the workspace effect below
+    // already has. The other way round, clearing the account returned early and
+    // left its workspaces on screen, so the page offered a workspace list
+    // belonging to an account nothing was pointing at any more.
     setWorkspaces([]); setWorkspaceId(null);
+    if (!accountId || !who) return;
     api.workspaces(accountId).then((ws) => {
       setWorkspaces(ws);
       const want = pendingWorkspace.current;
