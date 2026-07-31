@@ -10,7 +10,7 @@
 // downstream is generated from, and the effects that clear the token when
 // either moves live there too.
 import { useEffect, useRef, useState } from "react";
-import { Facts, KeyCandidate, Location, Ship } from "../api";
+import { Facts, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -29,7 +29,8 @@ export interface AgentPanelProps {
   setSourceOpen: (v: boolean) => void;
   // -- the API key
   who: { email: string; keyId: string } | null;
-  candidates: KeyCandidate[];
+  /** Hand the key back. The server forgets it; a key saved to disk stays. */
+  disconnect: () => void;
   keyPath: string;
   setKeyPath: (v: string) => void;
   pasteId: string;
@@ -90,6 +91,10 @@ export interface AgentPanelProps {
 type Arm = "idle" | "armed" | "done";
 
 export function AgentPanel(p: AgentPanelProps) {
+  const connected = !!p.who;
+  // A pasted pair outranks the path: typing both is the deliberate act, and
+  // the path field is prefilled from whatever key was detected on this machine.
+  const pasted = !!p.pasteId && !!p.pasteSecret;
   const empty = !!p.location && p.ships.length === 0;
   const ship = p.ships.find((s) => s.id === p.shipId);
   // An identity that already existed, with no credential in hand for it: its
@@ -196,83 +201,98 @@ export function AgentPanel(p: AgentPanelProps) {
         </div>
       ) : (
         <>
+          {/* One block, in one place, whatever state it is in. It used to
+              swap for a single "Connected as ..." line, so connecting made the
+              whole step jump and disconnecting made it jump back -- and the
+              way out moved with it. The fields stay put and describe the key
+              in use; the button that connected is the button that
+              disconnects. */}
           <SubSection title="Connect" done={!!p.who}
             hint="API key stays on this machine; only used server-side.">
-            {!p.who ? (
-              <div className="space-y-3">
-                {p.candidates.length > 0 && (
-                  <Field label="Detected key files">
-                    <select className={inputCls} value={p.keyPath}
-                      onChange={(e) => p.setKeyPath(e.target.value)}>
-                      {p.candidates.map((c) => (
-                        <option key={c.path} value={c.path}>
-                          {c.path} (id {c.key_id.slice(0, 8)}…)
-                        </option>
-                      ))}
-                    </select>
+            <div className="space-y-3">
+              {/* Above the path, because it is the answer to "I do not have a
+                  file" and that is the question someone with no file is asking.
+                  Still folded: the path is prefilled from a detected key, so
+                  most sessions never open this. */}
+              <details className="text-sm">
+                <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
+                <div className="mt-2 space-y-2">
+                  <Field label="Key ID">
+                    <TextInput value={p.pasteId} onChange={p.setPasteId} mono
+                      disabled={connected} /></Field>
+                  <Field label="Secret">
+                    <input type="password"
+                      className={inputCls + " font-mono text-xs"
+                        + (connected ? " bg-slate-50 text-slate-500" : "")}
+                      value={p.pasteSecret} disabled={connected}
+                      onChange={(e) => p.setPasteSecret(e.target.value)} />
                   </Field>
-                )}
-                <div className="flex gap-2 items-end">
-                  <div className="grow">
-                    <Field label="…or path to api-key.json">
-                      <TextInput value={p.keyPath} onChange={p.setKeyPath} mono
-                        placeholder="/path/to/api-key.json" />
-                    </Field>
-                  </div>
-                  {/* A label, not a Button, so it cannot be `disabled` -- while a
-                      connect is in flight it is taken out of reach instead, or a
-                      second key could be picked mid-request. */}
-                  <label className={"rounded-md px-3 py-1.5 text-sm font-medium border "
-                    + "border-slate-300 text-slate-600 whitespace-nowrap "
-                    + (p.connecting
-                      ? "opacity-40 pointer-events-none"
-                      : "hover:bg-slate-50 cursor-pointer")}>
-                    Browse…
-                    <input type="file" accept=".json,application/json" className="hidden"
-                      onChange={async (e) => {
-                        const f = e.target.files?.[0];
-                        if (!f) return;
-                        e.target.value = "";
-                        p.setConnErr(null);
-                        try {
-                          const d = JSON.parse(await f.text());
-                          if (!d.id || !d.secret) throw new Error();
-                          p.connect({ id: d.id, secret: d.secret, save: p.saveKey });
-                        } catch {
-                          p.setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
-                        }
-                      }} />
-                  </label>
-                  <Button onClick={() => p.connect({ path: p.keyPath })}
-                    disabled={!p.keyPath} busy={p.connecting}>
-                    {p.connecting ? "Connecting…" : "Connect"}
+                </div>
+              </details>
+              <div className="flex gap-2 items-end">
+                <div className="grow">
+                  <Field label="…or api-key.json">
+                    <TextInput value={p.keyPath} onChange={p.setKeyPath} mono
+                      disabled={connected}
+                      placeholder="/path/to/api-key.json" />
+                  </Field>
+                </div>
+                {/* A label, not a Button, so it cannot be `disabled` -- while a
+                    connect is in flight, or one is already made, it is taken
+                    out of reach instead. */}
+                <label className={"rounded-md px-3 py-1.5 text-sm font-medium border "
+                  + "border-slate-300 text-slate-600 whitespace-nowrap "
+                  + (p.connecting || connected
+                    ? "opacity-40 pointer-events-none"
+                    : "hover:bg-slate-50 cursor-pointer")}>
+                  Browse…
+                  <input type="file" accept=".json,application/json" className="hidden"
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0];
+                      if (!f) return;
+                      e.target.value = "";
+                      p.setConnErr(null);
+                      try {
+                        const d = JSON.parse(await f.text());
+                        if (!d.id || !d.secret) throw new Error();
+                        p.connect({ id: d.id, secret: d.secret, save: p.saveKey });
+                      } catch {
+                        p.setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
+                      }
+                    }} />
+                </label>
+                {/* The same button, in the same place, doing the other half of
+                    the same job. The fixed box is the point: three labels of
+                    three widths in a row whose text field is `grow` would
+                    resize the field under the cursor every time the state
+                    changed. */}
+                <div className="w-32 shrink-0">
+                  {/* One button for both ways in: a pasted id and secret if
+                      there is one, the file otherwise. Two Connects meant two
+                      places to look for the one that was going to work, and
+                      the pasted pair is the deliberate act -- if it is filled
+                      in, it is what was meant. */}
+                  <Button block kind={connected ? "ghost" : "primary"}
+                    onClick={connected ? p.disconnect
+                      : () => p.connect(pasted
+                        ? { id: p.pasteId, secret: p.pasteSecret, save: p.saveKey }
+                        : { path: p.keyPath })}
+                    disabled={!connected && !pasted && !p.keyPath}
+                    busy={p.connecting}>
+                    {connected ? "Disconnect"
+                      : p.connecting ? "Connecting…" : "Connect"}
                   </Button>
                 </div>
-                <Check label="Remember this key on this machine" checked={p.saveKey}
-                  onChange={p.setSaveKey}
-                  hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
-                <details className="text-sm">
-                  <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
-                  <div className="mt-2 space-y-2">
-                    <Field label="Key ID">
-                      <TextInput value={p.pasteId} onChange={p.setPasteId} mono /></Field>
-                    <Field label="Secret">
-                      <input type="password" className={inputCls + " font-mono text-xs"}
-                        value={p.pasteSecret}
-                        onChange={(e) => p.setPasteSecret(e.target.value)} />
-                    </Field>
-                    <Button
-                      onClick={() => p.connect({ id: p.pasteId, secret: p.pasteSecret, save: p.saveKey })}
-                      disabled={!p.pasteId || !p.pasteSecret} busy={p.connecting}>
-                      {p.connecting ? "Connecting…" : "Connect"}
-                    </Button>
-                  </div>
-                </details>
-                <ErrorMsg msg={p.connErr} />
               </div>
-            ) : (
-              <p className="text-sm text-emerald-700">Connected as {p.who.email}</p>
-            )}
+              <Check label="Remember this key on this machine" checked={p.saveKey}
+                onChange={p.setSaveKey} disabled={connected}
+                hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
+              {/* Status and failure share the slot under the form, so neither
+                  arriving moves anything. */}
+              {connected
+                ? <p className="text-sm text-emerald-700">Connected as {p.who!.email}</p>
+                : <ErrorMsg msg={p.connErr} />}
+            </div>
           </SubSection>
 
           {/* Where you are, always, and what is still missing. A location with
@@ -423,7 +443,11 @@ export function AgentPanel(p: AgentPanelProps) {
                         const on = s.id === p.shipId;
                         const isOpen = open === s.id;
                         return (
-                          <div key={s.id} className={on ? "bg-bzm/5"
+                          // Selected is the same blue as a selected location
+                          // above: the two lists are the same kind of choice,
+                          // and a fainter tint here read as banding rather than
+                          // as selection.
+                          <div key={s.id} className={on ? "bg-bzm/10"
                             : i % 2 ? "bg-slate-50/70" : "bg-white"}>
                             {/* A div, not a button: the row is clickable and so
                                 are the controls inside it, and a button inside a

@@ -36,6 +36,8 @@ import {
 // and how to take it back. What the evidence means is suggest.py's and how it
 // stands against the options is suggest.merge()'s -- both arrive on the row.
 import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
+// What survives a refresh, and the one thing that must not.
+import * as session from "./session";
 import { SuggestionList } from "./SuggestionList";
 import { AgentPanel } from "./steps/AgentPanel";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
@@ -228,7 +230,68 @@ export default function App() {
     api.svConstants().then(setSvConst).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.features().then(setFeatures).catch(() => {});
+
+    // The key lives in the server process, so a refresh never disconnected
+    // anything -- the page just forgot. Ask, and put back what it was pointed
+    // at. Selections are restored before the connection resolves so the
+    // location list is filtered to the right workspace as it arrives; the
+    // agent is the exception (see pendingShip).
+    const saved = session.load();
+    if (saved) {
+      setSourceMode(saved.sourceMode);
+      setManual(saved.manual);
+      setOptions((o) => ({ ...o, ...saved.options }));
+      setStep(saved.step);
+      pendingShip.current = saved.shipId;
+    }
+    api.keyStatus().then(async (r) => {
+      if (!r.connected || !r.user) return;
+      setWho({ email: r.user.email, keyId: r.key_id ?? "" });
+      const accts = await api.accounts();
+      setAccounts(accts);
+      pendingWorkspace.current = saved?.workspaceId ?? null;
+      pendingHarbor.current = saved?.harborId ?? null;
+      setAccountId(saved?.accountId ?? r.default_account_id ?? accts[0]?.id ?? null);
+    }).catch(() => {})
+      // Only now may the page write its own state back. Saving before this
+      // resolves overwrites the snapshot with the empty state it is about to
+      // restore *from* -- which is what happened the first time: one refresh
+      // against a server that did not answer, and the selections were gone for
+      // good.
+      .finally(() => setRestored(true));
   }, []);
+  const [restored, setRestored] = useState(false);
+
+  // What a restored session is still waiting to re-select. Each is consumed by
+  // the effect that loads the list it belongs to, because a selection is only
+  // legitimate once the account has confirmed the thing still exists -- a
+  // location deleted since the last page load must not come back as an id the
+  // rest of the page believes.
+  const pendingWorkspace = useRef<number | null>(null);
+  const pendingHarbor = useRef<string | null>(null);
+  const pendingShip = useRef<string | null>(null);
+
+  // Remember what a refresh would otherwise lose. Never the AUTH_TOKEN -- see
+  // session.strip, which is where that decision lives and is tested.
+  useEffect(() => {
+    if (!restored) return;
+    session.save({ sourceMode, accountId, workspaceId, harborId, shipId,
+                   manual, options, step });
+  }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, manual,
+      options, step]);
+
+  /** Hand the key back. The server forgets the client; the page forgets
+   *  everything that was read with it, because a stale account tree is worse
+   *  than an empty one -- it offers locations this page can no longer reach. */
+  const disconnect = async () => {
+    try { await api.keyClear(); } catch { /* forgetting locally still helps */ }
+    setWho(null); setAccounts([]); setAccountId(null);
+    setWorkspaces([]); setWorkspaceId(null);
+    setLocations([]); setHarborId(null); setShipId(null); setFacts(null);
+    setStatus(null); setPolling(false); setConnErr(null);
+    forgetToken();
+    session.clear();
+  };
 
   const connect = async (body: Parameters<typeof api.keySet>[0]) => {
     if (connecting) return;
@@ -252,7 +315,9 @@ export default function App() {
     setWorkspaces([]); setWorkspaceId(null);
     api.workspaces(accountId).then((ws) => {
       setWorkspaces(ws);
-      setWorkspaceId(ws[0]?.id ?? null);
+      const want = pendingWorkspace.current;
+      pendingWorkspace.current = null;
+      setWorkspaceId(ws.find((w) => w.id === want)?.id ?? ws[0]?.id ?? null);
     }).catch((e) => setLocErr(e.message));
   }, [accountId, who]);
 
@@ -264,8 +329,14 @@ export default function App() {
     // show an empty list that means nothing yet. An empty workspace and an
     // unfetched one look identical without it.
     setLocBusy(true);
-    api.locations(workspaceId).then(setLocations)
-      .catch((e) => setLocErr(e.message))
+    api.locations(workspaceId).then((ls) => {
+      setLocations(ls);
+      const want = pendingHarbor.current;
+      pendingHarbor.current = null;
+      // Only if it is still there. An id restored blind would leave the page
+      // configured for a location the account no longer has.
+      if (want && ls.some((l) => l.id === want)) setHarborId(want);
+    }).catch((e) => setLocErr(e.message))
       .finally(() => setLocBusy(false));
   }, [workspaceId]);
 
@@ -307,6 +378,14 @@ export default function App() {
     !!s.lastHeartBeat && Date.now() / 1000 - s.lastHeartBeat < 300;
 
   useEffect(() => {
+    // A restored agent outranks the auto-pick: it is what the user chose, and
+    // it is applied only once the location's own list has confirmed it exists.
+    const want = pendingShip.current;
+    if (want && ships.some((s) => s.id === want)) {
+      pendingShip.current = null;
+      setShipId(want);
+      return;
+    }
     // Auto-pick a lone agent only if it isn't running somewhere already --
     // a new deployment should get a NEW agent identity, not clone a live one.
     if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
@@ -1015,7 +1094,7 @@ export default function App() {
               sourceMode={sourceMode} switchMode={switchMode} manual={manual}
               setManual={setManual} sourceOpen={sourceOpen}
               setSourceOpen={setSourceOpen}
-              who={who} candidates={candidates} keyPath={keyPath}
+              who={who} disconnect={disconnect} keyPath={keyPath}
               setKeyPath={setKeyPath} pasteId={pasteId} setPasteId={setPasteId}
               pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
               saveKey={saveKey} setSaveKey={setSaveKey} connect={connect}

@@ -80,6 +80,47 @@ def key_detect():
     return {"candidates": core.detect_keys(), "active_key_id": _state["key_id"]}
 
 
+@app.get("/api/key")
+def key_status():
+    """Whether this server still holds a usable key, and whose.
+
+    The connection lives in the process, not in the browser, so a refresh has
+    never actually disconnected anything -- the page just forgot. This is how it
+    remembers. The user call is made rather than assumed: a key that was revoked
+    or expired since it was accepted should read as disconnected here, not fail
+    later on whichever call happens to be first.
+    """
+    client = _state["client"]
+    if client is None:
+        return {"connected": False}
+    try:
+        user = core.user(client)
+    except core.CoreError:
+        # It was accepted once and is not working now. Drop it rather than
+        # leaving a client behind that every later call would fail on.
+        _state["client"] = _state["key_id"] = None
+        return {"connected": False}
+    return {
+        "connected": True,
+        "user": {"email": user.get("email"), "display_name": user.get("displayName")},
+        "default_account_id": (user.get("defaultProject") or {}).get("accountId"),
+        "key_id": _state["key_id"],
+    }
+
+
+@app.delete("/api/key")
+def key_clear():
+    """Forget the key this server is holding.
+
+    Only what is in memory: a key saved with `save: true` is at
+    core.SAVED_KEY_PATH and stays there, because deleting a file the user asked
+    to keep is not what a Disconnect button on a web page should mean. Detect
+    still lists it, so reconnecting is one click.
+    """
+    _state["client"] = _state["key_id"] = None
+    return {"connected": False}
+
+
 @app.post("/api/key")
 def key_set(k: KeyIn):
     if k.path:

@@ -70,6 +70,28 @@ visible: it now sits on a page rather than streaming into a zip. Masking is not
 secrecy — crane logs the token, and anyone who can read a pod log in that
 namespace can read the Secret — it is about a screen share and a screenshot.
 
+**A refresh does not disconnect you.** The API key lives in the server process,
+not in the browser, so reloading the page never actually dropped the
+connection — the page simply forgot. It now asks on load, and puts back the
+account, workspace, location, agent, step and options it was pointed at. Each
+selection is re-applied only once the account has confirmed it still exists, so
+a location deleted since the last load comes back as nothing rather than as an
+id the page believes. **The AUTH_TOKEN is never stored** — see `session.strip`
+— because the page's promise is that it is held for this browser session and
+that nothing writes it down, and browser storage is a file in the browser's
+profile.
+
+**The Connect button becomes the Disconnect button.** The key form stays where
+it is — the paste fields, the `api-key.json` path, Browse, *Remember this key* —
+and shows, greyed, the key that is in use; connecting and disconnecting change
+what the controls say, never where they are. One Connect for both ways in: a
+pasted id and secret if there is one, the file otherwise — the pasted pair is
+the deliberate act, so it wins. The path is prefilled from a key detected on
+this machine, which is why the paste fields fold away above it. Disconnect makes the server forget
+the key and clears everything read with it; a key you asked to save stays on
+disk, so reconnecting is one click. Without it, a key pasted by mistake — or the
+wrong account — cost a server restart.
+
 **Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
 writes a LaunchAgent that serves the UI from login onward with whatever
 `--port`/`--host`/`--api-key` you gave it, restarts it if it dies, and logs to
