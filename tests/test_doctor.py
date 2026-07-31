@@ -240,15 +240,22 @@ def test_the_vendor_default_pairing_passes():
     assert c.status == doctor.PASS
 
 
-def test_engine_heap_fails_when_the_heap_cannot_carry_the_threads():
+def test_a_heap_short_of_its_threads_warns_rather_than_fails():
     """The 1000-thread case, live on 24 locations in one real account: they
     declare double the documented threads and almost all still carry the
-    default 4096MB heap, so they OOM partway up the ramp."""
+    default 4096MB heap.
+
+    WARN, not FAIL, deliberately. The judgement rests on per-thread scaling,
+    and the bisection measured that flat between 50 and 300 threads -- so what
+    1000 threads really needs is an extrapolation from a shape we know does not
+    hold in the range we tested. It may be right above that range; it has not
+    earned a non-zero exit, and the verdict says so."""
     facts = dict(FACTS, engine_xmx_mb=4096, threads_per_engine=1000)
     c = _find(doctor.check_engine_heap(facts, {"engine_mem_limit": "8Gi"}, {}),
               "engine heap")
-    assert c.status == doctor.FAIL
-    assert "8192MB" in c.detail          # what 1000 threads actually need
+    assert c.status == doctor.WARN
+    assert "8192MB" in c.detail          # still names a figure to aim at
+    assert "unverified" in c.detail      # ...and admits what backs it
 
 
 def test_engine_heap_warns_when_the_heap_dwarfs_the_threads():

@@ -533,13 +533,24 @@ def check_engine_heap(facts, opts, cluster):
     # vendor data point, so a verdict on a 10% difference would be false
     # precision.
     if xmx < want_heap / 1.5:
-        return [Check("engine heap", FAIL,
+        # WARN, not FAIL, and the wording says why: this rests on
+        # HEAP_MB_PER_THREAD, whose *shape* the bisection refuted -- 50 and 300
+        # threads measured the same requirement, so per-thread scaling is not
+        # how this behaves in the range we have data for. Above that range it
+        # may well be right, but "may well be" does not earn a non-zero exit.
+        # The heap-exceeds-the-limit FAIL above is untouched: that one is
+        # arithmetic, not a model.
+        return [Check("engine heap", WARN,
                       f"{pair}: that load needs about {want_heap}MB of heap "
                       f"({HEAP_MB_PER_THREAD}MB a thread, from BlazeMeter's "
                       f"documented 500 threads on a 4096MB heap), so the JVM "
                       f"fills and is OOMKilled partway up the ramp -- reported "
                       f"as a test that stopped. Raise engineXmx to {want_heap}MB "
-                      f"and engine_mem_limit to {engine_container_mb(want_heap)}MB")]
+                      f"and engine_mem_limit to {engine_container_mb(want_heap)}MB. "
+                      f"Treat the figure as indicative: it comes from a "
+                      f"per-thread model that measured *flat* between 50 and 300 "
+                      f"threads, so what this load actually needs above that "
+                      f"range is unverified (#89)")]
     if xmx > want_heap * 1.5:
         return [Check("engine heap", WARN,
                       f"{pair}: that load needs only about {want_heap}MB of heap, "
