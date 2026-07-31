@@ -60,7 +60,7 @@ import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
 import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
-import { WorkArea } from "./layout/WorkArea";
+import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
 import { StepFlow } from "./layout/StepFlow";
 
@@ -1176,9 +1176,6 @@ export default function App() {
                      onUse={usePlan} />
         </main>
       ) : (
-      <WorkArea files={files} activeFile={activeFile}
-        setActiveFile={setActiveFile} genErr={genErr}
-        open={previewOpen} setOpen={setPreviewOpen}>
       <main className="max-w-screen-xl mx-auto p-6">
         {/* `done` is what a step cannot say about itself -- whether it is
             finished enough to leave. The last step never is: there is nothing
@@ -1294,7 +1291,6 @@ export default function App() {
           </Section>
         </StepFlow>
       </main>
-      </WorkArea>
       )}
     </>
   );
@@ -1320,6 +1316,14 @@ export default function App() {
         <NavDrawer view={view} setView={setView}
           open={navOpen} setOpen={setNavOpen} />
         <div className="grow min-w-0 overflow-y-auto">{body}</div>
+        {/* Only beside the view that produces manifests. On the two planning
+            views there is nothing for it to show, and a rail promising a
+            preview of nothing is a door to an empty room. */}
+        {view === "flow" && (
+          <PreviewDrawer files={files} activeFile={activeFile}
+            setActiveFile={setActiveFile} genErr={genErr}
+            open={previewOpen} setOpen={setPreviewOpen} />
+        )}
       </div>
     </div>
   );

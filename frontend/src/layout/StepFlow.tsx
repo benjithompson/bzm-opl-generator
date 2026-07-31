@@ -82,8 +82,12 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
       {/* Below the Configure/Preview tabs, which are sticky at the very top:
           two bars both claiming top-0 is one bar over the other. */}
       <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
-        <div className="max-w-screen-xl mx-auto py-2 flex items-center gap-4">
-          <div className="flex items-center gap-1.5 grow min-w-0">
+        <div className="py-2 flex items-center gap-4">
+          {/* Scrolls rather than collides: the drawer on the right takes the
+              width the three pills and the Back/Next pair used to share, and
+              flex children do not shrink below their content -- so without
+              this the step titles ran under the buttons. */}
+          <div className="flex items-center gap-1.5 grow min-w-0 overflow-x-auto">
             {steps.map((s, i) => (
               <button key={s.n} onClick={() => go(i)}
                 className={"flex items-center gap-1.5 rounded-full pl-1 pr-3 py-1 "
@@ -98,7 +102,7 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <span className="text-[11px] text-slate-400 whitespace-nowrap">
               Step {at + 1} of {steps.length}
             </span>
