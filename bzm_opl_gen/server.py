@@ -22,6 +22,7 @@ here re-decides what a given refusal means.
 
 import json
 import os
+import time
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -61,6 +62,48 @@ def _answer(fn, *args, **kw):
         return fn(*args, **kw)
     except core.CoreError as e:
         raise HTTPException(e.status, str(e))
+
+
+# -- the account tree, remembered for a minute ---------------------------------
+# A page load asks for accounts, workspaces, locations and facts, and each is a
+# round trip to BlazeMeter: ~2.5s together on a small account, and the locations
+# call alone is 1.3s on one holding 171 of them. Nothing about that changes
+# between two reloads a few seconds apart, and reloading is what you do all day
+# while configuring a bundle.
+#
+# Here rather than in core, deliberately. This process is one browser session
+# holding one client, so its own writes are the only changes it can miss -- and
+# those invalidate it. core is also imported by `bzm-opl-gen mcp`, which is a
+# long-lived process whose caller *does* have another way to change the account
+# (their own shell, the BlazeMeter UI), and a cache there would answer "list the
+# locations" with a location that has since been deleted.
+#
+# Sixty seconds because it is short enough that a change made in the BlazeMeter
+# UI shows up while you are still looking for it, and long enough to cover the
+# reload it exists for.
+CACHE_TTL_S = 60
+_cache: dict = {}
+
+
+def _cached(key, fn, *args, **kw):
+    """`fn(*args)`, remembered under `key` for CACHE_TTL_S."""
+    hit = _cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    value = fn(*args, **kw)
+    _cache[key] = (time.monotonic() + CACHE_TTL_S, value)
+    return value
+
+
+def _forget():
+    """Drop the lot, after anything that writes.
+
+    Whole-cache rather than per-key: creating an agent changes the location it
+    is in *and* the list that location appears in, and a rule about which keys a
+    given write touches is a rule that goes wrong quietly. There is no cost to
+    being blunt -- the next read is one round trip.
+    """
+    _cache.clear()
 
 
 def _typed(value):
@@ -132,6 +175,7 @@ def key_clear():
     still lists it, so reconnecting is one click.
     """
     _state["client"] = _state["key_id"] = None
+    _forget()
     return {"connected": False}
 
 
@@ -158,6 +202,7 @@ def key_set(k: KeyIn):
     if k.id and k.secret and not k.save:
         os.unlink(path)
     _state["client"] = client
+    _forget()
     _state["key_id"] = json.load(open(os.path.expanduser(k.path)))["id"] if k.path else k.id
     return {
         "user": {"email": user.get("email"), "display_name": user.get("displayName")},
@@ -171,12 +216,13 @@ def key_set(k: KeyIn):
 
 @app.get("/api/accounts")
 def accounts():
-    return _answer(core.accounts, _client())
+    return _cached("accounts", _answer, core.accounts, _client())
 
 
 @app.get("/api/workspaces")
 def workspaces(account_id: int):
-    return _answer(core.workspaces, _client(), account_id)
+    return _cached(f"workspaces:{account_id}",
+                   _answer, core.workspaces, _client(), account_id)
 
 
 @app.get("/api/locations")
@@ -186,7 +232,8 @@ def locations(account_id: Optional[int] = None, workspace_id: Optional[int] = No
     # with or without a key, so answering 401 would send the caller off to
     # configure one and then refuse them anyway.
     _answer(core.require_location_scope, account_id, workspace_id)
-    return _answer(core.locations, _client(), account_id, workspace_id)
+    return _cached(f"locations:{account_id}:{workspace_id}",
+                   _answer, core.locations, _client(), account_id, workspace_id)
 
 
 class LocationIn(BaseModel):
@@ -200,6 +247,7 @@ class LocationIn(BaseModel):
 
 @app.post("/api/locations")
 def location_create(loc: LocationIn):
+    _forget()
     return _answer(core.create_location, _client(), loc.name, loc.account_id,
                    loc.workspace_id, func_ids=loc.func_ids, slots=loc.slots,
                    threads_per_engine=loc.threads_per_engine)
@@ -238,6 +286,7 @@ def ship_create(s: ShipIn):
         # the agent in BlazeMeter's own UI works just as well. Not _answer'd:
         # this is the one refusal here that must not become the response.
         refused = str(e)
+    _forget()
     return {"ship": ship, "auth_token": token, "token_error": refused}
 
 
@@ -248,6 +297,7 @@ class FuncIdIn(BaseModel):
 
 @app.post("/api/locations/func-id", description=core.add_func_id.__doc__)
 def location_add_func_id(f: FuncIdIn):
+    _forget()
     return _answer(core.add_func_id, _client(), f.harbor_id, f.func_id)
 
 
@@ -271,6 +321,7 @@ def location_update(s: LocationSettingsIn):
     a change here reaches every agent in the location and every test that
     starts on it, so it has to be the thing that was clicked.
     """
+    _forget()
     return _answer(core.update_location, _client(), s.harbor_id,
                    slots=_typed(s.slots),
                    threads_per_engine=_typed(s.threads_per_engine),
@@ -304,7 +355,11 @@ def ship_issue_token(t: TokenIn):
 
 @app.get("/api/facts")
 def get_facts(harbor_id: str):
-    return _answer(core.gather_facts, _client(), harbor_id)
+    # Cached like the lists: it is re-read on every reload and on every change
+    # of agent. What it must not be confused with is liveness -- an agent's
+    # heartbeat is /api/status, which is polled and never cached.
+    return _cached(f"facts:{harbor_id}",
+                   _answer, core.gather_facts, _client(), harbor_id)
 
 
 class ManualFactsIn(BaseModel):

@@ -2,6 +2,7 @@ import io
 import os
 import pathlib
 import re
+import time
 import zipfile
 
 import pytest
@@ -1401,3 +1402,93 @@ def test_location_settings_needs_a_key(monkeypatch):
     r = client.post("/api/locations/settings",
                     json={"harbor_id": "h1", "slots": 3})
     assert r.status_code == 401
+
+
+# -- the account tree, remembered for a minute --------------------------------
+# A page load is four round trips to BlazeMeter and reloading is what you do all
+# day while configuring. What these defend is not the speed -- it is that the
+# cache cannot outlive a change this server made itself.
+
+@pytest.fixture(autouse=True)
+def _empty_cache():
+    """Every test starts cold. Without this the cache is process-wide state
+    shared between tests, which is how one passes because another ran first."""
+    server._forget()
+    yield
+    server._forget()
+
+
+def test_the_account_tree_is_read_once_not_once_per_reload(monkeypatch):
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    monkeypatch.setitem(server._state, "client", c)
+    for _ in range(3):
+        assert client.get("/api/locations?workspace_id=42").status_code == 200
+    assert [x[0] for x in c.calls].count("private_locations") == 1
+
+
+def test_a_created_location_is_not_hidden_by_the_cache(monkeypatch):
+    """The write this server made itself is the one staleness it cannot
+    tolerate: create a location, and it has to be in the next list."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    monkeypatch.setitem(server._state, "client", c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/locations", json={"name": "new", "account_id": 7,
+                                        "workspace_id": 42})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_changing_a_location_s_settings_drops_the_cache(monkeypatch):
+    c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
+                           "overrideCPU": None, "overrideMemory": None},
+                   locations=[{"id": "h1", "name": "loc", "slots": 2}])
+    monkeypatch.setitem(server._state, "client", c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/locations/settings",
+                json={"harbor_id": "h1", "slots": 4})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_a_new_agent_drops_the_cache(monkeypatch):
+    c = FakeClient(harbor={"id": "h1", "ships": []},
+                   locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    monkeypatch.setitem(server._state, "client", c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/ships", json={"harbor_id": "h1", "name": "agent1"})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_a_different_key_is_a_different_account(monkeypatch, tmp_path):
+    """Nothing read with the old credential may survive into the new one."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    monkeypatch.setitem(server._state, "client", c)
+    client.get("/api/locations?workspace_id=42")
+    assert server._cache
+    client.delete("/api/key")
+    assert not server._cache
+
+
+def test_the_cache_expires(monkeypatch):
+    """Sixty seconds, so a change made in the BlazeMeter UI shows up while you
+    are still looking for it."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    monkeypatch.setitem(server._state, "client", c)
+    client.get("/api/locations?workspace_id=42")
+    now = time.monotonic()
+    monkeypatch.setattr(server.time, "monotonic",
+                        lambda: now + server.CACHE_TTL_S + 1)
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
+    """Liveness is the one read that must always be live: the status poll is
+    what says an agent came online, and a cached answer would say it had not."""
+    c = FakeClient(harbor={"id": "h1", "ships": [
+        {"id": "s1", "state": "idle", "lastHeartBeat": 0}]})
+    monkeypatch.setitem(server._state, "client", c)
+    for _ in range(3):
+        client.get("/api/status?harbor_id=h1&ship_id=s1")
+    assert [x[0] for x in c.calls].count("private_location") == 3

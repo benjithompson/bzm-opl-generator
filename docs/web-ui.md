@@ -58,6 +58,15 @@ different one, and a folded one carries its state on the header (who you are
 connected as, which location, which agent), so nothing has to be opened to find
 out whether it needed opening.
 
+The account tree — accounts, workspaces, locations and an agent's facts — is
+**remembered for 60 seconds** by the server, so reloading the page costs one
+local round trip rather than four to BlazeMeter (2.5s on a small account; the
+location list alone is 1.3s on one holding 171). Anything this server writes —
+creating a location or an agent, changing a location's settings, enabling a
+feature, or connecting a different key — drops the cache immediately, so your
+own changes are never the stale ones. An agent's heartbeat is never cached: the
+status poll is what says an agent came online.
+
 ### Changing a location after it exists
 
 Selecting a location expands it, the way an agent row does, and its settings are

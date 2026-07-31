@@ -141,6 +141,21 @@ anything that breaks.
 
 ### Fixed
 
+- **The web UI stops re-reading the account on every page load.** Accounts,
+  workspaces, locations and an agent's facts are held for 60 seconds by the
+  server, which turns a reload from four BlazeMeter round trips into one local
+  one — measured on a real account, the location list alone went from 1.29s to
+  0.04s. Every write this server makes (a new location or agent, a settings
+  change, a feature enabled, a different key) drops the cache, so the staleness
+  it can produce is never your own change. An agent's heartbeat is deliberately
+  not cached: the status poll is what says an agent came online.
+
+  It lives in `server.py` rather than `core.py` on purpose. This process is one
+  browser session holding one client, so its own writes are the only changes it
+  can miss. `core` is also the MCP server's, which is long-lived and whose
+  caller has other ways to change the account — a cache there would answer
+  "list the locations" with one that has since been deleted.
+
 - **The account and workspace dropdowns say when they are loading.** Both are a
   round trip to BlazeMeter over whatever network the user is on, and both were
   silent while it happened — an empty dropdown and a slow one look identical, so
