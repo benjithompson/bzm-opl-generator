@@ -17,7 +17,7 @@
 
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
-import { Check, inputCls } from "../components";
+import { Check, inputCls, Switch } from "../components";
 import { GroupRow } from "../groups/GroupRow";
 import {
   ANY_DEPLOYMENT, GroupFlags, GroupId, OPTION_GROUPS, OptionGroup,
@@ -125,6 +125,58 @@ function CoreFields(p: ProtoProps) {
   );
 }
 
+
+// -- crane-hook --------------------------------------------------------------
+// github.com/Blazemeter/crane-hook: BlazeMeter's own cluster-readiness checker.
+// It ships as a Pod plus its own Role and RoleBinding, runs once
+// (restartPolicy: Never), and exits 0 or 1 having checked node capacity,
+// egress to BlazeMeter and the registries, the RBAC the agent needs, and --
+// for service virtualization -- the ingress/Istio setup and its TLS secret.
+// helm-crane 1.4.0+ packages the same image as a `helm test` hook.
+//
+// Every env var it wants is a value this page already holds: WORKING_NAMESPACE,
+// ROLE_NAME / ROLE_BINDING_NAME / SERVICE_ACCOUNT_NAME, KUBERNETES_WEB_EXPOSE_TYPE
+// and _TLS_SECRET_NAME, DOCKER_REGISTRY, and the proxy settings. That is why it
+// belongs beside the other deployment settings rather than in a doc: the
+// bundle is the only place those are all decided at once.
+//
+// PROTOTYPE: the toggle writes `crane_hook` into the options and nothing
+// generates from it yet -- generate.py would need the template, and helm parity
+// and the options registry would need the same row. The note under the switch
+// says so rather than letting the bundle look bigger than it is.
+function CraneHookRow(p: ProtoProps) {
+  const on = !!p.options.crane_hook;
+  return (
+    <div className="px-3 py-2.5">
+      <div className="flex items-center gap-3">
+        <Switch on={on} onChange={(v) => p.set("crane_hook", v || null)} />
+        <div className="min-w-0 grow">
+          <p className={`text-sm font-medium ${on ? "text-slate-900" : "text-slate-500"}`}>
+            Cluster check (crane-hook)
+          </p>
+          <p className="text-[11px] text-slate-400 truncate">
+            a one-shot Pod that checks capacity, egress, RBAC and ingress before the agent runs
+          </p>
+        </div>
+      </div>
+      {on && (
+        <div className="mt-2 pl-12 space-y-1">
+          <p className="text-[11px] text-slate-500">
+            Adds a Pod, a Role and a RoleBinding
+            (<span className="font-mono">cranehook.yaml</span>), configured from
+            the namespace, service account and ingress settings above. Runs once
+            and exits 0 or 1; delete it when it has. With Helm it is the chart&apos;s
+            own <span className="font-mono">helm test</span> hook.
+          </p>
+          <p className="text-[11px] font-semibold text-amber-700">
+            PROTOTYPE: nothing is emitted yet — the generator has no template for it.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // == A -- shared deck, then a card per feature ================================
 // Nothing appears or disappears when a feature is touched: the shared deck is
 // the same deck whatever the location runs, and each feature owns a card beside
@@ -141,6 +193,7 @@ export function VariantA(p: ProtoProps) {
           <div id="proto-shared"
             className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
             {rows(p, SHARED, "")}
+            <CraneHookRow {...p} />
           </div>
         </div>
       </section>

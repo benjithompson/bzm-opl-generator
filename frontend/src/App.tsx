@@ -1632,11 +1632,19 @@ export default function App() {
                   machine -- the shape livetest re-renders from and an MCP
                   session's opl_bundle reads, so the folder is the shared
                   state between this page and those. */}
-              <div className="flex gap-2 items-center">
-                <input className={inputCls + " grow font-mono"}
-                  placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
-                  value={saveDir}
-                  onChange={(e) => setSaveDir(e.target.value)} />
+              <div className="flex gap-2 items-end">
+                <label className="grow block">
+                  <span className="text-xs font-medium text-slate-600">Folder</span>
+                  <input className={inputCls + " font-mono"}
+                    placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
+                    value={saveDir}
+                    onChange={(e) => setSaveDir(e.target.value)} />
+                </label>
+                {/* A plain button of the same size as every other one here. The
+                    label is typed rather than browsed because a browser cannot
+                    hand back an absolute directory path -- webkitdirectory
+                    yields file names relative to the folder, which is not what
+                    the server needs -- and `~` is expanded server-side. */}
                 <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
                   onClick={() => {
                     setSaveErr(null); setSaved(null); setLastTokenReport(null);
@@ -1647,7 +1655,7 @@ export default function App() {
                       .then((s) => { setSaved(s); setLastTokenReport(s.token); })
                       .catch((e) => setSaveErr(String(e.message)));
                   }}>
-                  💾 Save to folder
+                  Save to folder
                 </Button>
               </div>
               {saved && (
@@ -1688,10 +1696,10 @@ export default function App() {
                   has access to neither the account nor the cluster -- so it
                   sits here beside the download, needing no key and no
                   kubecontext of its own. */}
-              <div className="border-t border-slate-100 pt-3">
+              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                 <div className="flex items-start gap-2 flex-wrap">
                   <div className="grow min-w-[16rem]">
-                    <p className="text-xs font-medium text-slate-700">
+                    <p className="text-sm font-semibold text-slate-800">
                       Preflight the target cluster
                     </p>
                     <p className="text-[11px] text-slate-400">
@@ -1820,8 +1828,16 @@ export default function App() {
                 ) : (
                 <>
                 <div className="flex items-center gap-3">
-                  <Check label="Watch agent status" checked={polling} onChange={setPolling}
-                    hint="polls every 10s — green once the applied deployment heartbeats" />
+                  {/* A Switch, like the option groups: this turns a background
+                      poll on, which is a mode rather than a value in the
+                      bundle, and the two read alike everywhere else. */}
+                  <Switch on={polling} onChange={setPolling} />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-700">Watch agent status</p>
+                    <p className="text-[11px] text-slate-400">
+                      polls every 10s — green once the applied deployment heartbeats
+                    </p>
+                  </div>
                   {status && (
                     <span className={`text-sm font-medium px-2.5 py-1 rounded-full ${status.online ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
                       {status.online ? "● online" : "○ waiting"} — {status.state}

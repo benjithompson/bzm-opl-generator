@@ -28,7 +28,7 @@ describe("downloadPlan", () => {
   it("treats a token in the form as complete, and rotates nothing", () => {
     const plan = downloadPlan(report("given"), false, "bbb222");
     expect(plan).toMatchObject({ rotates: false, incomplete: false, warning: null });
-    expect(plan.hint).toMatch(/as entered/);
+    expect(plan.hint).toMatch(/generated AUTH_TOKEN/);
   });
 
   it("reports a folder's own token as what a save will carry", () => {

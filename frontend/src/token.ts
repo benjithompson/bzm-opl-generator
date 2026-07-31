@@ -35,7 +35,7 @@ export interface DownloadPlan {
 }
 
 const CARRIES: Record<TokenBranch, string> = {
-  given: "AUTH_TOKEN as entered above",
+  given: "the generated AUTH_TOKEN",
   rotated: "a NEW AUTH_TOKEN, issued now",
   reused: "the AUTH_TOKEN already in that folder",
   placeholder: "AUTH_TOKEN left as a placeholder — fill it in before applying",
@@ -62,7 +62,7 @@ export function downloadPlan(
     return {
       rotates: false,
       hint: CARRIES.given + (rotate
-        ? " — the token above wins, so nothing will be issued" : ""),
+        ? " — the token in hand wins, so nothing will be issued" : ""),
       warning: null,
       incomplete: false,
     };
