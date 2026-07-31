@@ -97,14 +97,24 @@ anything that breaks.
   that came back unchanged are reported as not stored, in amber, beside the ones
   that saved.
 
-  **The capacity plan feeds it.** A plan on the Plan capacity view offers
-  *Fill from the plan* on the selected location's settings, which puts its
-  concurrent engines, virtual users per engine and engine requests into the
-  form and leaves the saving to you -- so a re-plan after a measured run lands
-  on the location it has to change rather than on a create form. Filling is not
-  saving: one write control, one warning, one re-read. The engine request
-  fields are left alone when the plan's engine CPU is not a whole number of
-  cores, which is all `overrideCPU` takes.
+  **The settings open out of the location, and size themselves.** Selecting a
+  location expands it the way an agent row does, and the settings are inside it
+  — they belong to the one that is selected and to nothing else. **Calculate**,
+  beside the heading, sizes *that* location from a virtual user target, starting
+  from what it already says: 5,000 virtual users at the 50 an engine a location
+  currently advertises is 100 engines and 100 nodes, which is the argument for
+  changing the figure rather than the pool.
+
+  It is guidance, not a form. It answers in engines, **nodes** and peak vCPU —
+  the cost that lands off this page, on a cluster nobody sees from here — flags
+  the users-per-engine figure as an assumption when nothing supplied one, and
+  carries the same warnings the planner does. *Apply* fills concurrent engines
+  and the two engine requests; applying is not saving, and **Save** is still the
+  only control that writes.
+
+  Step 1's three sections (Connect, Private location, Agent) now fold, opening
+  on whichever the step has reached until one is pinned, and a folded one says
+  on its header what it holds.
 
   Only changed fields are sent, so a page left open does not write back three
   values somebody else has since edited; blank means "leave alone", so there is

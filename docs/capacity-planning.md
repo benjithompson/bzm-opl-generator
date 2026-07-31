@@ -110,10 +110,13 @@ that has never sent a heartbeat is the expected state until its manifests are
 applied. So the setup either side of the wait can happen during it, and the day
 the nodes exist the only step left is `kubectl apply`.
 
-If the location already exists, its settings are editable in step 1 of the web
-UI — see [web-ui.md](web-ui.md#changing-a-location-after-it-exists). Re-planning
-after a measured run usually ends there: the engine count and virtual users per
-engine change, and neither is in a manifest.
+If the location already exists, size it from inside it: selecting it in step 1
+of the web UI expands its settings, and **Calculate** there starts from what
+that location already says rather than from a blank form
+([web-ui.md](web-ui.md#changing-a-location-after-it-exists)). Re-planning after
+a measured run ends there — the engine count and virtual users per engine
+change, and neither is in a manifest. This page's own view is for the location
+that does not exist yet.
 
 In the web UI, **Plan capacity** in the header is the same calculator, and
 *Use this plan* fills in the location's slots and threads per engine and the

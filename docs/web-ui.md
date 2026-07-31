@@ -50,13 +50,35 @@ report, and deleting it changes nothing. In a Helm bundle it is the chart's
 cluster** below the download button, which needs no cluster access at all — see
 [Preflight](preflight.md).
 
+Step 1's three sections — **Connect**, **Private location**, **Agent (ship)** —
+fold, and open on whichever one the step has reached until you pin a different
+one. A folded section carries its state on the header (who you are connected as,
+which location, which agent), so nothing has to be opened to find out whether it
+needed opening.
+
 ### Changing a location after it exists
 
-The selected location's settings are editable under it in step 1: **concurrent
-engines** (`slots`), **virtual users per engine** (`threadsPerEngine`) and the
-engine's CPU and memory **requests** (`overrideCPU` / `overrideMemory`). The
-case is the correction rather than the setup — a location built for 500 virtual
-users an engine that a real run says should be 1,000.
+Selecting a location expands it, the way an agent row does, and its settings are
+inside: **concurrent engines** (`slots`), **virtual users per engine**
+(`threadsPerEngine`) and the engine's CPU and memory **requests**
+(`overrideCPU` / `overrideMemory`). They open out of the location rather than
+sitting under the list, because they belong to the one that is selected and to
+nothing else. The case is the correction rather than the setup — a location
+built for 500 virtual users an engine that a real run says should be 1,000.
+
+**Calculate**, beside the settings heading, sizes that location from a virtual
+user target. It starts from what the location already says — its virtual users
+per engine, its engine size — so the first thing it shows is what the location
+as it stands would cost: 5,000 virtual users at 50 an engine is 100 engines and
+100 nodes, which is the argument for raising the figure rather than the pool.
+It answers in engines, **nodes** and peak vCPU, flags the users-per-engine
+figure as an assumption when nothing supplied one, and *Apply* fills the fields
+above. Applying is not saving: the location is untouched until **Save**, which
+is still the only control that writes.
+
+The standalone **Plan capacity** view remains, and is the one for a location
+that does not exist yet — no account, no cluster, and a request document to
+raise the infrastructure ticket with ([capacity-planning.md](capacity-planning.md)).
 
 None of those four values is in a manifest, so changing one needs no
 regenerate, no re-apply and no restart; it applies to the next test that

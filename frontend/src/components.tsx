@@ -196,20 +196,66 @@ export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) =
  *  own. Used where several former steps were folded into one. */
 export function SubSection(props: {
   title: string; hint?: string; done?: boolean; children: ReactNode;
+  /** Collapsible when both are given. Controlled from the caller, because what
+   *  should be open is a fact about where you are in the step -- the next
+   *  unfinished thing -- and only the caller knows that. Given neither, the
+   *  section is always open and has no header control, which is what every
+   *  existing caller wants. */
+  open?: boolean;
+  onToggle?: () => void;
+  /** A word or two of state on the header, visible while collapsed: a folded
+   *  section that says nothing is a section you have to open to find out
+   *  whether you needed to. */
+  summary?: string;
 }) {
+  const collapsible = props.open !== undefined && !!props.onToggle;
+  const open = !collapsible || props.open;
+  const heading = (
+    <>
+      {/* Only the finished state is marked. An "unfinished" glyph on every
+          step you have not reached yet reads as a list of failures. The span
+          keeps its width either way so the headings stay aligned. */}
+      <span className="text-xs text-emerald-600 w-2.5 shrink-0">
+        {props.done ? "✓" : ""}
+      </span>
+      <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
+      {collapsible && (
+        <>
+          {props.summary && (
+            <span className="text-[11px] text-slate-500 truncate">
+              {props.summary}
+            </span>
+          )}
+          <span className="grow" />
+          <span className={"text-slate-400 text-xs transition-transform duration-150 "
+            + (open ? "rotate-90" : "")}>›</span>
+        </>
+      )}
+    </>
+  );
   return (
     <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
-      <div className="flex items-baseline gap-2 mb-2">
-        {/* Only the finished state is marked. An "unfinished" glyph on every
-            step you have not reached yet reads as a list of failures. The span
-            keeps its width either way so the headings stay aligned. */}
-        <span className="text-xs text-emerald-600 w-2.5 shrink-0">
-          {props.done ? "✓" : ""}
-        </span>
-        <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
+      {collapsible ? (
+        <button type="button" onClick={props.onToggle}
+          aria-expanded={open}
+          className="w-full flex items-baseline gap-2 mb-2 text-left group">
+          {heading}
+        </button>
+      ) : (
+        <div className="flex items-baseline gap-2 mb-2">{heading}</div>
+      )}
+      {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the
+          body's height is not knowable in advance and `height: auto` does not
+          transition. Kept mounted while closed so what was typed into it is
+          still there when it reopens. */}
+      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+        + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div className="overflow-hidden">
+          {props.hint && open
+            && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+          {props.children}
+        </div>
       </div>
-      {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
-      {props.children}
     </div>
   );
 }

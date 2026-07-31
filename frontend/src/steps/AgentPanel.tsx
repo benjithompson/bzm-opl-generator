@@ -10,7 +10,7 @@
 // downstream is generated from, and the effects that clear the token when
 // either moves live there too.
 import { useEffect, useRef, useState } from "react";
-import { CapacityPlan, Facts, Location, Ship } from "../api";
+import { Facts, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -66,9 +66,6 @@ export interface AgentPanelProps {
   /** The location came back changed: App owns the list and the selection, so
    *  it is App that puts it back. */
   onLocationUpdated: (loc: Location) => void;
-  /** The capacity plan, if one is on screen in the other view -- offered as a
-   *  fill on the selected location's settings. */
-  plan?: CapacityPlan | null;
   setShowCreateLoc: (v: boolean) => void;
   createLocationForm: React.ReactNode;
   // -- the agents in it
@@ -116,6 +113,22 @@ export function AgentPanel(p: AgentPanelProps) {
   // Which row is open. Separate from `shipId`: closing a row is a view action
   // and must not un-choose the agent the bundle is for.
   const [open, setOpen] = useState<string | null>(null);
+  // Which of the three sections is expanded. `null` means "wherever the step
+  // has got to", which is what makes the panel open on the next thing to do
+  // rather than on all of it; a click pins one and stops it moving underneath
+  // whoever clicked -- a section that re-folds itself when the state behind it
+  // changes is the worst of both.
+  type Fold = "connect" | "location" | "agent";
+  // null = follow the step; "none" = the user closed the open one and wants all
+  // three folded. Three states rather than two, because "closed everything" is
+  // a choice and re-opening the current step over it would fight the click.
+  const [pinned, setPinned] = useState<Fold | "none" | null>(null);
+  const reached: Fold = !p.who ? "connect" : !p.harborId ? "location" : "agent";
+  const section = pinned ?? reached;
+  const fold = (id: Fold) => ({
+    open: section === id,
+    onToggle: () => setPinned(section === id ? "none" : id),
+  });
   // The row on its way out. Its body stays mounted for the length of the
   // transition, or switching agents collapses the old row in one frame while
   // the new one animates -- the jump the animation exists to remove.
@@ -214,7 +227,8 @@ export function AgentPanel(p: AgentPanelProps) {
               way out moved with it. The fields stay put and describe the key
               in use; the button that connected is the button that
               disconnects. */}
-          <SubSection title="Connect" done={!!p.who}
+          <SubSection title="Connect" done={!!p.who} {...fold("connect")}
+            summary={p.who ? p.who.email : "not connected"}
             hint="API key stays on this machine; only used server-side.">
             <div className="space-y-3">
               {/* Above the path, because it is the answer to "I do not have a
@@ -317,7 +331,11 @@ export function AgentPanel(p: AgentPanelProps) {
           </div>
 
           <SubSection title="Private location" done={!!p.harborId}
-            hint="A location holds agents.">
+            {...fold("location")}
+            summary={p.location
+              ? `${p.location.name} · ${p.location.slots ?? "?"} engine(s)`
+              : "none selected"}
+            hint="A location holds agents. Open one to size it and change its settings.">
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-2">
                 <Field label="Account">
@@ -356,45 +374,63 @@ export function AgentPanel(p: AgentPanelProps) {
               {/* A list has to look like one: zebra banding and a divider a
                   shade darker than the card's own border. Rows that share a
                   background and a hairline read as one block of text. */}
-              <div className={"max-h-56 overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
+              <div className={"max-h-[32rem] overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
                 + (p.locBusy ? "opacity-40" : "")}>
                 {p.filteredLocs.map((l, i) => {
                   const n = (l.ships ?? []).length;
                   const up = (l.ships ?? []).filter(p.shipOnline).length;
+                  const on = l.id === p.harborId;
                   return (
-                    <button key={l.id} onClick={() => p.setHarborId(l.id)}
-                      className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 "
-                        + (l.id === p.harborId ? "bg-bzm/10 border-l-4 border-bzm"
-                          : i % 2 ? "bg-slate-50/70" : "bg-white")}>
-                      <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
-                        + (n ? "bg-emerald-500" : "bg-amber-400")} />
-                      <span className="font-medium">{l.name}</span>
-                      <span className="text-xs text-slate-400 truncate">
-                        {l.slots} slot{l.slots === 1 ? "" : "s"}
-                      </span>
-                      <span className="grow" />
-                      <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
-                        {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
-                           : "no agents yet"}
-                      </span>
-                    </button>
+                    // A div wrapping the row and its body, like an agent row:
+                    // the settings belong to this location, so they open out of
+                    // it rather than sitting under the list where they would
+                    // read as the list's.
+                    <div key={l.id}
+                      className={on ? "bg-bzm/10 border-l-4 border-bzm"
+                        : i % 2 ? "bg-slate-50/70" : "bg-white"}>
+                      <button onClick={() => p.setHarborId(l.id)}
+                        className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
+                        <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
+                          + (n ? "bg-emerald-500" : "bg-amber-400")} />
+                        <span className="font-medium">{l.name}</span>
+                        <span className="text-xs text-slate-400 truncate">
+                          {l.slots} engine{l.slots === 1 ? "" : "s"}
+                          {l.threadsPerEngine
+                            ? ` × ${l.threadsPerEngine.toLocaleString()} VUs` : ""}
+                        </span>
+                        <span className="grow" />
+                        <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
+                          {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
+                             : "no agents yet"}
+                        </span>
+                        <span className={"text-slate-400 text-xs transition-transform duration-150 "
+                          + (on ? "rotate-90" : "")}>›</span>
+                      </button>
+                      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+                        + (on ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                        <div className="overflow-hidden">
+                          {on && (
+                            <div className="px-3 pb-3">
+                              <LocationSettings location={l}
+                                onUpdated={p.onLocationUpdated} />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
                 {!!p.who && p.filteredLocs.length === 0 && !p.locBusy && (
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>
                 )}
               </div>
-              {/* Under the list, for the location that is selected: this is a
-                  change to something that exists, so it belongs where the thing
-                  it changes is, rather than in a settings screen of its own. */}
-              {p.location && (
-                <LocationSettings location={p.location}
-                  onUpdated={p.onLocationUpdated} plan={p.plan} />
-              )}
             </div>
           </SubSection>
 
-          <SubSection title="Agent (ship)" done={!!p.shipId}
+          <SubSection title="Agent (ship)" done={!!p.shipId} {...fold("agent")}
+            summary={p.shipId
+              ? (p.ships.find((x) => x.id === p.shipId)?.name ?? p.shipId)
+              : (p.location ? "none selected" : "pick a location first")}
             hint="One agent = one deployment, inside the location above.">
             <div className="space-y-3">
               {p.factsBusy && (

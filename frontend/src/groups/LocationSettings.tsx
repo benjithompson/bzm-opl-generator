@@ -15,10 +15,9 @@
 // core.update_location re-reads for exactly that reason.
 import { useEffect, useState } from "react";
 
-import {
-  api, CapacityPlan, Location, LocationSettings as Settings, LocationUpdate,
-} from "../api";
+import { api, Location, LocationSettings as Settings, LocationUpdate } from "../api";
 import { Button, ErrorMsg, Field, inputCls } from "../components";
+import { LocationSizing, SizingFill } from "./LocationSizing";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
  *  the API takes: there is deliberately no way to *clear* a setting here, since
@@ -59,17 +58,16 @@ export function LocationSettings(props: {
   location: Location;
   /** Put the changed location back into the page's own list and selection. */
   onUpdated: (loc: Location) => void;
-  /** The capacity plan currently on the Plan capacity view, if there is one.
-   *  A re-plan lands here rather than on a new location: the numbers change,
-   *  and this is the location they have to change on. Filling is not saving --
-   *  it writes the draft, and the same Save below sends it. */
-  plan?: CapacityPlan | null;
 }) {
   const { location } = props;
   const [draft, setDraft] = useState<Draft>(() => draftOf(location));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<LocationUpdate | null>(null);
+  // The calculator, open on demand. Closed by default because most visits here
+  // are a one-field edit, and a pane that is always open makes the four fields
+  // it feeds look like its output rather than the location's settings.
+  const [sizing, setSizing] = useState(false);
 
   // A different location is a different form. Without this, picking another
   // location left the previous one's numbers in the fields, and Save would
@@ -104,30 +102,22 @@ export function LocationSettings(props: {
     }
   };
 
-  // What the plan would put in these fields. overrideCPU is whole cores on the
-  // accounts this has been read on, so a fractional engine limit (500m, say)
-  // has no legitimate value to offer here -- fill the two that always apply and
-  // say why the others were left.
-  const planFill = props.plan && {
-    slots: String(props.plan.location.slots),
-    threads_per_engine: String(props.plan.location.threads_per_engine),
-    whole: /^\d+$/.test(props.plan.location.override_cpu),
-    override_cpu: props.plan.location.override_cpu,
-    override_memory: String(props.plan.location.override_memory_mb),
-  };
-
-  const fillFromPlan = () => {
-    if (!planFill) return;
+  // Applying a size writes the draft, not the location: Save is still the only
+  // thing that reaches the account, and what it will send is visible in the
+  // fields first. `whole` because overrideCPU is whole cores on every account
+  // this has been read on, so a fractional engine CPU has no value to offer.
+  const applySizing = (fill: SizingFill) => {
     setResult(null);
     setDraft({
       ...draft,
-      slots: planFill.slots,
-      threads_per_engine: planFill.threads_per_engine,
-      ...(planFill.whole
-        ? { override_cpu: planFill.override_cpu,
-            override_memory: planFill.override_memory }
+      slots: fill.slots,
+      threads_per_engine: fill.threads_per_engine,
+      ...(/^\d+$/.test(fill.override_cpu)
+        ? { override_cpu: fill.override_cpu,
+            override_memory: fill.override_memory }
         : {}),
     });
+    setSizing(false);
   };
 
   const field = (k: keyof Draft, hint: string) => (
@@ -141,35 +131,37 @@ export function LocationSettings(props: {
   return (
     <div className="border border-slate-200 rounded-md p-3 space-y-3 bg-slate-50">
       <div>
-        <p className="text-xs font-semibold text-slate-700">
-          Location settings
-        </p>
+        <div className="flex items-baseline gap-2">
+          <p className="text-xs font-semibold text-slate-700">
+            Location settings
+          </p>
+          <span className="grow" />
+          {/* Beside the heading, not below the fields: it is how you decide what
+              the fields should say, so it belongs where you would look before
+              typing rather than after. */}
+          <Button kind="ghost" onClick={() => setSizing(!sizing)}>
+            {sizing ? "Hide calculator" : "Calculate…"}
+          </Button>
+        </div>
         <p className="text-[11px] text-slate-500">
           What this location may run, in BlazeMeter. None of it is in the
           manifests, so a change here needs no regenerate and no redeploy — it
-          applies to the next test that starts.
+          applies to the next test that starts. <b>Calculate</b> works out these
+          numbers from a virtual user target, and what they cost in nodes.
         </p>
       </div>
 
-      {planFill && (
-        <div className="rounded-md border border-bzm/40 bg-bzm/5 p-2.5 space-y-1.5">
-          <p className="text-[11px] text-slate-600">
-            The capacity plan sizes this at <b>{planFill.slots} concurrent
-            engines</b> × <b>{Number(planFill.threads_per_engine).toLocaleString()}
-            {" "}virtual users</b>
-            {planFill.whole
-              ? <>, requesting <b>{planFill.override_cpu} CPU /
-                  {" "}{Number(planFill.override_memory).toLocaleString()}MB</b> per
-                  engine.</>
-              : <>. Its engine CPU ({props.plan?.engine.cpu}) is not a whole
-                  number of cores, which is all `overrideCPU` takes, so the two
-                  request fields are left alone.</>}
-          </p>
-          <Button kind="ghost" onClick={fillFromPlan}>
-            Fill from the plan
-          </Button>
+      {/* Open/close on the same 0fr -> 1fr grid as everything else that expands
+          on this page, so the pane arrives rather than appears. */}
+      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+        + (sizing ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div className="overflow-hidden">
+          {sizing && (
+            <LocationSizing location={location} onApply={applySizing}
+              onClose={() => setSizing(false)} />
+          )}
         </div>
-      )}
+      </div>
 
       <div className="grid grid-cols-2 gap-3">
         {field("slots", "engines this location may run at once")}
