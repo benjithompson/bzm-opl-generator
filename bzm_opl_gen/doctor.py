@@ -415,12 +415,28 @@ MB = 1024 ** 2
 HEAP_MB_PER_THREAD = 8.192
 CONTAINER_HEAP_RATIO = 2.0
 
-# Below roughly 50 threads the ratio produces a container no JVM will start in
-# (10 threads -> 164MB), so these floor it. They cover an edge rather than
-# modelling anything: at 50 threads -- the common low value, on 55 locations in
-# one real account -- the ratio needs no help.
+# The floors, and they turn out to be load-bearing rather than an edge case.
+#
+# Measured on a real engine at ONE thread (BlazeMeter's engine-health metrics):
+# 1030MB at start, settling ~1110MB and still drifting up to 1220MB when the
+# 60s run ended, with a 1320MB transient during JVM/JMeter startup. So an engine
+# costs about 1.2GB simply to exist, before it carries any load at all.
+#
+# That is fatal to a model that is linear through the origin, which this one
+# still is: 8.192MB/thread was obtained by dividing the whole 4096MB heap by 500
+# threads, silently assuming a baseline of zero. The real shape is
+# `baseline + threads * slope`, and below a few hundred threads the baseline
+# dominates. MIN_CONTAINER_MB was 1024 -- under the measured floor -- so the
+# model would have recommended less memory than an idle engine uses and OOMed
+# the low-thread locations it was meant to right-size.
+#
+# 1536 clears the observed drift and the startup transient with a little margin.
+# It is a floor, not a fix: the run never reached steady state and one data
+# point cannot give both an intercept and a gradient. A run at 200-500 threads,
+# long enough to plateau, yields the slope and lets the baseline become an
+# explicit term instead of a floor. See #89.
 MIN_HEAP_MB = 256
-MIN_CONTAINER_MB = 1024
+MIN_CONTAINER_MB = 1536
 
 
 def engine_heap_mb(threads):
