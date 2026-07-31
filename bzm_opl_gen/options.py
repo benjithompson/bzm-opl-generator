@@ -16,7 +16,7 @@ Two description fields, because the consumers want different lengths and one
 field would have to fail one of them:
 
   `summary`  one line, at most 20 words. This is what goes in an MCP tool's
-             JSON schema, where all thirty-one land in every session's context
+             JSON schema, where all thirty-four land in every session's context
              whether or not the option is used, and in the UI's field help.
   `doc`      the full argued paragraph, cross-links and all. This is the
              `docs/options.md` cell, read one at a time by someone who has
@@ -369,10 +369,11 @@ OPTIONS = [
         "tolerations", "array", "Scheduling",
         summary="Kubernetes toleration list, applied to the crane pod and to every engine.",
         doc="A Kubernetes toleration list, applied to the crane pod **and** passed "
-            "to the engines crane spawns. Both, because a taint that keeps crane off "
-            "a node pool keeps the engines off it too, and a bundle that tolerated "
-            "one but not the other schedules the agent and then leaves every test "
-            "Pending. JSON, e.g. "
+            "to the engines crane spawns. Both by default, because on a one-pool "
+            "cluster a taint that keeps crane off a node pool keeps the engines off "
+            "it too, and a bundle that tolerated one but not the other schedules the "
+            "agent and then leaves every test Pending. Set `engine_tolerations` to "
+            "aim the engines at a different pool. JSON, e.g. "
             "`[{\"key\":\"lifecycle\",\"operator\":\"Equal\",\"value\":\"spot\",\"effect\":\"NoSchedule\"}]`."),
     Option(
         "node_selector", "object", "Scheduling",
@@ -382,6 +383,52 @@ OPTIONS = [
             "`doctor` measures capacity against the nodes that match it, so a "
             "selector matching nothing is reported as no capacity rather than as a "
             "typo."),
+    Option(
+        "engine_node_selector", "object", "Scheduling",
+        summary="Label selector for engines only, overriding node_selector -- the dedicated engine pool.",
+        doc="A label map applied to the engines **only**, overriding "
+            "`node_selector` for them and leaving it to place the crane pod. This "
+            "is the two-pool shape: crane is one small always-on pod, an engine is "
+            "1-n large pods that exist only during a run, and a pool that suits "
+            "one suits the other badly. Unset means engines follow crane, which is "
+            "what every bundle did before this option. An explicit `{}` is "
+            "different from unset and is worth having: it says engines take no "
+            "selector even though crane has one, for a crane pinned to a tainted "
+            "infra pool with engines free to land anywhere. **The dedicated pool "
+            "does not by itself give engines the size they are configured for** -- "
+            "engine *requests* come from the location (overrideCPU/overrideMemory) "
+            "and default to 250m/256Mi when it sets neither, "
+            "and both the scheduler and the cluster autoscaler work on requests, "
+            "so a pool without a `maxPods` ceiling packs many engines onto one "
+            "node. The generated `nodepools.md` carries the per-flavour recipe."),
+    Option(
+        "engines_per_node", "integer", "Scheduling",
+        default_note="unset -> 1",
+        summary="How many engines a node of the engine pool should hold. Sizes the node pool recipe.",
+        doc="How many engines one node of the engine pool is meant to hold. It "
+            "reaches no manifest -- it sizes the generated `nodepools.md` "
+            "(`maxPods` and the machine type together) and is what `doctor`'s "
+            "engine-packing check judges against. Unset means 1, the "
+            "conservative answer: engines are measuring instruments, and two "
+            "sharing a node contend for CPU, NIC and cache in ways that surface "
+            "as latency the load generator invented rather than latency the "
+            "system produced. Raising it is legitimate and cheaper -- every node "
+            "spends about a CPU and 2Gi on system pods before an engine arrives, "
+            "so one large node beats several small ones -- provided the node is "
+            "sized for that many engines at their **limits**, which the recipe "
+            "does for you. Note that a platform floor can override it: GKE "
+            "refuses `--max-pods-per-node` below 8, which after ~6 system pods "
+            "leaves room for 2 engines whatever this says, and the recipe sizes "
+            "the node for the larger number rather than pretending otherwise."),
+    Option(
+        "engine_tolerations", "array", "Scheduling",
+        summary="Toleration list for engines only, overriding tolerations -- lets the engine pool be tainted.",
+        doc="A toleration list applied to the engines **only**, overriding "
+            "`tolerations` for them. The companion to `engine_node_selector`: a "
+            "taint on the engine pool is what keeps everything else in the cluster "
+            "off nodes that exist to be empty between runs, and this is what lets "
+            "the engines past it. Unset means engines follow crane; an explicit "
+            "`[]` means they tolerate nothing even though crane does."),
 
     # ---- Sizing --------------------------------------------------------
     Option(
@@ -448,7 +495,7 @@ OPTIONS = [
 BY_NAME = {o.name: o for o in OPTIONS}
 
 # The words the summary limit is enforced at. Long enough for a real sentence,
-# short enough that all thirty-one together stay a small fraction of an MCP
+# short enough that all thirty-four together stay a small fraction of an MCP
 # session's context -- which is the only reason the limit exists.
 SUMMARY_MAX_WORDS = 20
 

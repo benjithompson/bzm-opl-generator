@@ -66,6 +66,17 @@ DEFAULT_OPTIONS = {
     # Real-cluster scheduling / trust / sizing (all optional):
     "tolerations": None,             # k8s toleration list -> crane pod + engines
     "node_selector": None,           # {"label": "value"} -> crane pod + engines
+    # Engines only, overriding the two above. Unset (None) means the engines
+    # share the crane pod's placement -- the single-pool shape, and still the
+    # default. An *empty* {} or [] is not the same as unset: it says the engines
+    # take no selector/toleration even though crane has one, which is how you
+    # keep crane on a tainted infra pool and let engines land anywhere.
+    "engine_tolerations": None,      # k8s toleration list -> engines only
+    "engine_node_selector": None,    # {"label": "value"} -> engines only
+    # How many engines a node of the engine pool is meant to hold. Reaches no
+    # manifest -- it sizes the node pool recipe and is what doctor judges
+    # packing against. Unset means 1.
+    "engines_per_node": None,
     # CA trust -- pick ONE mode:
     "ca_bundle": None,               # inline PEM -> generator creates the ConfigMap
     "ca_existing_configmap": None,   # name of a ConfigMap the platform team owns/rotates
@@ -125,12 +136,52 @@ CRANE_MEM_LIMIT = "2Gi"
 # another.
 CRANE_EPHEMERAL_STORAGE = "1Gi"
 
-# What crane stamps on the engine pods it spawns, explicitly -- so this is what
-# the scheduler packs engines by, whatever their limits say. Nothing these
-# manifests can emit changes it: a LimitRange's defaultRequest only fills fields
-# a pod leaves unset, which is why this generator no longer ships one.
-ENGINE_STAMPED_REQUEST_CPU = "250m"
-ENGINE_STAMPED_REQUEST_MEM = "256Mi"
+# What crane puts on an engine pod's requests when the *location* says nothing.
+#
+# These were long believed to be hardcoded and unchangeable -- "crane stamps
+# them, nothing can move them" -- and the LimitRange removal, the packing
+# problem and the whole node-pool recipe were argued from that. It is wrong,
+# and a live run settled it: with the location's overrideCPU=1 and
+# overrideMemory=4096 against a bundle asking for 2 CPU / 8Gi limits, the engine
+# pod came back
+#
+#     requests {cpu: 1, memory: 4Gi}   limits {cpu: 2, memory: 8Gi}
+#
+# So the two knobs are not rivals for one field -- they set *different* fields.
+# The bundle's KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY set the limits; the
+# location's overrideCPU/overrideMemory set the requests (overrideMemory in MB).
+# These values are simply crane's default for a location that leaves both unset,
+# which is 165 of 171 locations on a real account -- so the 250m/256Mi seen
+# everywhere was the *default*, not a ceiling.
+#
+# What survives from the old reasoning: a LimitRange still cannot help, because
+# crane sets requests explicitly either way and `defaultRequest` only fills
+# fields a pod leaves unset. What does not survive: "nothing can change them".
+# Setting the location's overrides to match the engine limits is the direct fix
+# for engine packing, and it beats every node-pool trick -- see requests_note().
+ENGINE_DEFAULT_REQUEST_CPU = "250m"
+ENGINE_DEFAULT_REQUEST_MEM = "256Mi"
+
+# Kept as aliases: `livetest` profiles written by older versions and any caller
+# outside this repo still name them, and the values are unchanged -- only the
+# claim about them was wrong.
+ENGINE_STAMPED_REQUEST_CPU = ENGINE_DEFAULT_REQUEST_CPU
+ENGINE_STAMPED_REQUEST_MEM = ENGINE_DEFAULT_REQUEST_MEM
+
+
+def engine_requests(facts):
+    """(cpu, memory) an engine pod will actually request, as strings, given what
+    the location carries -- or the defaults when it carries nothing.
+
+    `overrideMemory` is in MB. Its unit is the one thing here not to trust from
+    the field alone: the same account holds 32, 4000 and 8196 for it, so a value
+    that looks like GB probably is somebody's mistake rather than a different
+    unit. Read it, report it, do not rescale it.
+    """
+    cpu = facts.get("override_cpu")
+    mem = facts.get("override_memory")
+    return (f"{cpu}" if cpu else ENGINE_DEFAULT_REQUEST_CPU,
+            f"{mem}Mi" if mem else ENGINE_DEFAULT_REQUEST_MEM)
 
 
 def _quantity(o, key, default, parse):
@@ -152,6 +203,43 @@ def engine_size(o):
     this to compare the claim against what a node can hold."""
     return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
             _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
+
+
+def crane_scheduling(o):
+    """(nodeSelector, tolerations) for the crane pod itself."""
+    return o.get("node_selector") or {}, o.get("tolerations") or []
+
+
+def engine_scheduling(o):
+    """(nodeSelector, tolerations) crane stamps on the engines it spawns.
+
+    `engine_*` unset means the engines inherit the crane pod's placement, which
+    is the one-pool shape and the behaviour every bundle generated before these
+    options had. Set, it wins outright rather than merging: a two-pool cluster
+    puts crane and the engines on nodes with *different* labels and taints, so
+    a union of the two selectors would match neither pool.
+
+    Unset and empty are deliberately different, and both are reachable. `None`
+    is "engines go wherever crane goes"; `{}` / `[]` is "engines take no
+    selector/toleration of their own", which is what a customer wants when
+    crane sits on a tainted infra pool and the engines are free to land on the
+    general one. Collapsing the two would make that second case unsayable.
+    """
+    selector = o.get("engine_node_selector")
+    if selector is None:
+        selector = o.get("node_selector")
+    tolerations = o.get("engine_tolerations")
+    if tolerations is None:
+        tolerations = o.get("tolerations")
+    return selector or {}, tolerations or []
+
+
+def separate_pools(o):
+    """Whether engines are aimed at different nodes from crane. Drives the node
+    pool recipe in the bundle, and stops doctor spending crane's resources out
+    of a pool crane is not on."""
+    return (o.get("engine_node_selector") is not None
+            or o.get("engine_tolerations") is not None)
 
 
 # BlazeMeter's own registry: the default DOCKER_REGISTRY, and what the
@@ -536,13 +624,18 @@ def _configmap(facts, o):
             lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items()
                       if k != "NO_PROXY"]
         lines.append(f"  NO_PROXY: {proxy_env(o)['NO_PROXY']}")
-    if o["tolerations"]:
+    eng_sel, eng_tol = engine_scheduling(o)
+    split = separate_pools(o)
+    if eng_tol:
         lines += [
+            "  # Tolerations crane stamps on the engines it spawns." if split else
             "  # Engines inherit the crane pod's tolerations via this env.",
-            f"  KUBERNETES_TOLERATIONS_JSON: '{json.dumps(o['tolerations'])}'",
+            f"  KUBERNETES_TOLERATIONS_JSON: '{json.dumps(eng_tol)}'",
         ]
-    if o["node_selector"]:
-        lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(o['node_selector'])}'")
+    if eng_sel:
+        if split:
+            lines.append("  # Engines are pinned to their own node pool, separate from crane's.")
+        lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(eng_sel)}'")
     if o["engine_cpu_limit"]:
         lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: \"{o['engine_cpu_limit']}\"")
     if o["engine_mem_limit"]:
@@ -579,14 +672,17 @@ def _indent_yaml(obj, indent):
 
 
 def _scheduling_block(o):
-    """tolerations / nodeSelector for the crane pod itself (engines get the
-    matching env vars in the ConfigMap)."""
+    """tolerations / nodeSelector for the crane pod itself. Engines are placed
+    by the KUBERNETES_*_JSON env in the ConfigMap instead -- crane stamps those
+    on the pods it spawns -- so the two pools are reached by two different
+    mechanisms, and engine_scheduling() is what decides whether they differ."""
+    sel, tol = crane_scheduling(o)
     out = ""
-    if o["tolerations"]:
-        out += "      tolerations:\n" + _indent_yaml(o["tolerations"], 8) + "\n"
-    if o["node_selector"]:
+    if tol:
+        out += "      tolerations:\n" + _indent_yaml(tol, 8) + "\n"
+    if sel:
         out += "      nodeSelector:\n" + "\n".join(
-            f"        {k}: \"{v}\"" for k, v in o["node_selector"].items()) + "\n"
+            f"        {k}: \"{v}\"" for k, v in sel.items()) + "\n"
     return out
 
 
@@ -622,6 +718,455 @@ def _proxy_secret_block(o):
     lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
     lines += [f"  {k}: \"{v}\"" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
     return "\n".join(lines) + "\n"
+
+
+# -- node pool recipe ---------------------------------------------------------
+
+NODEPOOLS_FILE = "nodepools.md"
+
+# What a node spends on itself before a pod sees any of it: the kubelet's
+# kube-reserved/system-reserved plus the eviction threshold. Every managed
+# distribution reserves on a sliding scale and none of them agree, so this is a
+# working allowance for sizing advice, not a number to compute a manifest from
+# -- which is why nothing outside this file uses it.
+NODE_OVERHEAD_CPU = 1000        # millicores
+NODE_OVERHEAD_MEM = 2 * (1024 ** 3)
+
+# System pods that land on a node in a *tainted* pool, counted into maxPods
+# because a ceiling that forgets them stops the node's own agents from starting
+# and the node never becomes useful.
+#
+# Measured, not assumed, and the three ways of counting disagree wildly -- on a
+# GKE 1.35 REGULAR cluster: `kubectl get ds -A` reports 32; 31 of those tolerate
+# any taint; and exactly 4 DaemonSet pods actually land on a node (fluentbit-gke,
+# gke-metrics-agent, node-local-dns, pdcsi-node), plus kube-proxy as a static
+# pod and a managed-prometheus collector. The 32 are mostly *variants* gated by
+# nodeAffinity -- GPU plugins, Windows builds, metrics agents selected by
+# machine size -- so counting DaemonSet objects overestimates by 8x.
+#
+# A taint is what makes this predictable at all: it repels the Deployments
+# (kube-dns, metrics-server, konnectivity-agent, l7-default-backend) that
+# otherwise take another 5-6 slots per node on an untainted pool.
+#
+# So this is a starting point for arithmetic, and the recipe tells the reader to
+# count pods on a real node of their own pool rather than trust it.
+TYPICAL_SYSTEM_PODS = 6
+
+# GKE refuses --max-pods-per-node below 8: "Maximum pods per node must be at
+# least 8 and at most 256". Verified against the API, not read off a doc page.
+#
+# It is the reason this file cannot simply promise one engine per node. With
+# TYPICAL_SYSTEM_PODS system pods already on the node, the floor leaves
+# 8 - 6 = 2 engine slots, and no node pool setting closes that further: crane
+# exposes no anti-affinity, and the engine's requests are too small to bind.
+# So on GKE the honest instruction is "size the node for the engines the floor
+# still permits", which is what _engines_per_node() works out.
+GKE_MIN_MAX_PODS = 8
+
+
+def engines_per_node(o):
+    """How many engines a node of the engine pool is meant to hold.
+
+    One by default, which is the conservative answer: engines are measuring
+    instruments, and two sharing a node contend for CPU, NIC and cache in ways
+    that show up as latency the load generator invented rather than latency the
+    system produced. But it is a choice, not a law -- a node big enough to run
+    several at their full limits satisfies the real rule, and costs less,
+    because every node spends about a CPU and 2Gi on system pods before any
+    engine arrives.
+    """
+    n = o.get("engines_per_node")
+    if n is None:
+        return 1
+    n = int(n)
+    if n < 1:
+        raise ValueError(f"engines_per_node must be at least 1, got {n}")
+    return n
+
+
+def _engines_per_node(max_pods, floor=0):
+    """Engines that can still share a node once `floor` raises maxPods above
+    what we asked for. Never below 1 -- a floor that leaves no room at all is a
+    pool that cannot run an engine, which is a different (and louder) problem
+    than one that packs them."""
+    return max(max(max_pods, floor) - TYPICAL_SYSTEM_PODS, 1)
+
+
+def _taints_from_tolerations(tolerations):
+    """The taints a pool must carry for these tolerations to be the thing that
+    gets past it. `Exists` with no value gives a valueless taint, which is
+    written `key:effect` -- `key=:effect` is a taint with an empty *value* and
+    is not the same object."""
+    out = []
+    for tol in tolerations:
+        key = tol.get("key")
+        if not key:
+            continue                  # tolerates everything; no taint to derive
+        effect = tol.get("effect") or "NoSchedule"
+        if tol.get("operator") == "Exists":
+            out.append(f"{key}:{effect}")
+        else:
+            out.append(f"{key}={tol.get('value', '')}:{effect}")
+    return out
+
+
+def _nodepools_md(facts, o):
+    """The node pool shape the split scheduling options describe, as commands.
+
+    This file exists because the interesting half of a two-pool location is not
+    in the manifests at all. The manifests can say *which* nodes an engine may
+    land on; they cannot say *how many* engines land on one, because crane
+    engine pod's requests come from the *location* (overrideCPU /
+    overrideMemory), defaulting to 250m/256Mi when it sets neither -- and both
+    the scheduler and the cluster autoscaler decide on requests. So a dedicated
+    pool whose location leaves them unset still packs engines onto the first
+    node it scales up, and the run reports numbers from engines that were never
+    given the CPU they were configured for. The recipe therefore leads with the
+    overrides, and falls back to the pool's own maxPods, which is a node pool
+    property on every distribution and a manifest property on none -- hence a
+    recipe rather than another template.
+    """
+    cpu, mem = engine_size(o)
+    eng_sel, eng_tol = engine_scheduling(o)
+    crane_sel, crane_tol = crane_scheduling(o)
+    slots = facts.get("slots")
+    taints = _taints_from_tolerations(eng_tol)
+    per_node = engines_per_node(o)
+    max_pods = TYPICAL_SYSTEM_PODS + per_node
+
+    # An engine's *limits* are what has to fit, since that is what it runs at
+    # once it is on the node -- the requests it was scheduled by are the lie
+    # this whole file is about.
+    node_cpu = format_cpu(cpu + NODE_OVERHEAD_CPU)
+    node_mem = format_memory(mem + NODE_OVERHEAD_MEM)
+
+    sel_pairs = ",".join(f"{k}={v}" for k, v in eng_sel.items()) or "(none set)"
+    crane_desc = (", ".join(f"{k}={v}" for k, v in crane_sel.items())
+                  or "no selector -- crane lands on any node")
+
+    lines = [
+        f"# Node pools for {facts.get('harbor_name') or facts['harbor_id']}",
+        "",
+        "This bundle places crane and its engines on **different nodes**. The",
+        "manifests carry the labels and tolerations; the pools themselves are",
+        "yours to create, and this is what they need to be.",
+        "",
+        "| | crane pool | engine pool |",
+        "|---|---|---|",
+        "| holds | 1 pod, always | 0-n pods, only during a run |",
+        f"| selector | {crane_desc} | `{sel_pairs}` |",
+        f"| taints | none needed | {', '.join(f'`{t}`' for t in taints) or 'none set'} |",
+        f"| per node | {CRANE_CPU_LIMIT} CPU / {CRANE_MEM_LIMIT} | "
+        f"{format_cpu(cpu)} CPU / {format_memory(mem)} per engine |",
+        "| autoscaling | fixed, 1-2 nodes | min 0, scales with the run |",
+        "",
+        "## Why two pools",
+        "",
+        "Crane is a small orchestrator that must not move: it holds the",
+        f"location's registration, and it needs {CRANE_CPU_LIMIT} CPU / {CRANE_MEM_LIMIT} to do it.",
+        f"An engine needs {format_cpu(cpu)} CPU / {format_memory(mem)} and exists only for the length",
+        "of a run. Sharing one pool means either paying for engine-sized nodes",
+        "around the clock, or letting crane sit on a node the autoscaler wants",
+        "to remove -- so the pool never drains and the saving never arrives.",
+        "",
+        "## Set the location's CPU/memory overrides first",
+        "",
+        "**This is the fix. Everything below is a backstop for it.**",
+        "",
+        "The scheduler and the cluster autoscaler place pods by their",
+        "**requests**, not their limits. An engine's limits come from this bundle",
+        f"({format_cpu(cpu)} / {format_memory(mem)}); its *requests* come from the location, as",
+        "`overrideCPU` and `overrideMemory` under Settings -> Private Locations.",
+        "They are different fields, not rival settings for one field --",
+        "confirmed on a live run, where a location at `overrideCPU: 1` /",
+        "`overrideMemory: 4096` and a bundle at 2 CPU / 8Gi produced an engine pod",
+        "with `requests {cpu: 1, memory: 4Gi}` and `limits {cpu: 2, memory: 8Gi}`.",
+        "",
+        f"Left unset -- as {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM} -- an engine asks the scheduler for a",
+        "fraction of what it will use, so the autoscaler adds **one** node and",
+        "packs the whole run onto it. The engines then throttle against each",
+        "other and the test reports the load generator's latency, not the",
+        "system's.",
+        "",
+        f"So set them to match the limits this bundle asks for: **overrideCPU: {format_cpu(cpu)}**,",
+        f"**overrideMemory: {mem // (1024 ** 2)}** (it is in MB). Then requests equal limits, the",
+        "scheduler places engines truthfully, the autoscaler grows the pool by",
+        "the right number of nodes, and none of the `maxPods` arithmetic below",
+        "has to carry the weight on its own.",
+        "",
+        "A LimitRange still cannot do this: crane sets the requests explicitly",
+        "either way, and `defaultRequest` only fills fields a pod leaves unset.",
+        "",
+        "## The backstop, when the overrides are not set",
+        "",
+        f"**`maxPods` on the engine pool is the ceiling that works.** At {max_pods} a node",
+        "takes its own system pods and exactly one engine, so N engines force N",
+        f"nodes regardless of what they requested. Measure before trusting {max_pods} --",
+        "count the pods on a node of the pool, on a node of a pool with the same",
+        "taints, or on any node if you have neither:",
+        "",
+        "```",
+        "kubectl get pods -A --field-selector spec.nodeName=<NODE> --no-headers | wc -l",
+        "```",
+        "",
+        "**Do not count DaemonSet objects for this.** `kubectl get ds -A | wc -l`",
+        "reports 32 on a stock GKE cluster where 4 DaemonSet pods actually land:",
+        "most are variants gated by nodeAffinity -- GPU plugins, Windows builds,",
+        "metrics agents chosen by machine size -- and counting them sizes the pool",
+        "eight times too loose.",
+        "",
+        "That count + 1 is your `maxPods`. Too low and the node's own agents never",
+        "start, which looks like a broken node rather than a full one: a cluster",
+        "left at `maxPods: 10` had six system pods stuck Pending on `Too many",
+        "pods`, managed Prometheus among them.",
+        "",
+        "The taint is what makes the number predictable. Without it the pool also",
+        "takes whatever Deployments the scheduler spreads there -- kube-dns,",
+        "metrics-server, konnectivity-agent -- for another 5-6 slots a node that",
+        "come and go.",
+        "",
+        "## Sizing the engine node",
+        "",
+        f"One engine per node means the machine must hold {format_cpu(cpu)} CPU / {format_memory(mem)}",
+        "*allocatable*, and allocatable is what is left after the kubelet's",
+        f"reservations -- roughly {format_cpu(NODE_OVERHEAD_CPU)} CPU and {format_memory(NODE_OVERHEAD_MEM)} on a managed node. So pick a",
+        f"machine with at least **{node_cpu} vCPU and {node_mem}** of capacity, and confirm with",
+        "`kubectl get node <name> -o jsonpath='{.status.allocatable}'` once one exists.",
+        "",
+    ]
+    if slots:
+        lines += [
+            f"This location advertises **slots={slots}**, so size the pool's maximum",
+            f"at {slots} node(s) to run a full-width test.",
+            "",
+        ]
+    else:
+        lines += [
+            "The location's concurrency (`slots`) is not recorded in these facts;",
+            "set the pool maximum to the widest test you intend to run.",
+            "",
+        ]
+
+    lines += _nodepool_commands(o, eng_sel, taints, max_pods, slots)
+    lines += [
+        "## Checking it worked",
+        "",
+        "Run a test, then -- while it is running -- confirm the engine is on the",
+        "engine pool and is the size you configured:",
+        "",
+        "```",
+        f"kubectl -n {o['namespace']} get pods -o wide",
+        f"kubectl -n {o['namespace']} get pod <engine-pod> \\",
+        "  -o jsonpath='{.spec.nodeName}{\"\\n\"}{.spec.containers[*].resources}{\"\\n\"}'",
+        "```",
+        "",
+        f"Expect `limits` of {format_cpu(cpu)}/{format_memory(mem)} and `requests` of "
+        f"{ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM}.",
+        "The mismatch is expected and is the reason for `maxPods`. What matters",
+        "is that the node is one of the engine pool's, and that no more engines",
+        "share it than the pool was sized for -- which is one per node where the",
+        f"platform allows it and {_engines_per_node(max_pods, GKE_MIN_MAX_PODS)} on GKE, whose maxPods floor of "
+        f"{GKE_MIN_MAX_PODS} does not",
+        "go low enough. More than that means `maxPods` is not in effect.",
+        "",
+        "`bzm-opl-gen doctor` checks the same shape before you deploy.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _machine_for(o, engines):
+    """The machine-size placeholder for a node expected to hold `engines` of
+    them at once.
+
+    Sized from the engine's *limits*, because that is what it runs at once it is
+    on the node -- the requests it was scheduled by are the gap this whole file
+    is about. Where a platform floor forces more than one engine onto a node,
+    this is what stops the recipe recommending a node for one and a maxPods for
+    several.
+    """
+    cpu, mem = engine_size(o)
+    return (f"<at least {format_cpu(cpu * engines + NODE_OVERHEAD_CPU)} vCPU / "
+            f"{format_memory(mem * engines + NODE_OVERHEAD_MEM)}"
+            + (f", holding {engines} engines>" if engines > 1 else ">"))
+
+
+def _cmd(parts):
+    """Shell command lines joined with trailing backslashes. Built from a list
+    with the empty entries already dropped, because the alternative -- a
+    conditional line that carries its own `\\` -- emits a dangling continuation
+    the moment its condition is false, and a broken command in a recipe is
+    worse than a missing flag."""
+    parts = [p for p in parts if p]
+    return [p + (" \\" if i < len(parts) - 1 else "")
+            for i, p in enumerate(parts)]
+
+
+def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
+    """Per-distribution commands for the engine pool. Every one sets the same
+    four things -- labels, taints, maxPods, min zero -- and they are spelled out
+    in full rather than given as a table of flag names because the flag easiest
+    to leave out (maxPods) is the one the whole shape depends on.
+
+    Where a distribution cannot set one of the four on the create command
+    (EKS's maxPods, OpenShift's anything), that is said in prose rather than
+    quietly omitted: a recipe that looks complete and is not is how a pool ends
+    up scaling correctly and packing eight engines onto the first node.
+    """
+    labels = ",".join(f"{k}={v}" for k, v in eng_sel.items())
+    maximum = slots or 5
+    machine = _machine_for(o, engines_per_node(o))
+    out = [
+        "## Creating the engine pool",
+        "",
+        "Four things matter and are the same everywhere: the **labels** the",
+        "manifests select on, the **taints** that keep other workloads off, the",
+        f"**`maxPods: {max_pods}`** ceiling ({engines_per_node(o)} engine(s) a node plus",
+        f"~{TYPICAL_SYSTEM_PODS} system pods), and a **minimum of zero** so the pool",
+        "drains between runs.",
+        "",
+    ]
+
+    gke_max_pods = max(max_pods, GKE_MIN_MAX_PODS)
+    gke_engines = _engines_per_node(max_pods, GKE_MIN_MAX_PODS)
+    out += ["### GKE (Standard -- Autopilot cannot take user node pools)", "", "```"]
+    out += _cmd([
+        "gcloud container node-pools create bzm-engines",
+        "  --cluster <CLUSTER> --region <REGION>",
+        f"  --machine-type {_machine_for(o, gke_engines)}",
+        f"  --node-labels {labels}" if labels else "",
+        f"  --max-pods-per-node {gke_max_pods}",
+        *[f"  --node-taints {t}" for t in taints],
+        f"  --enable-autoscaling --min-nodes 0 --max-nodes {maximum}",
+    ])
+    out += ["```", ""]
+    if gke_max_pods > max_pods:
+        out += [
+            f"**GKE will not go below {GKE_MIN_MAX_PODS}.** The API refuses anything lower",
+            f"(\"Maximum pods per node must be at least {GKE_MIN_MAX_PODS} and at most 256\"), so the",
+            f"{max_pods} this pool actually wants is not reachable and the floor leaves room",
+            f"for **{gke_engines} engines a node**, not one.",
+            "",
+            "That is not a setting you can tighten, so size the node for those",
+            f"{gke_engines} engines rather than for one -- the machine type above already",
+            "is. The alternative is fewer system pods on the pool (dropping",
+            "managed Prometheus or NodeLocalDNS from it), which buys one slot each",
+            "and costs observability.",
+            "",
+        ]
+    out += [
+        "`--max-pods-per-node` cannot be changed after creation -- it sizes the",
+        "node's alias IP range, so getting it wrong means replacing the pool.",
+        "",
+    ]
+
+    out += ["### EKS (managed node group)", "", "```"]
+    out += _cmd([
+        "eksctl create nodegroup --cluster <CLUSTER> --name bzm-engines",
+        f"  --node-type {machine}",
+        f"  --nodes-min 0 --nodes-max {maximum}",
+        f"  --node-labels {labels}" if labels else "",
+    ])
+    out += [
+        "```",
+        "",
+        "**Two of the four are not on that command.** Taints go in the `eksctl`",
+        "ClusterConfig (`taints:` under the node group), and `maxPods` comes from",
+        "the launch template's bootstrap:",
+        "",
+        "```",
+        f"--kubelet-extra-args '--max-pods={max_pods}'",
+        "```",
+        "",
+        "EKS otherwise derives maxPods from the instance type's ENI limits, which",
+        "is far higher than anything wanted here.",
+        "",
+    ]
+
+    out += ["### AKS", "", "```"]
+    out += _cmd([
+        "az aks nodepool add --cluster-name <CLUSTER> --resource-group <RG>",
+        "  --name bzmengines",
+        f"  --node-vm-size {machine}",
+        f"  --max-pods {max_pods}",
+        f"  --enable-cluster-autoscaler --min-count 0 --max-count {maximum}",
+        f"  --labels {labels}" if labels else "",
+        f"  --node-taints {','.join(taints)}" if taints else "",
+    ])
+    out += ["```", ""]
+
+    out += [
+        "### OpenShift (MachineSet)",
+        "",
+        "Clone an existing MachineSet and set on the clone:",
+        "",
+        "```yaml",
+        "spec:",
+        "  replicas: 0                     # a MachineAutoscaler grows it",
+        "  template:",
+        "    spec:",
+        "      metadata:",
+        "        labels:",
+    ]
+    out += ([f"          {k}: \"{v}\"" for k, v in eng_sel.items()]
+            or ["          # no engine labels configured"])
+    if taints:
+        out.append("      taints:")
+        for block in _taint_yaml(taints):
+            out += block
+    out += [
+        "```",
+        "",
+        "Pair it with a `MachineAutoscaler` (`minReplicas: 0`), and set maxPods",
+        "through a `KubeletConfig` selecting that pool's machine config pool --",
+        "it is not a MachineSet field:",
+        "",
+        "```yaml",
+        "apiVersion: machineconfiguration.openshift.io/v1",
+        "kind: KubeletConfig",
+        "spec:",
+        "  kubeletConfig:",
+        f"    maxPods: {max_pods}",
+        "```",
+        "",
+    ]
+
+    out += [
+        "### Anything else (kubeadm, Rancher, on-prem)",
+        "",
+        "No pool object, so the same four things are set per node:",
+        "",
+        "```",
+    ]
+    out += ([f"kubectl label node <NODE> {labels.replace(',', ' ')}"] if labels
+            else ["# no engine labels configured"])
+    out += [f"kubectl taint node <NODE> {t}" for t in taints]
+    out += [
+        "```",
+        "",
+        f"`maxPods: {max_pods}` goes in the kubelet config",
+        "(`/var/lib/kubelet/config.yaml`) and needs a kubelet restart. With no",
+        "cluster autoscaler the pool cannot scale to zero: cordon the nodes",
+        "between runs, or accept that they idle.",
+        "",
+    ]
+    return out
+
+
+def _taint_yaml(taints):
+    """`key=value:Effect` / `key:Effect` back into MachineSet taint YAML. The
+    valueless form is a real and different taint, so it renders without a
+    `value:` key rather than with an empty one."""
+    out = []
+    for t in taints:
+        head, _, effect = t.rpartition(":")
+        key, sep, value = head.partition("=")
+        block = [f"        - key: \"{key}\"", f"          effect: \"{effect}\""]
+        if sep:
+            block.insert(1, f"          value: \"{value}\"")
+        out.append(block)
+    return out
+
 
 
 # -- shared README fragments --------------------------------------------------
@@ -680,13 +1225,36 @@ def _sa_bullet(o):
             f"agent pod is simply never created.")
 
 
-def _mirror_step(o, verb):
-    """The mirror instruction, or nothing when there is no private registry."""
-    if not o["private_registry"]:
+def _deploy_steps(o, verb):
+    """Whatever has to happen before the apply/install, numbered as one list.
+
+    Both prerequisites are optional and independent, so neither can number
+    itself: a bundle with a private registry *and* split node pools used to get
+    two steps both called "1." and two called "2.". The numbering lives here,
+    once, and the verb is the last step whatever precedes it.
+
+    Node pools come before the mirror because they are the slower of the two to
+    get wrong -- a pool that does not exist fails silently and late (every
+    object applies, crane comes online, the location reports healthy, and then
+    every test sits Pending against a nodeSelector no node carries), where a
+    missing image fails at the first pull.
+    """
+    steps = []
+    if separate_pools(o):
+        steps.append(
+            f"**{{n}}. Create the node pools** -- see [{NODEPOOLS_FILE}]"
+            f"({NODEPOOLS_FILE}). This bundle pins engines to\nnodes that must "
+            f"exist first; without them the agent comes online and every test "
+            f"stays\nPending.\n\n")
+    if o["private_registry"]:
+        steps.append(
+            "**{n}. Mirror the images** (needs push access to the registry; "
+            "the pull side needs none):\n\n"
+            "```\n./bzm-opl-image-mirror.sh\n```\n\n")
+    if not steps:
         return ""
-    return ("**1. Mirror the images** (needs push access to the registry; the "
-            "pull side needs none):\n\n"
-            f"```\n./bzm-opl-image-mirror.sh\n```\n\n**2. {verb}**\n\n")
+    body = "".join(s.format(n=i) for i, s in enumerate(steps, 1))
+    return f"{body}**{len(steps) + 1}. {verb}**\n\n"
 
 
 def _mirror_script(facts, o):
@@ -1147,11 +1715,10 @@ def _helm_values(facts, o):
     else:
         lines.append("nodeSelector: {}")
     if o["tolerations"]:
-        # Engines inherit these through KUBERNETES_TOLERATIONS_JSON, which the
-        # chart derives from this same list. Spelled out as YAML rather than the
-        # JSON block _indent_yaml would give: a toleration is the thing someone
-        # most often hand-edits after generating, and `- key: ...` is what every
-        # other example they will find looks like.
+        # Spelled out as YAML rather than the JSON block _indent_yaml would
+        # give: a toleration is the thing someone most often hand-edits after
+        # generating, and `- key: ...` is what every other example they will
+        # find looks like.
         lines.append("tolerations:")
         for tol in o["tolerations"]:
             items = list(tol.items())
@@ -1159,6 +1726,31 @@ def _helm_values(facts, o):
                       for i, (k, v) in enumerate(items)]
     else:
         lines.append("tolerations: []")
+
+    # Engine placement is a separate pair, not a derivation of the two above:
+    # the chart cannot tell "unset, so follow crane" from "explicitly empty"
+    # once the values file is written, so generate.py resolves it here and the
+    # chart just renders what it is given. engineNodeSelector/engineTolerations
+    # are therefore always the *effective* engine placement.
+    eng_sel, eng_tol = engine_scheduling(o)
+    lines.append("")
+    if separate_pools(o):
+        lines.append("# Engines run on their own node pool, separate from crane's above.")
+    else:
+        lines.append("# Engines follow the crane pod's placement (one-pool shape).")
+    if eng_sel:
+        lines += ["engineNodeSelector:"] + [
+            f"  {json.dumps(k)}: {_yq(v)}" for k, v in eng_sel.items()]
+    else:
+        lines.append("engineNodeSelector: {}")
+    if eng_tol:
+        lines.append("engineTolerations:")
+        for tol in eng_tol:
+            items = list(tol.items())
+            lines += [f"  {'- ' if i == 0 else '  '}{k}: {_yq(v)}"
+                      for i, (k, v) in enumerate(items)]
+    else:
+        lines.append("engineTolerations: []")
     cpu_limit, mem_limit = engine_size(o)
     lines += [
         "",
@@ -1167,8 +1759,11 @@ def _helm_values(facts, o):
         f"# {format_memory(mem_limit)} per engine, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
         "# Check a cluster against that with `bzm-opl-gen doctor`.",
         "#",
-        "# Engine *requests* are not settable from here: crane stamps them at",
-        f"# {ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM} itself, and the scheduler packs nodes on those.",
+        "# Engine *requests* are not settable from here -- they come from the",
+        "# location's overrideCPU/overrideMemory (Settings -> Private Locations),",
+        f"# defaulting to {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler packs nodes on those,",
+        "# so set them to match these limits or engines pack far tighter than",
+        "# they run.",
         "engine:",
         f"  cpuLimit: {_yq(o['engine_cpu_limit'] or '')}",
         f"  memoryLimit: {_yq(o['engine_mem_limit'] or '')}",
@@ -1255,7 +1850,7 @@ def _helm_readme(facts, o):
     return f"""{_bundle_table(facts, o)}
 ## Deploy
 
-{_mirror_step(o, "Install")}```
+{_deploy_steps(o, "Install")}```
 helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE}{token}
 ```
 
@@ -1331,6 +1926,8 @@ def generate(facts, options):
         out[HELM_VALUES_FILE] = _helm_values(facts, o)
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
+        if separate_pools(o):
+            out[NODEPOOLS_FILE] = _nodepools_md(facts, o)
         out["README.md"] = _helm_readme(facts, o)
         out[PROFILE_FILE] = _profile_json(o)
         return out
@@ -1399,6 +1996,11 @@ def generate(facts, options):
             sub, **_hook_sub(o, sv))
     if o["private_registry"]:
         out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
+    if separate_pools(o):
+        # Only when the engines are actually aimed elsewhere. A one-pool bundle
+        # gaining a file about node pools it does not have would be one more
+        # thing to read before finding the part that applies.
+        out[NODEPOOLS_FILE] = _nodepools_md(facts, o)
     out["README.md"] = _readme(facts, o, out)
     out[PROFILE_FILE] = _profile_json(o)
     return out
@@ -1597,7 +2199,7 @@ def _readme(facts, o, files):
     return f"""{_bundle_table(facts, o, token_row)}
 ## Deploy
 
-{_mirror_step(o, "Apply")}```
+{_deploy_steps(o, "Apply")}```
 {apply_lines}
 ```
 
@@ -1605,9 +2207,10 @@ def _readme(facts, o, files):
 ## Worth knowing
 
 {_sizing_bullet(o)}{_sa_bullet(o)}
-- Engines request far less than they are allowed ({ENGINE_STAMPED_REQUEST_CPU}/{ENGINE_STAMPED_REQUEST_MEM}), because crane
-  sets that itself and nothing here can change it. On a shared node a run can
-  compete for CPU it was never reserved.{pinned}{big_ca}
+- Engine *requests* come from the location, not this bundle: `overrideCPU` and
+  `overrideMemory` under Settings -> Private Locations, defaulting to
+  {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set
+  them to match the limits above, a run competes for CPU it never reserved.{pinned}{big_ca}
 - `bzm-opl-gen doctor` checks a cluster against all of the above before you apply.
 """
 

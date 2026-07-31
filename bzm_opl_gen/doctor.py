@@ -29,12 +29,16 @@ from . import livetest
 # Aliased because every check takes a `facts` argument, which takes the name.
 from . import facts as facts_mod
 from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
-from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT, DEFAULT_OPTIONS,
+from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
+                       CRANE_MEM_REQUEST, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
                        ENGINE_STAMPED_REQUEST_CPU, ENGINE_STAMPED_REQUEST_MEM,
-                       SV_INGRESS_BACKENDS, SV_INGRESS_NONE, engine_size,
-                       proxy_env, service_account)
+                       NODEPOOLS_FILE, SV_INGRESS_BACKENDS, SV_INGRESS_NONE,
+                       TYPICAL_SYSTEM_PODS, crane_scheduling, engine_requests,
+                       engines_per_node,
+                       engine_scheduling, engine_size, proxy_env,
+                       separate_pools, service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
 
@@ -172,14 +176,19 @@ def _tolerates(toleration, taint):
     return toleration.get("value", "") == taint.get("value", "")
 
 
-def eligible_nodes(nodes, opts):
-    """Nodes an engine could actually land on: Ready, uncordoned, matching the
-    configured nodeSelector, and with every blocking taint tolerated.
+def eligible_nodes(nodes, opts, placement=None):
+    """Nodes a pod could actually land on: Ready, uncordoned, matching the
+    nodeSelector, and with every blocking taint tolerated.
+
+    `placement` is a (selector, tolerations) pair -- engine_scheduling(opts) or
+    crane_scheduling(opts). It defaults to the engines' placement because every
+    caller here is asking about engines; crane's pod is one, theirs are the ones
+    that fail to schedule. On a two-pool location the two answers are different
+    sets of nodes, so a caller that means crane has to say so.
 
     PreferNoSchedule is a preference, not a rejection, so it does not exclude.
     """
-    selector = opts.get("node_selector") or {}
-    tolerations = opts.get("tolerations") or []
+    selector, tolerations = placement or engine_scheduling(opts)
     out = []
     for n in nodes:
         spec, meta = n.get("spec", {}), n.get("metadata", {})
@@ -208,16 +217,68 @@ def _engine_str(cpu, mem):
     return f"{format_cpu(cpu)} CPU / {format_memory(mem)}"
 
 
-def _scope(opts):
+def _scope(opts, placement=None):
+    """How the eligible-node set was narrowed, for a detail string. Defaults to
+    the engines' placement, matching eligible_nodes()."""
+    selector, tolerations = placement or engine_scheduling(opts)
     bits = []
-    if opts.get("node_selector"):
-        bits.append(f"nodeSelector {json.dumps(opts['node_selector'])}")
-    if opts.get("tolerations"):
-        bits.append(f"{len(opts['tolerations'])} toleration(s)")
+    if selector:
+        bits.append(f"nodeSelector {json.dumps(selector)}")
+    if tolerations:
+        bits.append(f"{len(tolerations)} toleration(s)")
     return ", ".join(bits) or "no nodeSelector/tolerations"
 
 
 # -- capacity -----------------------------------------------------------------
+
+def check_crane_pool(facts, opts, cluster):
+    """The crane pool can hold crane.
+
+    Only asked when the pools are split, because otherwise check_capacity
+    already spends crane's share out of the one set of nodes it measures. Split,
+    nothing was checking the crane side at all: every capacity check here is
+    about engines, and a crane pool too small to run crane fails in the way that
+    is hardest to attribute -- the agent goes offline mid-run, and BlazeMeter
+    reports a test that stopped.
+
+    The case that motivated it is not exotic. `e2-medium` is the obvious choice
+    for "small always-on node" and reports **940m** allocatable CPU: crane
+    schedules on its 250m request and can never reach its 1 CPU limit, so it is
+    throttled exactly when a run makes it busy.
+    """
+    if not separate_pools(opts):
+        return []
+    unread = _unread_section(
+        cluster, "nodes", "crane pool",
+        "the cluster's nodes could not be read, so whether the crane pool can "
+        "hold crane is unverified")
+    if unread:
+        return unread
+    placement = crane_scheduling(opts)
+    nodes = eligible_nodes(cluster.get("nodes") or [], opts, placement)
+    want_cpu, want_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
+    want = _engine_str(want_cpu, want_mem)
+    if not nodes:
+        return [Check("crane pool", FAIL,
+                      f"no Ready, schedulable node matches {_scope(opts, placement)} "
+                      f"-- the crane pod has nowhere to run, and an agent that "
+                      f"never starts is a location that never comes online")]
+    fits = [n for n in nodes if _allocatable(n) >= (want_cpu, want_mem)]
+    if fits:
+        return [Check("crane pool", PASS,
+                      f"{len(fits)}/{len(nodes)} crane-pool node(s) hold crane's "
+                      f"{want} (allocatable, not free)")]
+    best = max(nodes, key=lambda n: _allocatable(n))
+    cpu, mem = _allocatable(best)
+    return [Check("crane pool", WARN,
+                  f"no crane-pool node has crane's full {want} allocatable; the "
+                  f"largest is {best['metadata']['name']} with "
+                  f"{format_cpu(cpu)} CPU / {human_memory(mem)}. Crane schedules "
+                  f"anyway -- it requests only {CRANE_CPU_REQUEST}/"
+                  f"{CRANE_MEM_REQUEST} -- but is throttled at its limit exactly "
+                  f"when a run makes it busy, and an agent that stops "
+                  f"heartbeating mid-run reads as a test that stopped")]
+
 
 def check_capacity(facts, opts, cluster):
     """slots x engine size vs what the eligible nodes can hold.
@@ -238,6 +299,30 @@ def check_capacity(facts, opts, cluster):
         return unread
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
+        if separate_pools(opts):
+            # An engine pool aimed at its own nodes is *supposed* to sit at zero
+            # between runs -- that is the saving the split exists for. From
+            # `get nodes` alone an empty autoscaling pool and a pool that was
+            # never created look identical, and they are opposite verdicts, so
+            # this cannot be the FAIL it is on a single-pool cluster. Observed
+            # on a correctly-built GKE pool at min-nodes 0, where the old FAIL
+            # said "engines have nowhere to run" about a cluster that was right.
+            #
+            # The cluster-autoscaler does publish its node groups
+            # (kube-system/cluster-autoscaler-status), but names them by
+            # instance-group URL and carries none of their labels, so it cannot
+            # settle which group answers this selector either. Hence a WARN that
+            # says what to look at rather than a guess in either direction.
+            return [Check("capacity: eligible nodes", WARN,
+                          f"no node currently matches {_scope(opts)}. With a "
+                          f"dedicated engine pool that is expected between runs "
+                          f"-- a pool at min-nodes 0 has none until a test asks "
+                          f"for one -- but it looks the same as a pool that was "
+                          f"never created, and nothing in `get nodes` tells them "
+                          f"apart. Confirm the pool exists and can scale: "
+                          f"`kubectl -n kube-system get cm "
+                          f"cluster-autoscaler-status -o yaml` lists the node "
+                          f"groups with their minSize/maxSize")]
         return [Check("capacity: eligible nodes", FAIL,
                       f"no Ready, schedulable node matches {_scope(opts)} -- "
                       f"engines have nowhere to run")]
@@ -259,15 +344,21 @@ def check_capacity(facts, opts, cluster):
                             f"{human_memory(biggest[1][1])}. An engine is one pod; "
                             f"it cannot be split across nodes"))
 
-    # Crane occupies the namespace alongside the engines; the quota check counts
-    # its pod, so the capacity maths has to spend its share too.
+    # Crane's own pod is spent out of the engine pool only when it is *on* it.
+    # With engines pointed at their own pool crane is somewhere else entirely,
+    # and charging the engine pool for it understates the capacity by a whole
+    # crane -- which on a small pool is the difference between a PASS and a FAIL
+    # that sends someone resizing nodes they did not need to touch.
+    crane_here = not separate_pools(opts) or _crane_on(nodes, opts)
     crane_cpu, crane_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
-    tot_cpu = max(sum(c for c, _ in sizes.values()) - crane_cpu, 0)
-    tot_mem = max(sum(m for _, m in sizes.values()) - crane_mem, 0)
+    spent_cpu, spent_mem = (crane_cpu, crane_mem) if crane_here else (0, 0)
+    tot_cpu = max(sum(c for c, _ in sizes.values()) - spent_cpu, 0)
+    tot_mem = max(sum(m for _, m in sizes.values()) - spent_mem, 0)
     holds = min(tot_cpu // cpu, tot_mem // mem)
+    after = (f" after crane's own {_engine_str(crane_cpu, crane_mem)}"
+             if crane_here else " (crane is on its own pool and spends none of it)")
     total = (f"{len(nodes)} eligible node(s) leave {format_cpu(tot_cpu)} CPU / "
-             f"{human_memory(tot_mem)} after crane's own "
-             f"{_engine_str(crane_cpu, crane_mem)} -- an upper bound, other "
+             f"{human_memory(tot_mem)}{after} -- an upper bound, other "
              f"workloads already use part of the rest")
     if holds < slots:
         checks.append(Check("capacity: aggregate", FAIL,
@@ -279,6 +370,192 @@ def check_capacity(facts, opts, cluster):
                             f"slots={slots} needs {format_cpu(cpu * slots)} CPU / "
                             f"{format_memory(mem * slots)}; {total} ({holds} engine(s))"))
     return checks
+
+
+MB = 1024 ** 2
+# A JVM needs more than its heap: metaspace, thread stacks, code cache, direct
+# buffers and the GC's own structures. 25% of the container limit is the usual
+# working allowance, i.e. a heap at or below 75% of the limit.
+HEAP_HEADROOM = 0.75
+
+
+def check_engine_heap(facts, opts, cluster):
+    """The location's JVM heap against the container limit the bundle sets.
+
+    Two silent failures live in this gap and neither is a scheduling problem,
+    so nothing else in doctor can see them. A heap above the limit is an
+    OOMKill mid-run, which surfaces as a test that stopped rather than as a
+    resource error. A heap far below it reserves node capacity the JVM will
+    never touch -- which on a dedicated, autoscaling engine pool is the whole
+    cost of the pool, paid for nothing.
+
+    The heap is a *location* setting and the limit is a bundle option, so this
+    is the one check that compares the two sources of truth for engine size
+    directly. Unknown heap is a WARN naming where to look, never a pass: the
+    default is 4096MB on almost every location, and the one that has been
+    retuned is exactly the one somebody is generating a bundle for.
+    """
+    xmx = facts.get("engine_xmx_mb")
+    _, mem = engine_size(opts)
+    limit = format_memory(mem)
+    if xmx is None:
+        if facts_mod.from_manual_entry(facts):
+            return [Check("engine heap", WARN,
+                          f"the location's engineXmx is unknown (facts entered by "
+                          f"hand), so nothing here can tell whether a JVM fits the "
+                          f"{limit} limit. Read it from the location's Advanced "
+                          f"settings in BlazeMeter")]
+        return [Check("engine heap", WARN,
+                      f"the location has no engineXmx set, so the engine JVM's "
+                      f"heap against the {limit} limit is unverified")]
+
+    heap = xmx * MB
+    room = int(mem * HEAP_HEADROOM)
+    pair = (f"engineXmx={xmx}MB against a {limit} container limit")
+    if heap >= mem:
+        return [Check("engine heap", FAIL,
+                      f"{pair}: the heap is at or above the whole limit, so the "
+                      f"JVM is OOMKilled once it fills -- mid-run, reported as a "
+                      f"test that stopped rather than a resource error. Set the "
+                      f"heap at or below {int(room / MB)}MB, or raise "
+                      f"engine_mem_limit")]
+    if heap > room:
+        return [Check("engine heap", WARN,
+                      f"{pair}: leaves under 25% for the JVM's non-heap memory "
+                      f"(metaspace, thread stacks, direct buffers), so a busy "
+                      f"engine can still be OOMKilled. {int(room / MB)}MB is the "
+                      f"comfortable ceiling at this limit")]
+    if heap * 2 <= mem:
+        return [Check("engine heap", WARN,
+                      f"{pair}: the JVM cannot use more than half of what every "
+                      f"engine pod reserves, so the rest is node capacity nobody "
+                      f"consumes -- on a dedicated engine pool that is most of "
+                      f"what it costs. Either lower engine_mem_limit toward "
+                      f"{int(heap / MB * 4 / 3)}MB or raise the heap")]
+    return [Check("engine heap", PASS,
+                  f"{pair}: within the ~25% the JVM needs beyond its heap")]
+
+
+def _crane_on(engine_nodes, opts):
+    """Whether the crane pod could also land on the engine pool. Asked of the
+    already-filtered engine nodes, so it answers about the overlap rather than
+    about the cluster: two pools configured separately may still both accept
+    crane, and then its share really is spent out of this set."""
+    return bool(eligible_nodes(engine_nodes, opts, crane_scheduling(opts)))
+
+
+def _pod_ceiling(node):
+    """`allocatable.pods`, the kubelet's maxPods as the node reports it. Absent
+    on a node whose status was trimmed, which is not zero -- None says so."""
+    raw = node.get("status", {}).get("allocatable", {}).get("pods")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_engine_packing(facts, opts, cluster):
+    """How many engines the scheduler will put on one node, versus how many
+    can actually run there.
+
+    Both the scheduler and the cluster autoscaler place pods by *requests*, so
+    a node with room for one engine's limits is offered as many as its requests
+    divide into it. What sets those requests is the **location's** overrideCPU
+    and overrideMemory, not this bundle and not anything in these manifests --
+    confirmed live, where a location at 1 CPU / 4096MB against a bundle asking
+    2 CPU / 8Gi produced requests {1, 4Gi} and limits {2, 8Gi} on the same pod.
+    Unset, they default to 250m/256Mi, which is how nearly every location runs
+    and why engines pack.
+
+    So the fix this check points at is the location's overrides; the engine
+    pool's maxPods is the backstop for when they are not set. `allocatable.pods`
+    is how the node reports that ceiling.
+
+    WARN, never FAIL: the engines do start, and a small test may never notice.
+    What it costs is the validity of the numbers -- engines throttling against
+    each other report the load generator's latency, not the system's.
+    """
+    unread = _unread_section(
+        cluster, "nodes", "engine packing",
+        "the cluster's nodes could not be read, so nothing here knows how many "
+        "engines would share one")
+    if unread:
+        return unread
+    nodes = eligible_nodes(cluster.get("nodes") or [], opts)
+    if not nodes:
+        return []            # check_capacity already FAILed on the empty set
+    cpu, mem = engine_size(opts)
+    # The requests the engine will really carry, from the location -- not the
+    # default, which is only what an unset location produces.
+    req_cpu_s, req_mem_s = engine_requests(facts)
+    req_cpu, req_mem = parse_cpu(req_cpu_s), parse_memory(req_mem_s)
+    overridden = bool(facts.get("override_cpu") or facts.get("override_memory"))
+
+    worst = None
+    for n in nodes:
+        alloc_cpu, alloc_mem = _allocatable(n)
+        # What the scheduler will accept, by the requests the pod carries.
+        by_req = min(alloc_cpu // req_cpu, alloc_mem // req_mem)
+        # ...capped by the node's own pod ceiling, less the DaemonSets that land
+        # on every node. That subtraction is an assumption, not a measurement:
+        # `allocatable.pods` counts all pods and nothing here collects
+        # DaemonSets, so the number is named in the verdict for the reader to
+        # correct rather than buried. TYPICAL_SYSTEM_PODS is the same constant
+        # the generated recipe sizes maxPods from, so a pool built to that
+        # recipe is judged by the arithmetic that produced it. It counts what
+        # actually lands on a tainted node, which is not the DaemonSet count --
+        # see the constant.
+        ceiling = _pod_ceiling(n)
+        if ceiling is not None:
+            by_req = min(by_req, max(ceiling - TYPICAL_SYSTEM_PODS, 1))
+        # What can actually run: the limits the engine was configured with,
+        # but never counted above what the pool was *designed* to hold. A node
+        # sized for 2 engines is not over-packed by taking 2, and judging it
+        # against its raw capacity would WARN on a pool built exactly to spec.
+        runs = min(alloc_cpu // cpu, alloc_mem // mem, engines_per_node(opts))
+        if by_req > max(runs, 1) and (worst is None or by_req > worst[1]):
+            worst = (n["metadata"]["name"], by_req, runs, ceiling)
+
+    want = _engine_str(cpu, mem)
+    if not worst:
+        return [Check("engine packing", PASS,
+                      f"no eligible node would take more {want} engine(s) than "
+                      f"it can run. Engines request {req_cpu_s}/{req_mem_s}"
+                      + (" (the location's overrideCPU/overrideMemory)"
+                         if overridden else
+                         " (crane's default -- the location sets no "
+                         "overrideCPU/overrideMemory)")
+                      + f"; assuming ~{TYPICAL_SYSTEM_PODS} system pods a node "
+                      f"against its allocatable.pods, which you can count with "
+                      f"`kubectl get pods -A --field-selector "
+                      f"spec.nodeName=<NODE>`")]
+
+    name, packs, runs, ceiling = worst
+    lever = (f"allocatable.pods={ceiling}, less ~{TYPICAL_SYSTEM_PODS} for "
+             f"system pods" if ceiling is not None
+             else "the node reports no pod ceiling")
+    return [Check("engine packing", WARN,
+                  f"node {name} would accept {packs} engine(s) but can only run "
+                  f"{runs} at {want}: engines request {req_cpu_s}/{req_mem_s} and "
+                  f"both the scheduler and the cluster autoscaler place on "
+                  f"requests, not limits ({lever}). Engines sharing a node "
+                  f"throttle against each other, so the run reports the load "
+                  f"generator's latency rather than the system's. "
+                  + ("Raise the location's overrideCPU/overrideMemory to match "
+                     f"the engine limits ({format_cpu(cpu)} / "
+                     f"{mem // (1024 ** 2)}MB) -- they set the pod's requests, "
+                     "and matching them is what makes the scheduler place "
+                     "engines truthfully."
+                     if not overridden else
+                     "The location's overrideCPU/overrideMemory are set but "
+                     f"still below the limits; matching them ({format_cpu(cpu)} "
+                     f"/ {mem // (1024 ** 2)}MB) closes this.")
+                  + f" Failing that, cap the engine pool's maxPods at the pods "
+                  f"a node of it actually runs plus one -- counted with "
+                  f"`kubectl get pods -A --field-selector spec.nodeName=<NODE>`, "
+                  f"not `get ds`, which counts nodeAffinity-gated variants that "
+                  f"never land. No manifest can set maxPods, so it belongs on "
+                  f"the node pool (see the generated {NODEPOOLS_FILE})")]
 
 
 def check_disk(facts, opts, cluster):
@@ -991,7 +1268,8 @@ def _oneshot_curl(cli, namespace, targets, opts):
 
 # Every check takes the same (facts, opts, cluster) so adding one is a single
 # edit here, not a new argument order to remember.
-CHECKS = (check_location, check_threads_per_engine, check_capacity, check_disk,
+CHECKS = (check_location, check_threads_per_engine, check_engine_heap,
+          check_crane_pool, check_capacity, check_engine_packing, check_disk,
           check_limitrange, check_resourcequota, check_admission,
           check_service_account, check_ingress_class, check_egress)
 

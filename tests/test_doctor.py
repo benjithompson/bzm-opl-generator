@@ -210,6 +210,311 @@ def test_eligible_nodes(node, opts, eligible):
     assert bool(doctor.eligible_nodes([node], opts)) is eligible
 
 
+# -- check_engine_heap ------------------------------------------------------
+#
+# The container limit is a bundle option and the JVM heap is a location setting,
+# so this is the only check comparing the two sources of truth for engine size.
+# Both failures it catches are invisible to a scheduler.
+
+def _heap_facts(xmx):
+    return dict(FACTS, engine_xmx_mb=xmx)
+
+
+def test_engine_heap_fails_when_the_jvm_can_fill_the_whole_limit():
+    """OOMKilled mid-run, which BlazeMeter reports as a test that stopped
+    rather than as a resource error -- so nothing downstream says 'memory'."""
+    c = _find(doctor.check_engine_heap(_heap_facts(8192), {"engine_mem_limit": "8Gi"},
+                                       {}), "engine heap")
+    assert c.status == doctor.FAIL
+    assert "OOMKilled" in c.detail
+
+
+def test_engine_heap_warns_when_non_heap_memory_has_no_room():
+    c = _find(doctor.check_engine_heap(_heap_facts(7000), {"engine_mem_limit": "8Gi"},
+                                       {}), "engine heap")
+    assert c.status == doctor.WARN
+    assert "metaspace" in c.detail
+
+
+def test_engine_heap_warns_when_the_pod_reserves_what_the_jvm_cannot_use():
+    """The default pairing on a real account: engineXmx is 4096MB on 160 of 171
+    locations, and the documented engine limit is 8Gi. Every engine pod reserves
+    twice what its JVM can address -- on a dedicated autoscaling pool that is
+    most of what the pool costs."""
+    c = _find(doctor.check_engine_heap(_heap_facts(4096), {"engine_mem_limit": "8Gi"},
+                                       {}), "engine heap")
+    assert c.status == doctor.WARN
+    assert "nobody consumes" in c.detail
+
+
+def test_engine_heap_passes_when_the_heap_fits_with_jvm_headroom():
+    c = _find(doctor.check_engine_heap(_heap_facts(6144), {"engine_mem_limit": "8Gi"},
+                                       {}), "engine heap")
+    assert c.status == doctor.PASS
+
+
+def test_unknown_heap_is_a_warn_not_a_pass():
+    """4096 is the default on almost every location, so assuming it would pass
+    the check nearly always -- and the location somebody is generating a bundle
+    for is exactly the one that has been retuned."""
+    c = _find(doctor.check_engine_heap(_heap_facts(None), {"engine_mem_limit": "8Gi"},
+                                       {}), "engine heap")
+    assert c.status == doctor.WARN
+
+
+# -- two node pools ---------------------------------------------------------
+#
+# With engines aimed at their own pool, "eligible" means eligible *for an
+# engine*. Every capacity number here is about engines, so reading crane's
+# placement instead silently measures the wrong nodes.
+
+CRANE_POOL = {"pool": "crane"}
+ENGINE_POOL = {"pool": "bzm-engines"}
+ENGINE_TAINT = [{"key": "bzm.io/engines", "value": "true", "effect": "NoSchedule"}]
+ENGINE_TOL = [{"key": "bzm.io/engines", "operator": "Equal", "value": "true",
+               "effect": "NoSchedule"}]
+SPLIT = {"node_selector": CRANE_POOL, "engine_node_selector": ENGINE_POOL,
+         "engine_tolerations": ENGINE_TOL}
+
+
+def _engine_node(name="e1", cpu="16", mem="64Gi", pods=None):
+    """A node in the dedicated engine pool: labelled, tainted, and big."""
+    n = _node(name, cpu=cpu, mem=mem, disk="500Gi", labels=ENGINE_POOL,
+              taints=ENGINE_TAINT)
+    if pods is not None:
+        n["status"]["allocatable"]["pods"] = str(pods)
+    return n
+
+
+# -- engine requests come from the location ---------------------------------
+#
+# Measured on a live GKE run: a location at overrideCPU=1 / overrideMemory=4096
+# against a bundle asking for 2 CPU / 8Gi produced ONE pod carrying
+# requests {cpu: 1, memory: 4Gi} and limits {cpu: 2, memory: 8Gi}. The two
+# settings are not rivals for one field -- the bundle sets limits, the location
+# sets requests. 250m/256Mi is only what an unset location defaults to.
+
+def test_engine_requests_come_from_the_location_when_set():
+    from bzm_opl_gen import generate as gen
+    assert gen.engine_requests({"override_cpu": 1, "override_memory": 4096}) \
+        == ("1", "4096Mi")
+
+
+def test_engine_requests_fall_back_to_cranes_default():
+    from bzm_opl_gen import generate as gen
+    assert gen.engine_requests({}) == (gen.ENGINE_DEFAULT_REQUEST_CPU,
+                                       gen.ENGINE_DEFAULT_REQUEST_MEM)
+
+
+def test_packing_uses_the_locations_requests_not_the_default():
+    """A location whose overrides match the engine limits packs correctly, and
+    the check has to see that -- judging it by the 250m default would WARN on
+    the very configuration that fixes the problem."""
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    facts = dict(FACTS, override_cpu=2, override_memory=8192)
+    # 3 CPU / 12Gi holds exactly one such engine once the requests are honest --
+    # and note maxPods is wide open at 32, which is the point: with truthful
+    # requests the pod ceiling stops being the thing doing the work.
+    node = _engine_node("e1", cpu="3", mem="12Gi", pods=32)
+    c = _find(doctor.check_engine_packing(facts, opts, {"nodes": [node]}),
+              "engine packing")
+    assert c.status == doctor.PASS
+    assert "overrideCPU" in c.detail
+
+
+def test_packing_names_the_location_overrides_as_the_fix():
+    """The old advice was maxPods, which is a backstop. The direct fix is the
+    location's overrides, and the verdict has to say so."""
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    node = _engine_node("e1", cpu="16", mem="64Gi", pods=110)
+    c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
+              "engine packing")
+    assert c.status == doctor.WARN
+    assert "overrideCPU/overrideMemory" in c.detail
+    assert "8192MB" in c.detail          # the value to set, in the field's unit
+
+
+# -- check_crane_pool -------------------------------------------------------
+#
+# Split pools left crane unchecked: every other capacity check here is about
+# engines. Numbers below are a real GKE e2-medium.
+
+def _e2_medium(name="c1"):
+    """940m allocatable CPU, ~2.73Gi memory -- measured, and the point is that
+    940m is *below* crane's 1 CPU limit while being above its 250m request."""
+    return _node(name, cpu="940m", mem="2866848Ki", labels=CRANE_POOL)
+
+
+def test_crane_pool_warns_when_the_node_cannot_reach_cranes_limit():
+    """The obvious "small always-on node" cannot actually run crane at its
+    limit. It schedules on the request and is throttled when a run makes it
+    busy -- and an agent that stops heartbeating mid-run reads as a test that
+    stopped, which is the hardest failure here to attribute."""
+    cluster = {"nodes": [_e2_medium(), _engine_node("e1")]}
+    c = _find(doctor.check_crane_pool(FACTS, SPLIT, cluster), "crane pool")
+    assert c.status == doctor.WARN
+    assert "940m" in c.detail and "throttled" in c.detail
+
+
+def test_crane_pool_passes_on_a_node_that_holds_cranes_limit():
+    node = _node("c1", cpu="2", mem="4Gi", labels=CRANE_POOL)
+    c = _find(doctor.check_crane_pool(FACTS, SPLIT, {"nodes": [node]}), "crane pool")
+    assert c.status == doctor.PASS
+
+
+def test_crane_pool_fails_when_nothing_matches_cranes_selector():
+    """A crane pool that does not exist is a location that never comes online --
+    distinct from the engine pool being empty, which check_capacity reports."""
+    cluster = {"nodes": [_engine_node("e1")]}
+    c = _find(doctor.check_crane_pool(FACTS, SPLIT, cluster), "crane pool")
+    assert c.status == doctor.FAIL
+
+
+def test_crane_pool_is_not_checked_on_a_one_pool_bundle():
+    """check_capacity already spends crane's share out of the nodes it
+    measures, so a second verdict would be double-counting it."""
+    assert doctor.check_crane_pool(FACTS, {}, {"nodes": [_big("a")]}) == []
+
+
+def test_an_empty_engine_pool_is_a_warn_not_a_failure():
+    """A dedicated engine pool is *supposed* to sit at zero between runs -- that
+    is the saving the split exists for. Observed on a correctly-built GKE pool
+    at min-nodes 0, where FAIL claimed "engines have nowhere to run" about a
+    cluster that was right. An empty autoscaling pool and a pool that was never
+    created look identical in `get nodes`, and they are opposite verdicts."""
+    cluster = {"nodes": [_node("c1", labels=CRANE_POOL)]}      # crane only, no engine nodes
+    checks = doctor.check_capacity(FACTS, SPLIT, cluster)
+    c = _find(checks, "eligible nodes")
+    assert c.status == doctor.WARN
+    assert not doctor.has_failures(checks)
+    assert "cluster-autoscaler-status" in c.detail      # says what to look at
+
+
+def test_an_empty_single_pool_cluster_is_still_a_failure():
+    """Nothing was aimed anywhere, so there is no autoscaling pool to be waiting
+    on -- an empty match really does mean engines have nowhere to run."""
+    opts = {"node_selector": {"pool": "nope"}}
+    c = _find(doctor.check_capacity(FACTS, opts, {"nodes": [_big("a")]}),
+              "eligible nodes")
+    assert c.status == doctor.FAIL
+
+
+def test_eligible_nodes_follows_the_engine_pool_not_cranes():
+    """The crane pool is small and untainted; the engine pool is tainted and
+    labelled differently. An engine belongs on exactly one of them."""
+    crane_node = _node("c1", labels=CRANE_POOL)
+    engine_node = _engine_node("e1")
+    nodes = [crane_node, engine_node]
+    assert [n["metadata"]["name"] for n in doctor.eligible_nodes(nodes, SPLIT)] == ["e1"]
+    # ...and crane's own placement still resolves to crane's node when asked for.
+    from bzm_opl_gen.generate import crane_scheduling
+    assert [n["metadata"]["name"] for n in
+            doctor.eligible_nodes(nodes, SPLIT, crane_scheduling(SPLIT))] == ["c1"]
+
+
+def test_capacity_does_not_spend_crane_out_of_a_pool_it_is_not_on():
+    """Charging the engine pool for crane understates it by a whole crane. On a
+    small dedicated pool that is the difference between PASS and a FAIL that
+    sends someone resizing nodes they did not need to touch."""
+    cluster = {"nodes": [_node("c1", labels=CRANE_POOL), _engine_node("e1")]}
+    agg = _find(doctor.check_capacity(FACTS, SPLIT, cluster), "aggregate")
+    assert agg.status == doctor.PASS
+    assert "own pool" in agg.detail          # and it says why it did not charge it
+    # Same nodes, one pool: crane shares them, so its share is spent.
+    shared = {"nodes": [_big("a")]}
+    agg_shared = _find(doctor.check_capacity(FACTS, {}, shared), "aggregate")
+    assert "after crane's own" in agg_shared.detail
+
+
+# -- check_engine_packing ---------------------------------------------------
+#
+# The check that exists because of the one thing the manifests cannot express:
+# crane stamps engine requests at 250m/256Mi whatever the limits say, and the
+# scheduler places on requests.
+
+def test_engine_packing_warns_when_requests_let_engines_pile_onto_one_node():
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    # 16 CPU / 64Gi runs 8 engines but *accepts* 64 by requests.
+    checks = doctor.check_engine_packing(FACTS, opts, {"nodes": [_engine_node("e1")]})
+    c = _find(checks, "engine packing")
+    assert c.status == doctor.WARN
+    assert "250m" in c.detail and "maxPods" in c.detail
+    # Never a FAIL: the engines do start, and the cost is the validity of the
+    # numbers rather than the run.
+    assert c.status != doctor.FAIL
+
+
+def test_engine_packing_passes_when_maxpods_caps_the_node():
+    """The lever that actually closes it, as the node reports it. A pool capped
+    at the system pods a node of it actually runs, plus one, takes exactly one
+    engine however little that engine asked for."""
+    from bzm_opl_gen import generate as gen
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    # Derived, not the literal it used to be: the ceiling that admits exactly
+    # one engine is a function of how many system pods land on the node, and a
+    # test that hardcodes the sum silently stops testing the property when that
+    # number is corrected -- which is exactly what happened when measurement
+    # moved it from 8 to 6.
+    caps_at_one = gen.TYPICAL_SYSTEM_PODS + 1
+    checks = doctor.check_engine_packing(
+        FACTS, opts, {"nodes": [_engine_node("e1", pods=caps_at_one)]})
+    assert _find(checks, "engine packing").status == doctor.PASS
+
+
+def test_engine_packing_allows_the_engines_the_pool_was_designed_for():
+    """A node sized for 2 engines is not over-packed by taking 2. Judging it
+    against raw capacity would WARN on a pool built exactly to spec -- and on
+    GKE, whose maxPods floor of 8 forces 2 engines a node, that verdict would
+    fire on every correctly-built pool there is."""
+    from bzm_opl_gen import generate as gen
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi",
+                engines_per_node=2)
+    node = _engine_node("e1", cpu="8", mem="32Gi",
+                        pods=gen.TYPICAL_SYSTEM_PODS + 2)
+    assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
+                 "engine packing").status == doctor.PASS
+    # ...and one designed for 2 but ceilinged for 4 is still over-packed.
+    loose = _engine_node("e2", cpu="8", mem="32Gi",
+                         pods=gen.TYPICAL_SYSTEM_PODS + 4)
+    assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [loose]}),
+                 "engine packing").status == doctor.WARN
+
+
+def test_the_recipe_builds_a_pool_the_checker_passes():
+    """The generated nodepools.md and this check must agree: a pool built to
+    the recipe's maxPods, on a node sized as the recipe says, has to come back
+    PASS. They share TYPICAL_SYSTEM_PODS precisely so the advice and the
+    verdict cannot drift into contradicting each other."""
+    from bzm_opl_gen import generate as gen
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    recipe_max_pods = gen.TYPICAL_SYSTEM_PODS + 1
+    # The recipe's node: one engine's limits plus the kubelet's reservations.
+    node = _engine_node("e1", cpu="3", mem="10Gi", pods=recipe_max_pods)
+    c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
+              "engine packing")
+    assert c.status == doctor.PASS
+    # ...and the same node without the ceiling is exactly what it warns about.
+    loose = _engine_node("e2", cpu="3", mem="10Gi", pods=110)
+    assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [loose]}),
+                 "engine packing").status == doctor.WARN
+
+
+def test_engine_packing_is_silent_when_no_node_is_eligible():
+    """check_capacity already FAILs on an empty eligible set; a second verdict
+    saying the same thing is noise, and this one would have nothing to measure."""
+    cluster = {"nodes": [_node("c1", labels=CRANE_POOL)]}
+    assert doctor.check_engine_packing(FACTS, SPLIT, cluster) == []
+
+
+def test_engine_packing_warns_rather_than_guesses_when_nodes_are_unread():
+    """A denied `list nodes` is not an uncapped pool. Unreadable and empty must
+    not share a verdict."""
+    checks = doctor.check_engine_packing(FACTS, SPLIT, {"nodes": None})
+    c = _find(checks, "engine packing")
+    assert c.status == doctor.WARN
+    assert "could not be read" in c.detail
+
+
 # -- check_capacity ---------------------------------------------------------
 
 def test_capacity_ok_on_a_real_cluster():

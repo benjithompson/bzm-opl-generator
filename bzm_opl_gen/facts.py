@@ -188,6 +188,24 @@ def gather(client, harbor_id):
         # API (POST ignores it) -- and then every test start 403s, so the
         # doctor treats it as a hard failure rather than a detail.
         "threads_per_engine": harbor.get("threadsPerEngine"),
+        # The location's own engine sizing, which is a *second* source of truth
+        # for the same pod fields the bundle sets through
+        # KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY. Recorded rather than acted
+        # on: which of the two crane honours is not settled here, and a
+        # generator that quietly picked one would be wrong half the time.
+        # Read off a real account: overrideCPU is whole cores; the heaps are MB
+        # (4096 on 160 of 171 locations). overrideMemory's unit is *not*
+        # reliable -- the same account holds 32, 4000 and 8196 -- so it is
+        # carried verbatim and interpreted nowhere.
+        "override_cpu": harbor.get("overrideCPU"),
+        "override_memory": harbor.get("overrideMemory"),
+        # The JVM heap inside that container. A limit the heap never reaches is
+        # node capacity nobody consumes; a heap above the limit is an OOMKill
+        # mid-run, which reads as a test that stopped rather than a resource
+        # error. Neither is visible to a scheduler, so nothing but this pairing
+        # catches them.
+        "engine_xmx_mb": harbor.get("engineXmx"),
+        "engine_xms_mb": harbor.get("engineXms"),
         "ships": [],
         "images": [],
         "crane_image": None,  # set from inventory if an agent is live
@@ -326,6 +344,13 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
         # location with the fields unset via from_manual_entry() above.
         "slots": None,
         "threads_per_engine": None,
+        # Same reason as the two above -- and the heap especially: unknown here
+        # is not "the default 4096", because the one location in an account that
+        # has been retuned is exactly the one someone is generating a bundle for.
+        "override_cpu": None,
+        "override_memory": None,
+        "engine_xmx_mb": None,
+        "engine_xms_mb": None,
         "ships": [{"id": ship_id, "name": None, "state": None,
                    "installed_version": None, "last_heartbeat": None}],
         "images": [dict(i, size_mb=None) for i in FALLBACK_IMAGES],

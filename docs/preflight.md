@@ -172,32 +172,102 @@ On arm64 it warns that BlazeMeter's amd64-only images run under emulation and
 that engines need sizing down. Exits non-zero on anything that would stop the
 run before it deploys.
 
-## Engine requests: the gap, and why no LimitRange
+## Engine requests: where they come from, and why no LimitRange
 
 The agent env reference exposes engine **limits** only —
-`KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY`. Crane nonetheless sets the engine
-pod's **requests**, to a fixed **250m / 256Mi**. The scheduler packs nodes on
-requests, so it will put roughly eight engines where two fit — and a run that
-competes for CPU it was never given reports numbers that are wrong, not merely
-slow.
+`KUBERNETES_RESOURCES_LIMITS_CPU` / `_MEMORY`. The **requests** come from
+somewhere else entirely: the location's `overrideCPU` and `overrideMemory`
+(Settings → Private Locations). They are not rival settings for one field —
+they set different fields, verified on a live GKE run where a location at
+`overrideCPU: 1` / `overrideMemory: 4096` and a bundle asking for 2 CPU / 8Gi
+produced a single engine pod carrying:
 
-**A LimitRange cannot fix this, and neither can anything else in these
-manifests.** `defaultRequest` only fills in fields a pod leaves unset, and crane
-sets them explicitly. Verified on a live run: the engine pod comes back with
-`requests 250m/256Mi`, `limits 1/4Gi` and **no `kubernetes.io/limit-ranger`
-annotation** at all, while crane's per-run job pods — which declare nothing — do
-carry one and get the defaults. `livetest --run-test` prints the live gap under
-`ENGINE SIZING:`.
+```
+requests {cpu: 1, memory: 4Gi}     limits {cpu: 2, memory: 8Gi}
+```
+
+Left unset — which is the case on 165 of 171 locations in a real account — they
+default to **250m / 256Mi**. That default is why engines pack: the scheduler and
+the cluster autoscaler both place pods by requests, so an engine that will use
+2 CPU asks for a fraction of one, and roughly eight land where two fit. A run
+that competes for CPU it was never given reports numbers that are wrong, not
+merely slow.
+
+> This was previously documented here as "crane stamps the requests and nothing
+> can change them", and the LimitRange removal, the packing problem and the node
+> pool recipe were all argued from it. The live run above disproved it. What
+> survives is the LimitRange conclusion; what does not is the claim that the
+> requests are fixed.
+
+**Setting the location's overrides to match the engine limits is the fix.**
+Requests then equal limits, the scheduler places engines truthfully, and the
+autoscaler grows a dedicated pool by the right number of nodes. `overrideMemory`
+is in MB — and treat its value with suspicion, since one account holds `32`,
+`4000` and `8196` for it, so a number that looks like GB is probably somebody's
+slip rather than a different unit.
+
+**A LimitRange still cannot do it.** `defaultRequest` only fills in fields a pod
+leaves unset, and crane sets them explicitly whichever way they were chosen.
+Verified on a live run: the engine pod comes back with **no
+`kubernetes.io/limit-ranger` annotation** at all, while crane's per-run job pods
+— which declare nothing — do carry one and get the defaults.
 
 This generator used to emit one anyway, opt-in, for the namespace ceiling it
-also gave. **It was removed.** Besides not closing the gap above, the defaults
-it *did* apply landed on crane's own per-run job pods — reserving a full
-engine's worth of CPU and memory for jobs that need neither, and so taking
-capacity a real engine could then not get. It was namespace-wide as well, so it
-reached workloads that had nothing to do with the location.
+also gave. **It was removed.** Besides not closing the gap, the defaults it
+*did* apply landed on crane's own per-run job pods — reserving a full engine's
+worth of CPU and memory for jobs that need neither, and so taking capacity a
+real engine could then not get. It was namespace-wide as well, so it reached
+workloads that had nothing to do with the location.
 
-To size engines honestly, give the location nodes it does not share, or add a
-mutating admission policy that rewrites the engine pod's requests.
+`livetest --run-test` prints the live gap under `ENGINE SIZING:` and the JVM
+heap against the limit under `ENGINE HEAP:`.
+
+## Two node pools, and the ceiling that makes them work
+
+Giving engines their own nodes is what `engine_node_selector` and
+`engine_tolerations` are for. They place the engines *only* — `node_selector`
+and `tolerations` keep placing the crane pod — so crane stays on a small
+always-on pool while engines land on a tainted pool that scales to zero between
+runs. The two travel by different mechanisms and always did: crane's placement
+is the Deployment's podspec, the engines' is the `KUBERNETES_NODE_SELECTOR_JSON`
+/ `KUBERNETES_TOLERATIONS_JSON` env that crane stamps onto what it spawns.
+Leaving the engine options unset keeps the one-pool shape, where both get the
+same values.
+
+Unset and empty differ, deliberately. `None` means "engines go wherever crane
+goes"; `{}` or `[]` means "engines take no selector or toleration of their own",
+which is what you want when crane is pinned to a tainted infra pool and the
+engines are free to land anywhere.
+
+**A dedicated pool does not by itself give engines the size they are configured
+for.** If the location's overrides are unset, engines request 250m/256Mi, and a
+cluster autoscaler scales on requests just as the scheduler places on them — so
+an empty pool grows by *one* node and every engine of the run packs onto it.
+Set `overrideCPU`/`overrideMemory` to match the engine limits and that stops
+being true: the pool then grows by the number of nodes the run actually needs.
+
+Where the overrides cannot be set, the backstop is the pool's own `maxPods`,
+sized to the pods a node of that pool actually runs plus the engines you intend
+it to hold (`engines_per_node`). Measure it with `kubectl get pods -A
+--field-selector spec.nodeName=<NODE>` — **not** with `kubectl get ds -A`, which
+counts nodeAffinity-gated variants that never land (32 objects against 4 real
+pods on a stock GKE cluster). It is a node pool property on every distribution
+and a manifest property on none, which is why a bundle with split pools also
+carries a generated `nodepools.md` with the per-flavour commands.
+
+**GKE will not take a `maxPods` below 8**, so after ~6 system pods the floor
+leaves room for 2 engines a node whatever you ask for. On GKE the backstop
+therefore cannot deliver one-engine-per-node at all, and the recipe sizes the
+node for the engines the floor permits rather than pretending otherwise. That
+limitation is another reason to set the location's overrides instead.
+
+`doctor`'s **engine packing** check reads this back: it compares how many
+engines a node would *accept* (by requests, capped by `allocatable.pods`)
+against how many it can *run* (by limits), and WARNs when the first exceeds the
+second. It assumes ~8 DaemonSet pods a node and says so in the verdict, because
+nothing here collects DaemonSets — count yours to confirm. WARN, never FAIL:
+the engines do start, and what is lost is the validity of the numbers rather
+than the run.
 
 `doctor` still reports what the target namespace already has, which is a
 different question: an existing LimitRange whose `max`/`min`/

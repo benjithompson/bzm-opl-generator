@@ -79,6 +79,25 @@ CASES = {
     "scheduling": {"platform": "k8s", "node_selector": {"workload": "perf"},
                    "tolerations": [{"key": "lifecycle", "operator": "Equal",
                                     "value": "spot", "effect": "NoSchedule"}]},
+    # Two node pools: crane's placement is the podspec, the engines' is the
+    # KUBERNETES_*_JSON env, and the chart has to keep them apart exactly as the
+    # manifests do. A chart that derived the engine env from .Values.nodeSelector
+    # -- which is what it used to do -- puts every engine back on crane's pool
+    # and renders a Deployment that still looks right.
+    "scheduling-split-pools": {
+        "platform": "k8s", "node_selector": {"pool": "crane"},
+        "engine_node_selector": {"pool": "bzm-engines"},
+        "engine_tolerations": [{"key": "bzm.io/engines", "operator": "Equal",
+                                "value": "true", "effect": "NoSchedule"}]},
+    # The distinction the chart cannot re-derive: crane is tainted and pinned,
+    # the engines are explicitly given neither. Rendered from a values file
+    # alone, "empty" and "absent" have to already be resolved -- so an engine
+    # env appearing here at all is the regression.
+    "scheduling-engines-unpinned": {
+        "platform": "k8s", "node_selector": {"pool": "infra"},
+        "tolerations": [{"key": "infra", "operator": "Exists",
+                         "effect": "NoSchedule"}],
+        "engine_node_selector": {}, "engine_tolerations": []},
     "ephemeral": {"platform": "k8s", "engine_ephemeral_request_mb": 1024,
                   "engine_ephemeral_limit_mb": 61440},
     # Crane's own pod, which the engine case above does not touch. The chart

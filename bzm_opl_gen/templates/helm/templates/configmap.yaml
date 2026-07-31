@@ -66,11 +66,19 @@ data:
   {{- end }}
   NO_PROXY: {{ .Values.proxy.noProxy | quote }}
   {{- end }}
-  {{- with .Values.tolerations }}
-  # Engines inherit the crane pod's tolerations via this env.
+  {{- /*
+    Engine placement, NOT crane's. nodeSelector/tolerations above place the
+    crane pod; these two place the engines crane spawns, and on a two-pool
+    cluster they are deliberately different values. bzm-opl-gen resolves
+    "unset, so follow crane" into engineNodeSelector/engineTolerations when it
+    writes values.yaml, so what is here is always the effective engine
+    placement -- do not fall back to .Values.nodeSelector, or an explicitly
+    empty engine selector would silently inherit crane's pool.
+  */}}
+  {{- with .Values.engineTolerations }}
   KUBERNETES_TOLERATIONS_JSON: {{ toJson . | squote }}
   {{- end }}
-  {{- with .Values.nodeSelector }}
+  {{- with .Values.engineNodeSelector }}
   KUBERNETES_NODE_SELECTOR_JSON: {{ toJson . | squote }}
   {{- end }}
   {{- with .Values.engine.cpuLimit }}

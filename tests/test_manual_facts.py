@@ -35,13 +35,29 @@ def _gen(f, **opts):
 
 # -- shape --------------------------------------------------------------------
 
+class _OneLocationClient:
+    """Just enough of BzmClient for gather(): the location, and no agent that
+    has ever reported an inventory."""
+
+    def __init__(self, harbor):
+        self._h = harbor
+
+    def private_location(self, harbor_id):
+        return self._h
+
+
 def test_manual_facts_match_the_shape_gather_returns():
-    """Same keys, so every consumer downstream is indifferent to the source."""
-    m = facts_mod.manual(H, S)
-    assert set(m) == set(FACTS) | {"slots", "threads_per_engine"}
-    for key in ("harbor_id", "func_ids", "ships", "images", "images_source",
-                "crane_image"):
-        assert key in m, key
+    """Same keys, so every consumer downstream is indifferent to the source.
+
+    Compared against what gather() *actually returns*, not against a stored
+    fixture plus a list of keys the fixture predates: that list had to grow
+    every time a location field was read, which is the drift this test exists
+    to catch doing the catching itself.
+    """
+    gathered = facts_mod.gather(
+        _OneLocationClient({"id": H, "name": "L", "funcIds": ["performance"],
+                            "ships": []}), H)
+    assert set(facts_mod.manual(H, S)) == set(gathered)
 
 
 def test_how_the_facts_arrived_is_readable_from_the_marker_they_already_carry():

@@ -524,9 +524,17 @@ def run_engine_test(client, cli, namespace, test_id, harbor_id, opts,
             return [f"crane never created an engine pod for master {master_id} "
                     f"-- RBAC, resources, or IMAGE_OVERRIDES for the engine"]
         fails = assert_engine_config(pod, opts)
+        fails += assert_engine_size(pod, opts)
+        # kget reports a node it could not read as {}, which the assertion needs
+        # as None: "not read" and "read, and does not match" are different
+        # findings and only the second is a failure.
+        node_name = pod["spec"].get("nodeName")
+        node = kget(cli, None, "node", node_name) if node_name else None
+        fails += assert_engine_pool(pod, node or None, opts)
         gap = engine_request_gap(pod)
         if gap:
             print("  ENGINE SIZING: " + gap)
+        print("  ENGINE HEAP: " + engine_heap_note(pod))
         status = wait_master_done(client, master_id, run_timeout)
         if status != "ENDED":
             fails.append(f"the run finished as {status}, not ENDED -- the engine "
@@ -582,6 +590,125 @@ def assert_engine_config(pod, opts):
     return fails
 
 
+def assert_engine_size(pod, opts):
+    """The engine runs at the size the bundle configured.
+
+    The limits are the half of engine sizing that *is* ours: crane reads them
+    from KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY, so a bundle that set them
+    and an engine that came back with something else means the ConfigMap never
+    reached the engine -- which looks identical to a working run until someone
+    reads the numbers it produced. (The requests are crane's own and are
+    reported by engine_request_gap, not asserted.)
+    """
+    from .generate import engine_size
+    from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
+    want_cpu, want_mem = engine_size(opts)
+    fails = []
+    for c in pod["spec"].get("containers", []):
+        lim = (c.get("resources") or {}).get("limits") or {}
+        if not lim:
+            continue
+        got_cpu = parse_cpu(lim["cpu"]) if "cpu" in lim else None
+        got_mem = parse_memory(lim["memory"]) if "memory" in lim else None
+        if got_cpu is not None and got_cpu != want_cpu:
+            fails.append(f"engine {c.get('name')} has a CPU limit of "
+                         f"{format_cpu(got_cpu)}, not the configured "
+                         f"{format_cpu(want_cpu)}")
+        if got_mem is not None and got_mem != want_mem:
+            fails.append(f"engine {c.get('name')} has a memory limit of "
+                         f"{format_memory(got_mem)}, not the configured "
+                         f"{format_memory(want_mem)}")
+    return fails
+
+
+_XMX = re.compile(r"-Xmx(\d+)([kKmMgG]?)")
+_XMX_UNIT = {"": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}
+
+
+def engine_heap_bytes(pod):
+    """The JVM heap the engine container was actually started with, or None.
+
+    Searched across env values, command and args because the heap is a
+    *location* setting pushed by BlazeMeter rather than anything these
+    manifests write, so where it lands in the pod is not ours to fix. None is
+    "not found here", never "the default" -- an engine whose heap we could not
+    read must not be reported as one whose heap matches.
+    """
+    for c in pod["spec"].get("containers", []):
+        haystack = [e.get("value") or "" for e in c.get("env", [])]
+        haystack += list(c.get("command") or []) + list(c.get("args") or [])
+        for value in haystack:
+            m = _XMX.search(value)
+            if m:
+                return int(m.group(1)) * _XMX_UNIT[m.group(2).lower()]
+    return None
+
+
+def engine_heap_note(pod):
+    """The heap against the container limit, as a line to print. Reported and
+    not asserted: the pairing is the location's to fix, not the bundle's, and
+    a run that produced valid numbers is not a failed live test.
+
+    Worth printing on every run because neither way of getting it wrong looks
+    like a memory problem: a heap over the limit is an OOMKill reported as a
+    test that stopped, and a heap far under it is capacity the node reserved
+    and nothing used.
+    """
+    from .quantity import format_memory, parse_memory
+    heap = engine_heap_bytes(pod)
+    limits = [(c.get("resources") or {}).get("limits", {}).get("memory")
+              for c in pod["spec"].get("containers", [])]
+    limit = next((parse_memory(m) for m in limits if m), None)
+    if heap is None:
+        return ("no -Xmx found in the engine container's env, command or args "
+                "-- heap unread, so its fit against the limit is unverified")
+    if limit is None:
+        return f"engine JVM heap is {format_memory(heap)}; the pod sets no memory limit"
+    pct = round(100 * heap / limit)
+    verdict = ""
+    if heap >= limit:
+        verdict = " -- at or above the limit: OOMKill once the heap fills"
+    elif heap * 2 <= limit:
+        # `* 2 <=`, matching doctor.check_engine_heap rather than `pct < 50`:
+        # the default pairing (engineXmx 4096MB against the documented 8Gi) is
+        # exactly half, so a strict comparison stays silent on the single most
+        # common way an engine pool is oversized.
+        verdict = " -- at or under half the limit, so the rest is reserved and unused"
+    return (f"engine JVM heap is {format_memory(heap)} against a "
+            f"{format_memory(limit)} limit ({pct}%){verdict}")
+
+
+def assert_engine_pool(pod, node, opts):
+    """The engine landed on the pool it was aimed at.
+
+    Only meaningful with split pools, and it is the one part of the two-pool
+    shape that nothing else can confirm: the manifests carry the selector, the
+    node carries the labels, and whether crane actually joined them up is
+    visible only on a spawned engine. `node` is None when it could not be read,
+    which is not the same as a node that does not match -- an unread node says
+    so and asserts nothing.
+    """
+    from .generate import separate_pools, engine_scheduling
+    if not separate_pools(opts):
+        return []
+    selector, _ = engine_scheduling(opts)
+    if not selector:
+        return []
+    name = pod["spec"].get("nodeName")
+    if node is None:
+        print(f"  ENGINE POOL: node {name or '(unknown)'} could not be read -- "
+              f"placement unverified")
+        return []
+    labels = (node.get("metadata") or {}).get("labels") or {}
+    missing = {k: v for k, v in selector.items() if labels.get(k) != v}
+    if missing:
+        return [f"engine landed on node {name}, which does not carry the engine "
+                f"pool's labels {missing} -- crane did not apply "
+                f"KUBERNETES_NODE_SELECTOR_JSON, or the pool is mislabelled"]
+    print(f"  ENGINE POOL: engine is on {name}, which matches {selector}")
+    return []
+
+
 LIMIT_RANGER_ANNOTATION = "kubernetes.io/limit-ranger"
 
 
@@ -589,13 +716,19 @@ def engine_request_gap(pod):
     """The gap between what an engine is limited to and what it asks the
     scheduler for, or None when there is none.
 
-    Reported, not asserted: nothing in the manifests can close it. Crane sets
-    the engine's requests *explicitly* (250m/256Mi observed on a real run), and
-    a LimitRange's defaultRequest only fills fields a pod leaves unset -- the
-    engine pod comes back with no kubernetes.io/limit-ranger annotation at all,
-    while crane's own test-job pods, which declare nothing, do get one. The
-    scheduler packs nodes on requests, so this is what decides how many engines
-    land on a node, whatever the limits say.
+    Reported, not asserted: nothing in *the manifests* can close it. The
+    requests come from the location's overrideCPU/overrideMemory -- verified
+    live, where overrideCPU=1 / overrideMemory=4096 against a bundle asking for
+    2 CPU / 8Gi produced requests {1, 4Gi} and limits {2, 8Gi}. Unset they
+    default to 250m/256Mi, which is the case on nearly every location and the
+    reason this gap is usually large.
+
+    A LimitRange still cannot close it either: crane sets the requests
+    explicitly whichever way they were chosen, and a defaultRequest only fills
+    fields a pod leaves unset -- the engine pod comes back with no
+    kubernetes.io/limit-ranger annotation at all, while crane's own test-job
+    pods, which declare nothing, do get one. The scheduler packs nodes on
+    requests, so this is what decides how many engines land on a node.
     """
     for c in pod["spec"].get("containers", []):
         res = c.get("resources") or {}
@@ -611,8 +744,9 @@ def engine_request_gap(pod):
                 f"namespace LimitRange did not and cannot change them)")
             return (f"engine {c.get('name')} requests {dict(req)} against limits "
                     f"{dict(lim)} -- the scheduler packs on requests, so engines "
-                    f"pack {'; '.join(short)} tighter than they run. Crane sets "
-                    f"these explicitly{note}")
+                    f"pack {'; '.join(short)} tighter than they run. Raise the "
+                    f"location's overrideCPU/overrideMemory to match the limits "
+                    f"to close it{note}")
     return None
 
 
