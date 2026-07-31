@@ -1094,9 +1094,16 @@ def account_capacity(client, account_id):
             "id": l["id"], "name": l.get("name"),
             "func_ids": l.get("funcIds") or [],
             "agents": len(ships),
-            # An agent that has never reported cannot run an engine, so the
-            # rating and what is available right now are different numbers.
+            # Two counts, for the reason mcp_server's listing carries two: a
+            # locations *listing* need not carry `lastHeartBeat` at all, and
+            # `ship_reporting` answers None there rather than False. Folding
+            # that into "not reporting" would print "1 not reporting" about an
+            # agent nothing had looked at -- the collapse this package has made
+            # four times. Reporting is what the payload vouches for; unknown is
+            # what it declined to say.
             "agents_reporting": sum(1 for s in ships if ship_reporting(s)),
+            "agents_unknown": sum(1 for s in ships
+                                  if ship_reporting(s) is None),
             "slots": slots, "threads_per_engine": tpe,
             "engines": engines,
             # None, not 0: a location with slots or threadsPerEngine unset has

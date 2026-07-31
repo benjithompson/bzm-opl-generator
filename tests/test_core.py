@@ -37,6 +37,7 @@ class FakeClient:
         self._token = token
         self._harbor = harbor if harbor is not None else {}
         self._locations = locations
+        self._workspaces = [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]
         # BlazeMeter fields this stand-in account accepts on a PATCH and then
         # does not store, which is a real behaviour rather than an invented
         # one: POST /private-locations does exactly that with threadsPerEngine.
@@ -54,6 +55,10 @@ class FakeClient:
     def user(self):
         return {"email": "se@example.com", "displayName": "SE",
                 "defaultProject": {"accountId": 7}}
+
+    def workspaces(self, account_id):
+        self.calls.append(("workspaces", account_id))
+        return self._workspaces
 
     def private_locations(self, account_id=None, workspace_id=None):
         self.calls.append(("private_locations", account_id, workspace_id))
@@ -1056,3 +1061,85 @@ def test_update_location_says_a_value_was_already_what_was_asked_for():
     client = FakeClient(harbor=_loc())
     out = core.update_location(client, "h1", threads_per_engine=500)
     assert out["changed"] == {} and out["ignored"] == []
+
+
+# -- what an account can generate ---------------------------------------------
+# The numbers here were settled by a live run rather than by reading: on a
+# location with 2 agents, slots=1 and threadsPerEngine=50, a 100 virtual user
+# test started and ran on two engines, one per agent. Asking for three engines
+# allocated two. 101 virtual users also started, packed onto the same two -- so
+# the engine count is enforced and the virtual users per engine is a rating.
+
+def _cap_loc(name, ships=1, slots=1, tpe=50, workspaces=(1,), **over):
+    loc = {"id": f"h-{name}", "name": name, "slots": slots,
+           "threadsPerEngine": tpe, "funcIds": ["performance"],
+           "workspacesId": list(workspaces),
+           "ships": [{"id": f"s{i}", "lastHeartBeat": 1} for i in range(ships)]}
+    loc.update(over)
+    return loc
+
+
+def test_rated_capacity_is_agents_times_slots_times_threads():
+    """The Bens Linux case, which is the one that was measured: two agents at
+    one engine each, fifty virtual users an engine, so a hundred."""
+    client = FakeClient(locations=[_cap_loc("Bens Linux", ships=2, slots=1, tpe=50)])
+    out = core.account_capacity(client, 7)
+    loc = out["locations"][0]
+    assert loc["engines"] == 2
+    assert loc["rated_vus"] == 100
+    assert out["rated_vus"] == 100
+
+
+def test_a_location_nobody_has_sized_has_no_rating_rather_than_zero():
+    """`slots` or `threadsPerEngine` unset is "nobody has said", and 0 would
+    read as "no capacity" -- a different claim, and a wrong one."""
+    client = FakeClient(locations=[_cap_loc("new", slots=None),
+                                   _cap_loc("half", tpe=None)])
+    out = core.account_capacity(client, 7)
+    assert [l["rated_vus"] for l in out["locations"]] == [None, None]
+    assert out["unrated"] == 2
+    # And it contributes nothing to the total rather than breaking the sum.
+    assert out["rated_vus"] == 0
+
+
+def test_a_location_in_two_workspaces_is_flagged_and_counted_once():
+    """Its capacity is claimable from either, so adding it into both workspace
+    totals counts engines that cannot run twice."""
+    client = FakeClient(locations=[
+        _cap_loc("shared", ships=2, slots=1, tpe=50, workspaces=(1, 2)),
+        _cap_loc("alpha-only", ships=1, slots=1, tpe=50, workspaces=(1,))])
+    out = core.account_capacity(client, 7)
+    shared = next(l for l in out["locations"] if l["name"] == "shared")
+    assert shared["shared"] is True
+    assert shared["workspace_names"] == ["Alpha", "Beta"]
+    # 100 + 50, not 100 + 100 + 50.
+    assert out["rated_vus"] == 150
+
+
+def test_an_agent_the_payload_says_nothing_about_is_unknown_not_absent():
+    """A locations listing need not carry `lastHeartBeat`, and ship_reporting
+    answers None there. Counting that as "not reporting" would print a claim
+    about an agent nothing had looked at -- the same "could not read" versus
+    "there is nothing there" collapse this package keeps making.
+
+    Both are in the rating either way: the location advertises the agents, and
+    whether one is up today is a different question from what it is sized for.
+    """
+    stale = {"id": "s1", "lastHeartBeat": 1, "state": "idle"}   # present, old
+    silent = {"id": "s2"}                                        # no heartbeat
+    client = FakeClient(locations=[{
+        "id": "h1", "name": "half-up", "slots": 1, "threadsPerEngine": 50,
+        "workspacesId": [1], "funcIds": [], "ships": [stale, silent]}])
+    loc = core.account_capacity(client, 7)["locations"][0]
+    assert loc["agents"] == 2
+    assert loc["agents_reporting"] == 0      # the stale one is a real "no"
+    assert loc["agents_unknown"] == 1        # the silent one is not
+    assert loc["rated_vus"] == 100
+
+
+def test_a_location_with_no_agents_rates_nothing():
+    """An empty location is a record in BlazeMeter with nothing behind it."""
+    client = FakeClient(locations=[_cap_loc("empty", ships=0)])
+    out = core.account_capacity(client, 7)
+    assert out["locations"][0]["engines"] == 0
+    assert out["locations"][0]["rated_vus"] == 0

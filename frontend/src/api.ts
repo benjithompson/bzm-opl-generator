@@ -100,6 +100,42 @@ export interface CapacityPlan {
   document_file: string;
 }
 
+/** One private location's share of an account's rated capacity. */
+export interface CapLocation {
+  id: string;
+  name: string;
+  func_ids: string[];
+  agents: number;
+  /** Agents the payload vouches for, and agents it says nothing about. Two
+   *  counts because one cannot carry both: a listing need not include a
+   *  heartbeat, and "we did not look" is not "it is down". */
+  agents_reporting: number;
+  agents_unknown: number;
+  /** BlazeMeter's `slots`: engines per *agent*, so a location's concurrency is
+   *  agents x slots. Null when the location has never been given one. */
+  slots: number | null;
+  threads_per_engine: number | null;
+  engines: number;
+  /** null, not 0: a location missing slots or threadsPerEngine has no rating
+   *  to state, and 0 would read as "no capacity" when the truth is "nobody has
+   *  said". */
+  rated_vus: number | null;
+  workspace_ids: number[];
+  workspace_names: string[];
+  /** In more than one workspace, so its capacity is claimable from either. */
+  shared: boolean;
+}
+
+export interface Capacity {
+  account_id: number;
+  workspaces: { id: number; name: string }[];
+  locations: CapLocation[];
+  /** Shared locations counted once, which is why this is not the sum of the
+   *  workspace totals. */
+  rated_vus: number;
+  unrated: number;
+}
+
 /** Which of four ways a bundle's AUTH_TOKEN arrived, from core.resolve_auth_token.
  *  GIVEN: the token in the form. ROTATED: a new one was issued and the previous
  *  one is dead. REUSED: the one already in the folder being saved to. PLACEHOLDER:
@@ -237,10 +273,10 @@ export const api = {
   engineVus: (cpu: string, mem: string) =>
     req<{ cpu: string; memory: string; supported_vus: number }>(
       "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
-  /** PROTOTYPE: account-wide rated capacity, by workspace. */
+  /** What the account can generate, by workspace. See core.account_capacity
+   *  for what "rated" means and why a shared location is counted once. */
   capacity: (accountId: number) =>
-    req<import("./prototype/capacityViews").Capacity>(
-      "GET", `/api/capacity?account_id=${accountId}`),
+    req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),

@@ -1,0 +1,219 @@
+// What this account can generate, and where it lives.
+//
+// The number people actually want is one: how many virtual users can this
+// account run at once. Everything else on the page exists to make that number
+// checkable -- which workspace holds it, which location, and out of how many
+// agents and engines -- because a total nobody can take apart is a total nobody
+// believes.
+//
+// The bar and the table are one thing, not two. The bar says where the capacity
+// is; the row beneath, sharing its colour, says how that location gets there.
+// That is why there is no separate legend: it would repeat the table a
+// centimetre higher while carrying four fewer figures.
+//
+// "Rated" is the load-bearing word, and it was measured rather than assumed --
+// see core.account_capacity. `agents x engines-per-agent` is the engine count
+// and BlazeMeter enforces it; multiplying by virtual users per engine gives
+// what those engines are *sized* for, which a run may exceed and be packed
+// onto them instead.
+import { useMemo, useState } from "react";
+
+import { Capacity, CapLocation } from "./api";
+import { byWorkspace } from "./capacity";
+import { inputCls } from "./components";
+
+const n = (x: number) => x.toLocaleString();
+
+const BAND = ["bg-bzm", "bg-sky-400", "bg-emerald-400", "bg-violet-400",
+              "bg-amber-400", "bg-rose-400", "bg-teal-400", "bg-indigo-400"];
+
+// Shared locations are striped rather than given a colour: amber was both "this
+// is shared" and the fifth palette entry, so a shared segment and an ordinary
+// one were the same swatch. The stripe rides on whatever colour the segment
+// already has, so it reads as a texture rather than another category.
+const STRIPE = "repeating-linear-gradient(45deg, rgba(255,255,255,.55) 0 3px,"
+  + " rgba(255,255,255,0) 3px 7px)";
+
+function Swatch({ i, shared }: { i: number; shared: boolean }) {
+  return (
+    <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 "
+      + BAND[i % BAND.length] + (shared ? " ring-1 ring-amber-600" : "")}
+      style={shared ? { backgroundImage: STRIPE } : undefined} />
+  );
+}
+
+export function CapacityView({ cap }: { cap: Capacity }) {
+  const [filter, setFilter] = useState("");
+  const spaces = useMemo(() => byWorkspace(cap, filter), [cap, filter]);
+  // Against the largest workspace *on the account*, not the largest match, so
+  // filtering does not silently rescale every bar and make a small workspace
+  // look like the whole account.
+  const widest = useMemo(
+    () => Math.max(...byWorkspace(cap, "").map((w) => w.total), 1), [cap]);
+  const holding = new Set(cap.locations.flatMap((l) => l.workspace_ids)).size;
+  const sharedCount = cap.locations.filter((l) => l.shared).length;
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white border border-slate-200 rounded-lg p-4
+                      flex items-center gap-4 flex-wrap">
+        <div>
+          <div className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
+            {n(cap.rated_vus)}
+          </div>
+          <div className="text-[11px] text-slate-500 mt-0.5">account rated VUs</div>
+        </div>
+        <div className="text-xs text-slate-500">
+          {/* Workspaces that hold a location. The account has far more, and
+              counting those said "100 workspaces" about the 54 that matter. */}
+          {cap.locations.length} locations · {holding} workspaces
+          {sharedCount > 0 && <> · <b className="text-amber-700">{sharedCount} shared</b></>}
+        </div>
+        <span className="grow" />
+        <div className="w-56 max-w-full">
+          <input className={inputCls} value={filter} type="search"
+            placeholder={`Filter ${holding} workspaces…`}
+            aria-label="Filter workspaces"
+            onChange={(e) => setFilter(e.target.value)} />
+          {/* The account total does not move with the filter: it is the
+              account's, and a headline that changed as you typed would read as
+              the sum of what is on screen. */}
+          {filter.trim() && (
+            <p className="text-[11px] text-slate-400 mt-1">
+              {spaces.length} of {holding} shown ·{" "}
+              {n(spaces.reduce((t, w) => t + w.total, 0))} rated VUs in view
+            </p>
+          )}
+        </div>
+      </div>
+
+      {spaces.length === 0 && (
+        <p className="text-sm text-slate-500">no workspace matches “{filter}”.</p>
+      )}
+
+      {spaces.map((w) => {
+        const locs = w.locs;
+        return (
+          <div key={w.id} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+            <div className="px-3 pt-2.5 pb-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-semibold text-slate-800">{w.name}</span>
+                {w.shared.length > 0 && (
+                  <span className="text-[10px] font-bold uppercase tracking-wide
+                                   bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
+                    {w.shared.length} shared
+                  </span>
+                )}
+                <span className="text-xs text-slate-400">
+                  {w.locs.length} location{w.locs.length === 1 ? "" : "s"}
+                </span>
+                <span className="grow" />
+                <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
+                <span className="text-[11px] text-slate-400">
+                  {Math.round((w.total / (cap.rated_vus || 1)) * 100)}% of the account
+                </span>
+              </div>
+              <div className="flex h-5 rounded overflow-hidden bg-slate-100 mt-1.5"
+                   style={{ width: `${Math.max((w.total / widest) * 100, 2)}%` }}>
+                {locs.map((l, i) => (
+                  <div key={l.id}
+                    title={`${l.name} — ${n(l.rated_vus ?? 0)} rated VUs`
+                      + (l.shared ? " (shared)" : "")}
+                    className={BAND[i % BAND.length] + " h-full"}
+                    style={{
+                      width: `${((l.rated_vus ?? 0) / (w.total || 1)) * 100}%`,
+                      backgroundImage: l.shared ? STRIPE : undefined,
+                    }} />
+                ))}
+              </div>
+            </div>
+            <table className="w-full text-xs border-t border-slate-100">
+              <thead className="text-slate-500">
+                <tr className="border-b border-slate-100">
+                  <th className="text-left font-medium px-3 py-1.5">location</th>
+                  <th className="text-right font-medium px-2">agents</th>
+                  <th className="text-right font-medium px-2">engines/agent</th>
+                  <th className="text-right font-medium px-2">engines</th>
+                  <th className="text-right font-medium px-2">VUs/engine</th>
+                  <th className="text-right font-medium px-3">rated VUs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {locs.map((l, i) => <Row key={l.id} l={l} i={i} workspace={w.name} />)}
+              </tbody>
+            </table>
+            {/* A shared location with no agents yet has no segment to stripe,
+                and the sentence about the stripe then explains something that
+                is not on screen -- and says "0 of 2,650 is claimable", which
+                reads as a rounding error rather than as "nothing is deployed
+                there". Both are worth saying; they are not the same sentence. */}
+            {w.shared.length > 0 && (
+              <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200">
+                {w.sharedVus > 0 ? (
+                  <>
+                    Striped segments are shared — {n(w.sharedVus)} of this
+                    workspace&apos;s {n(w.total)} is claimable from another
+                    workspace too. Running it there leaves none of it here, and
+                    the account total counts it once.
+                  </>
+                ) : (
+                  <>
+                    {w.shared.length === 1 ? "One location here is" : `${w.shared.length} locations here are`}
+                    {" "}shared with another workspace, but {w.shared.length === 1 ? "has" : "have"}
+                    {" "}no agents yet — so none of this workspace&apos;s {n(w.total)}
+                    {" "}is claimable elsewhere. Adding agents there changes that.
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Row({ l, i, workspace }: { l: CapLocation; i: number; workspace: string }) {
+  const elsewhere = l.workspace_names.filter((x) => x !== workspace);
+  const down = l.agents - l.agents_reporting - l.agents_unknown;
+  return (
+    <tr className={i % 2 ? "bg-slate-50/60" : ""}>
+      <td className="px-3 py-1.5">
+        <span className="flex items-center gap-1.5 flex-wrap">
+          <Swatch i={i} shared={l.shared} />
+          <span className="font-medium text-slate-800">{l.name}</span>
+          {l.shared && elsewhere.length > 0 && (
+            <span className="text-[10px] text-amber-700">
+              also in {elsewhere.join(", ")}
+            </span>
+          )}
+          {/* Down and unlooked-at are different claims. A locations listing
+              need not carry a heartbeat at all, and saying "not reporting"
+              about an agent nothing asked after is how a working agent gets
+              redeployed. The rating covers both either way -- it is what the
+              location is sized for, not what is up this minute. */}
+          {down > 0 && (
+            <span className="text-[10px] text-amber-700">
+              {down} not reporting
+            </span>
+          )}
+          {l.agents_unknown > 0 && (
+            <span className="text-[10px] text-slate-400"
+              title="this listing carries no heartbeat for them — ask the agent itself">
+              {l.agents_unknown} unchecked
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="text-right px-2 tabular-nums">{l.agents}</td>
+      <td className="text-right px-2 tabular-nums text-slate-500">{l.slots ?? "—"}</td>
+      <td className="text-right px-2 tabular-nums">{l.engines}</td>
+      <td className="text-right px-2 tabular-nums text-slate-500">
+        {l.threads_per_engine ?? "—"}
+      </td>
+      <td className="text-right px-3 tabular-nums font-medium">
+        {l.rated_vus === null ? "—" : n(l.rated_vus)}
+      </td>
+    </tr>
+  );
+}

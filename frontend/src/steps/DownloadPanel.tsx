@@ -258,9 +258,11 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       <code className="font-mono">bzm-opl-gen doctor</code> runs.
                     </p>
                   </div>
-                  {/* Left of the file picker, because it comes first in time:
+                  {/* Above the file picker, because it comes first in time:
                       this is what you run *on* the cluster, and the evidence
-                      file is what comes back. */}
+                      file is what comes back from it. Stacked rather than in a
+                      row so the order reads as the sequence it is. */}
+                  <div className="flex flex-col items-start gap-2">
                   <TestDeploy facts={facts} options={options} />
                   {/* A label rather than a Button so the file dialog is the
                       click, as in Connect and Import above. */}
@@ -280,6 +282,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         if (f) importEvidence(f);
                       }} />
                   </label>
+                  </div>
                 </div>
                 {!facts && (
                   <p className="text-[11px] text-slate-400 mt-1">

@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, saveBundle, Account, AgentStatus, Facts, Feature,
+  api, downloadZip, saveBundle, Account, AgentStatus, Capacity, Facts, Feature,
   GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
   FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
@@ -38,12 +38,12 @@ import {
 import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
+// The shape a hand-typed id and token come in, and what is wrong with one that
+// does not. Nothing is built from a value that fails it.
+import { manualComplete } from "./manualIds";
 import { SuggestionList } from "./SuggestionList";
-// PROTOTYPE — throwaway, behind ?variant=. Account-level capacity views.
-import {
-  Capacity, PrototypeSwitcher, Variant as CapacityVariant,
-  useVariant as useCapacityVariant,
-} from "./prototype/capacityViews";
+// What the account can generate, by workspace.
+import { CapacityView } from "./CapacityView";
 // The capacity planner: a view of its own, not a step. See PlanPanel.
 import {
   EMPTY_PLAN_INPUTS, PlanHandover, PlanInputs, PlanPanel,
@@ -214,8 +214,6 @@ export default function App() {
   // until an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // PROTOTYPE state: the account rollup, and which variant is on screen.
-  const capVariant = useCapacityVariant();
   const [cap, setCap] = useState<Capacity | null>(null);
   const [capErr, setCapErr] = useState<string | null>(null);
   useEffect(() => {
@@ -631,7 +629,14 @@ export default function App() {
   const manualTimer = useRef<number>();
   useEffect(() => {
     if (sourceMode !== "manual") return;
-    if (!manual.harbor_id.trim() || !manual.ship_id.trim()) {
+    // Nothing is built from a value that is not the shape an id comes in. The
+    // fields say what is wrong; what this stops is the rest of the page --
+    // preview, preflight, download -- describing a bundle assembled around a
+    // truncated paste, which is a bundle that applies cleanly and then joins
+    // nothing. `done` below follows from `facts`, so this is also what keeps
+    // step 1 from being leavable.
+    if (!manualComplete(manual.harbor_id, manual.ship_id,
+                        String(options.auth_token ?? ""))) {
       setFacts(null); setShipId(null); return;
     }
     window.clearTimeout(manualTimer.current);
@@ -645,7 +650,7 @@ export default function App() {
         setShipId(r.facts.ships[0].id);
       }).catch((e) => setGenErr(String(e.message)));
     }, 250);
-  }, [sourceMode, manual, manualFuncIds]);
+  }, [sourceMode, manual, manualFuncIds, options.auth_token]);
 
   // Switching modes drops what the other one established. Leaving a connected
   // location's facts in place while manual fields are on screen is how the
@@ -1189,8 +1194,7 @@ export default function App() {
           {!cap && accountId && !capErr && (
             <p className="text-sm text-slate-500">reading the account…</p>
           )}
-          {cap && <CapacityVariant id={capVariant ?? "A"} cap={cap} />}
-          {cap && <PrototypeSwitcher current={capVariant ?? "A"} />}
+          {cap && <CapacityView cap={cap} />}
         </main>
       ) : view === "plan" ? (
         // No WorkArea: there are no manifests to sit beside a plan, and an
