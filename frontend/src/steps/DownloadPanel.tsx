@@ -7,9 +7,11 @@
 // The props are a wide list rather than a bag: every one of them is something
 // this panel actually reads, and a `Record<string, unknown>` would hide the day
 // one of them stops being passed.
+import { useState } from "react";
 import {
-  AgentStatus, Facts, Options, SavedBundle, Ship, SvCheckOut, SvMocksOut,
-  TokenReport, Feature, Suggestion, downloadZip, saveBundle,
+  api, AgentStatus, Facts, GeneratedFile, Options, SavedBundle, Ship,
+  SvCheckOut, SvMocksOut, TokenReport, Feature, Suggestion, downloadZip,
+  saveBundle,
 } from "../api";
 import {
   Button, Check, ErrorMsg, inputCls, SegmentedControl, Switch,
@@ -256,6 +258,10 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       <code className="font-mono">bzm-opl-gen doctor</code> runs.
                     </p>
                   </div>
+                  {/* Left of the file picker, because it comes first in time:
+                      this is what you run *on* the cluster, and the evidence
+                      file is what comes back. */}
+                  <TestDeploy facts={facts} options={options} />
                   {/* A label rather than a Button so the file dialog is the
                       click, as in Connect and Import above. */}
                   <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
@@ -472,5 +478,58 @@ export function DownloadPanel(p: DownloadPanelProps) {
                 )}
               </div>
             </div>
+  );
+}
+
+/** crane-hook, as a manifest to apply to the cluster under test.
+ *
+ *  There is deliberately no chart to fetch. crane-hook is an image, published
+ *  as a `helm test` hook inside the separate helm-crane chart -- its own
+ *  repository ships no chart at all, and documents a Kubernetes manifest as the
+ *  standalone way to run it. That manifest is one this generator already
+ *  renders (`crane_hook`), so this hands over the one it would put in the
+ *  bundle: the same Pod, Role and RoleBinding, for the namespace and registry
+ *  currently configured, rather than a generic copy that ignores both.
+ *
+ *  It does not turn the option on. Applying the check and shipping it inside
+ *  the agent's bundle are different decisions -- this is the one you make
+ *  before deploying anything.
+ */
+function TestDeploy({ facts, options }: { facts: Facts | null; options: Options }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    if (!facts) return;
+    setBusy(true); setErr(null);
+    try {
+      const out = await api.generate(facts, { ...options, crane_hook: true });
+      const f = out.files.find((x: GeneratedFile) => x.name.includes("cranehook"));
+      if (!f) throw new Error("this bundle renders no crane-hook manifest");
+      const url = URL.createObjectURL(
+        new Blob([f.content], { type: "text/yaml" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = f.name; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <span className="flex items-center gap-1">
+      <Button kind="ghost" onClick={run} disabled={!facts} busy={busy}>
+        Test deploy
+      </Button>
+      <a href="https://github.com/Blazemeter/crane-hook" target="_blank"
+        rel="noreferrer" title="crane-hook on GitHub — what this checks and how"
+        aria-label="About crane-hook"
+        className="w-5 h-5 rounded-full border border-slate-300 text-slate-500
+                   hover:text-slate-900 hover:bg-slate-100 flex items-center
+                   justify-center text-[10px] font-serif italic shrink-0">
+        i
+      </a>
+      <ErrorMsg msg={err} />
+    </span>
   );
 }

@@ -40,6 +40,16 @@ on from the same folder. Saving into a folder that already holds this ship's
 bundle reuses the token already there, so a re-render with one option changed is
 the same bytes and leaves the deployed agent alone.
 
+**Test deploy**, beside the evidence-file picker under *Preflight the target
+cluster*, hands over crane-hook as a manifest to apply to the cluster under
+test: the same Pod, Role and RoleBinding the bundle would carry, rendered for
+the namespace and registry currently configured. It does not turn the option on
+— applying the check and shipping it inside the agent's bundle are different
+decisions, and this is the one you make before deploying anything. There is no
+chart to fetch: crane-hook publishes an image, packaged as a `helm test` hook
+inside the separate [helm-crane](https://github.com/Blazemeter/helm-crane/releases)
+chart, and documents a manifest as the standalone way to run it.
+
 **Cluster check (crane-hook)** under *Deployment settings* adds
 [crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
 Pod, plus its own read-only Role and RoleBinding, that checks node capacity,
