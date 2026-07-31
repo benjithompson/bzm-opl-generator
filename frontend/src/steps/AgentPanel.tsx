@@ -10,7 +10,7 @@
 // downstream is generated from, and the effects that clear the token when
 // either moves live there too.
 import { useEffect, useRef, useState } from "react";
-import { Facts, KeyCandidate, Location, Ship } from "../api";
+import { Facts, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -31,7 +31,6 @@ export interface AgentPanelProps {
   who: { email: string; keyId: string } | null;
   /** Hand the key back. The server forgets it; a key saved to disk stays. */
   disconnect: () => void;
-  candidates: KeyCandidate[];
   keyPath: string;
   setKeyPath: (v: string) => void;
   pasteId: string;
@@ -93,6 +92,9 @@ type Arm = "idle" | "armed" | "done";
 
 export function AgentPanel(p: AgentPanelProps) {
   const connected = !!p.who;
+  // A pasted pair outranks the path: typing both is the deliberate act, and
+  // the path field is prefilled from whatever key was detected on this machine.
+  const pasted = !!p.pasteId && !!p.pasteSecret;
   const empty = !!p.location && p.ships.length === 0;
   const ship = p.ships.find((s) => s.id === p.shipId);
   // An identity that already existed, with no credential in hand for it: its
@@ -208,22 +210,28 @@ export function AgentPanel(p: AgentPanelProps) {
           <SubSection title="Connect" done={!!p.who}
             hint="API key stays on this machine; only used server-side.">
             <div className="space-y-3">
-              {p.candidates.length > 0 && (
-                <Field label="Detected key files">
-                  <select className={inputCls + (connected ? " bg-slate-50 text-slate-500" : "")}
-                    value={p.keyPath} disabled={connected}
-                    onChange={(e) => p.setKeyPath(e.target.value)}>
-                    {p.candidates.map((c) => (
-                      <option key={c.path} value={c.path}>
-                        {c.path} (id {c.key_id.slice(0, 8)}…)
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              )}
+              {/* Above the path, because it is the answer to "I do not have a
+                  file" and that is the question someone with no file is asking.
+                  Still folded: the path is prefilled from a detected key, so
+                  most sessions never open this. */}
+              <details className="text-sm">
+                <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
+                <div className="mt-2 space-y-2">
+                  <Field label="Key ID">
+                    <TextInput value={p.pasteId} onChange={p.setPasteId} mono
+                      disabled={connected} /></Field>
+                  <Field label="Secret">
+                    <input type="password"
+                      className={inputCls + " font-mono text-xs"
+                        + (connected ? " bg-slate-50 text-slate-500" : "")}
+                      value={p.pasteSecret} disabled={connected}
+                      onChange={(e) => p.setPasteSecret(e.target.value)} />
+                  </Field>
+                </div>
+              </details>
               <div className="flex gap-2 items-end">
                 <div className="grow">
-                  <Field label="…or path to api-key.json">
+                  <Field label="api-key.json">
                     <TextInput value={p.keyPath} onChange={p.setKeyPath} mono
                       disabled={connected}
                       placeholder="/path/to/api-key.json" />
@@ -259,9 +267,18 @@ export function AgentPanel(p: AgentPanelProps) {
                     resize the field under the cursor every time the state
                     changed. */}
                 <div className="w-32 flex justify-end shrink-0">
+                  {/* One button for both ways in: a pasted id and secret if
+                      there is one, the file otherwise. Two Connects meant two
+                      places to look for the one that was going to work, and
+                      the pasted pair is the deliberate act -- if it is filled
+                      in, it is what was meant. */}
                   <Button kind={connected ? "ghost" : "primary"}
-                    onClick={connected ? p.disconnect : () => p.connect({ path: p.keyPath })}
-                    disabled={!connected && !p.keyPath} busy={p.connecting}>
+                    onClick={connected ? p.disconnect
+                      : () => p.connect(pasted
+                        ? { id: p.pasteId, secret: p.pasteSecret, save: p.saveKey }
+                        : { path: p.keyPath })}
+                    disabled={!connected && !pasted && !p.keyPath}
+                    busy={p.connecting}>
                     {connected ? "Disconnect"
                       : p.connecting ? "Connecting…" : "Connect"}
                   </Button>
@@ -270,27 +287,6 @@ export function AgentPanel(p: AgentPanelProps) {
               <Check label="Remember this key on this machine" checked={p.saveKey}
                 onChange={p.setSaveKey} disabled={connected}
                 hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
-              <details className="text-sm">
-                <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
-                <div className="mt-2 space-y-2">
-                  <Field label="Key ID">
-                    <TextInput value={p.pasteId} onChange={p.setPasteId} mono
-                      disabled={connected} /></Field>
-                  <Field label="Secret">
-                    <input type="password"
-                      className={inputCls + " font-mono text-xs"
-                        + (connected ? " bg-slate-50 text-slate-500" : "")}
-                      value={p.pasteSecret} disabled={connected}
-                      onChange={(e) => p.setPasteSecret(e.target.value)} />
-                  </Field>
-                  <Button
-                    onClick={() => p.connect({ id: p.pasteId, secret: p.pasteSecret, save: p.saveKey })}
-                    disabled={connected || !p.pasteId || !p.pasteSecret}
-                    busy={p.connecting}>
-                    {p.connecting ? "Connecting…" : "Connect"}
-                  </Button>
-                </div>
-              </details>
               {/* Status and failure share the slot under the form, so neither
                   arriving moves anything. */}
               {connected

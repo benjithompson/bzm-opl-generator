@@ -82,9 +82,12 @@ that nothing writes it down, and browser storage is a file in the browser's
 profile.
 
 **The Connect button becomes the Disconnect button.** The key form stays where
-it is — detected files, path, Browse, *Remember this key*, the paste section —
+it is — the paste fields, the `api-key.json` path, Browse, *Remember this key* —
 and shows, greyed, the key that is in use; connecting and disconnecting change
-what the controls say, never where they are. Disconnect makes the server forget
+what the controls say, never where they are. One Connect for both ways in: a
+pasted id and secret if there is one, the file otherwise — the pasted pair is
+the deliberate act, so it wins. The path is prefilled from a key detected on
+this machine, which is why the paste fields fold away above it. Disconnect makes the server forget
 the key and clears everything read with it; a key you asked to save stays on
 disk, so reconnecting is one click. Without it, a key pasted by mistake — or the
 wrong account — cost a server restart.

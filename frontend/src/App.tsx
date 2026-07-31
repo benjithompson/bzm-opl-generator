@@ -1094,8 +1094,7 @@ export default function App() {
               sourceMode={sourceMode} switchMode={switchMode} manual={manual}
               setManual={setManual} sourceOpen={sourceOpen}
               setSourceOpen={setSourceOpen}
-              who={who} disconnect={disconnect}
-              candidates={candidates} keyPath={keyPath}
+              who={who} disconnect={disconnect} keyPath={keyPath}
               setKeyPath={setKeyPath} pasteId={pasteId} setPasteId={setPasteId}
               pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
               saveKey={saveKey} setSaveKey={setSaveKey} connect={connect}
