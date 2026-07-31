@@ -194,13 +194,25 @@ export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) =
 
 /** A step within a numbered Section -- same heading shape, no number of its
  *  own. Used where several former steps were folded into one. */
+/** One panel of a step: a bordered card with a header, optionally collapsible.
+ *
+ *  A card rather than a rule between blocks. Three sections separated by a
+ *  hairline on one white background read as one long form with bold words in
+ *  it -- where a panel starts and ends is the thing a reader needs before they
+ *  need anything inside it, and a border is how that gets said.
+ *
+ *  When it collapses, the header follows the disclosure convention rather than
+ *  inventing one: the whole bar is the control, the pointer changes over it, it
+ *  tints on hover, and a chevron on the left points right when closed and down
+ *  when open. A header that is clickable and does not look it is a header
+ *  nobody clicks.
+ */
 export function SubSection(props: {
   title: string; hint?: string; done?: boolean; children: ReactNode;
   /** Collapsible when both are given. Controlled from the caller, because what
    *  should be open is a fact about where you are in the step -- the next
    *  unfinished thing -- and only the caller knows that. Given neither, the
-   *  section is always open and has no header control, which is what every
-   *  existing caller wants. */
+   *  section is always open and has no header control. */
   open?: boolean;
   onToggle?: () => void;
   /** A word or two of state on the header, visible while collapsed: a folded
@@ -212,37 +224,37 @@ export function SubSection(props: {
   const open = !collapsible || props.open;
   const heading = (
     <>
-      {/* Only the finished state is marked. An "unfinished" glyph on every
-          step you have not reached yet reads as a list of failures. The span
-          keeps its width either way so the headings stay aligned. */}
+      {collapsible && (
+        <span aria-hidden="true"
+          className={"text-slate-400 text-sm leading-none transition-transform "
+            + "duration-150 shrink-0 " + (open ? "rotate-90" : "")}>›</span>
+      )}
+      {/* Only the finished state is marked. An "unfinished" glyph on every step
+          you have not reached yet reads as a list of failures. */}
       <span className="text-xs text-emerald-600 w-2.5 shrink-0">
         {props.done ? "✓" : ""}
       </span>
       <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
-      {collapsible && (
-        <>
-          {props.summary && (
-            <span className="text-[11px] text-slate-500 truncate">
-              {props.summary}
-            </span>
-          )}
-          <span className="grow" />
-          <span className={"text-slate-400 text-xs transition-transform duration-150 "
-            + (open ? "rotate-90" : "")}>›</span>
-        </>
+      {props.summary && (
+        <span className="text-[11px] text-slate-500 truncate">
+          {props.summary}
+        </span>
       )}
     </>
   );
   return (
-    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
+    <section className="border border-slate-200 rounded-lg overflow-hidden bg-white">
       {collapsible ? (
-        <button type="button" onClick={props.onToggle}
-          aria-expanded={open}
-          className="w-full flex items-baseline gap-2 mb-2 text-left group">
+        <button type="button" onClick={props.onToggle} aria-expanded={open}
+          className={"w-full flex items-center gap-2 px-3 py-2.5 text-left "
+            + "bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer "
+            + (open ? "border-b border-slate-200" : "")}>
           {heading}
         </button>
       ) : (
-        <div className="flex items-baseline gap-2 mb-2">{heading}</div>
+        <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50 border-b border-slate-200">
+          {heading}
+        </div>
       )}
       {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the
           body's height is not knowable in advance and `height: auto` does not
@@ -251,12 +263,13 @@ export function SubSection(props: {
       <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
         + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
         <div className="overflow-hidden">
-          {props.hint && open
-            && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
-          {props.children}
+          <div className="p-3">
+            {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+            {props.children}
+          </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 

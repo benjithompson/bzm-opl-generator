@@ -318,8 +318,12 @@ export function AgentPanel(p: AgentPanelProps) {
 
           {/* Where you are, always, and what is still missing. A location with
               no agent says so here rather than in a panel further down that you
-              have to reach before the absence is visible. */}
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 flex items-center gap-2 flex-wrap">
+              have to reach before the absence is visible.
+
+              Borderless, unlike the three panels below it: with a card's border
+              it read as a fourth section between two of them, and it is not a
+              section -- it is the summary of what they add up to. */}
+          <div className="px-1 py-0.5 flex items-center gap-2 flex-wrap">
             {pathSeg("location", p.location?.name ?? null)}
             <span className="text-slate-300">›</span>
             {pathSeg("agent", ship?.name ?? null, !!p.location)}

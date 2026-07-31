@@ -112,9 +112,13 @@ anything that breaks.
   and the two engine requests; applying is not saving, and **Save** is still the
   only control that writes.
 
-  Step 1's three sections (Connect, Private location, Agent) now fold, opening
-  on whichever the step has reached until one is pinned, and a folded one says
-  on its header what it holds.
+  Step 1's three sections (Connect, Private location, Agent) are now bordered
+  panels with tinted headers, and they fold: a chevron on the left of the
+  header, pointing right when closed and down when open, and the whole bar is
+  the control. They open on whichever section the step has reached until one is
+  pinned, and a folded one says on its header what it holds. Three sections
+  divided by a hairline on one white background read as a single long form; a
+  panel's extent is the thing a reader needs before anything inside it.
 
   Only changed fields are sent, so a page left open does not write back three
   values somebody else has since edited; blank means "leave alone", so there is

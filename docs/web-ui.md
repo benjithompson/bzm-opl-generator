@@ -51,10 +51,12 @@ cluster** below the download button, which needs no cluster access at all — se
 [Preflight](preflight.md).
 
 Step 1's three sections — **Connect**, **Private location**, **Agent (ship)** —
-fold, and open on whichever one the step has reached until you pin a different
-one. A folded section carries its state on the header (who you are connected as,
-which location, which agent), so nothing has to be opened to find out whether it
-needed opening.
+are bordered panels that fold. The header is the control: a chevron on its left
+points right when closed and down when open, and the bar tints under the
+pointer. They open on whichever section the step has reached until you pin a
+different one, and a folded one carries its state on the header (who you are
+connected as, which location, which agent), so nothing has to be opened to find
+out whether it needed opening.
 
 ### Changing a location after it exists
 
