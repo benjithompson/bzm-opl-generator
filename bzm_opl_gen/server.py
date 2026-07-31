@@ -613,6 +613,12 @@ def sv_check(host: str, scheme: str = "http"):
 # core's to say; a second copy here is what goes stale, and /api/docs is
 # exactly where nobody would notice.
 
+@app.get("/api/capacity", description=core.account_capacity.__doc__)
+def capacity(account_id: int):
+    return _cached(f"capacity:{account_id}",
+                   _answer, core.account_capacity, _client(), account_id)
+
+
 @app.get("/api/engine-vus", description=core.engine_vus.__doc__)
 def engine_vus(cpu: Optional[str] = None, mem: Optional[str] = None):
     """What an engine of this size is rated for, for a field that wants to

@@ -1061,6 +1061,59 @@ def engine_vus(engine_cpu=None, engine_mem=None):
             "supported_vus": plan.supported_vus(cpu, mem)}
 
 
+def account_capacity(client, account_id):
+    """Rated virtual-user capacity across an account, by workspace.
+
+    "Rated", not "allowed", and the distinction was measured rather than
+    assumed. A live run settled two halves of it on a location with 2 agents,
+    slots=1 and threadsPerEngine=50:
+
+      * `agents x slots` is the **engine** count, and it is enforced -- asking
+        for 3 engines allocated 2, and a start while those 2 are busy is
+        refused with 403 "Not enough available resources".
+      * `x threadsPerEngine` is what those engines are *sized* for, and is not
+        a gate: 101 virtual users started happily, packed onto the same 2
+        engines. So this number is what the location is built to serve well,
+        not a ceiling BlazeMeter enforces.
+
+    A location in several workspaces is *shared*: its capacity is claimable
+    from either, so adding it into both workspace totals counts engines that
+    cannot run twice. It is flagged, and the account total counts it once --
+    which is why the account figure is not the sum of the workspace figures.
+    """
+    locs = _upstream(client.private_locations, account_id=account_id)
+    spaces = {w["id"]: w["name"]
+              for w in _upstream(client.workspaces, account_id)}
+    out = []
+    for l in locs:
+        ships = l.get("ships") or []
+        slots, tpe = l.get("slots"), l.get("threadsPerEngine")
+        engines = (slots or 0) * len(ships)
+        ws = list(l.get("workspacesId") or [])
+        out.append({
+            "id": l["id"], "name": l.get("name"),
+            "func_ids": l.get("funcIds") or [],
+            "agents": len(ships),
+            # An agent that has never reported cannot run an engine, so the
+            # rating and what is available right now are different numbers.
+            "agents_reporting": sum(1 for s in ships if ship_reporting(s)),
+            "slots": slots, "threads_per_engine": tpe,
+            "engines": engines,
+            # None, not 0: a location with slots or threadsPerEngine unset has
+            # no rating to state, and 0 would read as "no capacity" when the
+            # truth is "nobody has said".
+            "rated_vus": engines * tpe if (slots and tpe) else None,
+            "workspace_ids": ws,
+            "workspace_names": [spaces.get(w, str(w)) for w in ws],
+            "shared": len(ws) > 1,
+        })
+    return {"account_id": account_id,
+            "workspaces": [{"id": i, "name": n} for i, n in spaces.items()],
+            "locations": out,
+            "rated_vus": sum(x["rated_vus"] or 0 for x in out),
+            "unrated": sum(1 for x in out if x["rated_vus"] is None)}
+
+
 # -- preflight -----------------------------------------------------------------
 
 def evidence_document(evidence):

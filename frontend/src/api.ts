@@ -237,6 +237,10 @@ export const api = {
   engineVus: (cpu: string, mem: string) =>
     req<{ cpu: string; memory: string; supported_vus: number }>(
       "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
+  /** PROTOTYPE: account-wide rated capacity, by workspace. */
+  capacity: (accountId: number) =>
+    req<import("./prototype/capacityViews").Capacity>(
+      "GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),

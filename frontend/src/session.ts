@@ -36,7 +36,8 @@ export interface Session {
   /** Which of the two views is open. The planner is not a step, so the step
    *  number cannot say -- and somebody who refreshed while sizing a cluster
    *  came back to a connect form asking for the account they have not got. */
-  view: "flow" | "plan";
+  /** PROTOTYPE: "capacity" is the throwaway account view. */
+  view: "flow" | "plan" | "capacity";
   /** What was typed into the planner. Kept for the same reason the option
    *  values are: they were typed, and nothing else can recover them. */
   plan: PlanSnapshot;

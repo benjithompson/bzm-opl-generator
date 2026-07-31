@@ -39,6 +39,11 @@ import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 import { SuggestionList } from "./SuggestionList";
+// PROTOTYPE — throwaway, behind ?variant=. Account-level capacity views.
+import {
+  Capacity, PrototypeSwitcher, Variant as CapacityVariant,
+  useVariant as useCapacityVariant,
+} from "./prototype/capacityViews";
 // The capacity planner: a view of its own, not a step. See PlanPanel.
 import {
   EMPTY_PLAN_INPUTS, PlanHandover, PlanInputs, PlanPanel,
@@ -201,7 +206,17 @@ export default function App() {
   // state a customer with no cluster is actually in, and why it cannot be a
   // step. `plan` holds what was typed into it, so switching views and coming
   // back does not empty the form.
-  const [view, setView] = useState<"flow" | "plan">("flow");
+  const [view, setView] = useState<"flow" | "plan" | "capacity">("flow");
+  // PROTOTYPE state: the account rollup, and which variant is on screen.
+  const capVariant = useCapacityVariant();
+  const [cap, setCap] = useState<Capacity | null>(null);
+  const [capErr, setCapErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (view !== "capacity" || !accountId) return;
+    setCap(null); setCapErr(null);
+    api.capacity(accountId).then(setCap)
+      .catch((e: Error) => setCapErr(e.message));
+  }, [view, accountId]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
@@ -1150,7 +1165,8 @@ export default function App() {
               routinely asked by somebody who cannot answer any question the
               flow's first step asks, so it cannot live inside it. */}
           <nav className="ml-4 flex gap-1 text-xs" aria-label="View">
-            {([["flow", "Generate"], ["plan", "Plan capacity"]] as const).map(
+            {([["flow", "Generate"], ["plan", "Plan capacity"],
+               ["capacity", "Account capacity"]] as const).map(
               ([id, label]) => (
                 <button key={id} onClick={() => setView(id)}
                   aria-current={view === id ? "page" : undefined}
@@ -1166,7 +1182,17 @@ export default function App() {
         </div>
       </header>
 
-      {view === "plan" ? (
+      {view === "capacity" ? (
+        <main className="max-w-screen-xl mx-auto p-6">
+          {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
+          {capErr && <p className="text-sm text-red-600">{capErr}</p>}
+          {!cap && accountId && !capErr && (
+            <p className="text-sm text-slate-500">reading the account…</p>
+          )}
+          {cap && <CapacityVariant id={capVariant ?? "A"} cap={cap} />}
+          {cap && <PrototypeSwitcher current={capVariant ?? "A"} />}
+        </main>
+      ) : view === "plan" ? (
         // No WorkArea: there are no manifests to sit beside a plan, and an
         // empty preview pane next to it would suggest this step produces some.
         <main className="max-w-screen-lg mx-auto p-6">
