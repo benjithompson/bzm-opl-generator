@@ -17,7 +17,7 @@
 
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
-import { Check, inputCls, Switch } from "../components";
+import { Button, Check, Field, inputCls, Switch } from "../components";
 import { GroupRow } from "../groups/GroupRow";
 import {
   ANY_DEPLOYMENT, GroupFlags, GroupId, OPTION_GROUPS, OptionGroup,
@@ -177,27 +177,72 @@ function CraneHookRow(p: ProtoProps) {
   );
 }
 
+
+/** Advanced, as a row in the settings list rather than a dashed box under it.
+ *  It is two fields with the same weight as any other pair here; what makes it
+ *  advanced is that it is closed, not that it sits outside the form. */
+function AdvancedRow(p: ProtoProps) {
+  const [open, setOpen] = useState(false);
+  const openshift = p.options.platform === "openshift";
+  return (
+    <div className="px-3 py-2.5">
+      <button className="w-full flex items-center gap-3 text-left"
+        onClick={() => setOpen(!open)}>
+        <span className="text-slate-400 text-xs w-3">{open ? "▾" : "▸"}</span>
+        <span className="min-w-0 grow">
+          <span className="block text-sm font-medium text-slate-500">Advanced</span>
+          <span className="block text-[11px] text-slate-400">
+            security posture and UID — you should not need these
+          </span>
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3 pl-6 grid grid-cols-2 gap-3">
+          <Field label="Security posture"
+            hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
+            <select className={inputCls} value={String(p.options.platform)}
+              onChange={(e) => p.set("platform", e.target.value)}>
+              <option value="openshift">Unified SCC-friendly (recommended)</option>
+              <option value="k8s">Legacy pinned-UID k8s</option>
+            </select>
+          </Field>
+          {!openshift && (
+            <Field label="runAsUser / runAsGroup">
+              <input type="number" className={inputCls}
+                value={Number(p.options.run_as_user ?? 1337)}
+                onChange={(e) => p.set("run_as_user", Number(e.target.value))} />
+            </Field>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // == A -- shared deck, then a card per feature ================================
 // Nothing appears or disappears when a feature is touched: the shared deck is
 // the same deck whatever the location runs, and each feature owns a card beside
 // it. What a feature costs you is inside its own card, next to its own options.
 export function VariantA(p: ProtoProps) {
+  // A feature the location does not run, switched on here anyway. Local: making
+  // it true in the account is a PATCH of the location's funcIds, and this build
+  // has no call for it -- so the card says the account still disagrees rather
+  // than implying the write happened.
+  const [enabledHere, setEnabledHere] = useState<Record<string, boolean>>({});
+  // Which card is asking. One at a time, and clearing on any answer, so a
+  // half-asked question never sits under a card you have moved on from.
+  const [asking, setAsking] = useState<string | null>(null);
+  const enable = (id: string) => {
+    setEnabledHere((e) => ({ ...e, [id]: true }));
+    setAsking(null);
+    // "the toggle turns on and the feature pane expands" -- the pane is the
+    // group's own body, so turning the group on is what expands it. Its enable
+    // seeds whatever the group needs (SV lands on nginx rather than no backend).
+    const first = ownedBy(id)[0];
+    if (first && !p.grpOn[first.id]) p.flipGroup(first.id, true);
+  };
   return (
     <div className="space-y-5">
-      <section>
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-          Deployment settings
-        </h3>
-        <div className="rounded-xl border border-slate-200 p-3 space-y-3">
-          <div id="proto-core" className="scroll-mt-4"><CoreFields {...p} /></div>
-          <div id="proto-shared"
-            className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
-            {rows(p, SHARED, "")}
-            <CraneHookRow {...p} />
-          </div>
-        </div>
-      </section>
-
       <section>
         <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
           Deployment features
@@ -207,9 +252,10 @@ export function VariantA(p: ProtoProps) {
         <div className="space-y-3">
           {p.features.map((f) => {
             const st = featState(p, f);
-            const chip = STATE_CHIP[st];
+            const on = !!enabledHere[f.id];
+            const chip = on ? STATE_CHIP.runs : STATE_CHIP[st];
             const own = ownedBy(f.id);
-            const dim = st === "not-run" && p.sourceMode === "connect";
+            const dim = st === "not-run" && p.sourceMode === "connect" && !on;
             const stranded = dim ? own.filter((g) => g.detect(p.options)) : [];
             return (
               <div key={f.id} id={"proto-f-" + f.id}
@@ -237,13 +283,49 @@ export function VariantA(p: ProtoProps) {
                   </p>
                   <p className="text-[11px] text-slate-400">{f.hint}</p>
                 </div>
-                <div className={dim ? "opacity-60" : ""}>
+                {/* Off on this location, so its switches are inert until the
+                    question under them is answered. The click still lands --
+                    it is what asks -- but nothing is written by it. */}
+                {dim && (
+                  asking === f.id ? (
+                    <div className="px-3 py-2.5 border-b border-slate-100 bg-white">
+                      <p className="text-xs text-slate-700">
+                        <b>{f.label}</b> is not enabled on this location. Enable
+                        it and configure it here?
+                      </p>
+                      <p className="text-[11px] text-amber-700 mt-0.5">
+                        PROTOTYPE: this build has no call that changes the
+                        location&apos;s features — it enables the settings here only.
+                      </p>
+                      <div className="flex gap-2 mt-2">
+                        <Button onClick={() => enable(f.id)}>Enable on location</Button>
+                        <Button kind="ghost" onClick={() => setAsking(null)}>Cancel</Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button className="w-full text-left px-3 py-1.5 text-[11px] text-bzm hover:underline"
+                      onClick={() => setAsking(f.id)}>
+                      Enable on this location…
+                    </button>
+                  )
+                )}
+                <div className={dim ? "opacity-60 pointer-events-none select-none" : ""}
+                  onClickCapture={dim ? (e) => {
+                    e.preventDefault(); setAsking(f.id);
+                  } : undefined}>
                   {own.length
                     ? <div className="divide-y divide-slate-100">{rows(p, own, "")}</div>
                     : <p className="px-3 py-3 text-[11px] text-slate-400">
                         nothing extra to configure — it uses the settings above
                       </p>}
                 </div>
+                {on && st === "not-run" && (
+                  <p className="px-3 py-2 text-[11px] text-amber-700 border-t border-amber-100 bg-amber-50">
+                    Enabled here, but the account still says this location does
+                    not run it — enable it in BlazeMeter too, or the agent will
+                    never be asked to.
+                  </p>
+                )}
                 {stranded.length > 0 && (
                   <p className="px-3 py-2 text-[11px] text-amber-700 border-t border-amber-100 bg-amber-50">
                     set here and still generated, though this location does not
@@ -261,6 +343,22 @@ export function VariantA(p: ProtoProps) {
           </p>
         )}
       </section>
+
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+          Deployment settings
+        </h3>
+        <div className="rounded-xl border border-slate-200 p-3 space-y-3">
+          <div id="proto-core" className="scroll-mt-4"><CoreFields {...p} /></div>
+          <div id="proto-shared"
+            className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
+            {rows(p, SHARED, "")}
+            <CraneHookRow {...p} />
+            <AdvancedRow {...p} />
+          </div>
+        </div>
+      </section>
+
     </div>
   );
 }
@@ -271,12 +369,13 @@ export function VariantA(p: ProtoProps) {
 // page. The rail is not navigation with a status dot bolted on -- it NAMES what
 // is set, so "what is in this bundle" is answered without scrolling the form.
 export function VariantD(p: ProtoProps) {
+  // Same order as the pane: features first, then the settings under them.
   const secs = [
-    { id: "core", label: "Placement", gs: [] as OptionGroup[] },
-    { id: "shared", label: "Configure agent", gs: SHARED },
     ...p.features.map((f) => ({
       id: "f-" + f.id, label: f.label, gs: ownedBy(f.id),
     })),
+    { id: "core", label: "Placement", gs: [] as OptionGroup[] },
+    { id: "shared", label: "Configure agent", gs: SHARED },
   ];
   return (
     <div className="grid grid-cols-[13rem_1fr] gap-6 items-start">

@@ -1522,6 +1522,10 @@ export default function App() {
               </div>
               </>)}
 
+              {/* THROWAWAY: the prototypes carry Advanced as a row inside the
+                  deployment-settings list, so it is one of the forms rather
+                  than a dashed afterthought under them. */}
+              {!PROTO_STEPS && (
               <details className="border border-dashed border-slate-300 rounded-xl bg-slate-50/60">
                 <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-slate-500">
                   Advanced — you should not need this
@@ -1544,6 +1548,7 @@ export default function App() {
                   )}
                 </div>
               </details>
+              )}
             </div>
           </Section>
 
@@ -1827,21 +1832,39 @@ export default function App() {
                   </p>
                 ) : (
                 <>
-                <div className="flex items-center gap-3">
-                  {/* A Switch, like the option groups: this turns a background
-                      poll on, which is a mode rather than a value in the
-                      bundle, and the two read alike everywhere else. */}
+                {/* Built like an option-group row -- a Switch, a title, a
+                    sub-title -- because that is what it is: an on/off with one
+                    line of consequence. The status belongs to an agent, so the
+                    row names it; a bare "online" beside a page that has four
+                    other identities on it says less than it looks like it
+                    does. */}
+                <div className="rounded-xl border border-slate-200 px-3 py-2.5 flex items-center gap-3">
                   <Switch on={polling} onChange={setPolling} />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-700">Watch agent status</p>
+                  <div className="min-w-0 grow">
+                    <p className="text-sm font-medium text-slate-700">
+                      Watch agent status
+                      <span className="ml-2 font-mono text-[11px] text-slate-500">
+                        {ships.find((s) => s.id === shipId)?.name || shipId}
+                      </span>
+                    </p>
                     <p className="text-[11px] text-slate-400">
-                      polls every 10s — green once the applied deployment heartbeats
+                      {polling
+                        ? status
+                          ? `${status.state}`
+                            + (status.heartbeat_age_s != null
+                              ? ` · heartbeat ${status.heartbeat_age_s}s ago` : "")
+                          : "polling every 10s…"
+                        : "polls every 10s — green once the applied deployment heartbeats"}
                     </p>
                   </div>
-                  {status && (
-                    <span className={`text-sm font-medium px-2.5 py-1 rounded-full ${status.online ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                      {status.online ? "● online" : "○ waiting"} — {status.state}
-                      {status.heartbeat_age_s != null && `, heartbeat ${status.heartbeat_age_s}s ago`}
+                  {polling && (
+                    <span className={"flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 "
+                      + (status?.online
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-slate-100 text-slate-500")}>
+                      <span className={"h-1.5 w-1.5 rounded-full "
+                        + (status?.online ? "bg-emerald-500" : "bg-slate-400 animate-pulse")} />
+                      {status?.online ? "Online" : "Waiting"}
                     </span>
                   )}
                 </div>
