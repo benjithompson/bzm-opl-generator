@@ -423,7 +423,11 @@ export function AgentPanel(p: AgentPanelProps) {
                         const on = s.id === p.shipId;
                         const isOpen = open === s.id;
                         return (
-                          <div key={s.id} className={on ? "bg-bzm/5"
+                          // Selected is the same blue as a selected location
+                          // above: the two lists are the same kind of choice,
+                          // and a fainter tint here read as banding rather than
+                          // as selection.
+                          <div key={s.id} className={on ? "bg-bzm/10"
                             : i % 2 ? "bg-slate-50/70" : "bg-white"}>
                             {/* A div, not a button: the row is clickable and so
                                 are the controls inside it, and a button inside a
