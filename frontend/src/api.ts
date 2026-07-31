@@ -90,6 +90,20 @@ export const api = {
   createShip: (harborId: string, name: string) =>
     req<{ ship: Ship; auth_token: string | null; token_error: string | null }>(
       "POST", "/api/ships", { harbor_id: harborId, name }),
+  /** Issue a NEW AUTH_TOKEN for an agent that already exists.
+   *
+   *  Its own call, not a flag on a download: what it does to an agent running
+   *  on the previous credential is revoke it, and the caller has to have said
+   *  so before reaching this. The token comes back because BlazeMeter will not
+   *  show it again. */
+  issueToken: (harborId: string, shipId: string) =>
+    req<{ auth_token: string }>(
+      "POST", "/api/ships/token", { harbor_id: harborId, ship_id: shipId }),
+  /** Turn a feature on for a location. Additive and idempotent server-side --
+   *  see core.add_func_id, which reads the location's own list first. */
+  addFuncId: (harborId: string, funcId: string) =>
+    req<Location>("POST", "/api/locations/func-id",
+                  { harbor_id: harborId, func_id: funcId }),
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
   /** Facts from the three values BlazeMeter shows on the agent, with no API key.
    *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */

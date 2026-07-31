@@ -96,6 +96,23 @@ the same rewrite, keeping the tag).
 {{- end -}}
 
 {{/*
+crane-hook's image and its own Role. The image follows privateRegistry like
+everything else BlazeMeter ships; the Role is named for the tool that made it
+rather than upstream's `test-hookrole`, so a stray one is traceable in six
+months. Both names are also written into the Pod's env -- crane-hook is told
+what it is called -- which is why they are helpers and not literals.
+*/}}
+{{- define "bzm-opl.hookRoleName" -}}bzm-cranehook{{- end -}}
+
+{{- define "bzm-opl.registry" -}}
+{{- include "bzm-opl.dockerRegistry" . -}}
+{{- end -}}
+
+{{- define "bzm-opl.hookImage" -}}
+{{- printf "%s/cranehook:latest" (include "bzm-opl.dockerRegistry" .) -}}
+{{- end -}}
+
+{{/*
 Engine sizing. BlazeMeter's documented footprint is the fallback. Only limits
 are settable: crane stamps the engine pod's *requests* itself, and nothing this
 chart can emit changes them.

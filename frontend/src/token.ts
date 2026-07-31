@@ -18,10 +18,9 @@ import { TokenBranch, TokenReport } from "./api";
  *  copy is not that one: it is said while the box is being ticked, which is the
  *  only moment at which anybody can still decide not to. */
 export const rotateHazard = (shipId: string | null) =>
-  `Issuing a new AUTH_TOKEN${shipId ? ` for agent ${shipId}` : ""} kills the `
-  + "current one immediately. Any agent already running on it starts answering "
-  + "404 and sits at 0/1 Running — which looks like a slow boot — until this "
-  + "bundle is re-applied, Secret included.";
+  `A new AUTH_TOKEN${shipId ? ` for agent ${shipId}` : ""} kills the current one `
+  + "at once: anything already running on it answers 404 and sits at 0/1 "
+  + "Running until this bundle is re-applied, Secret included.";
 
 export interface DownloadPlan {
   /** Whether asking for the bundle will issue a credential. */
@@ -36,7 +35,7 @@ export interface DownloadPlan {
 }
 
 const CARRIES: Record<TokenBranch, string> = {
-  given: "AUTH_TOKEN as entered above",
+  given: "the generated AUTH_TOKEN",
   rotated: "a NEW AUTH_TOKEN, issued now",
   reused: "the AUTH_TOKEN already in that folder",
   placeholder: "AUTH_TOKEN left as a placeholder — fill it in before applying",
@@ -63,7 +62,7 @@ export function downloadPlan(
     return {
       rotates: false,
       hint: CARRIES.given + (rotate
-        ? " — the token above wins, so nothing will be issued" : ""),
+        ? " — the token in hand wins, so nothing will be issued" : ""),
       warning: null,
       incomplete: false,
     };

@@ -186,6 +186,40 @@ def ship_create(s: ShipIn):
     return {"ship": ship, "auth_token": token, "token_error": refused}
 
 
+class FuncIdIn(BaseModel):
+    harbor_id: str
+    func_id: str
+
+
+@app.post("/api/locations/func-id", description=core.add_func_id.__doc__)
+def location_add_func_id(f: FuncIdIn):
+    return _answer(core.add_func_id, _client(), f.harbor_id, f.func_id)
+
+
+class TokenIn(BaseModel):
+    harbor_id: str
+    ship_id: str
+
+
+@app.post("/api/ships/token")
+def ship_issue_token(t: TokenIn):
+    """Issue a NEW AUTH_TOKEN for an existing agent.
+
+    Deliberately its own route rather than a flag on generate: rotating as a
+    side effect of asking for files is what #64 took out, and the page that
+    calls this has already said, in the words core wrote, that the agent
+    currently running on the old credential starts answering 404 until the
+    bundle is re-applied. A route whose whole name is the action cannot be
+    reached by accident.
+
+    The token comes back in the body because there is nowhere else for it to
+    go: BlazeMeter will not show it again, and the caller's next move is to put
+    it in the Secret. Nothing here writes it down -- same as ship_create.
+    """
+    return {"auth_token": _answer(core.issue_auth_token, _client(),
+                                  t.harbor_id, t.ship_id)}
+
+
 @app.get("/api/facts")
 def get_facts(harbor_id: str):
     return _answer(core.gather_facts, _client(), harbor_id)

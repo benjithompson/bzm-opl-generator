@@ -112,6 +112,10 @@ GROUPS = [
      "All unset by default: crane has its own defaults and this generator only "
      "overrides them when asked. `bzm-opl-gen doctor` checks whatever you set "
      "against real node capacity."),
+    ("Cluster checks",
+     "Objects that check the cluster rather than serve tests on it. They are "
+     "not part of the agent: applying the bundle without them deploys exactly "
+     "the same agent."),
 ]
 
 
@@ -414,6 +418,22 @@ OPTIONS = [
             "reservation -- a pod that exceeds an ephemeral-storage limit is evicted "
             "mid-run, which surfaces as a test that stops rather than as a resource "
             "error, so leave headroom over `engine_ephemeral_request_mb`."),
+    # ---- Cluster checks ------------------------------------------------
+    Option(
+        "crane_hook", "boolean", "Cluster checks",
+        summary="Add crane-hook: a one-shot Pod that checks the cluster before the agent runs.",
+        doc="Adds [crane-hook](https://github.com/Blazemeter/crane-hook) to the "
+            "bundle -- a one-shot Pod, plus its own read-only Role and RoleBinding, "
+            "that checks node capacity, egress to BlazeMeter and the registries, the "
+            "RBAC the agent needs, and (for service virtualization) the ingress and "
+            "its TLS secret. It exits 0 or 1 and stops; `kubectl logs cranehook` is "
+            "the report, and it is yours to delete when you have read it. Off by "
+            "default because it is a check rather than part of the agent. Under "
+            "`--format helm` it becomes the chart's `helm test` hook, so `helm test "
+            "<release>` runs it and nothing runs at install time. With "
+            "`private_registry` its image is added to the mirror script -- it is not "
+            "in the location's inventory, so an air-gapped bundle would otherwise "
+            "carry the one object that cannot pull."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
         default_note=gen.CRANE_EPHEMERAL_STORAGE,

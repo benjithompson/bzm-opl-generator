@@ -163,6 +163,8 @@ def cmd_generate(a):
         opts["service_account_create"] = False
     if a.cluster_rbac:
         opts["cluster_rbac"] = True
+    if getattr(a, "crane_hook", False):
+        opts["crane_hook"] = True
     if a.no_restrict_engines:
         opts["restrict_engines"] = False
     if a.tolerations:
@@ -687,6 +689,12 @@ def main():
                         "images have run under it and what they were observed "
                         "to be given")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
+    g.add_argument("--crane-hook", action="store_true",
+                   help="add crane-hook: a one-shot Pod (plus its own read-only "
+                        "Role and RoleBinding) that checks capacity, egress, RBAC "
+                        "and ingress, then exits 0 or 1. Not part of the agent -- "
+                        "`kubectl logs cranehook` is the report, and deleting it "
+                        "changes nothing about the deployment")
     g.add_argument("-o", "--output", default="out")
     g.set_defaults(fn=cmd_generate)
 

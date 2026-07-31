@@ -72,6 +72,50 @@ class FakeClient:
     def delete_private_location(self, harbor_id):
         self.calls.append(("delete", harbor_id))
 
+    def update_private_location(self, harbor_id, slots=None,
+                                threads_per_engine=None, func_ids=None):
+        self.calls.append(("update_private_location", harbor_id, func_ids))
+        merged = dict(self._harbor)
+        if func_ids is not None:
+            merged["funcIds"] = list(func_ids)
+        return merged
+
+
+# -- turning a feature on for a location --------------------------------------
+
+def test_add_func_id_keeps_the_ones_the_location_already_has():
+    """The PATCH replaces `funcIds`, so the additive part is ours to get right:
+    sending only what was asked for is how a location running performance and
+    mocks comes back running only mocks."""
+    client = FakeClient(harbor={"id": "h1", "funcIds": ["performance"]})
+    out = core.add_func_id(client, "h1", "mockServices")
+    assert out["funcIds"] == ["performance", "mockServices"]
+    assert ("update_private_location", "h1",
+            ["performance", "mockServices"]) in client.calls
+
+
+def test_add_func_id_is_idempotent_and_asks_the_account_first():
+    """Already enabled is the answer, not an error -- and the list is read from
+    the account rather than from the caller, whose copy may be an hour old."""
+    client = FakeClient(harbor={"id": "h1", "funcIds": ["performance"]})
+    out = core.add_func_id(client, "h1", "performance")
+    assert out["funcIds"] == ["performance"]
+    assert [c for c in client.calls if c[0] == "update_private_location"] == []
+
+
+def test_issue_auth_token_mints_for_the_ship_it_was_given():
+    client = FakeClient()
+    assert core.issue_auth_token(client, "h1", "s1") == "TOKEN-FROM-API"
+    assert client.calls == [("auth_token", "h1", "s1")]
+
+
+def test_issue_auth_token_reports_a_refused_endpoint_as_such():
+    """Same refusal as everywhere else the token endpoint is called: it names
+    the ship and says a token read off the BlazeMeter UI works as well."""
+    with pytest.raises(core.TokenRefused) as e:
+        core.issue_auth_token(RefusingClient(), "h1", "s1")
+    assert "could not be issued" in str(e.value)
+
 
 # -- the split itself ---------------------------------------------------------
 

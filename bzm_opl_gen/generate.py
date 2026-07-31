@@ -78,6 +78,12 @@ DEFAULT_OPTIONS = {
     # Crane's own pod, unset -> CRANE_EPHEMERAL_STORAGE. One value, both fields;
     # see the constant for why they are not separately settable.
     "crane_ephemeral_storage": None,      # e.g. "2Gi"
+    # github.com/Blazemeter/crane-hook: a one-shot Pod (plus its own read-only
+    # Role and RoleBinding) that checks the cluster against what the agent needs
+    # and exits 0 or 1. Off by default -- it is a check, not part of the agent,
+    # and a bundle that quietly carried an extra Pod would surprise whoever
+    # applies it.
+    "crane_hook": False,
 }
 
 # BlazeMeter's documented engine footprint -- the fallback when the customer
@@ -151,6 +157,17 @@ def engine_size(o):
 # BlazeMeter's own registry: the default DOCKER_REGISTRY, and what the
 # bundle READMEs name when no private registry is configured.
 PUBLIC_REGISTRY = "gcr.io/verdant-bulwark-278"
+
+# crane-hook's own image and RBAC names. The image lives in the same registry as
+# everything else BlazeMeter ships, so a private-registry bundle mirrors it with
+# the rest -- see _mirror_script. The Role name is ours rather than upstream's
+# `test-hookrole`: the bundle already namespaces every object it owns, and a
+# name that says which tool made it is what stops `kubectl delete role
+# test-hookrole` in six months' time being a guess.
+HOOK_IMAGE_REPO = "cranehook"
+HOOK_IMAGE_TAG = "latest"
+HOOK_ROLE_NAME = "bzm-cranehook"
+HOOK_FILE = "bzm_cranehook.yaml"
 
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
@@ -690,6 +707,12 @@ def _mirror_script(facts, o):
     which would abort a mirror that would otherwise have worked.
     """
     refs = image_refs(facts)
+    # The hook's image is not in the location's inventory -- it is not an image
+    # the agent runs -- so an air-gapped bundle that includes the check has to
+    # be told to mirror it too, or the Pod is the one object in the bundle that
+    # cannot pull.
+    if o["crane_hook"]:
+        refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
     reg = o["private_registry"].rstrip("/")
     host = reg.split("/")[0]
     # The registry is free-form input from a CLI flag or a text field, and this
@@ -885,6 +908,38 @@ def _crane_image(facts, o):
     return f"{o['private_registry'].rstrip('/')}/crane:{tag}"
 
 
+def _hook_sub(o, sv):
+    """The crane-hook-only half of the substitution map.
+
+    Split out rather than folded into `sub` for one reason: every key in `sub`
+    is used by a template that is always emitted, and a key that exists only for
+    an optional file is how the always-emitted ones acquire a value nobody can
+    trace. The SV variables are the interesting part -- the hook checks the
+    ingress and its TLS secret only when there is one to check, and passing
+    empty strings would have it check for an ingress named "".
+    """
+    registry = o["private_registry"] or PUBLIC_REGISTRY
+    sv_env = ""
+    if sv:
+        sv_env = (
+            f"        - name: KUBERNETES_WEB_EXPOSE_TYPE\n"
+            f"          value: {sv['type'].upper()}\n"
+            f"        - name: KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME\n"
+            f"          value: {sv['tls_secret']}\n")
+    return {
+        "HOOK_ROLE": HOOK_ROLE_NAME,
+        "REGISTRY": registry,
+        "HOOK_IMAGE": f"{registry.rstrip('/')}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}",
+        # Same rule as the agent: OpenShift's SCC assigns the UID and a pinned
+        # one is refused, so it is pinned only on the platform that wants it.
+        "HOOK_UID_BLOCK": (
+            "" if o["platform"] == "openshift" else
+            f"        runAsUser: {o['run_as_user']}\n"
+            f"        runAsGroup: {o['run_as_user']}\n"),
+        "HOOK_SV_ENV": sv_env,
+    }
+
+
 def _sv_rbac_block(sv):
     """Namespaced Role rules crane needs to publish a virtual service.
 
@@ -1031,6 +1086,17 @@ def _helm_values(facts, o):
             'privateRegistry: ""',
             "imageOverrides: {}",
             "registryAuth: false",
+        ]
+    if o["crane_hook"]:
+        # Only when asked for: the chart's default is off, and an overlay that
+        # restated every default would stop being the record of what was chosen.
+        lines += [
+            "",
+            "# github.com/Blazemeter/crane-hook, as this chart's `helm test`",
+            "# hook: `helm test <release>` runs the cluster check and nothing",
+            "# runs it at install time.",
+            "craneHook:",
+            "  enabled: true",
         ]
     if o["auto_update"] is None:
         lines += [
@@ -1328,6 +1394,9 @@ def generate(facts, options):
         out["bzm_clusterrolebinding.yaml"] = _tpl("clusterrolebinding.yaml").substitute(sub)
     if ca and ca["mode"] in ("inline", "inject"):
         out["bzm_cacerts.yaml"] = _ca_configmap(facts, o)
+    if o["crane_hook"]:
+        out[HOOK_FILE] = _tpl("cranehook.yaml").substitute(
+            sub, **_hook_sub(o, sv))
     if o["private_registry"]:
         out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
     out["README.md"] = _readme(facts, o, out)

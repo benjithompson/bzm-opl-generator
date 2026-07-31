@@ -209,6 +209,20 @@ the classes of problem it can't fix for you.
   *functions*, which a Python registry cannot carry. `/api/option-docs` serves
   the registry so the labels have somewhere to move to later.
 
+- **The UI is three steps and two option buckets, and neither is a view.**
+  `layout/StepFlow.tsx` shows one step at a time (controlled from App, because
+  the download step sends you back to Configure); `layout/WorkArea.tsx` makes
+  the manifests a tab rather than a column. The steps themselves are
+  `steps/AgentPanel`, `steps/ConfigurePanel`, `steps/DownloadPanel` — App keeps
+  every piece of state and every effect and hands them down as typed props, so
+  `core`-style ownership holds on this side too. A group belongs to no feature
+  (`SHARED_GROUPS`) or to one (`groupsOf`), and both are on screen at once:
+  there is no `visibleGroups`/`setButHidden`/`hiddenBlockers` any more, and
+  nothing that hands back what a view was hiding. Two writes to the account come
+  from this page and nowhere else — `POST /api/ships/token` (regenerate) and
+  `POST /api/locations/func-id` (enable a feature on a location) — and both say
+  what they cost before they are pressed.
+
 - **"Could not read" and "there is nothing there" must never share a
   representation.** This has been the same bug four times, and three of them
   were found within one session: `null` vs `[]` in the evidence collector; the

@@ -333,6 +333,37 @@ def test_an_agent_whose_credential_was_refused_is_still_reported(monkeypatch):
     assert "auth_token" in body["token_error"]
 
 
+def test_issuing_a_token_is_its_own_route(connected):
+    """Not a flag on generate. Rotating as a side effect of asking for files is
+    what #64 took out; a route whose whole name is the action cannot be reached
+    by accident, and the page calling it has already said what it costs."""
+    r = client.post("/api/ships/token",
+                    json={"harbor_id": "aaa111", "ship_id": "s1"})
+    assert r.status_code == 200
+    assert r.json()["auth_token"] == "TOKEN-FROM-API"
+    assert connected.calls == [("auth_token", "aaa111", "s1")]
+
+
+def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
+    monkeypatch.setitem(server._state, "client", RefusingClient())
+    r = client.post("/api/ships/token",
+                    json={"harbor_id": "aaa111", "ship_id": "s1"})
+    assert r.status_code == 502
+    assert "could not be issued" in r.json()["detail"]
+
+
+def test_enabling_a_feature_adds_to_the_location_s_func_ids(monkeypatch):
+    """A bundle for mock services against a location that does not carry
+    mockServices deploys cleanly and is never asked to serve one. This is the
+    call that fixes that, and it must not drop what the location already had."""
+    fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
+    monkeypatch.setitem(server._state, "client", fake)
+    r = client.post("/api/locations/func-id",
+                    json={"harbor_id": "aaa111", "func_id": "mockServices"})
+    assert r.status_code == 200
+    assert r.json()["funcIds"] == ["performance", "mockServices"]
+
+
 def test_func_ids_mark_which_ones_change_the_images():
     """The create-location form needs every funcId; the manual form needs only
     the ones that change the answer. Both read this one response, so the

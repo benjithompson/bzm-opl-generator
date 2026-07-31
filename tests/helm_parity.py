@@ -98,6 +98,14 @@ CASES = {
     "service-account-existing": {"platform": "k8s", "cluster_rbac": True,
                                  "service_account_name": "platform-sa",
                                  "service_account_create": False},
+    # crane-hook: three more objects on both sides, and every value in them is
+    # one the bundle already decided -- the namespace, the account it runs as,
+    # the registry its image comes from, the UID rule that differs by platform.
+    "crane-hook": {"platform": "k8s", "crane_hook": True},
+    "crane-hook-openshift": {"platform": "openshift", "crane_hook": True},
+    "crane-hook-private-registry": {"platform": "k8s", "crane_hook": True,
+                                    "private_registry": "reg.example.com/bzm",
+                                    "service_account_name": "bzm-agent"},
 }
 
 JSON_ENVS = ("IMAGE_OVERRIDES", "KUBERNETES_TOLERATIONS_JSON",
@@ -111,15 +119,31 @@ CONTAINER_FIELDS = ("name", "image", "imagePullPolicy", "resources", "envFrom",
                     "readinessProbe")
 
 
+# crane-hook's objects, which are keyed by kind like everything else and would
+# collide with the agent's Role, RoleBinding and (in helm) nothing at all. They
+# are compared separately, by name, because they are not the deployment: they
+# are a check that runs beside it, and on the chart side they are a `helm test`
+# hook rather than an installed object.
+HOOK_NAMES = ("bzm-cranehook", "bzm-cranehook-binding", "cranehook")
+
+
+def _is_hook(d):
+    return d and d.get("metadata", {}).get("name") in HOOK_NAMES
+
+
 def _by_kind(docs):
     out = {}
     for d in docs:
-        if d:
+        if d and not _is_hook(d):
             out[d["kind"]] = d
     return out
 
 
-def _helm_render(outdir, namespace):
+def _by_name(docs):
+    return {d["metadata"]["name"]: d for d in docs if _is_hook(d)}
+
+
+def _helm_docs(outdir, namespace):
     chart = os.path.join(outdir, gen.CHART_DIR)
     values = os.path.join(outdir, gen.HELM_VALUES_FILE)
     for cmd in ([HELM, "lint", "--strict", chart, "-f", values],
@@ -127,7 +151,7 @@ def _helm_render(outdir, namespace):
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             raise RuntimeError((r.stderr or r.stdout).strip())
-    return _by_kind(yaml.safe_load_all(r.stdout))
+    return list(yaml.safe_load_all(r.stdout))
 
 
 def compare(name, opts):
@@ -135,16 +159,21 @@ def compare(name, opts):
     outdir = tempfile.mkdtemp(prefix=f"bzm-parity-{name}-")
     try:
         gen.write(gen.generate(FACTS, {**opts, "output_format": "helm"}), outdir)
-        helm = _helm_render(outdir, opts["namespace"])
+        helm_docs = _helm_docs(outdir, opts["namespace"])
     finally:
         shutil.rmtree(outdir, ignore_errors=True)
+    helm = _by_kind(helm_docs)
 
-    manifests = _by_kind(
-        yaml.safe_load(c)
-        for n, c in gen.generate(FACTS, {**opts, "output_format": "manifests"}).items()
-        if n.endswith(".yaml"))
+    # safe_load_all, not safe_load: a file may hold several documents --
+    # bzm_cranehook.yaml holds three.
+    flat = [d
+            for n, c in gen.generate(
+                FACTS, {**opts, "output_format": "manifests"}).items()
+            if n.endswith(".yaml")
+            for d in yaml.safe_load_all(c)]
+    manifests = _by_kind(flat)
 
-    diffs = []
+    diffs = _hook_diffs(_by_name(flat), _by_name(helm_docs))
     if set(manifests) != set(helm):
         diffs.append(f"object kinds: manifests={sorted(manifests)} "
                      f"helm={sorted(helm)}")
@@ -189,6 +218,49 @@ def compare(name, opts):
                 diffs.append(f"{kind}.rules: {m['rules']} != {h['rules']}")
         elif kind == "Secret" and m["stringData"] != h["stringData"]:
             diffs.append(f"Secret.stringData: {m['stringData']} != {h['stringData']}")
+    return diffs
+
+
+def _hook_diffs(flat, helm):
+    """crane-hook, compared by name across the two formats.
+
+    Not by kind: its Role and RoleBinding sit beside the agent's, and a
+    kind-keyed map would silently compare one against the other. Its Pod exists
+    on both sides but is a `helm test` hook in the chart, so the annotations are
+    expected to differ and only what the hook *does* is compared -- the image it
+    runs, the account it runs as, and the environment that tells it what to
+    check. Everything there is a value the bundle decided twice.
+    """
+    if set(flat) != set(helm):
+        return [f"crane-hook objects: manifests={sorted(flat)} helm={sorted(helm)}"]
+    diffs = []
+    for name in sorted(flat):
+        m, h = flat[name], helm[name]
+        if m["kind"] != h["kind"]:
+            diffs.append(f"{name}.kind: {m['kind']} != {h['kind']}")
+        elif m["kind"] == "Role" and m["rules"] != h["rules"]:
+            diffs.append(f"{name}.rules: {m['rules']} != {h['rules']}")
+        elif m["kind"] == "RoleBinding":
+            for f in ("subjects", "roleRef"):
+                if m[f] != h[f]:
+                    diffs.append(f"{name}.{f}: {m[f]} != {h[f]}")
+        elif m["kind"] == "Pod":
+            mp, hp = m["spec"], h["spec"]
+            for f in ("serviceAccountName", "restartPolicy", "volumes"):
+                if mp.get(f) != hp.get(f):
+                    diffs.append(f"{name}.{f}: {mp.get(f)!r} != {hp.get(f)!r}")
+            mc, hc = mp["containers"][0], hp["containers"][0]
+            for f in ("image", "securityContext", "resources", "volumeMounts"):
+                if mc.get(f) != hc.get(f):
+                    diffs.append(f"{name}.container.{f}: {mc.get(f)!r} != {hc.get(f)!r}")
+            me = {e["name"]: e["value"] for e in mc["env"]}
+            he = {e["name"]: e["value"] for e in hc["env"]}
+            # The SV variables are the exception, and deliberately: --format
+            # helm refuses a service-virtualization location outright, so the
+            # chart has no ingress for the hook to be told about.
+            me = {k: v for k, v in me.items() if not k.startswith("KUBERNETES_WEB_")}
+            if me != he:
+                diffs.append(f"{name}.env: {me} != {he}")
     return diffs
 
 

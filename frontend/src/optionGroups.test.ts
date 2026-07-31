@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
-  allGroupsOff, ANY_DEPLOYMENT, appliesTo, detectGroups, ENGINE_SIZES,
-  featuresOf, GROUP_BY_ID, GroupId, hiddenBlockers, incompleteGroups,
-  serviceAccountOk, unavailableFeatures,
-  OPTION_GROUPS, OptionGroup,
-  setButHidden, startFeature, suggestNamespace, SV_NONE, svConfigured,
-  unclaimedFuncIds, visibleGroups,
+  allGroupsOff, detectGroups, groupsOf, SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
+  incompleteGroups, OPTION_GROUPS, OptionGroup, serviceAccountOk, startFeature,
+  suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
 
 // The lifecycle of a group is data in, data out -- a detect over the options, a
@@ -294,122 +291,30 @@ const ids = (gs: OptionGroup[]) => gs.map((g) => g.id);
  *  any deployment, so they are on screen whatever is being configured. */
 const UNIVERSAL = ids(OPTION_GROUPS.filter((g) => !g.features.length));
 
-describe("group attribution", () => {
-  it("tags every group with features the served vocabulary knows", () => {
-    for (const g of OPTION_GROUPS) {
-      for (const f of g.features) expect(FEATURES.map((x) => x.id)).toContain(f);
-    }
+describe("the split the configure step is built on", () => {
+  it("puts every group in exactly one bucket", () => {
+    const owned = OPTION_GROUPS.filter((g) => g.features.length);
+    expect([...SHARED_GROUPS, ...owned].length).toBe(OPTION_GROUPS.length);
+    // A group in both -- or in neither -- is a group on screen twice, or not at
+    // all. That was the feature view's failure and it is structural now.
+    for (const g of SHARED_GROUPS) expect(g.features).toEqual([]);
   });
 
-  it("says which feature a group belongs to, or that it applies to any", () => {
-    expect(appliesTo(GROUP_BY_ID.sv, FEATURES)).toBe(SV.label);
-    expect(appliesTo(GROUP_BY_ID.sizing, FEATURES)).toBe(PERF.label);
-    expect(appliesTo(GROUP_BY_ID.proxy, FEATURES)).toBe(ANY_DEPLOYMENT);
+  it("gives a feature the groups tagged with it, and only those", () => {
+    expect(groupsOf("sv").map((g) => g.id)).toEqual(["sv"]);
+    expect(groupsOf("performance").map((g) => g.id)).toEqual(["sizing"]);
   });
 
-  it("falls back to the raw id for a feature the vocabulary has not named", () => {
-    // The same deliberate failure mode as the funcId labels: an unlabelled
-    // feature is shown under its id rather than leaving a group unattributed.
-    expect(appliesTo(GROUP_BY_ID.sv, [])).toBe("sv");
-  });
-});
-
-describe("which groups are in view", () => {
-  it("shows a feature's own groups plus the ones that apply to any", () => {
-    // sv is the last declaration, so its view is the universal groups then it.
-    expect(ids(visibleGroups("sv"))).toEqual([...UNIVERSAL, "sv"]);
-    expect(ids(visibleGroups("performance"))).toContain("sizing");
-    expect(ids(visibleGroups("performance"))).not.toContain("sv");
-    expect(ids(visibleGroups("sv"))).not.toContain("sizing");
+  it("answers a feature nothing is tagged with, rather than throwing", () => {
+    // A backend that grows a feature before the frontend tags a group to it is
+    // a card that says "nothing extra to configure" -- not a crash, and not a
+    // missing card.
+    expect(groupsOf("secrets")).toEqual([]);
   });
 
-  it("keeps the declaration order, so the form does not reshuffle", () => {
-    const shown = ids(visibleGroups("performance"));
-    expect(shown).toEqual(ids(OPTION_GROUPS).filter((id) => shown.includes(id)));
-  });
-
-  it("shows the any-deployment groups for a feature no group is tagged with", () => {
-    // What a newly added feature looks like before anything is tagged with it:
-    // the registry/proxy/CA/scheduling options, and nothing claimed falsely.
-    expect(ids(visibleGroups(SECRETS.id))).toEqual(UNIVERSAL);
-  });
-
-  it("hides nothing until a feature is chosen", () => {
-    // The vocabulary is fetched; a failed or pending fetch must not take
-    // options off the page.
-    expect(ids(visibleGroups(null))).toEqual(ids(OPTION_GROUPS));
-  });
-
-  it("is a selection, not a patch -- the options are never touched", () => {
-    // The selector is a view, not a scope: narrowing it may not change what the
-    // manifests contain, so none of these may write an option. A frozen input
-    // makes an attempt throw rather than pass silently.
-    const frozen = Object.freeze({ ...FULL });
-    expect(() => {
-      visibleGroups("sv");
-      setButHidden(frozen, "sv");
-      hiddenBlockers([GROUP_BY_ID.sv], "performance");
-    }).not.toThrow();
-    expect(frozen).toEqual(FULL);
-  });
-});
-
-describe("set but not in view", () => {
-  it("reports a group configured under another feature", () => {
-    // FULL has every group's fields set, so viewing performance leaves the SV
-    // ingress set and off screen -- exactly what must not ship invisibly.
-    expect(ids(setButHidden(FULL, "performance"))).toEqual(["sv"]);
-    expect(ids(setButHidden(FULL, "sv"))).toEqual(["sizing"]);
-  });
-
-  it("reports nothing when the hidden groups hold nothing", () => {
-    expect(setButHidden({ namespace: "blazemeter" }, "performance")).toEqual([]);
-  });
-
-  it("never reports a group that is on screen", () => {
-    for (const f of [...FEATURES, SECRETS]) {
-      const shown = new Set(ids(visibleGroups(f.id)));
-      for (const g of setButHidden(FULL, f.id)) expect(shown.has(g.id)).toBe(false);
-    }
-  });
-
-  it("reports every group when a feature owning them is not in view", () => {
-    // A feature with no groups of its own still hides the other features':
-    // both tagged groups are set in FULL and neither is on screen.
-    expect(ids(setButHidden(FULL, SECRETS.id))).toEqual(["sizing", "sv"]);
-  });
-});
-
-describe("required but not in view", () => {
-  const unfinished = incompleteGroups({ sv_ingress: "nginx" }, {});
-
-  it("is the unfinished groups the current view is hiding", () => {
-    // Which groups are unfinished is each group's own rule; this only says
-    // whether the reason is even on screen.
-    expect(hiddenBlockers(unfinished, "performance")).toEqual([GROUP_BY_ID.sv]);
-  });
-
-  it("says nothing when the group needing attention is on screen", () => {
-    // Then the group renders its own error, which is where it belongs.
-    expect(hiddenBlockers(unfinished, "sv")).toEqual([]);
-  });
-
-  it("says nothing when nothing is incomplete", () => {
-    expect(hiddenBlockers([], "performance")).toEqual([]);
-  });
-
-  it("never blocks on a group that applies to any deployment", () => {
-    // It cannot be off screen, so it can never be the hidden reason.
-    expect(hiddenBlockers([GROUP_BY_ID.registry, GROUP_BY_ID.proxy], "sv"))
-      .toEqual([]);
-  });
-
-  it("labels the switch from the served vocabulary, like every other row", () => {
-    // One label lookup, so the button and the "also in this bundle" line
-    // beside it cannot disagree about what a group is called.
-    const [g] = hiddenBlockers(unfinished, "performance");
-    expect(appliesTo(g, FEATURES)).toBe(SV.label);
-    expect(appliesTo(g, [])).toBe("sv");     // unnamed feature falls back
+  it("keeps the shared groups shared", () => {
+    expect(SHARED_GROUPS.map((g) => g.id))
+      .toEqual(["registry", "proxy", "ca", "sched", "security"]);
   });
 });
 
@@ -588,41 +493,6 @@ describe("a group declares whether its own configuration is finished", () => {
       .map((g) => g.id)).toEqual(["sv"]);
     expect(incompleteGroups({}, { sv: false })).toEqual([]);
     expect(incompleteGroups({}, { sv: true }).map((g) => g.id)).toEqual(["sv"]);
-  });
-});
-
-describe("unavailableFeatures", () => {
-  it("names the features the location does not run", () => {
-    expect(unavailableFeatures(true, ["performance"], FEATURES)).toEqual(["sv"]);
-    expect(unavailableFeatures(true, ["sv"], FEATURES)).toEqual(["performance"]);
-  });
-
-  it("says nothing when the location runs both", () => {
-    expect(unavailableFeatures(true, ["performance", "sv"], FEATURES)).toEqual([]);
-  });
-
-  it("says nothing before the answer is known", () => {
-    // Manual entry declares rather than reads, and no location chosen yet is
-    // "not asked" -- an empty locFeatures must not read as "none enabled", or
-    // every feature greys out on first load.
-    expect(unavailableFeatures(false, [], FEATURES)).toEqual([]);
-    expect(unavailableFeatures(false, ["performance"], FEATURES)).toEqual([]);
-  });
-
-  it("says nothing for a location whose funcIds claim no feature", () => {
-    // The dead end this guards: 10 of 169 locations in the account checked are
-    // sv-bridge / tdm / dataPublisher only. Marking every feature unavailable
-    // there would leave nothing configurable and no way forward.
-    expect(featuresOf(UNMODELLED, FEATURES)).toEqual([]);
-    expect(unavailableFeatures(true, [], FEATURES)).toEqual([]);
-  });
-
-  it("extends with the served vocabulary", () => {
-    // A third feature nobody has tagged a group with is still a feature a
-    // location can lack, so it must be nameable without an edit here.
-    const served = [PERF, SV, SECRETS];
-    expect(unavailableFeatures(true, ["performance"], served))
-      .toEqual(["sv", SECRETS.id]);
   });
 });
 

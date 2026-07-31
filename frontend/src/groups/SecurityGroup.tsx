@@ -38,7 +38,7 @@ export function SecurityGroup(props: {
           after the agent is already online. The hint says what unchecking
           costs rather than what checking buys. */}
       <Check label="Engines drop privileges"
-        hint="uncheck only for an image needing a capability, and it unchecks for every container crane creates; privileged engines are rejected by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
+        hint="uncheck only for an image needing a capability — it applies to every container crane creates. Privileged engines are refused by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
         checked={props.restrictEngines}
         onChange={props.onRestrictEngines} />
       <Field label="Service type"
@@ -52,17 +52,17 @@ export function SecurityGroup(props: {
       {/* Three options because the option has three states -- "" writes no key
           and takes the default, which is off. On is the one that costs
           something and the hint says what: crane takes ownership of its own
-          Deployment within seconds of install, and the next `helm upgrade`
-          fails on a conflict --force-conflicts cannot resolve. The variable is
+          Deployment within seconds of install, and any later apply -- kubectl or
+          helm -- fails on a conflict --force-conflicts cannot resolve. The variable is
           named in the label because BlazeMeter has an AUTO_UPDATE too -- the
           Docker-side switch, inert here -- and this is not it. */}
       <Field label="Agent auto-update (AUTO_KUBERNETES_UPDATE)"
-        hint="off by default: the agent stays on the image in this bundle, and keeping it current is your job. On, crane rewrites its own Deployment and `helm upgrade` stops working">
+        hint="off keeps the agent on this bundle's image; keeping it current is then your job. On, crane rewrites its own Deployment, and re-applying this bundle conflicts with it">
         <select className={inputCls}
           value={props.autoUpdate == null ? "" : String(props.autoUpdate)}
           onChange={(e) => props.onAutoUpdate(
             e.target.value === "" ? null : e.target.value === "true")}>
-          <option value="">Default — off, upgrades keep working</option>
+          <option value="">Default — off, re-applying keeps working</option>
           <option value="true">On — crane updates its own Deployment</option>
           <option value="false">Off — pinned to the image in this bundle</option>
         </select>

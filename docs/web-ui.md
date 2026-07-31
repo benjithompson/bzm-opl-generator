@@ -7,11 +7,19 @@ bzm-opl-gen ui          # opens http://127.0.0.1:8765
 Installed from the release wheel with the `[ui]` extra (see the
 [README](../README.md#install)); from a checkout, `pip install -e ".[ui]"`.
 
-Single page: Agent details — either connect (key stays local) and pick or create
-a location & agent, or enter the harbor id, ship id and token by hand → choose
-what the location runs → configure → live manifest preview → download zip →
-watch the agent flip online. Profile JSON import/export round-trips with
-`generate --profile`.
+Three steps, one on screen at a time, with the stepper and Back/Next in one bar
+at the top: **Agent details** — either connect (key stays local) and pick or
+create a location & agent, or enter the harbor id, ship id and token by hand →
+**Configure** → **Download & verify**, which is also where you watch the agent
+flip online. The manifests are a **Preview** tab beside Configure rather than a
+column, so the form has the page's full width; the count on the tab says how
+many files the current options produce. Profile JSON import/export round-trips
+with `generate --profile`.
+
+Next is greyed until the step is finished, and says what is missing rather than
+leaving you to find it: a step that is complete only because everything has a
+default, and that you have not opened, reads *ready — nothing required* rather
+than showing a tick.
 
 **Save to folder** writes the same bundle (profile.json included) to a
 directory on the machine running the server, instead of a browser download.
@@ -21,6 +29,16 @@ configure here, then `kubectl apply` / livetest / ask an AI session to carry
 on from the same folder. Saving into a folder that already holds this ship's
 bundle reuses the token already there, so a re-render with one option changed is
 the same bytes and leaves the deployed agent alone.
+
+**Cluster check (crane-hook)** under *Deployment settings* adds
+[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
+Pod, plus its own read-only Role and RoleBinding, that checks node capacity,
+egress, RBAC and — for service virtualization — the ingress and its TLS secret,
+then exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
+report, and deleting it changes nothing. In a Helm bundle it is the chart's
+`helm test` hook instead. This is a different thing from **Preflight the target
+cluster** below the download button, which needs no cluster access at all — see
+[Preflight](preflight.md).
 
 ### The AUTH_TOKEN, and where it comes from
 
@@ -37,9 +55,11 @@ saving now mint nothing, and each says which of four ways its bundle got a token
   credential to invalidate — and it is the only copy: nothing here writes it down.
   Keep it as you would what `create-ship` prints.
 - **Pointing at an agent that already exists leaves the field empty**, because no
-  API reads an existing token back. Paste what you kept — or tick *Issue a NEW
-  AUTH_TOKEN with this bundle*, which names, before the download, the agent whose
-  credential it kills and what that looks like when it happens.
+  API reads an existing token back. Paste what you kept — or press **Regenerate
+  token** in that agent's own row, which arms to *I'm sure* (beside a *Cancel*)
+  and names, before it issues anything, the agent whose credential it kills and
+  what that looks like when it happens. The new token lands in the field above
+  the button, and the download then carries it rather than issuing a second one.
 - **A download with neither is a placeholder bundle**, which is a fine thing to
   read and an unusable thing to apply, so the page says so over the button and
   names both places a real token comes from — including the `kubectl … get secret`
@@ -65,31 +85,46 @@ build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
 runs the logic suites CI runs as its own job — the option groups and the
 preflight panel, both plain data in and data out, neither rendering anything.
 
-**Namespace and service account are always on screen**, above the groups and
-outside the feature view: every deployment has both, and both are always sent.
+**Namespace and service account are always on screen**, under *Deployment
+settings*: every deployment has both, and both are always sent.
 The service account's **Create it** checkbox is the only thing that decides
 whether the bundle carries the ServiceAccount object — the name is what the
 Deployment runs as and what the RoleBinding grants to either way, so a customer
 who must run under an account their platform team owns unchecks it and types
 that name. The name itself is required, and an empty one blocks the download.
 
-**Configure one feature at a time.** The step shows that feature's options plus
-the ones that apply to any deployment — registry, proxy, CA trust, scheduling,
-security. It is a **view, not a scope**: the manifests come from the location's
-own funcIds either way, so anything set under one feature stays set and stays in
-the bundle. Options set under a feature you are not looking at are listed beside
-the preview; ones that are *required* and not on screen block the download with
-a link to the feature that needs them. The feature list is served, so it grows
-without a UI release — and a location carrying funcIds no feature claims says so
+**Everything is on screen at once, in two sections.** *Deployment features* is
+one card per feature — each marked `Enabled` or `Not enabled` from the
+location's own funcIds — holding the options only that feature has. *Deployment
+settings* is everything every deployment gets: namespace, service account,
+registry, proxy, CA trust, scheduling, security, the cluster check, and
+Advanced. A rail down the left names what is set in each, so what the bundle
+contains is answerable without scrolling the form.
+
+There used to be a feature *selector* switching between two views of the same
+groups. Nothing is hidden now, so nothing has to be handed back: no "also in
+this bundle", no "not in view". A group that is unfinished blocks the download
+and the download step offers the way back to it.
+
+A feature the location does **not** run has its options greyed, and touching one
+asks *Enable it and configure it here?* — answering yes adds that feature's
+funcId to the location in BlazeMeter, because an agent is only ever asked to
+serve what its location says it runs. The feature list is served, so it grows
+without a UI release, and a location carrying funcIds no feature claims says so
 rather than hiding them.
 
-Picking or creating is one or the other: starting to create a location or an
-agent hides the list of existing ones until you finish or cancel. Reusing an
-agent identity that is already running somewhere conflicts with that install,
-so the two paths are kept apart deliberately.
+**A location holds agents**, and step 1 is built around that: a path line naming
+both (`LOCATION x › AGENT y`), the two lists styled alike because they are the
+same kind of choice, and *New location* / *New agent identity* above their lists
+rather than under them. A location with no agents says so on its row and again
+in the panel — an empty location is not broken, it just has nothing deployed to
+it, and the first agent has to be created. Choosing an agent expands its row to
+hold that agent's credential and the regenerate control; only one row is open at
+a time. Reusing an identity that is already running somewhere conflicts with
+that install, and the row says so.
 
-A location carrying `mockServices` opens with **Service virtualization** on and
-marked *required*, because a bundle without an ingress stalls at
+A location carrying `mockServices` shows **Service virtualization** enabled with
+its group marked *required*, because a bundle without an ingress stalls at
 `WAITING_FOR_DOMAIN` — but the switch does turn off, and that is how you
 generate a location that offers both for performance alone. Switched off it
 reads *declined*, the row says what was given up, and the download unblocks;

@@ -319,6 +319,45 @@ def create_ship(client, harbor_id, name):
     return _upstream(client.create_ship, harbor_id, name)
 
 
+def add_func_id(client, harbor_id, func_id):
+    """Turn a feature on for a location, and hand the location back.
+
+    An agent serves what its location says it runs, so a bundle configured for
+    mock services against a location that does not carry mockServices deploys
+    cleanly and is never asked to serve one. This is the one call that changes
+    that, and it is additive by construction: the PATCH replaces `funcIds`
+    wholesale, so it is built from what the location already has. Sending the
+    single funcId the caller asked for is how a location that ran performance
+    and mocks comes back running only mocks.
+
+    Idempotent -- already present is not an error, it is the answer -- and it
+    reads the location first for that reason rather than trusting a caller's
+    copy, which may be a list a browser has been holding for an hour.
+    """
+    loc = _upstream(client.private_location, harbor_id)
+    have = list(loc.get("funcIds") or [])
+    if func_id in have:
+        return loc
+    return _upstream(client.update_private_location, harbor_id,
+                     func_ids=have + [func_id])
+
+
+def issue_auth_token(client, harbor_id, ship_id):
+    """Mint a new AUTH_TOKEN for an existing agent, and return it.
+
+    Named for the effect, like rotate_auth_token: the endpoint is a fetch and
+    what it does to an agent already running on the previous credential is
+    revoke it. Separated from resolve_auth_token's rotation branch because the
+    two answer different questions -- that one asks what a *bundle* should
+    carry, this one is a person deciding to replace a credential nobody kept,
+    with nothing generated yet.
+
+    The caller is expected to have said what it costs first; core does not
+    confirm, it performs.
+    """
+    return fetch_ship_token(client, harbor_id, ship_id)
+
+
 def gather_facts(client, harbor_id):
     return _upstream(facts_mod.gather, client, harbor_id)
 
