@@ -81,10 +81,13 @@ id the page believes. **The AUTH_TOKEN is never stored** — see `session.strip`
 that nothing writes it down, and browser storage is a file in the browser's
 profile.
 
-**Disconnect** sits at the right of the *Connected as …* row. It makes the
-server forget the key and clears everything read with it; a key you asked to
-save stays on disk, so reconnecting is one click. Without it, a key pasted by
-mistake — or the wrong account — cost a server restart.
+**The Connect button becomes the Disconnect button.** The key form stays where
+it is — detected files, path, Browse, *Remember this key*, the paste section —
+and shows, greyed, the key that is in use; connecting and disconnecting change
+what the controls say, never where they are. Disconnect makes the server forget
+the key and clears everything read with it; a key you asked to save stays on
+disk, so reconnecting is one click. Without it, a key pasted by mistake — or the
+wrong account — cost a server restart.
 
 **Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
 writes a LaunchAgent that serves the UI from login onward with whatever

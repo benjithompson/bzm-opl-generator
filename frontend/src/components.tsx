@@ -34,13 +34,20 @@ export const inputCls =
   "focus:outline-none focus:ring-2 focus:ring-bzm/40 focus:border-bzm bg-white";
 
 export function TextInput(props: {
-  value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean;
+  value: string; onChange: (v: string) => void; placeholder?: string;
+  mono?: boolean;
+  /** Shown, and not editable. Used where a field describes a state the page is
+   *  already in -- the key it is connected with -- rather than an input waiting
+   *  to be filled: hiding it would move everything below it. */
+  disabled?: boolean;
 }) {
   return (
     <input
-      className={inputCls + (props.mono ? " font-mono text-xs" : "")}
+      className={inputCls + (props.mono ? " font-mono text-xs" : "")
+        + (props.disabled ? " bg-slate-50 text-slate-500" : "")}
       value={props.value}
       placeholder={props.placeholder}
+      disabled={props.disabled}
       onChange={(e) => props.onChange(e.target.value)}
     />
   );
@@ -83,13 +90,18 @@ export function SecretInput(props: {
 
 export function Check(props: {
   label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string;
+  /** Shown but not changeable -- a box that describes a state rather than
+   *  offering one. Hiding it instead would move whatever is below it. */
+  disabled?: boolean;
 }) {
   return (
-    <label className="flex items-start gap-2 text-sm cursor-pointer select-none">
+    <label className={"flex items-start gap-2 text-sm select-none "
+      + (props.disabled ? "opacity-50" : "cursor-pointer")}>
       <input
         type="checkbox"
         className="mt-0.5 accent-bzm"
         checked={props.checked}
+        disabled={props.disabled}
         onChange={(e) => props.onChange(e.target.checked)}
       />
       <span>
