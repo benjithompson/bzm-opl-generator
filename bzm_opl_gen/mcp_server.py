@@ -61,6 +61,9 @@ Kubernetes or OpenShift, from a real account rather than from a template.
 
 The path through it:
 
+  0. opl_plan capacity          -- how much cluster a load target needs. Before
+                                   everything else, and needs none of it: no
+                                   key, no account, no cluster.
   1. opl_location list          -- find the location, then `show` for its ship
                                    (agent). Accounts hold hundreds of
                                    locations, so `list` is one line each and
@@ -79,6 +82,14 @@ theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
 opl_agent livetest, which is off unless its own variable is set.)
 
+Sizing before there is a cluster: `opl_plan capacity` turns a load target
+("we need to test 5,000 users") into engines, nodes and a machine size, plus a
+`document` written for the platform team who has to provide them. That request
+is often the actual blocker -- a customer with no cluster cannot start at step
+1, and this is what unblocks them. It assumes how many users one engine
+carries unless told; say that the figure is an assumption whenever you report
+what it produced.
+
 Facts without an account: `opl_facts manual` builds the same structure from a
 harbor id and ship id read off the BlazeMeter UI, so you can produce a bundle
 for a customer whose account you cannot reach. It cannot know which browser
@@ -91,8 +102,8 @@ you have not got one, say so -- do not report a preflight you did not run.
 
 Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
-checks mean), helm.md, service-virtualization.md, hardened-engines.md,
-live-test.md. Read the one that covers the question rather than guessing at an
+checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md,
+service-virtualization.md, hardened-engines.md, live-test.md. Read the one that covers the question rather than guessing at an
 option name -- `opl_bundle options` lists them all with a one-line summary each.
 
 OTHER BLAZEMETER MCP SERVERS, IF THIS SESSION HAS THEM
@@ -142,6 +153,8 @@ _ANNOTATIONS = {
                                     idempotent_hint=True, open_world_hint=True),
     "opl_bundle": ToolAnnotations(read_only_hint=False, destructive_hint=True,
                                     idempotent_hint=False, open_world_hint=False),
+    "opl_plan": ToolAnnotations(read_only_hint=True, destructive_hint=False,
+                                    idempotent_hint=True, open_world_hint=False),
     "opl_preflight": ToolAnnotations(read_only_hint=True, destructive_hint=False,
                                     idempotent_hint=True, open_world_hint=False),
     "opl_agent": ToolAnnotations(read_only_hint=False, destructive_hint=False,
@@ -698,6 +711,45 @@ def _bundle_warnings(options):
     return out
 
 
+# -- opl_plan ------------------------------------------------------------------
+
+PLAN_ACTIONS = ("capacity",)
+
+DESCRIPTIONS["opl_plan"] = (
+    "How much infrastructure a load target needs, before any of it "
+    "exists.\n"
+    "  capacity -- {users, threads_per_engine?, engine_cpu?, "
+    "engine_mem?, engines_per_node?, name?}\n"
+    "The one tool here that reaches nothing: no API key, no account, no "
+    "cluster. Use it when someone asks 'what would we need to test N "
+    "users?' -- typically before there is a cluster to deploy to, "
+    "because the answer is what they raise the request for one with.\n"
+    "It returns the numbers AND `document`, a ready-to-send "
+    "infrastructure request written for a platform team that has never "
+    "heard of BlazeMeter. Offer that document -- it is the deliverable, "
+    "not a formatting of the numbers.\n"
+    "`threads_per_engine` is the input everything multiplies by and the "
+    "one thing arithmetic cannot reach: it depends on what the script "
+    "does between requests. Unset, BlazeMeter's documented figure for "
+    "that engine size is assumed and `threads_per_engine_assumed` says "
+    "so -- pass on that qualifier rather than reporting the node count "
+    "as measured.")
+
+
+def _plan(action, args):
+    if action == "capacity":
+        users, = _need(args, "users")
+        return core.capacity_plan(
+            users,
+            threads_per_engine=args.get("threads_per_engine"),
+            engine_cpu=args.get("engine_cpu"),
+            engine_mem=args.get("engine_mem"),
+            engines_per_node=args.get("engines_per_node"),
+            name=args.get("name"))
+
+    raise _unknown(action, PLAN_ACTIONS)
+
+
 # -- opl_preflight -------------------------------------------------------------
 
 PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
@@ -889,6 +941,13 @@ def build():
     def opl_bundle(action: Literal[BUNDLE_ACTIONS],  # type: ignore[valid-type]
                      args: dict[str, Any] | None = None) -> str:
         return _answer(_bundle, action, args)
+
+    @srv.tool(name="opl_plan",
+              annotations=_ANNOTATIONS["opl_plan"],
+              description=DESCRIPTIONS["opl_plan"])
+    def opl_plan(action: Literal[PLAN_ACTIONS],  # type: ignore[valid-type]
+                     args: dict[str, Any] | None = None) -> str:
+        return _answer(_plan, action, args)
 
     @srv.tool(name="opl_preflight",
               annotations=_ANNOTATIONS["opl_preflight"],

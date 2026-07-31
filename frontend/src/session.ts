@@ -19,7 +19,7 @@ import { Options } from "./api";
 /** Bumped when the shape changes. A snapshot from an older build is dropped
  *  rather than half-read: the fields are ids and options that other code
  *  believes, and a partially-understood one is worse than starting over. */
-const VERSION = 1;
+const VERSION = 2;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -33,6 +33,26 @@ export interface Session {
   manual: { harbor_id: string; ship_id: string };
   options: Options;
   step: number;
+  /** Which of the two views is open. The planner is not a step, so the step
+   *  number cannot say -- and somebody who refreshed while sizing a cluster
+   *  came back to a connect form asking for the account they have not got. */
+  view: "flow" | "plan";
+  /** What was typed into the planner. Kept for the same reason the option
+   *  values are: they were typed, and nothing else can recover them. */
+  plan: PlanSnapshot;
+}
+
+/** The planner's fields, as strings, exactly as they were typed. Numbers are
+ *  not parsed on the way in or out -- a half-typed "50" is a legitimate state
+ *  of the form, and coercing it here would tidy it into a plan nobody asked
+ *  for on the way back. */
+export interface PlanSnapshot {
+  users: string;
+  threadsPerEngine: string;
+  engineCpu: string;
+  engineMem: string;
+  enginesPerNode: string;
+  name: string;
 }
 
 /** The options minus anything that must not be written down. Exported because

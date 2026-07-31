@@ -300,6 +300,24 @@ the classes of problem it can't fix for you.
   actually free needs every pod's requests summed per node, which is a much
   bigger read for a preflight. Say "upper bound" in any detail string you add.
 
+- **`plan.py` reaches nothing, and that is the requirement rather than a
+  property.** It sizes a load target — users → engines → nodes → machine size —
+  for somebody who has no cluster and often no account, because the answer is
+  what they raise the request for the cluster *with*. Any dependency added here
+  (facts, an evidence file, a key) puts the first step behind a later one, which
+  is the one thing it cannot do. Two things it shares rather than restates: the
+  engine footprint and node overhead come from `generate`, and
+  `plan.supported_threads()` is the 500-per-2CPU/8Gi ratio that
+  `doctor.check_threads_per_engine` judges against — the planner recommending
+  what the preflight then WARNs about is the failure mode, and
+  `tests/test_plan.py` asserts the pair agree. **The users-per-engine figure is
+  an assumption and every surface has to say so**: it is the number the whole
+  plan multiplies by, nothing here can measure it (it is a property of the
+  script), and `threads_per_engine_assumed` is how the plan carries the
+  difference between a figure supplied and a figure defaulted. Warnings are
+  plain prose — no backticks, no `--` — because they are rendered as Markdown in
+  the document and as text in the web panel.
+
 - **`facts.manual()` is the same shape `gather()` returns, on purpose.** The UI's
   manual mode and `facts --manual` build facts from a typed harbor id, ship id
   and token so a bundle can be produced for an account nobody here can reach.

@@ -424,6 +424,53 @@ def generate_save(g: SaveIn):
             "token": source._asdict()}
 
 
+# -- planning -----------------------------------------------------------------
+
+class PlanIn(BaseModel):
+    # Everything but `users` is optional, and every count is `Any` rather than
+    # `int`: a number field a browser leaves empty posts "" and a typed one
+    # posts a string, and pydantic's own 422 for either names a field of this
+    # model rather than saying which number could not be a plan. core's refusal
+    # says that, in the words the planner uses at the field itself.
+    users: Any
+    threads_per_engine: Any = None
+    engine_cpu: Optional[str] = None
+    engine_mem: Optional[str] = None
+    engines_per_node: Any = None
+    name: Optional[str] = None
+
+
+def _typed(value):
+    """A form field the user left alone, as "not given".
+
+    An untouched `<input type=number>` posts "", and every optional field here
+    is one. Core cannot make this call for itself: a caller that means "no
+    figure, use the documented one" and a caller that sent a number which is
+    not a number must not arrive there as the same thing, and "" is only the
+    first of the two because a *browser* sent it. So the browser's transport
+    is where it is resolved -- the MCP server passes what its caller typed, and
+    an empty string from a model gets the planner's refusal.
+    """
+    return None if isinstance(value, str) and not value.strip() else value
+
+
+@app.post("/api/plan", description=core.capacity_plan.__doc__)
+def capacity_plan(p: PlanIn):
+    """Size a load target, for a browser that has connected to nothing.
+
+    Not behind _client() and not behind facts, which is the same exemption
+    /api/facts/manual and /api/preflight take and for a stronger reason: this
+    is what somebody opens the UI for *before* they have an account to connect
+    it to or a cluster to point it at.
+    """
+    return _answer(core.capacity_plan, p.users,
+                   threads_per_engine=_typed(p.threads_per_engine),
+                   engine_cpu=_typed(p.engine_cpu),
+                   engine_mem=_typed(p.engine_mem),
+                   engines_per_node=_typed(p.engines_per_node),
+                   name=p.name)
+
+
 # -- preflight ----------------------------------------------------------------
 
 class PreflightIn(BaseModel):

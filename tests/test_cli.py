@@ -522,3 +522,74 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     regenerate({"ca_bundle": "PEM"})
     assert c.calls == []
     assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()
+
+
+# -- plan ---------------------------------------------------------------------
+# The one command that takes neither an API key nor a facts file. What these
+# defend is that it stays that way: a flag that made either mandatory would put
+# the first question a customer asks behind the account they have not got.
+
+def test_plan_needs_no_account_and_no_facts(monkeypatch, capsys):
+    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: pytest.fail(
+        "plan reached BlazeMeter"))
+    _run(monkeypatch, "plan", "--users", "5000")
+    out = capsys.readouterr().out
+    assert "10 engines" in out
+    assert "10 node(s) of 3 vCPU / 10Gi" in out
+    assert "slots=10" in out
+
+
+def test_plan_says_when_the_users_per_engine_figure_is_assumed(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000")
+    assert "assumed" in capsys.readouterr().out
+    _run(monkeypatch, "plan", "--users", "5000", "--threads-per-engine", "500")
+    assert "assumed" not in capsys.readouterr().out
+
+
+def test_plan_writes_the_request_document(monkeypatch, capsys, tmp_path):
+    out_dir = tmp_path / "plan"
+    _run(monkeypatch, "plan", "--users", "2500", "--name", "Checkout",
+         "-o", str(out_dir))
+    doc = (out_dir / "capacity-request.md").read_text()
+    assert "# Infrastructure request: load testing for Checkout" in doc
+    assert "5** × 3 vCPU" in doc
+    assert str(out_dir) in capsys.readouterr().out
+
+
+def test_plan_output_directory_may_be_relative_to_the_shell(monkeypatch, tmp_path):
+    """core refuses a relative out_dir because a server's working directory is
+    whatever launched it. A shell is the one caller that chose its own, so the
+    command resolves the path rather than passing the refusal on."""
+    monkeypatch.chdir(tmp_path)
+    _run(monkeypatch, "plan", "--users", "100", "-o", "here")
+    assert (tmp_path / "here" / "capacity-request.md").exists()
+
+
+def test_plan_json_is_the_whole_plan(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--json")
+    p = json.loads(capsys.readouterr().out)
+    assert p["engines"] == 10 and p["nodes"] == 10
+    assert p["document"].startswith("# Infrastructure request")
+
+
+def test_plan_markdown_prints_the_document_alone(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--markdown")
+    out = capsys.readouterr().out
+    assert out.startswith("# Infrastructure request")
+    assert "slots=10" not in out          # the summary, not this
+
+
+def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "0")
+    assert "at least 1" in str(caught.value)
+
+
+def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):
+    """Same two flag names as `generate`, so a plan and the bundle it leads to
+    are described in one vocabulary."""
+    _run(monkeypatch, "plan", "--users", "1000", "--threads-per-engine", "250",
+         "--engine-cpu-limit", "4", "--engine-mem-limit", "16Gi")
+    out = capsys.readouterr().out
+    assert "4 engines of 4 CPU / 16Gi" in out
+    assert "overrideMemory=16384" in out

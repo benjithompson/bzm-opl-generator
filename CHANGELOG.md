@@ -11,6 +11,66 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **`bzm-opl-gen plan --users N`: how much infrastructure a load target needs,
+  before any of it exists.** Every other command here starts from something that
+  already exists — a location, an agent, a cluster, an evidence file. This one
+  starts from a number somebody has in a planning meeting, and takes **no API
+  key, no facts file and no cluster**, because the customer who needs it most has
+  none of them: the cluster is a ticket they have not raised yet, and this is
+  what they raise it with.
+
+  ```
+  bzm-opl-gen plan --users 5000 --name "Checkout API" -o ./plan
+  ```
+
+  5,000 users → 10 engines of 2 CPU / 8Gi → 10 nodes of 3 vCPU / 10Gi capacity,
+  a peak of 30 vCPU / 100Gi that idles at zero between runs, one small always-on
+  node for the agent, the egress hosts a firewall rule needs, and the four
+  BlazeMeter-side settings (`slots`, `threadsPerEngine`, `overrideCPU`,
+  `overrideMemory`) without which the cluster is provisioned and then not used.
+
+  `-o DIR` writes **`capacity-request.md`** — the same numbers written for a
+  platform team that has never heard of BlazeMeter, showing the arithmetic so
+  the request can be *checked* rather than only read. `--markdown` prints it,
+  `--json` gives the whole plan as data.
+
+  **The users-per-engine figure is an assumption, and everything says so.** How
+  many users one engine carries is a property of the script, not of the engine —
+  a chatty API test with no think time exhausts one far sooner than a browsing
+  journey does — so unset, `--threads-per-engine` assumes BlazeMeter's documented
+  figure for the engine size (500 for 2 CPU / 8Gi, scaled linearly on whichever
+  of CPU and memory is tighter for any other size) and the plan carries
+  `threads_per_engine_assumed`. The document leads with it, the web panel shows
+  it as a callout, and the MCP tool's description tells a model to pass the
+  qualifier on. The honest sequence is plan → provision small → measure →
+  re-plan, and the document says that too.
+
+  The same calculator is in all three surfaces: **`plan`** in the CLI, a
+  **Plan capacity** view in the web UI (a view rather than a step, since
+  everything step 1 asks for is what somebody sizing a cluster has not got yet),
+  and **`opl_plan capacity`** on the MCP server, which returns the numbers and
+  the document together. In the UI, *Use this plan* fills in the location's
+  slots and threads per engine and the bundle's engine size; it writes nothing
+  to BlazeMeter. Full reference in
+  [docs/capacity-planning.md](docs/capacity-planning.md).
+
+  `doctor` and the planner now share the threads-per-engine ratio
+  (`plan.supported_threads`) rather than each carrying it, so a plan the
+  preflight would then warn about cannot be produced.
+
+### Fixed
+
+- **The web UI's engine-sizing hint still claimed engine requests could not be
+  set.** "Crane stamps them at 250m/256Mi and the scheduler packs nodes on
+  those" was the belief a live GKE run disproved in the previous release — the
+  bundle sets the engine's *limits*, the location's `overrideCPU`/
+  `overrideMemory` set its *requests*, and 250m/256Mi is only the default for a
+  location that sets neither. The correction reached the generator, the node
+  pool recipe and `doctor`; this hint was missed, so the one place a user
+  configures engine size still told them the fix was unavailable.
+
 ### Changed
 
 - **BREAKING: `generate --api-key` no longer fetches an AUTH_TOKEN.** It fetched

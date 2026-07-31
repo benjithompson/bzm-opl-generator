@@ -39,6 +39,10 @@ import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 import { SuggestionList } from "./SuggestionList";
+// The capacity planner: a view of its own, not a step. See PlanPanel.
+import {
+  EMPTY_PLAN_INPUTS, PlanHandover, PlanInputs, PlanPanel,
+} from "./PlanPanel";
 import { AgentPanel } from "./steps/AgentPanel";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
@@ -185,6 +189,14 @@ export default function App() {
   // sends you back to the configure step when a group it depends on is
   // unfinished, and it cannot do that with a position it cannot see.
   const [step, setStep] = useState(0);
+  // Which of the two things this page is. The step flow deploys an agent and
+  // needs an account or the values off one; the planner works out how much
+  // cluster a load target needs and reaches nothing at all -- which is the
+  // state a customer with no cluster is actually in, and why it cannot be a
+  // step. `plan` holds what was typed into it, so switching views and coming
+  // back does not empty the form.
+  const [view, setView] = useState<"flow" | "plan">("flow");
+  const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
@@ -242,6 +254,8 @@ export default function App() {
       setManual(saved.manual);
       setOptions((o) => ({ ...o, ...saved.options }));
       setStep(saved.step);
+      setView(saved.view);
+      setPlanInputs(saved.plan);
       pendingShip.current = saved.shipId;
     }
     api.keyStatus().then(async (r) => {
@@ -276,9 +290,9 @@ export default function App() {
   useEffect(() => {
     if (!restored) return;
     session.save({ sourceMode, accountId, workspaceId, harborId, shipId,
-                   manual, options, step });
+                   manual, options, step, view, plan: planInputs });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, manual,
-      options, step]);
+      options, step, view, planInputs]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -498,6 +512,28 @@ export default function App() {
 
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
+
+  /** Carry a plan into the generator, and move to step 1.
+   *
+   *  Writes four fields and creates nothing. Two are the new-location form's
+   *  (slots, threadsPerEngine) -- which only matter if a location is made here,
+   *  and are harmless if one is picked instead -- and two are bundle options
+   *  the plan's node arithmetic assumed, so a bundle generated afterwards asks
+   *  for the engines the request was sized for.
+   *
+   *  overrideCPU / overrideMemory are deliberately *not* written: they are
+   *  fields of the BlazeMeter location and nothing here writes to an account
+   *  without saying what it costs first. The panel names them and the request
+   *  document explains them; setting them is the operator's, in BlazeMeter. */
+  const usePlan = useCallback((h: PlanHandover) => {
+    setNewLoc((l) => ({ ...l, slots: h.slots,
+                        threads_per_engine: h.threadsPerEngine }));
+    setOptions((o) => ({ ...o, engine_cpu_limit: h.engineCpuLimit,
+                         engine_mem_limit: h.engineMemLimit,
+                         engines_per_node: h.enginesPerNode }));
+    setView("flow");
+    setStep(0);
+  }, []);
 
   // Settled means: an agent is chosen and its facts are in. Collapsing then
   // keeps three steps of pickers from sitting above the configuration for the
@@ -1060,11 +1096,35 @@ export default function App() {
           <span className="text-xs text-slate-400">
             private-location Kubernetes / OpenShift manifests, from your real account
           </span>
+          {/* Two views, not two steps. The planner answers "how much cluster
+              would we need?" and the flow deploys into one -- the first is
+              routinely asked by somebody who cannot answer any question the
+              flow's first step asks, so it cannot live inside it. */}
+          <nav className="ml-4 flex gap-1 text-xs" aria-label="View">
+            {([["flow", "Generate"], ["plan", "Plan capacity"]] as const).map(
+              ([id, label]) => (
+                <button key={id} onClick={() => setView(id)}
+                  aria-current={view === id ? "page" : undefined}
+                  className={"rounded-md px-2.5 py-1 font-medium transition-colors "
+                    + (view === id ? "bg-bzm text-white"
+                                   : "text-slate-500 hover:bg-slate-100")}>
+                  {label}
+                </button>
+              ))}
+          </nav>
           {who && <span className="ml-auto text-xs text-slate-500">
             {who.email} · key {who.keyId.slice(0, 8)}…</span>}
         </div>
       </header>
 
+      {view === "plan" ? (
+        // No WorkArea: there are no manifests to sit beside a plan, and an
+        // empty preview pane next to it would suggest this step produces some.
+        <main className="max-w-screen-lg mx-auto p-6">
+          <PlanPanel inputs={planInputs} setInputs={setPlanInputs}
+                     onUse={usePlan} />
+        </main>
+      ) : (
       <WorkArea files={files} activeFile={activeFile}
         setActiveFile={setActiveFile} genErr={genErr}>
       <main className="max-w-screen-xl mx-auto p-6">
@@ -1161,6 +1221,7 @@ export default function App() {
         </StepFlow>
       </main>
       </WorkArea>
+      )}
     </div>
   );
 }

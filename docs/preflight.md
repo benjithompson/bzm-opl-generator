@@ -1,5 +1,10 @@
 # Preflight: `doctor`, `suggest` and `toolcheck`
 
+Sizing a cluster you do not have yet is a different question and a different
+command — [`plan`](capacity-planning.md) turns a load target into engines, nodes
+and a machine size, and needs neither an account nor a cluster. What follows
+assumes both exist.
+
 Manifests that apply cleanly say nothing about whether an engine can be
 *scheduled*. When it can't, the customer sees a run stuck in "initializing" —
 no manifest error, no crane error. `doctor` reads the cluster and the location

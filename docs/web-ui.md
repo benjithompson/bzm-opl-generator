@@ -7,7 +7,16 @@ bzm-opl-gen ui          # opens http://127.0.0.1:8765
 Installed from the release wheel with the `[ui]` extra (see the
 [README](../README.md#install)); from a checkout, `pip install -e ".[ui]"`.
 
-Three steps, one on screen at a time, with the stepper and Back/Next in one bar
+Two views, chosen in the header. **Plan capacity** sizes a load target —
+engines, nodes, machine size, and a request document to send to whoever
+provisions the cluster — and reaches nothing at all, so it works with no key,
+no account and no cluster ([capacity-planning.md](capacity-planning.md)). It is
+not a step for that reason: everything the first step asks for is what somebody
+sizing a cluster has not got yet. *Use this plan* carries its numbers into
+**Generate** — the location's slots and threads per engine, and the bundle's
+engine size — and writes nothing to BlazeMeter.
+
+**Generate** is the three steps, one on screen at a time, with the stepper and Back/Next in one bar
 at the top: **Agent details** — either connect (key stays local) and pick or
 create a location & agent, or enter the harbor id, ship id and token by hand →
 **Configure** → **Download & verify**, which is also where you watch the agent

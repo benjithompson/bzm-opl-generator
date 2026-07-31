@@ -46,7 +46,8 @@ import urllib.request
 import zipfile
 
 from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               options as options_mod, suggest as suggest_mod, workstation)
+               options as options_mod, plan, suggest as suggest_mod,
+               workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -929,6 +930,38 @@ def bundle_images(facts, all_images=False):
     """Every image reference this location's bundle will pull. See
     facts.image_refs, which is where the crane-first rule lives."""
     return facts_mod.image_refs(facts, all_images=all_images)
+
+
+# -- planning, before any of the above exists ---------------------------------
+
+def capacity_plan(users, threads_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None, name=None):
+    """What a load target needs, as numbers and as a document to request it with.
+
+    The only thing here that reaches nothing at all -- no key, no account, no
+    cluster, no evidence file. That is deliberate and it is the whole case:
+    this is used *before* there is an account to connect to or a cluster to
+    preflight, by somebody who has to raise a ticket for the infrastructure the
+    rest of this tool assumes. Putting it behind a credential would put the
+    first step behind the last one.
+
+    The document comes back with the numbers rather than from a second call.
+    Both describe one plan, and two round trips is two answers that can end up
+    describing different ones -- the same reason preflight() returns its
+    suggestions alongside its verdicts.
+    """
+    try:
+        p = plan.capacity_plan(
+            users, threads_per_engine=threads_per_engine,
+            engine_cpu=engine_cpu, engine_mem=engine_mem,
+            engines_per_node=1 if engines_per_node is None else engines_per_node)
+    except ValueError as e:
+        # Every one of these is the caller's number rather than a failure here,
+        # and each names the field it is about. 400, not 500.
+        raise BadRequest(str(e))
+    return dict(p,
+                document=plan.plan_document(p, name),
+                document_file=plan.DOCUMENT_FILE)
 
 
 # -- preflight -----------------------------------------------------------------

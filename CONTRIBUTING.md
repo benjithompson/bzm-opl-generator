@@ -33,12 +33,13 @@ bzm_opl_gen/
   suggest.py     what a cluster's evidence implies about the generate options
   workstation.py workstation preflight for the live rig (`toolcheck`)
   quantity.py    k8s CPU/memory quantities as numbers (sizing arithmetic)
+  plan.py        a load target -> engines, nodes, and a request document (reaches nothing)
   livetest.py    deploy, poll-until-online, teardown
   options.py     what each generate option is for (docs/options.md renders it)
   core.py        orchestration, transport-free -- no fastapi, no request objects
   server.py      HTTP over core.py: routes, request models, the web UI's bind
-  mcp_server.py  MCP over core.py: five action-dispatch tools, docs as resources
-  cli.py         subcommands: facts | generate | doctor | suggest | toolcheck
+  mcp_server.py  MCP over core.py: six action-dispatch tools, docs as resources
+  cli.py         subcommands: plan | facts | generate | doctor | suggest | toolcheck
                               | images | livetest | ui | sv-expose | locations
                               | create-location | create-ship
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
@@ -143,7 +144,7 @@ and nobody writes those by accident.
 | | |
 |---|---|
 | `README.md` | what the tool is, how to install it, how to get a bundle out — deliberately short |
-| `docs/` | the user-facing reference: options, web UI, Helm, SV, preflight, the live rig, plus write-ups of specific findings |
+| `docs/` | the user-facing reference: options, web UI, Helm, SV, preflight, capacity planning, the live rig, plus write-ups of specific findings |
 | `CONTRIBUTING.md` | this file: setup, layout, test layers, PR flow, releases |
 | `CLAUDE.md` | live-rig internals, account facts, the traps behind each flag |
 

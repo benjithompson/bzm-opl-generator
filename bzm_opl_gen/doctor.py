@@ -26,6 +26,7 @@ import os
 import subprocess
 
 from . import livetest
+from . import plan
 # Aliased because every check takes a `facts` argument, which takes the name.
 from . import facts as facts_mod
 from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
@@ -132,18 +133,19 @@ def check_location(facts, opts, cluster):
 def check_threads_per_engine(facts, opts, cluster):
     """Threads the location promises per engine vs what the engine is sized for.
 
-    BlazeMeter's own default pairs 500 threads with a 2 CPU / 8Gi engine, so
-    scale that linearly on whichever of the two ratios is smaller: 500 threads
-    on a 1 CPU / 4Gi engine is not a runnable location, it is a location that
-    OOM-kills or throttles halfway up the ramp.
+    The ratio itself is plan.supported_threads: BlazeMeter's own default pairs
+    500 threads with a 2 CPU / 8Gi engine, scaled linearly on whichever of the
+    two dimensions is tighter. 500 threads on a 1 CPU / 4Gi engine is not a
+    runnable location, it is one that OOM-kills or throttles halfway up the
+    ramp. `plan` sizes a cluster *from* that ratio where this judges a location
+    against it, and the two answering differently would be the planner
+    recommending what the preflight then warns about.
     """
     tpe = facts.get("threads_per_engine")
     if not tpe:
         return []                     # check_location has already reported it
     cpu, mem = engine_size(opts)
-    base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
-    ratio = min(cpu / base_cpu, mem / base_mem)
-    supported = int(DEFAULT_THREADS_PER_ENGINE * ratio)
+    supported = plan.supported_threads(cpu, mem)
     size = _engine_str(cpu, mem)
     if tpe > supported:
         return [Check("threadsPerEngine vs engine size", WARN,

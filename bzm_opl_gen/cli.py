@@ -2,6 +2,7 @@
 from a customer's actual BlazeMeter account.
 
 Subcommands:
+  plan        how much infrastructure a load target needs -- no account, no cluster
   locations   list private locations (harbors) across the account
   create-ship create an agent (ship) in a location, print id + AUTH_TOKEN
   facts       query the account, write facts.json (harbor, ships, images, features)
@@ -15,10 +16,11 @@ Subcommands:
 
 import argparse
 import json
+import os
 import sys
 
 from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
-               livetest, suggest as suggest_mod, workstation)
+               livetest, plan, suggest as suggest_mod, workstation)
 
 
 def _resolve_account(client, a):
@@ -255,6 +257,53 @@ def cmd_sv_expose(a):
     names = ", ".join(f"{m['name']}:{m['port']}" for m in mocks)
     print(f"wrote {a.output}: {len(mocks)} virtual service(s) -- {names}")
     print(f"apply with: kubectl apply -n {opts['namespace']} -f {a.output}")
+
+
+def cmd_plan(a):
+    """Size the infrastructure a load target needs, before any of it exists."""
+    try:
+        p = core.capacity_plan(
+            a.users, threads_per_engine=a.threads_per_engine,
+            engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
+            engines_per_node=a.engines_per_node, name=a.name)
+    except core.CoreError as e:
+        sys.exit(str(e))
+    if a.json:
+        print(json.dumps(p, indent=2))
+        return
+    if a.markdown:
+        print(p["document"])
+        return
+
+    eng, node = p["engine"], p["node"]
+    print(f"{p['users']:,} concurrent users at {p['threads_per_engine']:,} per "
+          f"engine" + ("  (assumed -- BlazeMeter's default for this engine "
+                       "size)" if p["threads_per_engine_assumed"] else ""))
+    print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
+          f"{eng['disk_gb']}GB disk")
+    print(f"  {p['nodes']} node(s) of {node['cpu']} vCPU / {node['memory']} "
+          f"capacity, at {p['engines_per_node']} engine(s) each")
+    print(f"  peak {p['peak']['cpu']} vCPU / {p['peak']['memory']} across the "
+          f"pool; 0 between runs")
+    print(f"  agent: 1 small always-on node ({p['crane']['cpu_limit']} CPU / "
+          f"{p['crane']['memory_limit']})")
+    print(f"  location: slots={p['location']['slots']}, "
+          f"threadsPerEngine={p['location']['threads_per_engine']}, "
+          f"overrideCPU={p['location']['override_cpu']}, "
+          f"overrideMemory={p['location']['override_memory_mb']}")
+    for w in p["warnings"]:
+        print(f"  ! {w}")
+    if a.output:
+        # Through core so the absolute-path rule is the same one every other
+        # written artifact obeys, rather than a second opinion about paths.
+        out = os.path.abspath(a.output)
+        core.write_bundle({p["document_file"]: p["document"]}, out)
+        print(f"\nwrote {os.path.join(out, p['document_file'])} -- the request "
+              f"to hand to whoever provisions the cluster")
+    else:
+        print(f"\n-o DIR writes {p['document_file']}: the same numbers as a "
+              f"document to raise the infrastructure request with "
+              f"(--markdown prints it here)")
 
 
 def cmd_doctor(a):
@@ -535,6 +584,37 @@ def main():
     p = argparse.ArgumentParser(prog="bzm-opl-gen", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    # Deliberately takes no --api-key and no --facts. It answers the question
+    # that comes before both: how much cluster to ask for. Requiring either
+    # would put it behind the thing it exists to help get funded.
+    pl = sub.add_parser("plan",
+                        help="how much infrastructure a load target needs "
+                             "(no account, no cluster)")
+    pl.add_argument("--users", required=True,
+                    help="concurrent users the test has to reach")
+    pl.add_argument("--threads-per-engine", dest="threads_per_engine",
+                    help=f"users one engine carries (default "
+                         f"{api.DEFAULT_THREADS_PER_ENGINE}, BlazeMeter's "
+                         f"figure for a {gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine). Your script "
+                         f"decides the real number -- measure it against one "
+                         f"engine and re-run this")
+    pl.add_argument("--engine-cpu-limit", dest="engine_cpu_limit",
+                    help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
+    pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
+                    help=f'engine memory limit (default {gen_mod.ENGINE_DEFAULT_MEM})')
+    pl.add_argument("--engines-per-node", dest="engines_per_node",
+                    help="engines to a node (default 1; more is cheaper and "
+                         "they contend)")
+    pl.add_argument("--name", help="what is being load tested, for the "
+                                   "document's title")
+    pl.add_argument("-o", "--output", metavar="DIR",
+                    help=f"write {plan.DOCUMENT_FILE} here")
+    pl.add_argument("--markdown", action="store_true",
+                    help="print that document instead of the summary")
+    pl.add_argument("--json", action="store_true", help="the plan as data")
+    pl.set_defaults(fn=cmd_plan)
 
     l = sub.add_parser("locations", help="list private locations in an account")
     l.add_argument("--api-key", required=True)

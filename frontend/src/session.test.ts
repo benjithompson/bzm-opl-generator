@@ -23,6 +23,11 @@ const BASE = {
   manual: { harbor_id: "", ship_id: "" },
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
+  view: "flow" as const,
+  plan: {
+    users: "5000", threadsPerEngine: "", engineCpu: "2", engineMem: "8Gi",
+    enginesPerNode: "", name: "Checkout",
+  },
 };
 
 beforeEach(() => {
@@ -42,6 +47,16 @@ describe("what is remembered", () => {
 
   it("returns null when nothing was stored", () => {
     expect(load()).toBeNull();
+  });
+
+  it("remembers which view was open, and what was typed into the planner", () => {
+    // A refresh while sizing a cluster used to come back on the connect form,
+    // asking for the account the planner exists precisely to work without.
+    save({ ...BASE, view: "plan" });
+    const back = load();
+    expect(back?.view).toBe("plan");
+    expect(back?.plan.users).toBe("5000");
+    expect(back?.plan.name).toBe("Checkout");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {
@@ -76,8 +91,12 @@ describe("what is never remembered", () => {
   });
 
   it("does not put one back if something else wrote one", () => {
+    // Written at the *current* version on purpose: at an old one this would
+    // pass because the whole snapshot was dropped, which is not the property
+    // being asserted.
     sessionStorage.setItem("bzm-opl-gen.session", JSON.stringify(
-      { ...BASE, v: 1, options: { namespace: "ns1", auth_token: "LEAKED" } }));
+      { ...BASE, v: 2, options: { namespace: "ns1", auth_token: "LEAKED" } }));
+    expect(load()?.harborId).toBe("h1");
     expect(load()?.options.auth_token).toBeUndefined();
   });
 

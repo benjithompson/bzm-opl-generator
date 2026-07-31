@@ -46,10 +46,19 @@ export function SizingGroup(props: {
         Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
         Size worker nodes for slots × engine size.
       </p>
+      {/* This said engine requests were unsettable -- "crane stamps them at
+          250m/256Mi and nothing can move them" -- which a live GKE run
+          disproved: the bundle sets the engine's *limits*, the location's
+          overrideCPU/overrideMemory set its *requests*, and 250m/256Mi is only
+          the default for a location that sets neither. The correction landed in
+          the generator, the recipe and doctor, and this hint was missed. */}
       <p className="text-[11px] text-slate-400">
-        Engine <i>requests</i> are not settable: crane stamps them at 250m/256Mi
-        and the scheduler packs nodes on those, so a busy node under-serves the
-        run. Give the location nodes it does not share if that matters.
+        These are the engine's <i>limits</i>. Its <i>requests</i> — what the
+        scheduler and the autoscaler actually place on — come from the
+        location's <code>overrideCPU</code> / <code>overrideMemory</code> in
+        BlazeMeter, and default to 250m/256Mi. Left at that default an engine
+        asks for a fraction of what it uses, so a whole run packs onto one node
+        and the engines contend. Set them to match the limits above.
       </p>
     </>
   );

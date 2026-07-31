@@ -28,13 +28,14 @@ SHIP = FACTS["ships"][0]["id"]
 
 # What each tool promises a client about side effects. Asserted as a whole
 # table rather than a few hand-picked cells: a client that asks before running
-# something reads all five, and the interesting property is how they compare --
-# that the two read-only ones really are, and that the two that can change a
+# something reads every row, and the interesting property is how they compare --
+# that the read-only ones really are, and that the two that can change a
 # customer's account say so.
 EXPECTED_ANNOTATIONS = {
     "opl_location":  {"read_only": False, "destructive": True},
     "opl_facts":     {"read_only": True,  "destructive": False},
     "opl_bundle":    {"read_only": False, "destructive": True},
+    "opl_plan":      {"read_only": True,  "destructive": False},
     "opl_preflight": {"read_only": True,  "destructive": False},
     "opl_agent":     {"read_only": False, "destructive": False},
 }
@@ -108,17 +109,24 @@ def no_ambient_credentials(monkeypatch):
 
 # -- what a session is handed -------------------------------------------------
 
-def test_the_five_tools_are_the_agreed_surface():
+def test_the_tools_are_the_agreed_surface():
     assert sorted(listing()["tools"]) == sorted(EXPECTED_ANNOTATIONS)
 
 
 def test_every_tool_enumerates_its_actions_in_the_schema():
-    """The action list is an enum, not prose: a wrong one is then refused by
-    the client's own validation, naming the valid ones, instead of arriving
-    here to be guessed at."""
+    """The action list is machine-readable, not prose: a wrong one is then
+    refused by the client's own validation, naming the valid ones, instead of
+    arriving here to be guessed at.
+
+    A one-action tool schematises as `const` rather than `enum` -- pydantic
+    collapses a single-member Literal -- and that is the same guarantee said in
+    the narrower way, not a tool that failed to declare itself. Both are
+    accepted; neither being present is the failure.
+    """
     for name, tool in listing()["tools"].items():
         action = tool.input_schema["properties"]["action"]
-        assert action.get("enum"), f"{name} does not enumerate its actions"
+        assert action.get("enum") or action.get("const"), \
+            f"{name} does not enumerate its actions"
 
 
 def test_every_tool_says_whether_it_changes_anything():
@@ -920,3 +928,51 @@ def test_toolcheck_answers_rather_than_exiting(quiet_workstation):
     SystemExit here would take the process down past any except Exception."""
     body = ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
     assert body["checks"] and isinstance(body["ok"], bool)
+
+
+# -- opl_plan ------------------------------------------------------------------
+
+def test_plan_needs_no_credential_at_all(monkeypatch):
+    """Every other tool that answers something useful either holds a client or
+    reads a file the customer sent. This one is reached by a session that has
+    neither, which is the whole reason it is a tool rather than a note in the
+    instructions."""
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: pytest.fail(
+        "opl_plan asked for a BlazeMeter client"))
+    body = ok("opl_plan", "capacity", {"users": 5000})
+    assert body["engines"] == 10 and body["nodes"] == 10
+
+
+def test_plan_hands_back_the_document_to_send_on():
+    """The deliverable is the request, not the arithmetic -- a session with no
+    checkout has nothing else to turn these numbers into."""
+    body = ok("opl_plan", "capacity", {"users": 5000, "name": "Checkout API"})
+    assert body["document"].startswith("# Infrastructure request")
+    assert "Checkout API" in body["document"]
+
+
+def test_plan_marks_the_assumption_a_model_would_otherwise_report_as_fact():
+    body = ok("opl_plan", "capacity", {"users": 5000})
+    assert body["threads_per_engine_assumed"] is True
+    supplied = ok("opl_plan", "capacity",
+                  {"users": 5000, "threads_per_engine": 250})
+    assert supplied["threads_per_engine_assumed"] is False
+    assert supplied["engines"] == 20
+
+
+def test_plan_refuses_a_target_it_cannot_plan():
+    r = call("opl_plan", "capacity", {"users": 0})
+    assert r.is_error and "at least 1" in r.content[0].text
+
+
+def test_plan_names_the_argument_it_is_missing():
+    r = call("opl_plan", "capacity", {})
+    assert r.is_error and "users" in r.content[0].text
+
+
+def test_the_instructions_offer_planning_before_the_account():
+    """A session whose customer has no cluster has to be able to find this
+    without knowing the tool exists."""
+    text = listing()["instructions"]
+    assert "opl_plan" in text
+    assert "no cluster" in text or "before there is a cluster" in text

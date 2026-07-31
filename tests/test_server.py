@@ -603,6 +603,7 @@ def test_key_detection_sees_a_key_named_after_startup(monkeypatch, tmp_path):
 # what this list guards is that they still point at something.
 DOCUMENTED_ROUTES = [
     ("get", "/api/status"), ("post", "/api/facts/manual"),
+    ("post", "/api/plan"),
     ("post", "/api/preflight"), ("get", "/api/sv-mocks"),
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
@@ -1300,3 +1301,54 @@ def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
     assert "b1" in again.json()["detail"] and "b2" in again.json()["detail"]
     assert "B1TOKEN" in open(os.path.join(out, "bzm_secret.yaml")).read(), \
         "the refusal must not have destroyed the token it was protecting"
+
+
+# -- planning, with nothing connected -----------------------------------------
+
+def test_plan_answers_a_browser_that_has_connected_to_nothing(monkeypatch):
+    """The case this route exists for: the UI open, no key, no account, no
+    cluster, and somebody who needs a number to raise a ticket with."""
+    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: pytest.fail(
+        "the planner asked for a BlazeMeter client"))
+    r = client.post("/api/plan", json={"users": 5000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["engines"] == 10 and body["nodes"] == 10
+    assert body["location"]["slots"] == 10
+
+
+def test_plan_returns_the_document_with_the_numbers():
+    """One call, one plan. Two would let a panel show numbers from one request
+    and a document from another."""
+    body = client.post("/api/plan", json={"users": 5000, "name": "Checkout"}).json()
+    assert body["document"].startswith("# Infrastructure request")
+    assert "Checkout" in body["document"]
+    assert body["document_file"] == "capacity-request.md"
+
+
+def test_plan_refuses_a_bad_number_in_the_planner_s_own_words():
+    """400 naming the field, not a 422 naming a model attribute -- the person
+    reading it typed a load target, not a request body."""
+    r = client.post("/api/plan", json={"users": 0})
+    assert r.status_code == 400
+    assert "users must be at least 1" in r.json()["detail"]
+
+
+def test_plan_takes_the_empty_strings_a_form_posts():
+    """Every optional field arrives as "" from an untouched number input, and
+    that has to mean 'not given' rather than a number that will not parse --
+    otherwise the panel refuses the very first thing anyone types."""
+    r = client.post("/api/plan", json={
+        "users": "5000", "threads_per_engine": "", "engine_cpu": "",
+        "engine_mem": "  ", "engines_per_node": ""})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["threads_per_engine_assumed"] is True
+    assert body["engines"] == 10 and body["engines_per_node"] == 1
+    assert body["engine"]["memory"] == "8Gi"       # the documented default
+
+
+def test_plan_still_refuses_a_target_that_was_never_typed():
+    """`users` is the one field with no default, so blank is a refusal rather
+    than an assumption -- there is no plan without a load target."""
+    assert client.post("/api/plan", json={"users": ""}).status_code == 400

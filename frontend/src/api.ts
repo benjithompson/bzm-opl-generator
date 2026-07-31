@@ -29,6 +29,40 @@ export interface AgentStatus {
 }
 export interface Options { [k: string]: unknown }
 
+/** What a load target costs, from core.capacity_plan.
+ *
+ *  The arithmetic is all on the server, not because it is hard -- it is a
+ *  division and two multiplications -- but because doctor judges a cluster
+ *  against the same constants and the planner and the preflight disagreeing is
+ *  the one failure this feature can have. A second copy in TypeScript would be
+ *  a second engine footprint to keep in step.
+ *
+ *  `threads_per_engine_assumed` is the field the panel must never drop: the
+ *  whole plan is that number multiplied out, and nothing here can measure it. */
+export interface CapacityPlan {
+  users: number;
+  threads_per_engine: number;
+  threads_per_engine_assumed: boolean;
+  engines: number;
+  engines_per_node: number;
+  nodes: number;
+  engine: {
+    cpu: string; memory: string; disk_gb: number; tmp_gb: number;
+    supported_threads: number;
+  };
+  node: { cpu: string; memory: string; disk_gb: number };
+  peak: { cpu: string; memory: string; disk_gb: number };
+  crane: { cpu_limit: string; memory_limit: string };
+  location: {
+    slots: number; threads_per_engine: number;
+    override_cpu: string; override_memory_mb: number;
+  };
+  egress: string[];
+  warnings: string[];
+  document: string;
+  document_file: string;
+}
+
 /** Which of four ways a bundle's AUTH_TOKEN arrived, from core.resolve_auth_token.
  *  GIVEN: the token in the form. ROTATED: a new one was issued and the previous
  *  one is dead. REUSED: the one already in the folder being saved to. PLACEHOLDER:
@@ -134,6 +168,13 @@ export const api = {
   generate: (facts: Facts, options: Options, outDir?: string) =>
     req<{ files: GeneratedFile[]; token: TokenReport }>("POST", "/api/generate",
       { facts, options, rotate_token: false, out_dir: outDir ?? null }),
+  /** Size a load target. Reaches no account and no cluster, which is why the
+   *  planner panel works with nothing connected -- see core.capacity_plan.
+   *  Blank fields are sent as typed; the server reads "" as "not given". */
+  plan: (body: {
+    users: string; threads_per_engine?: string; engine_cpu?: string;
+    engine_mem?: string; engines_per_node?: string; name?: string;
+  }) => req<CapacityPlan>("POST", "/api/plan", body),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
