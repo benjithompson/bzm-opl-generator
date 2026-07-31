@@ -75,14 +75,13 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
     // always going to be wrong for somebody: on a 900px window it put the line
     // 21px below the fold. What is above this varies -- the blocked-by sentence
     // comes and goes -- so nothing here should be counting rem.
-    // 10rem is what is above and below this: the page header (3.25rem), the
-    // Configure/Preview tab bar (3.25rem), and main's own padding top and
-    // bottom (1.5rem each). Measured rather than guessed -- the first two
-    // attempts put the footer 21px and then 10px under the fold.
-    <div className="flex flex-col h-[calc(100vh-10rem)]">
+    // 6.75rem is what is above and below this now that the preview is a drawer
+    // rather than a tab bar: the page header (2.75rem) plus main's own padding
+    // (1.5rem top and bottom). Measured rather than guessed.
+    <div className="flex flex-col h-[calc(100vh-6.75rem)]">
       {/* Below the Configure/Preview tabs, which are sticky at the very top:
           two bars both claiming top-0 is one bar over the other. */}
-      <div className="sticky top-[3.25rem] z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
+      <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
         <div className="max-w-screen-xl mx-auto py-2 flex items-center gap-4">
           <div className="flex items-center gap-1.5 grow min-w-0">
             {steps.map((s, i) => (

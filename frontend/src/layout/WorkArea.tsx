@@ -1,16 +1,16 @@
-// The page is one thing at a time: the form, or the manifests it produces.
+// The manifests, in a drawer that slides in from the right.
 //
-// The preview used to sit in a sticky right-hand column, which cost the form
-// half the width for the whole session. Tabs give the form all of it and the
-// preview all of it, and the count on the tab is what says the bundle exists
-// while it is not on screen. The cost is real and was weighed: the preview no
-// longer re-renders in front of you as you type. A slide-over that keeps both
-// visible was the runner-up (PROTOTYPE.md, variant F) and is the thing to
-// revisit if watching it live turns out to matter.
+// This is the third answer to the same question. The first was a sticky
+// right-hand column, which cost the form half its width for the whole session.
+// The second was a "Configure | Preview" pair of tabs, which gave each of them
+// the full page but made the page one thing at a time. A drawer keeps what both
+// were for: the form has everything while the drawer is shut, and the drawer
+// covers what it needs when it is open -- over the top, rather than by
+// squeezing what is underneath.
 //
-// The form is hidden, never unmounted: a remount would drop scroll position and
-// every open group's state on each tab switch.
-import { ReactNode, useCallback, useEffect, useState } from "react";
+// The form is hidden behind it, never unmounted: a remount would drop scroll
+// position and every open group's state each time the preview was opened.
+import { ReactNode, useCallback, useEffect } from "react";
 import { GeneratedFile } from "../api";
 
 interface WorkAreaProps {
@@ -18,6 +18,8 @@ interface WorkAreaProps {
   activeFile: string | null;
   setActiveFile: (name: string | null) => void;
   genErr: string | null;
+  open: boolean;
+  setOpen: (v: boolean) => void;
   /** The steps. */
   children: ReactNode;
 }
@@ -33,7 +35,6 @@ const inEditable = (t: EventTarget | null) => {
 };
 
 export function WorkArea(p: WorkAreaProps) {
-  const [tab, setTab] = useState<"configure" | "preview">("configure");
   const files = p.files;
   const idx = Math.max(0, files.findIndex((f) => f.name === p.activeFile));
   const file = files[idx];
@@ -43,46 +44,57 @@ export function WorkArea(p: WorkAreaProps) {
     p.setActiveFile(files[(idx + d + files.length) % files.length].name);
   }, [files, idx, p]);
 
-  // ArrowLeft/Right cycle files, but only while the preview is the tab in view:
-  // bound unconditionally they would fight every text field in the form.
+  // ArrowLeft/Right cycle files, but only while the drawer is open: bound
+  // unconditionally they would fight every text field in the form. Escape
+  // closes it, which is what a slide-over is expected to do.
   useEffect(() => {
-    if (tab !== "preview") return;
+    if (!p.open) return;
     const h = (e: KeyboardEvent) => {
       if (inEditable(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
       else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+      else if (e.key === "Escape") p.setOpen(false);
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [go, tab]);
-
-  const tabCls = (on: boolean) =>
-    "px-3 py-1.5 text-xs font-medium rounded-md "
-    + (on ? "bg-white shadow-sm text-slate-900"
-          : "text-slate-500 hover:text-slate-700");
+  }, [go, p]);
 
   return (
     <>
-      <div className="sticky top-0 z-20 px-6 py-2 bg-slate-50/90 backdrop-blur border-b border-slate-200">
-        <div className="max-w-screen-xl mx-auto">
-          <div className="inline-flex gap-1 bg-slate-200/70 rounded-lg p-1">
-            <button className={tabCls(tab === "configure")}
-              onClick={() => setTab("configure")}>
-              Configure
-            </button>
-            <button className={tabCls(tab === "preview")}
-              onClick={() => setTab("preview")}>
-              Preview {files.length > 0 && `(${files.length})`}
-            </button>
-          </div>
-        </div>
-      </div>
+      {p.children}
 
-      <div className={tab === "configure" ? "" : "hidden"}>{p.children}</div>
+      {/* The handle, on the edge the drawer comes from. Always there, and the
+          count on it is what says a bundle exists while it is out of sight --
+          the job the "Preview (8)" tab used to do. It hides while the drawer is
+          open, because the drawer covers the edge it sits on. */}
+      <button
+        onClick={() => p.setOpen(true)}
+        aria-expanded={p.open}
+        aria-label="Open the manifest preview"
+        className={"fixed right-0 top-1/2 -translate-y-1/2 z-30 flex items-center gap-1 "
+          + "bg-slate-900 text-white rounded-l-lg pl-1.5 pr-1 py-3 shadow-lg "
+          + "hover:bg-slate-800 transition-opacity "
+          + (p.open ? "opacity-0 pointer-events-none" : "opacity-100")}>
+        <svg viewBox="0 0 20 20" className="w-4 h-4" fill="none" stroke="currentColor"
+          strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 5l-5 5 5 5" />
+        </svg>
+        <span className="text-[11px] font-medium [writing-mode:vertical-rl] py-1">
+          Preview{files.length > 0 ? ` (${files.length})` : ""}
+        </span>
+      </button>
 
-      <div className={tab === "preview"
-        ? "max-w-screen-xl mx-auto px-6 py-6 h-[calc(100vh-7rem)]" : "hidden"}>
-        <div className="bg-slate-900 rounded-xl shadow-lg overflow-hidden h-full flex flex-col">
+      {/* Click-away, and it dims the form so the drawer reads as being over it
+          rather than beside it. */}
+      <div onClick={() => p.setOpen(false)}
+        className={"fixed inset-0 z-30 bg-slate-900/20 transition-opacity duration-200 "
+          + (p.open ? "opacity-100" : "opacity-0 pointer-events-none")} />
+
+      <aside aria-hidden={!p.open}
+        className={"fixed right-0 top-0 bottom-0 z-40 w-full max-w-3xl p-3 "
+          + "transition-transform duration-200 ease-out "
+          + (p.open ? "translate-x-0" : "translate-x-full")}>
+        <div className="bg-slate-900 rounded-xl shadow-2xl overflow-hidden h-full flex flex-col">
           <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800">
             <select
               className="grow min-w-0 max-w-md bg-slate-800 text-slate-100 text-xs font-mono rounded px-2 py-1 border border-slate-700"
@@ -103,9 +115,9 @@ export function WorkArea(p: WorkAreaProps) {
               onClick={() => file && navigator.clipboard.writeText(file.content)}>
               copy
             </button>
-            <button className={barBtn} onClick={() => setTab("configure")}>
-              ← back to form
-            </button>
+            {/* Closes towards the edge it came from. */}
+            <button className={barBtn} onClick={() => p.setOpen(false)}
+              title="close (Esc)" aria-label="Close the preview">→</button>
           </div>
           {p.genErr && <p className="text-red-400 text-xs px-4 py-2">{p.genErr}</p>}
           {file ? (
@@ -120,7 +132,7 @@ export function WorkArea(p: WorkAreaProps) {
             )
           )}
         </div>
-      </div>
+      </aside>
     </>
   );
 }

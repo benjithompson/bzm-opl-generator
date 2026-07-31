@@ -61,6 +61,7 @@ import { SecurityGroup } from "./groups/SecurityGroup";
 import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { WorkArea } from "./layout/WorkArea";
+import { NavDrawer, ViewId } from "./layout/NavDrawer";
 import { StepFlow } from "./layout/StepFlow";
 
 
@@ -206,7 +207,12 @@ export default function App() {
   // state a customer with no cluster is actually in, and why it cannot be a
   // step. `plan` holds what was typed into it, so switching views and coming
   // back does not empty the form.
-  const [view, setView] = useState<"flow" | "plan" | "capacity">("flow");
+  const [view, setView] = useState<ViewId>("flow");
+  // The two drawers. The nav starts open because the three views are the first
+  // thing to understand; the preview starts shut because there is nothing in it
+  // until an agent is chosen.
+  const [navOpen, setNavOpen] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
   // PROTOTYPE state: the account rollup, and which variant is on screen.
   const capVariant = useCapacityVariant();
   const [cap, setCap] = useState<Capacity | null>(null);
@@ -1150,38 +1156,8 @@ export default function App() {
     </div>
   );
 
-  return (
-    <div className="min-h-screen">
-      <header className="bg-white border-b border-slate-200 px-6 py-3 sticky top-0 z-10">
-        <div className="max-w-screen-2xl mx-auto flex items-baseline gap-3">
-          <h1 className="text-lg font-bold text-slate-900">
-            <span className="text-bzm">BlazeMeter</span> OPL Generator
-          </h1>
-          <span className="text-xs text-slate-400">
-            private-location Kubernetes / OpenShift manifests, from your real account
-          </span>
-          {/* Two views, not two steps. The planner answers "how much cluster
-              would we need?" and the flow deploys into one -- the first is
-              routinely asked by somebody who cannot answer any question the
-              flow's first step asks, so it cannot live inside it. */}
-          <nav className="ml-4 flex gap-1 text-xs" aria-label="View">
-            {([["flow", "Generate"], ["plan", "Plan capacity"],
-               ["capacity", "Account capacity"]] as const).map(
-              ([id, label]) => (
-                <button key={id} onClick={() => setView(id)}
-                  aria-current={view === id ? "page" : undefined}
-                  className={"rounded-md px-2.5 py-1 font-medium transition-colors "
-                    + (view === id ? "bg-bzm text-white"
-                                   : "text-slate-500 hover:bg-slate-100")}>
-                  {label}
-                </button>
-              ))}
-          </nav>
-          {who && <span className="ml-auto text-xs text-slate-500">
-            {who.email} · key {who.keyId.slice(0, 8)}…</span>}
-        </div>
-      </header>
-
+  const body = (
+    <>
       {view === "capacity" ? (
         <main className="max-w-screen-xl mx-auto p-6">
           {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
@@ -1201,7 +1177,8 @@ export default function App() {
         </main>
       ) : (
       <WorkArea files={files} activeFile={activeFile}
-        setActiveFile={setActiveFile} genErr={genErr}>
+        setActiveFile={setActiveFile} genErr={genErr}
+        open={previewOpen} setOpen={setPreviewOpen}>
       <main className="max-w-screen-xl mx-auto p-6">
         {/* `done` is what a step cannot say about itself -- whether it is
             finished enough to leave. The last step never is: there is nothing
@@ -1319,6 +1296,31 @@ export default function App() {
       </main>
       </WorkArea>
       )}
+    </>
+  );
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <header className="bg-white border-b border-slate-200 px-4 py-2.5 shrink-0">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-lg font-bold text-slate-900 whitespace-nowrap">
+            <span className="text-bzm">BlazeMeter</span> OPL Generator
+          </h1>
+          <span className="text-xs text-slate-400 truncate">
+            private-location Kubernetes / OpenShift manifests, from your real account
+          </span>
+          {who && <span className="ml-auto text-xs text-slate-500 whitespace-nowrap">
+            {who.email} · key {who.keyId.slice(0, 8)}…</span>}
+        </div>
+      </header>
+
+      {/* The shell: the drawer picks the view, the view fills what is left, and
+          the preview slides over the top of it from the right. */}
+      <div className="flex grow min-h-0">
+        <NavDrawer view={view} setView={setView}
+          open={navOpen} setOpen={setNavOpen} />
+        <div className="grow min-w-0 overflow-y-auto">{body}</div>
+      </div>
     </div>
   );
 }
