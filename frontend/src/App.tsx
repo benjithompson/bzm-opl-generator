@@ -1047,7 +1047,7 @@ export default function App() {
       <p className="text-xs font-semibold text-slate-700">
         New private location
       </p>
-      <Field required={!!newLoc.name.trim()}
+      <Field required
         label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
         <TextInput value={newLoc.name}
           onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>

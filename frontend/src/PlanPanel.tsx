@@ -122,7 +122,7 @@ export function PlanPanel(props: {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Virtual users" required={!!inputs.users.trim()}
+          <Field label="Virtual users" required
             hint="the load the test has to reach">
             <input type="number" min={1} className={inputCls}
               placeholder="5000" value={inputs.users}

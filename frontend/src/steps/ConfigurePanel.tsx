@@ -13,7 +13,7 @@
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, RequiredBadge, Switch,
+  Button, Check, Field, inputCls, RequiredMark, Switch,
 } from "../components";
 import { GroupRow } from "../groups/GroupRow";
 import {
@@ -66,14 +66,15 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
  *  here: every deployment has both, and putting the required half of a pair
  *  behind a toggle makes it look optional. */
 function CoreFields(p: ConfigurePanelProps) {
-  // The badge itself is components.RequiredBadge now -- the planner needed the
-  // same one, and two copies of "what required looks like" is how they drift.
-  const ok = (good: boolean) => <RequiredBadge ok={good} />;
+  // The asterisk says the field is required; the input's border says whether it
+  // has been filled in. Two jobs, and the badge that used to do both said
+  // "REQUIRED" in red on a form where nothing was wrong yet.
+  const ok = () => <RequiredMark />;
   return (
     <div className="space-y-3">
       <label className="block">
         <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-          Namespace {ok(p.namespaceOk)}
+          Namespace{ok()}
         </span>
         <input className={inputCls + (p.namespaceOk ? " border-emerald-400" : " border-red-300")}
           value={String(p.options.namespace ?? "")} placeholder="e.g. blazemeter"
@@ -82,7 +83,7 @@ function CoreFields(p: ConfigurePanelProps) {
       <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
         <label className="block">
           <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-            Service account {ok(p.saOk)}
+            Service account{ok()}
           </span>
           <input className={inputCls + (p.saOk ? "" : " border-red-300")}
             value={String(p.options.service_account_name ?? "")}
