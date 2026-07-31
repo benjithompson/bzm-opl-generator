@@ -393,10 +393,25 @@ MB = 1024 ** 2
 # nothing about a 4096MB heap on a 50-thread location, where it is ten times
 # oversized. The threads are the signal; the ratio never was.
 #
-# Both are inferred from a single vendor data point, and 2.0 is round enough to
-# be a rule of thumb rather than a measurement. It is *their* rule of thumb and
-# reproducing it exactly is the point -- but anyone revising these should record
-# what they measured, on what, right here. See #89.
+# What these constants are NOT: a measurement of what an engine needs.
+#
+# BlazeMeter's "2 CPU / 8Gi" is a system *requirement* in the dumbed-down sense
+# -- a floor chosen so that things work consistently across every customer and
+# every script, not a figure anyone optimised. The 2.0 ratio is round because it
+# is somebody's rule of thumb. So both constants encode a safety margin of
+# unknown size, and scaling them linearly carries that margin to every thread
+# count rather than removing it.
+#
+# That makes this model safe by construction and no better: a recommendation it
+# produces is exactly as conservative as BlazeMeter's own default, proportionally
+# -- which is the right *default* to ship, because it cannot be less safe than
+# what the vendor already tells people to run. It is also why the numbers here
+# cannot deliver an optimised cluster on their own. Getting below the vendor's
+# margin needs observed usage, which is what the calibration loop in #89 is for;
+# until that exists, treat every value this produces as an upper bound that
+# happens to be defensible, not as a measured requirement.
+#
+# Anyone revising these should record what they measured, on what, right here.
 HEAP_MB_PER_THREAD = 8.192
 CONTAINER_HEAP_RATIO = 2.0
 

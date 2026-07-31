@@ -283,9 +283,14 @@ def test_engine_heap_is_not_judged_against_load_when_threads_are_unset():
 
 
 def test_the_model_reproduces_the_documented_point_exactly():
-    """If it ever stops returning BlazeMeter's own numbers for BlazeMeter's own
-    thread count, the model is the bug -- both constants are derived from this
-    single point and nothing else calibrates them."""
+    """A compatibility anchor, not a correctness one.
+
+    It proves the model never contradicts what BlazeMeter tells people to run.
+    It proves nothing about those numbers being right: 2 CPU / 8Gi is a floor
+    chosen so things work consistently everywhere, not a measurement, so this
+    pins a safety margin of unknown size rather than a requirement. Getting
+    below it needs observed usage (#89), and until then every value the model
+    produces is a defensible upper bound."""
     assert doctor.engine_heap_mb(500) == 4096
     assert doctor.engine_container_mb(4096) == 8192
 
