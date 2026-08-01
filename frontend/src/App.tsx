@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, Account, AgentStatus, Capacity, Facts, Feature,
+  Api, Account, AgentStatus, Capacity, Facts, Feature,
   GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
   FuncIdChoice, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
@@ -65,7 +65,14 @@ import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 
 
-export default function App() {
+// The one thing this page does not own: the caller of the local routes. It
+// arrives as an adapter from main.tsx -- the real one in the browser, a fake in
+// vitest -- because every effect below reaches it, and a module-level import
+// leaves nowhere to alter that behaviour without editing in place. Every bug
+// this page has had lived in one of those effects.
+//
+// Fixed for the page's lifetime, which is why it is not in any dependency array.
+export default function App({ api }: { api: Api }) {
   // -- connection ------------------------------------------------------------
   const [keyPath, setKeyPath] = useState("");
   const [pasteId, setPasteId] = useState("");

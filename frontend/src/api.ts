@@ -308,6 +308,20 @@ export const api = {
       { facts: facts ?? {}, options, evidence }),
 };
 
+/** Every route the page calls, as one thing it is handed rather than one it
+ *  imports. `typeof api` rather than a hand-written interface: the two would
+ *  drift, and what the page is allowed to reach is exactly what this module
+ *  serves -- a route added below is available to a caller without a second
+ *  declaration, and a fake that has fallen behind fails to typecheck.
+ *
+ *  Its point is the seam. Imported at module level there is nowhere to put a
+ *  different implementation, so every effect on the page -- the session restore
+ *  ordering, the debounced preview, the guarded account-capacity read, the poll
+ *  that travels by ref -- can only be exercised against a live server. Passed
+ *  in, a test drives them. See App.tsx, which takes it as a prop, and main.tsx,
+ *  which is the one place the real one is chosen. */
+export type Api = typeof api;
+
 /** One verdict, exactly as `doctor` reaches it. FAIL = a test would not start;
  *  WARN = the numbers are wrong or it will bite later, but a test still starts.
  *  Nothing in the browser re-decides one. */
