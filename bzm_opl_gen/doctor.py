@@ -83,6 +83,54 @@ def _unread_section(cluster, key, name, detail):
     return None
 
 
+# What a check declares about the cluster section it reads: the key in the
+# cluster data, the name its unread verdict carries, and what that verdict says.
+Section = collections.namedtuple("Section", "key name unread")
+
+
+def reads(key, name, unread):
+    """Declare the evidence section a check reads, and its unread verdict.
+
+    The rule this exists to make structural is the one broken most often here:
+    an unread section (None -- denied, not served, trimmed out of an evidence
+    file) and an empty one ([] or {}) are opposite answers, and a check body
+    that forgets the difference turns a read somebody was refused into a FAIL
+    about a cluster nobody described. A declared check never gets the chance:
+    run_check() answers the unread case from this declaration and the body is
+    only ever called with a section that was actually read.
+
+    `unread` is the check's own sentence, not a generic one, because what an
+    unread section costs is specific to the question being asked of it -- only
+    the branch is shared. It is a plain string rather than a callable
+    deliberately: a wording that needed the facts or the options to compose
+    would be a wording about data the check has not got.
+
+    Undeclared checks are run unchanged and open the branch themselves (see
+    _unread_section). Both styles coexist; a check that reads no section, or
+    that has to decide whether the question applies at all before it can say
+    what an unread section costs, is right not to declare one.
+    """
+    def declare(check):
+        check.section = Section(key, name, unread)
+        return check
+    return declare
+
+
+def run_check(check, facts, opts, cluster):
+    """One check's verdicts, with the unread branch opened for a declared one.
+
+    The single place that reads a `section` declaration, so evaluate() and any
+    caller running a check on its own agree about what a check was promised.
+    """
+    section = getattr(check, "section", None)
+    if section is not None:
+        unread = _unread_section(cluster, section.key, section.name,
+                                 section.unread)
+        if unread:
+            return unread
+    return check(facts, opts, cluster)
+
+
 # -- location -----------------------------------------------------------------
 
 def check_location(facts, opts, cluster):
@@ -594,6 +642,9 @@ def _pod_ceiling(node):
         return None
 
 
+@reads("nodes", "engine packing",
+       "the cluster's nodes could not be read, so nothing here knows how many "
+       "engines would share one")
 def check_engine_packing(facts, opts, cluster):
     """How many engines the scheduler will put on one node, versus how many
     can actually run there.
@@ -614,13 +665,11 @@ def check_engine_packing(facts, opts, cluster):
     WARN, never FAIL: the engines do start, and a small test may never notice.
     What it costs is the validity of the numbers -- engines throttling against
     each other report the load generator's latency, not the system's.
+
+    The `nodes` it reads are declared above, so an unread section is answered
+    before this body runs and `[]` here is only ever "we looked and there are
+    none".
     """
-    unread = _unread_section(
-        cluster, "nodes", "engine packing",
-        "the cluster's nodes could not be read, so nothing here knows how many "
-        "engines would share one")
-    if unread:
-        return unread
     nodes = eligible_nodes(cluster.get("nodes") or [], opts)
     if not nodes:
         return []            # check_capacity already FAILed on the empty set
@@ -741,19 +790,20 @@ def check_disk(facts, opts, cluster):
 _LR_TYPES = ("Container", "Pod")
 
 
+@reads("limitranges", "limitrange",
+       "the namespace's LimitRanges could not be read, so whether one would "
+       "reject the engine pod at admission is unverified")
 def check_limitrange(facts, opts, cluster):
     """An existing LimitRange can reject the engine pod outright -- max below
     its limits, min above the requests crane stamps, or a maxLimitRequestRatio
     tighter than the gap between the two -- and can rewrite the resources of any
-    pod in the namespace that declares none. Neither shows up in the manifests."""
+    pod in the namespace that declares none. Neither shows up in the manifests.
+
+    The declaration above means `limitranges` here is a list that was read:
+    empty is "the namespace caps nothing", which is this check's WARN, and never
+    "we were refused it", which is the seam's."""
     limitranges = cluster.get("limitranges")
     cpu, mem = engine_size(opts)
-    unread = _unread_section(
-        cluster, "limitranges", "limitrange",
-        "the namespace's LimitRanges could not be read, so whether one would "
-        "reject the engine pod at admission is unverified")
-    if unread:
-        return unread
     if not limitranges:
         # Nothing caps the namespace, which is a note rather than a problem --
         # and separately the engines schedule small, which nothing here can
@@ -890,6 +940,11 @@ PSA_ENFORCE = "pod-security.kubernetes.io/enforce"
 SCC_UID_RANGE = "openshift.io/sa.scc.uid-range"
 
 
+@reads("namespace", "admission",
+       "the namespace could not be read, so its PodSecurity / SCC posture is "
+       "unverified -- unreadable is not absent, and creating the namespace is "
+       "not what is missing here. The cluster evidence verdict carries the "
+       "collector's own reason; re-collect with access to it to settle this")
 def check_admission(facts, opts, cluster):
     """Will the namespace's admission posture accept the *engine* pods?
 
@@ -905,23 +960,16 @@ def check_admission(facts, opts, cluster):
     Those envs are on by default on every platform now, so what this reads is
     the option, not the platform.
     """
-    namespace_obj = cluster.get("namespace")
-    platform = opts.get("platform") or "openshift"
     # Two different facts, and only one of them is answered by creating the
     # namespace. `{}` is a read that came back empty -- the live path's `get ns`
     # on a namespace that is not there yet, which is the ordinary preflight
-    # case. `None` is nobody having looked, which today only an evidence file
-    # says: the collector records a section it was refused as null, and telling
-    # its reader to create a namespace they may well already have is advice
-    # about a problem they do not have.
-    unread = _unread_section(
-        cluster, "namespace", "admission",
-        "the namespace could not be read, so its PodSecurity / SCC posture is "
-        "unverified -- unreadable is not absent, and creating the namespace is "
-        "not what is missing here. The cluster evidence verdict carries the "
-        "collector's own reason; re-collect with access to it to settle this")
-    if unread:
-        return unread
+    # case, and the only one that reaches this body. `None` is nobody having
+    # looked, which today only an evidence file says: the collector records a
+    # section it was refused as null, and telling its reader to create a
+    # namespace they may well already have is advice about a problem they do not
+    # have. That case is answered by the declaration above, before this runs.
+    namespace_obj = cluster.get("namespace")
+    platform = opts.get("platform") or "openshift"
     meta = namespace_obj.get("metadata") or {}
     if not namespace_obj:
         return [Check("admission", WARN,
@@ -1407,7 +1455,14 @@ def _oneshot_curl(cli, namespace, targets, opts):
 
 
 # Every check takes the same (facts, opts, cluster) so adding one is a single
-# edit here, not a new argument order to remember.
+# edit here, not a new argument order to remember. Order is part of the
+# interface: a check returning [] means one earlier in this tuple already owns
+# that verdict.
+#
+# A check decorated with @reads names the cluster section it needs, and
+# run_check() answers the unread case for it -- so its body only ever sees a
+# section that was read. The rest open that branch themselves with
+# _unread_section(); both styles run through the same loop.
 CHECKS = (check_location, check_threads_per_engine, check_engine_heap,
           check_crane_pool, check_capacity, check_engine_packing, check_disk,
           check_limitrange, check_resourcequota, check_admission,
@@ -1458,7 +1513,7 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
 
     cluster = {**cluster_data, "probes": probes}
     return list(extra_checks) + [c for check in CHECKS
-                                 for c in check(facts, opts, cluster)]
+                                 for c in run_check(check, facts, opts, cluster)]
 
 
 def run(facts, opts, namespace, cluster_data=None, probes=None, cli=None,

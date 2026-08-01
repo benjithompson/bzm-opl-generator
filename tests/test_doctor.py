@@ -582,8 +582,13 @@ def test_engine_packing_is_silent_when_no_node_is_eligible():
 
 def test_engine_packing_warns_rather_than_guesses_when_nodes_are_unread():
     """A denied `list nodes` is not an uncapped pool. Unreadable and empty must
-    not share a verdict."""
-    checks = doctor.check_engine_packing(FACTS, SPLIT, {"nodes": None})
+    not share a verdict.
+
+    Through run_check(), because this check declares the section it reads and
+    the unread branch is opened for it -- calling the body directly is asking a
+    question it is no longer given."""
+    checks = doctor.run_check(doctor.check_engine_packing, FACTS, SPLIT,
+                              {"nodes": None})
     c = _find(checks, "engine packing")
     assert c.status == doctor.WARN
     assert "could not be read" in c.detail
@@ -845,10 +850,14 @@ def test_admission_tells_an_absent_namespace_from_an_unread_one():
     answered by creating it. `None` is "nobody looked", which an evidence file
     says when the collector was refused the namespace; telling that reader to
     create the namespace sends them after something that is not missing.
+
+    The unread half is the seam's now -- check_admission declares `namespace`,
+    so run_check() answers it and the body below is only reached for `{}`.
     """
-    absent = doctor.check_admission(FACTS, {"platform": "k8s"}, {"namespace": {}})[0]
-    unread = doctor.check_admission(FACTS, {"platform": "k8s"},
-                                    {"namespace": None})[0]
+    absent = doctor.run_check(doctor.check_admission, FACTS, {"platform": "k8s"},
+                              {"namespace": {}})[0]
+    unread = doctor.run_check(doctor.check_admission, FACTS, {"platform": "k8s"},
+                              {"namespace": None})[0]
     assert absent.status == unread.status == doctor.WARN
     assert "does not exist yet" in absent.detail
     # The claim that cannot be made about a namespace nobody could read.
@@ -1166,6 +1175,120 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
     data = doctor.gather_cluster("kubectl", "ns1")
     assert data["ingressclasses"] == expected
     assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
+
+
+# -- a check declares the section it reads -----------------------------------
+#
+# The rule these pin is the one this codebase has broken six times: "could not
+# read" and "there is nothing there" must never share a representation. A check
+# that declares its section has the unread branch opened for it by evaluate(),
+# so its body is never handed a section nobody could read and cannot forget the
+# distinction. The undeclared checks keep opening it themselves, and both styles
+# have to work at once.
+
+UNREAD_ALL = {"nodes": None, "ingressclasses": None, "limitranges": None,
+              "quotas": None, "serviceaccounts": None, "namespace": None}
+EMPTY_ALL = {"nodes": [], "ingressclasses": [], "limitranges": [],
+             "quotas": [], "serviceaccounts": [], "namespace": {}}
+
+DECLARED = (doctor.check_engine_packing, doctor.check_limitrange,
+            doctor.check_admission)
+
+
+@pytest.mark.parametrize("check, key", [
+    (doctor.check_engine_packing, "nodes"),
+    (doctor.check_limitrange, "limitranges"),
+    (doctor.check_admission, "namespace"),
+])
+def test_a_migrated_check_declares_its_section_as_data(check, key):
+    """The section a check reads is readable off the check, not inferred from
+    its body -- which is what makes it something a new check must supply rather
+    than something its author has to remember."""
+    assert check.section.key == key
+    assert check.section.name and check.section.unread
+
+
+def test_a_declared_checks_body_is_never_handed_an_unread_section():
+    """The whole point of the seam: the body cannot mishandle what it never
+    receives."""
+    @doctor.reads("nodes", "explosive", "the nodes could not be read")
+    def check_explosive(facts, opts, cluster):
+        raise AssertionError("the body ran on an unread section")
+
+    checks = doctor.run_check(check_explosive, FACTS, {}, {"nodes": None})
+    assert [(c.name, c.status) for c in checks] == [("explosive", doctor.WARN)]
+    assert checks[0].detail == "the nodes could not be read"
+
+
+def test_a_declared_check_runs_its_body_when_the_section_is_merely_empty():
+    """[] is "we looked and there are none", which is the body's to judge --
+    and can be a FAIL. Only None is the seam's."""
+    @doctor.reads("nodes", "picky", "the nodes could not be read")
+    def check_picky(facts, opts, cluster):
+        return [doctor.Check("picky", doctor.FAIL, f"{cluster['nodes']!r}")]
+
+    checks = doctor.run_check(check_picky, FACTS, {}, {"nodes": []})
+    assert [(c.status, c.detail) for c in checks] == [(doctor.FAIL, "[]")]
+
+
+def test_an_undeclared_check_is_run_exactly_as_before():
+    """The ten that have not moved still see whatever the cluster holds,
+    including None, and open the branch themselves."""
+    def check_old_style(facts, opts, cluster):
+        return [doctor.Check("old", doctor.WARN, repr(cluster.get("nodes")))]
+
+    checks = doctor.run_check(check_old_style, FACTS, {}, {"nodes": None})
+    assert [(c.name, c.detail) for c in checks] == [("old", "None")]
+
+
+def test_every_declared_section_is_one_the_cluster_data_actually_carries():
+    """A mistyped section key would be indistinguishable from a permanently
+    denied read -- a check that WARNs forever and is never actually run."""
+    carried = set(doctor.cluster_from_evidence(
+        {"schema": doctor.EVIDENCE_SCHEMA}).cluster)
+    for check in doctor.CHECKS:
+        section = getattr(check, "section", None)
+        if section is not None:
+            assert section.key in carried, check.__name__
+
+
+def test_evaluate_opens_the_unread_branch_for_the_declared_checks():
+    """Read through the seam, the verdict is the same WARN the check used to
+    produce for itself."""
+    checks = doctor.evaluate(FACTS, {"platform": "k8s"}, "blazemeter",
+                             cluster_data=UNREAD_ALL, probes={})
+    for check in DECLARED:
+        c = _find(checks, check.section.name)
+        assert c.status == doctor.WARN
+        assert c.detail == check.section.unread
+
+
+def test_a_wholly_unread_cluster_warns_and_exits_zero():
+    """A denied read is never a failure: nothing here can stand behind a
+    verdict about a cluster it was not allowed to look at."""
+    checks = doctor.evaluate(FACTS, {"platform": "k8s"}, "blazemeter",
+                             cluster_data=UNREAD_ALL, probes={})
+    assert not doctor.has_failures(checks)
+    assert doctor.FAIL not in _statuses(checks)
+
+
+def test_a_wholly_empty_cluster_can_still_fail():
+    """The other half of the same distinction, and the reason the seam cannot
+    simply treat a falsy section as unread."""
+    checks = doctor.evaluate(FACTS, {**SV_NGINX, "platform": "k8s"},
+                             "blazemeter", cluster_data=EMPTY_ALL,
+                             probes={doctor.API_PROBE_URL: 7})
+    assert doctor.has_failures(checks)
+
+
+@pytest.mark.parametrize("check", DECLARED)
+def test_a_declared_check_says_something_different_when_it_did_look(check):
+    """Unread and empty reach the reader as different sentences, not just as
+    different statuses."""
+    unread = doctor.run_check(check, FACTS, {"platform": "k8s"}, UNREAD_ALL)
+    looked = doctor.run_check(check, FACTS, {"platform": "k8s"}, EMPTY_ALL)
+    assert [c.detail for c in unread] != [c.detail for c in looked]
+    assert all(c.status == doctor.WARN for c in unread)
 
 
 # -- run() ------------------------------------------------------------------
