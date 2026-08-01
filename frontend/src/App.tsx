@@ -13,7 +13,6 @@ import {
 // say about the click that has not happened yet, which is the only moment a
 // rotation can still be reconsidered (#64).
 import { downloadPlan } from "./token";
-import { SvCtx } from "./SvPrereqs";
 // The option groups of the Configure step: one declaration each (title, hint, the option
 // keys it owns, the features it belongs to, and its detect/enable/disable),
 // plus a body per group. This file only wires them -- what a group *is*, and
@@ -21,9 +20,14 @@ import { SvCtx } from "./SvPrereqs";
 import {
   allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
   featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups,
-  serviceAccountOk, startFeature, suggestNamespace, SV_NONE, svConfigured,
-  unclaimedFuncIds,
+  serviceAccountOk, startFeature, suggestNamespace, unclaimedFuncIds,
 } from "./optionGroups";
+// Service virtualization, as one record rather than a dozen values derived in
+// four places here. Whether the location demands it, whether that demand was
+// declined, whether what is configured is finished, the prerequisite context,
+// the RBAC prose, the scheme, the chart's refusal -- and the one patch the
+// options need, which used to be two effects writing what a third read back.
+import { svState } from "./sv";
 // The preflight panel's own decisions -- how a verdict list reads, what a
 // picked file has to be, what a refused import leaves behind. No verdict is
 // reached there either: they are doctor's, and arrive in doctor's order.
@@ -153,6 +157,15 @@ export default function App({ api }: { api: Api }) {
   // typing a space -- so the two are separate rather than one with a flag.
   const raw = useCallback(
     (k: string) => String(options[k] ?? ""), [options]);
+  // Everything about service virtualization, answered once. Four blocks of this
+  // file used to derive it -- what the location demands, whether that demand
+  // was declined, whether what is set is finished, what the panels render
+  // against -- and each read the options for itself, so one question had four
+  // answers free to disagree. Declared up here because the status poll below
+  // asks it too. See sv.ts; it is tested as plain data, with no page at all.
+  const sv = useMemo(
+    () => svState(facts?.func_ids, options, svConst),
+    [facts?.func_ids, options, svConst]);
   /** Drop the credential and everything said about it.
    *
    *  One function because it is one fact -- the token, the rotate choice and the
@@ -533,7 +546,7 @@ export default function App({ api }: { api: Api }) {
   // and depending on them would tear down and restart the interval on every
   // keystroke in the namespace field.
   const svWatchRef = useRef({ on: false, ns: "", dom: "" });
-  svWatchRef.current = { on: svConfigured(txt("sv_ingress")), ns: txt("namespace"),
+  svWatchRef.current = { on: sv.configured, ns: txt("namespace"),
                          dom: txt("sv_subdomain") };
   useEffect(() => {
     if (!polling || !harborId || !shipId) return;
@@ -672,8 +685,6 @@ export default function App({ api }: { api: Api }) {
       .catch(() => setGenErr("could not parse profile JSON"));
   };
 
-  const openshift = options.platform === "openshift";
-
   const proxyOpt = (options.proxy ?? {}) as Record<string, string | undefined>;
   const setProxy = (k: string, v: string) => {
     const p = { ...proxyOpt, [k]: v || undefined };
@@ -691,69 +702,34 @@ export default function App({ api }: { api: Api }) {
   // options, so nothing hidden ever reaches the manifests. Auto-flips on when
   // a preset/import brings values in.
   const [grpOn, setGrpOn] = useState<GroupFlags>(allGroupsOff);
-  // An SV location cannot be generated without this group: the manifests would
-  // apply cleanly and then stall at WAITING_FOR_DOMAIN, so the backend refuses.
-  // Surface it as required rather than letting the user find out later. The
-  // funcIds come from generate.SV_FUNC_IDS over /api/sv-constants rather than a
-  // copy here, so adding one cannot leave the UI silently disagreeing.
-  const svLocation = !!facts?.func_ids?.some(
-    (f) => svConst.func_ids.includes(f));
-  // ...and answered: a location can carry mockServices and be wanted for
-  // performance alone, which is a decision the options can hold (SV_NONE) and
-  // generate() accepts. Required is therefore the demand *not yet answered* --
-  // the state that blocks -- and declined is the same demand answered no.
-  const svDeclined = options.sv_ingress === SV_NONE;
-  const svRequired = svLocation && !svDeclined;
-  // What a group cannot read off the options: SV is required by the location,
-  // not by anything configured. Keyed by group id so the walk below never has
-  // to test for one by name.
-  const grpRequired: Partial<GroupFlags> = { sv: svRequired };
-  const grpDeclined: Partial<GroupFlags> = { sv: svLocation && svDeclined };
   // Sticky: this only ever opens groups, so a group the user opened by hand
-  // stays open with nothing set in it. svRequired is the dependency; the record
-  // above is derived from it, which is why it is not one.
+  // stays open with nothing set in it. `sv.required` is the dependency, not the
+  // record it is carried in: a fresh object every render would re-run this on
+  // every keystroke.
   useEffect(() => {
-    setGrpOn((g) => detectGroups(options, g, grpRequired));
-  }, [options, svRequired]);
-  // Keep the SV options self-consistent however they arrived -- an imported
-  // profile sets them without ever calling flipGroup, and opening the panel via
-  // svRequired goes through setGrpOn, so neither path would otherwise seed
-  // sv_ingress (leaving the select showing "NGINX" off the ?? fallback while
-  // state stayed null).
-  //
-  // service_type is deliberately not touched here. This effect used to rewrite
-  // a NODEPORT to CLUSTERIP whenever an ingress was configured; #60 showed the
-  // pairing works, so an imported profile keeps the value it arrived with.
-  //
-  // Same reason a stale sv_istio_gateway is dropped here rather than only in the
-  // select's onChange: only crane's istio backend reads it, so generate() now
-  // refuses outright, and an imported profile pairing it with another ingress
-  // would hit that error with nothing in the UI to explain it.
-  // The openshift backend publishes a route.openshift.io Route, so switching the
-  // platform away from OpenShift strands sv_ingress on a value generate() now
-  // refuses -- and the option itself disappears from the select, leaving nothing
-  // on screen to explain the error. Fall back to nginx, which works anywhere.
+    setGrpOn((g) => detectGroups(options, g, { sv: sv.required }));
+  }, [options, sv.required]);
+  // The one place an SV option is written without anyone pressing anything, and
+  // the whole of it: an imported profile can arrive stranded (openshift ingress
+  // on a platform that is not OpenShift, a gateway no backend will read, a
+  // chart format this location cannot have), and a location can turn out to be
+  // an SV one after the form was filled in. What has to change is decided in
+  // sv.ts as a value -- which is what makes it testable, and what stops this
+  // being two effects writing what a third reads back. Applying the patch makes
+  // the next one null, so this settles in one pass.
   useEffect(() => {
-    setOptions((o) => {
-      const stranded = o.sv_ingress === "openshift" && o.platform !== "openshift";
-      const toNginx = stranded || (svRequired && !o.sv_ingress);
-      const ingress = toNginx ? "nginx" : o.sv_ingress;
-      const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
-      if (!toNginx && !clearGateway) return o;
-      return {
-        ...o,
-        ...(toNginx ? { sv_ingress: "nginx" } : {}),
-        ...(clearGateway ? { sv_istio_gateway: null } : {}),
-      };
-    });
-  }, [svRequired, options.sv_ingress, options.sv_istio_gateway, options.platform]);
+    const patch = sv.patch;
+    if (!patch) return;
+    setOptions((o) => ({ ...o, ...patch }));
+  }, [sv.patch]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
     const group = GROUP_BY_ID[id];
     setOptions((o) => {
       // `required` reaches disable so a group the location demands can record
       // being switched off rather than merely emptied -- see the SV group.
-      const patch = on ? group.enable(o) : group.disable(o, !!grpRequired[id]);
+      const patch = on ? group.enable(o)
+        : group.disable(o, !!sv.groupRequired[id]);
       // A group that seeds nothing must hand back the same object: a fresh
       // identity would re-run the preview effect and re-POST /api/generate for
       // options that did not change.
@@ -809,45 +785,17 @@ export default function App({ api }: { api: Api }) {
   // two that produces no bundle at all.
   const saOk = serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
-  // What the bundle is: flat YAML to kubectl apply, or the chart with a values
-  // overlay. Both render the same objects -- the choice is how you install and
-  // upgrade -- except that the chart is performance-only, so an SV location is
-  // held to manifests and the segment says why instead of disappearing.
   // What the download and save buttons will do about the credential: the hint
   // beside them, the banner over them, and whether the request rotates at all.
   // One derivation because those three answer one question, and three of them
   // could disagree -- see token.ts.
   const tokenPlan = downloadPlan(previewToken, rotate, shipId);
+  // What the bundle is: flat YAML to kubectl apply, or the chart with a values
+  // overlay. Both render the same objects -- the choice is how you install and
+  // upgrade -- except that the chart is performance-only, so an SV location is
+  // held to manifests and the segment says why instead of disappearing. That
+  // refusal is sv.helmBlocked, with the sentence it is refused in.
   const format = String(options.output_format ?? "manifests");
-  const helmBlocked = svRequired
-    ? "Not for this location — service virtualization needs an ingress, its RBAC "
-      + "and a TLS secret, which this chart does not carry."
-    : undefined;
-  // A location can turn out to be an SV one after the format was picked, and an
-  // imported profile can arrive already set to helm. Fall back rather than
-  // leaving a disabled segment selected and every generate call failing.
-  useEffect(() => {
-    if (svRequired && options.output_format === "helm") set("output_format", "manifests");
-  }, [svRequired, options.output_format, set]);
-
-  // Read off the group's own rule rather than restated here. The two were
-  // separate copies of _sv_cfg's requirements and had to be edited in lockstep
-  // -- #60 relaxed the rule and had to touch both, which is the argument.
-  const svOk = !GROUP_BY_ID.sv.incomplete!(options, svRequired, svConst.backends);
-  // What the prerequisite list and the endpoint host are rendered against. The
-  // list shows from the moment the group is on, so a field still empty renders
-  // as its own placeholder rather than a gap; anything filled in is substituted
-  // for real, which is the point -- the host below is meant to be pasted into a
-  // browser after the first virtual service deploys.
-  const svCtx: SvCtx = {
-    ns: txt("namespace") || "<namespace>",
-    dom: txt("sv_subdomain") || "<domain>",
-    secret: txt("sv_tls_secret") || "<tls-secret>",
-    gateway: txt("sv_istio_gateway"),
-  };
-  // Served, not restated here: what the Role grants is generate.py's to state,
-  // and the two can disagree only if one of them is a copy.
-  const svRbac = svConst.backends[txt("sv_ingress")];
 
   // -- what this location runs -----------------------------------------------
   // The features it carries, and the funcIds it carries that the tool has no
@@ -878,34 +826,26 @@ export default function App({ api }: { api: Api }) {
   }, [features, harborId, workspaceId]);
   // Which groups are in use but not finished. Each group declares its own rule,
   // so a feature gaining required options later needs nothing here.
-  const incomplete = incompleteGroups(options, { sv: svRequired }, svConst.backends);
+  const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
   // the controller rejects crane's Ingress the endpoint 503s while the pod is
-  // healthy. The scheme follows the TLS secret, because that is what decides
-  // whether the published endpoint terminates TLS -- probing the other one
-  // answers a question nobody asked.
-  const svScheme = txt("sv_tls_secret") ? "https" as const : "http" as const;
+  // healthy. The scheme is the record's -- it follows the TLS secret, because
+  // that is what decides whether the published endpoint terminates TLS.
+  //
   // Nothing renders off the promise: the row goes busy, the status poll behind
   // it keeps running, and the server bounds its own wait well inside one poll
   // interval, so a hanging endpoint holds up nothing but its own row.
   const checkEndpoint = async (host: string) => {
     setSvChecks((c) => ({ ...c, [host]: { busy: true } }));
     try {
-      const res = await api.svCheck(host, svScheme);
+      const res = await api.svCheck(host, sv.scheme);
       setSvChecks((c) => ({ ...c, [host]: { busy: false, res } }));
     } catch (e) {
       setSvChecks((c) => ({ ...c, [host]: { busy: false, err: String((e as Error).message) } }));
     }
   };
-  // How the result reads. A 503 is amber, not red: the check worked and this is
-  // its answer -- the one `bzm-opl-gen sv-expose` exists to fix, which the
-  // message names. Anything else that answered routed, so only a probe that got
-  // no status line is red.
-  const svCheckTone = (r: SvCheckOut) =>
-    r.status !== "ok" ? "text-red-600"
-      : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
   // -- preflight against an imported cluster read ----------------------------
   // The cluster-side twin of manual facts entry: someone with access to the
@@ -1035,26 +975,16 @@ export default function App({ api }: { api: Api }) {
         onAutoUpdate={(v) => set("auto_update", v)}
         onServiceType={(v) => set("service_type", v)} />
     ),
+    // The one record, and the four writes. Which backend is chosen, whether it
+    // is finished, what the prose is rendered against and what may be offered
+    // are all one answer -- assembled here from eleven props, they were eleven
+    // chances to assemble it wrongly.
     sv: (
-      <SvGroup
-        // Null, not "", while nothing is chosen: the select still shows its
-        // nginx default, but no backend's prose is claimed until one is picked.
-        ingress={options.sv_ingress == null ? null : String(options.sv_ingress)}
-        ingressTypes={svConst.ingress_types} openshift={openshift}
-        subdomain={raw("sv_subdomain")} tlsSecret={raw("sv_tls_secret")}
-        gateway={raw("sv_istio_gateway")}
+      <SvGroup sv={sv}
         onIngress={(v) => set("sv_ingress", v)}
         onSubdomain={(v) => set("sv_subdomain", v)}
         onTlsSecret={(v) => set("sv_tls_secret", v)}
-        onGateway={(v) => set("sv_istio_gateway", v)}
-        ok={svOk}
-        // Computed, not deduced from the absence of other reasons: a later
-        // completeness rule would otherwise inherit the nodePort sentence, and
-        // the panel would show it before the backend table has even loaded.
-        nodePortConflict={options.service_type != null
-          && options.service_type !== "CLUSTERIP"
-          && svConst.backends[txt("sv_ingress")]?.nodeport_ok === false}
-        ctx={svCtx} rbac={svRbac} />
+        onGateway={(v) => set("sv_istio_gateway", v)} />
     ),
   };
 
@@ -1240,7 +1170,8 @@ export default function App({ api }: { api: Api }) {
               locUnclaimed={locUnclaimed} notEnabled={notEnabled}
               enableFeature={enableFeature}
               options={options} set={set}
-              grpOn={grpOn} grpRequired={grpRequired} grpDeclined={grpDeclined}
+              grpOn={grpOn} grpRequired={sv.groupRequired}
+              grpDeclined={sv.groupDeclined}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
               namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
               exportProfile={exportProfile} importProfile={importProfile} />
@@ -1250,11 +1181,10 @@ export default function App({ api }: { api: Api }) {
           <Section n={3} title="Download & verify">
             <DownloadPanel
               facts={facts} shipId={shipId} ships={ships} sourceMode={sourceMode}
-              who={who} options={options} set={set} raw={raw} txt={txt}
-              saOk={saOk} svOk={svOk} genErr={genErr}
+              who={who} options={options} set={set} raw={raw}
+              sv={sv} saOk={saOk} genErr={genErr}
               unfinished={incomplete} goToConfigure={() => setStep(1)}
               format={format}
-              helmBlocked={helmBlocked}
               previewToken={previewToken} rotate={rotate} setRotate={setRotate}
               tokenPlan={tokenPlan} lastTokenReport={lastTokenReport}
               setLastTokenReport={setLastTokenReport}
@@ -1266,8 +1196,8 @@ export default function App({ api }: { api: Api }) {
               applied={applied} applySuggestion={applySuggestion}
               undoSuggestion={undoSuggestion}
               polling={polling} setPolling={setPolling} status={status}
-              svMocks={svMocks} svChecks={svChecks} svScheme={svScheme}
-              svCheckTone={svCheckTone} checkEndpoint={checkEndpoint} />
+              svMocks={svMocks} svChecks={svChecks}
+              checkEndpoint={checkEndpoint} />
           </Section>
         </StepFlow>
       </main>

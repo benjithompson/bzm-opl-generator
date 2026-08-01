@@ -19,10 +19,13 @@ import {
 import { afterEach, expect, test } from "vitest";
 
 import App from "./App";
-import { Capacity } from "./api";
+import { Capacity, Options } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 
 afterEach(cleanup);
+// The page writes its selections to sessionStorage, and one test's would
+// otherwise be restored into the next one's page.
+afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
 
 /** One account's rollup, identifiable on screen by its workspace name. */
 function capacityOf(accountId: number, workspace: string): Capacity {
@@ -100,4 +103,95 @@ test("a slow capacity answer for the previous account never lands under the new 
 
     expect(screen.queryByText("Alpha workspace")).toBeNull();
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
+  });
+
+// -- service virtualization, through the page --------------------------------
+// sv.ts is tested as plain data (sv.test.ts) -- what needs a page is the wiring
+// it replaced: an effect that WROTE the ingress option and another that READ it
+// back. The bundle really carrying the seeded value, and doing so once, is the
+// thing neither a type nor the module's own tests can show.
+
+/** An account holding one location that runs virtual services, ready to
+ *  generate for. `record` collects the options every preview is asked for --
+ *  the bundle as the server would see it, rather than what the form shows. */
+function svAccount(record: Options[]) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-mocks", name: "Mocks", funcIds: ["mock-services"], slots: 1,
+      // Offline, so the page's own rule auto-picks it -- a running agent is
+      // never cloned into a new deployment.
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-mocks", func_ids: ["mock-services"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      platform: "openshift", output_format: "helm",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [{
+      id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
+      func_ids: ["mock-services"],
+    }],
+    // The funcId that means "runs virtual services" is served, never spelled
+    // in the frontend -- this is the fixture standing in for that vocabulary.
+    svConstants: async () => ({
+      func_ids: ["mock-services"],
+      ingress_types: ["nginx", "istio"],
+      backends: {
+        nginx: { group: "networking.k8s.io", resources: ["ingresses"],
+                 creates: "Ingress", nodeport_ok: true },
+      },
+    }),
+    generate: async (_facts: unknown, options: Options) => {
+      record.push(options);
+      return { files: [], token: { branch: "placeholder" as const,
+                                   ship_id: "s-1", message: "" } };
+    },
+  });
+}
+
+test("an SV location seeds a backend into the bundle, once, and is held to manifests",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={svAccount(asked)} />);
+
+    // Pick the location. Its funcIds are what make SV required -- nothing was
+    // configured, and nothing was pressed in the group.
+    fireEvent.click(await screen.findByText("Mocks"));
+
+    // The seed reaches the bundle, not just the select: with sv_ingress unset
+    // generate() refuses such a location outright, and the select showing its
+    // own nginx fallback would hide that.
+    const latest = () => asked[asked.length - 1] ?? {};
+    await waitFor(() => expect(latest().sv_ingress).toBe("nginx"));
+    // ...and the imported default of `helm`, which this location cannot have,
+    // is corrected in the same pass.
+    expect(latest().output_format).toBe("manifests");
+    // Settled: the correction is applied and then there is nothing left to
+    // correct. A loop would keep minting options identities and re-POSTing the
+    // preview for a configuration that stopped changing.
+    const settled = asked.length;
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked.length).toBe(settled);
+
+    // The row says the location is what demands it...
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
+
+    // ...and the chart is refused with the sentence, rather than disappearing.
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const chart = await screen.findByRole<HTMLButtonElement>(
+      "radio", { name: /Helm chart/ });
+    expect(chart.disabled).toBe(true);
+    expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
   });

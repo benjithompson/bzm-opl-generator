@@ -157,6 +157,54 @@ export function svConfigured(ingress: unknown): boolean {
   return !!ingress && ingress !== SV_NONE;
 }
 
+/** Is the SV configuration in use but not finished, so the bundle cannot
+ *  generate? The `incomplete` of the sv group below, named so that sv.ts can
+ *  ask it directly: the page used to reach `GROUP_BY_ID.sv.incomplete!` through
+ *  the table, which is a hole in the promise that a group's rules are the
+ *  group's own. A second copy of the rule beside that caller would be worse
+ *  still -- #60 relaxed it and had to edit both.
+ *
+ *  Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and the
+ *  TLS secret are both mandatory (the secret even for plain HTTP -- crane
+ *  validates it at startup), and NODEPORT is refused for a backend that cannot
+ *  publish over it. With none chosen, only a location whose funcIds demand SV
+ *  is unfinished.
+ *
+ *  An unknown backend does NOT block, and that covers three states this one
+ *  value cannot tell apart -- not fetched yet, fetch failed, table served
+ *  empty. Usually the repo insists those stay distinct; here they genuinely
+ *  share an answer, because none of them is evidence that the pairing is
+ *  broken. Blocking on any of them would grey out the download for a
+ *  configuration that generates fine, and generate() refuses authoritatively
+ *  in the case that is actually broken.
+ *
+ *  SV_NONE is finished by declaration -- generate() accepts it for a
+ *  mockServices location, so blocking the download on it would be the UI
+ *  refusing what the backend allows. */
+export function svIncomplete(
+    o: Options, required: boolean,
+    backends?: Record<string, { nodeport_ok: boolean }>): boolean {
+  if (o.sv_ingress === SV_NONE) return false;
+  if (!o.sv_ingress) return required;
+  return !String(o.sv_subdomain ?? "").trim()
+    || !String(o.sv_tls_secret ?? "").trim()
+    || svNodePortConflict(o, backends);
+}
+
+/** The one arm of the rule above that the SV panel has to name on its own: a
+ *  service type the chosen backend cannot publish over needs a different
+ *  sentence from an empty field, because only one of them names a fix that is
+ *  somewhere else on the page. Computed rather than deduced from the absence of
+ *  the other reasons: deduced, it would inherit whatever a later completeness
+ *  rule adds, and the panel would show the nodePort sentence for it. */
+export function svNodePortConflict(
+    o: Options,
+    backends?: Record<string, { nodeport_ok: boolean }>): boolean {
+  return svConfigured(o.sv_ingress)
+    && o.service_type != null && o.service_type !== "CLUSTERIP"
+    && backends?.[String(o.sv_ingress).trim()]?.nodeport_ok === false;
+}
+
 // -- the groups, in the order the form shows them ----------------------------
 export const OPTION_GROUPS: OptionGroup[] = [
   {
@@ -276,29 +324,9 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // answer, not a configuration, so it leaves the group closed -- an imported
     // profile that declined must not re-open it.
     detect: (o) => svConfigured(o.sv_ingress),
-    // Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and
-    // the TLS secret are both mandatory (the secret even for plain HTTP --
-    // crane validates it at startup), and NODEPORT is refused for a backend
-    // that cannot publish over it. With none chosen, only a location whose
-    // funcIds demand SV is unfinished.
-    //
-    // An unknown backend does NOT block, and that covers three states this one
-    // value cannot tell apart -- not fetched yet, fetch failed, table served
-    // empty. Usually the repo insists those stay distinct; here they genuinely
-    // share an answer, because none of them is evidence that the pairing is
-    // broken. Blocking on any of them would grey out the download for a
-    // configuration that generates fine, and generate() refuses authoritatively
-    // in the case that is actually broken.
-    // SV_NONE is finished by declaration -- generate() accepts it for a
-    // mockServices location, so blocking the download on it would be the UI
-    // refusing what the backend allows.
-    incomplete: (o, required, backends) => (o.sv_ingress === SV_NONE ? false
-      : o.sv_ingress
-        ? !String(o.sv_subdomain ?? "").trim()
-          || !String(o.sv_tls_secret ?? "").trim()
-          || (o.service_type != null && o.service_type !== "CLUSTERIP"
-              && backends?.[String(o.sv_ingress)]?.nodeport_ok === false)
-        : required),
+    // Stated above, as svIncomplete: sv.ts answers the same question for the
+    // panel that has to explain it, and the two must not be two rules.
+    incomplete: svIncomplete,
     // `{}` when an ingress is already chosen, like every other group that has
     // nothing to seed: a patch with a key in it mints a fresh options identity
     // and re-POSTs /api/generate for a configuration that did not change.

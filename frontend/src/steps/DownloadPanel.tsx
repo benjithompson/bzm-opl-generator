@@ -16,7 +16,7 @@ import {
 import {
   Button, Check, ErrorMsg, inputCls, SegmentedControl, Switch,
 } from "../components";
-import { OptionGroup, svConfigured } from "../optionGroups";
+import { OptionGroup } from "../optionGroups";
 import {
   EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, verdictLine,
   worstStatus,
@@ -24,6 +24,10 @@ import {
 import { Applied } from "../suggestions";
 import { SuggestionList } from "../SuggestionList";
 import { DownloadPlan } from "../token";
+// Service virtualization as one record: whether this bundle can be a chart,
+// whether its settings are finished, how a published endpoint is probed. It
+// used to arrive as four props derived four places in App.
+import { Sv } from "../sv";
 
 export interface DownloadPanelProps {
   // -- what is being generated for whom
@@ -35,10 +39,14 @@ export interface DownloadPanelProps {
   options: Options;
   set: (k: string, v: unknown) => void;
   raw: (k: string) => string;
-  txt: (k: string) => string;
+  /** Everything about service virtualization, from sv.ts. Four things are read
+   *  off it here -- whether the settings are finished, whether the chart is
+   *  refused and why, whether a mock watch is meaningful at all, and the scheme
+   *  an endpoint is probed over -- and they are one answer, so they arrive as
+   *  one value. */
+  sv: Sv;
   // -- the download guard, and why it is closed when the reason is elsewhere
   saOk: boolean;
-  svOk: boolean;
   genErr: string | null;
   /** Groups in use but unfinished. They are on the configure step, which is by
    *  definition not this one, so the block names them and offers the way back
@@ -46,7 +54,6 @@ export interface DownloadPanelProps {
   unfinished: OptionGroup[];
   goToConfigure: () => void;
   format: string;
-  helmBlocked?: string;
   // -- the credential this bundle will carry
   previewToken: TokenReport | null;
   rotate: boolean;
@@ -77,25 +84,31 @@ export interface DownloadPanelProps {
   status: AgentStatus | null;
   svMocks: { ns: string; read: SvMocksOut } | null;
   svChecks: Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>;
-  svScheme: "https" | "http";
-  svCheckTone: (r: SvCheckOut) => string;
   checkEndpoint: (host: string) => void;
 }
+
+/** How an endpoint check reads. A 503 is amber, not red: the check worked and
+ *  this is its answer -- the one `bzm-opl-gen sv-expose` exists to fix, which
+ *  the message names. Anything else that answered routed, so only a probe that
+ *  got no status line at all is red. Here rather than in App: it is a class
+ *  name for a row this file renders, and nothing else asks. */
+const checkTone = (r: SvCheckOut) =>
+  r.status !== "ok" ? "text-red-600"
+    : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
 export function DownloadPanel(p: DownloadPanelProps) {
   // Destructured rather than read off `p` throughout: the markup below is the
   // markup that was in App, and rewriting every reference to prove it moved is
   // how a move turns into a rewrite nobody diffed.
   const {
-    facts, shipId, ships, sourceMode, who, options, set, raw, txt,
-    saOk, svOk, genErr, unfinished, goToConfigure, format, helmBlocked,
+    facts, shipId, ships, sourceMode, who, options, set, raw,
+    sv, saOk, genErr, unfinished, goToConfigure, format,
     previewToken, rotate, setRotate, tokenPlan, lastTokenReport,
     setLastTokenReport, dlErr, setDlErr,
     saveDir, setSaveDir, saved, setSaved, saveErr, setSaveErr,
     preflight, preflightBusy, importEvidence, evidence,
     applied, applySuggestion, undoSuggestion,
-    polling, setPolling, status, svMocks, svChecks, svScheme, svCheckTone,
-    checkEndpoint,
+    polling, setPolling, status, svMocks, svChecks, checkEndpoint,
   } = p;
   return (
             <div className="space-y-3">
@@ -113,11 +126,11 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     value: "helm",
                     label: "Helm chart",
                     hint: "The chart plus a values overlay from this account. helm install / upgrade.",
-                    disabledReason: helmBlocked,
+                    disabledReason: sv.helmBlocked,
                   },
                 ]} />
               <div className="flex gap-2 items-center">
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
+                <Button disabled={!facts || !shipId || !!genErr || !sv.ok || !saOk}
                   onClick={() => {
                     setDlErr(null); setLastTokenReport(null);
                     downloadZip(facts!, { ...options, ship_id: shipId },
@@ -194,7 +207,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     hand back an absolute directory path -- webkitdirectory
                     yields file names relative to the folder, which is not what
                     the server needs -- and `~` is expanded server-side. */}
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
+                <Button disabled={!facts || !shipId || !!genErr || !sv.ok || !saOk}
                   onClick={() => {
                     setSaveErr(null); setSaved(null); setLastTokenReport(null);
                     const dir = saveDir.trim() ||
@@ -422,7 +435,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     became reachable, which is the part of an SV deploy that
                     actually stalls. Only for an SV deployment -- the
                     performance panel is exactly as it was. */}
-                {polling && svConfigured(txt("sv_ingress")) && svMocks && (
+                {polling && sv.configured && svMocks && (
                   <div className="mt-3">
                     <p className="text-xs font-medium text-slate-600 mb-1">
                       Virtual services in {svMocks.ns}
@@ -439,9 +452,9 @@ export function DownloadPanel(p: DownloadPanelProps) {
                                 <>
                                   {" — "}
                                   <a className="text-bzm hover:underline font-mono break-all"
-                                    href={`${svScheme}://${m.host}/`}
+                                    href={`${sv.scheme}://${m.host}/`}
                                     target="_blank" rel="noreferrer">
-                                    {svScheme}://{m.host}/
+                                    {sv.scheme}://{m.host}/
                                   </a>
                                   {/* The check is made from the machine serving
                                       this page, against the host shown above --
@@ -454,7 +467,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                                 </>
                               ) : <> — set a wildcard domain to get the endpoint host</>}
                               {chk?.res && (
-                                <p className={`mt-0.5 ${svCheckTone(chk.res)}`}>
+                                <p className={`mt-0.5 ${checkTone(chk.res)}`}>
                                   {chk.res.message}
                                   {chk.res.status !== "ok" && chk.res.detail && (
                                     <span className="block text-slate-400 font-mono break-all">
