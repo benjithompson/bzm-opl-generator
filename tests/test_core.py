@@ -11,6 +11,8 @@ That is deliberate: these are the decisions and those are the status codes, and
 a change that moves one without the other should fail somewhere.
 """
 
+import base64
+import inspect
 import io
 import json
 import os
@@ -911,6 +913,171 @@ def test_a_malformed_key_file_is_a_refusal_rather_than_an_exit(tmp_path):
     # ...and the exiting one is still there, which is why this test is.
     with pytest.raises(SystemExit):
         api.BzmClient(str(bad))
+
+
+# -- one construction for the client ------------------------------------------
+#
+# #92. Thirteen places built a client and three suites stood in at three
+# different points, so `client_from_env` widened to take all three inputs a
+# caller can have: a path, an id and secret, or nothing and the environment.
+# Every one of these asserts a CoreError and none asserts SystemExit -- an
+# escaping SystemExit is not caught by pytest.raises(CoreError), so each of the
+# refusal tests below fails rather than passes if the exiting constructor ever
+# creeps back in underneath.
+
+@pytest.fixture
+def no_key_env(monkeypatch):
+    """No key in the environment of whoever is running the suite.
+
+    The developer running this very likely has BZM_API_KEY_FILE set (the MCP
+    server wants it) and an api-key.json in the checkout, and a test that
+    reads either would pass here and fail in CI, or worse the other way round.
+    """
+    for var in (core.KEY_FILE_ENV, core.KEY_ID_ENV, core.KEY_SECRET_ENV):
+        monkeypatch.delenv(var, raising=False)
+
+
+def credential_of(client):
+    """The (id, secret) a built client will authenticate as.
+
+    Past the underscore deliberately: which credential a client ended up
+    holding is the whole question this section asks, and the only other way to
+    ask it is an HTTP request, which does not belong in an offline suite.
+    """
+    return tuple(base64.b64decode(client._auth).decode().split(":", 1))
+
+
+def test_a_client_is_built_from_a_key_file(no_key_env, tmp_path):
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "SHHH"}')
+    client = core.client_from_env(str(key))
+    assert isinstance(client, api.BzmClient)
+    assert credential_of(client) == ("KID", "SHHH")
+
+
+def test_a_client_is_built_from_an_id_and_secret(no_key_env, monkeypatch):
+    """The UI's input, which arrives pasted into a form and has no file behind
+    it. `key_set` writes it to a temp file purely to have a path to hand to a
+    constructor that only takes one, then unlinks it -- a secret on disk for
+    the duration of a call, to satisfy an argument list. Taken directly, it
+    never lands there, which is what the read_key_file guard below asserts."""
+    monkeypatch.setattr(api, "read_key_file", lambda p: pytest.fail(
+        f"a pasted id and secret read {p} -- it should reach no disk at all"))
+    client = core.client_from_env(key_id="KID", secret="SHHH")
+    assert credential_of(client) == ("KID", "SHHH")
+
+
+def test_a_key_file_that_is_not_there_is_a_refusal_naming_the_path(no_key_env,
+                                                                   tmp_path):
+    missing = tmp_path / "nope.json"
+    with pytest.raises(core.NotConfigured) as e:
+        core.client_from_env(str(missing))
+    assert str(missing) in str(e.value)
+
+
+def test_a_key_file_missing_half_the_key_is_a_refusal(no_key_env, tmp_path):
+    half = tmp_path / "api-key.json"
+    half.write_text('{"id": "KID"}')
+    with pytest.raises(core.NotConfigured, match='"id" and "secret"'):
+        core.client_from_env(str(half))
+
+
+def test_a_key_file_that_cannot_be_read_at_all_is_a_refusal(no_key_env,
+                                                            tmp_path):
+    """Not every unreadable file is a missing or malformed one: a path that is
+    a directory (a `--api-key ~/.config/bzm-opl-gen` away), or one with the
+    wrong mode, or a binary file, all reach `open()` and none of them raised
+    ValueError. They came back as OSError and UnicodeDecodeError -- bare
+    exceptions, straight past a route's `except CoreError` into a 500 with a
+    traceback in it."""
+    with pytest.raises(core.NotConfigured) as e:
+        core.client_from_env(str(tmp_path))            # a directory
+    assert str(tmp_path) in str(e.value)
+
+    binary = tmp_path / "api-key.json"
+    binary.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+    with pytest.raises(core.NotConfigured, match="not valid JSON"):
+        core.client_from_env(str(binary))
+
+
+def test_a_path_and_a_pasted_pair_together_are_refused(no_key_env, tmp_path):
+    """Two credentials and no way to tell which one the caller meant. Taking
+    the first silently is how a bundle gets generated against the wrong
+    account and nothing anywhere says so."""
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "FILE", "secret": "s"}')
+    with pytest.raises(core.BadRequest) as e:
+        core.client_from_env(str(key), key_id="PASTED", secret="s")
+    assert "not both" in str(e.value)
+
+
+def test_half_a_pasted_pair_names_the_half_that_is_missing(no_key_env):
+    """Not the "no API key anywhere" sentence: a caller that sent one of the
+    two plainly has a key and is one field away, and telling it to go set an
+    environment variable is an answer to a different question."""
+    with pytest.raises(core.BadRequest, match="secret"):
+        core.client_from_env(key_id="KID")
+    with pytest.raises(core.BadRequest, match="id"):
+        core.client_from_env(secret="SHHH")
+
+
+def test_the_environment_is_the_last_place_looked(no_key_env, monkeypatch,
+                                                  tmp_path):
+    """Both env forms, and the argument beating each. Precedence matters to
+    the UI more than anywhere: the server it runs in may have been started
+    with a key in its environment, and a key typed into the page has to win."""
+    env_key = tmp_path / "env-key.json"
+    env_key.write_text('{"id": "FROM-FILE-ENV", "secret": "s"}')
+    monkeypatch.setenv(core.KEY_FILE_ENV, str(env_key))
+    assert credential_of(core.client_from_env())[0] == "FROM-FILE-ENV"
+
+    named = tmp_path / "named.json"
+    named.write_text('{"id": "NAMED", "secret": "s"}')
+    assert credential_of(core.client_from_env(str(named)))[0] == "NAMED"
+    assert credential_of(
+        core.client_from_env(key_id="PASTED", secret="s"))[0] == "PASTED"
+
+    monkeypatch.delenv(core.KEY_FILE_ENV)
+    monkeypatch.setenv(core.KEY_ID_ENV, "FROM-ID-ENV")
+    monkeypatch.setenv(core.KEY_SECRET_ENV, "s")
+    assert credential_of(core.client_from_env())[0] == "FROM-ID-ENV"
+    assert credential_of(core.client_from_env(str(named)))[0] == "NAMED"
+
+
+def test_no_key_anywhere_says_how_to_supply_one(no_key_env, monkeypatch):
+    """And does not go looking in the working directory -- see the comment at
+    the refusal: a server's cwd is wherever a client launched it, quite
+    possibly a customer's checkout holding an api-key.json that is theirs."""
+    monkeypatch.setattr(core, "detect_keys", lambda: pytest.fail(
+        "the construction discovered a key from the working directory"))
+    with pytest.raises(core.NotConfigured) as e:
+        core.client_from_env()
+    for var in (core.KEY_FILE_ENV, core.KEY_ID_ENV, core.KEY_SECRET_ENV):
+        assert var in str(e.value)
+
+
+def test_the_fake_client_is_a_second_adapter_and_not_a_third_interface():
+    """What "one construction" is worth: the suites stand in at that one point
+    by handing back this fake, so it has to answer as the real client does.
+
+    Names first -- a method here that BzmClient does not have is a fake
+    account answering a call no real one would -- then the parameters of the
+    shared ones, because a fake whose argument names have drifted lets a core
+    change that renames a keyword pass here and fail against BlazeMeter.
+    Defaults are excluded on purpose: what a real client does when a field is
+    omitted is its own behaviour, and this fake only records the call.
+    """
+    def methods(cls):
+        return {n: f for n, f in inspect.getmembers(cls, inspect.isfunction)
+                if not n.startswith("_")}
+
+    real, fake = methods(api.BzmClient), methods(FakeClient)
+    assert not set(fake) - set(real)
+    for name in sorted(fake):
+        def params(f):
+            return [(p.name, p.kind) for p in
+                    inspect.signature(f).parameters.values()]
+        assert params(fake[name]) == params(real[name]), name
 
 
 def test_detect_never_reads_a_secret_back_out(monkeypatch, tmp_path):

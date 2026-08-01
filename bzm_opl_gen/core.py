@@ -156,29 +156,70 @@ KEY_SECRET_ENV = "BZM_API_KEY_SECRET"
 KEY_FILE_ENV = "BZM_API_KEY_FILE"
 
 
-def client_from_env(api_key_file=None):
-    """A BzmClient from the environment, or NotConfigured saying how to give one.
+def client_from_env(api_key_file=None, *, key_id=None, secret=None):
+    """The construction: a BzmClient from a path, an id and secret, or the
+    environment -- and a CoreError, never anything else, when there is none.
 
-    Two sources, in precedence order: a path the caller named, then the
-    id/secret pair in the environment. Nothing is discovered from the working
-    directory -- see the comment below for why that matters here and not for a
-    command.
+    Precedence, and each step is somebody's real input: the path in the
+    argument (a `--api-key` flag, an MCP tool argument, a file picked in the
+    page), then an id and secret in the argument (typed into the connect form,
+    where there is no file), then KEY_FILE_ENV, then the id/secret pair in the
+    environment. Nothing is discovered from the working directory -- see the
+    comment at the refusal for why that matters here and not for a command.
 
-    A *path* is something a caller may pass in an argument; the secret itself is
-    not, and there is deliberately no way to send one -- an argument travels
-    through whatever is between the caller and here, and gets logged by things
-    nobody is thinking about at the time.
+    Widened rather than joined by a sibling (#92). The promise worth having in
+    one place is the one this already made -- never SystemExit, because the
+    file-reading constructor raises one and a BaseException walks past every
+    `except Exception` between a route and the top of a server process -- and a
+    second function making the same promise about a different input is the
+    thirteen constructions again, one order of magnitude down. The name is now
+    narrower than the function; renaming it belongs to the half of this that
+    migrates every call site at once (#95), because a rename today either
+    breaks the point all three suites stand in at or adds the second name this
+    was written to remove.
 
-    Never SystemExit, which is what the file-reading constructor raises: this
-    runs inside a server, and SystemExit is a BaseException that would take the
-    process down past any `except Exception` in the way.
+    That widening spends a rule this docstring used to state: that a secret is
+    never an argument. It still holds where it was argued -- `mcp_server`
+    passes a path and nothing else, and an argument there has travelled through
+    a model's context to get here. It does not hold for the UI, whose key
+    arrives pasted into a form with no file behind it: `key_set` writes it to a
+    temp file purely to have a path for a constructor that takes only one, and
+    a secret written to disk to satisfy an argument list is worse than the
+    argument.
+
+    Not "connected" in the sense of having reached BlazeMeter -- there is no
+    connection to make, the client is stateless HTTP Basic. Proving the
+    credential works is `user(client)`, one call, made by the callers that need
+    the proof; making it here would put a network round-trip inside every
+    construction and a second one inside most.
     """
+    if key_id or secret:
+        if api_key_file:
+            # Both, in one call, and only ever as arguments -- a key in the
+            # environment losing to one the caller named is precedence, but two
+            # in the same call is a caller that does not know which account it
+            # is about, and taking one silently is how a bundle gets built
+            # against the wrong one with nothing anywhere saying so.
+            raise BadRequest("give an API key file path, or an id and secret, "
+                             "not both")
+        if not (key_id and secret):
+            # Half a pair gets its own sentence: this caller plainly has a key
+            # and is one field short, and the "no API key anywhere" message
+            # below -- which talks about environment variables -- answers a
+            # question it did not ask.
+            missing = "secret" if key_id else "id"
+            raise BadRequest(f"an API key needs both an id and a secret; "
+                             f"the {missing} is missing")
+        return api.BzmClient(credentials=(key_id, secret))
     path = api_key_file or os.environ.get(KEY_FILE_ENV)
     if path:
         try:
             return api.BzmClient(credentials=api.read_key_file(
                 os.path.expanduser(path)))
         except ValueError as e:
+            # Every failure read_key_file has is a ValueError, deliberately:
+            # an OSError or a UnicodeDecodeError escaping as itself is a bare
+            # exception out of a route.
             raise NotConfigured(str(e))
     key_id = os.environ.get(KEY_ID_ENV)
     secret = os.environ.get(KEY_SECRET_ENV)

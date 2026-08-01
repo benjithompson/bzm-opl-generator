@@ -43,15 +43,27 @@ def read_key_file(path):
     """The (id, secret) in an api-key.json, or ValueError saying what was wrong.
 
     Separate from the SystemExit wrapper below so a caller that must not exit
-    -- a server -- can report the same three problems its own way.
+    -- a server -- can report the same problems its own way. Every way this can
+    fail is a ValueError, and that is the contract rather than a tidiness:
+    `core.client_from_env` turns exactly that into a refusal, so anything
+    escaping as another type escapes as itself, past a route's `except
+    CoreError`, into a 500 with a traceback in it. The two wrappers must differ
+    only in how a failure is reported, never in which failures are handled.
     """
     try:
         with open(path) as f:
             d = json.load(f)
     except FileNotFoundError:
         raise ValueError(f"no API key file at '{path}'. It is {KEY_FILE_SHAPE}")
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        # A binary file decodes before it parses, so UnicodeDecodeError is the
+        # same answer arriving one step earlier -- and it is a ValueError only
+        # by inheritance, with a message about codecs rather than about keys.
         raise ValueError(f"API key file '{path}' is not valid JSON: {e}")
+    except OSError as e:
+        # A directory, a mode nobody can read, a dead symlink: `--api-key
+        # ~/.config/bzm-opl-gen` is one keystroke from the path that works.
+        raise ValueError(f"could not read API key file '{path}': {e}")
     if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
         raise ValueError(f"API key file '{path}' needs both \"id\" and "
                          f"\"secret\" (see examples/api-key.example.json)")
@@ -59,8 +71,8 @@ def read_key_file(path):
 
 
 def read_key_file_or_exit(path):
-    """read_key_file, as a command wants it: the same three messages, plus how
-    to create the file, and exit rather than traceback."""
+    """read_key_file, as a command wants it: the same messages, plus how to
+    create the file, and exit rather than traceback."""
     try:
         return read_key_file(path)
     except ValueError as e:
