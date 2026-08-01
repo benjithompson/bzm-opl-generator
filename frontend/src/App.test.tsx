@@ -2,17 +2,26 @@
 //
 // The page's effects, driven through the seam.
 //
-// The account-capacity read is the one under test here because it is the
-// cheapest of the four documented traps to provoke: it is the slowest read on
-// the page (171 locations on a real account), the account can be changed while
-// it is in flight, and without the `live` guard the slower answer wins -- so
-// the numbers on screen are the previous account's, under the name of the one
-// now selected. Nothing about that is visible in a type or in a review; it
-// needs two answers outstanding at once, which is what `deferred` is for.
+// Every effect below has gone wrong once, and none of the failures is visible
+// in a type or in a review: each needs two things outstanding at the same time,
+// or a timer that has not fired yet. `deferred` is what holds an answer open;
+// vi's clock is what holds a debounce or a poll interval open. The four the
+// page documents in prose are all pinned here -- the account-capacity guard
+// (the slower answer landing under the newer account's name), the session
+// restore ordering, the preview debounce and its dependency on the save
+// folder, and the status poll's target.
 //
 // Driven through the real controls rather than by poking state: switching
 // account is the menu at the foot of the drawer, and a test that reached
 // setAccountId directly would keep passing if that control stopped calling it.
+//
+// Under fake timers, nothing from testing-library that waits may be used:
+// `waitFor` and every `findBy*` poll on a real interval, and this jsdom's
+// testing-library only recognises jest's clock, so it would spin against a
+// clock nothing is advancing. The tests below therefore set up under the real
+// clock and install the fake one at the point the behaviour under test starts
+// -- which for the poll has to be before the interval is created, or it is a
+// real interval vi will never advance.
 import {
   act, cleanup, fireEvent, render, screen, waitFor,
 } from "@testing-library/react";
@@ -20,15 +29,29 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import {
-  Api, Capacity, Facts, Location, Options, SavedBundle, Ship, TokenRequest,
+  AgentStatus, Api, Capacity, Facts, Location, Options, SavedBundle, Ship,
+  TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
+// The snapshot writer the page itself uses. A literal forged here would be a
+// second declaration of the shape, and one that starts passing for the wrong
+// reason the first time the version is bumped -- see session.VERSION.
+import * as session from "./session";
+import { EMPTY_PLAN_INPUTS } from "./usePlan";
 
 afterEach(cleanup);
 // The page writes its selections to sessionStorage, and one test's would
 // otherwise be restored into the next one's page.
 afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// Before cleanup, which unmounts: hooks run in reverse, and an effect cleanup
+// clearing a faked interval on the way out is one more thing to get right for
+// nothing.
+afterEach(() => { vi.useRealTimers(); });
+
+/** Let the fake clock run, with React's own work flushed around it. */
+const tick = (ms: number) =>
+  act(async () => { await vi.advanceTimersByTimeAsync(ms); });
 
 /** One account's rollup, identifiable on screen by its workspace name. */
 function capacityOf(accountId: number, workspace: string): Capacity {
@@ -116,8 +139,10 @@ test("a slow capacity answer for the previous account never lands under the new 
 
 /** An account holding one location that runs virtual services, ready to
  *  generate for. `record` collects the options every preview is asked for --
- *  the bundle as the server would see it, rather than what the form shows. */
-function svAccount(record: Options[]) {
+ *  the bundle as the server would see it, rather than what the form shows.
+ *  `extra` is what the test under way adds: the watch routes, which only the
+ *  poll calls. */
+function svAccount(record: Options[], extra: Partial<Api> = {}) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
     keyStatus: async () => ({
@@ -160,6 +185,7 @@ function svAccount(record: Options[]) {
       return { files: [], token: { branch: "placeholder" as const,
                                    ship_id: "s-1", message: "" } };
     },
+    ...extra,
   });
 }
 
@@ -566,4 +592,208 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
 
     fireEvent.click(screen.getByText("agent-live"));
     expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
+  });
+
+// -- what survives a refresh, and when it may be written back ----------------
+
+test("nothing is written back over a saved session until the restore has resolved",
+  async () => {
+    // Written with the page's own writer, at the page's own version.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-dublin", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "restored-ns" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+
+    // The key check is the last thing the mount effect waits on. Held open,
+    // it is the refresh this guard was written for: the server had not
+    // answered, the page saved the empty state it was about to restore *from*,
+    // and every selection was gone for good.
+    const key = deferred<Awaited<ReturnType<Api["keyStatus"]>>>();
+    const listing = [
+      loc("h-0", "Region 0"),
+      loc("h-dublin", "Dublin", [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+    ];
+    render(<App api={accountOf(listing, {
+      keyStatus: () => key.promise,
+    })} />);
+
+    // The options are back on screen before the connection resolves -- which is
+    // the ordering, not an accident of it: the location list has to arrive
+    // already filtered to the restored workspace.
+    const ns = await screen.findByPlaceholderText("e.g. blazemeter");
+    expect(ns).toHaveProperty("value", "restored-ns");
+    // ...and the snapshot they came from is untouched. None of these four is
+    // page state yet -- they are still waiting for the account to confirm the
+    // things they name still exist -- so anything written now writes nulls
+    // over them.
+    expect(session.load()).toMatchObject({
+      accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
+    });
+
+    key.settle({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    });
+
+    // Only now does the page write. Asserted with an edit on top of the
+    // restored ids, so this cannot pass by nothing having been written at all:
+    // the snapshot has to hold both the typed value and the four ids.
+    fireEvent.change(ns, { target: { value: "typed-ns" } });
+    await waitFor(() => expect(session.load()).toMatchObject({
+      accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
+      step: 1, options: { namespace: "typed-ns" },
+    }));
+  });
+
+// -- the live preview, and the two things that decide when it is asked -------
+
+test("the preview waits for the typing to stop, and the save folder is part of what it asks",
+  async () => {
+    const asked: { options: Options; outDir?: string }[] = [];
+    render(<App api={perfAccount({
+      generate: async (_facts: Facts, options: Options, outDir?: string) => {
+        asked.push({ options, outDir });
+        return {
+          files: [{ name: "crane.yaml", content: "kind: Deployment" }],
+          // What a folder already holding this ship's bundle answers: the save
+          // would keep the token that is in it. Core's branch, on the answer --
+          // the page never works one out.
+          token: outDir
+            ? { branch: "reused" as const, ship_id: "s-1",
+                message: "the folder already holds one" }
+            : { branch: "placeholder" as const, ship_id: "s-1",
+                message: "no AUTH_TOKEN — the bundle carries a placeholder" },
+        };
+      },
+    })} />);
+    await atDownloadStep();
+    // Settled: the location's facts, the feature it opens on and the option
+    // defaults all move the configuration, and each moves it once.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    const before = asked.length;
+
+    // From here the clock is ours, because the point is what does *not* happen
+    // inside the 250ms.
+    vi.useFakeTimers();
+    const folder = screen.getByLabelText("Folder");
+    for (const typed of ["~/b", "~/bz", "~/bzm"]) {
+      fireEvent.change(folder, { target: { value: typed } });
+      await tick(100);
+    }
+    // Three keystrokes, 300ms, no request: /api/generate renders the whole
+    // bundle, and a preview that ran per keystroke rendered it three times.
+    expect(asked.length).toBe(before);
+
+    await tick(250);
+    // ...and then exactly one, carrying the folder. The folder is a dependency
+    // because it changes the answer, not because the request has room for it.
+    expect(asked.length).toBe(before + 1);
+    expect(asked[asked.length - 1].outDir).toBe("~/bzm");
+    // The changed answer, on screen: pointed at a folder this ship's bundle is
+    // already in, the credential branch is `reused` -- so the step stops
+    // announcing a placeholder over a bundle that has a real token.
+    expect(screen.getByText(/the AUTH_TOKEN already in that folder/)).toBeTruthy();
+  });
+
+// -- the watch, and what it is watching --------------------------------------
+
+/** An agent that is up, which is all these two ask of a status read. */
+const IDLE: AgentStatus = { state: "IDLE", heartbeat_age_s: 3, online: true };
+
+test("the status poll moves with the agent, and leaves no interval behind",
+  async () => {
+    const polled: string[] = [];
+    const both = loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ]);
+    render(<App api={accountOf([both], {
+      status: async (harborId: string, shipId: string) => {
+        polled.push(`${harborId}/${shipId}`);
+        return IDLE;
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    // Two agents, so neither is auto-picked: the one being watched is the one
+    // that was chosen, which is what makes changing it a change of target.
+    fireEvent.click(await screen.findByText("agent-1"));
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const watch = await screen.findByRole("switch");
+
+    // Installed before the click, because the click is what creates the
+    // interval -- afterwards it would be a real one, and vi would advance a
+    // clock nothing is using.
+    vi.useFakeTimers();
+    fireEvent.click(watch);
+    // Read at once: ten seconds of "polling every 10s…" over an agent that is
+    // already up reads as a page that has not started.
+    expect(polled).toEqual(["h-perf/s-1"]);
+    await tick(20_000);
+    expect(polled).toEqual(["h-perf/s-1", "h-perf/s-1", "h-perf/s-1"]);
+
+    // Move the target. The switch is still on -- what changed is which agent
+    // the answers would be about.
+    fireEvent.click(screen.getByRole("button", { name: /Agent details/ }));
+    fireEvent.click(screen.getByText("agent-2"));
+    expect(polled[polled.length - 1]).toBe("h-perf/s-2");
+
+    // The agent left behind is not still being polled beside the new one: one
+    // request per tick, for the agent on screen. An interval that outlives its
+    // effect keeps asking about an agent nothing is looking at, and every
+    // change of agent adds another.
+    await tick(20_000);
+    expect(polled.filter((p) => p === "h-perf/s-1").length).toBe(3);
+    expect(polled.filter((p) => p === "h-perf/s-2").length).toBe(3);
+  });
+
+test("the SV read travels by ref: typing in the namespace does not restart the poll",
+  async () => {
+    const asked: Options[] = [];
+    const read: string[] = [];
+    render(<App api={svAccount(asked, {
+      status: async () => IDLE,
+      svMocks: async (namespace: string) => {
+        read.push(namespace);
+        return { status: "no_mocks" as const, mocks: [],
+                 message: "nothing deployed" };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Mocks"));
+    // The location's own funcIds are what make this an SV watch, and the seed
+    // that follows from them is what makes it configured -- so the poll reads
+    // the namespace as well as the heartbeat only once that has landed.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx"));
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const watch = await screen.findByRole("switch");
+
+    vi.useFakeTimers();
+    fireEvent.click(watch);
+    expect(read).toEqual(["blazemeter"]);
+
+    // One second short of the next tick, the namespace is edited. Back rather
+    // than the stepper: the unfinished-group block on this step offers a
+    // "Configure" button of its own, and both go to the same place.
+    await tick(9_000);
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    fireEvent.change(screen.getByPlaceholderText("e.g. blazemeter"),
+                     { target: { value: "mocks-ns" } });
+
+    // Half a second later: nothing. A namespace in the dependency array tears
+    // the interval down and stands a new one up, which reads at once -- so the
+    // cluster would be read on every keystroke in the field.
+    await tick(500);
+    expect(read).toEqual(["blazemeter"]);
+
+    // The tick that was already due arrives on time, and reads what the field
+    // says now: the ref is what carries the new value into an interval that
+    // was never restarted.
+    await tick(1_000);
+    expect(read).toEqual(["blazemeter", "mocks-ns"]);
   });
