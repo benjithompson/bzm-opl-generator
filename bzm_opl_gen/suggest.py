@@ -38,7 +38,8 @@ from . import doctor
 # tuple and in _decisive/_suggestive's signature.
 from . import evidence as evidence_mod
 from .doctor import CRANE_INGRESS_CLASS
-from .generate import DEFAULT_OPTIONS, SV_INGRESS_NONE, SV_INGRESS_TYPES
+from .generate import (CA_MODES, DEFAULT_OPTIONS, SV_INGRESS_NONE,
+                       SV_INGRESS_TYPES)
 
 # option:     the generate option this is about
 # strength:   DECISIVE | SUGGESTIVE (see the module docstring)
@@ -516,6 +517,19 @@ def _fmt(value):
     return value if isinstance(value, str) else json.dumps(value)
 
 
+def shown(value):
+    """The same, plus unset said in words.
+
+    Served on the row rather than left to each caller to format: `null` is not
+    an answer to "what is configured now", and the empty string goes with it --
+    that is the field a form seeds when it reveals a group, not a value
+    somebody chose (the same set `_UNSET` names below). The browser had its own
+    copy of both rules beside this one, and two formatters agreeing was nobody's
+    job.
+    """
+    return "not set" if value is None or value == "" else _fmt(value)
+
+
 def as_dict(s):
     return {"option": s.option, "strength": s.strength, "value": s.value,
             "candidates": list(s.candidates), "ruled_out": list(s.ruled_out),
@@ -616,13 +630,47 @@ def _chosen(option, current):
     return current not in _UNSET and current != DEFAULT_OPTIONS.get(option)
 
 
+def blocked_by(option, options):
+    """Why writing `option` cannot be offered against `options`, or None.
+
+    CA trust is the only one so far, and the rule is generate's: it takes one
+    of `CA_MODES`, so writing one while another holds a value produces a bundle
+    that does not generate -- and the fix, clearing the other, is exactly the
+    silent overwrite this module may not make. So the row says so instead of
+    offering it, in one sentence rather than one per caller that draws a
+    button. The two do co-occur: a namespace holding a trust bundle and a
+    cluster proxy carrying one produce a suggestion each.
+
+    Truthiness is the right test for all three -- "" is the empty field a form
+    seeds, and False is the injection switch off -- and an option is never
+    blocked by its own value, since replacing a mode with the same mode is
+    still one mode.
+    """
+    if option not in CA_MODES:
+        return None
+    held = next((k for k in CA_MODES if (options or {}).get(k)), None)
+    if not held or held == option:
+        return None
+    return (f"custom CA trust already uses {CA_MODES[held]} — clear it first, "
+            f"because a bundle carrying two CA modes does not generate")
+
+
 def merged_as_dict(s, options):
     """A suggestion plus how it stands, as one wire object. Deliberately
     `as_dict` extended rather than a second shape beside it: the browser reads
-    these two facts about the same suggestion in one row, and a second envelope
-    is how the two start disagreeing about which suggestion they describe."""
+    these facts about the same suggestion in one row, and a second envelope is
+    how the two start disagreeing about which suggestion they describe.
+
+    The `_shown` fields are the values the row displays, written once here --
+    see `shown`. They ride along rather than replacing the values themselves,
+    which are what applying writes.
+    """
     m = merge(s, options)
-    return dict(as_dict(s), state=m.state, current=m.current)
+    return dict(as_dict(s), state=m.state, current=m.current,
+                current_shown=shown(m.current), value_shown=shown(s.value),
+                candidates_shown=[shown(c) for c in s.candidates],
+                ruled_out_shown=[shown(v) for v in s.ruled_out],
+                blocked=blocked_by(s.option, options))
 
 
 def report(doc, suggestions):

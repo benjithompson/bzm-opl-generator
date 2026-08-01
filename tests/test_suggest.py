@@ -731,6 +731,73 @@ def test_an_applied_value_is_indistinguishable_from_a_typed_one():
         gen.generate(facts, typed)[gen.PROFILE_FILE]))
 
 
+# -- the row a caller renders -------------------------------------------------
+#
+# What `merged_as_dict` adds beyond the suggestion and its state: the values as
+# a reader sees them, and why a row cannot be offered. Both were the browser's
+# own copies of a rule that lives here -- how a value is written, and generate's
+# one-of for CA trust -- and a copy is what stops agreeing quietly.
+
+def test_a_value_is_shown_the_way_the_file_that_would_carry_it_writes_it():
+    assert suggest.shown("nginx") == "nginx"
+    assert suggest.shown(False) == "false"          # not `False`
+    assert suggest.shown(True) == "true"
+    assert suggest.shown({"https": "http://p:3128"}) == '{"https": "http://p:3128"}'
+
+
+def test_unset_is_said_in_words_rather_than_printed_as_null():
+    """"what is configured now" is a question `null` does not answer. The empty
+    string goes with it: it is what a form seeds into a field it reveals, not a
+    value somebody chose."""
+    assert suggest.shown(None) == "not set"
+    assert suggest.shown("") == "not set"
+    # ...and a value that is merely falsy is still a value.
+    assert suggest.shown(False) != "not set"
+    assert suggest.shown(0) == "0"
+
+
+def test_a_row_carries_every_value_it_displays_already_written():
+    doc = _evidence(**REGCRED)
+    row = suggest.merged_as_dict(_for(doc, "pull_secret"), {})
+    assert row["current_shown"] == suggest.shown(row["current"])
+    assert row["value_shown"] == suggest.shown(row["value"])
+    assert row["candidates_shown"] == [suggest.shown(c) for c in row["candidates"]]
+    assert row["ruled_out_shown"] == [suggest.shown(v) for v in row["ruled_out"]]
+
+
+def test_a_ca_mode_cannot_be_offered_over_one_that_already_holds_a_value():
+    """generate() takes exactly one of the three, so applying this would need
+    the other cleared -- and clearing it is precisely the silent overwrite this
+    feature may not make. The refusal is generate's; it is stated once, here,
+    rather than restated by every caller that draws a button."""
+    doc = _evidence(openshift={"ingress_config": None, "proxy_config": PROXY_CONFIG})
+    s = _for(doc, "ca_openshift_inject")
+    blocked = suggest.merged_as_dict(s, {"ca_existing_configmap": "corp-ca"})
+    assert "an existing ConfigMap" in blocked["blocked"]
+    assert "does not generate" in blocked["blocked"]
+    # Nothing claims the slot -> nothing to say.
+    assert suggest.merged_as_dict(s, {})["blocked"] is None
+    # An empty field is not a value, for the same reason it is not a choice.
+    assert suggest.merged_as_dict(s, {"ca_bundle": ""})["blocked"] is None
+
+
+def test_an_option_is_never_blocked_by_its_own_value():
+    """Replacing a CA mode with the same mode is one mode, not two."""
+    doc = _evidence(inventory={"configmaps": ["corp-trusted-ca"], "secrets": []})
+    s = _for(doc, "ca_existing_configmap")
+    assert s is not None
+    assert suggest.merged_as_dict(s, {"ca_existing_configmap": "older-ca"})["blocked"] \
+        is None
+
+
+def test_the_blocked_rule_names_the_modes_generate_actually_refuses():
+    """The set is generate's, and a copy here is how a fourth mode arrives
+    offerable over the other three."""
+    from bzm_opl_gen.generate import CA_MODES, DEFAULT_OPTIONS
+    for option in CA_MODES:
+        assert option in DEFAULT_OPTIONS
+
+
 # -- the paths a suggestion cites --------------------------------------------
 #
 # A path is what sends a reader to the file to disagree with the tool, and a

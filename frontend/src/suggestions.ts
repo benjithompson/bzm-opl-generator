@@ -30,6 +30,12 @@ export const STRENGTH_STYLE: Record<
                 hint: "narrowed, not decided — pick one" },
 };
 
+/** A value and the string it was served as. The two travel together wherever a
+ *  value is both written and shown: `value` is what applying puts in the
+ *  options, `shown` is suggest.shown's rendering of it, and nothing here
+ *  derives the second from the first. */
+export interface Shown { value: unknown; shown: string }
+
 /** What a row lets you do.
  *
  *  `apply`   a decisive suggestion for an option nobody moved: one click, and
@@ -38,51 +44,41 @@ export const STRENGTH_STYLE: Record<
  *            because it is a different act, and the row shows both values.
  *  `choose`  a shortlist. Never carries a value: the pick is the user's, at one
  *            candidate as much as at three.
- *  `blocked` applying would need another option cleared first (see CA_MODES).
+ *  `blocked` applying would need another option cleared first -- the row says
+ *            which, in generate's words.
  *  `none`    nothing to do -- already configured this way, or the evidence
  *            ruled every candidate out and the finding is the detail.
  */
 export type Offer =
   | { kind: "none" }
-  | { kind: "apply"; value: unknown }
-  | { kind: "replace"; value: unknown }
-  | { kind: "choose"; candidates: unknown[] }
+  | { kind: "apply"; value: unknown; shown: string }
+  | { kind: "replace"; value: unknown; shown: string }
+  | { kind: "choose"; candidates: Shown[] }
   | { kind: "blocked"; because: string };
 
-// CA trust is one-of: generate() refuses two modes at once, so writing one of
-// these while another holds a value produces a bundle that does not generate --
-// and the fix, clearing the other, is exactly the silent overwrite this feature
-// may not make. The two do co-occur: a namespace holding a trust bundle and a
-// cluster proxy carrying one produce a suggestion each. Wording matches the
-// radio labels in CaGroup, so the sentence names the mode the user sees.
-const CA_MODES: Record<string, string> = {
-  ca_existing_configmap: "an existing ConfigMap",
-  ca_bundle: "an inline PEM",
-  ca_openshift_inject: "OpenShift injection",
-};
-
-/** Which CA mode currently holds a value. Truthiness is the right test for all
- *  three: "" is the empty field the group seeds, and false is the injection
- *  switch off. */
-function caHeld(o: Options): string | undefined {
-  return Object.keys(CA_MODES).find((k) => !!o[k]);
-}
-
-export function offer(s: Suggestion, o: Options): Offer {
+/** What may be clicked on this row. Takes no options: both facts about the
+ *  configuration it needs -- how the suggestion stands against it (`state`) and
+ *  why it cannot be written (`blocked`) -- were judged against the options that
+ *  were sent, and arrive on the row. It used to read the options for the second
+ *  one, which meant a row could be offered against one configuration and
+ *  refused against another in the same render. */
+export function offer(s: Suggestion): Offer {
   if (s.state === "SETTLED") return { kind: "none" };
-  const held = CA_MODES[s.option] ? caHeld(o) : undefined;
-  if (held && held !== s.option) {
-    return { kind: "blocked", because:
-      `custom CA trust already uses ${CA_MODES[held]} — clear it first, `
-      + `because a bundle carrying two CA modes does not generate` };
-  }
+  // Why a row cannot be offered is generate's rule -- CA trust is one-of, and
+  // clearing the mode that holds a value is the silent overwrite this feature
+  // may not make -- so the sentence arrives already written.
+  if (s.blocked) return { kind: "blocked", because: s.blocked };
   if (s.strength === "SUGGESTIVE") {
     // An empty shortlist is a finding, not an action: nothing this cluster
     // serves can be picked, which the detail says.
     return s.candidates.length
-      ? { kind: "choose", candidates: s.candidates } : { kind: "none" };
+      ? { kind: "choose",
+          candidates: s.candidates.map(
+            (value, i) => ({ value, shown: s.candidates_shown[i] })) }
+      : { kind: "none" };
   }
-  return { kind: s.state === "CONFLICT" ? "replace" : "apply", value: s.value };
+  return { kind: s.state === "CONFLICT" ? "replace" : "apply",
+           value: s.value, shown: s.value_shown };
 }
 
 /** What applying writes: the option, and the value. Nothing else -- no marker,
@@ -97,8 +93,14 @@ export function applyPatch(option: string, value: unknown): OptionPatch {
 /** What was applied from the panel this session, by option: the value it wrote
  *  and the one that was there first. Reversible within the session means the
  *  previous value is recoverable without being re-entered, and this is where it
- *  is kept -- the options themselves carry no history. */
-export type Applied = Record<string, { previous: unknown; value: unknown }>;
+ *  is kept -- the options themselves carry no history.
+ *
+ *  `previousShown` is how that value read on the row it came off. Kept rather
+ *  than re-derived: by the time the undo is offered the row has been rendered
+ *  again against the configuration as it now is, so the server's string for the
+ *  value undo would restore is not on screen anywhere else. */
+export type Applied = Record<
+  string, { previous: unknown; previousShown: string; value: unknown }>;
 
 export const NOTHING_APPLIED: Applied = {};
 
@@ -107,12 +109,15 @@ export const NOTHING_APPLIED: Applied = {};
  *  thing undo returns to -- what a person wants back is the configuration they
  *  had before the panel touched it. */
 export function record(
-    prev: Applied, option: string, current: unknown, value: unknown): Applied {
+    prev: Applied, option: string, current: Shown, value: unknown): Applied {
   // Key presence, not `??`: an option that held null (most of them, unset) has a
   // perfectly good previous value, and `??` would step over it back to whatever
   // the second apply replaced.
-  const previous = option in prev ? prev[option].previous : current;
-  return { ...prev, [option]: { previous, value } };
+  const held = prev[option];
+  return { ...prev, [option]: {
+    previous: held ? held.previous : current.value,
+    previousShown: held ? held.previousShown : current.shown,
+    value } };
 }
 
 /** Applying a row: what to write, and what to remember so it can be taken back.
@@ -130,7 +135,9 @@ export function record(
 export function apply(prev: Applied, s: Suggestion, value: unknown):
     { patch: OptionPatch; applied: Applied } {
   return { patch: applyPatch(s.option, value),
-           applied: record(prev, s.option, s.current, value) };
+           applied: record(prev, s.option,
+                           { value: s.current, shown: s.current_shown },
+                           value) };
 }
 
 /** Is the undo still the panel's to offer? Only while the option still holds
@@ -154,20 +161,16 @@ export function undo(
   return { patch: applyPatch(option, prev[option].previous), applied: rest };
 }
 
-/** A value as profile.json would carry it -- `false`, not `False`, and an
- *  object as its JSON. Unset is said in words: printing `null` at somebody is
- *  not an answer to "what is configured now". */
-export function showValue(v: unknown): string {
-  if (v == null || v === "") return "not set";
-  return typeof v === "string" ? v : JSON.stringify(v);
-}
+// How a value reads at all -- JSON as profile.json would carry it, unset said
+// in words -- is suggest.shown's, and every row arrives with its values already
+// written that way. There was a second copy of that rule here, and the two do
+// not even agree about the space after a colon in an object.
 
-/** The same value, cut to what a button can hold. The row itself shows it in
+/** A served value, cut to what a button can hold. The row itself shows it in
  *  full: what must not happen is the label deciding the panel's width, which
  *  the proxy suggestion -- three URLs in one JSON object -- does. */
-export function clipValue(v: unknown, max = 22): string {
-  const s = showValue(v);
-  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+export function clipValue(shown: string, max = 22): string {
+  return shown.length > max ? `${shown.slice(0, max - 1)}…` : shown;
 }
 
 /** The one-line summary of what the evidence implies, in the states' own terms.

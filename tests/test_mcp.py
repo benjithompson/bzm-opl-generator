@@ -541,6 +541,18 @@ def test_creating_a_location_still_answers_in_full(fake_account):
     assert loc["ships"] == [] and "ship_count" not in loc
 
 
+def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
+    """The warning was the terminal's alone, so a session that created a
+    location this way got one that 403s every start with nothing anywhere
+    saying why. It comes from core.create_location now, like the location
+    itself, and rides beside the summary rather than inside it -- present only
+    when it applies, as the listing's `note` is."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99})
+    assert "403" in body["warning"]
+    assert "Not enough available resources" in body["warning"]
+
+
 def test_the_listing_names_the_account_it_actually_listed(fake_account):
     """Neither id given means the key's default account, and that default is
     easy to be wrong about -- the key to hand defaults to a two-location

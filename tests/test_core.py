@@ -124,6 +124,51 @@ def test_add_func_id_is_idempotent_and_asks_the_account_first():
     assert [c for c in client.calls if c[0] == "update_private_location"] == []
 
 
+# -- creating one, and whether it can start a test -----------------------------
+#
+# #93. The warning lived in `cli.py` alone, so the two surfaces that create
+# locations without a terminal -- the web page and an MCP session -- made one
+# that 403s every test start and said nothing about it.
+
+class _RunnableClient(FakeClient):
+    """An account that stores threadsPerEngine, as the PATCH after the POST
+    makes it. FakeClient's own create answers the shape a location comes back
+    in before that lands, which is the unrunnable one."""
+
+    def create_private_location(self, name, account_id, workspace_ids,
+                                func_ids=("performance",), slots=1,
+                                threads_per_engine=None):
+        return dict(super().create_private_location(
+            name, account_id, workspace_ids, func_ids=func_ids, slots=slots),
+            threadsPerEngine=threads_per_engine)
+
+
+def test_a_location_that_cannot_start_a_test_says_so_when_it_is_created():
+    """The 403 it produces -- "Not enough available resources" -- names neither
+    field and reads as a busy account, so the moment to say it is the one where
+    the location is made."""
+    made = core.create_location(FakeClient(), "loc", 7, 2, slots=2)
+    assert made["location"]["id"] == "h9"
+    assert made["runnable"] is False
+    assert "403" in made["warning"]
+    assert "Not enough available resources" in made["warning"]
+
+
+def test_a_runnable_location_carries_no_warning():
+    made = core.create_location(_RunnableClient(), "loc", 7, 2, slots=2,
+                                threads_per_engine=500)
+    assert made["runnable"] is True and made["warning"] is None
+
+
+def test_a_location_created_without_slots_is_unrunnable_too():
+    """Either field missing is the same 403, so the verdict reads both -- one
+    that looked only at the field this tool tends to lose would vouch for the
+    other."""
+    made = core.create_location(_RunnableClient(), "loc", 7, 2, slots=0,
+                                threads_per_engine=500)
+    assert made["runnable"] is False and made["warning"]
+
+
 def test_issue_auth_token_mints_for_the_ship_it_was_given():
     client = FakeClient()
     assert core.issue_auth_token(client, "h1", "s1") == "TOKEN-FROM-API"
@@ -479,6 +524,31 @@ class RefusingClient(FakeClient):
         raise api.BzmApiError(TOKEN_403)
 
 
+# A key BlazeMeter has stopped accepting -- expired, revoked, or typed wrong.
+# Nothing about it is visible until something is asked of the account, which is
+# why it is the failure every surface has to be able to report: it arrives on
+# the first call each command makes.
+EXPIRED_401 = ('GET /user -> HTTP 401: {"error": {"code": 401, "message": '
+               '"Unauthorized: invalid API key"}}')
+
+
+class ExpiredClient(FakeClient):
+    """An account that answers 401 to everything. Shared with tests/test_cli.py.
+
+    Every read and every write, because which call a command makes first is the
+    command's business -- what has to be true is that whichever it is comes
+    back as a sentence rather than as a BzmApiError nobody caught.
+    """
+
+    def _refuse(self, *a, **kw):
+        raise api.BzmApiError(EXPIRED_401)
+
+    user = accounts = workspaces = _refuse
+    private_locations = private_location = _refuse
+    create_private_location = update_private_location = _refuse
+    delete_private_location = create_ship = auth_token = _refuse
+
+
 # Every path that still reaches the endpoint. Parametrised rather than tested
 # once through the fetch helper: the point of the refusal is that it arrives
 # whole at whoever asked, and a caller that unwrapped it on the way -- turning
@@ -687,6 +757,42 @@ def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     doc = _evidence()
     body = core.preflight(LOC_FACTS, {}, doc)
     assert body["namespace"] == doc["namespace"]
+
+
+# The half of preflight() a caller that prints its own report needs on its own.
+# `doctor --cluster-evidence` is that caller -- doctor.run writes to stdout and
+# core is not a terminal -- and it had its own copy of this precedence, comment
+# included, so a change to one was a change to one.
+
+def test_preflight_cluster_decides_the_same_namespace_preflight_does():
+    doc = _evidence()
+    for options in ({"namespace": "elsewhere"}, {}):
+        _, namespace = core.preflight_cluster(doc, options)
+        assert namespace == core.preflight(LOC_FACTS, options, doc)["namespace"]
+
+
+def test_an_explicitly_asked_for_namespace_wins_over_both():
+    """`doctor -n` is the one input the options cannot carry: the bundle's
+    namespace is what it was generated for, and -n is what is being preflighted
+    now."""
+    doc = _evidence()
+    _, namespace = core.preflight_cluster(doc, {"namespace": "elsewhere"},
+                                          namespace="asked-for")
+    assert namespace == "asked-for"
+
+
+def test_no_evidence_at_all_is_an_empty_read_rather_than_a_refusal():
+    """A `doctor` run against a cluster it can reach passes no file. Empty says
+    exactly what doctor's own defaults say: no cluster data, no probes, no
+    verdicts reached before the checks ran."""
+    imported, namespace = core.preflight_cluster(None, {"namespace": "ns1"})
+    assert imported == core.doctor.Evidence(None, None, ())
+    assert namespace == "ns1"
+
+
+def test_preflight_cluster_refuses_a_file_that_is_not_evidence():
+    with pytest.raises(core.BadRequest):
+        core.preflight_cluster([1, 2, 3], {"namespace": "blazemeter"})
 
 
 def test_preflight_refuses_a_file_that_is_not_evidence():

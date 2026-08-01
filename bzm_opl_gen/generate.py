@@ -426,6 +426,19 @@ def _sv_cfg(facts, o):
             "istio_gateway": o["sv_istio_gateway"]}
 
 
+# The options that configure CA trust, and what each mode is called where
+# somebody picks one. Exactly one of them may hold a value (see _ca_cfg), and a
+# caller offering to write one has to know which of the others already does --
+# the web UI's suggestion panel is that caller -- so the set and the words for
+# it are stated here, beside the refusal, rather than restated wherever a mode
+# is offered.
+CA_MODES = {
+    "ca_existing_configmap": "an existing ConfigMap",
+    "ca_bundle": "an inline PEM",
+    "ca_openshift_inject": "OpenShift injection",
+}
+
+
 def _ca_cfg(o):
     """Resolve the CA-trust mode to {cm, key, mode} or None.
 
@@ -438,22 +451,19 @@ def _ca_cfg(o):
                   config.openshift.io/inject-trusted-cabundle=true and the
                   cluster network operator injects ca-bundle.crt into it.
     """
-    modes = [("inline", bool(o["ca_bundle"])),
-             ("existing", bool(o["ca_existing_configmap"])),
-             ("inject", bool(o["ca_openshift_inject"]))]
-    active = [m for m, on in modes if on]
+    active = [k for k in CA_MODES if o[k]]
     if len(active) > 1:
         raise ValueError("choose one CA mode: ca_bundle (inline PEM) | "
                          "ca_existing_configmap | ca_openshift_inject")
     if not active:
         return None
-    mode = active[0]
-    if mode == "existing":
+    if active[0] == "ca_existing_configmap":
         return {"cm": o["ca_existing_configmap"],
-                "key": o["ca_configmap_key"] or CA_FILENAME, "mode": mode}
+                "key": o["ca_configmap_key"] or CA_FILENAME, "mode": "existing"}
     # inline + inject both use our own ConfigMap; inject's key is fixed to
     # ca-bundle.crt (the key OpenShift writes into labeled ConfigMaps).
-    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
+    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME,
+            "mode": "inline" if active[0] == "ca_bundle" else "inject"}
 
 
 def proxy_url(url, p):

@@ -66,6 +66,33 @@ def has_failures(checks):
     return any(c.status == FAIL for c in checks)
 
 
+# What a FAIL in that list costs, in the words the report ends on. A constant
+# because two surfaces state it and one of them is not this process: the web UI
+# puts the same sentence beside the imported file's name.
+NO_TEST_WOULD_START = "a test would not start on this location as configured"
+
+
+def summary_line(checks):
+    """The verdict list in one sentence: the counts, and what a failure means.
+
+    The consequence is stated only where something FAILed. An evidence file
+    whose collector was refused half the cluster is all warnings, and ending
+    that with "a test would not start" turns a thin read into a rejection of a
+    cluster nobody has judged -- which is the same rule `has_failures` keeps,
+    and it is kept once, here. The browser used to compose its own line from
+    the same counts, including this rule.
+    """
+    counts = collections.Counter(c.status for c in checks)
+    line = (f"{counts[PASS]} passed, {_plural(counts[WARN], 'warning')}, "
+            + (_plural(counts[FAIL], "failure") if counts[FAIL]
+               else "no failures"))
+    return f"{line} — {NO_TEST_WOULD_START}" if counts[FAIL] else line
+
+
+def _plural(n, word):
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
 def _unread_section(cluster, key, name, detail):
     """The branch every check that reads a cluster section opens with.
 
@@ -1510,7 +1537,7 @@ def _evidence_checks(doc, namespace):
     doc_ns = doc.get(evidence_mod.NAMESPACE)
     parts = [f"cluster read by {EVIDENCE_SCRIPT} at {collected} for namespace "
              f"{doc_ns or 'an unnamed namespace'}, not from a live cluster"]
-    if namespace and doc_ns and namespace != doc_ns:
+    if describes_elsewhere(doc_ns, namespace):
         # Most of what follows is per-namespace -- LimitRanges, quotas,
         # ServiceAccounts, the PSA labels -- so evidence from another namespace
         # says little about this one. It still describes the same nodes, so this
@@ -1550,19 +1577,40 @@ def unreadable_sections(notes):
     return sections
 
 
-def evidence_summary(doc):
+def describes_elsewhere(doc_ns, namespace):
+    """Does this file describe a different namespace than the one being
+    preflighted?
+
+    A file that names none is not a mismatch: there is nothing to mismatch
+    with, and a warning nobody can act on is one more line between the reader
+    and the ones they can. Nor is a caller that named no namespace to compare
+    against -- which is *not* the same as agreeing, and is why the summary
+    keeps `namespace` beside this: false here means "nothing to report", and
+    what the file recorded is still said in full.
+    """
+    return bool(namespace and doc_ns and namespace != doc_ns)
+
+
+def evidence_summary(doc, namespace=None):
     """What the file says about itself, as data rather than as a sentence.
 
-    The same three facts _evidence_checks() states in prose, and it stays the
-    one that judges them -- this is for a caller that renders a header instead
-    of a verdict list. The web UI is that caller: three facts inside one
-    verdict's prose, ten verdicts down a panel, is how a thin file passes for a
-    clean bill of health (#53), and a browser re-deriving them by parsing that
+    The same facts _evidence_checks() states in prose, and it stays the one
+    that judges them -- this is for a caller that renders a header instead of a
+    verdict list. The web UI is that caller: three facts inside one verdict's
+    prose, ten verdicts down a panel, is how a thin file passes for a clean
+    bill of health (#53), and a browser re-deriving them by parsing that
     sentence would be a second opinion about the same file.
+
+    `namespace` is the one being preflighted, and only the mismatch is about
+    it. Comparing the two served fields instead was that second opinion in its
+    shortest form -- the same comparison, one language away from the verdict
+    that already makes it.
     """
     doc = doc if isinstance(doc, dict) else {}
+    doc_ns = doc.get(evidence_mod.NAMESPACE) or None
     return {"collected_at": doc.get(evidence_mod.COLLECTED_AT) or None,
-            "namespace": doc.get(evidence_mod.NAMESPACE) or None,
+            "namespace": doc_ns,
+            "elsewhere": describes_elsewhere(doc_ns, namespace),
             "unreadable": unreadable_sections(doc.get(evidence_mod.NOTES))}
 
 
@@ -1711,8 +1759,4 @@ def _report(checks, facts, namespace):
     width = max((len(c.name) for c in checks), default=0)
     for c in checks:
         print(f"{c.status:<4}  {c.name:<{width}}  {c.detail}")
-    counts = collections.Counter(c.status for c in checks)
-    print(f"{counts[PASS]} passed, {counts[WARN]} warning(s), "
-          f"{counts[FAIL]} failure(s)"
-          + ("" if not counts[FAIL] else
-             " -- a test would not start on this location as configured"))
+    print(summary_line(checks))

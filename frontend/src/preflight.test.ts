@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CheckStatus, EvidenceSummary, PreflightCheck, PreflightOut } from "./api";
 import {
   countByStatus, evidenceHeader, imported, NO_PREFLIGHT, readEvidence,
-  rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
+  rechecked, refused, STATUS_STYLE, worstStatus,
 } from "./preflight";
 
 // What the panel decides on its own, as data in and data out: how a verdict
@@ -28,14 +28,14 @@ const THIN: PreflightCheck[] = [
 /** What the file says about itself, as the server reads it off the document. */
 const summary = (over: Partial<EvidenceSummary> = {}): EvidenceSummary =>
   ({ collected_at: "2026-07-28T02:51:50Z", namespace: "some-ns",
-     unreadable: [], ...over });
+     elsewhere: false, unreadable: [], ...over });
 
 // The verdict half of the response. What the same file implies about the
 // options rides along on it, and is exercised in suggestions.test.ts.
 const out = (checks: PreflightCheck[],
              evidence: EvidenceSummary = summary()): PreflightOut =>
   ({ namespace: "blazemeter", checks, suggestions: [], why_nothing: null,
-     evidence });
+     summary: "doctor's sentence, served", evidence });
 
 describe("reading the verdict list", () => {
   it("counts every status, including the ones nothing has", () => {
@@ -43,23 +43,10 @@ describe("reading the verdict list", () => {
     expect(countByStatus([])).toEqual({ PASS: 0, WARN: 0, FAIL: 0 });
   });
 
-  it("summarises in the same terms the command does", () => {
-    expect(verdictLine(THIN)).toContain("1 passed");
-    expect(verdictLine(THIN)).toContain("3 warnings");
-    expect(verdictLine(THIN)).toContain("no failures");
-  });
-
-  it("counts of one are not pluralised", () => {
-    expect(verdictLine([check("FAIL", "capacity")])).toContain("1 failure");
-  });
-
-  it("says a test would not start only when something failed", () => {
-    // The sentence doctor's own report ends on. Saying it over a list of
-    // warnings would make an unreadable file look like a rejection.
-    expect(verdictLine(THIN)).not.toContain("would not start");
-    expect(verdictLine([...THIN, check("FAIL", "capacity")]))
-      .toContain("would not start");
-  });
+  // The list in one sentence is not here any more: doctor already writes it
+  // under its own report, and a second one composed from the same counts is a
+  // second place the "a test would not start" rule can be got wrong. It arrives
+  // on the response as `summary` and is rendered in steps/DownloadPanel.test.tsx.
 
   it("takes its tone from the worst verdict in the list", () => {
     expect(worstStatus(THIN)).toBe("WARN");
@@ -121,12 +108,18 @@ describe("what the imported file says about itself", () => {
   it("separates the namespace the file describes from the one being preflighted", () => {
     // The two are different things and the difference is the point: every
     // namespaced verdict below describes the file's namespace, whatever
-    // namespace the bundle is being configured for.
-    const elsewhere = evidenceHeader(out(THIN, summary({ namespace: "their-ns" })));
-    expect(elsewhere.describes).toBe("their-ns");
-    expect(elsewhere.elsewhere).toBe(true);
-    const same = evidenceHeader(out(THIN, summary({ namespace: "blazemeter" })));
-    expect(same.elsewhere).toBe(false);
+    // namespace the bundle is being configured for. Whether they differ is
+    // doctor's -- it is the judgement the leading verdict already states -- so
+    // it is carried here rather than made again.
+    const served = evidenceHeader(
+      out(THIN, summary({ namespace: "their-ns", elsewhere: true })));
+    expect(served.describes).toBe("their-ns");
+    expect(served.elsewhere).toBe(true);
+    // Two namespaces that differ and no mismatch reported: this is not the
+    // comparison, and it does not second-guess the one that is.
+    const quiet = evidenceHeader(
+      out(THIN, summary({ namespace: "their-ns", elsewhere: false })));
+    expect(quiet.elsewhere).toBe(false);
   });
 
   it("says so in words when the file recorded neither", () => {
@@ -136,8 +129,6 @@ describe("what the imported file says about itself", () => {
       out(THIN, summary({ collected_at: null, namespace: null })));
     expect(h.collected).toContain("unrecorded");
     expect(h.describes).toContain("unnamed");
-    // ...and an unnamed namespace is not a mismatch to shout about.
-    expect(h.elsewhere).toBe(false);
   });
 });
 

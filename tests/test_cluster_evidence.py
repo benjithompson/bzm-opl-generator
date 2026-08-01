@@ -68,7 +68,9 @@ def test_run_reports_exactly_what_evaluate_decided(capsys):
     assert checks == doctor.evaluate(FACTS, OPTS, "blazemeter",
                                      cluster_data=cluster, probes={})
     assert out.startswith("doctor: location Test Location")
-    assert "location slots" in out and "warning(s)" in out
+    assert "location slots" in out
+    # The summary the browser shows too, printed rather than composed again.
+    assert doctor.summary_line(checks) in out
 
 
 def test_run_prints_extra_checks_the_caller_already_made(capsys):
@@ -354,6 +356,39 @@ def test_matching_namespace_just_says_where_the_data_came_from():
     assert c.status == doctor.PASS
     assert "2026-07-27T10:00:00Z" in c.detail       # how stale the verdicts are
     assert "blazemeter" in c.detail
+
+
+def test_the_summary_reports_the_same_mismatch_the_verdict_states():
+    """One decision, two renderings. A caller that puts the file's facts in a
+    header rather than in a verdict list gets the mismatch as a field -- and the
+    browser used to re-derive it by comparing the two namespaces itself, which
+    is a second opinion about the same file."""
+    doc = document(namespace="their-ns")
+    assert doctor.evidence_summary(doc, "blazemeter")["elsewhere"] is True
+    assert doctor.evidence_summary(doc, "their-ns")["elsewhere"] is False
+    # ...and it agrees with the verdict, which is the same file read by the same
+    # function.
+    c = _find(doctor.cluster_from_evidence(doc, "blazemeter").checks, "evidence")
+    assert c.status == doctor.WARN
+
+
+def test_a_file_naming_no_namespace_is_not_a_mismatch():
+    """There is nothing to mismatch with. A warning nobody can act on is one
+    more line between the reader and the ones they can -- and the header still
+    says the file named no namespace, so the two are not collapsed."""
+    doc = document(namespace=None)
+    summary = doctor.evidence_summary(doc, "blazemeter")
+    assert summary["elsewhere"] is False
+    assert summary["namespace"] is None
+    c = _find(doctor.cluster_from_evidence(doc, "blazemeter").checks, "evidence")
+    assert c.status == doctor.PASS
+
+
+def test_a_summary_nobody_named_a_namespace_for_claims_no_mismatch():
+    """`evidence_summary` is also asked without one -- there is no preflight to
+    compare against, which is not the same as agreeing."""
+    assert doctor.evidence_summary(document(namespace="their-ns"))["elsewhere"] \
+        is False
 
 
 def test_notes_reach_the_report_because_they_explain_the_nulls():

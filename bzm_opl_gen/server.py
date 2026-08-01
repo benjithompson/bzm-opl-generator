@@ -283,9 +283,16 @@ class LocationIn(BaseModel):
 @app.post("/api/locations")
 @_writes
 def location_create(loc: LocationIn):
-    return _answer(core.create_location, _client(), loc.name, loc.account_id,
+    made = _answer(core.create_location, _client(), loc.name, loc.account_id,
                    loc.workspace_id, func_ids=loc.func_ids, slots=loc.slots,
                    threads_per_engine=loc.threads_per_engine)
+    # The location document with core's warning beside it rather than nested
+    # under it: the page reads `id` off this response to select the location it
+    # has just made, and the warning is a field it can start rendering without
+    # every existing reader moving first. Null for a runnable location, so the
+    # page shows what it is given rather than deciding when it applies -- see
+    # core.create_location for what the 403 costs.
+    return {**made["location"], "warning": made["warning"]}
 
 
 class ShipIn(BaseModel):

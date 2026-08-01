@@ -4,14 +4,15 @@
 // survive the cluster" but "how should it have been configured".
 //
 // Every judgement on screen arrives on the row -- the strength from suggest.py,
-// the state from suggest.merge(), the action from offer(). This file is JSX
-// over those three, which is why its rules are tested in suggestions.test.ts
-// with no DOM in sight.
+// the state from suggest.merge(), every value already written the way
+// profile.json would carry it, and the sentence for a row that cannot be
+// offered. What is left to decide here is the action, in offer(). This file is
+// JSX over those, which is why its rules are tested in suggestions.test.ts with
+// no DOM in sight.
 
 import { Options, Suggestion } from "./api";
 import {
-  Applied, canUndo, clipValue, offer, showValue, STRENGTH_STYLE,
-  suggestionLine,
+  Applied, canUndo, clipValue, offer, STRENGTH_STYLE, suggestionLine,
 } from "./suggestions";
 
 /** A row action. Deliberately the size of the "check endpoint" button rather
@@ -63,7 +64,7 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
           under the shopping list. */}
       <ul className="mt-1.5 space-y-1.5">
         {suggestions.map((s) => {
-          const act = offer(s, options);
+          const act = offer(s);
           // Offered only while the option still holds what was applied: undo
           // restores what was there before that, and putting it back over a
           // value typed since would be the overwrite this panel may not make.
@@ -91,30 +92,30 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                       <>
                         {" — configured "}
                         <code className="font-mono text-amber-900 break-all">
-                          {showValue(s.current)}
+                          {s.current_shown}
                         </code>
                         {", and this cluster "}
                         {s.strength === "DECISIVE"
                           ? <>says <code className="font-mono text-amber-900 break-all">
-                              {showValue(s.value)}</code></>
+                              {s.value_shown}</code></>
                           : <>can only serve{" "}
                               <code className="font-mono text-amber-900 break-all">
-                                {s.candidates.map(showValue).join(", ") || "none of them"}
+                                {s.candidates_shown.join(", ") || "none of them"}
                               </code></>}
                       </>
                     ) : (
                       <>
                         {" — now "}
                         <code className="font-mono text-slate-500 break-all">
-                          {showValue(s.current)}
+                          {s.current_shown}
                         </code>
                         {s.state === "SETTLED"
                           ? ", which is what this evidence says"
                           : s.strength === "DECISIVE"
                             ? <>, evidence says <code className="font-mono break-all">
-                                {showValue(s.value)}</code></>
+                                {s.value_shown}</code></>
                             : <>, evidence narrows it to <code className="font-mono break-all">
-                                {s.candidates.map(showValue).join(", ")}</code></>}
+                                {s.candidates_shown.join(", ")}</code></>}
                       </>
                     )}
                   </p>
@@ -125,9 +126,9 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                   {act.kind === "blocked" && (
                     <p className="text-amber-700">Not offered: {act.because}</p>
                   )}
-                  {s.ruled_out.length > 0 && (
+                  {s.ruled_out_shown.length > 0 && (
                     <p className="text-slate-400">
-                      rules out {s.ruled_out.map(showValue).join(", ")}
+                      rules out {s.ruled_out_shown.join(", ")}
                     </p>
                   )}
                   <p className="font-mono text-[10px] text-slate-400">
@@ -137,29 +138,29 @@ export function SuggestionList({ suggestions, whyNothing, options, applied,
                 </div>
                 <div className="flex flex-col items-end gap-1">
                   {act.kind === "apply" && (
-                    <Act onClick={() => onApply(s, s.value)}>
-                      Apply {clipValue(s.value)}
+                    <Act onClick={() => onApply(s, act.value)}>
+                      Apply {clipValue(act.shown)}
                     </Act>
                   )}
                   {/* A different word for a different act. One click either way,
                       but this one overwrites a value somebody chose, and the row
                       above has just shown them both. */}
                   {act.kind === "replace" && (
-                    <Act tone="warn" onClick={() => onApply(s, s.value)}>
-                      Replace with {clipValue(s.value)}
+                    <Act tone="warn" onClick={() => onApply(s, act.value)}>
+                      Replace with {clipValue(act.shown)}
                     </Act>
                   )}
                   {/* One button per candidate, never a default -- not even at a
                       single candidate. Narrowing to one is still not choosing. */}
                   {act.kind === "choose" && act.candidates.map((c) => (
-                    <Act key={String(c)} tone={conflict ? "warn" : "plain"}
-                      onClick={() => onApply(s, c)}>
-                      Use {clipValue(c)}
+                    <Act key={c.shown} tone={conflict ? "warn" : "plain"}
+                      onClick={() => onApply(s, c.value)}>
+                      Use {clipValue(c.shown)}
                     </Act>
                   ))}
                   {undoable && (
                     <Act onClick={() => onUndo(s.option)}>
-                      Undo → {clipValue(undoable.previous)}
+                      Undo → {clipValue(undoable.previousShown)}
                     </Act>
                   )}
                 </div>

@@ -1543,3 +1543,39 @@ def test_run_gathers_when_nothing_is_injected(monkeypatch):
     checks = doctor.run(FACTS, {"platform": "k8s"}, "blazemeter")
     assert called["gather"] == ("kubectl", "blazemeter")
     assert not doctor.has_failures(checks)
+
+
+# -- the verdict list in one sentence ----------------------------------------
+#
+# One sentence with two readers: the line `doctor` prints under its report, and
+# the line the web UI puts beside the imported file's name. The browser used to
+# compose its own from the same counts -- including the consequence and the rule
+# for when to state it -- which is two judgements about one list.
+
+def _checks(**counts):
+    return [doctor.Check(f"{status} {i}", status, "")
+            for status, n in counts.items() for i in range(n)]
+
+
+def test_the_summary_counts_every_status_including_the_empty_ones():
+    line = doctor.summary_line(_checks(PASS=3, WARN=2))
+    assert "3 passed" in line and "2 warnings" in line and "no failures" in line
+
+
+def test_a_count_of_one_is_not_pluralised():
+    assert "1 warning," in doctor.summary_line(_checks(PASS=0, WARN=1))
+    assert "1 failure" in doctor.summary_line(_checks(FAIL=1))
+
+
+def test_the_consequence_is_stated_only_where_something_failed():
+    """A file whose collector was refused half the cluster is all warnings, and
+    ending that with "a test would not start" turns a thin read into a rejection
+    of a cluster nobody has judged."""
+    assert doctor.NO_TEST_WOULD_START not in doctor.summary_line(_checks(WARN=4))
+    assert doctor.NO_TEST_WOULD_START in doctor.summary_line(_checks(WARN=4, FAIL=1))
+
+
+def test_the_report_prints_the_sentence_rather_than_a_second_one(capsys):
+    checks = doctor.run(FACTS, {"platform": "k8s"}, "blazemeter",
+                        cluster_data=HEALTHY, probes={doctor.API_PROBE_URL: 0})
+    assert doctor.summary_line(checks) in capsys.readouterr().out

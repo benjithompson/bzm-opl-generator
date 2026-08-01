@@ -384,16 +384,24 @@ def _location(action, args):
     if action == "create":
         name, account_id, workspace_id = _need(args, "name", "account_id",
                                                "workspace_id")
-        loc = core.create_location(
+        made = core.create_location(
             _client(args), name, account_id, workspace_id,
             func_ids=args.get("func_ids") or ["performance"],
             slots=args.get("slots", 1),
             threads_per_engine=args.get("threads_per_engine",
                                         core.api.DEFAULT_THREADS_PER_ENGINE))
-        return {"location": _location_summary(loc),
+        loc = made["location"]
+        body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_ship with harbor_id "
                          f"{loc.get('id')!r} -- a location with no ship has "
                          f"nothing to deploy"]}
+        if made["warning"]:
+            # Present only when it applies, like the listing's `note`: a
+            # location missing either field 403s every test start with a
+            # message naming neither, and a session that read the summary
+            # without this would go on to generate a bundle for it.
+            body["warning"] = made["warning"]
+        return body
 
     if action == "create_ship":
         harbor_id, name = _need(args, "harbor_id", "name")

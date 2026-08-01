@@ -389,6 +389,11 @@ export interface PreflightCheck {
  *  the one collected for (the leading check says so when it is not). */
 export interface PreflightOut {
   namespace: string;
+  /** The list in one sentence, as `doctor` prints it under its own report: the
+   *  counts, and -- only where something FAILed -- what that costs. Served
+   *  rather than composed here, because when to state the consequence is a
+   *  judgement about the verdicts and doctor is the one that makes it. */
+  summary: string;
   /** What the file says about itself. Distinct from `namespace` above on
    *  purpose: that is the namespace being preflighted, this is the one the
    *  file describes, and a file collected for another namespace says little
@@ -415,6 +420,12 @@ export interface PreflightOut {
 export interface EvidenceSummary {
   collected_at: string | null;
   namespace: string | null;
+  /** Whether that namespace is a different one from the namespace being
+   *  preflighted, so every namespaced verdict below describes the other one.
+   *  The comparison is doctor's -- it is what the leading verdict says in
+   *  prose -- and false is "nothing to report", which is why `namespace` is
+   *  still here beside it: a file that named none is not a mismatch. */
+  elsewhere: boolean;
   /** Section names, in the order the collector wrote them; empty when it read
    *  everything it asked for. */
   unreadable: string[];
@@ -462,6 +473,21 @@ export interface Suggestion {
   /** What the configuration holds for this option right now. Shown whatever the
    *  state: applying is always a value replacing a value. */
   current: unknown;
+  /** The four values above as a reader sees them, from suggest.shown: JSON the
+   *  way profile.json would carry it (`false`, not `False`), and unset said in
+   *  words. Served rather than formatted here -- the same rule was written
+   *  twice, in two languages, and `JSON.stringify` and `json.dumps` do not
+   *  even agree about the space after a colon. The raw values stay beside
+   *  them: they are what applying writes. */
+  current_shown: string;
+  value_shown: string;
+  candidates_shown: string[];
+  ruled_out_shown: string[];
+  /** Why this row cannot be offered, or null. generate() takes one CA mode of
+   *  three, so writing one over another produces a bundle that does not
+   *  generate -- the refusal belongs where that rule is, and arrives already
+   *  written. */
+  blocked: string | null;
 }
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in

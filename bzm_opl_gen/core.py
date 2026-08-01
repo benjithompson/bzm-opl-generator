@@ -350,12 +350,47 @@ def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
             "omitted_by_limit": len(matched) - len(kept)}
 
 
+# What BlazeMeter needs before it will hand a run to a location, and what it
+# says when one of them is missing. The 403 names neither field -- it reads as
+# an account that is busy rather than a location that was never finished -- and
+# `threadsPerEngine` is exactly where this goes wrong, because POST
+# /private-locations accepts the field and does not store it (see
+# api.create_private_location's follow-up PATCH). So the moment to say it is the
+# one where the location is made, on every surface that can make one.
+LOCATION_UNRUNNABLE = (
+    "WARNING: location is not runnable -- tests will fail to start with "
+    "403 'Not enough available resources'. Set the missing field(s) in "
+    "the BlazeMeter UI (Settings -> Private Locations).")
+
+
+def location_runnable(location):
+    """Whether a location has both the fields a test start needs.
+
+    Both, rather than the one that usually goes missing: either alone produces
+    the same 403, and a check that looked at one would vouch for the other.
+    """
+    return bool(location.get("slots") and location.get("threadsPerEngine"))
+
+
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
-    return _upstream(client.create_private_location, name, account_id,
-                     [workspace_id], func_ids=list(func_ids), slots=slots,
-                     threads_per_engine=threads_per_engine)
+    """Create a private location, and say whether a test can start on it.
+
+    The verdict travels with the location rather than being left for each
+    caller to work out: it was the CLI's alone, so the two surfaces that create
+    a location without a terminal -- the web page and an MCP session -- made
+    one that 403s every start and said nothing about it.
+
+    `warning` is None for a runnable location, so a caller shows what it is
+    given rather than deciding when the sentence applies.
+    """
+    loc = _upstream(client.create_private_location, name, account_id,
+                    [workspace_id], func_ids=list(func_ids), slots=slots,
+                    threads_per_engine=threads_per_engine)
+    runnable = location_runnable(loc)
+    return {"location": loc, "runnable": runnable,
+            "warning": None if runnable else LOCATION_UNRUNNABLE}
 
 
 def create_ship(client, harbor_id, name):
@@ -1211,6 +1246,47 @@ def evidence_document(evidence):
         raise EvidenceUnreadable(str(e))
 
 
+def preflight_cluster(evidence, options=None, namespace=None):
+    """The cluster read a preflight works from, and the namespace it is about.
+
+    Two answers from one function because the second decides the first:
+    `cluster_from_evidence` is told which namespace is being preflighted so it
+    can report a file collected for a different one, rather than adopting it.
+
+    The precedence, and each step is somebody's input: a namespace asked for
+    outright (`doctor -n`, which the options cannot carry -- the bundle's
+    namespace is what it was *generated* for), then the configuration's, then
+    the one the evidence was collected for, then the documented default.
+
+    Reachable on its own, and not only from preflight(), because one caller
+    prints its own report: `doctor --cluster-evidence` runs doctor.run, which
+    writes to stdout, and core is not a terminal. That command restated this
+    precedence line for line, comment included, so a change to one rule was a
+    change to one of its two copies.
+
+    A falsy `evidence` is a run against a cluster this machine can reach, and
+    comes back as the empty Evidence -- which says exactly what doctor's own
+    defaults say: no cluster data, no probes, and no verdicts reached before
+    the checks ran. Not a refusal, and not a None the call site then has to
+    test three times over.
+    """
+    options = options or {}
+    doc_ns = (evidence.get(evidence_mod.NAMESPACE)
+              if isinstance(evidence, dict) else None)
+    want = namespace or options.get("namespace") or doc_ns
+    if not evidence:
+        return doctor.Evidence(None, None, ()), doctor.resolve_namespace(
+            want, options)
+    try:
+        imported = doctor.cluster_from_evidence(evidence, want)
+    except ValueError as e:
+        # Every way a file can be the wrong one is a sentence doctor already
+        # writes, and it carries no verdicts -- so whatever the caller was
+        # already showing stays on screen.
+        raise BadRequest(str(e))
+    return imported, doctor.resolve_namespace(want, options)
+
+
 def preflight(facts, options, evidence):
     """The verdicts `doctor --cluster-evidence` prints, for one configuration.
 
@@ -1226,20 +1302,7 @@ def preflight(facts, options, evidence):
     because it qualifies every one of them.
     """
     options = options or {}
-    doc_ns = (evidence.get(evidence_mod.NAMESPACE)
-              if isinstance(evidence, dict) else None)
-    # Same precedence as the command: the namespace being configured wins, and
-    # the one the file was collected for is the last resort. A file collected
-    # elsewhere is then reported by cluster_from_evidence rather than adopted.
-    namespace = options.get("namespace") or doc_ns
-    try:
-        imported = doctor.cluster_from_evidence(evidence, namespace)
-    except ValueError as e:
-        # Every way a file can be the wrong one is a sentence doctor already
-        # writes, and it carries no verdicts -- so whatever the caller was
-        # already showing stays on screen.
-        raise BadRequest(str(e))
-    namespace = doctor.resolve_namespace(namespace, options)
+    imported, namespace = preflight_cluster(evidence, options)
     try:
         checks = doctor.evaluate(facts, options, namespace, evidence=imported)
     except (ValueError, KeyError) as e:
@@ -1255,12 +1318,19 @@ def preflight(facts, options, evidence):
     suggestions = suggest_mod.from_evidence(evidence)
     return {"namespace": namespace,
             **_verdicts(checks),
-            # The same three facts the leading check states in prose, apart
-            # from it: a caller can put them in a header, where they cannot be
-            # read past. Which namespace the *file* describes is not
-            # `namespace` above -- that is the one being preflighted, and the
-            # difference is the point.
-            "evidence": doctor.evidence_summary(evidence),
+            # The list in one sentence, in doctor's words -- the line the
+            # command prints under its report. A caller that renders a header
+            # rather than a report needs the same sentence, and composing it
+            # from the counts is where the rule for when to state the
+            # consequence gets decided a second time.
+            "summary": doctor.summary_line(checks),
+            # The same facts the leading check states in prose, apart from it:
+            # a caller can put them in a header, where they cannot be read
+            # past. Which namespace the *file* describes is not `namespace`
+            # above -- that is the one being preflighted, and the difference is
+            # the point, so doctor is asked for it rather than left to a
+            # caller comparing the two fields.
+            "evidence": doctor.evidence_summary(evidence, namespace),
             **suggestions_from_evidence(evidence, options)}
 
 

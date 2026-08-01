@@ -618,6 +618,38 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
     assert r.json()["funcIds"] == ["mockServices", "proxyRecorder"]
 
 
+def test_a_location_a_test_cannot_start_on_says_so(monkeypatch):
+    """The warning came back from the terminal only, so the page could create a
+    location that 403s every start and show nothing about it. core decides it
+    now; the field rides beside the location document rather than nesting it,
+    because the page reads `id` off this response to select what it just made.
+    """
+    made = {}
+
+    class FakeClient:
+        def create_private_location(self, name, account_id, workspace_ids, **kw):
+            stored = {"id": "h9", "name": name, "funcIds": kw["func_ids"],
+                      "slots": kw["slots"],
+                      "threadsPerEngine": kw.get("threads_per_engine")}
+            # Applied last: `made` is what this account declined to store.
+            stored.update(made)
+            return stored
+
+    monkeypatch.setitem(server._state, "client", FakeClient())
+
+    def create(**kw):
+        return client.post("/api/locations", json={
+            "name": "loc", "account_id": 1, "workspace_id": 2, **kw}).json()
+
+    # threadsPerEngine is the one POST /private-locations accepts and drops.
+    made["threadsPerEngine"] = None
+    body = create(slots=2)
+    assert body["id"] == "h9"
+    assert "403" in body["warning"]
+    made.clear()
+    assert create(slots=2, threads_per_engine=500)["warning"] is None
+
+
 def test_api_requires_key():
     assert client.get("/api/accounts").status_code == 401
 
@@ -1112,6 +1144,10 @@ def test_preflight_carries_what_the_file_says_about_itself_as_data():
     assert body["evidence"] == {
         "collected_at": "2026-07-28T02:51:50Z",
         "namespace": "some-ns",
+        # Whether the file describes a different namespace than the one being
+        # preflighted. Decided here rather than by comparing the two fields in
+        # the browser: it is the judgement the leading verdict already makes.
+        "elsewhere": False,
         # Every section this collector was refused, named -- one entry per
         # section, in the order the script wrote them.
         "unreadable": ["nodes", "ingressclasses", "namespace", "scoped",
@@ -1179,6 +1215,30 @@ def test_preflight_reports_evidence_collected_for_another_namespace():
     assert "their-ns" in first["detail"] and "blazemeter" in first["detail"]
 
 
+def test_preflight_says_the_file_describes_another_namespace():
+    """The header's own line, as a field rather than as two fields to compare.
+    The browser used to decide this itself -- namespace != evidence.namespace --
+    which is the same judgement the leading verdict makes, made twice."""
+    assert _preflight(_evidence(namespace="their-ns")).json()["evidence"]["elsewhere"]
+    assert not _preflight(_evidence()).json()["evidence"]["elsewhere"]
+
+
+def test_preflight_summarises_the_verdict_list_in_one_sentence():
+    """The line beside the imported file's name, in doctor's words rather than
+    the browser's: the counts, and what a FAIL costs. A browser composing it
+    from the same list is a second place the "a test would not start" rule can
+    be got wrong."""
+    doc = _evidence()
+    body = _preflight(doc).json()
+    assert body["summary"] == doctor.summary_line(
+        [doctor.Check(**c) for c in body["checks"]])
+    assert doctor.NO_TEST_WOULD_START not in body["summary"]
+    # ...and it is stated where something failed.
+    huge = _preflight(doc, {"engine_cpu_limit": "64",
+                            "engine_mem_limit": "256Gi"}).json()
+    assert doctor.NO_TEST_WOULD_START in huge["summary"]
+
+
 def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     """Same precedence as the command: what is being configured wins, and the
     file's own namespace is the last resort rather than the first."""
@@ -1227,7 +1287,12 @@ def test_preflight_refuses_options_no_bundle_could_be_generated_from():
 # can disagree about which options the answer describes.
 
 from evidence_fixtures import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
-from test_suggest import REGCRED  # noqa: E402
+from test_suggest import PROXY_CONFIG, REGCRED  # noqa: E402
+
+# A cluster whose own proxy carries a trust bundle: the one fixture that
+# produces a CA-trust suggestion, which is where the one-of refusal is read.
+_CA_DOC = _evidence(openshift={"ingress_config": None,
+                               "proxy_config": PROXY_CONFIG})
 
 
 def _suggestions(evidence, options=None):
@@ -1282,6 +1347,33 @@ def test_preflight_says_why_it_has_nothing_to_suggest():
 def test_preflight_drops_the_reason_once_there_is_something_to_show():
     body = _preflight(_evidence()).json()
     assert body["suggestions"] and body["why_nothing"] is None
+
+
+def test_preflight_shows_every_value_a_row_displays():
+    """Values as profile.json would carry them -- `false`, not `False` -- said
+    once, here. The browser had its own formatter beside suggest's, and the two
+    agreeing was nobody's job."""
+    doc = _evidence(**REGCRED)
+    row = _suggestions(doc)["pull_secret"]
+    assert row["value_shown"] == "regcred"
+    # An option nobody set is unset in words: printing `null` at somebody is not
+    # an answer to "what is configured now".
+    assert row["current_shown"] == "not set" and row["current"] is None
+    assert _suggestions(_CA_DOC)["ca_openshift_inject"]["candidates_shown"] \
+        == ["true"]
+
+
+def test_preflight_says_when_a_suggestion_cannot_be_offered():
+    """generate() takes one CA mode of the three, so writing this one over a
+    configuration already holding another produces a bundle that does not
+    generate -- and clearing the other is the silent overwrite this feature may
+    not make. One statement of that, on the row."""
+    held = {"ca_bundle": "-----BEGIN CERTIFICATE-----"}
+    rows = _suggestions(_CA_DOC, held)
+    assert "inline PEM" in rows["ca_openshift_inject"]["blocked"]
+    # Only the row it is about, and only while something else claims the slot.
+    assert [o for o, r in rows.items() if r["blocked"]] == ["ca_openshift_inject"]
+    assert _suggestions(_CA_DOC)["ca_openshift_inject"]["blocked"] is None
 
 
 # -- saving a bundle to disk ---------------------------------------------------

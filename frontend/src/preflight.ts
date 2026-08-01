@@ -9,7 +9,6 @@
 // like optionGroups.ts and needs no DOM to test.
 
 import { CheckStatus, PreflightCheck, PreflightOut } from "./api";
-import { counted, plural } from "./text";
 
 /** The header over the verdict list: what was imported, stated where it cannot
  *  be read past.
@@ -25,7 +24,10 @@ export interface EvidenceHeader {
   /** The namespace the FILE describes — not the one being preflighted. */
   describes: string;
   /** The two are different namespaces, so every namespaced verdict below
-   *  describes the other one. */
+   *  describes the other one. Carried off the response rather than worked out
+   *  from the two namespaces here: it is the judgement the leading verdict
+   *  already makes, and made a second time it would be a second opinion about
+   *  the same file. */
   elsewhere: boolean;
   unreadable: string[];
   /** The unreadable sections as a sentence, or "" when there were none. Said
@@ -35,14 +37,11 @@ export interface EvidenceHeader {
 }
 
 export function evidenceHeader(out: PreflightOut): EvidenceHeader {
-  const { collected_at, namespace, unreadable } = out.evidence;
+  const { collected_at, namespace, elsewhere, unreadable } = out.evidence;
   return {
     collected: collected_at ?? "an unrecorded time",
     describes: namespace ?? "an unnamed namespace",
-    // A file that names no namespace is not a mismatch — there is nothing to
-    // mismatch with, and warning about one would be a complaint nobody can act
-    // on.
-    elsewhere: namespace != null && namespace !== out.namespace,
+    elsewhere,
     unreadable,
     unreadableLine: unreadable.length
       ? `could not read ${unreadable.join(", ")} — reported below as unverified, `
@@ -82,19 +81,12 @@ export function worstStatus(checks: PreflightCheck[]): CheckStatus | null {
   return SEVERITY.find((s) => checks.some((c) => c.status === s)) ?? null;
 }
 
-/** The one-line summary, in doctor's own terms. The consequence is stated only
- *  where something FAILed: an evidence file with sections nobody could read is
- *  all warnings, and ending that with "a test would not start" would turn a
- *  thin file into a rejection of the cluster. */
-export function verdictLine(checks: PreflightCheck[]): string {
-  const n = countByStatus(checks);
-  const line = `${counted(n.PASS, "passed")}, `
-    + `${plural(n.WARN, "warning")}, `
-    + (n.FAIL ? plural(n.FAIL, "failure") : "no failures");
-  return n.FAIL
-    ? `${line} — a test would not start on this location as configured`
-    : line;
-}
+// The one-line summary of the same list is doctor's, and arrives as
+// `PreflightOut.summary`. It used to be composed here from these counts --
+// including the rule that the consequence is stated only against a FAIL, since
+// a file whose collector was refused half the cluster is all warnings and
+// ending that with "a test would not start" turns a thin read into a rejection
+// of a cluster nobody judged. That rule now has one statement, in doctor.
 
 export type EvidenceRead = { doc: unknown } | { error: string };
 

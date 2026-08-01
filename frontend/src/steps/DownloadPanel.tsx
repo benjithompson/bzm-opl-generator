@@ -34,8 +34,7 @@ import {
 } from "../components";
 import { OptionGroup } from "../optionGroups";
 import {
-  EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, verdictLine,
-  worstStatus,
+  EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, worstStatus,
 } from "../preflight";
 import { Applied } from "../suggestions";
 import { SuggestionList } from "../SuggestionList";
@@ -382,10 +381,13 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       {" · preflighting "}
                       <code className="font-mono">{read.out.namespace}</code>
                       {" · "}
+                      {/* doctor's own sentence about the list, in the colour
+                          the worst verdict in it takes. The tone is a
+                          rendering; the sentence is not, and is served. */}
                       <span className={worstStatus(read.out.checks)
                         ? STATUS_STYLE[worstStatus(read.out.checks)!].text
                         : ""}>
-                        {verdictLine(read.out.checks)}
+                        {read.out.summary}
                       </span>
                     </p>
                     {/* The namespaced verdicts -- LimitRanges, quotas,
