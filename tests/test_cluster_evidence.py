@@ -358,8 +358,13 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     # The count, not just the presence: a refactor that dropped a check's
     # unread branch would still leave *some* WARN in the output and pass an
     # "is there a WARN" assertion. Every section of this file is null, so the
-    # number is what says each one was noticed. Update it deliberately when a
-    # check is added -- that is the point of pinning it.
+    # number is what says each one was noticed.
+    #
+    # This is no longer the thing *protecting* that -- @reads and the two
+    # source-level guards in test_doctor.py are, and they name the check rather
+    # than leaving you to work out which of nine went missing. It stays as a
+    # plain regression pin over the whole degraded run; update it deliberately
+    # when a check is added.
     # 9: +1 for check_engine_packing, which reads the same unread `nodes`
     # section as capacity and disk and says so separately rather than borrowing
     # theirs, and +1 for check_engine_heap, which has no engineXmx to read.

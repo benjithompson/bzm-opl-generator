@@ -21,6 +21,7 @@ later, but a test still starts.
 """
 
 import collections
+import functools
 import json
 import os
 import subprocess
@@ -74,64 +75,184 @@ def _unread_section(cluster, key, name, detail):
 
     Returns the verdict to hand straight back, or None to carry on. `detail`
     stays the caller's, because what an unread section costs is specific to the
-    question being asked of it -- only the branch is shared, so a check that
-    reads a new section gets it by naming its section rather than by its author
-    remembering the rule.
+    question being asked of it -- only the branch is shared.
+
+    Every check reaches this through its own @reads declaration now, so the
+    seam below is the only caller: a check that reads a new section gets the
+    branch by naming its section, and cannot get it by remembering the rule.
     """
     if cluster.get(key) is None:
         return [Check(name, WARN, detail)]
     return None
 
 
-# What a check declares about the cluster section it reads: the key in the
-# cluster data, the name its unread verdict carries, and what that verdict says.
-Section = collections.namedtuple("Section", "key name unread")
+class MissingSection(LookupError):
+    """A check was handed cluster data with no key at all for a section it reads.
+
+    Absent is not a third answer to "what is in this section". Both producers --
+    gather_cluster() and cluster_from_evidence() -- carry every key always, null
+    for a section nobody could read and a value for one that was read, so a
+    mapping missing the key is a caller that has not said which of the two it
+    means. `.get()` picks "unread" for it silently, and that WARN is
+    indistinguishable from an honest one: it is how thirty-six partial test
+    fixtures could each have been putting a question to a check that the check
+    never answered, with a pinned count of WARNs as the only thing noticing.
+
+    Loud, therefore, and at the call site rather than in the report.
+    """
 
 
-def reads(key, name, unread):
-    """Declare the evidence section a check reads, and its unread verdict.
+# What a check declares about a cluster section it reads.
+#
+# `name`/`unread` are the verdict to give when the section is null. Both may be
+# None: that is a check whose unread case is not its own to report -- either
+# another check already owns that verdict (check_resourcequota's second read of
+# `limitranges`) or the section cannot express the difference in the first place
+# (check_egress's probes). The key is still declared, because presence is
+# checked for every declaration and reading a section undeclared is the thing
+# this exists to stop.
+#
+# `when` is a predicate over the options, for a section only read when the
+# question arises at all -- crane's own pool on a split bundle, an
+# IngressClass for a virtual service. It gates the whole declaration: a section
+# a check will not look at need not be there, and an unread one costs nothing.
+Section = collections.namedtuple("Section", "key name unread when")
+
+
+def reads(key, name=None, unread=None, when=None):
+    """Declare a cluster section a check reads, and what an unread one costs.
 
     The rule this exists to make structural is the one broken most often here:
     an unread section (None -- denied, not served, trimmed out of an evidence
     file) and an empty one ([] or {}) are opposite answers, and a check body
     that forgets the difference turns a read somebody was refused into a FAIL
     about a cluster nobody described. A declared check never gets the chance:
-    run_check() answers the unread case from this declaration and the body is
+    the wrapper answers the unread case from this declaration and the body is
     only ever called with a section that was actually read.
+
+    The declaration travels with the check rather than being applied by the
+    loop, so a direct call -- which is how most of the tests here reach a check
+    -- is held to the same contract as evaluate(). A seam only the loop went
+    through would leave every other caller free to ask a check a question it
+    was never given.
 
     `unread` is the check's own sentence, not a generic one, because what an
     unread section costs is specific to the question being asked of it -- only
-    the branch is shared. It is a plain string rather than a callable
-    deliberately: a wording that needed the facts or the options to compose
-    would be a wording about data the check has not got.
+    the branch is shared. It may be a callable over (facts, opts) where the
+    sentence names the location's own numbers ("slots=2 x 2 CPU / 8Gi"), which
+    is what makes it actionable; never over the cluster, which is the thing that
+    was not read.
 
-    Undeclared checks are run unchanged and open the branch themselves (see
-    _unread_section). Both styles coexist; a check that reads no section, or
-    that has to decide whether the question applies at all before it can say
-    what an unread section costs, is right not to declare one.
+    Stack the decorator for a check that reads two sections. Undeclared checks
+    are run unchanged: a check that reads nothing from the cluster is right not
+    to declare, and says so where it is defined.
     """
     def declare(check):
-        check.section = Section(key, name, unread)
+        section = Section(key, name, unread, when)
+        if getattr(check, "sections", None) is not None:
+            # Already wrapped by a decorator below this one; one wrapper is
+            # enough, and source order is the order they are answered in.
+            check.sections = (section,) + check.sections
+            return check
+
+        @functools.wraps(check)
+        def declared(facts, opts, cluster):
+            for s in declared.sections:
+                verdict = _declared_verdict(s, declared, facts, opts, cluster)
+                if verdict is not None:
+                    return verdict
+            return check(facts, opts, cluster)
+
+        declared.sections = (section,)
+        return declared
+    return declare
+
+
+def _declared_verdict(section, check, facts, opts, cluster):
+    """The verdict a declaration answers with by itself, or None to run the body.
+
+    Three outcomes, and the middle one is the point: a section the check does
+    not read here (`when`), a section the cluster data has no key for at all
+    (MissingSection -- see it), and a section that was read (carry on, possibly
+    after the unread WARN).
+    """
+    if section.when is not None and not section.when(opts):
+        return None
+    if section.key not in cluster:
+        raise MissingSection(
+            f"{check.__name__} reads the cluster section '{section.key}', and "
+            f"this cluster data has no key for it. Absent is not a third "
+            f"answer: pass '{section.key}': None for a section nobody could "
+            f"read, or its contents for one that was read. Both "
+            f"gather_cluster() and cluster_from_evidence() always carry every "
+            f"section, so this is a caller -- in practice a fixture -- that "
+            f"has not said which it means")
+    if section.unread is None:
+        return None                   # not this check's verdict to give
+    detail = (section.unread(facts, opts) if callable(section.unread)
+              else section.unread)
+    return _unread_section(cluster, section.key, section.name, detail)
+
+
+def defers_to(*owners):
+    """Declare the checks whose verdicts this one returns [] rather than restate.
+
+    Two checks here go quiet because an earlier one has already reported the
+    thing they would have said -- threadsPerEngine unset, an eligible node set
+    that is empty. That was true only by where they sat in CHECKS, which is a
+    fact about a tuple rather than about either check; _ordered() below turns it
+    into something that fails at import when the tuple is reshuffled.
+
+    Not a dependency graph, and it should not grow into one: it records the two
+    places a verdict is deliberately left to somebody else. A check that goes
+    quiet because the question does not arise (no split pools, no virtual
+    service, the bundle brings its own ServiceAccount) is not deferring to
+    anything and declares nothing.
+    """
+    def declare(check):
+        check.defers = tuple(owners)
         return check
     return declare
 
 
-def run_check(check, facts, opts, cluster):
-    """One check's verdicts, with the unread branch opened for a declared one.
+def _ordered(checks):
+    """CHECKS, with every declared deference met by the order it is written in.
 
-    The single place that reads a `section` declaration, so evaluate() and any
-    caller running a check on its own agree about what a check was promised.
+    Import-time, because a reordering that silences a check is invisible in the
+    report: the verdict the quiet one was counting on simply never appears.
     """
-    section = getattr(check, "section", None)
-    if section is not None:
-        unread = _unread_section(cluster, section.key, section.name,
-                                 section.unread)
-        if unread:
-            return unread
+    seen = []
+    for check in checks:
+        for owner in getattr(check, "defers", ()):
+            if owner not in seen:
+                raise RuntimeError(
+                    f"{check.__name__} defers to {owner.__name__}, which does "
+                    f"not run before it -- so the verdict it stays quiet for is "
+                    f"never reported. Fix the order in CHECKS")
+        seen.append(check)
+    return tuple(checks)
+
+
+def run_check(check, facts, opts, cluster):
+    """One check's verdicts. A pass-through, and that is the finished shape.
+
+    The declaration used to be read here, which made this the one place a check
+    got what it was promised -- and left every caller that did not come through
+    it, most of this project's tests among them, free to hand a check anything
+    at all. Enforcing it on the check instead makes those two the same call, and
+    leaves nothing for a loop to do. Kept as the name evaluate() runs a check
+    under, so a caller running one on its own has the same thing to say.
+    """
     return check(facts, opts, cluster)
 
 
 # -- location -----------------------------------------------------------------
+#
+# The three checks in this section read no cluster section at all -- they judge
+# the location's own settings against the bundle's -- so they declare nothing,
+# and that is a decision rather than an omission. A @reads on any of them would
+# be a claim about data none of them touches, and would make a cluster mapping
+# a fixture has to carry to ask a question about an account.
 
 def check_location(facts, opts, cluster):
     """The two fields BlazeMeter itself needs before it will hand a run to this
@@ -182,6 +303,7 @@ def check_location(facts, opts, cluster):
     return checks
 
 
+@defers_to(check_location)
 def check_threads_per_engine(facts, opts, cluster):
     """Threads the location promises per engine vs what the engine is sized for.
 
@@ -285,6 +407,10 @@ def _scope(opts, placement=None):
 
 # -- capacity -----------------------------------------------------------------
 
+@reads("nodes", "crane pool",
+       "the cluster's nodes could not be read, so whether the crane pool can "
+       "hold crane is unverified",
+       when=separate_pools)
 def check_crane_pool(facts, opts, cluster):
     """The crane pool can hold crane.
 
@@ -300,16 +426,13 @@ def check_crane_pool(facts, opts, cluster):
     schedules on its 250m request and can never reach its 1 CPU limit, so it is
     throttled exactly when a run makes it busy.
     """
+    # The `when` on the declaration above is this same condition: a bundle with
+    # one pool asks nothing of the nodes here, so an unread `nodes` costs it
+    # nothing either, and the section is not required to be present.
     if not separate_pools(opts):
         return []
-    unread = _unread_section(
-        cluster, "nodes", "crane pool",
-        "the cluster's nodes could not be read, so whether the crane pool can "
-        "hold crane is unverified")
-    if unread:
-        return unread
     placement = crane_scheduling(opts)
-    nodes = eligible_nodes(cluster.get("nodes") or [], opts, placement)
+    nodes = eligible_nodes(cluster["nodes"], opts, placement)
     want_cpu, want_mem = parse_cpu(CRANE_CPU_LIMIT), parse_memory(CRANE_MEM_LIMIT)
     want = _engine_str(want_cpu, want_mem)
     if not nodes:
@@ -334,6 +457,19 @@ def check_crane_pool(facts, opts, cluster):
                   f"heartbeating mid-run reads as a test that stopped")]
 
 
+def _capacity_unread(facts, opts):
+    """What an unread `nodes` costs the capacity question, in the location's own
+    numbers -- which is what makes it something to act on rather than a note
+    that a read failed. Composed from facts and options only: the cluster is the
+    thing that was not read."""
+    slots = facts.get("slots") or 1
+    want = _engine_str(*engine_size(opts))
+    return (f"the cluster's nodes could not be read, so nothing here knows "
+            f"whether slots={slots} x {want} can be scheduled. Needs a role "
+            f"that can list nodes")
+
+
+@reads("nodes", "capacity", _capacity_unread)
 def check_capacity(facts, opts, cluster):
     """slots x engine size vs what the eligible nodes can hold.
 
@@ -344,14 +480,7 @@ def check_capacity(facts, opts, cluster):
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
     want = _engine_str(cpu, mem)
-    unread = _unread_section(
-        cluster, "nodes", "capacity",
-        f"the cluster's nodes could not be read, so nothing here knows whether "
-        f"slots={slots} x {want} can be scheduled. Needs a role that can list "
-        f"nodes")
-    if unread:
-        return unread
-    nodes = eligible_nodes(cluster.get("nodes") or [], opts)
+    nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
         if separate_pools(opts):
             # An engine pool aimed at its own nodes is *supposed* to sit at zero
@@ -642,6 +771,7 @@ def _pod_ceiling(node):
         return None
 
 
+@defers_to(check_capacity)
 @reads("nodes", "engine packing",
        "the cluster's nodes could not be read, so nothing here knows how many "
        "engines would share one")
@@ -670,7 +800,7 @@ def check_engine_packing(facts, opts, cluster):
     before this body runs and `[]` here is only ever "we looked and there are
     none".
     """
-    nodes = eligible_nodes(cluster.get("nodes") or [], opts)
+    nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
         return []            # check_capacity already FAILed on the empty set
     cpu, mem = engine_size(opts)
@@ -747,18 +877,15 @@ def check_engine_packing(facts, opts, cluster):
                   f"the node pool (see the generated {NODEPOOLS_FILE})")]
 
 
+@reads("nodes", "node disk",
+       f"the cluster's nodes could not be read, so the {ENGINE_DISK_GB}GB per "
+       f"engine is unverified")
 def check_disk(facts, opts, cluster):
     """Ephemeral storage per eligible node against the documented engine
     footprint. WARN, not FAIL: a short run may never fill it -- but an engine
     that does gets evicted mid-test, which reads as a random failure."""
     slots = facts.get("slots") or 1
-    unread = _unread_section(
-        cluster, "nodes", "node disk",
-        f"the cluster's nodes could not be read, so the {ENGINE_DISK_GB}GB per "
-        f"engine is unverified")
-    if unread:
-        return unread
-    nodes = eligible_nodes(cluster.get("nodes") or [], opts)
+    nodes = eligible_nodes(cluster["nodes"], opts)
     if not nodes:
         return [Check("node disk", WARN,
                       f"no eligible node to measure against the documented "
@@ -802,7 +929,7 @@ def check_limitrange(facts, opts, cluster):
     The declaration above means `limitranges` here is a list that was read:
     empty is "the namespace caps nothing", which is this check's WARN, and never
     "we were refused it", which is the seam's."""
-    limitranges = cluster.get("limitranges")
+    limitranges = cluster["limitranges"]
     cpu, mem = engine_size(opts)
     if not limitranges:
         # Nothing caps the namespace, which is a note rather than a problem --
@@ -875,17 +1002,25 @@ _QUOTA_CPU = ("requests.cpu", "limits.cpu", "cpu")
 _QUOTA_MEM = ("requests.memory", "limits.memory", "memory")
 
 
+def _quota_unread(facts, opts):
+    slots = facts.get("slots") or 1
+    return (f"the namespace's ResourceQuotas could not be read, so whether one "
+            f"has room for slots={slots} is unverified")
+
+
+@reads("quotas", "resourcequota", _quota_unread)
+# The second read, and the reason it is declared without a verdict of its own:
+# the last branch below distinguishes `limitranges == []` (read, the namespace
+# has none) from null, and check_limitrange already reports the null. Declaring
+# it says the section is read here, which is what stops a caller supplying
+# quotas alone and getting an answer composed against a LimitRange list nobody
+# looked at.
+@reads("limitranges")
 def check_resourcequota(facts, opts, cluster):
     """hard - used, per resource, against slots x engine (+1 pod for crane)."""
-    quotas, limitranges = cluster.get("quotas"), cluster.get("limitranges")
+    quotas, limitranges = cluster["quotas"], cluster["limitranges"]
     cpu, mem = engine_size(opts)
     slots = facts.get("slots") or 1
-    unread = _unread_section(
-        cluster, "quotas", "resourcequota",
-        f"the namespace's ResourceQuotas could not be read, so whether one has "
-        f"room for slots={slots} is unverified")
-    if unread:
-        return unread
     if not quotas:
         return [Check("resourcequota", PASS, "no ResourceQuota in the namespace")]
 
@@ -968,7 +1103,7 @@ def check_admission(facts, opts, cluster):
     # section it was refused as null, and telling its reader to create a
     # namespace they may well already have is advice about a problem they do not
     # have. That case is answered by the declaration above, before this runs.
-    namespace_obj = cluster.get("namespace")
+    namespace_obj = cluster["namespace"]
     platform = opts.get("platform") or "openshift"
     meta = namespace_obj.get("metadata") or {}
     if not namespace_obj:
@@ -1014,6 +1149,18 @@ def check_admission(facts, opts, cluster):
 
 # -- service account ----------------------------------------------------------
 
+def _brings_its_own_account(opts):
+    return not opts.get("service_account_create", True)
+
+
+def _account_unverified(facts, opts):
+    return (f"could not read the ServiceAccounts in the namespace, so "
+            f"'{service_account(opts)}' is unverified -- it must exist before "
+            f"you apply, because nothing in this bundle creates it")
+
+
+@reads("serviceaccounts", "service account", _account_unverified,
+       when=_brings_its_own_account)
 def check_service_account(facts, opts, cluster):
     """Is the ServiceAccount the bundle references actually there?
 
@@ -1023,20 +1170,24 @@ def check_service_account(facts, opts, cluster):
     the Deployment applies, the ReplicaSet reports `serviceaccounts "x" not
     found` in an event, and the agent simply never appears. A preflight is the
     only place that is visible before someone waits on it.
+
+    This is one of the two checks CLAUDE.md notes branch on falsiness rather
+    than on null, and it still does, below -- but the two halves are now split
+    where they belong. Null is the declaration's, like everywhere else. Empty
+    stays this check's own judgement, and is the one section here where an empty
+    read means the same thing as no read at all: see below.
     """
     if opts.get("service_account_create", True):
         return []                     # we create it; nothing to find
     name = service_account(opts)
-    accounts = cluster.get("serviceaccounts")
+    accounts = cluster["serviceaccounts"]
     # Every namespace that exists has at least `default`, so an empty list means
-    # the namespace is missing or unreadable rather than genuinely accountless
-    # -- a different answer from "we looked and it is not there", and not one to
-    # fail a preflight on.
+    # the namespace is missing or the read was filtered rather than the
+    # namespace being genuinely accountless -- which is not a fact any cluster
+    # produces. So this is the one place [] and null earn the same sentence, and
+    # it is composed once for both rather than written out twice.
     if not accounts:
-        return [Check("service account", WARN,
-                      f"could not read the ServiceAccounts in the namespace, so "
-                      f"'{name}' is unverified -- it must exist before you apply, "
-                      f"because nothing in this bundle creates it")]
+        return [Check("service account", WARN, _account_unverified(facts, opts))]
     if name in {(sa.get("metadata") or {}).get("name") for sa in accounts}:
         return [Check("service account", PASS,
                       f"ServiceAccount '{name}' exists (not created by this "
@@ -1060,6 +1211,23 @@ CRANE_INGRESS_CLASS = "nginx"
 OPENSHIFT_ROUTE_CONTROLLER = "openshift.io/ingress-to-route"
 
 
+def _claims_an_ingress_class(opts):
+    """Whether this bundle publishes an Ingress for something to claim at all.
+
+    The three branches the body takes before it reaches the cluster -- no SV, a
+    value generate() would have rejected, a backend that routes through its own
+    CRD -- are all answers about the options, and none of them is improved by
+    knowing whether IngressClasses could be read. So the declaration is gated on
+    the one case that does read them.
+    """
+    backend = SV_INGRESS_BACKENDS.get(opts.get("sv_ingress"))
+    return bool(backend and backend.via_ingress_class)
+
+
+@reads("ingressclasses", "sv ingress class",
+       f"IngressClasses could not be read, so the '{CRANE_INGRESS_CLASS}' class "
+       f"crane requires is unverified",
+       when=_claims_an_ingress_class)
 def check_ingress_class(facts, opts, cluster):
     """Will anything claim the Ingress crane creates for a virtual service?
 
@@ -1094,15 +1262,10 @@ def check_ingress_class(facts, opts, cluster):
                       f"sv_ingress={ingress} routes through the "
                       f"{backend.creates} crane creates, not an IngressClass")]
 
-    classes = cluster.get("ingressclasses")
-    # Older cluster_data, or an API server that does not serve the kind.
-    unread = _unread_section(
-        cluster, "ingressclasses", "sv ingress class",
-        f"IngressClasses could not be read, so the '{CRANE_INGRESS_CLASS}' "
-        f"class crane requires is unverified")
-    if unread:
-        return unread
-    by_name = {c.get("metadata", {}).get("name"): c for c in classes}
+    # An API server that does not serve the kind is the declaration's, above;
+    # what reaches here is a list, and an empty one is the FAIL below.
+    by_name = {c.get("metadata", {}).get("name"): c
+               for c in cluster["ingressclasses"]}
     mine = by_name.get(CRANE_INGRESS_CLASS)
     if mine is None:
         existing = ", ".join(sorted(n for n in by_name if n)) or "none at all"
@@ -1144,9 +1307,17 @@ def egress_targets(opts):
     return targets
 
 
+# Declared for presence, without an unread verdict of its own -- the other
+# check CLAUDE.md notes branches on falsiness, and the branch stays here because
+# probes is the one section where null and empty are genuinely the same answer.
+# egress_targets() is never empty, so there is no "we probed and there was
+# nothing to probe": {} is what an evidence file carries (a probe needs a pod in
+# the namespace, which a collector must not create) and None is a caller that
+# did not probe. Both are "not probed", and one sentence says so.
+@reads("probes")
 def check_egress(facts, opts, cluster):
     """Pure verdict over {target: curl returncode}; None = we could not probe."""
-    probes = cluster.get("probes")
+    probes = cluster["probes"]
     if not probes:
         # True of both ways in: no crane pod and no throwaway pod either, or an
         # evidence file, which cannot carry a probe -- it takes a pod in the
@@ -1455,18 +1626,18 @@ def _oneshot_curl(cli, namespace, targets, opts):
 
 
 # Every check takes the same (facts, opts, cluster) so adding one is a single
-# edit here, not a new argument order to remember. Order is part of the
-# interface: a check returning [] means one earlier in this tuple already owns
-# that verdict.
+# edit here, not a new argument order to remember.
 #
-# A check decorated with @reads names the cluster section it needs, and
-# run_check() answers the unread case for it -- so its body only ever sees a
-# section that was read. The rest open that branch themselves with
-# _unread_section(); both styles run through the same loop.
-CHECKS = (check_location, check_threads_per_engine, check_engine_heap,
-          check_crane_pool, check_capacity, check_engine_packing, check_disk,
-          check_limitrange, check_resourcequota, check_admission,
-          check_service_account, check_ingress_class, check_egress)
+# What each check reads is on the check (@reads), and what it leaves to an
+# earlier one is too (@defers_to) -- _ordered() holds the tuple to the second at
+# import. So this is a reading order rather than a contract: the three checks
+# that declare nothing read nothing from the cluster, and every other one is
+# handed only sections that were actually read.
+CHECKS = _ordered((check_location, check_threads_per_engine, check_engine_heap,
+                   check_crane_pool, check_capacity, check_engine_packing,
+                   check_disk, check_limitrange, check_resourcequota,
+                   check_admission, check_service_account, check_ingress_class,
+                   check_egress))
 
 
 def resolve_namespace(namespace, opts):

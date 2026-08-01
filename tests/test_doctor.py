@@ -5,9 +5,12 @@ file runs with no cluster and no network: the fixtures below are what
 `kubectl get nodes/limitrange/resourcequota/ns -o json` actually returns.
 """
 
+import ast
+import inspect
 import json
 import os
 import sys
+import textwrap
 
 import pytest
 
@@ -767,7 +770,13 @@ def _quota(name="team-quota", hard=None, used=None):
 
 
 def test_resourcequota_absent_passes():
-    assert _statuses(doctor.check_resourcequota(FACTS, {}, {"quotas": []})) == {doctor.PASS}
+    """Both sections stated, because the check reads both -- `limitranges: []`
+    is "the namespace has none", which is what the quota-defaults WARN turns
+    on. Leaving the key out used to read as a LimitRange list nobody looked at
+    and quietly suppress it."""
+    checks = doctor.check_resourcequota(FACTS, {},
+                                        {"quotas": [], "limitranges": []})
+    assert _statuses(checks) == {doctor.PASS}
 
 
 def test_resourcequota_with_room_passes():
@@ -910,12 +919,18 @@ def test_existing_service_account_missing_fails():
 
 
 def test_unreadable_namespace_warns_rather_than_failing():
-    """Every namespace that exists has `default`, so an empty list means we
-    could not look -- which is not evidence the account is missing."""
-    c = doctor.check_service_account(FACTS, EXISTING_SA, {"serviceaccounts": []})[0]
-    assert c.status == doctor.WARN
-    c2 = doctor.check_service_account(FACTS, EXISTING_SA, {})[0]
-    assert c2.status == doctor.WARN
+    """The one section where empty and unread earn the same sentence: every
+    namespace that exists has `default`, so an empty list is a namespace missing
+    or a read filtered, not an account that is genuinely not there. Null is the
+    declaration's half, `[]` is the check's own, and the sentence is composed
+    once so they cannot drift apart."""
+    empty = doctor.check_service_account(FACTS, EXISTING_SA,
+                                         {"serviceaccounts": []})[0]
+    unread = doctor.check_service_account(FACTS, EXISTING_SA,
+                                          {"serviceaccounts": None})[0]
+    assert empty.status == unread.status == doctor.WARN
+    assert empty.detail == unread.detail
+    assert "platform-sa" in empty.detail
 
 
 # -- check_ingress_class ----------------------------------------------------
@@ -988,12 +1003,21 @@ def test_ingress_class_unrecognised_value_warns_rather_than_fails():
     assert "traefik" in checks[0].detail
 
 
-@pytest.mark.parametrize("cluster", [{}, {"ingressclasses": None}])
-def test_ingress_class_unreadable_warns_rather_than_fails(cluster):
-    """cluster_data from an older caller has no such key -- 'we could not look',
-    not 'the class is missing'."""
-    checks = doctor.check_ingress_class(FACTS, SV_NGINX, cluster)
+def test_ingress_class_unreadable_warns_rather_than_fails():
+    """An API server that does not serve the kind -- 'we could not look', not
+    'the class is missing'."""
+    checks = doctor.check_ingress_class(FACTS, SV_NGINX,
+                                        {"ingressclasses": None})
     assert _statuses(checks) == {doctor.WARN}
+
+
+def test_ingress_class_with_no_such_key_at_all_is_a_fixture_error():
+    """And the third case, which used to be indistinguishable from the second.
+    A caller that carries no `ingressclasses` key has not said whether it means
+    "unread" or "none"; answering it as either is a verdict about a cluster
+    nobody described, so it is refused rather than reported."""
+    with pytest.raises(doctor.MissingSection):
+        doctor.check_ingress_class(FACTS, SV_NGINX, {})
 
 
 def test_ingress_class_openshift_alias_says_the_route_still_will_not_be_made():
@@ -1177,35 +1201,122 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
     assert _statuses(doctor.check_ingress_class(FACTS, SV_NGINX, data)) == {status}
 
 
-# -- a check declares the section it reads -----------------------------------
+# -- a check declares the sections it reads ----------------------------------
 #
 # The rule these pin is the one this codebase has broken six times: "could not
 # read" and "there is nothing there" must never share a representation. A check
-# that declares its section has the unread branch opened for it by evaluate(),
-# so its body is never handed a section nobody could read and cannot forget the
-# distinction. The undeclared checks keep opening it themselves, and both styles
-# have to work at once.
+# declares the sections it reads, and the declaration travels with the check --
+# so its body is never handed a section nobody could read, whether it is reached
+# through evaluate() or called directly by a test.
+#
+# The third representation is the one this file was carrying: a fixture with no
+# key for the section at all, which `.get()` served as "unread" and which
+# therefore WARNed in a way indistinguishable from an honest unread. Thirty-six
+# partial fixtures could each have been asking a check a question it never
+# answered, and a pinned count of WARNs elsewhere was the only thing watching.
+# Absent is now refused by name.
 
 UNREAD_ALL = {"nodes": None, "ingressclasses": None, "limitranges": None,
               "quotas": None, "serviceaccounts": None, "namespace": None}
 EMPTY_ALL = {"nodes": [], "ingressclasses": [], "limitranges": [],
              "quotas": [], "serviceaccounts": [], "namespace": {}}
 
-DECLARED = (doctor.check_engine_packing, doctor.check_limitrange,
-            doctor.check_admission)
+# Every check that reads a cluster section, with the sections it declares and
+# the options that make it read them. The three not here -- check_location,
+# check_threads_per_engine, check_engine_heap -- judge the location's settings
+# against the bundle's and read no cluster section at all.
+DECLARING = {
+    doctor.check_crane_pool: ("nodes",),
+    doctor.check_capacity: ("nodes",),
+    doctor.check_engine_packing: ("nodes",),
+    doctor.check_disk: ("nodes",),
+    doctor.check_limitrange: ("limitranges",),
+    doctor.check_resourcequota: ("quotas", "limitranges"),
+    doctor.check_admission: ("namespace",),
+    doctor.check_service_account: ("serviceaccounts",),
+    doctor.check_ingress_class: ("ingressclasses",),
+    doctor.check_egress: ("probes",),
+}
+FACTS_ONLY = (doctor.check_location, doctor.check_threads_per_engine,
+              doctor.check_engine_heap)
+# Options under which every declaration above is live at once: split pools, a
+# virtual service behind nginx, and a ServiceAccount the bundle does not create.
+ALL_ASKED = {"platform": "k8s", **SPLIT, **SV_NGINX, **EXISTING_SA}
 
 
-@pytest.mark.parametrize("check, key", [
-    (doctor.check_engine_packing, "nodes"),
-    (doctor.check_limitrange, "limitranges"),
-    (doctor.check_admission, "namespace"),
-])
-def test_a_migrated_check_declares_its_section_as_data(check, key):
-    """The section a check reads is readable off the check, not inferred from
-    its body -- which is what makes it something a new check must supply rather
-    than something its author has to remember."""
-    assert check.section.key == key
-    assert check.section.name and check.section.unread
+def _by_name(check):
+    return check.__name__
+
+
+@pytest.mark.parametrize("check, keys", sorted(DECLARING.items(),
+                                               key=lambda kv: _by_name(kv[0])),
+                         ids=lambda v: v if isinstance(v, tuple) else _by_name(v))
+def test_a_check_declares_the_sections_it_reads_as_data(check, keys):
+    """The sections a check reads are readable off the check, not inferred from
+    its body -- which is what makes them something a new check must supply
+    rather than something its author has to remember."""
+    assert tuple(s.key for s in check.sections) == keys
+
+
+def test_the_checks_that_declare_nothing_read_nothing():
+    """Undeclared has to mean "reads no cluster section", not "not migrated
+    yet" -- otherwise the absence of a declaration says nothing at all."""
+    for check in FACTS_ONLY:
+        assert not hasattr(check, "sections"), check.__name__
+        assert not _sections_read(check), check.__name__
+
+
+def _sections_read(check):
+    """Every cluster section a check's source actually reaches for."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(check)))
+    return {n.slice.value for n in ast.walk(tree)
+            if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name)
+            and n.value.id == "cluster" and isinstance(n.slice, ast.Constant)}
+
+
+@pytest.mark.parametrize("check", doctor.CHECKS, ids=_by_name)
+def test_every_section_a_check_reads_is_one_it_declares(check):
+    """The half a declaration cannot enforce by itself: a check could declare
+    one section and quietly read another, and that second read would be back to
+    inventing an unread section out of an absent key. Read off the source, so a
+    check added later is held to it without anyone remembering to."""
+    declared = tuple(s.key for s in getattr(check, "sections", ()))
+    assert _sections_read(check) == set(declared)
+
+
+@pytest.mark.parametrize("check", doctor.CHECKS, ids=_by_name)
+def test_no_check_reaches_a_cluster_section_with_get(check):
+    """`cluster.get(key)` is how absent came to mean unread: it answers for a
+    key that is not there instead of saying the caller never said. A subscript
+    cannot, which is what makes MissingSection reachable at all."""
+    assert "cluster.get(" not in inspect.getsource(check), check.__name__
+
+
+def test_a_section_missing_from_the_cluster_data_is_refused_by_name():
+    """The headline of this change. A fixture that carries no key for a section
+    a check reads is not a cluster with nothing in that section, and is not a
+    cluster nobody could read either -- it is a caller that has not said. Loud,
+    at the call site, rather than a WARN in a report that reads like every other
+    WARN."""
+    with pytest.raises(doctor.MissingSection) as e:
+        doctor.check_limitrange(FACTS, {}, {})
+    assert "check_limitrange" in str(e.value)
+    assert "'limitranges'" in str(e.value)
+    # ...and it says what the two answers are spelled, because the fix is one of
+    # them rather than adding a key with whatever value is to hand.
+    assert "None" in str(e.value)
+
+
+def test_the_declaration_travels_with_the_check_not_with_the_loop():
+    """Most of the tests here call a check directly. A seam that only evaluate()
+    went through would hold none of them to anything, which is the whole reason
+    the contract is on the check rather than in the loop."""
+    direct = doctor.check_admission(FACTS, {"platform": "k8s"},
+                                    {"namespace": None})
+    through = doctor.run_check(doctor.check_admission, FACTS,
+                               {"platform": "k8s"}, {"namespace": None})
+    assert direct == through
+    assert [c.status for c in direct] == [doctor.WARN]
 
 
 def test_a_declared_checks_body_is_never_handed_an_unread_section():
@@ -1231,36 +1342,122 @@ def test_a_declared_check_runs_its_body_when_the_section_is_merely_empty():
     assert [(c.status, c.detail) for c in checks] == [(doctor.FAIL, "[]")]
 
 
-def test_an_undeclared_check_is_run_exactly_as_before():
-    """The ten that have not moved still see whatever the cluster holds,
-    including None, and open the branch themselves."""
-    def check_old_style(facts, opts, cluster):
-        return [doctor.Check("old", doctor.WARN, repr(cluster.get("nodes")))]
+def test_an_unread_sentence_may_be_composed_from_the_facts_and_the_options():
+    """Three of the sentences name the location's own numbers -- "slots=2 x 2
+    CPU / 8Gi" -- which is what makes them something to act on. Composed from
+    facts and options only: the cluster is the thing that was not read."""
+    @doctor.reads("nodes", "composed",
+                  lambda facts, opts: f"slots={facts['slots']} unverified")
+    def check_composed(facts, opts, cluster):
+        raise AssertionError("the body ran on an unread section")
 
-    checks = doctor.run_check(check_old_style, FACTS, {}, {"nodes": None})
-    assert [(c.name, c.detail) for c in checks] == [("old", "None")]
-
-
-def test_every_declared_section_is_one_the_cluster_data_actually_carries():
-    """A mistyped section key would be indistinguishable from a permanently
-    denied read -- a check that WARNs forever and is never actually run."""
-    carried = set(doctor.cluster_from_evidence(
-        {"schema": doctor.EVIDENCE_SCHEMA}).cluster)
-    for check in doctor.CHECKS:
-        section = getattr(check, "section", None)
-        if section is not None:
-            assert section.key in carried, check.__name__
+    c = doctor.run_check(check_composed, FACTS, {}, {"nodes": None})[0]
+    assert c.detail == "slots=2 unverified"
 
 
-def test_evaluate_opens_the_unread_branch_for_the_declared_checks():
-    """Read through the seam, the verdict is the same WARN the check used to
-    produce for itself."""
-    checks = doctor.evaluate(FACTS, {"platform": "k8s"}, "blazemeter",
+def test_a_section_read_only_when_the_question_arises_is_gated_on_that():
+    """A one-pool bundle asks nothing of crane's pool, so it neither needs the
+    nodes to be there nor pays anything for their being unread. Gating the
+    declaration is what keeps the unread WARN off a question that was never
+    put."""
+    assert doctor.check_crane_pool(FACTS, {}, {}) == []
+    assert doctor.check_crane_pool(FACTS, {}, {"nodes": None}) == []
+    # Split, the same unread nodes are exactly what it cannot answer without.
+    c = doctor.check_crane_pool(FACTS, SPLIT, {"nodes": None})[0]
+    assert c.status == doctor.WARN and "crane pool" == c.name
+    with pytest.raises(doctor.MissingSection):
+        doctor.check_crane_pool(FACTS, SPLIT, {})
+
+
+def test_an_undeclared_check_is_run_unchanged():
+    """A check that reads no cluster section is passed straight through."""
+    def check_facts_only(facts, opts, cluster):
+        return [doctor.Check("old", doctor.WARN, str(facts["slots"]))]
+
+    checks = doctor.run_check(check_facts_only, FACTS, {}, {})
+    assert [(c.name, c.detail) for c in checks] == [("old", "2")]
+
+
+@pytest.mark.parametrize("carrier", ["evidence", "live"])
+def test_every_declared_section_is_one_the_cluster_data_actually_carries(
+        carrier, monkeypatch):
+    """A mistyped section key would now be a MissingSection on every real run,
+    not just in a fixture -- so both producers are held to carrying every key
+    every check names. `probes` is the exception by construction: evaluate()
+    merges it in, and no producer of cluster data has it."""
+    if carrier == "evidence":
+        carried = set(doctor.cluster_from_evidence(
+            {"schema": doctor.EVIDENCE_SCHEMA}).cluster)
+    else:
+        monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
+        carried = set(doctor.gather_cluster("kubectl", "ns1"))
+    for check, keys in DECLARING.items():
+        for key in keys:
+            assert key in carried or key == "probes", check.__name__
+
+
+def test_evaluate_carries_every_section_every_check_declares(monkeypatch):
+    """The one caller that assembles the mapping, against the declarations --
+    a check reading a section evaluate() does not merge in would raise on every
+    run, which is loud but not in a place anybody wants to find it. `probes` is
+    the one that only exists here, so only this says it is supplied."""
+    passed = {}
+    monkeypatch.setattr(doctor, "run_check",
+                        lambda check, facts, opts, cluster: passed.update(cluster) or [])
+    doctor.evaluate(FACTS, {}, "blazemeter", cluster_data=UNREAD_ALL, probes={})
+    for check, keys in DECLARING.items():
+        for key in keys:
+            assert key in passed, check.__name__
+
+
+def test_evaluate_opens_the_unread_branch_for_every_declared_check():
+    """Read through the loop, with every question asked at once: each declared
+    section that is null produces that check's own sentence, and nothing
+    fails."""
+    checks = doctor.evaluate(FACTS, ALL_ASKED, "blazemeter",
                              cluster_data=UNREAD_ALL, probes={})
-    for check in DECLARED:
-        c = _find(checks, check.section.name)
-        assert c.status == doctor.WARN
-        assert c.detail == check.section.unread
+    for check in DECLARING:
+        for section in check.sections:
+            if section.unread is None:
+                continue                  # the verdict is somebody else's
+            detail = (section.unread(FACTS, ALL_ASKED)
+                      if callable(section.unread) else section.unread)
+            c = _find(checks, section.name)
+            assert c.status == doctor.WARN
+            assert c.detail == detail
+    assert not doctor.has_failures(checks)
+
+
+# -- what a check leaves to an earlier one -----------------------------------
+
+def test_a_check_that_goes_quiet_declares_what_it_is_leaving_to():
+    """Two checks return [] because an earlier one has already reported the
+    thing they would have said. That was true only by where they sat in CHECKS
+    -- a fact about a tuple rather than about either check."""
+    assert doctor.check_threads_per_engine.defers == (doctor.check_location,)
+    assert doctor.check_engine_packing.defers == (doctor.check_capacity,)
+
+
+def test_the_order_of_checks_meets_every_declared_deference():
+    """Held at import, because a reordering that silences a check is invisible
+    in the report: the verdict the quiet one was counting on simply never
+    appears."""
+    seen = []
+    for check in doctor.CHECKS:
+        for owner in getattr(check, "defers", ()):
+            assert owner in seen, check.__name__
+        seen.append(check)
+
+
+def test_an_order_that_breaks_a_deference_is_refused():
+    """The tuple cannot be reshuffled quietly. Same list, two checks swapped
+    past the one they defer to."""
+    shuffled = [c for c in doctor.CHECKS if c is not doctor.check_capacity]
+    shuffled.append(doctor.check_capacity)
+    with pytest.raises(RuntimeError) as e:
+        doctor._ordered(shuffled)
+    assert "check_engine_packing" in str(e.value)
+    assert "check_capacity" in str(e.value)
 
 
 def test_a_wholly_unread_cluster_warns_and_exits_zero():
@@ -1281,12 +1478,22 @@ def test_a_wholly_empty_cluster_can_still_fail():
     assert doctor.has_failures(checks)
 
 
-@pytest.mark.parametrize("check", DECLARED)
+# Every check whose unread sentence is its own to give, less the two whose
+# section makes the comparison below meaningless: check_egress, whose probes are
+# not part of the cluster data at all, and check_service_account, where an empty
+# read genuinely means what no read means -- argued at its site and pinned
+# above, and the one place these two sentences are deliberately identical.
+SAYS_WHEN_IT_DID_NOT_LOOK = tuple(
+    c for c in DECLARING
+    if c not in (doctor.check_egress, doctor.check_service_account))
+
+
+@pytest.mark.parametrize("check", SAYS_WHEN_IT_DID_NOT_LOOK, ids=_by_name)
 def test_a_declared_check_says_something_different_when_it_did_look(check):
     """Unread and empty reach the reader as different sentences, not just as
     different statuses."""
-    unread = doctor.run_check(check, FACTS, {"platform": "k8s"}, UNREAD_ALL)
-    looked = doctor.run_check(check, FACTS, {"platform": "k8s"}, EMPTY_ALL)
+    unread = doctor.run_check(check, FACTS, ALL_ASKED, UNREAD_ALL)
+    looked = doctor.run_check(check, FACTS, ALL_ASKED, EMPTY_ALL)
     assert [c.detail for c in unread] != [c.detail for c in looked]
     assert all(c.status == doctor.WARN for c in unread)
 
