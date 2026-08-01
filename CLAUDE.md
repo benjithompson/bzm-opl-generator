@@ -261,15 +261,17 @@ structural, never where it is remembered.**
 
 Two named helpers carry it, and a new reader should go through one:
 
-- `suggest._read(doc, *path, kind=...)` — absent, null and wrong-typed all give
-  `None`; `kind=bool` coerces only a value that is *present*, so a refused probe
-  never arrives as `false`.
+- `suggest._read(doc, path, kind=...)` — `path` is one of the dotted paths built
+  from `evidence` at the top of the module, and the same string the suggestion
+  cites. Absent, null and wrong-typed all give `None`; `kind=bool` coerces only a
+  value that is *present*, so a refused probe never arrives as `false`. A path
+  the *document* does not define raises instead: no file will ever carry it.
 - `doctor._unread_section(cluster, key, name, detail)` — the unread branch for
   six checks.
 
 **Neither is the only route, and do not read the pair as an invariant.**
 `check_service_account` and `check_egress` branch on falsiness;
-`suggest._normalised` / `_reached_cluster` reach sections directly. Each is
+`suggest._normalised` reaches a section directly. Each is
 argued at its site; the point is that a new reader should have to argue too.
 `doctor.evaluate`/`run` take `evidence=` — the whole `Evidence`, not its parts
 unpacked per call site. **A denied read is a WARN and exits 0; an empty result
@@ -284,6 +286,27 @@ returns the same `None` for a real location that has them unset — the
 the account rollup: `core.account_capacity` keeps `rated_vus: None` and counts
 `unrated`, and the page rendered neither, so a location nobody had sized drew as
 one with no capacity. Same rule, one layer up.
+
+**The evidence document's section names are stated once**, in
+`bzm_opl_gen/evidence.py`, and the collector, `doctor`, `suggest` and
+`core.preflight` resolve against it. Same rule one level up: rename a section in
+the collector alone and every reader treats it as one nobody could read, so the
+report says "could not read nodes" about a section sitting in the file — a false
+unread, indistinguishable from an honest one, and nothing fails. A shell script
+cannot import a Python table, so `tests/test_cluster_evidence.py` parses the
+script's emitting half (everything below its `# -- the document` marker, one key
+per line at an indent that is its depth) and compares the keys it writes with
+`evidence.DOCUMENT`. Rename a section in either place and that test names it;
+the same table holds the three fixture files and the dotted paths
+`docs/preflight.md` quotes. Add a section in both, or in neither.
+
+Beside it, `tests/evidence_fixtures.py` is the one builder for the document —
+there were two, with different defaults for the same schema, and `test_server`
+imported both. It also names the three collected files: the all-null degraded
+one and two **half-read** ones (`cluster-scoped-denied`, `namespace-denied`).
+The half-read pair is the case the rule is about — a reader that had lost the
+distinction entirely still looks right on an all-null file, because there is
+nothing there to be right about.
 
 Two structural applications of it added since: `server.Blank` is `_typed` as a
 pydantic type, so an optional field cannot be declared without the blank-vs-

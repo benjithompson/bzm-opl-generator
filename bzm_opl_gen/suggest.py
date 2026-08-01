@@ -34,6 +34,9 @@ import collections
 import json
 
 from . import doctor
+# Aliased because `evidence` is what a Suggestion's paths are called, on the
+# tuple and in _decisive/_suggestive's signature.
+from . import evidence as evidence_mod
 from .doctor import CRANE_INGRESS_CLASS
 from .generate import DEFAULT_OPTIONS, SV_INGRESS_NONE, SV_INGRESS_TYPES
 
@@ -60,8 +63,47 @@ def _suggestive(option, candidates, evidence, detail, ruled_out=()):
                       tuple(ruled_out), tuple(evidence), detail)
 
 
-def _read(doc, *path, kind):
+# Where the rules read, as the dotted paths they also cite.
+#
+# Built from the document's shape rather than typed out, and built as this
+# module loads: a section renamed in the collector fails here, at the name,
+# instead of turning every rule that reads it into one that quietly finds
+# nothing -- which is indistinguishable from a collector that was refused it.
+# The read path and the cited one differ where a rule reads one probe and cites
+# the map it is in, which is deliberate: the reader is being sent to look at the
+# permissions the collector recorded, not at one boolean out of them.
+_cite = evidence_mod.cite
+
+API_GROUPS_OPENSHIFT_SECURITY = _cite(evidence_mod.API_GROUPS,
+                                      evidence_mod.OPENSHIFT_SECURITY)
+RAW_INGRESSCLASSES = _cite(evidence_mod.RAW, evidence_mod.INGRESSCLASSES)
+RAW_SCOPED = _cite(evidence_mod.RAW, evidence_mod.SCOPED)
+CAN_CREATE_SERVICEACCOUNTS = _cite(evidence_mod.PERMISSIONS,
+                                   evidence_mod.NAMESPACED,
+                                   evidence_mod.CREATE_SERVICEACCOUNTS)
+NAMESPACED_PERMISSIONS = _cite(evidence_mod.PERMISSIONS,
+                               evidence_mod.NAMESPACED)
+CAN_CREATE_CLUSTERROLES = _cite(evidence_mod.PERMISSIONS,
+                                evidence_mod.CLUSTER_SCOPED,
+                                evidence_mod.CREATE_CLUSTERROLES)
+CAN_CREATE_CLUSTERROLEBINDINGS = _cite(evidence_mod.PERMISSIONS,
+                                       evidence_mod.CLUSTER_SCOPED,
+                                       evidence_mod.CREATE_CLUSTERROLEBINDINGS)
+CLUSTER_PERMISSIONS = _cite(evidence_mod.PERMISSIONS,
+                            evidence_mod.CLUSTER_SCOPED)
+INVENTORY_SECRETS = _cite(evidence_mod.INVENTORY, evidence_mod.SECRETS)
+INVENTORY_CONFIGMAPS = _cite(evidence_mod.INVENTORY, evidence_mod.CONFIGMAPS)
+OPENSHIFT_INGRESS_CONFIG = _cite(evidence_mod.OPENSHIFT, evidence_mod.INGRESS_CONFIG)
+OPENSHIFT_PROXY_CONFIG = _cite(evidence_mod.OPENSHIFT, evidence_mod.PROXY_CONFIG)
+VERSIONS_SERVER_VERSION = _cite(evidence_mod.VERSIONS, evidence_mod.SERVER_VERSION)
+
+
+def _read(doc, path, kind):
     """One nested value out of the evidence file, or None where nothing said.
+
+    `path` is one of the dotted paths above -- the same string the suggestion
+    cites -- so what a rule read and what it sends its reader to look at cannot
+    come apart, and neither can outlive a section rename.
 
     Every section is optional and each can arrive wrong: the collector's maps
     grew over time, so a file from an older script does not carry the newer
@@ -69,6 +111,9 @@ def _read(doc, *path, kind):
     Absent, null and a section of the wrong type are all "nobody answered" --
     which is the one thing this module may never confuse with the cluster
     answering `false`, so it is decided here once rather than four times over.
+    A path the *document* does not define is the other case entirely and raises
+    (evidence.UnknownSection): no file will ever carry it, so reporting it as
+    unanswered would be a rule that has quietly stopped asking.
 
     `kind` is what a well-formed value looks like there, and anything else is
     unanswered. bool is the exception and coerces rather than checks: the
@@ -78,8 +123,14 @@ def _read(doc, *path, kind):
     here is the cluster's own answer rather than a failed command is
     _reached_cluster()'s doing, past which every rule is only ever called.
     """
+    keys = path.split(".")
+    if not evidence_mod.known(*keys):
+        raise evidence_mod.UnknownSection(
+            f"'{path}' is not a path in the cluster evidence document "
+            f"({evidence_mod.SCHEMA}); its sections are stated in "
+            f"bzm_opl_gen/evidence.py")
     value = doc
-    for key in path:
+    for key in keys:
         if not isinstance(value, dict):
             return None
         value = value.get(key)
@@ -114,15 +165,15 @@ def _platform(doc):
     They are on by default on both platforms now (restrict_engines), and this
     is back to deciding only what it says: whether crane's own pod pins a
     runAsUser or leaves it to an SCC."""
-    served = _read(doc, "api_groups", "openshift_security", kind=bool)
+    served = _read(doc, API_GROUPS_OPENSHIFT_SECURITY, kind=bool)
     if served is None:
         return []
     if served:
-        return [_decisive("platform", "openshift", ["api_groups.openshift_security"],
+        return [_decisive("platform", "openshift", [API_GROUPS_OPENSHIFT_SECURITY],
                           "security.openshift.io is served, which only OpenShift "
                           "does. Crane's pod leaves runAsUser to the SCC, and "
                           "engines inherit the UID it assigns")]
-    return [_decisive("platform", "k8s", ["api_groups.openshift_security"],
+    return [_decisive("platform", "k8s", [API_GROUPS_OPENSHIFT_SECURITY],
                       "security.openshift.io is not served, so this is plain "
                       "Kubernetes: crane's pod pins runAsUser itself, and the "
                       "namespace's PodSecurity level is what decides whether "
@@ -143,7 +194,7 @@ def _service_account(doc):
     contradiction the reader would have to arbitrate.
     """
     accounts, out = _normalised(doc, "serviceaccounts"), []
-    ns = doc.get("namespace") or "the namespace"
+    ns = doc.get(evidence_mod.NAMESPACE) or "the namespace"
     names = []
     if accounts is not None:
         # `default` is in every namespace, and generate refuses to fall back to
@@ -153,20 +204,19 @@ def _service_account(doc):
                         for sa in accounts} - {"default", None})
     if DEFAULT_SA in names:
         out.append(_decisive(
-            "service_account_create", False, ["raw.scoped"],
+            "service_account_create", False, [RAW_SCOPED],
             f"ServiceAccount '{DEFAULT_SA}' already exists in {ns}, which is the "
             f"name the bundle references by default -- so it has one to run as "
             f"and no reason to emit the object over somebody else's"))
-    elif _read(doc, "permissions", "namespaced",
-               "create serviceaccounts", kind=bool) is False:
+    elif _read(doc, CAN_CREATE_SERVICEACCOUNTS, kind=bool) is False:
         out.append(_decisive(
-            "service_account_create", False, ["permissions.namespaced"],
+            "service_account_create", False, [NAMESPACED_PERMISSIONS],
             f"this token cannot create ServiceAccounts in {ns} (auth can-i said "
             f"no), so a bundle carrying the object does not apply at all. The "
             f"account has to exist first -- name it with service_account_name"))
     if names:
         out.append(_suggestive(
-            "service_account_name", names, ["raw.scoped"],
+            "service_account_name", names, [RAW_SCOPED],
             f"{ns} already holds {', '.join(names)} besides `default`. Which one "
             f"crane should run as is the platform team's call, not a cluster "
             f"fact -- and an account named for another workload would quietly "
@@ -179,9 +229,11 @@ def _service_account(doc):
 # The one thing that makes each sv_ingress value usable, and where the evidence
 # file records it. nginx is the odd one out: networking.k8s.io is served
 # everywhere, so what decides it is the IngressClass crane hardcodes the name of.
-_SV_API_GROUPS = {"istio": ("networking.istio.io", "istio"),
-                  "contour": ("projectcontour.io", "contour"),
-                  "openshift": ("route.openshift.io", "openshift_route")}
+_SV_API_GROUPS = {
+    "istio": ("networking.istio.io", evidence_mod.ISTIO),
+    "contour": ("projectcontour.io", evidence_mod.CONTOUR),
+    "openshift": ("route.openshift.io", evidence_mod.OPENSHIFT_ROUTE),
+}
 
 
 def _sv_ingress(doc):
@@ -198,8 +250,8 @@ def _sv_ingress(doc):
             state, key, reason = _nginx_state(doc)
         else:
             group, key = _SV_API_GROUPS[value]
-            state = _read(doc, "api_groups", key, kind=bool)
-            key, reason = f"api_groups.{key}", f"{group} is not served"
+            key = _cite(evidence_mod.API_GROUPS, key)
+            state, reason = _read(doc, key, kind=bool), f"{group} is not served"
         if state is None:
             continue                      # not collected: neither open nor out
         evidence.append(key)
@@ -235,9 +287,9 @@ def _nginx_state(doc):
     reason = (f"no IngressClass named '{CRANE_INGRESS_CLASS}', which crane "
               f"hardcodes on the Ingress it creates")
     if classes is None:
-        return None, "raw.ingressclasses", reason
+        return None, RAW_INGRESSCLASSES, reason
     names = {(c.get("metadata") or {}).get("name") for c in classes}
-    return CRANE_INGRESS_CLASS in names, "raw.ingressclasses", reason
+    return CRANE_INGRESS_CLASS in names, RAW_INGRESSCLASSES, reason
 
 
 def _sv_subdomain(doc):
@@ -245,12 +297,12 @@ def _sv_subdomain(doc):
     is the *default* router's domain: virtual services published through an
     nginx, Contour or Istio ingress may well answer on another."""
     # Null on plain Kubernetes, where neither config kind exists at all.
-    cfg = _read(doc, "openshift", "ingress_config", kind=dict) or {}
+    cfg = _read(doc, OPENSHIFT_INGRESS_CONFIG, kind=dict) or {}
     domain = (cfg.get("spec") or {}).get("domain")
     if not domain:
         return []
     return [_suggestive(
-        "sv_subdomain", [domain], ["openshift.ingress_config"],
+        "sv_subdomain", [domain], [OPENSHIFT_INGRESS_CONFIG],
         f"the cluster publishes applications under *.{domain}. sv_subdomain has "
         f"to be a wildcard the controller you pick actually serves, which is "
         f"this one only if the virtual services go through the OpenShift router")]
@@ -269,20 +321,20 @@ def _pull_secret(doc):
     *type* is the API server's own answer about what a thing is rather than a
     guess off its name.
     """
-    secrets = _read(doc, "inventory", "secrets", kind=list)
+    secrets = _read(doc, INVENTORY_SECRETS, kind=list)
     if secrets is None:
         return []
     names = sorted(s["name"] for s in secrets
                    if isinstance(s, dict) and s.get("type") == DOCKERCONFIGJSON
                    and s.get("name"))
-    ns = doc.get("namespace") or "the namespace"
+    ns = doc.get(evidence_mod.NAMESPACE) or "the namespace"
     if len(names) == 1:
-        return [_decisive("pull_secret", names[0], ["inventory.secrets"],
+        return [_decisive("pull_secret", names[0], [INVENTORY_SECRETS],
                           f"'{names[0]}' is the only {DOCKERCONFIGJSON} Secret "
                           f"in {ns}, so it is the only thing pull_secret could "
                           f"name. Nothing in the bundle creates one")]
     if names:
-        return [_suggestive("pull_secret", names, ["inventory.secrets"],
+        return [_suggestive("pull_secret", names, [INVENTORY_SECRETS],
                             f"{ns} holds {len(names)} {DOCKERCONFIGJSON} "
                             f"Secrets; which of them can pull the BlazeMeter "
                             f"images is a question about the registry, and this "
@@ -305,7 +357,7 @@ _NOT_TRUST_BUNDLES = ("kube-root-ca.crt", "openshift-service-ca.crt")
 
 
 def _ca_configmap(doc):
-    names = _read(doc, "inventory", "configmaps", kind=list)
+    names = _read(doc, INVENTORY_CONFIGMAPS, kind=list)
     if names is None:
         return []
     hits = sorted(n for n in names
@@ -313,9 +365,9 @@ def _ca_configmap(doc):
                   and any(h in n.lower() for h in _TRUST_BUNDLE_HINTS))
     if not hits:
         return []
-    ns = doc.get("namespace") or "the namespace"
+    ns = doc.get(evidence_mod.NAMESPACE) or "the namespace"
     return [_suggestive(
-        "ca_existing_configmap", hits, ["inventory.configmaps"],
+        "ca_existing_configmap", hits, [INVENTORY_CONFIGMAPS],
         f"{ns} holds {', '.join(hits)}, named the way a trust bundle usually is. "
         f"Only names were collected, never contents, so this cannot go further "
         f"than a shortlist -- confirm the key ({', '.join(hits[:1])} holding a "
@@ -328,7 +380,7 @@ def _proxy(doc):
     status is what the operators publish as effective -- and its noProxy is the
     expanded list a pod actually needs -- so it wins over the spec it came from.
     """
-    cfg = _read(doc, "openshift", "proxy_config", kind=dict) or {}
+    cfg = _read(doc, OPENSHIFT_PROXY_CONFIG, kind=dict) or {}
     spec = cfg.get("status") or cfg.get("spec") or {}
     http, https = spec.get("httpProxy"), spec.get("httpsProxy")
     out = []
@@ -336,7 +388,7 @@ def _proxy(doc):
         value = {key: v for key, v in (("http", http), ("https", https),
                                        ("no_proxy", spec.get("noProxy"))) if v}
         out.append(_decisive(
-            "proxy", value, ["openshift.proxy_config"],
+            "proxy", value, [OPENSHIFT_PROXY_CONFIG],
             f"the cluster declares an egress proxy ({https or http}). Pods that "
             f"reach BlazeMeter go through it and nothing propagates it into a "
             f"pod's env for you -- without HTTP(S)_PROXY the agent never comes "
@@ -347,7 +399,7 @@ def _proxy(doc):
     trusted = ((cfg.get("spec") or {}).get("trustedCA") or {}).get("name")
     if trusted:
         out.append(_suggestive(
-            "ca_openshift_inject", [True], ["openshift.proxy_config"],
+            "ca_openshift_inject", [True], [OPENSHIFT_PROXY_CONFIG],
             f"the cluster proxy carries a trusted CA bundle ('{trusted}' in "
             f"openshift-config), so egress is TLS-intercepted and crane will not "
             f"reach BlazeMeter without that CA. On OpenShift a labelled empty "
@@ -365,16 +417,14 @@ def _cluster_rbac(doc):
     and a line saying "either value is fine" is noise in a list whose point is
     that every line carries information.
     """
-    roles = _read(doc, "permissions", "cluster_scoped",
-                  "create clusterroles", kind=bool)
-    bindings = _read(doc, "permissions", "cluster_scoped",
-                     "create clusterrolebindings", kind=bool)
+    roles = _read(doc, CAN_CREATE_CLUSTERROLES, kind=bool)
+    bindings = _read(doc, CAN_CREATE_CLUSTERROLEBINDINGS, kind=bool)
     if roles is None or bindings is None or (roles and bindings):
         return []
     missing = [n for n, ok in (("ClusterRoles", roles),
                                ("ClusterRoleBindings", bindings)) if not ok]
     return [_decisive(
-        "cluster_rbac", False, ["permissions.cluster_scoped"],
+        "cluster_rbac", False, [CLUSTER_PERMISSIONS],
         f"this token cannot create {' or '.join(missing)}, so a bundle carrying "
         f"them does not apply. Note this constrains nothing else: crane resolves "
         f"its advertised address from its own network interfaces rather than "
@@ -433,8 +483,14 @@ def _reached_cluster(doc):
     carries a serverVersion only when a server answered. `notes` cannot do this
     job -- a collector denied one namespaced read writes a note and is still
     describing a real cluster.
+
+    Read through _read like every other path here, so this one -- the gate the
+    whole module sits behind -- cannot be the one left naming a section by hand.
+    The document is `kubectl version`'s, copied whole, so serverVersion is a
+    kubectl key rather than one the collector writes; it is named in the table
+    all the same, because it is read.
     """
-    return bool((doc.get("versions") or {}).get("serverVersion"))
+    return bool(_read(doc, VERSIONS_SERVER_VERSION, kind=dict))
 
 
 # -- reporting ---------------------------------------------------------------
@@ -572,8 +628,8 @@ def merged_as_dict(s, options):
 def report(doc, suggestions):
     """Print the suggestions, and -- when there are none -- why."""
     print(f"suggestions from cluster evidence collected "
-          f"{doc.get('collected_at') or 'at an unrecorded time'} for namespace "
-          f"{doc.get('namespace') or '(unnamed)'}")
+          f"{doc.get(evidence_mod.COLLECTED_AT) or 'at an unrecorded time'} "
+          f"for namespace {doc.get(evidence_mod.NAMESPACE) or '(unnamed)'}")
     if not suggestions:
         print(f"  {why_nothing(doc)}")
         return
@@ -589,7 +645,7 @@ def report(doc, suggestions):
 def why_nothing(doc):
     if not _reached_cluster(doc):
         return (f"the collector never reached the cluster's API server: this "
-                f"file carries no versions.serverVersion, so its permission and "
+                f"file carries no {VERSIONS_SERVER_VERSION}, so its permission and "
                 f"api-group answers are all `false` because the commands failed "
                 f"rather than because the cluster said no. Nothing here "
                 f"describes a cluster to suggest from -- re-collect with "

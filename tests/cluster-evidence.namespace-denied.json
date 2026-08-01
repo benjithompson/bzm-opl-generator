@@ -1,0 +1,118 @@
+{
+  "schema": "bzm-opl-cluster-evidence/1",
+  "collected_at": "2026-07-30T09:12:44Z",
+  "namespace": "blazemeter",
+  "cli": "kubectl",
+  "raw": {
+    "nodes": {
+      "apiVersion": "v1",
+      "kind": "NodeList",
+      "items": [
+        {
+          "metadata": {
+            "name": "a",
+            "labels": {}
+          },
+          "spec": {},
+          "status": {
+            "allocatable": {
+              "cpu": "16",
+              "memory": "64Gi",
+              "ephemeral-storage": "500Gi"
+            },
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "b",
+            "labels": {}
+          },
+          "spec": {},
+          "status": {
+            "allocatable": {
+              "cpu": "16",
+              "memory": "64Gi",
+              "ephemeral-storage": "500Gi"
+            },
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ingressclasses": {
+      "apiVersion": "v1",
+      "kind": "List",
+      "items": [
+        {
+          "metadata": {
+            "name": "nginx"
+          },
+          "spec": {
+            "controller": "k8s.io/ingress-nginx"
+          }
+        }
+      ]
+    },
+    "namespace": null,
+    "scoped": null
+  },
+  "inventory": {
+    "configmaps": null,
+    "secrets": null
+  },
+  "permissions": {
+    "namespaced": {
+      "create serviceaccounts": false,
+      "create roles": false,
+      "create rolebindings": false,
+      "create configmaps": false,
+      "create secrets": false,
+      "create deployments": false,
+      "create ingresses": false
+    },
+    "cluster_scoped": {
+      "list nodes": true,
+      "create clusterroles": true,
+      "create clusterrolebindings": true
+    }
+  },
+  "api_groups": {
+    "openshift_route": false,
+    "openshift_security": false,
+    "istio": false,
+    "contour": true
+  },
+  "openshift": {
+    "ingress_config": null,
+    "proxy_config": null
+  },
+  "versions": {
+    "clientVersion": {
+      "gitVersion": "v1.29.4",
+      "platform": "linux/amd64"
+    },
+    "serverVersion": {
+      "major": "1",
+      "minor": "29",
+      "gitVersion": "v1.29.4",
+      "platform": "linux/amd64"
+    }
+  },
+  "notes": [
+    "namespace: Error from server (Forbidden): namespaces \"blazemeter\" is forbidden: User \"system:serviceaccount:tooling:reader\" cannot get resource \"namespaces\" in API group \"\" in the namespace \"blazemeter\"",
+    "scoped: Error from server (Forbidden): limitranges is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"limitranges\" in API group \"\" in the namespace \"blazemeter\"",
+    "configmaps: Error from server (Forbidden): configmaps is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"configmaps\" in API group \"\" in the namespace \"blazemeter\"",
+    "secrets: Error from server (Forbidden): secrets is forbidden: User \"system:serviceaccount:tooling:reader\" cannot list resource \"secrets\" in API group \"\" in the namespace \"blazemeter\""
+  ]
+}

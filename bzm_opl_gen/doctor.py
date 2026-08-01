@@ -30,6 +30,10 @@ from . import livetest
 from . import plan
 # Aliased because every check takes a `facts` argument, which takes the name.
 from . import facts as facts_mod
+# Same reason: evaluate(), run() and half of core take an `evidence` argument.
+# This is the module that states what is *in* one -- the section names, which
+# used to be spelled out at each of the four places that read them.
+from . import evidence as evidence_mod
 from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
                   ENGINE_UPLOAD_HOSTS)
 from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
@@ -1394,8 +1398,11 @@ def gather_cluster(cli, namespace):
 
 # -- evidence file ------------------------------------------------------------
 
-EVIDENCE_SCHEMA = "bzm-opl-cluster-evidence/1"
-EVIDENCE_SCRIPT = "scripts/bzm-cluster-evidence.sh"
+# The file's own vocabulary, under the names every caller of this module already
+# reads them by. What they say is stated with the rest of the document's shape,
+# in `evidence`, so the collector and this reader cannot drift apart.
+EVIDENCE_SCHEMA = evidence_mod.SCHEMA
+EVIDENCE_SCRIPT = evidence_mod.SCRIPT
 
 # What an import produces: cluster data in gather_cluster()'s shape, the probes
 # it cannot supply, and the verdicts about the file itself.
@@ -1442,11 +1449,12 @@ def cluster_from_evidence(doc, namespace=None):
     not look" cannot arrive looking like "there are none".
     """
     _validate_evidence(doc)
-    raw = doc.get("raw") or {}
-    limitranges, quotas, accounts = _split_by_kind(_section(raw, "scoped"))
+    raw = doc.get(evidence_mod.RAW) or {}
+    limitranges, quotas, accounts = _split_by_kind(
+        _section(raw, evidence_mod.SCOPED))
     cluster = {
-        "nodes": _items(_section(raw, "nodes")),
-        "ingressclasses": _items(_section(raw, "ingressclasses")),
+        "nodes": _items(_section(raw, evidence_mod.NODES)),
+        "ingressclasses": _items(_section(raw, evidence_mod.INGRESSCLASSES)),
         "limitranges": limitranges,
         "quotas": quotas,
         "serviceaccounts": accounts,
@@ -1454,7 +1462,7 @@ def cluster_from_evidence(doc, namespace=None):
         # something to lose: `{}` is what the live path produces for a namespace
         # that is not there yet, and check_admission's answer to that is "create
         # it". A collector that was refused `get ns` said nothing of the kind.
-        "namespace": _section(raw, "namespace"),
+        "namespace": _section(raw, evidence_mod.NAMESPACE),
     }
     # Egress needs something inside the namespace to curl from, so an evidence
     # file cannot carry it. {} is check_egress's "not probed" (WARN), which is
@@ -1480,7 +1488,7 @@ def _validate_evidence(doc):
         raise ValueError(f"cluster evidence must be a JSON object; found {found}. "
                          f"Expected the output of {EVIDENCE_SCRIPT} "
                          f"(schema {EVIDENCE_SCHEMA})")
-    schema = doc.get("schema")
+    schema = doc.get(evidence_mod.SCHEMA_FIELD)
     if not schema:
         raise ValueError(f"this file has no 'schema' field, so it is not cluster "
                          f"evidence -- expected {EVIDENCE_SCHEMA}, the output of "
@@ -1498,20 +1506,20 @@ def _evidence_checks(doc, namespace):
     stale they are, whether they describe the namespace being preflighted, and
     anything the script was refused. Every verdict after it is only as good as
     this one, which is why it is a Check and not a printed aside."""
-    collected = doc.get("collected_at") or "an unrecorded time"
-    for_ns = doc.get("namespace") or "an unnamed namespace"
+    collected = doc.get(evidence_mod.COLLECTED_AT) or "an unrecorded time"
+    doc_ns = doc.get(evidence_mod.NAMESPACE)
     parts = [f"cluster read by {EVIDENCE_SCRIPT} at {collected} for namespace "
-             f"{for_ns}, not from a live cluster"]
-    if namespace and doc.get("namespace") and namespace != doc["namespace"]:
+             f"{doc_ns or 'an unnamed namespace'}, not from a live cluster"]
+    if namespace and doc_ns and namespace != doc_ns:
         # Most of what follows is per-namespace -- LimitRanges, quotas,
         # ServiceAccounts, the PSA labels -- so evidence from another namespace
         # says little about this one. It still describes the same nodes, so this
         # reports rather than refuses.
         parts.append(f"but this preflight is for '{namespace}', so the "
-                     f"namespaced verdicts below describe '{doc['namespace']}' "
+                     f"namespaced verdicts below describe '{doc_ns}' "
                      f"instead: re-collect with -n {namespace}")
-    if doc.get("notes"):
-        parts.append(_unread(doc["notes"]))
+    if doc.get(evidence_mod.NOTES):
+        parts.append(_unread(doc[evidence_mod.NOTES]))
     return [Check("cluster evidence", WARN if len(parts) > 1 else PASS,
                   "; ".join(parts))]
 
@@ -1553,9 +1561,9 @@ def evidence_summary(doc):
     sentence would be a second opinion about the same file.
     """
     doc = doc if isinstance(doc, dict) else {}
-    return {"collected_at": doc.get("collected_at") or None,
-            "namespace": doc.get("namespace") or None,
-            "unreadable": unreadable_sections(doc.get("notes"))}
+    return {"collected_at": doc.get(evidence_mod.COLLECTED_AT) or None,
+            "namespace": doc.get(evidence_mod.NAMESPACE) or None,
+            "unreadable": unreadable_sections(doc.get(evidence_mod.NOTES))}
 
 
 def _ca_configured(opts):

@@ -1039,10 +1039,11 @@ def test_group_tags_name_features_the_server_actually_serves():
 # exists for is the customer whose account and cluster are both out of reach.
 
 from bzm_opl_gen import doctor, suggest  # noqa: E402
-# The fixtures live with the checks that read them, so the HTTP layer is fed the
-# same documents the doctor tests are -- a difference between the two would be a
-# difference in what the browser is told.
-from test_cluster_evidence import DEGRADED, _evidence  # noqa: E402
+# One document for every reader of one, so the HTTP layer is fed what the doctor
+# and suggest tests read -- a difference between the two would be a difference in
+# what the browser is told. It used to be two builders, and this file imported
+# both.
+from evidence_fixtures import DEGRADED, document as _evidence, raw as _raw  # noqa: E402
 from test_doctor import FACTS as LOC_FACTS, SV_NGINX  # noqa: E402
 
 
@@ -1171,7 +1172,7 @@ def test_preflight_reports_evidence_collected_for_another_namespace():
     """Most of what follows is per-namespace. The file still describes the same
     nodes, so this is reported rather than refused -- and the namespace judged
     is the one being configured, never the one the file happens to name."""
-    body = _preflight(_evidence("their-ns")).json()
+    body = _preflight(_evidence(namespace="their-ns")).json()
     first = body["checks"][0]
     assert body["namespace"] == "blazemeter"
     assert first["status"] == "WARN"
@@ -1182,7 +1183,7 @@ def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     """Same precedence as the command: what is being configured wins, and the
     file's own namespace is the last resort rather than the first."""
     r = client.post("/api/preflight", json={
-        "facts": LOC_FACTS, "options": {}, "evidence": _evidence("their-ns")})
+        "facts": LOC_FACTS, "options": {}, "evidence": _evidence(namespace="their-ns")})
     assert r.status_code == 200
     assert r.json()["namespace"] == "their-ns"
 
@@ -1197,7 +1198,7 @@ def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     # error, so the message says what was found instead of naming a field.
     ([{"schema": doctor.EVIDENCE_SCHEMA}], "a JSON array"),
     # Mailed in and trimmed on the way.
-    (_evidence(nodes=[{"metadata": {"name": "n1"}}]), "raw.nodes"),
+    (_evidence(raw=_raw(nodes=[{"metadata": {"name": "n1"}}])), "raw.nodes"),
 ])
 def test_preflight_refuses_a_file_that_is_not_evidence(evidence, says):
     r = _preflight(evidence)
@@ -1225,8 +1226,8 @@ def test_preflight_refuses_options_no_bundle_could_be_generated_from():
 # to move together on every option change. Two endpoints is two round trips that
 # can disagree about which options the answer describes.
 
-from test_suggest import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
-from test_suggest import REGCRED, _evidence as _read_evidence  # noqa: E402
+from evidence_fixtures import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
+from test_suggest import REGCRED  # noqa: E402
 
 
 def _suggestions(evidence, options=None):
@@ -1238,7 +1239,7 @@ def test_preflight_carries_what_the_evidence_implies_about_the_options():
     """The same suggestions `bzm-opl-gen suggest` prints, in the same order and
     the same wire shape -- compared against suggest itself, because the failure
     to guard is the server quietly reshaping them on the way to the browser."""
-    doc = _read_evidence()
+    doc = _evidence()
     body = _preflight(doc).json()
     expected = suggest.from_evidence(doc)
     assert [s["option"] for s in body["suggestions"]] == [s.option for s in expected]
@@ -1252,7 +1253,7 @@ def test_preflight_carries_what_the_evidence_implies_about_the_options():
 def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
     """Not against the defaults: the same evidence is a fill for a configuration
     that named no pull secret and a conflict for one that named another."""
-    doc = _read_evidence(**REGCRED)
+    doc = _evidence(**REGCRED)
     assert _suggestions(doc)["pull_secret"]["state"] == suggest.FILL
     conflict = _suggestions(doc, {"pull_secret": "team-creds"})["pull_secret"]
     assert conflict["state"] == suggest.CONFLICT
@@ -1263,7 +1264,7 @@ def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
 def test_preflight_never_offers_a_value_for_a_suggestive_suggestion():
     """The invariant, over HTTP, where a browser could otherwise read `value`
     off a shortlist and call it a default."""
-    doc = _read_evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
+    doc = _evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
     for s in _preflight(doc).json()["suggestions"]:
         if s["strength"] == suggest.SUGGESTIVE:
             assert s["value"] is None
@@ -1279,7 +1280,7 @@ def test_preflight_says_why_it_has_nothing_to_suggest():
 
 
 def test_preflight_drops_the_reason_once_there_is_something_to_show():
-    body = _preflight(_read_evidence()).json()
+    body = _preflight(_evidence()).json()
     assert body["suggestions"] and body["why_nothing"] is None
 
 

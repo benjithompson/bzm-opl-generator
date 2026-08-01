@@ -46,9 +46,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               options as options_mod, plan, suggest as suggest_mod,
-               workstation)
+from . import (api, doctor, evidence as evidence_mod, facts as facts_mod,
+               generate as gen_mod, livetest, options as options_mod, plan,
+               suggest as suggest_mod, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -1185,7 +1185,8 @@ def preflight(facts, options, evidence):
     because it qualifies every one of them.
     """
     options = options or {}
-    doc_ns = evidence.get("namespace") if isinstance(evidence, dict) else None
+    doc_ns = (evidence.get(evidence_mod.NAMESPACE)
+              if isinstance(evidence, dict) else None)
     # Same precedence as the command: the namespace being configured wins, and
     # the one the file was collected for is the last resort. A file collected
     # elsewhere is then reported by cluster_from_evidence rather than adopted.

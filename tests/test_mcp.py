@@ -640,7 +640,7 @@ def test_manual_facts_need_no_account():
 
 
 def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS
     monkeypatch.setattr(core.livetest, "cli_tool",
                         lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
@@ -651,7 +651,7 @@ def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
 
 
 def test_suggest_answers_the_other_question_about_the_same_file():
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     body = ok("opl_preflight", "suggest", {"evidence": _evidence()})
     assert "suggestions" in body
 
@@ -663,7 +663,7 @@ def test_suggest_answers_the_other_question_about_the_same_file():
 # which is why `api_key_file` is a path here too.
 
 def _evidence_file(tmp_path, **kw):
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     path = tmp_path / "cluster-evidence.json"
     path.write_text(json.dumps(_evidence(**kw)))
     return str(path)
@@ -682,7 +682,7 @@ def test_doctor_takes_the_evidence_file_as_the_path_it_is(tmp_path, monkeypatch)
 def test_a_path_and_the_object_it_holds_give_the_same_preflight(tmp_path):
     """Both forms stay accepted, and neither is a second opinion about the
     file: a caller with the document in hand loses nothing by inlining it."""
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS
     args = {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"}}
     from_path = ok("opl_preflight", "doctor",

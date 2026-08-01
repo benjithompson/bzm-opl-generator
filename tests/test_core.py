@@ -663,7 +663,7 @@ def test_unknown_ship_is_not_found():
 
 # -- preflight ----------------------------------------------------------------
 
-from test_cluster_evidence import _evidence          # noqa: E402
+from evidence_fixtures import document as _evidence  # noqa: E402
 from test_doctor import FACTS as LOC_FACTS           # noqa: E402
 
 
