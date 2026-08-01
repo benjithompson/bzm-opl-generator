@@ -16,7 +16,7 @@
 import {
   act, cleanup, fireEvent, render, screen, waitFor,
 } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import { Capacity, Options } from "./api";
@@ -26,6 +26,7 @@ afterEach(cleanup);
 // The page writes its selections to sessionStorage, and one test's would
 // otherwise be restored into the next one's page.
 afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 /** One account's rollup, identifiable on screen by its workspace name. */
 function capacityOf(accountId: number, workspace: string): Capacity {
@@ -194,4 +195,166 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
     expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
+  });
+
+// -- the download step, through the page -------------------------------------
+// The two requests this step exists to make are the ones nothing else covers:
+// they do not go through the injected client at all (a zip cannot carry a JSON
+// envelope, so downloadZip reads the branch off response headers and hands the
+// bytes to the browser), and what they carry decides whether a running agent's
+// credential survives. So `fetch` is what is stubbed here, and what is asserted
+// is the body that left -- the facts, the options with the agent's id, and
+// `rotate_token`, which is the field the whole of #64 was about.
+
+/** The zip and save routes, with what left recorded. Only these two: every
+ *  other call on the page goes through the injected client, so anything else
+ *  reaching fetch is a route that has escaped the seam and should be seen. */
+function stubTransfers(answer: (url: string, body: Record<string, unknown>) => Response) {
+  const calls: { url: string; body: Record<string, unknown> }[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    calls.push({ url: String(url), body });
+    return answer(String(url), body);
+  });
+  // jsdom implements neither, and the anchor dance is api.saveBlob's business
+  // rather than this step's -- what is under test is the request that produced
+  // the blob.
+  const url = URL as unknown as Record<string, unknown>;
+  url.createObjectURL = () => "blob:bundle";
+  url.revokeObjectURL = () => {};
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  return calls;
+}
+
+/** A zip, with the credential branch beside it in the headers the server sets. */
+const zipAnswer = (message: string) =>
+  new Response(new Blob(["PK"]), {
+    headers: {
+      "X-Bzm-Token-Branch": "given",
+      "X-Bzm-Token-Message": message,
+    },
+  });
+
+/** An account with one performance location and one idle agent in it: enough
+ *  to reach step 3 with the buttons enabled. */
+function perfAccount() {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-perf", name: "Perf", funcIds: ["performance"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-perf", func_ids: ["performance"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [{
+      id: "perf", label: "Performance", namespace: "blazemeter",
+      func_ids: ["performance"],
+    }],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    generate: async () => ({
+      files: [{ name: "crane.yaml", content: "kind: Deployment" }],
+      token: { branch: "placeholder" as const, ship_id: "s-1",
+               message: "no AUTH_TOKEN — the bundle carries a placeholder" },
+    }),
+  });
+}
+
+/** Pick the location, then open step 3 with the buttons live. */
+async function atDownloadStep() {
+  fireEvent.click(await screen.findByText("Perf"));
+  fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+  const button = await screen.findByRole<HTMLButtonElement>(
+    "button", { name: /Download bundle/ });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  return button;
+}
+
+test("downloading sends the configured bundle for the selected agent, and rotates nothing",
+  async () => {
+    const calls = stubTransfers(() => zipAnswer("the AUTH_TOKEN you supplied"));
+    render(<App api={perfAccount()} />);
+
+    fireEvent.click(await atDownloadStep());
+
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].url).toBe("/api/generate/zip");
+    expect(calls[0].body.facts).toMatchObject({ harbor_id: "h-perf" });
+    expect(calls[0].body.options).toMatchObject({
+      namespace: "blazemeter", ship_id: "s-1" });
+    // The default, and the whole of #64: reading a bundle must not revoke the
+    // credential the deployed agent is running on.
+    expect(calls[0].body.rotate_token).toBe(false);
+
+    // ...and what it did is reported in core's own words, off the headers.
+    expect(await screen.findByText(/the AUTH_TOKEN you supplied/)).toBeTruthy();
+  });
+
+test("saving reports where it landed, and a refusal replaces that with why",
+  async () => {
+    let refuse = false;
+    const calls = stubTransfers((url) => {
+      if (url === "/api/generate/zip") return zipAnswer("carried");
+      if (refuse) {
+        return new Response(JSON.stringify({ detail: "no such folder" }),
+                            { status: 400 });
+      }
+      return new Response(JSON.stringify({
+        out_dir: "/home/me/bzm-opl/blazemeter",
+        files: [{ name: "crane.yaml", bytes: 12 }],
+        token: { branch: "given", ship_id: "s-1", message: "kept the token" },
+      }));
+    });
+    render(<App api={perfAccount()} />);
+    await atDownloadStep();
+
+    fireEvent.change(screen.getByLabelText("Folder"),
+                     { target: { value: "~/bzm-opl/blazemeter" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].url).toBe("/api/generate/save");
+    expect(calls[0].body).toMatchObject({
+      out_dir: "~/bzm-opl/blazemeter", rotate_token: false });
+    // The expanded path the server echoed, not the `~` that was typed: it is
+    // what a kubectl command can be copied against.
+    expect(await screen.findByText(/Wrote 1 files to/)).toBeTruthy();
+    expect(screen.getByText("/home/me/bzm-opl/blazemeter")).toBeTruthy();
+
+    // A refused save says why, and takes the previous save's claim with it --
+    // that folder is not where this bundle went.
+    refuse = true;
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+    expect(await screen.findByText("no such folder")).toBeTruthy();
+    expect(screen.queryByText(/Wrote 1 files to/)).toBeNull();
+  });
+
+test("ticking the rotate box is what makes the request issue a credential",
+  async () => {
+    const calls = stubTransfers(() => zipAnswer("a NEW AUTH_TOKEN was issued"));
+    render(<App api={perfAccount()} />);
+    const download = await atDownloadStep();
+
+    // Offered because this agent has no token in the field, the page is
+    // connected, and an agent is selected -- minting is an API call.
+    fireEvent.click(screen.getByLabelText(/Issue a NEW AUTH_TOKEN/));
+    // What it kills, said while the box is being ticked, which is the only
+    // moment anyone can still decide not to.
+    expect(await screen.findByText(/kills the current one at once/)).toBeTruthy();
+
+    fireEvent.click(download);
+    await waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].body.rotate_token).toBe(true);
   });

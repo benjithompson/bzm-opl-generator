@@ -1,10 +1,13 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Api, Account, AgentStatus, Capacity, Facts, Feature,
-  GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
+  GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdChoice, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
+// What the last download or save did, as one record with one owner -- see
+// attempt.ts for why the four it replaced could not stay four.
+import { Attempt, NO_ATTEMPT } from "./attempt";
 import {
   Button, Check, Field, inputCls, Section, TextInput,
 } from "./components";
@@ -178,7 +181,10 @@ export default function App({ api }: { api: Api }) {
   const forgetToken = useCallback(() => {
     setOptions((o) => ({ ...o, auth_token: null }));
     setRotate(false);
-    setLastTokenReport(null);
+    // The whole attempt, not only its token report: what the last download or
+    // save did was done for the agent being left behind, and a folder named
+    // under a different agent's bundle is the same claim about the wrong thing.
+    setAttempt(NO_ATTEMPT);
   }, []);
 
   const [files, setFiles] = useState<GeneratedFile[]>([]);
@@ -236,7 +242,6 @@ export default function App({ api }: { api: Api }) {
   }, [view, accountId]);
   useEffect(() => { setCap(null); }, [accountId]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
-  const [dlErr, setDlErr] = useState<string | null>(null);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
   // download would carry. Read rather than re-derived here -- the rule has four
@@ -246,16 +251,17 @@ export default function App({ api }: { api: Api }) {
   // until asked: it is the one action here that breaks a deployment that is
   // currently working, and it used to be what the download button did by itself.
   const [rotate, setRotate] = useState(false);
-  // What the last download or save actually did, in core's own words. Said
-  // afterwards as well as before, because a rotation is worth confirming: the
-  // bundle in the browser's downloads folder is now the only copy of that token.
-  const [lastTokenReport, setLastTokenReport] = useState<TokenReport | null>(null);
-  // Saving to a folder, beside downloading: the typed directory, and where the
-  // last save actually landed (the server echoes the expanded path, which is
-  // what a kubectl command can be copied against -- `~` is not).
+  // What the last download or save actually did -- the credential report in
+  // core's own words, where a save landed, and why either was refused. One
+  // piece of state because it is one fact: the four it replaced were reset in
+  // pairs before every call, and whichever field was missed described the click
+  // before last. The download step reports the next one; nothing else writes it
+  // but forgetToken, which drops the lot when the agent changes.
+  const [attempt, setAttempt] = useState<Attempt>(NO_ATTEMPT);
+  // Where a save writes. Not part of the attempt: it is what was typed rather
+  // than what happened, and the preview reads it too -- a folder already
+  // holding this ship's bundle supplies the token the save would reuse.
   const [saveDir, setSaveDir] = useState("");
-  const [saved, setSaved] = useState<SavedBundle | null>(null);
-  const [saveErr, setSaveErr] = useState<string | null>(null);
   // The imported cluster evidence, its verdicts, and whatever the last import
   // was refused for. The document itself is kept, not just its verdicts: the
   // preflight re-runs against it on every option change, because verdicts that
@@ -790,6 +796,13 @@ export default function App({ api }: { api: Api }) {
   // One derivation because those three answer one question, and three of them
   // could disagree -- see token.ts.
   const tokenPlan = downloadPlan(previewToken, rotate, shipId);
+  // Whether the rotate box is offered at all, which is a different question
+  // from what a rotation would do: minting is an API call, so it needs the
+  // account and an agent, and a token already in the field wins over the box --
+  // core ignores the rotation rather than performing it, so offering it there
+  // would promise an issue that will not happen.
+  const mayRotate =
+    !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
   // What the bundle is: flat YAML to kubectl apply, or the chart with a values
   // overlay. Both render the same objects -- the choice is how you install and
   // upgrade -- except that the chart is performance-only, so an SV location is
@@ -1179,25 +1192,35 @@ export default function App({ api }: { api: Api }) {
 
           {/* 3 · Download & verify */}
           <Section n={3} title="Download & verify">
+            {/* Four records and one report, assembled here. Every value in
+                them is state this file still owns -- what changed is that the
+                panel is handed the five questions it answers rather than forty
+                fields it has to reassemble them from. */}
             <DownloadPanel
-              facts={facts} shipId={shipId} ships={ships} sourceMode={sourceMode}
-              who={who} options={options} set={set} raw={raw}
-              sv={sv} saOk={saOk} genErr={genErr}
-              unfinished={incomplete} goToConfigure={() => setStep(1)}
-              format={format}
-              previewToken={previewToken} rotate={rotate} setRotate={setRotate}
-              tokenPlan={tokenPlan} lastTokenReport={lastTokenReport}
-              setLastTokenReport={setLastTokenReport}
-              dlErr={dlErr} setDlErr={setDlErr}
-              saveDir={saveDir} setSaveDir={setSaveDir} saved={saved}
-              setSaved={setSaved} saveErr={saveErr} setSaveErr={setSaveErr}
-              preflight={preflight} preflightBusy={preflightBusy}
-              importEvidence={importEvidence} evidence={evidence}
-              applied={applied} applySuggestion={applySuggestion}
-              undoSuggestion={undoSuggestion}
-              polling={polling} setPolling={setPolling} status={status}
-              svMocks={svMocks} svChecks={svChecks}
-              checkEndpoint={checkEndpoint} />
+              bundle={{
+                facts, shipId, options, format,
+                setFormat: (v) => set("output_format", v),
+                sv, saOk, genErr,
+                unfinished: incomplete, goToConfigure: () => setStep(1),
+                saveDir, setSaveDir,
+              }}
+              credential={{
+                plan: tokenPlan, preview: previewToken,
+                rotate, setRotate, mayRotate,
+              }}
+              attempt={attempt} report={setAttempt}
+              preflight={{
+                read: preflight, busy: preflightBusy, header: evidence,
+                importFile: importEvidence,
+                applied, applySuggestion, undoSuggestion,
+              }}
+              watch={{
+                available: sourceMode === "connect",
+                on: polling, setOn: setPolling,
+                agent: ships.find((s) => s.id === shipId)?.name || shipId,
+                status, mocks: svMocks, checks: svChecks,
+                check: checkEndpoint,
+              }} />
           </Section>
         </StepFlow>
       </main>
