@@ -227,7 +227,12 @@ def key_set(k: KeyIn):
             pass
     else:
         raise HTTPException(400, "provide path, or id+secret")
-    client = api.BzmClient(path)
+    # core's construction, never api.BzmClient(path): that one raises SystemExit
+    # on a file that will not parse, and SystemExit is a BaseException -- it
+    # goes straight past this route's error handling and takes the server with
+    # it. core.client_from_env raises a CoreError instead, which _answer turns
+    # into the refusal the connect form can show.
+    client = _answer(core.client_from_env, path)
     user = _answer(core.user, client)
     if k.id and k.secret and not k.save:
         os.unlink(path)
@@ -720,9 +725,17 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False,
         # the one line that has to arrive before the port is open.
         print(EXPOSED_WARNING.format(host=host, port=port), flush=True)
     if api_key_path:
-        _state["client"] = api.BzmClient(api_key_path)
-        with open(api_key_path) as fh:
-            _state["key_id"] = json.load(fh).get("id")
+        # Same construction as the route, for the same reason, plus one of its
+        # own: the page this serves has a connect form on it, so a flag pointing
+        # at an unreadable file is worth saying and not worth refusing to start
+        # over. The id is read only once the client proves the file parses.
+        try:
+            _state["client"] = core.client_from_env(api_key_path)
+        except core.CoreError as e:
+            print(f"!! --api-key ignored: {e}", flush=True)
+        else:
+            with open(api_key_path) as fh:
+                _state["key_id"] = json.load(fh).get("id")
     if open_browser:
         import threading
         import webbrowser

@@ -898,6 +898,21 @@ def test_a_key_file_that_does_not_parse_is_skipped_not_raised(monkeypatch,
     assert all(f["path"] != str(bad) for f in core.detect_keys())
 
 
+def test_a_malformed_key_file_is_a_refusal_rather_than_an_exit(tmp_path):
+    """The contract the server leans on. api.BzmClient(path) raises SystemExit,
+    a BaseException that walks past every `except Exception` between here and
+    the top of the process -- fine for a command, fatal for a server. This is
+    the construction that does not."""
+    bad = tmp_path / "api-key.json"
+    bad.write_text("not json")
+    with pytest.raises(core.NotConfigured) as e:
+        core.client_from_env(str(bad))
+    assert "not valid JSON" in str(e.value)
+    # ...and the exiting one is still there, which is why this test is.
+    with pytest.raises(SystemExit):
+        api.BzmClient(str(bad))
+
+
 def test_detect_never_reads_a_secret_back_out(monkeypatch, tmp_path):
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "KID", "secret": "SHHH"}')

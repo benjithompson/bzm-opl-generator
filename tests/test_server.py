@@ -329,6 +329,43 @@ def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
     assert server._state["client"] is None
 
 
+def test_connecting_with_a_malformed_key_file_refuses_without_exiting(monkeypatch,
+                                                                      tmp_path):
+    """#91. The file is there, so the route's own existence check passes, and
+    what it hands to the client constructor is unparseable. Built through
+    api.BzmClient(path) that is a SystemExit -- a BaseException raised inside a
+    route, which no `except Exception` anywhere in the stack stops. The
+    assertion is as much that this call *returns* as that it says the right
+    thing: an escaping SystemExit fails it before status_code is reached.
+    """
+    monkeypatch.setitem(server._state, "client", None)
+    bad = tmp_path / "api-key.json"
+    bad.write_text("not json")
+    r = client.post("/api/key", json={"path": str(bad)})
+    assert r.status_code in (400, 401, 502)
+    assert "not valid JSON" in r.json()["detail"]      # core's own sentence
+    assert server._state["client"] is None
+    # The process is still serving, which is the whole point.
+    assert client.get("/api/key").json() == {"connected": False}
+
+
+def test_connecting_with_a_good_key_file_still_reports_the_user(monkeypatch,
+                                                                tmp_path):
+    """The other half of #91: the happy path goes through the same
+    construction and is unchanged by it."""
+    monkeypatch.setitem(server._state, "client", None)
+    monkeypatch.setitem(server._state, "key_id", None)
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    monkeypatch.setattr(core, "user", lambda c: {
+        "email": "se@example.com", "displayName": "SE",
+        "defaultProject": {"accountId": 7}})
+    body = client.post("/api/key", json={"path": str(key)}).json()
+    assert body["user"]["email"] == "se@example.com"
+    assert body["default_account_id"] == 7 and body["key_id"] == "KID"
+    assert server._state["client"] is not None
+
+
 def test_disconnect_forgets_the_key_without_deleting_a_saved_one(connected, tmp_path):
     """Only what is in memory. A key the user asked to save stays on disk --
     deleting it is not what a Disconnect button on a web page should mean."""
@@ -697,6 +734,30 @@ def test_ui_warns_when_the_bind_leaves_this_machine(monkeypatch, capsys):
     assert _served(monkeypatch, host="0.0.0.0")["host"] == "0.0.0.0"
     warning = capsys.readouterr().out
     assert "reachable" in warning and "AUTH_TOKEN" in warning
+
+
+def test_a_bad_api_key_flag_does_not_stop_the_server_starting(monkeypatch,
+                                                              tmp_path, capsys):
+    """#91's start-up half. `--api-key` pointing at an unparseable file used to
+    SystemExit out of main() before uvicorn was ever reached. The page this
+    serves has a connect form on it, so opening unconnected with the reason on
+    stdout is a better answer than not opening."""
+    monkeypatch.setitem(server._state, "client", None)
+    bad = tmp_path / "api-key.json"
+    bad.write_text("not json")
+    assert _served(monkeypatch, api_key_path=str(bad))["host"] == "127.0.0.1"
+    assert "not valid JSON" in capsys.readouterr().out
+    assert server._state["client"] is None
+
+
+def test_a_good_api_key_flag_connects_at_startup(monkeypatch, tmp_path):
+    monkeypatch.setitem(server._state, "client", None)
+    monkeypatch.setitem(server._state, "key_id", None)
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    _served(monkeypatch, api_key_path=str(key))
+    assert server._state["client"] is not None
+    assert server._state["key_id"] == "KID"
 
 
 def test_ui_dev_mode_binds_the_same_host(monkeypatch):
