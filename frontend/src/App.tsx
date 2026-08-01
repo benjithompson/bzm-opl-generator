@@ -792,9 +792,11 @@ export default function App({ api }: { api: Api }) {
   const saOk = serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
   // What the download and save buttons will do about the credential: the hint
-  // beside them, the banner over them, and whether the request rotates at all.
-  // One derivation because those three answer one question, and three of them
-  // could disagree -- see token.ts.
+  // beside them, the banner over them, and the request they send. One
+  // derivation because those three answer one question, and three of them could
+  // disagree -- see token.ts. Nothing here re-reads the rotate choice
+  // afterwards: `plan.request` goes to whichever button is pressed as it
+  // stands, so this line is the only place the choice is turned into anything.
   const tokenPlan = downloadPlan(previewToken, rotate, shipId);
   // Whether the rotate box is offered at all, which is a different question
   // from what a rotation would do: minting is an API call, so it needs the
@@ -1197,6 +1199,11 @@ export default function App({ api }: { api: Api }) {
                 panel is handed the five questions it answers rather than forty
                 fields it has to reassemble them from. */}
             <DownloadPanel
+              /* The two requests that produce a bundle are made in the panel,
+                 beside the warning saying what they cost -- but through the
+                 same client every other route uses, so what one carries about
+                 the credential is drivable rather than only reviewable. */
+              api={api}
               bundle={{
                 facts, shipId, options, format,
                 setFormat: (v) => set("output_format", v),

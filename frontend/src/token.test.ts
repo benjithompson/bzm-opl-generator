@@ -8,7 +8,10 @@ const report = (branch: TokenReport["branch"]): TokenReport =>
 describe("downloadPlan", () => {
   it("does not rotate by default, which is the whole of #64", () => {
     for (const b of ["given", "reused", "placeholder"] as const) {
-      expect(downloadPlan(report(b), false, "bbb222").rotates).toBe(false);
+      // The request itself, whole: what a caller sends is what this returned,
+      // so there is no boolean left anywhere for a button to re-apply.
+      expect(downloadPlan(report(b), false, "bbb222").request)
+        .toEqual({ rotate_token: false });
     }
   });
 
@@ -27,7 +30,8 @@ describe("downloadPlan", () => {
 
   it("treats a token in the form as complete, and rotates nothing", () => {
     const plan = downloadPlan(report("given"), false, "bbb222");
-    expect(plan).toMatchObject({ rotates: false, incomplete: false, warning: null });
+    expect(plan).toMatchObject({
+      request: { rotate_token: false }, incomplete: false, warning: null });
     expect(plan.hint).toMatch(/generated AUTH_TOKEN/);
   });
 
@@ -38,7 +42,7 @@ describe("downloadPlan", () => {
 
   it("warns what a rotation breaks before it is asked for, not after", () => {
     const plan = downloadPlan(report("placeholder"), true, "bbb222");
-    expect(plan.rotates).toBe(true);
+    expect(plan.request).toEqual({ rotate_token: true });
     expect(plan.warning).toContain("bbb222");
     expect(plan.warning).toMatch(/0\/1/);
     // A rotation is not the bundle being incomplete -- it comes out applicable.
@@ -51,7 +55,7 @@ describe("downloadPlan", () => {
   // actually going to hand over.
   it("lets a token in the form win over the rotate choice, and says so", () => {
     const plan = downloadPlan(report("given"), true, "bbb222");
-    expect(plan.rotates).toBe(false);
+    expect(plan.request).toEqual({ rotate_token: false });
     expect(plan.hint).toMatch(/nothing will be issued/);
   });
 });

@@ -10,7 +10,14 @@
 // Plain data in, data out, and tested, because the three places this used to be
 // decided -- the hint beside the button, the banner over it, and whether the
 // request rotates at all -- are exactly the three that can disagree.
-import { TokenBranch, TokenReport } from "./api";
+//
+// What it hands back for the third of those is the *request*, not a flag (#104).
+// A boolean is advice: the two buttons each turned it into a `rotate_token`
+// argument, and the conversion sat outside everything this module's tests can
+// reach -- so the one failure the module exists to prevent lived in the two
+// lines it did not own. A TokenRequest is spread into the body as it stands,
+// which leaves nothing to convert and no second place to convert it differently.
+import { TokenBranch, TokenReport, TokenRequest } from "./api";
 
 /** What a rotation will do, named against the agent it will do it to.
  *
@@ -23,8 +30,10 @@ export const rotateHazard = (shipId: string | null) =>
   + "Running until this bundle is re-applied, Secret included.";
 
 export interface DownloadPlan {
-  /** Whether asking for the bundle will issue a credential. */
-  rotates: boolean;
+  /** What the next bundle request carries about the credential. Handed to
+   *  api.downloadZip / api.saveBundle whole -- it is the request, so neither
+   *  button decides anything about it. */
+  request: TokenRequest;
   /** Beside the button: what the bundle will carry. */
   hint: string;
   /** Amber, before the click. Null when nothing is at stake. */
@@ -58,9 +67,12 @@ export function downloadPlan(
   report: TokenReport | null, rotate: boolean, shipId: string | null,
 ): DownloadPlan {
   const branch = report?.branch ?? "placeholder";
+  // Written out per branch rather than derived from `rotate` once: the "given"
+  // branch is exactly the case where the choice on screen is not what is sent,
+  // and a shared default would be one expression having to remember that.
   if (branch === "given") {
     return {
-      rotates: false,
+      request: { rotate_token: false },
       hint: CARRIES.given + (rotate
         ? " — the token in hand wins, so nothing will be issued" : ""),
       warning: null,
@@ -68,9 +80,9 @@ export function downloadPlan(
     };
   }
   if (rotate) {
-    return { rotates: true, hint: CARRIES.rotated,
+    return { request: { rotate_token: true }, hint: CARRIES.rotated,
              warning: rotateHazard(shipId), incomplete: false };
   }
-  return { rotates: false, hint: CARRIES[branch], warning: null,
-           incomplete: branch === "placeholder" };
+  return { request: { rotate_token: false }, hint: CARRIES[branch],
+           warning: null, incomplete: branch === "placeholder" };
 }

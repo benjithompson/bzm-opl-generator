@@ -163,6 +163,17 @@ export interface TokenReport {
   message: string;
 }
 
+/** What a bundle request carries about the credential — spread into the body
+ *  as it stands, under the server's own name for it.
+ *
+ *  A record rather than a boolean argument, and that is the whole of #104: the
+ *  decision has one producer (token.downloadPlan) and travels as the thing that
+ *  will be sent, so no call site converts it and no second call site converts
+ *  it differently. `rotate_token` revokes the credential a deployed agent is
+ *  running on, and there is no default here — a caller that has not been handed
+ *  a plan cannot ask for a bundle at all. */
+export interface TokenRequest { rotate_token: boolean }
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
     method,
@@ -306,6 +317,47 @@ export const api = {
   preflight: (facts: Facts | null, options: Options, evidence: unknown) =>
     req<PreflightOut>("POST", "/api/preflight",
       { facts: facts ?? {}, options, evidence }),
+  /** Download the bundle, and report what that did to the credential.
+   *
+   *  Here rather than beside `saveBlob` below, which is where it used to be: it
+   *  is a route, and a route outside this object is outside the seam -- the
+   *  only way to drive it from a test was to stub `fetch`, so the one path that
+   *  can revoke a running agent's credential was the one path not drivable the
+   *  way every other route is (#104).
+   *
+   *  `credential` is token.downloadPlan's, spread into the body as it stands.
+   *  It used to be a boolean defaulting to true -- downloading a bundle to read
+   *  it revoked a working agent's credential, and the pod that broke looked
+   *  like a slow boot (#64). */
+  downloadZip: async (
+    facts: Facts, options: Options, credential: TokenRequest,
+  ): Promise<TokenReport> => {
+    const r = await fetch("/api/generate/zip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ facts, options, ...credential }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
+    // Read before the bytes: a zip cannot carry a JSON envelope and still be a
+    // zip, so what happened to the credential travels beside the
+    // Content-Disposition.
+    const token = tokenFromHeaders(r);
+    saveBlob(await r.blob(),
+      `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
+    return token;
+  },
+  /** Write the bundle to a directory on the machine running this server -- the
+   *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
+   *  reads, so the folder is the handoff between this page and those.
+   *
+   *  Saving twice into one folder is the ordinary way to use it, and it no
+   *  longer costs a rotation: the server generates *into* the directory, so the
+   *  token already there is reused and the agent deployed from the last save
+   *  keeps working. `token.branch` says which happened. */
+  saveBundle: (
+    facts: Facts, options: Options, outDir: string, credential: TokenRequest,
+  ) => req<SavedBundle>("POST", "/api/generate/save",
+    { facts, options, ...credential, out_dir: outDir }),
 };
 
 /** Every route the page calls, as one thing it is handed rather than one it
@@ -527,44 +579,9 @@ function tokenFromHeaders(r: Response): TokenReport {
   };
 }
 
-/** Download the bundle, and report what that did to the credential.
- *
- *  `rotateToken` issues a NEW AUTH_TOKEN and kills the one any deployed agent is
- *  running on, so it is off unless the caller asked for exactly that. It used to
- *  default to true — downloading a bundle to read it revoked a working agent's
- *  credential, and the pod that broke looked like a slow boot (#64). */
-export async function downloadZip(
-  facts: Facts, options: Options, rotateToken = false,
-): Promise<TokenReport> {
-  const r = await fetch("/api/generate/zip", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facts, options, rotate_token: rotateToken }),
-  });
-  if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
-  const token = tokenFromHeaders(r);
-  saveBlob(await r.blob(),
-    `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
-  return token;
-}
-
+/** What a save wrote, and where. */
 export interface SavedBundle {
   out_dir: string;
   files: { name: string; bytes: number }[];
   token: TokenReport;
-}
-
-/** Write the bundle to a directory on the machine running this server — the
- *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
- *  reads, so the folder is the handoff between this page and those.
- *
- *  Saving twice into one folder is the ordinary way to use it, and it no longer
- *  costs a rotation: the server generates *into* the directory, so the token
- *  already there is reused and the agent deployed from the last save keeps
- *  working. `token.branch` says which happened. */
-export function saveBundle(
-  facts: Facts, options: Options, outDir: string, rotateToken = false,
-): Promise<SavedBundle> {
-  return req<SavedBundle>("POST", "/api/generate/save",
-    { facts, options, rotate_token: rotateToken, out_dir: outDir });
 }

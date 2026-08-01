@@ -17,11 +17,14 @@
 // The two calls that produce a bundle stay in this file deliberately. Both can
 // mint a credential, and CLAUDE.md's rule is that a request which touches the
 // account is made where its cost is on screen -- which is beside these buttons,
-// under the warning that says what a rotation kills.
+// under the warning that says what a rotation kills. They are made through the
+// injected client like every other route, and what they carry about the
+// credential is credential.plan.request, taken whole: this file has no say in
+// it, which is what stops the two buttons disagreeing (#104).
 import { useState } from "react";
 import {
-  api, AgentStatus, Facts, GeneratedFile, Options, SvCheckOut, SvMocksOut,
-  TokenReport, Suggestion, downloadZip, saveBundle,
+  Api, AgentStatus, Facts, GeneratedFile, Options, SvCheckOut, SvMocksOut,
+  TokenReport, Suggestion,
 } from "../api";
 import {
   Attempt, NO_ATTEMPT, downloadFailed, downloaded, saveFailed, savedTo,
@@ -82,7 +85,9 @@ export interface BundleHandover {
 /** What the next download or save will do about the agent's credential. */
 export interface CredentialHandover {
   /** The three answers that must agree -- the hint beside the button, the
-   *  warning over it, and whether the request rotates at all. From token.ts. */
+   *  warning over it, and the credential request both buttons send. From
+   *  token.ts, and `request` is sent rather than read: this panel is handed
+   *  what to send, so it has nothing to get wrong about it. */
   plan: DownloadPlan;
   /** What the preview's bundle currently carries, for the sentence naming where
    *  a real token comes from. Null only before the first preview lands. */
@@ -129,6 +134,11 @@ export interface WatchHandover {
 }
 
 export interface DownloadPanelProps {
+  /** The route caller, from App. Every request this panel makes goes through
+   *  it -- the two that produce a bundle and the crane-hook render behind Test
+   *  deploy, which was the last call site on the page still importing the real
+   *  client at module level and so the last one outside the seam. */
+  api: Api;
   bundle: BundleHandover;
   credential: CredentialHandover;
   /** What the last download or save did, and where the next one is reported.
@@ -150,7 +160,7 @@ const checkTone = (r: SvCheckOut) =>
     : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
 export function DownloadPanel(p: DownloadPanelProps) {
-  const { bundle, credential, attempt, report, preflight, watch } = p;
+  const { api, bundle, credential, attempt, report, preflight, watch } = p;
   // The names the markup below already used, for the values it reads most: the
   // markup is the markup that was in App, and rewriting every reference to
   // prove it moved is how a move turns into a rewrite nobody diffed.
@@ -185,8 +195,8 @@ export function DownloadPanel(p: DownloadPanelProps) {
                 <Button disabled={!ready}
                   onClick={() => {
                     report(NO_ATTEMPT);
-                    downloadZip(facts!, { ...options, ship_id: shipId },
-                                plan.rotates)
+                    api.downloadZip(facts!, { ...options, ship_id: shipId },
+                                    plan.request)
                       .then((t) => report(downloaded(t)))
                       .catch((e) => report(downloadFailed(String(e.message))));
                   }}>
@@ -264,8 +274,8 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     report(NO_ATTEMPT);
                     const dir = bundle.saveDir.trim() ||
                       `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
-                    saveBundle(facts!, { ...options, ship_id: shipId }, dir,
-                               plan.rotates)
+                    api.saveBundle(facts!, { ...options, ship_id: shipId }, dir,
+                                   plan.request)
                       .then((s) => report(savedTo(s)))
                       .catch((e) => report(saveFailed(String(e.message))));
                   }}>
@@ -328,7 +338,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       file is what comes back from it. Stacked rather than in a
                       row so the order reads as the sequence it is. */}
                   <div className="flex flex-col items-start gap-2">
-                  <TestDeploy facts={facts} options={options} />
+                  <TestDeploy api={api} facts={facts} options={options} />
                   {/* A label rather than a Button so the file dialog is the
                       click, as in Connect and Import above. */}
                   <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
@@ -563,8 +573,16 @@ export function DownloadPanel(p: DownloadPanelProps) {
  *  It does not turn the option on. Applying the check and shipping it inside
  *  the agent's bundle are different decisions -- this is the one you make
  *  before deploying anything.
+ *
+ *  `api` is handed down rather than imported, as everywhere else on the page:
+ *  a module-level import here was the one call site left with nowhere to put a
+ *  different implementation, so the one thing this component does could not be
+ *  driven from a test at all.
  */
-function TestDeploy({ facts, options }: { facts: Facts | null; options: Options }) {
+function TestDeploy(
+  { api, facts, options }:
+  { api: Api; facts: Facts | null; options: Options },
+) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
