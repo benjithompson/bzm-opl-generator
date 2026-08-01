@@ -20,7 +20,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import {
-  Api, Capacity, Facts, Options, SavedBundle, TokenRequest,
+  Api, Capacity, Facts, Location, Options, SavedBundle, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 
@@ -384,4 +384,186 @@ test("the box is the only thing that rotates: a save after one is asked for does
     fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
     await waitFor(() => expect(sent.length).toBe(2));
     expect(sent[1].credential).toEqual({ rotate_token: true });
+  });
+
+// -- step 1: the two lists, and the two forms that write to the account -------
+// A location holds agents and both are picked from a list, so both are driven
+// here rather than only typechecked. The filter is part of it: a real account
+// has 171 locations and the box only appears above eight, so a list that stops
+// filtering is a list nobody can get to the bottom of.
+
+/** One location in a workspace, as the listing carries it. */
+const loc = (id: string, name: string, ships: Ship[] = []): Location =>
+  ({ id, name, funcIds: ["performance"], slots: 1, ships });
+
+/** An account holding exactly `locations`, and nothing else of interest. The
+ *  list is the fixture's own array, so a test can have a create call add to it
+ *  the way the account would. */
+function accountOf(locations: Location[], extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    // A copy each time, as a fetch would be: the page stores what it is handed,
+    // and one array mutated in place is a re-read React sees no change in.
+    locations: async () => [...locations],
+    facts: async (harborId: string) => ({
+      harbor_id: harborId, func_ids: ["performance"],
+      ships: [], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [
+      { id: "performance", label: "Performance", changes_images: true },
+    ],
+    features: async () => [{
+      id: "perf", label: "Performance", namespace: "blazemeter",
+      func_ids: ["performance"],
+    }],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    generate: async () => ({
+      files: [], token: { branch: "placeholder" as const, ship_id: null,
+                          message: "" },
+    }),
+    ...extra,
+  });
+}
+
+test("a short list has no filter over it", async () => {
+  const eight = Array.from({ length: 8 }, (_, i) => loc(`h-${i}`, `Region ${i}`));
+  render(<App api={accountOf(eight)} />);
+
+  expect(await screen.findByText("Region 0")).toBeTruthy();
+  // Eight rows fit on the screen they are on; a box over them would be furniture
+  // asking to be filled in.
+  expect(screen.queryByPlaceholderText(/^filter /)).toBeNull();
+});
+
+test("a long list is filtered, and the row picked is the one whose facts are read",
+  async () => {
+    const asked: string[] = [];
+    const many = [...Array.from({ length: 8 }, (_, i) => loc(`h-${i}`, `Region ${i}`)),
+                  loc("h-dublin", "Dublin")];
+    render(<App api={accountOf(many, {
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    // The count is the whole list's, not the filtered one's -- it is what the
+    // box is offering to narrow.
+    const box = await screen.findByPlaceholderText("filter 9 locations…");
+    fireEvent.change(box, { target: { value: "dub" } });
+
+    expect(screen.queryByText("Region 0")).toBeNull();
+    // Picked from what the filter left, which is the only way to reach a row on
+    // a real account's list.
+    fireEvent.click(screen.getByText("Dublin"));
+    await waitFor(() => expect(asked).toEqual(["h-dublin"]));
+
+    // ...and a query nothing matches says so, rather than showing an empty box
+    // that reads like an empty workspace.
+    fireEvent.change(box, { target: { value: "zzz" } });
+    expect(screen.getByText("no locations match")).toBeTruthy();
+  });
+
+test("creating a location sends what the form holds, and selects what comes back",
+  async () => {
+    const created: unknown[] = [];
+    const listing = [loc("h-0", "Region 0")];
+    const asked: string[] = [];
+    render(<App api={accountOf(listing, {
+      createLocation: async (body) => {
+        created.push(body);
+        const made = loc("h-new", body.name);
+        listing.push(made);
+        return made;
+      },
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /New location/ }));
+    // Named after the workspace it would be created in, because the workspace is
+    // chosen at the foot of the drawer and this is a write into it.
+    const name = await screen.findByLabelText(/^Name \(created in workspace/);
+    fireEvent.change(name, { target: { value: "Frankfurt" } });
+    fireEvent.change(screen.getByLabelText(/^Slots/), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText(/^Threads per engine/),
+                     { target: { value: "250" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // The account this writes into, and the four fields, exactly as typed.
+    await waitFor(() => expect(created.length).toBe(1));
+    expect(created[0]).toEqual({
+      name: "Frankfurt", account_id: 1, workspace_id: 10,
+      func_ids: ["performance"], slots: 4, threads_per_engine: 250,
+    });
+    // Selected, so the agent section below is about the location just made --
+    // which is the only reason anyone makes one here. It is on screen twice by
+    // then (its row, and the path line under the step), so the read of the
+    // account is what this asserts on.
+    await waitFor(() => expect(asked).toEqual(["h-new"]));
+    expect(screen.getAllByText("Frankfurt").length).toBeGreaterThan(0);
+  });
+
+test("creating an agent in an empty location keeps the credential it is issued with",
+  async () => {
+    const listing = [loc("h-0", "Empty")];
+    render(<App api={accountOf(listing, {
+      createShip: async (_harborId: string, name: string) => {
+        const ship = { id: "s-new", name, state: "IDLE" };
+        listing[0] = { ...listing[0], ships: [ship] };
+        return { ship, auth_token: "tok-from-the-account", token_error: null };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Empty"));
+    // A location with no agents opens on the create form: there is nothing to
+    // pick, so there is no list to offer first.
+    expect(await screen.findByText(/has no agents yet/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"),
+                     { target: { value: "k8s-prod" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // The agent now exists (its row, the section summary and the path line
+    // under the step all name it) and is the one selected.
+    await waitFor(() =>
+      expect(screen.getAllByText("k8s-prod").length).toBeGreaterThan(1));
+    expect(screen.getByText("token in hand")).toBeTruthy();
+    // ...and the token it was created with, in the field. This is the one moment
+    // it is free -- nothing reads a credential back afterwards.
+    await waitFor(() => expect(
+      screen.getByPlaceholderText(/paste the token this agent was created with/),
+    ).toHaveProperty("value", "tok-from-the-account"));
+  });
+
+test("a lone agent that is reporting is not auto-picked, and says why when it is",
+  async () => {
+    // Fresh by the rule in heartbeat.ts, which is the whole difference between
+    // this location and the ones above.
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Busy", [live])])} />);
+
+    fireEvent.click(await screen.findByText("Busy"));
+    // Counted as online in the row for its location...
+    expect(await screen.findByText(/1 agent · 1 online/)).toBeTruthy();
+    // ...and left unpicked: a new deployment on an identity that is already
+    // running conflicts with the install that is working.
+    expect(screen.queryByText(/already running somewhere/)).toBeNull();
+
+    fireEvent.click(screen.getByText("agent-live"));
+    expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
   });

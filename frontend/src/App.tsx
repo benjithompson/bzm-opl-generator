@@ -8,9 +8,9 @@ import {
 // What the last download or save did, as one record with one owner -- see
 // attempt.ts for why the four it replaced could not stay four.
 import { Attempt, NO_ATTEMPT } from "./attempt";
-import {
-  Button, Check, Field, inputCls, Section, TextInput,
-} from "./components";
+// The only piece of furniture this file still renders itself: every form it
+// used to hold is inside the step that owns it.
+import { Section } from "./components";
 // What a download is about to do to the agent's credential. The branch a bundle's
 // token arrived by is core's and comes back on the answer; this decides what to
 // say about the click that has not happened yet, which is the only moment a
@@ -44,6 +44,9 @@ import {
 import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
+// Whether an agent is reporting. One statement of the rule, with its own tests
+// -- it used to be a closure here, handed to step 1 as a predicate.
+import { shipOnline } from "./heartbeat";
 // The shape a hand-typed id and token come in, and what is wrong with one that
 // does not. Nothing is built from a value that fails it.
 import { manualComplete } from "./manualIds";
@@ -447,9 +450,6 @@ export default function App({ api }: { api: Api }) {
       .finally(() => setFactsBusy(false));
   }, [harborId]);
 
-  const shipOnline = (s: Ship) =>
-    !!s.lastHeartBeat && Date.now() / 1000 - s.lastHeartBeat < 300;
-
   useEffect(() => {
     // A restored agent outranks the auto-pick: it is what the user chose, and
     // it is applied only once the location's own list has confirmed it exists.
@@ -464,15 +464,10 @@ export default function App({ api }: { api: Api }) {
     if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
   }, [harborId, ships.length]);
 
-  // Which half of the agent section is on screen -- picking an identity and
-  // minting one
-  // are one-of, because reusing an identity that is already running conflicts
-  // with that install while creating one is free. Derived, not a second piece
-  // of state: a location with no agents has nothing to pick, so it opens on the
-  // create form, and creating the first agent drops back to the list showing
-  // it. The same derivation is why Cancel appears only when there is a list to
-  // go back to.
-  const creatingShip = showCreateShip || ships.length === 0;
+  // Which half of the agent section is on screen -- picking an identity or
+  // minting one -- is derived from `showCreateShip` and the agents themselves,
+  // in the panel that renders both: it is a view's decision, and the state it
+  // is derived from is still here.
 
   /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
    *
@@ -1003,9 +998,6 @@ export default function App({ api }: { api: Api }) {
     ),
   };
 
-  const filteredLocs = locations.filter((l) =>
-    l.name.toLowerCase().includes(locFilter.toLowerCase()));
-
   /** Put a location that has just been changed back into the list.
    *
    *  In place rather than by re-fetching the workspace: the answer came from a
@@ -1021,6 +1013,21 @@ export default function App({ api }: { api: Api }) {
   // silently greyed button.
   const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
     : !newLoc.workspace_id ? "pick a workspace above first" : "";
+
+  /** Create the private location the form describes, and work on it.
+   *
+   *  A named function here, like createShipNow, rather than a handler inside the
+   *  form: this is a real write to the customer's account, and the panel renders
+   *  the button beside the sentence saying so without being able to make the
+   *  call itself. The list is re-read afterwards because a location arrives with
+   *  no agents and the row has to say so. */
+  const createLocationNow = async () => {
+    try {
+      const l = await api.createLocation({ ...newLoc, account_id: accountId! });
+      const ls = await api.locations(workspaceId!);
+      setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
+    } catch (e) { setLocErr(String((e as Error).message)); }
+  };
   /** One segment of the summary line under the flow: a label nobody has to
    *  read twice, and a value that says "none yet" in amber where the absence is
    *  the thing worth knowing. */
@@ -1032,61 +1039,6 @@ export default function App({ api }: { api: Api }) {
         {value ?? (warn ? "none yet" : "—")}
       </span>
     </span>
-  );
-
-  const createLocationFormNode = (
-    <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
-      <p className="text-xs font-semibold text-slate-700">
-        New private location
-      </p>
-      <Field required
-        label={`Name (created in workspace: ${workspaces.find((w) => w.id === workspaceId)?.name ?? "?"})`}>
-        <TextInput value={newLoc.name}
-          onChange={(v) => setNewLoc({ ...newLoc, name: v })} /></Field>
-      <div className="flex gap-4 items-end">
-        <div className="flex gap-3 flex-wrap">
-          {funcIdChoices.map((c) => (
-            <Check key={c.id} label={c.label}
-              checked={newLoc.func_ids.includes(c.id)}
-              onChange={(on) => setNewLoc({
-                ...newLoc,
-                func_ids: on ? [...newLoc.func_ids, c.id]
-                  : newLoc.func_ids.filter((x) => x !== c.id),
-              })} />
-          ))}
-        </div>
-        <Field label="Slots" hint="concurrent engines">
-          <input type="number" min={1} className={inputCls + " w-20"}
-            value={newLoc.slots}
-            onChange={(e) => setNewLoc({ ...newLoc, slots: Number(e.target.value) })} />
-        </Field>
-        <Field label="Threads per engine" hint="required — tests can't start without it">
-          <input type="number" min={1} className={inputCls + " w-24"}
-            value={newLoc.threads_per_engine}
-            onChange={(e) => setNewLoc({ ...newLoc, threads_per_engine: Number(e.target.value) })} />
-        </Field>
-      </div>
-      {/* Create stays put and greys out, and says which of the two things it is
-          waiting for -- a button that disables itself without a reason is the
-          same dead end as one that disappears. */}
-      <div className="flex gap-2 items-center">
-        <Button disabled={!!createLocBlockedBy}
-          onClick={async () => {
-            try {
-              const l = await api.createLocation({ ...newLoc, account_id: accountId! });
-              const ls = await api.locations(workspaceId!);
-              setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
-            } catch (e) { setLocErr(String((e as Error).message)); }
-          }}>Create</Button>
-        <Button kind="ghost"
-          onClick={() => { setLocErr(null); setShowCreateLoc(false); }}>
-          Cancel
-        </Button>
-        {createLocBlockedBy && (
-          <span className="text-[11px] text-amber-700">{createLocBlockedBy}</span>
-        )}
-      </div>
-    </div>
   );
 
   const body = (
@@ -1151,29 +1103,51 @@ export default function App({ api }: { api: Api }) {
               one mode ever uses. */}
           <Section n={1} title="Agent details" done={!!facts && !!shipId}
             hint="harbor_id, ship_id and AUTH_TOKEN — from your account, or typed.">
+            {/* Four records, assembled here. Every value in them is state this
+                file still owns -- what the panel gained is the three answers it
+                used to be handed already worked out: the filtered list, whether
+                an agent is reporting, and the new-location form as a finished
+                element. */}
             <AgentPanel
-              sourceMode={sourceMode} switchMode={switchMode} manual={manual}
-              setManual={setManual}
-              who={who}
-              accountName={accounts.find((a) => a.id === accountId)?.name ?? null}
-              workspaceName={workspaces.find((w) => w.id === workspaceId)?.name ?? null}
-              locations={locations} filteredLocs={filteredLocs}
-              locFilter={locFilter} setLocFilter={setLocFilter}
-              harborId={harborId} setHarborId={setHarborId} location={location}
-              locBusy={locBusy} locErr={locErr} showCreateLoc={showCreateLoc}
-              setShowCreateLoc={setShowCreateLoc}
-              onLocationUpdated={locationUpdated}
-              createLocationForm={createLocationFormNode}
-              ships={ships} shipId={shipId}
-              pickShip={(id) => { setShipId(id); forgetToken(); }}
-              shipOnline={shipOnline} factsBusy={factsBusy} facts={facts}
-              creatingShip={creatingShip} setShowCreateShip={setShowCreateShip}
-              newShipName={newShipName} setNewShipName={setNewShipName}
-              createShip={createShipNow} shipErr={shipErr}
-              shipTokenNotice={shipTokenNotice}
-              authToken={raw("auth_token")}
-              setAuthToken={(v) => set("auth_token", v || null)}
-              regenerateToken={regenerateToken} />
+              source={{
+                mode: sourceMode, switchTo: switchMode,
+                manual, setManual, who,
+              }}
+              locations={{
+                accountName: accounts.find((a) => a.id === accountId)?.name ?? null,
+                workspaceName: workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+                list: locations, filter: locFilter, setFilter: setLocFilter,
+                selectedId: harborId, pick: setHarborId,
+                busy: locBusy, error: locErr, updated: locationUpdated,
+                create: {
+                  open: showCreateLoc,
+                  // Opening or closing the form drops the last refusal with it:
+                  // an error about a form nobody is looking at describes
+                  // nothing.
+                  setOpen: (v) => { setLocErr(null); setShowCreateLoc(v); },
+                  workspace: workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+                  draft: newLoc,
+                  // The draft the panel edits is four of the five fields; the
+                  // workspace id is the drawer's and is merged back here.
+                  setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
+                  choices: funcIdChoices, blockedBy: createLocBlockedBy,
+                  submit: createLocationNow,
+                },
+              }}
+              agents={{
+                id: shipId,
+                pick: (id) => { setShipId(id); forgetToken(); },
+                busy: factsBusy, facts,
+                showCreate: showCreateShip, setShowCreate: setShowCreateShip,
+                newName: newShipName, setNewName: setNewShipName,
+                create: createShipNow,
+                error: shipErr, tokenNotice: shipTokenNotice,
+              }}
+              credential={{
+                token: raw("auth_token"),
+                setToken: (v) => set("auth_token", v || null),
+                regenerate: regenerateToken,
+              }} />
           </Section>
 
           {/* 2 · Configure */}
