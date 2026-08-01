@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Facts, Location, Ship } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
+  Button, Check, ErrorMsg, Field, inputCls, NoticeMsg,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
@@ -32,16 +32,12 @@ export interface AgentPanelProps {
    *  Account menu's, and what this step needs is whether there is one -- a
    *  location list needs a key, not the form that supplies it. */
   who: { email: string; keyId: string } | null;
-  // -- the account tree
-  accounts: { id: number; name: string }[];
-  accountId: number | null;
-  setAccountId: (id: number | null) => void;
-  /** The two lists are still arriving. */
-  accountsBusy: boolean;
-  workspacesBusy: boolean;
-  workspaces: { id: number; name: string }[];
-  workspaceId: number | null;
-  setWorkspaceId: (id: number | null) => void;
+  // -- where the list below came from. Both are chosen at the foot of the nav
+  // drawer (AccountMenu), because every view reads the account and the location
+  // list is the only thing here the workspace narrows -- so this step names
+  // them rather than asking again.
+  accountName: string | null;
+  workspaceName: string | null;
   locations: Location[];
   filteredLocs: Location[];
   locFilter: string;
@@ -170,9 +166,9 @@ export function AgentPanel(p: AgentPanelProps) {
           { value: "connect", label: "Connect to BlazeMeter",
             hint: "Pick a location and agent; a new agent's token is issued once, when you create it.",
             // Nothing to pick from without a key, and the key is not this
-            // step's to ask for any more -- it is the Account menu, top right.
+            // step's to ask for any more -- it is the key at the foot of the nav drawer.
             disabledReason: p.who ? undefined
-              : "connect an account first — the Account button, top right" },
+              : "connect an account first — the key at the foot of the menu" },
           { value: "manual", label: "Enter values manually",
             hint: "For an account you cannot reach — generation only, nothing is checked." },
         ]} />
@@ -215,25 +211,23 @@ export function AgentPanel(p: AgentPanelProps) {
               : "none selected"}
             hint="A location holds agents. Open one to size it and change its settings.">
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Account">
-                  <SearchSelect
-                    options={p.accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
-                    value={p.accountId} disabled={!p.who}
-                    busy={p.accountsBusy}
-                    onChange={(v) => p.setAccountId(Number(v))}
-                    onClear={() => p.setAccountId(null)} />
-                </Field>
-                <Field label="Workspace">
-                  <SearchSelect
-                    options={p.workspaces.map((w) => ({ value: w.id, label: w.name }))}
-                    value={p.workspaceId}
-                    disabled={!p.who || (!p.workspacesBusy && p.workspaces.length === 0)}
-                    busy={p.workspacesBusy}
-                    onChange={(v) => p.setWorkspaceId(Number(v))}
-                    onClear={() => p.setWorkspaceId(null)} />
-                </Field>
-              </div>
+              {/* Neither picker is here any more: both are at the foot of the
+                  nav drawer with the key, because the account decides what
+                  three separate views show and the workspace comes with it.
+                  What is left is the sentence saying which of them this list
+                  is -- a list of locations with no idea which account they are
+                  from is the thing the pickers were really for. */}
+              <p className="text-[11px] text-slate-500">
+                {p.accountName ? (
+                  <>Locations in <b>{p.workspaceName ?? "every workspace"}</b>
+                  {" · "}{p.accountName}. Change either at the foot of the menu.</>
+                ) : (
+                  <span className="text-amber-700">
+                    Choose an account at the foot of the menu to list its
+                    locations.
+                  </span>
+                )}
+              </p>
               {/* Above the list, like the agent panel below: the two read the
                   same way down the page -- make one, or choose one. */}
               {p.showCreateLoc ? p.createLocationForm : (

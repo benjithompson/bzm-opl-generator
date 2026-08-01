@@ -39,6 +39,22 @@ def test_create_location_threads_per_engine_override():
     assert c.calls[1][2]["threadsPerEngine"] == 50
 
 
+def test_list_calls_ask_for_more_than_one_page():
+    """A truncated list only looks short.
+
+    The workspace limit was 100, and SE Demo has 166: the 66 that fell off held
+    40% of the account's rated VUs, attributed on screen to no workspace at all.
+    Locations were already asking for 1000 for the same reason.
+    """
+    c = FakeClient({})
+    c.workspaces(291446)
+    c.private_locations(account_id=291446)
+
+    paths = [p for _, p, _ in c.calls]
+    assert paths[0] == "/workspaces?accountId=291446&limit=1000"
+    assert "limit=1000" in paths[1]
+
+
 def test_update_private_location_omits_unset_fields():
     c = FakeClient({})
     c.update_private_location("h1", threads_per_engine=100)

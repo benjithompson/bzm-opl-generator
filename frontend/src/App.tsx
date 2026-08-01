@@ -6,7 +6,7 @@ import {
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, NoticeMsg, SearchSelect,
+  Button, Check, ErrorMsg, Field, inputCls, JsonArea, NoticeMsg,
   Section, SecretInput, SegmentedControl, SubSection, Switch, TextInput,
 } from "./components";
 // What a download is about to do to the agent's credential. The branch a bundle's
@@ -62,6 +62,8 @@ import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
+// The key, the account and the workspace: session-wide, so all three live in
+// the drawer rather than inside step 1. See AccountMenu.
 import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 
@@ -396,9 +398,8 @@ export default function App() {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
     setLocations([]); setHarborId(null); setLocErr(null);
     if (workspaceId == null) return;
-    // THROWAWAY: `locBusy` only so a prototype can say "reading" rather than
-    // show an empty list that means nothing yet. An empty workspace and an
-    // unfetched one look identical without it.
+    // An empty workspace and an unfetched one look identical, so the list says
+    // which it is rather than showing nothing and meaning two things.
     setLocBusy(true);
     api.locations(workspaceId).then((ls) => {
       setLocations(ls);
@@ -411,9 +412,9 @@ export default function App() {
       .finally(() => setLocBusy(false));
   }, [workspaceId]);
 
-  // THROWAWAY: what is currently being fetched, for the prototypes' spinners.
-  // Two flags rather than one: they are two requests, and a location list that
-  // has arrived while its facts are still coming is a real state to show.
+  // What is currently being fetched. Two flags rather than one: they are two
+  // requests, and a location list that has arrived while its facts are still
+  // coming is a real state to show.
   const [locBusy, setLocBusy] = useState(false);
   const [factsBusy, setFactsBusy] = useState(false);
 
@@ -1072,36 +1073,6 @@ export default function App() {
   const filteredLocs = locations.filter((l) =>
     l.name.toLowerCase().includes(locFilter.toLowerCase()));
 
-  // THROWAWAY: the two bits of step 1 the K/L/M prototypes reuse rather than
-  // restate -- neither is what they are changing, and a second copy of the
-  // create-location form would be a second place to fix.
-  const accountWorkspaceNode = (
-    <div className="grid grid-cols-2 gap-2">
-      <Field label="Account">
-        <SearchSelect
-          options={accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
-          value={accountId} disabled={!who}
-          onChange={(v) => setAccountId(Number(v))} />
-      </Field>
-      <Field label="Workspace">
-        <SearchSelect
-          options={workspaces.map((w) => ({ value: w.id, label: w.name }))}
-          value={workspaceId} disabled={!who || workspaces.length === 0}
-          onChange={(v) => setWorkspaceId(Number(v))} />
-      </Field>
-    </div>
-  );
-  const createLocationNode = (
-    <>
-      <ErrorMsg msg={locErr} />
-      <Button kind="ghost" disabled={!who}
-        onClick={() => { setLocErr(null); setShowCreateLoc(true); }}>
-        + New location
-      </Button>
-    </>
-  );
-  // Lifted out of the Private location panel so both it and a prototype panel
-  // can show the same form -- it is the shipped one, moved, not a copy.
   /** Put a location that has just been changed back into the list.
    *
    *  In place rather than by re-fetching the workspace: the answer came from a
@@ -1252,10 +1223,8 @@ export default function App() {
               setManual={setManual} sourceOpen={sourceOpen}
               setSourceOpen={setSourceOpen}
               who={who}
-              accounts={accounts} accountId={accountId} setAccountId={setAccountId}
-              accountsBusy={accountsBusy} workspacesBusy={workspacesBusy}
-              workspaces={workspaces} workspaceId={workspaceId}
-              setWorkspaceId={setWorkspaceId}
+              accountName={accounts.find((a) => a.id === accountId)?.name ?? null}
+              workspaceName={workspaces.find((w) => w.id === workspaceId)?.name ?? null}
               locations={locations} filteredLocs={filteredLocs}
               locFilter={locFilter} setLocFilter={setLocFilter}
               harborId={harborId} setHarborId={setHarborId} location={location}
@@ -1329,16 +1298,6 @@ export default function App() {
           <span className="text-xs text-slate-400 truncate">
             private-location Kubernetes / OpenShift manifests, from your real account
           </span>
-          <span className="ml-auto shrink-0">
-            <AccountMenu
-              who={who} disconnect={disconnect}
-              keyPath={keyPath} setKeyPath={setKeyPath}
-              pasteId={pasteId} setPasteId={setPasteId}
-              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
-              saveKey={saveKey} setSaveKey={setSaveKey}
-              connect={connect} connErr={connErr} setConnErr={setConnErr}
-              connecting={connecting} />
-          </span>
         </div>
       </header>
 
@@ -1346,7 +1305,24 @@ export default function App() {
           the preview slides over the top of it from the right. */}
       <div className="flex grow min-h-0">
         <NavDrawer view={view} setView={setView} connected={!!who}
-          open={navOpen} setOpen={setNavOpen} />
+          open={navOpen} setOpen={setNavOpen}
+          /* Which key, which account it can see, which workspace inside it:
+             one control, because they are one answer narrowed three times, and
+             all three are the session's rather than any step's. */
+          footer={
+            <AccountMenu
+              who={who} disconnect={disconnect}
+              accounts={accounts} accountId={accountId}
+              setAccountId={setAccountId} accountsBusy={accountsBusy}
+              workspaces={workspaces} workspaceId={workspaceId}
+              setWorkspaceId={setWorkspaceId} workspacesBusy={workspacesBusy}
+              keyPath={keyPath} setKeyPath={setKeyPath}
+              pasteId={pasteId} setPasteId={setPasteId}
+              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
+              saveKey={saveKey} setSaveKey={setSaveKey}
+              connect={connect} connErr={connErr} setConnErr={setConnErr}
+              connecting={connecting} collapsed={!navOpen} />
+          } />
         <div className="grow min-w-0 overflow-y-auto">{body}</div>
         {/* Only beside the view that produces manifests. On the two planning
             views there is nothing for it to show, and a rail promising a

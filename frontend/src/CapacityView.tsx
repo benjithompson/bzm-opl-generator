@@ -19,7 +19,7 @@
 import { useMemo, useState } from "react";
 
 import { Capacity, CapLocation } from "./api";
-import { byWorkspace } from "./capacity";
+import { accountBands, byWorkspace } from "./capacity";
 import { inputCls } from "./components";
 
 const n = (x: number) => x.toLocaleString();
@@ -45,6 +45,21 @@ function Swatch({ i, shared }: { i: number; shared: boolean }) {
 export function CapacityView({ cap }: { cap: Capacity }) {
   const [filter, setFilter] = useState("");
   const spaces = useMemo(() => byWorkspace(cap, filter), [cap, filter]);
+  // The account's own bar: one segment per workspace, sized by what only that
+  // workspace can claim, plus one for everything claimable from more than one.
+  // They add up to the headline beside them -- see accountBands.
+  const bands = useMemo(() => accountBands(cap), [cap]);
+  // Colour by workspace name rather than by position in `bands`, so a
+  // workspace card below can wear the same swatch without either side
+  // recomputing the other's ordering.
+  const bandColour = useMemo(() => {
+    const m = new Map<string, string>();
+    bands.forEach((b, i) => {
+      if (!b.shared && !b.orphan) m.set(b.name, BAND[i % BAND.length]);
+    });
+    return m;
+  }, [bands]);
+  const q = filter.trim().toLowerCase();
   // Against the largest workspace *on the account*, not the largest match, so
   // filtering does not silently rescale every bar and make a small workspace
   // look like the whole account.
@@ -55,36 +70,75 @@ export function CapacityView({ cap }: { cap: Capacity }) {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-lg p-4
-                      flex items-center gap-4 flex-wrap">
-        <div>
-          <div className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
-            {n(cap.rated_vus)}
+      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div>
+            <div className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
+              {n(cap.rated_vus)}
+            </div>
+            <div className="text-[11px] text-slate-500 mt-0.5">account rated VUs</div>
           </div>
-          <div className="text-[11px] text-slate-500 mt-0.5">account rated VUs</div>
+          <div className="text-xs text-slate-500">
+            {/* Workspaces that hold a location. The account has far more, and
+                counting those said "100 workspaces" about the 54 that matter. */}
+            {cap.locations.length} locations · {holding} workspaces
+            {sharedCount > 0 && <> · <b className="text-amber-700">{sharedCount} shared</b></>}
+          </div>
+          <span className="grow" />
+          <div className="w-56 max-w-full">
+            <input className={inputCls} value={filter} type="search"
+              placeholder={`Filter ${holding} workspaces…`}
+              aria-label="Filter workspaces"
+              onChange={(e) => setFilter(e.target.value)} />
+            {/* The account total does not move with the filter: it is the
+                account's, and a headline that changed as you typed would read as
+                the sum of what is on screen. */}
+            {filter.trim() && (
+              <p className="text-[11px] text-slate-400 mt-1">
+                {spaces.length} of {holding} shown ·{" "}
+                {n(spaces.reduce((t, w) => t + w.total, 0))} rated VUs in view
+              </p>
+            )}
+          </div>
         </div>
-        <div className="text-xs text-slate-500">
-          {/* Workspaces that hold a location. The account has far more, and
-              counting those said "100 workspaces" about the 54 that matter. */}
-          {cap.locations.length} locations · {holding} workspaces
-          {sharedCount > 0 && <> · <b className="text-amber-700">{sharedCount} shared</b></>}
-        </div>
-        <span className="grow" />
-        <div className="w-56 max-w-full">
-          <input className={inputCls} value={filter} type="search"
-            placeholder={`Filter ${holding} workspaces…`}
-            aria-label="Filter workspaces"
-            onChange={(e) => setFilter(e.target.value)} />
-          {/* The account total does not move with the filter: it is the
-              account's, and a headline that changed as you typed would read as
-              the sum of what is on screen. */}
-          {filter.trim() && (
+
+        {/* The headline, drawn. Full width and always the full width, because
+            it is the whole account -- the workspace bars below are the ones
+            that are shorter than the page, and they are shorter *against* this
+            one. Each workspace card below carries the same swatch, which is
+            what makes this readable without a legend. */}
+        {bands.length > 0 && (
+          <div>
+            <div className="flex h-6 rounded overflow-hidden bg-slate-100">
+              {bands.map((b) => (
+                <div key={b.key}
+                  title={`${b.name} — ${n(b.vus)} rated VUs`
+                    + ` (${Math.round((b.vus / (cap.rated_vus || 1)) * 100)}%)`}
+                  className={(b.shared || b.orphan ? "bg-slate-300"
+                    : bandColour.get(b.name)) + " h-full transition-opacity "
+                    // Filtering dims rather than removes: the bar is the
+                    // account and stays the account, and what a search matches
+                    // is worth pointing at inside it.
+                    + (q && !b.shared && !b.orphan
+                      && !b.name.toLowerCase().includes(q) ? "opacity-25" : "")}
+                  style={{
+                    width: `${(b.vus / (cap.rated_vus || 1)) * 100}%`,
+                    backgroundImage: b.shared ? STRIPE : undefined,
+                  }} />
+              ))}
+            </div>
             <p className="text-[11px] text-slate-400 mt-1">
-              {spaces.length} of {holding} shown ·{" "}
-              {n(spaces.reduce((t, w) => t + w.total, 0))} rated VUs in view
+              One segment per workspace, sized by what only it can claim.
+              {bands.some((b) => b.shared) && (
+                <> The striped segment is capacity two or more workspaces can
+                  claim, counted once here and shown in each of them below.</>
+              )}
+              {bands.some((b) => b.orphan) && (
+                <> The grey segment is in no workspace this listing names.</>
+              )}
             </p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
       {spaces.length === 0 && (
@@ -97,6 +151,14 @@ export function CapacityView({ cap }: { cap: Capacity }) {
           <div key={w.id} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
             <div className="px-3 pt-2.5 pb-2">
               <div className="flex items-baseline gap-2">
+                {/* The colour this workspace has in the account bar above. A
+                    workspace whose capacity is *all* shared has no segment up
+                    there and so has no swatch here either, rather than being
+                    given a colour that appears nowhere. */}
+                {bandColour.get(w.name) && (
+                  <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 "
+                    + "self-center " + bandColour.get(w.name)} />
+                )}
                 <span className="text-sm font-semibold text-slate-800">{w.name}</span>
                 {w.shared.length > 0 && (
                   <span className="text-[10px] font-bold uppercase tracking-wide

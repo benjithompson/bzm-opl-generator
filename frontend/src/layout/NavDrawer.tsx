@@ -52,6 +52,11 @@ export function NavDrawer(props: {
   /** Without a key there is no account to roll up, so that view is out of
    *  reach rather than empty -- and it says which button fixes that. */
   connected: boolean;
+  /** The key and the account, at the foot of the drawer. Session-wide, like the
+   *  views above them and unlike anything inside a step -- and down here rather
+   *  than in the header because that is where an application this shape keeps
+   *  the identity it is working under. */
+  footer?: ReactNode;
 }) {
   const { open } = props;
   return (
@@ -98,7 +103,7 @@ export function NavDrawer(props: {
               disabled={off}
               // The label is the tooltip while collapsed, so the rail is
               // usable without opening it first.
-              title={off ? "connect an account first — the Account button, top right"
+              title={off ? "connect an account first — the key at the foot of this menu"
                 : open ? item.hint : item.label}
               className={"w-full flex items-center gap-2.5 rounded-md text-left "
                 + "transition-colors h-9 "
@@ -116,9 +121,18 @@ export function NavDrawer(props: {
       </div>
 
       {open && (
-        <p className="mt-auto p-3 text-[11px] text-slate-400 leading-snug">
+        <p className="mt-auto px-3 pt-3 pb-2 text-[11px] text-slate-400 leading-snug">
           {NAV.find((x) => x.id === props.view)?.hint}
         </p>
+      )}
+
+      {/* Pinned to the bottom whether or not the hint above it is there, so the
+          key does not move when the drawer collapses. */}
+      {props.footer && (
+        <div className={"mt-auto border-t border-slate-200 space-y-1.5 "
+          + (open ? "p-2" : "p-1.5")}>
+          {props.footer}
+        </div>
       )}
     </nav>
   );

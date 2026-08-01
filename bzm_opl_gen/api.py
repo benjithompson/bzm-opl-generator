@@ -137,7 +137,17 @@ class BzmClient:
         return self.get("/accounts?limit=100")
 
     def workspaces(self, account_id):
-        return self.get(f"/workspaces?accountId={account_id}&limit=100")
+        """Every workspace in the account, not the first page of them.
+
+        The limit was 100, which is a real account's *middle*: SE Demo has 166
+        and the missing 66 held 105,270 rated VUs -- 40% of the account. It
+        cost nothing visible for a long time because a truncated list only
+        looks short, and the workspace you wanted was usually in it. What
+        showed it was the account-capacity bar, which draws segments that have
+        to add up to the account total: two fifths of the account turned up in
+        a segment for locations whose workspace nobody had listed.
+        """
+        return self.get(f"/workspaces?accountId={account_id}&limit=1000")
 
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")

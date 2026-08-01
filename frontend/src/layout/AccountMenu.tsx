@@ -1,23 +1,43 @@
-// The account, top right, where an application keeps it.
+// Who this session is, at the foot of the nav drawer: the key, the account it
+// can see, and the workspace inside that account -- one control, because they
+// are one answer narrowed three times and each only means anything given the
+// one before it.
 //
-// Connecting used to be the first section of step 1, which put "which API key
-// am I using" inside "which agent am I generating for" -- two questions of
-// different lifetimes. A key lasts the session and is the same for every view;
-// an agent is chosen per bundle. So the key lives in the chrome, and step 1
-// starts at the location.
+// Connecting used to be the first section of step 1, and the account and
+// workspace were fields in the Private location panel below it. That put "which
+// API key am I using" inside "which agent am I generating for" -- two questions
+// of different lifetimes -- and left a selection made in step 1 quietly
+// deciding what a different view showed, since the location list, the agent
+// under it and the whole Account capacity view all read the account. A key
+// lasts the session; an agent is chosen per bundle. So all three live in the
+// chrome, and step 1 starts at the location.
 //
-// The menu says the state; the form is a modal because connecting is a question
-// being asked rather than a panel to work in, and because it now has to be
-// reachable from three views rather than from one step.
+// The menu says the state and holds the two pickers; the form for a *new* key
+// is a modal, because connecting is a question being asked rather than a panel
+// to work in. The menu opens upward, since it is the last thing in the drawer,
+// and grows into the workspace once there is an account to have one -- an empty
+// workspace picker above an unchosen account is a control for a question that
+// has not been asked.
 import { useEffect, useRef, useState } from "react";
 
+import { Account, Workspace } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, Modal, Spinner, TextInput,
+  Button, Check, ErrorMsg, Field, inputCls, Modal, SearchSelect, Spinner,
+  TextInput,
 } from "../components";
 
 export interface ConnectProps {
   who: { email: string; keyId: string } | null;
   disconnect: () => void;
+  // -- what the key can see. Owned by App, like everything else here.
+  accounts: Account[];
+  accountId: number | null;
+  setAccountId: (id: number | null) => void;
+  accountsBusy: boolean;
+  workspaces: Workspace[];
+  workspaceId: number | null;
+  setWorkspaceId: (id: number | null) => void;
+  workspacesBusy: boolean;
   keyPath: string;
   setKeyPath: (v: string) => void;
   pasteId: string;
@@ -30,6 +50,10 @@ export interface ConnectProps {
   connErr: string | null;
   setConnErr: (v: string | null) => void;
   connecting: boolean;
+  /** The drawer is a rail: the status dot alone, with the email as its
+   *  tooltip. Whether there is a key is the one thing that still has to be
+   *  legible at 56 pixels. */
+  collapsed?: boolean;
 }
 
 export function AccountMenu(p: ConnectProps) {
@@ -54,33 +78,60 @@ export function AccountMenu(p: ConnectProps) {
   useEffect(() => { if (connected) setForm(false); }, [connected]);
 
   const pasted = !!(p.pasteId && p.pasteSecret);
+  const account = p.accounts.find((a) => a.id === p.accountId) ?? null;
+  const workspace = p.workspaces.find((w) => w.id === p.workspaceId) ?? null;
+  // The workspace question only exists once an account has been chosen: without
+  // one there is no list to choose from, and a disabled picker sitting there
+  // reads as a step that has been skipped rather than one not yet reached.
+  const askWorkspace = connected && p.accountId != null;
 
   return (
     <div ref={root} className="relative">
       <button onClick={() => setMenu(!menu)} aria-expanded={menu}
-        className={"flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs "
+        title={connected ? `${p.who!.email} — the key everything is read with`
+          : "not connected — no account is being read"}
+        className={"flex items-center gap-2 rounded-md border text-xs w-full "
           + "transition-colors "
+          + (p.collapsed ? "justify-center px-0 py-2 " : "px-2.5 py-1.5 ")
           + (connected
             ? "border-slate-300 text-slate-700 hover:bg-slate-100"
             : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100")}>
-        <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
+        <span className={"rounded-full shrink-0 "
+          + (p.collapsed ? "h-2.5 w-2.5 " : "h-1.5 w-1.5 ")
           + (connected ? "bg-emerald-500" : "bg-amber-400")} />
-        <span className="font-medium max-w-[16rem] truncate">
-          {connected ? p.who!.email : "Not connected"}
-        </span>
-        <svg viewBox="0 0 20 20" className="w-3.5 h-3.5" fill="none"
-          stroke="currentColor" strokeWidth={1.75}
-          strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 8l5 5 5-5" />
-        </svg>
+        {!p.collapsed && (
+          <>
+            {/* The email, and under it where in the account the page is
+                pointed. Two lines because they answer two questions and the
+                second one changes far more often than the first. */}
+            <span className="grow min-w-0 text-left">
+              <span className="font-medium truncate block">
+                {connected ? p.who!.email : "Not connected"}
+              </span>
+              {connected && (
+                <span className={"block truncate text-[10px] "
+                  + (account ? "text-slate-400" : "text-amber-700")}>
+                  {account
+                    ? account.name + (workspace ? ` · ${workspace.name}` : "")
+                    : "no account chosen"}
+                </span>
+              )}
+            </span>
+            <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 shrink-0" fill="none"
+              stroke="currentColor" strokeWidth={1.75}
+              strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12l5-5 5 5" />
+            </svg>
+          </>
+        )}
       </button>
 
       {menu && (
-        <div className="absolute right-0 mt-1 w-72 z-50 bg-white border border-slate-200
-                        rounded-lg shadow-lg p-1.5">
+        <div className="absolute bottom-full left-0 mb-1 w-80 z-50 bg-white
+                        border border-slate-200 rounded-lg shadow-lg p-1.5">
           <div className="px-2 py-1.5">
             <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
-              BlazeMeter account
+              Connected as
             </p>
             {connected ? (
               <>
@@ -96,6 +147,47 @@ export function AccountMenu(p: ConnectProps) {
               </p>
             )}
           </div>
+
+          {/* Inside the key, because they are what the key can see. Both are
+              the whole session's: the location list, the agent under it and
+              Account capacity all read them. */}
+          {connected && (
+            <div className="border-t border-slate-100 mt-1 pt-2 px-2 pb-1 space-y-2">
+              <Field label="Account">
+                <SearchSelect
+                  options={p.accounts.map(
+                    (a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+                  value={p.accountId} busy={p.accountsBusy}
+                  onChange={(v) => p.setAccountId(Number(v))}
+                  onClear={() => p.setAccountId(null)} />
+              </Field>
+              {/* Grows in on the same 0fr -> 1fr grid the rest of the page
+                  expands on, so choosing an account opens the next question
+                  rather than making the menu jump to a new height. */}
+              <div className={"grid transition-[grid-template-rows] duration-200 "
+                + "ease-out " + (askWorkspace ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                <div className="overflow-hidden">
+                  <Field label="Workspace"
+                    hint="the locations in step 1 are this workspace's">
+                    <SearchSelect
+                      options={p.workspaces.map(
+                        (w) => ({ value: w.id, label: w.name }))}
+                      value={p.workspaceId} busy={p.workspacesBusy}
+                      disabled={!p.workspacesBusy && p.workspaces.length === 0}
+                      onChange={(v) => p.setWorkspaceId(Number(v))}
+                      onClear={() => p.setWorkspaceId(null)} />
+                  </Field>
+                </div>
+              </div>
+              {!account && (
+                <p className="text-[11px] text-amber-700">
+                  Choose an account: without one there are no locations to pick
+                  from and nothing for Account capacity to add up.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="border-t border-slate-100 mt-1 pt-1 space-y-0.5">
             <MenuItem onClick={() => { setMenu(false); setForm(true); }}>
               {connected ? "Use a different key…" : "Connect…"}
