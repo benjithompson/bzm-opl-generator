@@ -15,6 +15,13 @@ API_BASE = "https://a.blazemeter.com/api/v4"
 # test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
 DEFAULT_THREADS_PER_ENGINE = 500
 
+# Hosts only an engine talks to: results and artifact upload. Crane itself uses
+# a.blazemeter.com. A fact about the product, so it lives here with the API host
+# rather than in the live-test rig, which is where it was first needed -- the
+# planner has to name the egress a cluster will need and cannot import the rig
+# to find out, and doctor probes the same three hosts.
+ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+
 
 class BzmApiError(RuntimeError):
     pass
@@ -137,7 +144,12 @@ class BzmClient:
         return self.get("/accounts?limit=100")
 
     def workspaces(self, account_id):
-        """Every workspace in the account, not the first page of them.
+        """The account's workspaces, asked for in one big page.
+
+        Still a page, and the same failure returns above 1000 -- but the
+        endpoint honours `offset`, so the day an account has more this becomes
+        a loop rather than a bigger number. (`private-locations` cannot: it
+        ignores `offset`, which is why that one asks for 1000 and stops.)
 
         The limit was 100, which is a real account's *middle*: SE Demo has 166
         and the missing 66 held 105,270 rated VUs -- 40% of the account. It

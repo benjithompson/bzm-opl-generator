@@ -45,9 +45,10 @@ import { SuggestionList } from "./SuggestionList";
 // What the account can generate, by workspace.
 import { CapacityView } from "./CapacityView";
 // The capacity planner: a view of its own, not a step. See PlanPanel.
-import {
-  EMPTY_PLAN_INPUTS, PlanHandover, PlanInputs, PlanPanel,
-} from "./PlanPanel";
+import { PlanHandover, PlanPanel } from "./PlanPanel";
+// The planner's form shape and its empty value: plain data, so the session
+// snapshot and this page share one declaration of it.
+import { EMPTY_PLAN_INPUTS, PlanInputs } from "./usePlan";
 import { AgentPanel } from "./steps/AgentPanel";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";

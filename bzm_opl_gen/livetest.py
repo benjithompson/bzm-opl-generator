@@ -35,6 +35,10 @@ import subprocess
 import time
 
 from . import generate
+# Which hosts an engine uploads to is a fact about BlazeMeter, not about this
+# rig -- doctor probes them and the planner names them as required egress, and
+# neither should have to import the deploy rig to find out.
+from .api import ENGINE_UPLOAD_HOSTS
 
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
@@ -439,11 +443,9 @@ def wait_for_engine_pod(cli, namespace, timeout=420, poll=10):
     return seen        # spec is still checkable without an IP
 
 
-# Hosts only an engine talks to: results and artifact upload. Crane itself uses
-# a.blazemeter.com. Pod IPs cannot be used to tell them apart -- pod traffic is
-# SNAT'd to the node address before it reaches the proxy, so every flow in the
-# proxy log has the same source.
-ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+# ENGINE_UPLOAD_HOSTS (api.py) is how engine traffic is told apart here: pod IPs
+# cannot do it, because pod traffic is SNAT'd to the node address before it
+# reaches the proxy, so every flow in the proxy log has the same source.
 
 
 def engine_upload_marks():

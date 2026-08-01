@@ -12,11 +12,14 @@
 // of the figures is an assumption nobody here can check. So the pane answers
 // that first and offers Apply second, and Apply writes to the draft -- the
 // location is not touched until Save, which is the one control that writes.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { api, CapacityPlan, Location } from "../api";
-import { Button, ErrorMsg, Field, inputCls } from "../components";
+import { CapacityPlan, Location } from "../api";
+import { Button, ErrorMsg, Field, Figure, inputCls } from "../components";
 import { ENGINE_SIZES } from "../optionGroups";
+// How the ask is made -- debounce, states, and what a blank target means --
+// shared with the standalone planner, which used to hold a second copy.
+import { useCapacityPlan, useEngineRating } from "../usePlan";
 
 export interface SizingFill {
   slots: string;
@@ -45,9 +48,6 @@ export function LocationSizing(props: {
   onClose: () => void;
 }) {
   const [form, setForm] = useState(() => seed(props.location));
-  const [plan, setPlan] = useState<CapacityPlan | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => setForm(seed(props.location)), [props.location.id]);
 
@@ -58,35 +58,11 @@ export function LocationSizing(props: {
   // it will have as soon as the first agent is created.
   const agents = Math.max((props.location.ships ?? []).length, 1);
 
-  // What this engine size is rated for, asked as soon as the size changes
-  // rather than waiting for a plan: the suggestion is most use *before* the
-  // target is typed, and 500 is only right for the standard engine.
-  const [rated, setRated] = useState<number | null>(null);
-  useEffect(() => {
-    let live = true;
-    api.engineVus(size.cpu, size.mem)
-      .then((r) => { if (live) setRated(r.supported_vus); })
-      .catch(() => { if (live) setRated(null); });
-    return () => { live = false; };
-  }, [size.cpu, size.mem]);
-
-  // Debounced for the reason the standalone panel is: typing "5000" passes
-  // through 5, 50 and 500, and three answers nobody wanted arrive first.
-  const timer = useRef<number>();
-  useEffect(() => {
-    if (!form.vus.trim()) { setPlan(null); setErr(null); return; }
-    window.clearTimeout(timer.current);
-    setBusy(true);
-    timer.current = window.setTimeout(() => {
-      api.plan({ users: form.vus, vus_per_engine: form.vusPerEngine,
-                 engine_cpu: size.cpu, engine_mem: size.mem,
-                 agents: String(agents) })
-        .then((p) => { setPlan(p); setErr(null); })
-        .catch((e: Error) => { setErr(e.message); setPlan(null); })
-        .finally(() => setBusy(false));
-    }, 250);
-    return () => window.clearTimeout(timer.current);
-  }, [form.vus, form.vusPerEngine, size.cpu, size.mem, agents]);
+  const rated = useEngineRating(size.cpu, size.mem);
+  const { plan, err, busy } = useCapacityPlan({
+    users: form.vus, vusPerEngine: form.vusPerEngine,
+    engineCpu: size.cpu, engineMem: size.mem, agents: String(agents),
+  });
 
   const apply = () => {
     if (!plan) return;
@@ -222,15 +198,5 @@ function Guidance({ plan }: { plan: CapacityPlan }) {
         <p key={w} className="text-[11px] text-slate-500">{w}</p>
       ))}
     </>
-  );
-}
-
-function Figure({ n, unit, sub }: { n: number | string; unit: string; sub: string }) {
-  return (
-    <div className="border border-slate-200 rounded-md px-2.5 py-2">
-      <div className="text-lg font-bold text-slate-900 leading-none">{n}</div>
-      <div className="text-[11px] font-medium text-slate-600 mt-0.5">{unit}</div>
-      <div className="text-[10px] text-slate-400">{sub}</div>
-    </div>
   );
 }

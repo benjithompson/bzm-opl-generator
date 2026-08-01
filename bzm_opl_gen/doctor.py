@@ -29,7 +29,8 @@ from . import livetest
 from . import plan
 # Aliased because every check takes a `facts` argument, which takes the name.
 from . import facts as facts_mod
-from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
+from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
+                  ENGINE_UPLOAD_HOSTS)
 from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
                        CRANE_MEM_REQUEST, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
@@ -52,7 +53,7 @@ API_PROBE_URL = f"{API_BASE}/web/version"
 # Engines upload results and artifacts to hosts crane itself never contacts, so
 # an egress rule shaped around crane alone passes here and still fails a run.
 # Same hosts livetest looks for in the proxy log -- one list, not two.
-ENGINE_PROBE_URLS = tuple(f"https://{h}/" for h in livetest.ENGINE_UPLOAD_HOSTS)
+ENGINE_PROBE_URLS = tuple(f"https://{h}/" for h in ENGINE_UPLOAD_HOSTS)
 CURL_IMAGE = "curlimages/curl:8.11.1"
 
 

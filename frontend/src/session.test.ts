@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clear, load, save, strip } from "./session";
+import { clear, load, save, strip, VERSION } from "./session";
 
 // A memory stand-in for sessionStorage: these tests are about what is written,
 // not about a browser, and the module deliberately guards every call so that a
@@ -26,7 +26,7 @@ const BASE = {
   view: "flow" as const,
   plan: {
     users: "5000", vusPerEngine: "", engineCpu: "2", engineMem: "8Gi",
-    enginesPerNode: "",
+    enginesPerNode: "", agents: "",
   },
 };
 
@@ -93,9 +93,11 @@ describe("what is never remembered", () => {
   it("does not put one back if something else wrote one", () => {
     // Written at the *current* version on purpose: at an old one this would
     // pass because the whole snapshot was dropped, which is not the property
-    // being asserted.
+    // being asserted. Hence VERSION rather than a literal — as a literal it
+    // silently became that weaker test the first time the version moved.
     sessionStorage.setItem("bzm-opl-gen.session", JSON.stringify(
-      { ...BASE, v: 2, options: { namespace: "ns1", auth_token: "LEAKED" } }));
+      { ...BASE, v: VERSION,
+        options: { namespace: "ns1", auth_token: "LEAKED" } }));
     expect(load()?.harborId).toBe("h1");
     expect(load()?.options.auth_token).toBeUndefined();
   });

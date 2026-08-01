@@ -1028,11 +1028,12 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     suggestions alongside its verdicts.
     """
     try:
+        # Blanks are forwarded as they arrive: what "not given" defaults to is
+        # plan's, and restating it here was a second copy that could drift.
         p = plan.capacity_plan(
             users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
-            engines_per_node=1 if engines_per_node is None else engines_per_node,
-            agents=1 if agents is None else agents)
+            engines_per_node=engines_per_node, agents=agents)
     except ValueError as e:
         # Every one of these is the caller's number rather than a failure here,
         # and each names the field it is about. 400, not 500.

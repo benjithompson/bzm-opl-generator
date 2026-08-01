@@ -32,7 +32,8 @@ by a factor of three, so every returned plan carries
 
 import math
 
-from .api import API_BASE, DEFAULT_THREADS_PER_ENGINE
+from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
+                  ENGINE_UPLOAD_HOSTS)
 from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
                        CRANE_MEM_REQUEST, CRANE_EPHEMERAL_STORAGE,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
@@ -40,7 +41,6 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
                        ENGINE_DISK_GB, ENGINE_TMP_GB, GKE_MIN_MAX_PODS,
                        NODE_OVERHEAD_CPU, NODE_OVERHEAD_MEM, PUBLIC_REGISTRY,
                        TYPICAL_SYSTEM_PODS, engine_size)
-from .livetest import ENGINE_UPLOAD_HOSTS
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 # The BlazeMeter API host the agent registers against. Derived from
@@ -76,7 +76,7 @@ def supported_vus(cpu_millis, mem_bytes):
 
 
 def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=1, agents=1):
+                  engine_mem=None, engines_per_node=None, agents=None):
     """What `users` concurrent users needs, as numbers.
 
     **`slots` is per agent, not per location**, and this used to have it wrong.
@@ -102,9 +102,15 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     not parse is the customer's typo, and answering it with a default would size
     a cluster from a number they did not mean.
     """
+    # None means "not given", and the default for both is one -- one engine to
+    # a node so they do not contend, one agent because a location can be run by
+    # one. Defaulted here and nowhere else: every caller passes a form field or
+    # a flag that may be blank, and each of them defaulting for itself is how
+    # two callers come to disagree about what blank means.
     users = _positive(users, "users")
-    per_node = _positive(engines_per_node, "engines_per_node")
-    agents = _positive(agents, "agents")
+    per_node = _positive(1 if engines_per_node is None else engines_per_node,
+                         "engines_per_node")
+    agents = _positive(1 if agents is None else agents, "agents")
 
     # Reuse generate's own parse-and-default so an engine size means exactly
     # what it will mean in the bundle, error message included. Before the
@@ -383,7 +389,7 @@ def plan_document(plan):
     return "\n".join(lines)
 
 
-def eng_ratio(p):
+def _size_vs_baseline(p):
     """This engine against the baseline one, as words rather than a decimal.
 
     "half" and "twice" are what a reader checks the arithmetic with; "0.5x"
@@ -427,7 +433,7 @@ def _assumption_section(p):
            if p["vus_per_engine"] != BASELINE_VUS
            else " It is BlazeMeter's own figure for that size."),
         (f"{ENGINE_DEFAULT_CPU} CPU / {ENGINE_DEFAULT_MEM} engine, and this one "
-         f"is {eng_ratio(p)}."
+         f"is {_size_vs_baseline(p)}."
          if p["vus_per_engine"] != BASELINE_VUS else ""),
         f"How many users one engine really",
         "carries depends on what the script does between requests — a chatty API "
@@ -471,9 +477,14 @@ def _blazemeter_section(p):
         "",
         "| setting | value | why |",
         "|---|---|---|",
-        f"| Concurrent engines (`slots`) | `{loc['slots']}` | how many engines may "
-        f"run at once — below this the test cannot reach {p['users']:,} virtual "
-        f"users |",
+        # Named "Engines per agent" because that is what BlazeMeter's own UI
+        # calls it and what it means: the row used to read "Concurrent engines
+        # ... how many engines may run at once", which is the location's total
+        # only when there is one agent -- and this plan divides by agents.
+        f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
+        f"may run at once, so this location's total is "
+        f"{p['agents']} x {loc['slots']} = {p['agents'] * loc['slots']} engines "
+        f"— below that the test cannot reach {p['users']:,} virtual users |",
         f"| Virtual users per engine (`threadsPerEngine`) | "
         f"`{loc['threads_per_engine']}` | unset, every test start fails with 403 "
         f"*Not enough available resources* |",

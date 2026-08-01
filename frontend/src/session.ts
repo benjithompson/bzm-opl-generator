@@ -15,11 +15,20 @@
 // Plain data in, data out: no React here, which is what makes session.test.ts
 // possible without a DOM.
 import { Options } from "./api";
+// The planner's form, as the planner declares it. A second copy of the
+// shape here is a field that gets added to one and not the other.
+import type { PlanInputs } from "./usePlan";
 
 /** Bumped when the shape changes. A snapshot from an older build is dropped
  *  rather than half-read: the fields are ids and options that other code
- *  believes, and a partially-understood one is worse than starting over. */
-const VERSION = 2;
+ *  believes, and a partially-understood one is worse than starting over.
+ *
+ *  Exported for the test that forges a snapshot at the *current* version --
+ *  written against a literal, it started passing for the wrong reason the
+ *  first time this was bumped. */
+// 3: the planner grew an `agents` field. Half-reading a v2 snapshot would
+// leave that input undefined, which React renders as an uncontrolled field.
+export const VERSION = 3;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -33,27 +42,16 @@ export interface Session {
   manual: { harbor_id: string; ship_id: string };
   options: Options;
   step: number;
-  /** Which of the two views is open. The planner is not a step, so the step
-   *  number cannot say -- and somebody who refreshed while sizing a cluster
-   *  came back to a connect form asking for the account they have not got. */
-  /** PROTOTYPE: "capacity" is the throwaway account view. */
+  /** Which of the three views is open. The planner and the account rollup are
+   *  not steps, so the step number cannot say -- and somebody who refreshed
+   *  while sizing a cluster came back to a connect form asking for the account
+   *  they have not got. */
   view: "flow" | "plan" | "capacity";
   /** What was typed into the planner. Kept for the same reason the option
    *  values are: they were typed, and nothing else can recover them. */
-  plan: PlanSnapshot;
+  plan: PlanInputs;
 }
 
-/** The planner's fields, as strings, exactly as they were typed. Numbers are
- *  not parsed on the way in or out -- a half-typed "50" is a legitimate state
- *  of the form, and coercing it here would tidy it into a plan nobody asked
- *  for on the way back. */
-export interface PlanSnapshot {
-  users: string;
-  vusPerEngine: string;
-  engineCpu: string;
-  engineMem: string;
-  enginesPerNode: string;
-}
 
 /** The options minus anything that must not be written down. Exported because
  *  it is the whole safety argument: one function, one test, one place to look

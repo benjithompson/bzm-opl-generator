@@ -232,7 +232,14 @@ export const api = {
   /** Change a location's concurrency settings. A partial update: send only the
    *  fields being changed. The answer says what the account holds afterwards,
    *  which is not necessarily what was sent -- see LocationUpdate. */
-  updateLocation: (body: { harbor_id: string } & Record<string, string>) =>
+  /* Keyed on LocationSettings rather than Record<string, string>: the four
+     names are a closed set on the server too (core.LOCATION_SETTINGS, so a
+     caller that meant to change one cannot replace something else), and an
+     open record here let a typo through to a 400 that named a field nobody
+     had heard of. Values stay strings — the form's blanks are what "leave
+     this one alone" means, and parsing them here would lose that. */
+  updateLocation: (body: { harbor_id: string }
+    & Partial<Record<keyof LocationSettings, string>>) =>
     req<LocationUpdate>("POST", "/api/locations/settings", body),
   /** Turn a feature on for a location. Additive and idempotent server-side --
    *  see core.add_func_id, which reads the location's own list first. */

@@ -141,6 +141,35 @@ anything that breaks.
 
 ### Fixed
 
+- **The account listing was truncated at 100 workspaces, and two fifths of a
+  real account went missing with it.** `/workspaces` was asked for the first
+  100; BlazeMeter SE Demo has 166, and the 66 that fell off held 105,270 rated
+  virtual users across 52 locations — including the account's largest workspace,
+  which had no card on the Account capacity page at all. Locations were already
+  asking for 1,000; workspaces do now.
+
+- **Plan capacity can be told how many agents there will be.** A location's
+  concurrency is agents x engines per agent, and the standalone planner had no
+  field for the first half — so it always answered for one agent and told you to
+  set `slots` to the whole run, which on a four-agent location is four times the
+  engines. The pane inside an existing location already read the count off the
+  location; this is the same arithmetic for a location that does not exist yet.
+
+- **The planner's "virtual users per engine" suggestion follows the engine size
+  before a target is typed.** It was read off the last plan, so choosing Large
+  and reading the field showed BlazeMeter's 500 — the standard engine's figure —
+  next to an engine rated for 1,000. It now asks the server what the chosen size
+  is rated for, which is what the plan will assume.
+
+- **A location with no rating is counted as unknown rather than as zero.** The
+  Account capacity header says how many locations have no engines-per-agent or
+  no virtual-users-per-engine set. The number was already served and never
+  shown, so the page quietly rounded an unanswered question down to nothing.
+
+- **The generated request document called `slots` "concurrent engines".** It is
+  engines per *agent* — BlazeMeter's own label — and the row now says so, with
+  the multiplication spelled out (`4 x 3 = 12 engines`).
+
 - **The web UI stops re-reading the account on every page load.** Accounts,
   workspaces, locations and an agent's facts are held for 60 seconds by the
   server, which turns a reload from four BlazeMeter round trips into one local

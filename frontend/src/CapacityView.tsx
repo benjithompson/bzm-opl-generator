@@ -83,6 +83,17 @@ export function CapacityView({ cap }: { cap: Capacity }) {
                 counting those said "100 workspaces" about the 54 that matter. */}
             {cap.locations.length} locations · {holding} workspaces
             {sharedCount > 0 && <> · <b className="text-amber-700">{sharedCount} shared</b></>}
+            {/* A location with no engines-per-agent or no virtual users per
+                engine has no rating to state, and core sends `null` rather
+                than 0 for exactly that reason -- 0 would read as "no
+                capacity" when the truth is "nobody has said". The bars have to
+                add it as nothing, so the count is said here instead: without
+                it the page silently rounds an unanswered question down. */}
+            {cap.unrated > 0 && (
+              <> · <span title="no engines per agent or no virtual users per engine set, so there is no rating to state">
+                {cap.unrated} unrated
+              </span></>
+            )}
           </div>
           <span className="grow" />
           <div className="w-56 max-w-full">

@@ -11,24 +11,18 @@
 // them, and the one thing that flows the other way -- `onUse`, which fills in
 // the location and bundle fields the plan implies -- is a single call handed
 // down, so App keeps owning every piece of state the generator uses.
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
-import { api, CapacityPlan } from "./api";
-import { Button, ErrorMsg, Field, inputCls, TextInput } from "./components";
+import { CapacityPlan } from "./api";
+import {
+  Button, ErrorMsg, Field, Figure, inputCls, TextInput,
+} from "./components";
 import { ENGINE_SIZES } from "./optionGroups";
-
-export interface PlanInputs {
-  users: string;
-  vusPerEngine: string;
-  engineCpu: string;
-  engineMem: string;
-  enginesPerNode: string;
-}
-
-export const EMPTY_PLAN_INPUTS: PlanInputs = {
-  users: "", vusPerEngine: "", engineCpu: "", engineMem: "",
-  enginesPerNode: "",
-};
+// The ask itself -- debounce, states, what a blank target means -- shared with
+// the location's own Calculate pane rather than restated here.
+import {
+  EMPTY_PLAN_INPUTS, PlanInputs, useCapacityPlan, useEngineRating,
+} from "./usePlan";
 
 /** The plan as the generator's own vocabulary: what the location has to
  *  advertise, and what the bundle has to ask for. Named here because this is
@@ -52,39 +46,30 @@ export function PlanPanel(props: {
   onUse: (h: PlanHandover) => void;
 }) {
   const { inputs, setInputs } = props;
-  const [plan, setPlan] = useState<CapacityPlan | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [showDoc, setShowDoc] = useState(false);
   const [copied, setCopied] = useState(false);
+  // The clipboard's own failure, which is not the plan's: the hook owns
+  // whether the plan could be worked out, and a browser refusing the
+  // clipboard says nothing about that.
+  const [copyErr, setCopyErr] = useState<string | null>(null);
 
   const set = (k: keyof PlanInputs, v: string) => setInputs({ ...inputs, [k]: v });
 
-  // Debounced, because every keystroke in a number field is a plan: typing
-  // "5000" passes through 5, 50 and 500, and three answers nobody wanted arrive
-  // before the one they did. The blank target is not an error -- it is the
-  // state the panel opens in -- so it clears rather than refusing.
-  const timer = useRef<number>();
-  useEffect(() => {
-    if (!inputs.users.trim()) { setPlan(null); setErr(null); return; }
-    window.clearTimeout(timer.current);
-    setBusy(true);
-    timer.current = window.setTimeout(() => {
-      api.plan({
-        users: inputs.users, vus_per_engine: inputs.vusPerEngine,
-        engine_cpu: inputs.engineCpu, engine_mem: inputs.engineMem,
-        engines_per_node: inputs.enginesPerNode,
-      })
-        .then((p) => { setPlan(p); setErr(null); })
-        .catch((e: Error) => { setErr(e.message); setPlan(null); })
-        .finally(() => setBusy(false));
-    }, 250);
-    return () => window.clearTimeout(timer.current);
-  }, [inputs]);
+  const { plan, err, busy } = useCapacityPlan({
+    users: inputs.users, vusPerEngine: inputs.vusPerEngine,
+    engineCpu: inputs.engineCpu, engineMem: inputs.engineMem,
+    enginesPerNode: inputs.enginesPerNode, agents: inputs.agents,
+  });
 
   const preset = ENGINE_SIZES.find(
     (s) => s.cpu === inputs.engineCpu && s.mem === inputs.engineMem)?.id
     ?? (inputs.engineCpu || inputs.engineMem ? "custom" : "standard");
+  // What the chosen size is rated for, whether or not a target has been typed.
+  // This used to come off the plan, so before the first target it showed 500 --
+  // BlazeMeter's figure for the standard engine -- beside a Large one.
+  const size = ENGINE_SIZES.find((s) => s.id === preset);
+  const rated = useEngineRating(inputs.engineCpu || size?.cpu,
+                                inputs.engineMem || size?.mem);
 
   const download = () => {
     if (!plan) return;
@@ -104,7 +89,7 @@ export function PlanPanel(props: {
     navigator.clipboard.writeText(plan.document).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
-    }).catch(() => setErr("could not write to the clipboard"));
+    }).catch(() => setCopyErr("could not write to the clipboard"));
   };
 
   return (
@@ -131,11 +116,14 @@ export function PlanPanel(props: {
           {/* The placeholder follows the engine size, because so does the
               figure the plan assumes when this is blank. Showing a fixed 500
               beside a Large engine said the plan would use 500 when it uses
-              1,000. */}
+              1,000 -- and it did exactly that until a target was typed, since
+              the figure came off the plan. It comes off the size now. */}
           <Field label="Virtual users per engine"
-            hint="blank uses what an engine of this size is rated for">
+            hint={rated
+              ? `blank uses ${rated.toLocaleString()}, what this engine size is rated for`
+              : "blank uses what an engine of this size is rated for"}>
             <input type="number" min={1} className={inputCls}
-              placeholder={String(plan?.engine.supported_vus ?? 500)}
+              placeholder={String(rated ?? plan?.engine.supported_vus ?? 500)}
               value={inputs.vusPerEngine}
               onChange={(e) => set("vusPerEngine", e.target.value)} />
           </Field>
@@ -159,6 +147,16 @@ export function PlanPanel(props: {
               value={inputs.enginesPerNode}
               onChange={(e) => set("enginesPerNode", e.target.value)} />
           </Field>
+          {/* A location's concurrency is agents x engines per agent, so this
+              divides the run rather than adding to it: two agents each run half
+              the engines, in a cluster each. Blank is one, which is the answer
+              for most people asking this question for the first time. */}
+          <Field label="Agents"
+            hint="blank means one — each runs its share, in a cluster of its own">
+            <input type="number" min={1} className={inputCls} placeholder="1"
+              value={inputs.agents}
+              onChange={(e) => set("agents", e.target.value)} />
+          </Field>
           {preset === "custom" && (
             <>
               <Field label="Engine CPU limit">
@@ -172,7 +170,7 @@ export function PlanPanel(props: {
             </>
           )}
         </div>
-        <ErrorMsg msg={err} />
+        <ErrorMsg msg={err ?? copyErr} />
       </div>
 
       <PlanResult plan={plan} busy={busy} showDoc={showDoc}
@@ -211,15 +209,20 @@ function PlanResult(props: {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Em-dashes rather than zeroes: nothing has been worked out yet, and
               "0 engines" is an answer. */}
-          <Stat n={p ? p.engines : "—"}
+          <Figure big n={p ? p.engines : "—"}
             unit={p && p.engines === 1 ? "engine" : "engines"}
             sub={p ? `${p.engine.cpu} CPU / ${p.engine.memory} each` : " "} />
-          <Stat n={p ? p.nodes : "—"}
+          <Figure big n={p ? p.nodes : "—"}
             unit={p && p.nodes === 1 ? "node" : "nodes"}
-            sub={p ? `${p.node.cpu} vCPU / ${p.node.memory} each` : " "} />
-          <Stat n={p ? p.peak.cpu : "—"} unit="vCPU at peak"
+            /* Said per agent as soon as there is more than one, because that is
+               what each cluster has to be: the total is what the whole location
+               costs, and nobody buys that as one pool. */
+            sub={p ? (p.agents > 1
+              ? `${p.nodes_per_agent} per agent, ${p.node.cpu} vCPU / ${p.node.memory} each`
+              : `${p.node.cpu} vCPU / ${p.node.memory} each`) : " "} />
+          <Figure big n={p ? p.peak.cpu : "—"} unit="vCPU at peak"
             sub={p ? `${p.peak.memory} RAM` : " "} />
-          <Stat n={p ? 0 : "—"} unit="when idle"
+          <Figure big n={p ? 0 : "—"} unit="when idle"
             sub="the pool exists only during a run" />
         </div>
         {p ? (
@@ -344,12 +347,3 @@ function PlanResult(props: {
   );
 }
 
-function Stat({ n, unit, sub }: { n: number | string; unit: string; sub: string }) {
-  return (
-    <div className="border border-slate-200 rounded-md p-3">
-      <div className="text-2xl font-bold text-slate-900 leading-none">{n}</div>
-      <div className="text-xs font-medium text-slate-600 mt-1">{unit}</div>
-      <div className="text-[11px] text-slate-400 mt-0.5">{sub}</div>
-    </div>
-  );
-}

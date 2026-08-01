@@ -138,6 +138,28 @@ export function Check(props: {
   );
 }
 
+/** One number out of a plan: the figure, what it counts, and what it costs.
+ *
+ *  Both places that size something show a row of these, and they had a copy
+ *  each -- the same three lines at two type scales. `big` is the standalone
+ *  planner, where the row is the answer to the whole page; the pane inside a
+ *  location sits under four form fields and would shout over them. */
+export function Figure(props: {
+  n: number | string; unit: string; sub: string; big?: boolean;
+}) {
+  return (
+    <div className={"border border-slate-200 rounded-md "
+      + (props.big ? "p-3" : "px-2.5 py-2")}>
+      <div className={"font-bold text-slate-900 leading-none "
+        + (props.big ? "text-2xl" : "text-lg")}>{props.n}</div>
+      <div className={"font-medium text-slate-600 "
+        + (props.big ? "text-xs mt-1" : "text-[11px] mt-0.5")}>{props.unit}</div>
+      <div className={"text-slate-400 "
+        + (props.big ? "text-[11px] mt-0.5" : "text-[10px]")}>{props.sub}</div>
+    </div>
+  );
+}
+
 /** Indeterminate progress, for a wait whose length we cannot predict -- a
  *  round-trip to BlazeMeter over someone's corporate network. `currentColor`
  *  so it works on both button kinds without being told which it is on. */
