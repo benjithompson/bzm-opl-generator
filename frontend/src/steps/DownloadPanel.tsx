@@ -10,7 +10,7 @@
 import { useState } from "react";
 import {
   api, AgentStatus, Facts, GeneratedFile, Options, SavedBundle, Ship,
-  SvCheckOut, SvMocksOut, TokenReport, Feature, Suggestion, downloadZip,
+  SvCheckOut, SvMocksOut, TokenReport, Suggestion, downloadZip,
   saveBundle,
 } from "../api";
 import {

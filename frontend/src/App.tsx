@@ -1,13 +1,12 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, downloadZip, saveBundle, Account, AgentStatus, Capacity, Facts, Feature,
+  api, Account, AgentStatus, Capacity, Facts, Feature,
   GeneratedFile, ManualFactsOut, SavedBundle, TokenReport,
-  FuncIdChoice, KeyCandidate, Location, Options, Ship, Suggestion, SvCheckOut,
+  FuncIdChoice, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, JsonArea, NoticeMsg,
-  Section, SecretInput, SegmentedControl, SubSection, Switch, TextInput,
+  Button, Check, Field, inputCls, Section, TextInput,
 } from "./components";
 // What a download is about to do to the agent's credential. The branch a bundle's
 // token arrived by is core's and comes back on the answer; this decides what to
@@ -15,7 +14,7 @@ import {
 // rotation can still be reconsidered (#64).
 import { downloadPlan } from "./token";
 import { SvCtx } from "./SvPrereqs";
-// The option groups of step 4: one declaration each (title, hint, the option
+// The option groups of the Configure step: one declaration each (title, hint, the option
 // keys it owns, the features it belongs to, and its detect/enable/disable),
 // plus a body per group. This file only wires them -- what a group *is*, and
 // which of them a feature puts on screen, lives in optionGroups.ts.
@@ -29,8 +28,8 @@ import {
 // picked file has to be, what a refused import leaves behind. No verdict is
 // reached there either: they are doctor's, and arrive in doctor's order.
 import {
-  evidenceHeader, EVIDENCE_SCRIPT, imported, NO_PREFLIGHT, PreflightState,
-  readEvidence, rechecked, refused, STATUS_STYLE, verdictLine, worstStatus,
+  evidenceHeader, imported, NO_PREFLIGHT, PreflightState,
+  readEvidence, rechecked, refused,
 } from "./preflight";
 // Acting on the same file: what each suggestion offers, what applying writes,
 // and how to take it back. What the evidence means is suggest.py's and how it
@@ -41,7 +40,6 @@ import * as session from "./session";
 // The shape a hand-typed id and token come in, and what is wrong with one that
 // does not. Nothing is built from a value that fails it.
 import { manualComplete } from "./manualIds";
-import { SuggestionList } from "./SuggestionList";
 // What the account can generate, by workspace.
 import { CapacityView } from "./CapacityView";
 // The capacity planner: a view of its own, not a step. See PlanPanel.
@@ -53,8 +51,6 @@ import { AgentPanel } from "./steps/AgentPanel";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
-import { ManualSource } from "./groups/ManualSource";
-import { GroupRow } from "./groups/GroupRow";
 import { ProxyGroup } from "./groups/ProxyGroup";
 import { RegistryGroup } from "./groups/RegistryGroup";
 import { SchedGroup } from "./groups/SchedGroup";
@@ -69,24 +65,8 @@ import { AccountMenu } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 
 
-// Why performance and service virtualization want separate agents, and so
-// separate namespaces: one agent serving both puts mocks and load engines in a
-// single namespace, on a single slot budget, with a single restart lifecycle.
-// Said in the location list, in the callout under it, and beside the suggested
-// namespace in step 4. One string because the coupling is one fact -- three
-// near-copies is how the list ends up claiming something the callout no longer
-// does. It gates nothing: accounts already running a combined location have to
-// keep working, and the feature selector is a view over one such location's
-// options rather than a choice of what to deploy.
-const KIND_COUPLING =
-  "mocks and load engines share a namespace, a slot budget and a restart "
-  + "lifecycle, so redeploying the performance agent takes the virtual "
-  + "services down with it";
-
-
 export default function App() {
   // -- connection ------------------------------------------------------------
-  const [candidates, setCandidates] = useState<KeyCandidate[]>([]);
   const [keyPath, setKeyPath] = useState("");
   const [pasteId, setPasteId] = useState("");
   const [pasteSecret, setPasteSecret] = useState("");
@@ -143,9 +123,6 @@ export default function App() {
   // (manualFuncIds below) rather than stored: it was state with two writers that
   // disagreed on the miss case, and it is a pure function of `feature`.
   const [manual, setManual] = useState({ harbor_id: "", ship_id: "" });
-  // Collapsed once the source is settled: three steps' worth of pickers is
-  // noise while you are configuring, and the summary says what was chosen.
-  const [sourceOpen, setSourceOpen] = useState(true);
 
   // -- options / preview -----------------------------------------------------
   const [defaults, setDefaults] = useState<Options>({});
@@ -227,8 +204,15 @@ export default function App() {
     // What is on screen stays until its replacement arrives, and only a change
     // of account throws it away, because then it is another account's numbers.
     setCapErr(null);
-    api.capacity(accountId).then(setCap)
-      .catch((e: Error) => setCapErr(e.message));
+    // Guarded, because this is the slowest read on the page (171 locations)
+    // and the account can be changed while it is in flight: without it the
+    // slower answer wins and the numbers on screen belong to whichever account
+    // was asked for first, under the name of the one now selected.
+    let live = true;
+    api.capacity(accountId)
+      .then((c) => { if (live) setCap(c); })
+      .catch((e: Error) => { if (live) setCapErr(e.message); });
+    return () => { live = false; };
   }, [view, accountId]);
   useEffect(() => { setCap(null); }, [accountId]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
@@ -267,7 +251,8 @@ export default function App() {
 
   useEffect(() => {
     api.keyDetect().then((r) => {
-      setCandidates(r.candidates);
+      // Only the path: the list itself had no reader once the connect form
+      // became a modal that takes one file.
       if (r.candidates[0]) setKeyPath(r.candidates[0].path);
     }).catch(() => {});
     api.optionDefaults().then((d) => {
@@ -423,17 +408,6 @@ export default function App() {
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
 
-  // Which agent a location's funcIds imply. SV membership is generate.SV_FUNC_IDS
-  // over /api/sv-constants; everything else -- performance, the functional
-  // suites, the recorder -- runs on a performance agent, so "not SV" is the test
-  // rather than a second list to keep in step. Nothing is claimed until that
-  // fetch lands, or every SV location would flash up labelled performance.
-  // Both the badge here and the view in step 4 come from featuresOf, so a
-  // location cannot be called one thing in the list and another below it.
-  const locLabels = useCallback((l: Location) =>
-    featuresOf(l.funcIds, features).map(
-      (id) => features.find((f) => f.id === id)?.label ?? id), [features]);
-
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
     // A token belongs to one agent. Carried into another location's bundle it
@@ -464,7 +438,8 @@ export default function App() {
     if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
   }, [harborId, ships.length]);
 
-  // Which half of step 3 is on screen -- picking an identity and minting one
+  // Which half of the agent section is on screen -- picking an identity and
+  // minting one
   // are one-of, because reusing an identity that is already running conflicts
   // with that install while creating one is free. Derived, not a second piece
   // of state: a location with no agents has nothing to pick, so it opens on the
@@ -491,7 +466,14 @@ export default function App() {
   const createShipNow = async () => {
     try {
       const r = await api.createShip(harborId!, newShipName);
-      const ls = await api.locations(workspaceId!);
+      // Together: the write just dropped the server's cache, so both are cold
+      // and neither depends on the other. In series this was the slower of the
+      // two added to the other one, on the click that already waited for a
+      // create.
+      const [ls] = await Promise.all([
+        api.locations(workspaceId!),
+        api.facts(harborId!).then(setFacts).catch(() => {}),
+      ]);
       setLocations(ls); setShipId(r.ship.id); setNewShipName("");
       setShowCreateShip(false);
       // The whole point of #64: the credential is captured at the one moment
@@ -501,7 +483,6 @@ export default function App() {
       // below is the copy to keep.
       setOptions((o) => ({ ...o, auth_token: r.auth_token }));
       setShipTokenNotice(r.token_error);
-      api.facts(harborId!).then(setFacts).catch(() => {});
     } catch (e) { setShipErr(String((e as Error).message)); }
   };
 
@@ -584,7 +565,7 @@ export default function App() {
    *  fields of the BlazeMeter location and nothing here writes to an account
    *  without saying what it costs first. The panel names them and the request
    *  document explains them; setting them is the operator's, in BlazeMeter. */
-  const usePlan = useCallback((h: PlanHandover) => {
+  const applyPlan = useCallback((h: PlanHandover) => {
     setNewLoc((l) => ({ ...l, slots: h.slots,
                         threads_per_engine: h.threadsPerEngine }));
     setOptions((o) => ({ ...o, engine_cpu_limit: h.engineCpuLimit,
@@ -662,7 +643,6 @@ export default function App() {
     if (mode === sourceMode) return;
     setSourceMode(mode);
     setFacts(null); setShipId(null); setStatus(null); setGenErr(null);
-    setSourceOpen(true);
     // Both modes now hold a typed-or-captured token, and it belongs to the agent
     // the other mode was about -- so it must not survive the switch either way.
     forgetToken();
@@ -1173,7 +1153,7 @@ export default function App() {
         // empty preview pane next to it would suggest this step produces some.
         <main className="max-w-screen-lg mx-auto p-6">
           <PlanPanel inputs={planInputs} setInputs={setPlanInputs}
-                     onUse={usePlan} />
+                     onUse={applyPlan} />
         </main>
       ) : (
       <main className="max-w-screen-xl mx-auto p-6">
@@ -1221,8 +1201,7 @@ export default function App() {
             hint="harbor_id, ship_id and AUTH_TOKEN — from your account, or typed.">
             <AgentPanel
               sourceMode={sourceMode} switchMode={switchMode} manual={manual}
-              setManual={setManual} sourceOpen={sourceOpen}
-              setSourceOpen={setSourceOpen}
+              setManual={setManual}
               who={who}
               accountName={accounts.find((a) => a.id === accountId)?.name ?? null}
               workspaceName={workspaces.find((w) => w.id === workspaceId)?.name ?? null}

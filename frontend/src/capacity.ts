@@ -18,11 +18,10 @@ export interface WorkspaceRollup {
  *  and counted once in the account figure -- which is why the workspace numbers
  *  add up to more than the account's.
  *
- *  `filter` matches the workspace, which is the grouping. Matching locations
- *  instead would leave a workspace on screen showing a total its visible rows
- *  do not add up to. */
-export function byWorkspace(cap: Capacity, filter: string): WorkspaceRollup[] {
-  const q = filter.trim().toLowerCase();
+ *  Grouping only. Filtering is `matching` below, so the view can group once per
+ *  account and filter that -- this walks every location for every workspace,
+ *  which on a real account is 171 x 166 and was being redone per keystroke. */
+export function byWorkspace(cap: Capacity): WorkspaceRollup[] {
   return cap.workspaces
     .map((w) => {
       const locs = cap.locations
@@ -42,8 +41,18 @@ export function byWorkspace(cap: Capacity, filter: string): WorkspaceRollup[] {
     // account has ~100 of them and they said "100 workspaces" about the 54
     // that carry anything.
     .filter((w) => w.locs.length > 0)
-    .filter((w) => !q || w.name.toLowerCase().includes(q))
     .sort((a, b) => b.total - a.total);
+}
+
+/** The rows a search matches.
+ *
+ *  On the *workspace*, which is the grouping. Matching locations instead would
+ *  leave a workspace on screen showing a total its visible rows do not add up
+ *  to. Blank matches everything -- a search nobody has typed is not a search
+ *  that excludes everything. */
+export function matching(rows: WorkspaceRollup[], filter: string) {
+  const q = filter.trim().toLowerCase();
+  return q ? rows.filter((w) => w.name.toLowerCase().includes(q)) : rows;
 }
 
 export interface AccountBand {

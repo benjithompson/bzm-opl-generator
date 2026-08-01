@@ -296,7 +296,7 @@ def cmd_plan(a):
           f"threadsPerEngine={p['location']['threads_per_engine']} (virtual "
           f"users per engine),")
     print(f"            overrideCPU={p['location']['override_cpu']}, "
-          f"overrideMemory={p['location']['override_memory_mb']}")
+          f"overrideMemory={p['location']['override_memory']}")
     for w in p["warnings"]:
         print(f"  ! {w}")
     if a.output:

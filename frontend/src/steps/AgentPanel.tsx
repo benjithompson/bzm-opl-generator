@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Facts, Location, Ship } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, NoticeMsg,
+  Button, ErrorMsg, Field, NoticeMsg,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
@@ -26,8 +26,6 @@ export interface AgentPanelProps {
   manual: { harbor_id: string; ship_id: string };
   setManual: (f: (m: { harbor_id: string; ship_id: string }) =>
     { harbor_id: string; ship_id: string }) => void;
-  sourceOpen: boolean;
-  setSourceOpen: (v: boolean) => void;
   /** Who the page is connected as. Read here, never asked for: the key is the
    *  Account menu's, and what this step needs is whether there is one -- a
    *  location list needs a key, not the form that supplies it. */
@@ -181,21 +179,6 @@ export function AgentPanel(p: AgentPanelProps) {
           onHarborId={(v) => p.setManual((m) => ({ ...m, harbor_id: v }))}
           onShipId={(v) => p.setManual((m) => ({ ...m, ship_id: v }))}
           onAuthToken={p.setAuthToken} />
-      ) : !p.sourceOpen ? (
-        /* Settled: say what was chosen, and offer the way back. Reached only by
-           switching away from manual entry and back -- picking an agent no
-           longer folds the step away, because in a step flow there is nothing
-           underneath for it to make room for. */
-        <div className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-          <p className="text-xs text-slate-600 grow">
-            <b>{p.location?.name ?? p.harborId}</b>
-            {" · agent "}<code>{p.shipId}</code>
-            <span className="block text-slate-400">
-              {p.who?.email} · images: {p.facts?.images_source}
-            </span>
-          </p>
-          <Button kind="ghost" onClick={() => p.setSourceOpen(true)}>Change</Button>
-        </div>
       ) : (
         <>
           {/* One block, in one place, whatever state it is in. It used to

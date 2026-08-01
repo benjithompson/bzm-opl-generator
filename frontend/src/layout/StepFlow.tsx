@@ -79,8 +79,9 @@ export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFl
     // rather than a tab bar: the page header (2.75rem) plus main's own padding
     // (1.5rem top and bottom). Measured rather than guessed.
     <div className="flex flex-col h-[calc(100vh-6.75rem)]">
-      {/* Below the Configure/Preview tabs, which are sticky at the very top:
-          two bars both claiming top-0 is one bar over the other. */}
+      {/* The only sticky bar on the page now that the preview is a drawer
+          rather than a tab strip above this one -- two bars both claiming
+          top-0 was one bar over the other. */}
       <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
         <div className="py-2 flex items-center gap-4">
           {/* Scrolls rather than collides: the drawer on the right takes the

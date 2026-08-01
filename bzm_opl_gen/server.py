@@ -20,15 +20,16 @@ is one line, `_answer`: core raises CoreError carrying the status, and nothing
 here re-decides what a given refusal means.
 """
 
+import functools
 import json
 import os
 import time
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 
 from . import api, core
 
@@ -106,6 +107,27 @@ def _forget():
     _cache.clear()
 
 
+def _writes(fn):
+    """A route that changes the customer's account. Drops the cache after it.
+
+    A decorator rather than a `_forget()` in each body, for the reason _forget
+    itself gives about per-key rules: a rule you have to remember at each site
+    is a rule that gets forgotten at one. `/api/ships/token` had already
+    forgotten it. It also fixes the order -- the calls it replaces ran *before*
+    their write, so anything read in between repopulated the cache with what
+    the write was about to change -- and `finally` covers the half-written
+    case, which is real here: creating an agent can succeed and its token be
+    refused in the same request.
+    """
+    @functools.wraps(fn)
+    def wrapped(*a, **kw):
+        try:
+            return fn(*a, **kw)
+        finally:
+            _forget()
+    return wrapped
+
+
 def _typed(value):
     """A form field the user left alone, as "not given".
 
@@ -118,6 +140,14 @@ def _typed(value):
     an empty string from a model gets the planner's refusal.
     """
     return None if isinstance(value, str) and not value.strip() else value
+
+
+# The same rule as a *type*, so a field that needs it cannot be declared
+# without it. Applied by hand at eleven call sites, this was one `_typed(...)`
+# away from a blank arriving at core as "" -- the shape of every recurrence of
+# the "could not read / there is nothing there" bug in this codebase, and the
+# countermeasure is the same: make it structural rather than remembered.
+Blank = Annotated[Any, BeforeValidator(_typed)]
 
 
 # -- key management -----------------------------------------------------------
@@ -246,8 +276,8 @@ class LocationIn(BaseModel):
 
 
 @app.post("/api/locations")
+@_writes
 def location_create(loc: LocationIn):
-    _forget()
     return _answer(core.create_location, _client(), loc.name, loc.account_id,
                    loc.workspace_id, func_ids=loc.func_ids, slots=loc.slots,
                    threads_per_engine=loc.threads_per_engine)
@@ -259,6 +289,7 @@ class ShipIn(BaseModel):
 
 
 @app.post("/api/ships")
+@_writes
 def ship_create(s: ShipIn):
     """Create the agent, and issue its credential with it.
 
@@ -286,7 +317,6 @@ def ship_create(s: ShipIn):
         # the agent in BlazeMeter's own UI works just as well. Not _answer'd:
         # this is the one refusal here that must not become the response.
         refused = str(e)
-    _forget()
     return {"ship": ship, "auth_token": token, "token_error": refused}
 
 
@@ -296,8 +326,8 @@ class FuncIdIn(BaseModel):
 
 
 @app.post("/api/locations/func-id", description=core.add_func_id.__doc__)
+@_writes
 def location_add_func_id(f: FuncIdIn):
-    _forget()
     return _answer(core.add_func_id, _client(), f.harbor_id, f.func_id)
 
 
@@ -306,13 +336,14 @@ class LocationSettingsIn(BaseModel):
     # Every field optional and None-by-default: this is a partial update, and
     # only what the browser sends is written. `Any` for the numbers, for the
     # reason PlanIn gives -- an emptied number input posts "".
-    slots: Any = None
-    threads_per_engine: Any = None
-    override_cpu: Any = None
-    override_memory: Any = None
+    slots: Blank = None
+    threads_per_engine: Blank = None
+    override_cpu: Blank = None
+    override_memory: Blank = None
 
 
 @app.post("/api/locations/settings", description=core.update_location.__doc__)
+@_writes
 def location_update(s: LocationSettingsIn):
     """Change the selected location's concurrency settings.
 
@@ -321,12 +352,11 @@ def location_update(s: LocationSettingsIn):
     a change here reaches every agent in the location and every test that
     starts on it, so it has to be the thing that was clicked.
     """
-    _forget()
-    return _answer(core.update_location, _client(), s.harbor_id,
-                   slots=_typed(s.slots),
-                   threads_per_engine=_typed(s.threads_per_engine),
-                   override_cpu=_typed(s.override_cpu),
-                   override_memory=_typed(s.override_memory))
+    # Over core's own closed set rather than four named kwargs: a fifth
+    # setting is then one row in core.LOCATION_SETTINGS, not a row plus a field
+    # plus a line here.
+    settings = {k: getattr(s, k) for k in core.LOCATION_SETTINGS}
+    return _answer(core.update_location, _client(), s.harbor_id, **settings)
 
 
 class TokenIn(BaseModel):
@@ -335,6 +365,7 @@ class TokenIn(BaseModel):
 
 
 @app.post("/api/ships/token")
+@_writes
 def ship_issue_token(t: TokenIn):
     """Issue a NEW AUTH_TOKEN for an existing agent.
 
@@ -529,11 +560,11 @@ class PlanIn(BaseModel):
     # model rather than saying which number could not be a plan. core's refusal
     # says that, in the words the planner uses at the field itself.
     users: Any
-    vus_per_engine: Any = None
-    engine_cpu: Optional[str] = None
-    engine_mem: Optional[str] = None
-    engines_per_node: Any = None
-    agents: Any = None
+    vus_per_engine: Blank = None
+    engine_cpu: Blank = None
+    engine_mem: Blank = None
+    engines_per_node: Blank = None
+    agents: Blank = None
 
 
 @app.post("/api/plan", description=core.capacity_plan.__doc__)
@@ -546,11 +577,9 @@ def capacity_plan(p: PlanIn):
     it to or a cluster to point it at.
     """
     return _answer(core.capacity_plan, p.users,
-                   vus_per_engine=_typed(p.vus_per_engine),
-                   engine_cpu=_typed(p.engine_cpu),
-                   engine_mem=_typed(p.engine_mem),
-                   engines_per_node=_typed(p.engines_per_node),
-                   agents=_typed(p.agents))
+                   vus_per_engine=p.vus_per_engine,
+                   engine_cpu=p.engine_cpu, engine_mem=p.engine_mem,
+                   engines_per_node=p.engines_per_node, agents=p.agents)
 
 
 # -- preflight ----------------------------------------------------------------

@@ -34,8 +34,7 @@ import math
 
 from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
                   ENGINE_UPLOAD_HOSTS)
-from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
-                       CRANE_MEM_REQUEST, CRANE_EPHEMERAL_STORAGE,
+from .generate import (CRANE_CPU_LIMIT, CRANE_MEM_LIMIT,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM,
                        ENGINE_DEFAULT_REQUEST_CPU, ENGINE_DEFAULT_REQUEST_MEM,
                        ENGINE_DISK_GB, ENGINE_TMP_GB, GKE_MIN_MAX_PODS,
@@ -181,22 +180,34 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
             "memory_bytes": node_mem * nodes_per_agent,
             "disk_gb": ENGINE_DISK_GB * per_agent,
         },
+        # The agent itself, which is the always-on part of the request. Only the
+        # limits: nothing states crane's requests, and a figure nobody reads is
+        # a figure nobody notices going wrong.
         "crane": {
-            "cpu_request": CRANE_CPU_REQUEST, "memory_request": CRANE_MEM_REQUEST,
             "cpu_limit": CRANE_CPU_LIMIT, "memory_limit": CRANE_MEM_LIMIT,
-            "ephemeral_storage": CRANE_EPHEMERAL_STORAGE,
         },
         # What has to be set on the BlazeMeter side for the cluster above to be
         # the cluster that gets used. Two of these are the fields a location
         # leaves unset by default, which is the gap that has engines scheduled
         # at 250m and packed onto one node -- see requests_note() in generate.
+        # core.LOCATION_SETTINGS' own four names, in the units its PATCH takes.
+        # This block used to have a vocabulary of its own -- `override_memory_mb`
+        # and a *formatted* `override_cpu` -- and every consumer paid for it: the
+        # web UI renamed one field and stringified the other before it could put
+        # them in the settings form, and then guarded with a regex because a
+        # number field cannot hold "250m".
         "location": {
             # "Engines per agent" in BlazeMeter's own UI. See the docstring:
             # this is the whole run divided by the agents that will serve it.
             "slots": per_agent,
             "threads_per_engine": vus,
-            "override_cpu": format_cpu(cpu),
-            "override_memory_mb": mem // (1024 ** 2),
+            # None, not a formatted string, when the engine is not a whole
+            # number of cores: overrideCPU has been whole cores on every
+            # account this has been read on, so a 500m engine has no request
+            # to state -- and "cannot say" is the one thing a formatted
+            # quantity could not carry.
+            "override_cpu": cpu // 1000 if cpu % 1000 == 0 else None,
+            "override_memory": mem // (1024 ** 2),
         },
         "egress": [API_HOST, *ENGINE_UPLOAD_HOSTS, PUBLIC_REGISTRY.split("/")[0]],
         "warnings": _warnings(vus, supported, cpu, mem, per_node, engines),
@@ -488,9 +499,14 @@ def _blazemeter_section(p):
         f"| Virtual users per engine (`threadsPerEngine`) | "
         f"`{loc['threads_per_engine']}` | unset, every test start fails with 403 "
         f"*Not enough available resources* |",
-        f"| overrideCPU | `{loc['override_cpu']}` | the engine pod's CPU "
-        f"**request** |",
-        f"| overrideMemory | `{loc['override_memory_mb']}` | the memory "
+        # None means this engine is not a whole number of cores, which the
+        # field cannot express -- said as that rather than printed as "None".
+        (f"| overrideCPU | `{loc['override_cpu']}` | the engine pod's CPU "
+         f"**request**, in whole cores |" if loc["override_cpu"] is not None else
+         f"| overrideCPU | — | this engine is {p['engine']['cpu']}, and the "
+         f"field takes whole cores — round the engine size up, or set the "
+         f"request in BlazeMeter by hand |"),
+        f"| overrideMemory | `{loc['override_memory']}` | the memory "
         f"**request**, in MB |",
         "",
         "The last two matter more than they look. The engine's *limits* come from "

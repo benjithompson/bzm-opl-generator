@@ -16,8 +16,8 @@
 import { useEffect, useState } from "react";
 
 import { api, Location, LocationSettings as Settings, LocationUpdate } from "../api";
-import { Button, ErrorMsg, Field, inputCls } from "../components";
-import { LocationSizing, SizingFill } from "./LocationSizing";
+import { Button, ErrorMsg, Field, NumberInput } from "../components";
+import { LocationSizing } from "./LocationSizing";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
  *  the API takes: there is deliberately no way to *clear* a setting here, since
@@ -105,27 +105,29 @@ export function LocationSettings(props: {
 
   // Applying a size writes the draft, not the location: Save is still the only
   // thing that reaches the account, and what it will send is visible in the
-  // fields first. `whole` because overrideCPU is whole cores on every account
-  // this has been read on, so a fractional engine CPU has no value to offer.
-  const applySizing = (fill: SizingFill) => {
+  // fields first.
+  //
+  // A null field is left alone rather than blanked. Only `override_cpu` can be
+  // one -- the plan says null where the engine is not a whole number of cores,
+  // which overrideCPU cannot express -- and it used to arrive as a formatted
+  // "500m" that this had to catch with a regex over the plan's own string.
+  // Sizing it so the plan speaks the settings' vocabulary took that out.
+  const applySizing = (fill: Settings) => {
     setResult(null);
     setDraft({
       ...draft,
-      slots: fill.slots,
-      threads_per_engine: fill.threads_per_engine,
-      ...(/^\d+$/.test(fill.override_cpu)
-        ? { override_cpu: fill.override_cpu,
-            override_memory: fill.override_memory }
-        : {}),
+      ...Object.fromEntries(
+        (Object.keys(EMPTY) as (keyof Draft)[])
+          .filter((k) => fill[k] !== null)
+          .map((k) => [k, String(fill[k])])),
     });
     setSizing(false);
   };
 
   const field = (k: keyof Draft, hint: string) => (
     <Field label={LABELS[k]} hint={hint}>
-      <input type="number" min={1} className={inputCls}
-        placeholder={current[k] || "not set"} value={draft[k]}
-        onChange={(e) => set(k, e.target.value)} />
+      <NumberInput placeholder={current[k] || "not set"} value={draft[k]}
+        onChange={(v) => set(k, v)} />
     </Field>
   );
 

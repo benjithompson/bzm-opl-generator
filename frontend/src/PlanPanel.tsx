@@ -15,14 +15,14 @@ import { useState } from "react";
 
 import { CapacityPlan } from "./api";
 import {
-  Button, ErrorMsg, Field, Figure, inputCls, TextInput,
+  Button, cardCls, ErrorMsg, Field, Figure, NumberInput, PlanCaveats,
+  TextInput,
 } from "./components";
+import { EngineSizeSelect } from "./groups/SizingGroup";
 import { ENGINE_SIZES } from "./optionGroups";
 // The ask itself -- debounce, states, what a blank target means -- shared with
 // the location's own Calculate pane rather than restated here.
-import {
-  EMPTY_PLAN_INPUTS, PlanInputs, useCapacityPlan, useEngineRating,
-} from "./usePlan";
+import { PlanInputs, useCapacityPlan, useEngineRating } from "./usePlan";
 
 /** The plan as the generator's own vocabulary: what the location has to
  *  advertise, and what the bundle has to ask for. Named here because this is
@@ -94,7 +94,7 @@ export function PlanPanel(props: {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
+      <div className={cardCls}>
         <div>
           <h2 className="text-sm font-semibold text-slate-800">
             How much infrastructure will this need?
@@ -109,9 +109,8 @@ export function PlanPanel(props: {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Virtual user target" required
             hint="the load the test has to reach">
-            <input type="number" min={1} className={inputCls}
-              placeholder="5000" value={inputs.users}
-              onChange={(e) => set("users", e.target.value)} />
+            <NumberInput placeholder="5000" value={inputs.users}
+              onChange={(v) => set("users", v)} />
           </Field>
           {/* The placeholder follows the engine size, because so does the
               figure the plan assumes when this is blank. Showing a fixed 500
@@ -122,30 +121,18 @@ export function PlanPanel(props: {
             hint={rated
               ? `blank uses ${rated.toLocaleString()}, what this engine size is rated for`
               : "blank uses what an engine of this size is rated for"}>
-            <input type="number" min={1} className={inputCls}
-              placeholder={String(rated ?? plan?.engine.supported_vus ?? 500)}
+            <NumberInput placeholder={String(rated ?? 500)}
               value={inputs.vusPerEngine}
-              onChange={(e) => set("vusPerEngine", e.target.value)} />
+              onChange={(v) => set("vusPerEngine", v)} />
           </Field>
-          <Field label="Engine size"
-            hint="the pod limits every engine runs at">
-            <select className={inputCls} value={preset}
-              onChange={(e) => {
-                const p = ENGINE_SIZES.find((s) => s.id === e.target.value);
-                setInputs({ ...inputs, engineCpu: p?.cpu ?? "",
-                            engineMem: p?.mem ?? "" });
-              }}>
-              {ENGINE_SIZES.map((s) => (
-                <option key={s.id} value={s.id}>{s.label}</option>
-              ))}
-              <option value="custom">Custom…</option>
-            </select>
-          </Field>
+          <EngineSizeSelect preset={preset} custom
+            hint="the pod limits every engine runs at"
+            onPreset={(cpu, mem) => setInputs({
+              ...inputs, engineCpu: cpu ?? "", engineMem: mem ?? "" })} />
           <Field label="Engines per node"
             hint="blank means one — they contend when they share">
-            <input type="number" min={1} className={inputCls} placeholder="1"
-              value={inputs.enginesPerNode}
-              onChange={(e) => set("enginesPerNode", e.target.value)} />
+            <NumberInput placeholder="1" value={inputs.enginesPerNode}
+              onChange={(v) => set("enginesPerNode", v)} />
           </Field>
           {/* A location's concurrency is agents x engines per agent, so this
               divides the run rather than adding to it: two agents each run half
@@ -153,9 +140,8 @@ export function PlanPanel(props: {
               for most people asking this question for the first time. */}
           <Field label="Agents"
             hint="blank means one — each runs its share, in a cluster of its own">
-            <input type="number" min={1} className={inputCls} placeholder="1"
-              value={inputs.agents}
-              onChange={(e) => set("agents", e.target.value)} />
+            <NumberInput placeholder="1" value={inputs.agents}
+              onChange={(v) => set("agents", v)} />
           </Field>
           {preset === "custom" && (
             <>
@@ -205,7 +191,7 @@ function PlanResult(props: {
   return (
     <div className={"space-y-4 transition-opacity "
       + (props.busy ? "opacity-50" : "")}>
-      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
+      <div className={cardCls}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Em-dashes rather than zeroes: nothing has been worked out yet, and
               "0 engines" is an answer. */}
@@ -237,26 +223,11 @@ function PlanResult(props: {
         ) : <p className="text-xs text-amber-700">{waiting}</p>}
       </div>
 
-      {p?.vus_per_engine_assumed && (
-        <div className="border border-amber-300 bg-amber-50 rounded-lg p-3">
-          <p className="text-xs text-amber-900">
-            <b>{p.vus_per_engine.toLocaleString()} virtual users per engine is
-            assumed</b>, not measured — it is what an engine of this size is
-            rated for. How many virtual users one engine really carries depends
-            on what your script does between requests, and every number above is
-            that figure multiplied out. Run the real script against one engine,
-            find where it saturates, and put that number in the field above.
-          </p>
-        </div>
-      )}
+      <PlanCaveats assumed={!!p?.vus_per_engine_assumed}
+        vusPerEngine={p?.vus_per_engine ?? 0}
+        warnings={p?.warnings ?? []} />
 
-      {(p?.warnings ?? []).map((w) => (
-        <div key={w} className="border border-slate-200 bg-slate-50 rounded-lg p-3">
-          <p className="text-xs text-slate-600">{w}</p>
-        </div>
-      ))}
-
-      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
+      <div className={cardCls}>
         <div>
           <h3 className="text-sm font-semibold text-slate-800">
             The request to send
@@ -291,7 +262,7 @@ function PlanResult(props: {
         )}
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-2">
+      <div className={cardCls}>
         <h3 className="text-sm font-semibold text-slate-800">
           Carry this into the deployment
         </h3>
@@ -309,10 +280,20 @@ function PlanResult(props: {
             </p>
             <p className="text-xs text-slate-500">
               The two request fields —{" "}
-              <code>overrideCPU {p.location.override_cpu}</code> and{" "}
-              <code>overrideMemory {p.location.override_memory_mb}</code> — are
-              set in BlazeMeter rather than here, and the document says why they
-              matter.
+              {p.location.override_cpu === null ? (
+                <>
+                  <code>overrideMemory {p.location.override_memory}</code> and
+                  an <code>overrideCPU</code> this engine size cannot state (the
+                  field takes whole cores) —
+                </>
+              ) : (
+                <>
+                  <code>overrideCPU {p.location.override_cpu}</code> and{" "}
+                  <code>overrideMemory {p.location.override_memory}</code> —
+                </>
+              )}{" "}
+              are set in BlazeMeter rather than here, and the document says why
+              they matter.
             </p>
             {/* An empty location and an agent that has never reported are normal
                 states, not a half-finished setup -- so the wait for a cluster is

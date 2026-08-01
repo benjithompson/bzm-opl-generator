@@ -1,6 +1,39 @@
 import { Field, inputCls, TextInput } from "../components";
 import { ENGINE_SIZES } from "../optionGroups";
 
+/** The engine-size picker, wherever a size is chosen.
+ *
+ *  Three copies before this: here, the standalone planner and the location's
+ *  Calculate pane -- and they had already diverged, since only this one offered
+ *  Custom. A fourth size, or a relabelled one, was three edits.
+ *
+ *  `onCustom` absent means the caller has nowhere to put a custom size, so the
+ *  option is not offered rather than offered and ignored. */
+export function EngineSizeSelect(props: {
+  preset: string;
+  onPreset: (cpu: string | null, mem: string | null) => void;
+  label?: string;
+  hint?: string;
+  custom?: boolean;
+}) {
+  return (
+    <Field label={props.label ?? "Engine size"} hint={props.hint}>
+      <select className={inputCls} value={props.preset}
+        onChange={(e) => {
+          // "Custom…" clears both, which is what makes the preset fall
+          // through to "custom" and reveal the two fields.
+          const p = ENGINE_SIZES.find((s) => s.id === e.target.value);
+          props.onPreset(p?.cpu ?? null, p?.mem ?? null);
+        }}>
+        {ENGINE_SIZES.map((s) => (
+          <option key={s.id} value={s.id}>{s.label}</option>
+        ))}
+        {props.custom && <option value="custom">Custom…</option>}
+      </select>
+    </Field>
+  );
+}
+
 /** Engine sizing. `preset` is derived from the two limits by the caller
  *  (enginePreset) rather than stored, so an imported or preset config lands on
  *  the right entry and anything unrecognised shows as Custom. */
@@ -15,21 +48,9 @@ export function SizingGroup(props: {
 }) {
   return (
     <>
-      <Field label="Engine size"
-        hint="KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY — the pod limits the crane stamps on every engine it spawns">
-        <select className={inputCls} value={props.preset}
-          onChange={(e) => {
-            // "Custom…" clears both, which is what makes the preset fall
-            // through to "custom" and reveal the two fields.
-            const p = ENGINE_SIZES.find((s) => s.id === e.target.value);
-            props.onLimits(p?.cpu ?? null, p?.mem ?? null);
-          }}>
-          {ENGINE_SIZES.map((s) => (
-            <option key={s.id} value={s.id}>{s.label}</option>
-          ))}
-          <option value="custom">Custom…</option>
-        </select>
-      </Field>
+      <EngineSizeSelect preset={props.preset} custom
+        hint="KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY — the pod limits the crane stamps on every engine it spawns"
+        onPreset={props.onLimits} />
       {props.preset === "custom" && (
         <div className="grid grid-cols-2 gap-2">
           <Field label="CPU limit">

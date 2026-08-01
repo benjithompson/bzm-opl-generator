@@ -14,6 +14,32 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import doctor, plan  # noqa: E402
+from test_core import _imports  # noqa: E402
+
+
+# -- what it is allowed to reach --------------------------------------------
+
+def test_plan_reaches_nothing():
+    """The requirement, asserted rather than described.
+
+    "Reaches nothing" was prose in CLAUDE.md while core's equivalent rule was
+    an AST assertion, and prose is what the fifth recurrence of a rule is made
+    of. Anything that reads an account, a cluster or a file puts the *first*
+    step behind a later one, for the one user who has none of them.
+
+    `api` and `generate` are allowed and named: the planner takes constants
+    from them -- the API host for the egress list, the engine footprint and
+    node overhead doctor judges against -- and importing a constant is not
+    reaching anything. `client`, `facts`, `doctor` and `livetest` are not.
+    """
+    imported = _imports(plan.__file__)
+    reaching = imported & {"subprocess", "urllib", "http", "socket", "os",
+                           "facts", "doctor", "livetest", "core", "kubectl",
+                           "requests", "json"}
+    assert not reaching, (
+        f"plan imports {sorted(reaching)} -- it sizes a cluster for somebody "
+        f"who has no cluster, no account and no evidence file, so every one of "
+        f"those is a dependency that puts the first step behind a later one")
 
 
 # -- the arithmetic ---------------------------------------------------------
@@ -99,13 +125,13 @@ def test_engine_size_is_taken_from_the_bundle_options():
     assert p["engine"]["cpu"] == "4"
     assert p["engine"]["memory"] == "16Gi"
     assert p["engines"] == 4
-    assert p["location"]["override_memory_mb"] == 16384
+    assert p["location"]["override_memory"] == 16384
 
 
 def test_override_memory_is_megabytes():
     """BlazeMeter's overrideMemory field is in MB, and a plan that reported it
     in bytes or GiB would be pasted into the UI as-is."""
-    assert plan.capacity_plan(500)["location"]["override_memory_mb"] == 8192
+    assert plan.capacity_plan(500)["location"]["override_memory"] == 8192
 
 
 # -- supported threads, shared with doctor ----------------------------------
@@ -340,3 +366,24 @@ def test_document_does_not_mention_agents_when_there_is_one():
     doc = plan.plan_document(plan.capacity_plan(5000))
     assert "clusters" not in doc
     assert "the location's `slots`" in doc
+
+
+def test_a_fractional_engine_has_no_whole_core_request():
+    """overrideCPU takes whole cores, so a 500m engine has none to state.
+
+    None rather than a formatted "500m": the field cannot hold it, and the web
+    UI used to find that out with a regex over the plan's own string. Unknown
+    is the null; a number is always a number the field will take.
+    """
+    p = plan.capacity_plan(100, engine_cpu="500m", engine_mem="2Gi")
+    assert p["location"]["override_cpu"] is None
+    assert p["location"]["override_memory"] == 2048
+    doc = plan.plan_document(p)
+    assert "whole cores" in doc
+    # Never the repr of a missing value in the cell somebody types from. (Not
+    # `"None" not in doc` -- the prose says "None of that waits for the
+    # cluster", which is how the first version of this assertion failed.)
+    assert "`None`" not in doc
+
+    whole = plan.capacity_plan(100, engine_cpu="2", engine_mem="8Gi")
+    assert whole["location"]["override_cpu"] == 2

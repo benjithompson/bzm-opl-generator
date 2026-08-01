@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Capacity, CapLocation } from "./api";
-import { accountBands, byWorkspace } from "./capacity";
+import { accountBands, byWorkspace, matching } from "./capacity";
 
 // How the account's locations become workspace rows. The figures themselves are
-// core.account_capacity's and are tested in tests/test_capacity.py; what is
+// core.account_capacity's and are tested in tests/test_core.py; what is
 // decided here is which workspace a location lands in, in what order, and what
 // the filter does to the totals beside it.
 
@@ -26,7 +26,7 @@ describe("byWorkspace", () => {
   it("puts a location in every workspace that can claim it", () => {
     const shared = loc({ id: "s", rated_vus: 300, shared: true,
       workspace_ids: [1, 2], workspace_names: ["Alpha", "Beta"] });
-    const rows = byWorkspace(cap([shared]), "");
+    const rows = byWorkspace(cap([shared]));
     expect(rows.map((w) => w.name)).toEqual(["Alpha", "Beta"]);
     // Counted in both, which is why the two totals exceed the account's 300.
     expect(rows.map((w) => w.total)).toEqual([300, 300]);
@@ -34,7 +34,7 @@ describe("byWorkspace", () => {
   });
 
   it("drops a workspace holding no location rather than showing a zero", () => {
-    const rows = byWorkspace(cap([loc({ workspace_ids: [1] })]), "");
+    const rows = byWorkspace(cap([loc({ workspace_ids: [1] })]));
     expect(rows.map((w) => w.name)).toEqual(["Alpha"]);
   });
 
@@ -43,7 +43,7 @@ describe("byWorkspace", () => {
       loc({ id: "a", rated_vus: 10, workspace_ids: [1] }),
       loc({ id: "b", rated_vus: 90, workspace_ids: [1] }),
       loc({ id: "c", rated_vus: 500, workspace_ids: [2] }),
-    ]), "");
+    ]));
     expect(rows.map((w) => w.name)).toEqual(["Beta", "Alpha"]);
     expect(rows[1].locs.map((l) => l.id)).toEqual(["b", "a"]);
   });
@@ -52,7 +52,7 @@ describe("byWorkspace", () => {
     const rows = byWorkspace(cap([
       loc({ id: "a", rated_vus: null, slots: null, workspace_ids: [1] }),
       loc({ id: "b", rated_vus: 40, workspace_ids: [1] }),
-    ]), "");
+    ]));
     expect(rows[0].total).toBe(40);
     expect(rows[0].locs).toHaveLength(2);
   });
@@ -61,7 +61,7 @@ describe("byWorkspace", () => {
     const rows = byWorkspace(cap([
       loc({ id: "a", rated_vus: 100, workspace_ids: [1] }),
       loc({ id: "s", rated_vus: 250, shared: true, workspace_ids: [1, 2] }),
-    ]), "");
+    ]));
     const alpha = rows.find((w) => w.name === "Alpha")!;
     expect(alpha.total).toBe(350);
     expect(alpha.sharedVus).toBe(250);
@@ -74,26 +74,27 @@ describe("byWorkspace", () => {
       loc({ id: "a", rated_vus: 500, workspace_ids: [1] }),
       loc({ id: "s", agents: 0, agents_reporting: 0, engines: 0, rated_vus: 0,
         shared: true, workspace_ids: [1, 2] }),
-    ]), "");
+    ]));
     const alpha = rows.find((w) => w.name === "Alpha")!;
     expect(alpha.shared).toHaveLength(1);
     expect(alpha.sharedVus).toBe(0);
   });
 
   it("filters on the workspace, so a row's total still matches its rows", () => {
-    const rows = byWorkspace(cap([
+    const rows = matching(byWorkspace(cap([
       loc({ id: "a", name: "beta-ish", rated_vus: 100, workspace_ids: [1] }),
       loc({ id: "b", rated_vus: 40, workspace_ids: [2] }),
-    ]), "beta");
+    ])), "beta");
     expect(rows.map((w) => w.name)).toEqual(["Beta"]);
     // The location *named* beta-ish lives in Alpha and does not drag it in.
     expect(rows[0].locs.map((l) => l.id)).toEqual(["b"]);
   });
 
   it("ignores case and surrounding space in the filter", () => {
-    expect(byWorkspace(cap([loc()]), "  ALPHA ")).toHaveLength(1);
-    expect(byWorkspace(cap([loc()]), "   ")).toHaveLength(1);
-    expect(byWorkspace(cap([loc()]), "gamma")).toHaveLength(0);
+    const rows = byWorkspace(cap([loc()]));
+    expect(matching(rows, "  ALPHA ")).toHaveLength(1);
+    expect(matching(rows, "   ")).toHaveLength(1);
+    expect(matching(rows, "gamma")).toHaveLength(0);
   });
 });
 

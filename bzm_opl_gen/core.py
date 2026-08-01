@@ -33,6 +33,7 @@ caller, and the one that has them wrong is the one that would never say so.
 """
 
 import collections
+import concurrent.futures
 import http.client
 import io
 import json
@@ -1082,9 +1083,17 @@ def account_capacity(client, account_id):
     cannot run twice. It is flagged, and the account total counts it once --
     which is why the account figure is not the sum of the workspace figures.
     """
-    locs = _upstream(client.private_locations, account_id=account_id)
-    spaces = {w["id"]: w["name"]
-              for w in _upstream(client.workspaces, account_id)}
+    # Both at once: they are independent reads and the locations one is the
+    # slow half (1.3s on a 171-location account), so in series the workspace
+    # names were pure added wait on every cold view. Threads rather than async
+    # because the client is stdlib urllib and every caller here is synchronous
+    # -- and because two of them is the whole concurrency this needs.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        want_locs = pool.submit(_upstream, client.private_locations,
+                                account_id=account_id)
+        want_spaces = pool.submit(_upstream, client.workspaces, account_id)
+        locs = want_locs.result()
+        spaces = {w["id"]: w["name"] for w in want_spaces.result()}
     out = []
     for l in locs:
         ships = l.get("ships") or []

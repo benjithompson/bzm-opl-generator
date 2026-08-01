@@ -19,8 +19,8 @@
 import { useMemo, useState } from "react";
 
 import { Capacity, CapLocation } from "./api";
-import { accountBands, byWorkspace } from "./capacity";
-import { inputCls } from "./components";
+import { accountBands, byWorkspace, matching } from "./capacity";
+import { cardCls, inputCls } from "./components";
 
 const n = (x: number) => x.toLocaleString();
 
@@ -34,17 +34,26 @@ const BAND = ["bg-bzm", "bg-sky-400", "bg-emerald-400", "bg-violet-400",
 const STRIPE = "repeating-linear-gradient(45deg, rgba(255,255,255,.55) 0 3px,"
   + " rgba(255,255,255,0) 3px 7px)";
 
-function Swatch({ i, shared }: { i: number; shared: boolean }) {
+/** The colour chip that ties a row to its segment. `i` picks from BAND;
+ *  `className` overrides that where the colour comes from somewhere else (the
+ *  account bar assigns per workspace, not per row). */
+function Swatch(props: { i?: number; shared?: boolean; className?: string }) {
+  const colour = props.className
+    ?? BAND[(props.i ?? 0) % BAND.length]
+      + (props.shared ? " ring-1 ring-amber-600" : "");
   return (
-    <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 "
-      + BAND[i % BAND.length] + (shared ? " ring-1 ring-amber-600" : "")}
-      style={shared ? { backgroundImage: STRIPE } : undefined} />
+    <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 " + colour}
+      style={props.shared ? { backgroundImage: STRIPE } : undefined} />
   );
 }
 
 export function CapacityView({ cap }: { cap: Capacity }) {
   const [filter, setFilter] = useState("");
-  const spaces = useMemo(() => byWorkspace(cap, filter), [cap, filter]);
+  // Grouped once per account, filtered from that. It used to group the whole
+  // account twice on mount (once here, once for `widest`) and again on every
+  // keystroke -- 171 locations against 166 workspaces each time, which also
+  // handed every surviving card a new object and re-rendered its rows.
+  const all = useMemo(() => byWorkspace(cap), [cap]);
   // The account's own bar: one segment per workspace, sized by what only that
   // workspace can claim, plus one for everything claimable from more than one.
   // They add up to the headline beside them -- see accountBands.
@@ -64,13 +73,14 @@ export function CapacityView({ cap }: { cap: Capacity }) {
   // filtering does not silently rescale every bar and make a small workspace
   // look like the whole account.
   const widest = useMemo(
-    () => Math.max(...byWorkspace(cap, "").map((w) => w.total), 1), [cap]);
+    () => Math.max(...all.map((w) => w.total), 1), [all]);
+  const spaces = useMemo(() => matching(all, filter), [all, filter]);
   const holding = new Set(cap.locations.flatMap((l) => l.workspace_ids)).size;
   const sharedCount = cap.locations.filter((l) => l.shared).length;
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-3">
+      <div className={cardCls}>
         <div className="flex items-center gap-4 flex-wrap">
           <div>
             <div className="text-2xl font-bold text-slate-900 tabular-nums leading-none">
@@ -167,8 +177,7 @@ export function CapacityView({ cap }: { cap: Capacity }) {
                     there and so has no swatch here either, rather than being
                     given a colour that appears nowhere. */}
                 {bandColour.get(w.name) && (
-                  <span className={"inline-block w-2.5 h-2.5 rounded-sm shrink-0 "
-                    + "self-center " + bandColour.get(w.name)} />
+                  <Swatch className={"self-center " + bandColour.get(w.name)!} />
                 )}
                 <span className="text-sm font-semibold text-slate-800">{w.name}</span>
                 {w.shared.length > 0 && (

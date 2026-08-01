@@ -14,19 +14,15 @@
 // location is not touched until Save, which is the one control that writes.
 import { useEffect, useState } from "react";
 
-import { CapacityPlan, Location } from "../api";
-import { Button, ErrorMsg, Field, Figure, inputCls } from "../components";
+import { CapacityPlan, Location, LocationSettings } from "../api";
+import {
+  Button, ErrorMsg, Field, Figure, NumberInput, PlanCaveats,
+} from "../components";
 import { ENGINE_SIZES } from "../optionGroups";
+import { EngineSizeSelect } from "./SizingGroup";
 // How the ask is made -- debounce, states, and what a blank target means --
 // shared with the standalone planner, which used to hold a second copy.
 import { useCapacityPlan, useEngineRating } from "../usePlan";
-
-export interface SizingFill {
-  slots: string;
-  threads_per_engine: string;
-  override_cpu: string;
-  override_memory: string;
-}
 
 /** What the location already says, as the pane's starting point. A calculator
  *  that opened on blank fields would make you retype what is on screen behind
@@ -44,7 +40,9 @@ function seed(loc: Location) {
 
 export function LocationSizing(props: {
   location: Location;
-  onApply: (fill: SizingFill) => void;
+  /** The plan's own location block, handed over unchanged: it already carries
+   *  the settings' names and units, so there is nothing here to translate. */
+  onApply: (fill: LocationSettings) => void;
   onClose: () => void;
 }) {
   const [form, setForm] = useState(() => seed(props.location));
@@ -64,15 +62,7 @@ export function LocationSizing(props: {
     engineCpu: size.cpu, engineMem: size.mem, agents: String(agents),
   });
 
-  const apply = () => {
-    if (!plan) return;
-    props.onApply({
-      slots: String(plan.location.slots),
-      threads_per_engine: String(plan.location.threads_per_engine),
-      override_cpu: plan.location.override_cpu,
-      override_memory: String(plan.location.override_memory_mb),
-    });
-  };
+  const apply = () => { if (plan) props.onApply(plan.location); };
 
   const blocked = plan ? "" : "enter a virtual user target to size this location";
 
@@ -95,27 +85,25 @@ export function LocationSizing(props: {
       <div className="grid grid-cols-3 gap-3">
         <Field label="Virtual user target" required
           hint="the load this location has to run">
-          <input type="number" min={1} className={inputCls} placeholder="5000"
-            value={form.vus}
-            onChange={(e) => setForm({ ...form, vus: e.target.value })} />
+          <NumberInput placeholder="5000" value={form.vus}
+            onChange={(v) => setForm({ ...form, vus: v })} />
         </Field>
         <Field label="Virtual users per engine"
           hint={rated
             ? `a ${size.cpu} CPU / ${size.mem} engine is rated for ${rated.toLocaleString()}`
             : "blank uses what the engine size is rated for"}>
-          <input type="number" min={1} className={inputCls}
-            placeholder={rated ? String(rated) : "500"}
+          <NumberInput placeholder={rated ? String(rated) : "500"}
             value={form.vusPerEngine}
-            onChange={(e) => setForm({ ...form, vusPerEngine: e.target.value })} />
+            onChange={(v) => setForm({ ...form, vusPerEngine: v })} />
         </Field>
-        <Field label="Engine size" hint="what each engine pod runs at">
-          <select className={inputCls} value={form.engine}
-            onChange={(e) => setForm({ ...form, engine: e.target.value })}>
-            {ENGINE_SIZES.map((s) => (
-              <option key={s.id} value={s.id}>{s.label}</option>
-            ))}
-          </select>
-        </Field>
+        {/* No Custom: this pane fills a location's *request* fields, and
+            BlazeMeter takes whole cores there -- an arbitrary size is a plan
+            whose CPU request cannot be applied. */}
+        <EngineSizeSelect preset={form.engine} hint="what each engine pod runs at"
+          onPreset={(cpu) => setForm({
+            ...form,
+            engine: ENGINE_SIZES.find((x) => x.cpu === cpu)?.id ?? form.engine,
+          })} />
       </div>
 
       {rated != null && props.location.threadsPerEngine != null
@@ -186,17 +174,8 @@ function Guidance({ plan }: { plan: CapacityPlan }) {
         {" "}Setting this location above what a cluster can hold is a test that
         sits waiting for pods rather than one that fails.
       </p>
-      {plan.vus_per_engine_assumed && (
-        <p className="text-[11px] text-amber-700">
-          <b>{plan.vus_per_engine.toLocaleString()} virtual users per engine is
-          assumed</b> — what an engine this size is rated for, not a measurement
-          of your script. Run one engine, find where it saturates, and put that
-          number in.
-        </p>
-      )}
-      {plan.warnings.map((w) => (
-        <p key={w} className="text-[11px] text-slate-500">{w}</p>
-      ))}
+      <PlanCaveats compact assumed={plan.vus_per_engine_assumed}
+        vusPerEngine={plan.vus_per_engine} warnings={plan.warnings} />
     </>
   );
 }

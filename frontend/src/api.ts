@@ -90,9 +90,15 @@ export interface CapacityPlan {
   node: { cpu: string; memory: string; disk_gb: number };
   peak: { cpu: string; memory: string; disk_gb: number };
   crane: { cpu_limit: string; memory_limit: string };
-  location: {
-    slots: number; threads_per_engine: number;
-    override_cpu: string; override_memory_mb: number;
+  /** The four location settings, in LOCATION_SETTINGS' own names and the
+   *  units its PATCH takes -- so a plan can be applied to the settings form
+   *  without renaming or re-parsing anything on the way. `override_cpu` is
+   *  null when the engine is not a whole number of cores, which is the one
+   *  thing the field cannot express. */
+  location: LocationSettings & {
+    // A plan always has these three; only override_cpu can be missing, and
+    // only because the field takes whole cores and the engine may not be one.
+    slots: number; threads_per_engine: number; override_memory: number;
   };
   egress: string[];
   warnings: string[];

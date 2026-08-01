@@ -138,6 +138,34 @@ export function Check(props: {
   );
 }
 
+/** A whole-number field. Seven of these were `<input type="number">` with
+ *  `inputCls` concatenated by hand, and they had already drifted -- one without
+ *  a `min`, one with a width bolted onto the class string. The blank string is
+ *  a legitimate value and means "not given"; see server._typed, which is the
+ *  same fact on the other side of the wire. */
+export function NumberInput(props: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  min?: number;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input type="number" min={props.min ?? 1}
+      className={inputCls + (props.className ? " " + props.className : "")}
+      placeholder={props.placeholder} value={props.value}
+      disabled={props.disabled}
+      onChange={(e) => props.onChange(e.target.value)} />
+  );
+}
+
+/** The white card everything on these pages sits in. Was six copies of the
+ *  same class string across three files, one of which had already drifted to
+ *  `space-y-2`. */
+export const cardCls =
+  "bg-white border border-slate-200 rounded-lg p-4 space-y-3";
+
 /** One number out of a plan: the figure, what it counts, and what it costs.
  *
  *  Both places that size something show a row of these, and they had a copy
@@ -157,6 +185,49 @@ export function Figure(props: {
       <div className={"text-slate-400 "
         + (props.big ? "text-[11px] mt-0.5" : "text-[10px]")}>{props.sub}</div>
     </div>
+  );
+}
+
+/** What a plan cannot know, and what it wants to warn about.
+ *
+ *  Both sizing panels showed this and had a copy each, in two wordings -- and
+ *  the wording is the point: the users-per-engine figure is the number the
+ *  whole plan multiplies by, nothing on this side can measure it, and a panel
+ *  that softened the sentence would be the one people believed. `compact` is
+ *  the pane inside a location, where it sits under a form rather than being
+ *  the page.
+ *
+ *  The warnings themselves are plan.py's prose, rendered as it wrote them. */
+export function PlanCaveats(props: {
+  assumed: boolean;
+  vusPerEngine: number;
+  warnings: string[];
+  compact?: boolean;
+}) {
+  const small = props.compact;
+  return (
+    <>
+      {props.assumed && (
+        <div className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
+          <p className={small ? "text-[11px] text-amber-700" : "text-xs text-amber-900"}>
+            <b>{props.vusPerEngine.toLocaleString()} virtual users per engine is
+            assumed</b>, not measured — it is what an engine of this size is
+            rated for. How many virtual users one engine really carries depends
+            on what your script does between requests, and every number above is
+            that figure multiplied out. Run the real script against one engine,
+            find where it saturates, and put that number in the field above.
+          </p>
+        </div>
+      )}
+      {props.warnings.map((w) => (
+        <div key={w}
+          className={small ? "" : "border border-slate-200 bg-slate-50 rounded-lg p-3"}>
+          <p className={small ? "text-[11px] text-slate-500" : "text-xs text-slate-600"}>
+            {w}
+          </p>
+        </div>
+      ))}
+    </>
   );
 }
 

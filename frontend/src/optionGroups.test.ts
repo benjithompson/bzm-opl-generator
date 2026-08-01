@@ -292,11 +292,6 @@ const SECRETS: Feature = {
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
 
-const ids = (gs: OptionGroup[]) => gs.map((g) => g.id);
-/** The groups no feature owns -- registry, proxy, CA, scheduling: they apply to
- *  any deployment, so they are on screen whatever is being configured. */
-const UNIVERSAL = ids(OPTION_GROUPS.filter((g) => !g.features.length));
-
 describe("the split the configure step is built on", () => {
   it("puts every group in exactly one bucket", () => {
     const owned = OPTION_GROUPS.filter((g) => g.features.length);

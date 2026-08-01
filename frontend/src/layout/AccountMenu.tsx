@@ -18,11 +18,11 @@
 // and grows into the workspace once there is an account to have one -- an empty
 // workspace picker above an unchosen account is a control for a question that
 // has not been asked.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Account, Workspace } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, Modal, SearchSelect, Spinner,
+  Button, Check, ErrorMsg, Field, Modal, SearchSelect, SecretInput, Spinner,
   TextInput,
 } from "../components";
 
@@ -79,6 +79,15 @@ export function AccountMenu(p: ConnectProps) {
 
   const pasted = !!(p.pasteId && p.pasteSecret);
   const account = p.accounts.find((a) => a.id === p.accountId) ?? null;
+  // Built once per list rather than per render. This menu re-renders whenever
+  // anything in App does, and a fresh array each time re-filters 166 workspace
+  // options inside SearchSelect for a keystroke in an unrelated field.
+  const accountOpts = useMemo(
+    () => p.accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` })),
+    [p.accounts]);
+  const workspaceOpts = useMemo(
+    () => p.workspaces.map((w) => ({ value: w.id, label: w.name })),
+    [p.workspaces]);
   const workspace = p.workspaces.find((w) => w.id === p.workspaceId) ?? null;
   // The workspace question only exists once an account has been chosen: without
   // one there is no list to choose from, and a disabled picker sitting there
@@ -155,8 +164,7 @@ export function AccountMenu(p: ConnectProps) {
             <div className="border-t border-slate-100 mt-1 pt-2 px-2 pb-1 space-y-2">
               <Field label="Account">
                 <SearchSelect
-                  options={p.accounts.map(
-                    (a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
+                  options={accountOpts}
                   value={p.accountId} busy={p.accountsBusy}
                   onChange={(v) => p.setAccountId(Number(v))}
                   onClear={() => p.setAccountId(null)} />
@@ -170,8 +178,7 @@ export function AccountMenu(p: ConnectProps) {
                   <Field label="Workspace"
                     hint="the locations in step 1 are this workspace's">
                     <SearchSelect
-                      options={p.workspaces.map(
-                        (w) => ({ value: w.id, label: w.name }))}
+                      options={workspaceOpts}
                       value={p.workspaceId} busy={p.workspacesBusy}
                       disabled={!p.workspacesBusy && p.workspaces.length === 0}
                       onChange={(v) => p.setWorkspaceId(Number(v))}
@@ -221,11 +228,11 @@ export function AccountMenu(p: ConnectProps) {
                 <TextInput value={p.pasteId} onChange={p.setPasteId} mono
                   disabled={connected} /></Field>
               <Field label="Secret">
-                <input type="password"
-                  className={inputCls + " font-mono text-xs"
-                    + (connected ? " bg-slate-50 text-slate-500" : "")}
-                  value={p.pasteSecret} disabled={connected}
-                  onChange={(e) => p.setPasteSecret(e.target.value)} />
+                {/* The page's masked-credential control, not a hand-built
+                    type=password: this one gets the same Show/Hide as the
+                    AUTH_TOKEN field, which is the other secret on the page. */}
+                <SecretInput value={p.pasteSecret}
+                  onChange={p.setPasteSecret} />
               </Field>
             </div>
           </details>

@@ -1483,6 +1483,30 @@ def test_the_cache_expires(monkeypatch):
     assert [x[0] for x in c.calls].count("private_locations") == 2
 
 
+def test_every_write_route_drops_the_cache():
+    """The rule is the decorator's, not each route's memory of it.
+
+    `/api/ships/token` is the one that had forgotten -- which is why this
+    asserts over the app's own routes rather than over a list written here.
+    Anything that POSTs to a customer's account and leaves a read cached is
+    a page showing what the account held before the click.
+    """
+    writes = [r for r in app_routes()
+              if "POST" in r.methods and r.path in {
+                  "/api/locations", "/api/ships", "/api/locations/func-id",
+                  "/api/locations/settings", "/api/ships/token"}]
+    assert len(writes) == 5, "a write route was renamed; name it here too"
+    missing = [r.path for r in writes
+               if getattr(r.endpoint, "__wrapped__", None) is None]
+    assert not missing, (
+        f"{missing} write to the account without _writes, so a read cached "
+        f"before the click survives it")
+
+
+def app_routes():
+    return [r for r in server.app.routes if hasattr(r, "methods")]
+
+
 def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
     """Liveness is the one read that must always be live: the status poll is
     what says an agent came online, and a cached answer would say it had not."""
