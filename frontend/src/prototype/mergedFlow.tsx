@@ -7,8 +7,8 @@
 // with, on purpose, with a confirmation.
 //
 //   ?variant=P  four steps -- Plan, Location & agent, Configure, Download
-//   ?variant=Q  three steps; the profile sits above the locations with one
-//               control that edits it, and one Apply below the diff
+//   ?variant=Q  three steps; the profile is its own card above the locations,
+//               and each location opens to show what it would change
 //   ?variant=R  one scroll, target first, sections unfold as they are answered
 //   ?variant=S  two-pane first step: the plan on the left, the location it is
 //               being applied to on the right, the difference between them down
@@ -271,35 +271,51 @@ function Fit({ plan, loc }: { plan: Plan | null; loc: Loc }) {
   );
 }
 
-function LocationList({ plan, picked, onPick, onApply, rowApply = true }: {
+function LocationList({ plan, picked, onPick, onApply, rowApply = true, expand }: {
   plan: Plan | null; picked: string | null;
   onPick: (id: string) => void; onApply: (l: Loc) => void;
-  /** Whether the picked row carries its own Apply. Off where something below
+  /** Whether the picked row carries its own Apply. Off where something else
    *  already applies to the picked location -- two buttons doing one thing,
    *  a few centimetres apart, is the thing this prototype keeps growing. */
   rowApply?: boolean;
+  /** What opens under the picked row. Given, the row becomes the container for
+   *  what it is about, rather than pointing at a panel further down that has to
+   *  name the location again to say which one it means. */
+  expand?: (l: Loc) => ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       {LOCS.map((l) => (
         <div key={l.id}
-          className={"border rounded-md px-3 py-2 flex items-center gap-3 cursor-pointer "
-            + (picked === l.id ? "border-bzm bg-sky-50" : "border-slate-200 hover:bg-slate-50")}
-          onClick={() => onPick(l.id)}>
-          <div className="grow min-w-0">
-            <div className="text-sm font-medium text-slate-800">{l.name}</div>
-            <div className="text-[11px] text-slate-400">
-              {l.workspace} · {l.agents} agent{l.agents === 1 ? "" : "s"} ·{" "}
-              {l.slots} engines/agent ·{" "}
-              {l.threadsPerEngine ?? "no"} VUs/engine
+          className={"border rounded-md overflow-hidden "
+            + (picked === l.id ? "border-bzm" : "border-slate-200")}>
+          <div
+            className={"px-3 py-2 flex items-center gap-3 cursor-pointer "
+              + (picked === l.id ? "bg-sky-50" : "hover:bg-slate-50")}
+            onClick={() => onPick(l.id)}>
+            <div className="grow min-w-0">
+              <div className="text-sm font-medium text-slate-800">{l.name}</div>
+              <div className="text-[11px] text-slate-400">
+                {l.workspace} · {l.agents} agent{l.agents === 1 ? "" : "s"} ·{" "}
+                {l.slots} engines/agent ·{" "}
+                {l.threadsPerEngine ?? "no"} VUs/engine
+              </div>
             </div>
+            <Fit plan={plan} loc={l} />
+            {rowApply && plan && picked === l.id && diff(plan, l).length > 0 && (
+              <button className={ghost + " shrink-0"}
+                onClick={(e) => { e.stopPropagation(); onApply(l); }}>
+                Apply plan
+              </button>
+            )}
           </div>
-          <Fit plan={plan} loc={l} />
-          {rowApply && plan && picked === l.id && diff(plan, l).length > 0 && (
-            <button className={ghost + " shrink-0"}
-              onClick={(e) => { e.stopPropagation(); onApply(l); }}>
-              Apply plan
-            </button>
+          {expand && (
+            <div className={"grid transition-[grid-template-rows] duration-200 "
+              + "ease-out " + (picked === l.id ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+              <div className="overflow-hidden">
+                {picked === l.id && expand(l)}
+              </div>
+            </div>
           )}
         </div>
       ))}
@@ -457,7 +473,37 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
   const [picked, setPicked] = useState<string | null>("l1");
   const [applying, setApplying] = useState<Loc | null>(null);
   const steps = ["Location & agent", "Configure", "Download"];
-  const loc = LOCS.find((l) => l.id === picked) ?? null;
+
+  /** What opens under the picked location: what the profile would change about
+   *  it, and the one control that writes. Inside the row rather than under the
+   *  list, so it does not have to name the location to say which one it means
+   *  -- the row above it is the name. */
+  const settings = (l: Loc) => {
+    const rows = s.plan ? diff(s.plan, l) : [];
+    return (
+      <div className="border-t border-bzm/40 bg-white px-3 py-2.5 space-y-2">
+        {s.plan ? <DiffTable plan={s.plan} loc={l} /> : (
+          <p className="text-[11px] text-amber-700">
+            No profile yet — size one above and this says what it would change.
+          </p>
+        )}
+        {/* Apply on the right, where the thing that commits belongs, with what
+            it costs to its left rather than under it. */}
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-slate-500">
+            {!s.plan ? "size the profile first"
+              : rows.length === 0 ? "this location already matches the profile"
+                : "writes to the account, for every agent in this location; asks first"}
+          </span>
+          <span className="grow" />
+          <button className={primary} disabled={!s.plan || rows.length === 0}
+            onClick={() => setApplying(l)}>
+            Apply
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="max-w-screen-lg mx-auto p-6 space-y-4">
@@ -470,26 +516,25 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
       </div>
 
       {at === 0 && (
-        <div className={card + " p-4 space-y-3"}>
-          {/* The profile first, above the locations, because it is what the
-              locations are then measured against -- and one control edits it,
-              opening downward between the summary and the list it changes.
-              This variant had three buttons doing two things: an Edit in a bar
-              at the top *and* one beside Apply, and an Apply on the picked row
-              *and* one under the diff. Both pairs are now one. */}
-          <div className="rounded-md border border-slate-200 bg-slate-50">
-            <div className="flex items-center gap-3 px-3 py-2">
-              <span className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
-                Capacity profile
-              </span>
-              <span className="text-sm text-slate-800">
-                {s.plan
-                  ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
-                      {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
-                  : <span className="text-amber-700">not sized yet</span>}
-              </span>
-              <span className="grow" />
-              <button className={ghost} onClick={() => setOpen(!open)}
+        <>
+          {/* Its own card, above the locations and separated from them: it is a
+              different question -- what the load needs, before where it runs --
+              and sharing a card made it read as a heading for the list. */}
+          <div className={card + " overflow-hidden"}>
+            <div className="flex items-center gap-3 px-4 py-3">
+              <div className="grow min-w-0">
+                <p className="text-[11px] uppercase tracking-wide text-slate-400
+                              font-semibold">
+                  Capacity profile
+                </p>
+                <p className="text-sm text-slate-800 mt-0.5">
+                  {s.plan
+                    ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
+                        {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
+                    : <span className="text-amber-700">not sized yet</span>}
+                </p>
+              </div>
+              <button className={ghost + " shrink-0"} onClick={() => setOpen(!open)}
                 aria-expanded={open}>
                 {open ? "Done" : "Edit"}
               </button>
@@ -497,12 +542,12 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
             <div className={"grid transition-[grid-template-rows] duration-200 "
               + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden">
-                <div className="border-t border-slate-200 p-3 space-y-3 bg-white">
+                <div className="border-t border-slate-200 bg-slate-50 p-4 space-y-3">
                   <PlanFields s={s} compact />
                   <PlanAnswer plan={s.plan} />
-                  {/* No Apply or Cancel in here, and no second Done: the fields
-                      *are* the profile, so an edit is already made and every
-                      row below has already moved. The toggle above closes it. */}
+                  {/* No Apply or Cancel in here: the fields *are* the profile,
+                      so an edit is already made and every row below has moved.
+                      The toggle above closes it. */}
                   <div className="flex gap-2 items-center">
                     <button className={ghost} disabled={!s.plan}
                       onClick={() => toast("capacity-request.md downloaded")}>
@@ -517,38 +562,18 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
             </div>
           </div>
 
-          {/* No Apply on the rows: the one below applies to whichever is
-              picked, and the rows say how far each is from the profile. */}
-          <LocationList plan={s.plan} picked={picked} onPick={setPicked}
-            onApply={setApplying} rowApply={false} />
-
-          {picked && loc && (
-            <div className="border border-slate-200 rounded-md bg-slate-50 p-3 space-y-2">
-              <p className="text-xs font-semibold text-slate-700">
-                {loc.name} · location settings
+          <div className={card + " p-4 space-y-3"}>
+            <div>
+              <h3 className="text-sm font-semibold text-slate-800">Where it runs</h3>
+              <p className="text-[11px] text-slate-500">
+                Each location measured against the profile. Open one to see what
+                would change, and to apply it.
               </p>
-              {s.plan ? <DiffTable plan={s.plan} loc={loc} /> : (
-                <p className="text-[11px] text-amber-700">
-                  No profile yet — Edit it above and this says what it would
-                  change.
-                </p>
-              )}
-              <div className="flex gap-2 items-center">
-                <button className={primary}
-                  disabled={!s.plan || diff(s.plan, loc).length === 0}
-                  onClick={() => setApplying(loc)}>
-                  Apply
-                </button>
-                <span className="text-[11px] text-slate-500">
-                  {!s.plan ? "size the profile first"
-                    : diff(s.plan, loc).length === 0
-                      ? "this location already matches"
-                      : "writes to the account; asks first"}
-                </span>
-              </div>
             </div>
-          )}
-        </div>
+            <LocationList plan={s.plan} picked={picked} onPick={setPicked}
+              onApply={setApplying} rowApply={false} expand={settings} />
+          </div>
+        </>
       )}
       {at === 1 && <Placeholder title="Configure" lines={CONFIGURE} />}
       {at === 2 && <Placeholder title="Download &amp; verify" lines={DOWNLOAD} />}
