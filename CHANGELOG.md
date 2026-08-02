@@ -148,12 +148,18 @@ anything that breaks.
   which had no card on the Account capacity page at all. Locations were already
   asking for 1,000; workspaces do now.
 
-- **Plan capacity can be told how many agents there will be.** A location's
-  concurrency is agents x engines per agent, and the standalone planner had no
-  field for the first half — so it always answered for one agent and told you to
-  set `slots` to the whole run, which on a four-agent location is four times the
-  engines. The pane inside an existing location already read the count off the
-  location; this is the same arithmetic for a location that does not exist yet.
+- **`slots` in a plan is engines per *agent*, and the document says so.** A
+  location's concurrency is agents x engines per agent, and a plan that read
+  `slots` as the whole run told a four-agent location to set four times the
+  engines it needs. `bzm-opl-gen plan --agents N` divides by it, and the pane
+  inside an existing location reads the count off the location.
+
+  **Plan capacity does not ask how many agents you will have.** It was a field
+  for one release and should not have been: the panel exists for somebody with
+  no cluster, and how many agents they end up running is decided afterwards and
+  changed at will. Asked up front it is a guess that silently halves or doubles
+  `slots`. One agent is what it sizes for, and the request document says to
+  multiply if you add more.
 
 - **The planner's "virtual users per engine" suggestion follows the engine size
   before a target is typed.** It was read off the last plan, so choosing Large

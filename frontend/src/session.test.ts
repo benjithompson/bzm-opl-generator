@@ -26,7 +26,7 @@ const BASE = {
   view: "flow" as const,
   plan: {
     users: "5000", vusPerEngine: "", engineCpu: "2", engineMem: "8Gi",
-    enginesPerNode: "", agents: "",
+    enginesPerNode: "",
   },
 };
 

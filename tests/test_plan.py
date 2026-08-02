@@ -387,3 +387,20 @@ def test_a_fractional_engine_has_no_whole_core_request():
 
     whole = plan.capacity_plan(100, engine_cpu="2", engine_mem="8Gi")
     assert whole["location"]["override_cpu"] == 2
+
+
+def test_the_slots_row_only_multiplies_when_there_is_something_to_multiply():
+    """At one agent, "1 x 10 = 10" is arithmetic for its own sake -- and it
+    invites the question of where the 1 came from, which is the one thing the
+    planner cannot answer: how many agents a location ends up with is decided
+    after the cluster exists and changes at will. The web planner therefore has
+    no agents field, and this is what its document says.
+    """
+    one = plan.plan_document(plan.capacity_plan(5000))
+    row = [l for l in one.splitlines() if "Engines per agent" in l][0]
+    assert "1 x 10" not in row
+    assert "Add agents to this location" in row
+
+    many = plan.plan_document(plan.capacity_plan(5000, agents=4))
+    row = [l for l in many.splitlines() if "Engines per agent" in l][0]
+    assert "4 x 3 = 12 engines" in row

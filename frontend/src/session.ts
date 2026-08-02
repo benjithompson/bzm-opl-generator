@@ -26,9 +26,10 @@ import type { PlanInputs } from "./usePlan";
  *  Exported for the test that forges a snapshot at the *current* version --
  *  written against a literal, it started passing for the wrong reason the
  *  first time this was bumped. */
-// 3: the planner grew an `agents` field. Half-reading a v2 snapshot would
-// leave that input undefined, which React renders as an uncontrolled field.
-export const VERSION = 3;
+// 3: the planner grew an `agents` field. 4: it lost it again -- a v3 snapshot
+// would restore a key PlanInputs no longer has, and the panel would carry a
+// value nothing reads. Half-reading either way is what the version stops.
+export const VERSION = 4;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {

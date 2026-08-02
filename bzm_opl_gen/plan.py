@@ -492,10 +492,19 @@ def _blazemeter_section(p):
         # calls it and what it means: the row used to read "Concurrent engines
         # ... how many engines may run at once", which is the location's total
         # only when there is one agent -- and this plan divides by agents.
-        f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
-        f"may run at once, so this location's total is "
-        f"{p['agents']} x {loc['slots']} = {p['agents'] * loc['slots']} engines "
-        f"— below that the test cannot reach {p['users']:,} virtual users |",
+        # The multiplication only earns its place when there is something to
+        # multiply. At one agent "1 x 10 = 10" reads as arithmetic for its own
+        # sake and invites the question of where the 1 came from -- which is
+        # exactly the question the planner cannot answer, since how many agents
+        # a location ends up with is decided later and changes at will.
+        (f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
+         f"may run at once. Add agents to this location and its total is "
+         f"agents x this — below `{loc['slots']}` a single agent cannot reach "
+         f"{p['users']:,} virtual users |" if p["agents"] == 1 else
+         f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
+         f"may run at once, so this location's total is "
+         f"{p['agents']} x {loc['slots']} = {p['agents'] * loc['slots']} engines "
+         f"— below that the test cannot reach {p['users']:,} virtual users |"),
         f"| Virtual users per engine (`threadsPerEngine`) | "
         f"`{loc['threads_per_engine']}` | unset, every test start fails with 403 "
         f"*Not enough available resources* |",

@@ -19,18 +19,20 @@ export interface PlanInputs {
   engineCpu: string;
   engineMem: string;
   enginesPerNode: string;
-  /** How many agents the location will have. An input here and nowhere else in
-   *  this panel's arithmetic: a location's concurrency is agents x engines per
-   *  agent, so a plan that assumed one agent told a two-agent location to set
-   *  twice the engines it needs. The pane inside an existing location reads the
-   *  count off the location instead -- there it is a fact, here it is a
-   *  decision, and this is the panel for somebody who has not made it yet. */
-  agents: string;
 }
+
+// There is deliberately no `agents` here. A location's concurrency is
+// agents x engines per agent, so the arithmetic needs the count -- but this
+// panel is for somebody with no cluster, and how many agents they will end up
+// running is a decision they have not made yet and can change at will
+// afterwards. Asked up front it is a guess that silently halves or doubles
+// `slots`. The pane inside an existing location reads the count off the
+// location, where it is a fact; `plan.capacity_plan` still takes `agents`, and
+// that is who passes it.
 
 export const EMPTY_PLAN_INPUTS: PlanInputs = {
   users: "", vusPerEngine: "", engineCpu: "", engineMem: "",
-  enginesPerNode: "", agents: "",
+  enginesPerNode: "",
 };
 
 

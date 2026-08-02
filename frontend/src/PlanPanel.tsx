@@ -58,7 +58,7 @@ export function PlanPanel(props: {
   const { plan, err, busy } = useCapacityPlan({
     users: inputs.users, vusPerEngine: inputs.vusPerEngine,
     engineCpu: inputs.engineCpu, engineMem: inputs.engineMem,
-    enginesPerNode: inputs.enginesPerNode, agents: inputs.agents,
+    enginesPerNode: inputs.enginesPerNode,
   });
 
   const preset = ENGINE_SIZES.find(
@@ -134,15 +134,6 @@ export function PlanPanel(props: {
             <NumberInput placeholder="1" value={inputs.enginesPerNode}
               onChange={(v) => set("enginesPerNode", v)} />
           </Field>
-          {/* A location's concurrency is agents x engines per agent, so this
-              divides the run rather than adding to it: two agents each run half
-              the engines, in a cluster each. Blank is one, which is the answer
-              for most people asking this question for the first time. */}
-          <Field label="Agents"
-            hint="blank means one — each runs its share, in a cluster of its own">
-            <NumberInput placeholder="1" value={inputs.agents}
-              onChange={(v) => set("agents", v)} />
-          </Field>
           {preset === "custom" && (
             <>
               <Field label="Engine CPU limit">
@@ -200,12 +191,7 @@ function PlanResult(props: {
             sub={p ? `${p.engine.cpu} CPU / ${p.engine.memory} each` : " "} />
           <Figure big n={p ? p.nodes : "—"}
             unit={p && p.nodes === 1 ? "node" : "nodes"}
-            /* Said per agent as soon as there is more than one, because that is
-               what each cluster has to be: the total is what the whole location
-               costs, and nobody buys that as one pool. */
-            sub={p ? (p.agents > 1
-              ? `${p.nodes_per_agent} per agent, ${p.node.cpu} vCPU / ${p.node.memory} each`
-              : `${p.node.cpu} vCPU / ${p.node.memory} each`) : " "} />
+            sub={p ? `${p.node.cpu} vCPU / ${p.node.memory} each` : " "} />
           <Figure big n={p ? p.peak.cpu : "—"} unit="vCPU at peak"
             sub={p ? `${p.peak.memory} RAM` : " "} />
           <Figure big n={p ? 0 : "—"} unit="when idle"
