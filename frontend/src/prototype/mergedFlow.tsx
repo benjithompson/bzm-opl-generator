@@ -7,8 +7,8 @@
 // with, on purpose, with a confirmation.
 //
 //   ?variant=P  four steps -- Plan, Location & agent, Configure, Download
-//   ?variant=Q  three steps under a profile bar that states but does not edit;
-//               one Edit, beside Apply, expanding downward
+//   ?variant=Q  three steps; the profile sits above the locations with one
+//               control that edits it, and one Apply below the diff
 //   ?variant=R  one scroll, target first, sections unfold as they are answered
 //   ?variant=S  two-pane first step: the plan on the left, the location it is
 //               being applied to on the right, the difference between them down
@@ -271,9 +271,13 @@ function Fit({ plan, loc }: { plan: Plan | null; loc: Loc }) {
   );
 }
 
-function LocationList({ plan, picked, onPick, onApply }: {
+function LocationList({ plan, picked, onPick, onApply, rowApply = true }: {
   plan: Plan | null; picked: string | null;
   onPick: (id: string) => void; onApply: (l: Loc) => void;
+  /** Whether the picked row carries its own Apply. Off where something below
+   *  already applies to the picked location -- two buttons doing one thing,
+   *  a few centimetres apart, is the thing this prototype keeps growing. */
+  rowApply?: boolean;
 }) {
   return (
     <div className="space-y-1.5">
@@ -291,7 +295,7 @@ function LocationList({ plan, picked, onPick, onApply }: {
             </div>
           </div>
           <Fit plan={plan} loc={l} />
-          {plan && picked === l.id && diff(plan, l).length > 0 && (
+          {rowApply && plan && picked === l.id && diff(plan, l).length > 0 && (
             <button className={ghost + " shrink-0"}
               onClick={(e) => { e.stopPropagation(); onApply(l); }}>
               Apply plan
@@ -453,30 +457,10 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
   const [picked, setPicked] = useState<string | null>("l1");
   const [applying, setApplying] = useState<Loc | null>(null);
   const steps = ["Location & agent", "Configure", "Download"];
+  const loc = LOCS.find((l) => l.id === picked) ?? null;
 
   return (
     <div className="max-w-screen-lg mx-auto p-6 space-y-4">
-      {/* Not a step. The plan is a property of the whole session -- it is true
-          in step 3 as much as in step 1 -- so it sits above the flow rather
-          than inside it, and the flow keeps the three steps it had.
-          
-          It states the profile and does not edit it. There used to be an Edit
-          here as well as one beside Apply, and two controls a few centimetres
-          apart both saying "Edit" read as the same control twice however
-          different they were underneath. The one that stayed is the one next
-          to the thing it changes. */}
-      <div className={card + " flex items-center gap-3 px-3 py-2"}>
-        <span className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
-          Capacity profile
-        </span>
-        <span className="text-sm text-slate-800">
-          {s.plan
-            ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
-                {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
-            : <span className="text-amber-700">not sized yet</span>}
-        </span>
-      </div>
-
       <div className="flex items-center gap-3 flex-wrap">
         <Stepper at={at} go={setAt} steps={steps} />
         <span className="grow" />
@@ -487,75 +471,80 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
 
       {at === 0 && (
         <div className={card + " p-4 space-y-3"}>
-          <h3 className="text-sm font-semibold text-slate-800">Location &amp; agent</h3>
+          {/* The profile first, above the locations, because it is what the
+              locations are then measured against -- and one control edits it,
+              opening downward between the summary and the list it changes.
+              This variant had three buttons doing two things: an Edit in a bar
+              at the top *and* one beside Apply, and an Apply on the picked row
+              *and* one under the diff. Both pairs are now one. */}
+          <div className="rounded-md border border-slate-200 bg-slate-50">
+            <div className="flex items-center gap-3 px-3 py-2">
+              <span className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
+                Capacity profile
+              </span>
+              <span className="text-sm text-slate-800">
+                {s.plan
+                  ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
+                      {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
+                  : <span className="text-amber-700">not sized yet</span>}
+              </span>
+              <span className="grow" />
+              <button className={ghost} onClick={() => setOpen(!open)}
+                aria-expanded={open}>
+                {open ? "Done" : "Edit"}
+              </button>
+            </div>
+            <div className={"grid transition-[grid-template-rows] duration-200 "
+              + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+              <div className="overflow-hidden">
+                <div className="border-t border-slate-200 p-3 space-y-3 bg-white">
+                  <PlanFields s={s} compact />
+                  <PlanAnswer plan={s.plan} />
+                  {/* No Apply or Cancel in here, and no second Done: the fields
+                      *are* the profile, so an edit is already made and every
+                      row below has already moved. The toggle above closes it. */}
+                  <div className="flex gap-2 items-center">
+                    <button className={ghost} disabled={!s.plan}
+                      onClick={() => toast("capacity-request.md downloaded")}>
+                      Download request
+                    </button>
+                    <span className="text-[11px] text-slate-500">
+                      nothing is written to the account until Apply
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* No Apply on the rows: the one below applies to whichever is
+              picked, and the rows say how far each is from the profile. */}
           <LocationList plan={s.plan} picked={picked} onPick={setPicked}
-            onApply={setApplying} />
-          {/* Shown as soon as a location is picked, sized or not: without a
-              plan this is the only way back to the planner, and a panel that
-              appears only once you have one is a dead end for anyone who has
-              cleared the target. */}
-          {picked && (
+            onApply={setApplying} rowApply={false} />
+
+          {picked && loc && (
             <div className="border border-slate-200 rounded-md bg-slate-50 p-3 space-y-2">
-              <p className="text-xs font-semibold text-slate-700">Location settings</p>
-              {/* No Calculate button: the profile *is* the calculator, and a
-                  second one was the redundancy this variant exists to remove. */}
-              {s.plan ? (
-                <DiffTable plan={s.plan} loc={LOCS.find((l) => l.id === picked)!} />
-              ) : (
+              <p className="text-xs font-semibold text-slate-700">
+                {loc.name} · location settings
+              </p>
+              {s.plan ? <DiffTable plan={s.plan} loc={loc} /> : (
                 <p className="text-[11px] text-amber-700">
-                  No profile yet — Edit to size one, and this says what it would
+                  No profile yet — Edit it above and this says what it would
                   change.
                 </p>
               )}
               <div className="flex gap-2 items-center">
-                {/* Both stay on screen with a plan or without one; Apply says
-                    what it is waiting for rather than vanishing. */}
-                <button className={primary} disabled={!s.plan}
-                  onClick={() => setApplying(LOCS.find((l) => l.id === picked)!)}>
-                  Apply profile
+                <button className={primary}
+                  disabled={!s.plan || diff(s.plan, loc).length === 0}
+                  onClick={() => setApplying(loc)}>
+                  Apply
                 </button>
-                <button className={ghost} onClick={() => setOpen(!open)}
-                  aria-expanded={open}>
-                  {open ? "Done" : "Edit"}
-                </button>
-                {!s.plan && (
-                  <span className="text-[11px] text-amber-700">
-                    size the profile first
-                  </span>
-                )}
-              </div>
-
-              {/* Opens downward, under the button that opened it and directly
-                  above nothing -- the diff it changes is the line above, so the
-                  numbers move while the fields are still on screen. */}
-              <div className={"grid transition-[grid-template-rows] duration-200 "
-                + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                <div className="overflow-hidden">
-                  <div className="rounded-md border border-bzm/40 bg-white p-3
-                                  space-y-3 mt-1">
-                    <p className="text-xs font-semibold text-slate-700">
-                      Capacity profile
-                    </p>
-                    <PlanFields s={s} compact />
-                    <PlanAnswer plan={s.plan} />
-                    {/* No Apply or Cancel in here: the fields *are* the
-                        profile, so a change is already made and the table
-                        above has already moved. Closing is all that is left,
-                        and Apply profile above is the one that writes. */}
-                    <div className="flex gap-2 items-center">
-                      <button className={ghost} onClick={() => setOpen(false)}>
-                        Done
-                      </button>
-                      <button className={ghost} disabled={!s.plan}
-                        onClick={() => toast("capacity-request.md downloaded")}>
-                        Download request
-                      </button>
-                      <span className="text-[11px] text-slate-500">
-                        nothing is written until Apply profile
-                      </span>
-                    </div>
-                  </div>
-                </div>
+                <span className="text-[11px] text-slate-500">
+                  {!s.plan ? "size the profile first"
+                    : diff(s.plan, loc).length === 0
+                      ? "this location already matches"
+                      : "writes to the account; asks first"}
+                </span>
               </div>
             </div>
           )}
