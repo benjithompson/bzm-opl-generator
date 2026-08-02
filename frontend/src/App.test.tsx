@@ -956,3 +956,28 @@ test("the profile fills a location's settings, and Save is the only write",
     await waitFor(() => expect(sent.length).toBe(2));
     expect(sent[1]).toEqual({ slots: "6", override_memory: "8192" });
   });
+
+
+test("a location with no agents is not a bundle request", async () => {
+  // Picking an empty location used to spend a 400 on saying so: the preview
+  // asked for a bundle, and generate() refused -- correctly -- with a sentence
+  // about a ship_id nobody had been asked for yet. An empty location is a
+  // normal state this page has a whole amber panel for, so the preview waits
+  // for the agent instead of asking a question it already knows the answer to.
+  const generated: unknown[] = [];
+  const api = accountOf([loc("h-empty", "no agents here")], {
+    generate: async (...args: unknown[]) => {
+      generated.push(args);
+      throw new Error("ship_id required: location has 0 ships ([])");
+    },
+  });
+  render(<App api={api} />);
+
+  fireEvent.click(await screen.findByText("no agents here"));
+  // The page says the location is empty...
+  expect(await screen.findByText(/has no agents yet/)).toBeTruthy();
+  // ...and asked for nothing. Waited past the preview's own debounce, so this
+  // is "never asked" rather than "has not asked yet".
+  await new Promise((r) => setTimeout(r, 400));
+  expect(generated).toEqual([]);
+});

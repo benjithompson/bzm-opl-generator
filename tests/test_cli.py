@@ -539,6 +539,54 @@ def test_livetest_refuses_a_placeholder_bundle_with_nothing_to_re_render(
     assert "AUTH_TOKEN" in str(caught.value)
 
 
+def test_livetest_refuses_a_bundle_built_for_another_agent(monkeypatch, tmp_path):
+    """#107, as it happened: --manifests defaults to out/, out/ is whatever the
+    last `generate` left there, and a run with --ship-id and --auth-token
+    deployed a nine-day-old bundle for a different agent. Crane could not
+    register, the rollout timed out saying nothing else, and the rig deleted the
+    cluster. The refusal names the ship on disk and the ship asked for, and
+    arrives before anything is built."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(manifests))
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it deployed a bundle built for a different agent"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--ship-id", "6a6f7270aaaabbbbccccdddd",
+             "--auth-token", "REAL")
+    msg = str(caught.value)
+    assert SHIP in msg and "6a6f7270aaaabbbbccccdddd" in msg
+
+
+def test_livetest_refuses_a_leftover_from_an_older_generator(monkeypatch,
+                                                             tmp_path):
+    """The other half of the same stale directory: bzm_limitrange.yaml, emitted
+    by a version that no longer exists and applied by the rig regardless."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(manifests))
+    (manifests / "bzm_limitrange.yaml").write_text("kind: LimitRange\n")
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it applied a file this generator does not emit"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--auth-token", "REAL")
+    assert "bzm_limitrange.yaml" in str(caught.value)
+
+
 def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     """--auth-token is the way out for a caller who already holds one -- the
     token `create-ship` printed, say. Minting over it would revoke the very

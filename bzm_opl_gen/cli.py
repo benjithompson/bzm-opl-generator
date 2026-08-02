@@ -490,6 +490,16 @@ def cmd_livetest(a):
             f"(the two render the same objects), or install the chart yourself "
             f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
             f"logs -l role=role-crane -f")
+    # Is the directory this agent's bundle at all? --manifests defaults to out/,
+    # which holds whatever the last `generate` left there, and the rig applies
+    # every *.yaml in it. First of the bundle guards and before the mint below,
+    # because a run that is about to be refused must not rotate a credential
+    # some other agent is holding. See livetest.bundle_check for the incident.
+    check = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id, opts)
+    for note in check.notes:
+        print("note: " + note)
+    if check.refusals:
+        sys.exit("\n".join(check.refusals))
     # Same shape of guard, for the same reason. The rig deploys into a namespace
     # it creates itself, so a ServiceAccount the bundle does not create is never
     # there: every object applies, no pod is ever created, and the run burns its

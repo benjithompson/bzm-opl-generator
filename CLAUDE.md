@@ -316,9 +316,28 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
 
 ## Generator details that bite
 
-- `generate` writes `out/profile.json` (resolved options minus `auth_token`);
-  `livetest` re-renders from it, so manifests under test stay generator output
-  rather than hand-patched YAML.
+- **`livetest` deploys the directory, and only sometimes re-renders it.**
+  `generate` writes `out/profile.json` (resolved options minus `auth_token`), and
+  the rig re-renders from it only where it has something to inject: the proxy's
+  CA (`--local-proxy`) or the engine sizing (`--run-test`). A lean run has no
+  regenerate callback at all and applies `<dir>/*.yaml` exactly as it sits —
+  which this file used to describe as "manifests under test stay generator
+  output". They do not, and #107 is what that cost: `--manifests` defaults to
+  `out/`, `out/` is whatever the last `generate` left there, and a run given
+  `--ship-id` and `--auth-token` deployed a nine-day-old bundle for a *different*
+  agent, plus a `bzm_limitrange.yaml` from a version that no longer emits one.
+  Re-rendering everywhere would not have caught it either — `_regenerator` merges
+  onto the profile and prefers *its* `ship_id` over the command line, so the
+  stale identity survives a re-render — and on the lean path it would have to
+  either mint a token (revoking the one the bundle is running on, which is why
+  the mint sits inside the re-render branch) or silently rewrite a directory the
+  operator built deliberately. So the identity is **checked**, not re-rendered:
+  `livetest.bundle_check` refuses a `HARBOR_ID`/`SHIP_ID` (in the ConfigMap or in
+  `profile.json`) that is not the one the run was told to test, naming both
+  values, and refuses any `*.yaml` outside `emitted_yaml_files()`. It runs in
+  `cmd_livetest` before the token mint and again at the top of `livetest.run`
+  before the try block — outside it, because that `finally` tears down a cluster.
+  Unreadable is a note, not a refusal.
 - **The chart is copied, never re-rendered.** `--format helm` walks
   `templates/helm/` and emits it verbatim, so anything added there ships in every
   bundle — including files `package-data` would drop. Its globs do not recurse
@@ -327,12 +346,13 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
 - `--format helm` refuses a service-virtualization location, `livetest` refuses
-  a chart directory, and `livetest` refuses a profile with
-  `service_account_create: false`. One-line guards over silent failures: a chart
+  a chart directory, a profile with `service_account_create: false`, a
+  placeholder `AUTH_TOKEN` it will not re-render over, and a bundle whose
+  identity is not the agent under test. Guards over silent failures: a chart
   without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob
   comes back empty, and a namespace the rig was told already exists never gets
   created, so every object applies, no pod is created, and the run waits out its
-  timeout.
+  timeout. Each of these is 12–20 minutes and a deleted cluster otherwise.
 - CA bundles exceed the 256KB cap on kubectl's last-applied-configuration
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;

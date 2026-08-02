@@ -518,6 +518,13 @@ export default function App({ api }: { api: Api }) {
     // exists -- which is exactly what switching source mode used to leave on
     // screen.
     if (!facts) { setFiles([]); setPreviewToken(null); return; }
+    // A bundle is generated *for an agent*, so without one there is nothing to
+    // preview and generate() refuses -- correctly, and with a sentence about a
+    // ship_id nobody has been asked for yet. Picking a location that has no
+    // agents is a normal state this page has a whole amber panel for, and it
+    // used to spend a 400 on saying so. The preview waits for the agent
+    // instead; the empty preview reads as "not yet", which is what it is.
+    if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
     window.clearTimeout(previewTimer.current);
     previewTimer.current = window.setTimeout(async () => {
       try {
