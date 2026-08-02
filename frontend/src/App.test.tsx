@@ -23,14 +23,14 @@
 // -- which for the poll has to be before the interval is created, or it is a
 // real interval vi will never advance.
 import {
-  act, cleanup, fireEvent, render, screen, waitFor,
+  act, cleanup, fireEvent, render, screen, waitFor, within,
 } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import {
-  AgentStatus, Api, Capacity, Facts, Location, Options, SavedBundle, Ship,
-  TokenRequest,
+  AgentStatus, Api, Capacity, CapacityPlan, Facts, Location, Options,
+  SavedBundle, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 // The snapshot writer the page itself uses. A literal forged here would be a
@@ -738,7 +738,7 @@ test("the status poll moves with the agent, and leaves no interval behind",
 
     // Move the target. The switch is still on -- what changed is which agent
     // the answers would be about.
-    fireEvent.click(screen.getByRole("button", { name: /Agent details/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Capacity & agent/ }));
     fireEvent.click(screen.getByText("agent-2"));
     expect(polled[polled.length - 1]).toBe("h-perf/s-2");
 
@@ -796,4 +796,163 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     // was never restarted.
     await tick(1_000);
     expect(read).toEqual(["blazemeter", "mocks-ns"]);
+  });
+
+// -- the capacity profile, and the location it lands on ----------------------
+// The planner reaches nothing -- no key, no account, no cluster -- and that is
+// the requirement rather than a property: it is the question somebody asks
+// *before* they have any of it, which is why it is the first card of step 1
+// rather than a view beside the flow. The first test below is that claim, made
+// on a page nobody has connected. The second is the other half: what the
+// profile says is filled into a location's own fields, and the only thing that
+// reaches the account is Save.
+
+/** A plan as core would answer it. The arithmetic is plan.py's and is tested
+ *  there; what these two need is an answer that divides by the agents it was
+ *  asked with, because that division is the whole reason a location re-asks. */
+function planFor(body: {
+  users: string; agents?: string; vus_per_engine?: string;
+}): CapacityPlan {
+  const agents = Math.max(Number(body.agents) || 1, 1);
+  const vus = Number(body.vus_per_engine) || 500;
+  const engines = Math.ceil(Number(body.users) / vus);
+  const perAgent = Math.ceil(engines / agents);
+  return {
+    users: Number(body.users), vus_per_engine: vus,
+    vus_per_engine_assumed: !body.vus_per_engine,
+    engines, agents, engines_per_agent: perAgent, engines_per_node: 1,
+    nodes_per_agent: perAgent, nodes: perAgent * agents,
+    engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
+              supported_vus: 500 },
+    node: { cpu: "4", memory: "16Gi", disk_gb: 100 },
+    peak: { cpu: String(engines * 2), memory: `${engines * 8}Gi`,
+            disk_gb: engines * 60 },
+    crane: { cpu_limit: "1", memory_limit: "2Gi" },
+    location: { slots: perAgent, threads_per_engine: vus, override_cpu: 2,
+                override_memory: 8192 },
+    egress: ["a.blazemeter.com"], warnings: [],
+    document: "# infrastructure request", document_file: "capacity-request.md",
+  };
+}
+
+test("with no key connected, step 1 still sizes a capacity profile", async () => {
+  const asked: { users: string; agents?: string }[] = [];
+  // Not connected, and nothing account-shaped is stubbed: every route but the
+  // four the page reads at mount rejects by naming itself, so a profile that
+  // had come to need an account could not pass this.
+  const api = fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({ connected: false }),
+    optionDefaults: async () => ({ namespace: "blazemeter" }),
+    funcIdChoices: async () => [],
+    features: async () => [],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+    plan: async (body) => { asked.push(body); return planFor(body); },
+  });
+  render(<App api={api} />);
+
+  // The card is on screen before anything is connected, and says it has no
+  // answer yet rather than hiding until it does.
+  expect(await screen.findByText("not sized yet")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+                   { target: { value: "5000" } });
+
+  // The summary is the answer, on the row that is visible with the editor shut.
+  expect(await screen.findByText(/5,000 VUs · 10 engines · 2 CPU \/ 8Gi/))
+    .toBeTruthy();
+  // Asked for the run, not for a location: how many agents will serve it is a
+  // fact about a location, and there is no location here to have one.
+  expect(asked[asked.length - 1].agents).toBeUndefined();
+  // ...and the document that is the point of sizing without a cluster is
+  // reachable from inside the editor.
+  const download = screen.getByRole<HTMLButtonElement>(
+    "button", { name: "Download" });
+  await waitFor(() => expect(download.disabled).toBe(false));
+});
+
+test("the profile fills a location's settings, and Save is the only write",
+  async () => {
+    const asked: { users: string; agents?: string }[] = [];
+    const sent: Record<string, string>[] = [];
+    // What the account holds, moved only by a request that reaches it -- so
+    // "before" on the second save is what the first one actually did.
+    let held = loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ]);
+    const state = () => ({
+      slots: held.slots ?? null,
+      threads_per_engine: held.threadsPerEngine ?? null,
+      override_cpu: held.overrideCPU ?? null,
+      override_memory: held.overrideMemory ?? null,
+    });
+    render(<App api={accountOf([held], {
+      // The list is re-read on nothing here, so the fixture hands back what it
+      // holds now rather than the array it was built from.
+      locations: async () => [held],
+      engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+      plan: async (body) => { asked.push(body); return planFor(body); },
+      updateLocation: async (body) => {
+        const { harbor_id: _h, ...fields } = body;
+        sent.push(fields as Record<string, string>);
+        const before = state();
+        held = { ...held,
+          slots: fields.slots ? Number(fields.slots) : held.slots,
+          threadsPerEngine: fields.threads_per_engine
+            ? Number(fields.threads_per_engine) : held.threadsPerEngine ?? null,
+          // override_memory is deliberately not applied: BlazeMeter's own POST
+          // accepts `threadsPerEngine` and drops it on some accounts, and a
+          // field that comes back unstored is the case the answer exists for.
+          overrideCPU: fields.override_cpu
+            ? Number(fields.override_cpu) : held.overrideCPU ?? null };
+        const after = state();
+        const changed = Object.fromEntries(
+          (Object.keys(after) as (keyof typeof after)[])
+            .filter((k) => after[k] !== before[k]).map((k) => [k, after[k]]));
+        return { location: held, changed, before, after,
+                 ignored: fields.override_memory ? ["override_memory"] : [] };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+                     { target: { value: "5000" } });
+    fireEvent.click(await screen.findByText("Perf"));
+
+    // The row opens on this location's own arithmetic: 10 engines over its two
+    // agents is 5 each, and writing the run's own figure into `slots` would
+    // size the location for twenty.
+    const panel = await screen.findByRole("region", { name: "Perf settings" });
+    await waitFor(() => expect(asked.some((a) => a.agents === "2")).toBe(true));
+    const field = (label: RegExp) =>
+      within(panel).getByLabelText<HTMLInputElement>(label);
+    await waitFor(() => expect(field(/^Engines per agent/).value).toBe("5"));
+    expect(field(/^Virtual users per engine/).value).toBe("500");
+    expect(field(/^Engine CPU request/).value).toBe("2");
+    expect(field(/^Engine memory request/).value).toBe("8192");
+    // Filled, and nothing has been written: filling a field applies nothing,
+    // and Save is the only thing here that reaches the account.
+    expect(sent).toEqual([]);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]).toEqual({ slots: "5", threads_per_engine: "500",
+                              override_cpu: "2", override_memory: "8192" });
+    // What the account holds now, not what was sent: three landed and one came
+    // back unstored, and the two are reported apart. It survives the re-read
+    // the save itself caused -- the location arrives changed, which is what
+    // used to clear this the moment it appeared.
+    expect(await within(panel).findByText(/engines per agent 1 → 5/)).toBeTruthy();
+    expect(within(panel).getByText(/BlazeMeter did not store engine memory request/))
+      .toBeTruthy();
+
+    // The fields are still fields. A hand edit outranks the profile, and only
+    // what differs from the account is sent -- the two the first save landed
+    // are not written back.
+    fireEvent.change(field(/^Engines per agent/), { target: { value: "6" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent.length).toBe(2));
+    expect(sent[1]).toEqual({ slots: "6", override_memory: "8192" });
   });

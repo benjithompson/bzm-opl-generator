@@ -1,24 +1,36 @@
 // Asking the server to size something, from either of the two places that do.
 //
-// The standalone planner and the location's own Calculate pane are different
-// panels asking one question, and they had two copies of how to ask it: the
-// same 250ms debounce, the same three pieces of state, the same "a blank target
-// is not an error, it is the state the panel opens in". A copy each is how they
-// come to disagree about which keystroke is worth a round trip -- and they
-// already had, since only one of them asked what the engine size was rated for.
+// The capacity profile card and each location's own panel are different views
+// of one question, and they had two copies of how to ask it: the same 250ms
+// debounce, the same three pieces of state, the same "a blank target is not an
+// error, it is the state the panel opens in". A copy each is how they come to
+// disagree about which keystroke is worth a round trip -- and they already had,
+// since only one of them asked what the engine size was rated for.
+//
+// The two ask the same thing with one difference: the card sizes the run
+// (no agents, so one), and a location row re-asks it with the agent count that
+// location actually has, because `slots` is engines per *agent*. That division
+// is plan.py's and is not restated on this side.
 //
 // The arithmetic itself is not here and must not be: it is plan.py's, and
 // doctor judges live locations against the same ratio. This is only the asking.
 import { useEffect, useRef, useState } from "react";
 
-import { api, CapacityPlan } from "./api";
+import { Api, CapacityPlan } from "./api";
 
+/** The two figures the profile owns outright: what the load is, and what one
+ *  engine is assumed to carry.
+ *
+ *  The engine size and the engines-per-node are deliberately *not* here. They
+ *  are bundle options (`engine_cpu_limit`, `engine_mem_limit`,
+ *  `engines_per_node`) and the profile is sized for the engine the bundle asks
+ *  for -- one value with one owner. Held here as well they were two, and the
+ *  planner's copy reached the options only when somebody pressed the button
+ *  that copied it across, so a plan sized for a Large engine could generate a
+ *  bundle asking for a standard one. */
 export interface PlanInputs {
   users: string;
   vusPerEngine: string;
-  engineCpu: string;
-  engineMem: string;
-  enginesPerNode: string;
 }
 
 // There is deliberately no `agents` here. A location's concurrency is
@@ -30,10 +42,7 @@ export interface PlanInputs {
 // location, where it is a fact; `plan.capacity_plan` still takes `agents`, and
 // that is who passes it.
 
-export const EMPTY_PLAN_INPUTS: PlanInputs = {
-  users: "", vusPerEngine: "", engineCpu: "", engineMem: "",
-  enginesPerNode: "",
-};
+export const EMPTY_PLAN_INPUTS: PlanInputs = { users: "", vusPerEngine: "" };
 
 
 export interface PlanAsk {
@@ -53,7 +62,12 @@ export interface PlanState {
   busy: boolean;
 }
 
-export function useCapacityPlan(ask: PlanAsk): PlanState {
+/** `api` is the caller of the local routes, handed down from App like every
+ *  other route on this page rather than imported here: a module-level import
+ *  leaves nowhere to put a fake, and these two panels are the only ones whose
+ *  requests could not be driven through the page's own seam. Fixed for the
+ *  page's lifetime, which is why it is in no dependency array below. */
+export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   const [plan, setPlan] = useState<CapacityPlan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -91,7 +105,8 @@ export function useCapacityPlan(ask: PlanAsk): PlanState {
  *  placeholder that waited for a plan showed 500 beside a Large one. The ratio
  *  stays on the server for the reason api.engineVus gives: doctor judges
  *  locations against the same one. */
-export function useEngineRating(cpu?: string, mem?: string): number | null {
+export function useEngineRating(cpu: string | undefined, mem: string | undefined,
+                                api: Api): number | null {
   const [rated, setRated] = useState<number | null>(null);
   useEffect(() => {
     if (!cpu || !mem) { setRated(null); return; }

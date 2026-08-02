@@ -24,10 +24,9 @@ const BASE = {
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
-  plan: {
-    users: "5000", vusPerEngine: "", engineCpu: "2", engineMem: "8Gi",
-    enginesPerNode: "",
-  },
+  // The two figures the capacity profile owns. Its engine size is a bundle
+  // option and is remembered with the rest of them.
+  plan: { users: "5000", vusPerEngine: "750" },
 };
 
 beforeEach(() => {
@@ -49,14 +48,15 @@ describe("what is remembered", () => {
     expect(load()).toBeNull();
   });
 
-  it("remembers which view was open, and what was typed into the planner", () => {
-    // A refresh while sizing a cluster used to come back on the connect form,
-    // asking for the account the planner exists precisely to work without.
-    save({ ...BASE, view: "plan" });
+  it("remembers which view was open, and what was typed into the profile", () => {
+    // A refresh while sizing a run must not come back to an empty target: the
+    // profile is the first thing on step 1 and nothing else can recover what
+    // was typed into it.
+    save({ ...BASE, view: "capacity" });
     const back = load();
-    expect(back?.view).toBe("plan");
+    expect(back?.view).toBe("capacity");
     expect(back?.plan.users).toBe("5000");
-    expect(back?.plan.engineMem).toBe("8Gi");
+    expect(back?.plan.vusPerEngine).toBe("750");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

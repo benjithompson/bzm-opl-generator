@@ -52,12 +52,14 @@ import { shipOnline } from "./heartbeat";
 import { manualComplete } from "./manualIds";
 // What the account can generate, by workspace.
 import { CapacityView } from "./CapacityView";
-// The capacity planner: a view of its own, not a step. See PlanPanel.
-import { PlanHandover, PlanPanel } from "./PlanPanel";
 // The planner's form shape and its empty value: plain data, so the session
-// snapshot and this page share one declaration of it.
-import { EMPTY_PLAN_INPUTS, PlanInputs } from "./usePlan";
+// snapshot and this page share one declaration of it. `PlanAsk` is what a
+// profile asks for, assembled once here and read by two panels.
+import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 import { AgentPanel } from "./steps/AgentPanel";
+// The capacity profile: step 1's first card, and the planner that used to be a
+// view of its own. See CapacityProfile for why it moved.
+import { CapacityProfile } from "./steps/CapacityProfile";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
@@ -211,16 +213,15 @@ export default function App({ api }: { api: Api }) {
   // sends you back to the configure step when a group it depends on is
   // unfinished, and it cannot do that with a position it cannot see.
   const [step, setStep] = useState(0);
-  // Which of the two things this page is. The step flow deploys an agent and
-  // needs an account or the values off one; the planner works out how much
-  // cluster a load target needs and reaches nothing at all -- which is the
-  // state a customer with no cluster is actually in, and why it cannot be a
-  // step. `plan` holds what was typed into it, so switching views and coming
-  // back does not empty the form.
+  // Which of the two things this page is. The step flow deploys an agent; the
+  // rollup is one read of a whole account and belongs to nothing in the flow.
+  // The planner is no longer among them -- it is step 1's first card, because
+  // reaching nothing is what makes it the first question rather than a separate
+  // page (see CapacityProfile).
   const [view, setView] = useState<ViewId>("flow");
-  // The two drawers. The nav starts open because the three views are the first
-  // thing to understand; the preview starts shut because there is nothing in it
-  // until an agent is chosen.
+  // The two drawers. The nav starts open because the views are the first thing
+  // to understand; the preview starts shut because there is nothing in it until
+  // an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [cap, setCap] = useState<Capacity | null>(null);
@@ -355,12 +356,14 @@ export default function App({ api }: { api: Api }) {
     setStatus(null); setPolling(false); setConnErr(null);
     forgetToken();
     session.clear();
-    // Land somewhere that still works. Two of the three views need a key --
-    // Account capacity has nothing to roll up, and Generate's "Connect to
-    // BlazeMeter" source has no account to read a location from -- so leaving
-    // the page where it was would leave it on a disabled control. Plan capacity
-    // needs nothing at all, which is what makes it the place to land.
-    setView("plan");
+    // Land somewhere that still works. Account capacity has nothing to roll up
+    // without a key, and Generate's "Connect to BlazeMeter" source has no
+    // account to read a location from -- so the page goes to the flow's first
+    // step in manual entry, where the capacity profile at the top of it needs
+    // no account at all. That card is what "Plan capacity" used to be, and it
+    // is still the one thing here that works with nothing connected.
+    setView("flow");
+    setStep(0);
     setSourceMode("manual");
     setCap(null);
   };
@@ -574,27 +577,25 @@ export default function App({ api }: { api: Api }) {
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
 
-  /** Carry a plan into the generator, and move to step 1.
+  /** What the capacity profile is sizing.
    *
-   *  Writes four fields and creates nothing. Two are the new-location form's
-   *  (slots, threadsPerEngine) -- which only matter if a location is made here,
-   *  and are harmless if one is picked instead -- and two are bundle options
-   *  the plan's node arithmetic assumed, so a bundle generated afterwards asks
-   *  for the engines the request was sized for.
+   *  Assembled once, read twice: by the profile card at the top of step 1, and
+   *  by whichever location is open below it -- which re-asks with its own agent
+   *  count, since `slots` is engines per agent. Two of the five are the
+   *  planner's own (they are what was typed at a target); three are bundle
+   *  options, because the profile is sized for the engine the bundle asks for
+   *  and a second copy of that size is how the two came to disagree.
    *
-   *  overrideCPU / overrideMemory are deliberately *not* written: they are
-   *  fields of the BlazeMeter location and nothing here writes to an account
-   *  without saying what it costs first. The panel names them and the request
-   *  document explains them; setting them is the operator's, in BlazeMeter. */
-  const applyPlan = useCallback((h: PlanHandover) => {
-    setNewLoc((l) => ({ ...l, slots: h.slots,
-                        threads_per_engine: h.threadsPerEngine }));
-    setOptions((o) => ({ ...o, engine_cpu_limit: h.engineCpuLimit,
-                         engine_mem_limit: h.engineMemLimit,
-                         engines_per_node: h.enginesPerNode }));
-    setView("flow");
-    setStep(0);
-  }, []);
+   *  There is nothing to "apply". The four location settings the plan implies
+   *  are a write to the customer's account, and that write is made in one place
+   *  -- the location's own panel, beside the sentence saying what it costs. */
+  const profileAsk: PlanAsk = {
+    users: planInputs.users,
+    vusPerEngine: planInputs.vusPerEngine,
+    engineCpu: raw("engine_cpu_limit"),
+    engineMem: raw("engine_mem_limit"),
+    enginesPerNode: raw("engines_per_node"),
+  };
 
   // Settled means: an agent is chosen and its facts are in. Collapsing then
   // keeps three steps of pickers from sitting above the configuration for the
@@ -1052,13 +1053,6 @@ export default function App({ api }: { api: Api }) {
           )}
           {cap && <CapacityView cap={cap} />}
         </main>
-      ) : view === "plan" ? (
-        // No WorkArea: there are no manifests to sit beside a plan, and an
-        // empty preview pane next to it would suggest this step produces some.
-        <main className="max-w-screen-lg mx-auto p-6">
-          <PlanPanel inputs={planInputs} setInputs={setPlanInputs}
-                     onUse={applyPlan} />
-        </main>
       ) : (
       <main className="max-w-screen-xl mx-auto p-6">
         {/* `done` is what a step cannot say about itself -- whether it is
@@ -1096,19 +1090,38 @@ export default function App({ api }: { api: Api }) {
             "namespace, service account and any unfinished group first",
             "",
           ]}>
-          {/* 1 · Where the harbor id, ship id and token come from.
-              Three steps folded into one: connected they are picked from the
-              account, manually they are typed. Both end at the same three
-              values, so they belong in one place rather than three that only
-              one mode ever uses. */}
-          <Section n={1} title="Agent details" done={!!facts && !!shipId}
-            hint="harbor_id, ship_id and AUTH_TOKEN — from your account, or typed.">
-            {/* Four records, assembled here. Every value in them is state this
+          {/* 1 · How big the run is, and which agent it is generated for.
+              The profile comes first because it decides everything after it and
+              needs none of it -- no key, no account, no cluster -- and because
+              its answer is four settings on the location picked below, which is
+              the next thing on this screen rather than a number to carry to
+              another one. Under it, where the harbor id, ship id and token come
+              from: connected they are picked from the account, manually they
+              are typed, and both end at the same three values. */}
+          <Section n={1} title="Capacity & agent" done={!!facts && !!shipId}
+            hint="Size the run, then the location and agent it is generated for.">
+            <div className="space-y-3">
+            <CapacityProfile
+              api={api} ask={profileAsk} setInputs={setPlanInputs}
+              /* The engine size and the engines per node are the bundle's own
+                 options, edited here as well as in the Configure step's Sizing
+                 group: the profile is sized for the engine the manifests ask
+                 for, so there is one value rather than two that agree until
+                 somebody changes one. */
+              setEngine={(cpu, mem) => setOptions((o) => ({
+                ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
+              /* An integer option, so it is stored as one: the field is a
+                 string because every form field is, and generate() refuses a
+                 string here. */
+              setPerNode={(v) => set("engines_per_node",
+                                     v.trim() ? Number(v) : null)} />
+            {/* Five records, assembled here. Every value in them is state this
                 file still owns -- what the panel gained is the three answers it
                 used to be handed already worked out: the filtered list, whether
                 an agent is reporting, and the new-location form as a finished
                 element. */}
             <AgentPanel
+              api={api} profile={profileAsk}
               source={{
                 mode: sourceMode, switchTo: switchMode,
                 manual, setManual, who,
@@ -1148,6 +1161,7 @@ export default function App({ api }: { api: Api }) {
                 setToken: (v) => set("auth_token", v || null),
                 regenerate: regenerateToken,
               }} />
+            </div>
           </Section>
 
           {/* 2 · Configure */}

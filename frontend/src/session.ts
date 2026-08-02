@@ -29,7 +29,11 @@ import type { PlanInputs } from "./usePlan";
 // 3: the planner grew an `agents` field. 4: it lost it again -- a v3 snapshot
 // would restore a key PlanInputs no longer has, and the panel would carry a
 // value nothing reads. Half-reading either way is what the version stops.
-export const VERSION = 4;
+// 5: the planner became step 1's capacity profile. Its engine size moved into
+// the bundle options (which are stored here already), so PlanInputs is down to
+// the two figures it owns -- and `view` no longer has a "plan" to restore, so a
+// v4 snapshot would land the page on a view that does not exist.
+export const VERSION = 5;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -43,13 +47,13 @@ export interface Session {
   manual: { harbor_id: string; ship_id: string };
   options: Options;
   step: number;
-  /** Which of the three views is open. The planner and the account rollup are
-   *  not steps, so the step number cannot say -- and somebody who refreshed
-   *  while sizing a cluster came back to a connect form asking for the account
-   *  they have not got. */
-  view: "flow" | "plan" | "capacity";
-  /** What was typed into the planner. Kept for the same reason the option
-   *  values are: they were typed, and nothing else can recover them. */
+  /** Which of the two views is open. The account rollup is not a step, so the
+   *  step number cannot say. */
+  view: "flow" | "capacity";
+  /** What was typed into the capacity profile. Kept for the same reason the
+   *  option values are: they were typed, and nothing else can recover them --
+   *  and somebody who refreshes while sizing a run must not come back to an
+   *  empty target. */
   plan: PlanInputs;
 }
 

@@ -5,7 +5,8 @@ import { ENGINE_SIZES } from "../optionGroups";
  *
  *  Three copies before this: here, the standalone planner and the location's
  *  Calculate pane -- and they had already diverged, since only this one offered
- *  Custom. A fourth size, or a relabelled one, was three edits.
+ *  Custom. A fourth size, or a relabelled one, was three edits. Two now: this
+ *  group and step 1's capacity profile, which edit the same two options.
  *
  *  `onCustom` absent means the caller has nowhere to put a custom size, so the
  *  option is not offered rather than offered and ignored. */

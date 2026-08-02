@@ -1,5 +1,5 @@
-// Changing a location that already exists: the concurrency settings, after the
-// agent is deployed.
+// What the capacity profile would change about this location, and the one
+// control that writes it.
 //
 // The case this is for is not setup, it is the correction that follows one. A
 // location and its agent get built for 500 virtual users an engine, a real run
@@ -8,6 +8,14 @@
 // re-applied or restarted. Before this existed the answer was "go and edit it
 // in BlazeMeter", which is the one place this tool otherwise never sends you.
 //
+// It opens as a before -> after: the left column is what the account holds, the
+// right column is the field that will be sent, and the profile above the list
+// is what those fields open filled with. There is no separate calculator any
+// more (it was a third place the same four numbers were worked out, seeded from
+// a target typed per location) and no Apply -- filling a field applies nothing,
+// so a button to do it was a click between the profile and the only control
+// here that costs anything.
+//
 // It is a write to the customer's account, so it follows the same rules as the
 // other two on this page: its own control rather than a side effect of
 // something else, what it costs said before it is pressed, and the answer
@@ -15,9 +23,12 @@
 // core.update_location re-reads for exactly that reason.
 import { useEffect, useState } from "react";
 
-import { api, Location, LocationSettings as Settings, LocationUpdate } from "../api";
-import { Button, ErrorMsg, Field, NumberInput } from "../components";
-import { LocationSizing } from "./LocationSizing";
+import { Api, CapacityPlan, Location, LocationSettings as Settings,
+         LocationUpdate } from "../api";
+import { Button, ErrorMsg, NumberInput, PlanCaveats } from "../components";
+// The same ask the profile card makes, re-made with this location's agent
+// count: `slots` is engines per *agent*, and the division is plan.py's.
+import { PlanAsk, useCapacityPlan } from "../usePlan";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
  *  the API takes: there is deliberately no way to *clear* a setting here, since
@@ -33,17 +44,38 @@ const EMPTY: Draft = {
   slots: "", threads_per_engine: "", override_cpu: "", override_memory: "",
 };
 
+const KEYS = Object.keys(EMPTY) as (keyof Draft)[];
+
 const shown = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : String(v);
 
-/** What the location currently says, as a draft. Re-derived whenever the
- *  location changes so the form is never showing another location's numbers. */
+/** What the location currently says, as a draft. */
 function draftOf(loc: Location): Draft {
   return {
     slots: shown(loc.slots),
     threads_per_engine: shown(loc.threadsPerEngine),
     override_cpu: shown(loc.overrideCPU),
     override_memory: shown(loc.overrideMemory),
+  };
+}
+
+/** What the fields open on: the location's own values, with the profile's over
+ *  the top of them where there is a profile.
+ *
+ *  Filling is not applying. Nothing has reached the account until Save, and the
+ *  numbers are in the fields where they can be read and edited first -- which
+ *  is the whole reason the profile fills a draft rather than being sent.
+ *
+ *  A null setting is left as the location's. Only `override_cpu` can be one --
+ *  the plan says null where the engine is not a whole number of cores, which
+ *  overrideCPU cannot express. */
+function seed(loc: Location, fill: Settings | null): Draft {
+  const current = draftOf(loc);
+  if (!fill) return current;
+  return {
+    ...current,
+    ...Object.fromEntries(KEYS.filter((k) => fill[k] !== null)
+      .map((k) => [k, String(fill[k])])),
   };
 }
 
@@ -54,36 +86,78 @@ const LABELS: Record<keyof Draft, string> = {
   override_memory: "Engine memory request (MB)",
 };
 
+const HINTS: Record<keyof Draft, string> = {
+  slots: "BlazeMeter's `slots` — one agent's engines, not the location's total",
+  threads_per_engine: "unset, every test start fails with 403",
+  override_cpu: "match the engine's CPU — 2 for a standard engine. Blank = 250m",
+  override_memory: "match the engine's memory in MB — 8192 for a standard "
+    + "engine. Blank = 256Mi",
+};
+
 export function LocationSettings(props: {
+  /** The caller of the local routes. Handed down rather than imported: Save is
+   *  one of the three writes this page makes to the customer's account, and a
+   *  write that cannot be swapped for a fake is a write no test can watch. */
+  api: Api;
   location: Location;
+  /** What the profile is sizing, assembled once by App. Its `users` is blank
+   *  until somebody sizes one, which is the "no profile yet" state -- not an
+   *  error, and not a reason to hide the fields. */
+  profile: PlanAsk;
   /** Put the changed location back into the page's own list and selection. */
   onUpdated: (loc: Location) => void;
 }) {
   const { location } = props;
-  const [draft, setDraft] = useState<Draft>(() => draftOf(location));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<LocationUpdate | null>(null);
-  // The calculator, open on demand. Closed by default because most visits here
-  // are a one-field edit, and a pane that is always open makes the four fields
-  // it feeds look like its output rather than the location's settings.
-  const [sizing, setSizing] = useState(false);
+  // Whether anything in here was typed. A hand edit outranks a later change to
+  // the profile: the fields would otherwise be rewritten under someone who is
+  // in the middle of correcting one of them. Reset gives the profile back.
+  const [touched, setTouched] = useState(false);
 
-  // A different location is a different form. Without this, picking another
-  // location left the previous one's numbers in the fields, and Save would
-  // have written them to it.
+  // Not a field: the location already says how many agents it has, and a box to
+  // retype it is a second source for the same fact -- one that can disagree
+  // with the row it sits under. An empty location counts as one, which is what
+  // it will have as soon as the first agent is created.
+  const agents = Math.max((location.ships ?? []).length, 1);
+  const { plan, err: planErr, busy: planBusy } =
+    useCapacityPlan({ ...props.profile, agents: String(agents) }, props.api);
+  const fill = plan?.location ?? null;
+
+  const [draft, setDraft] = useState<Draft>(() => seed(location, fill));
+
+  // A different location is a different everything: the fields, the last
+  // outcome, the last refusal, and whether any of it was typed. Without this,
+  // picking another location left the previous one's numbers in the fields and
+  // Save would have written them to it.
   useEffect(() => {
-    setDraft(draftOf(location));
-    setResult(null);
-    setErr(null);
-  }, [location.id, location.slots, location.threadsPerEngine,
-      location.overrideCPU, location.overrideMemory]);
+    setTouched(false); setResult(null); setErr(null);
+  }, [location.id]);
 
-  const agentCount = Math.max((location.ships ?? []).length, 1);
+  // The fields follow the location and the profile until something is typed
+  // into them.
+  //
+  // The outcome is deliberately not cleared here. A save changes the location,
+  // the changed location comes back through `onUpdated`, and this effect runs
+  // *because of* the save that just landed -- so clearing it took the report of
+  // what the account now holds off screen at the moment it arrived.
+  useEffect(() => {
+    if (touched) return;
+    setDraft(seed(location, fill));
+    // The plan's own four values rather than the plan: a fresh object every
+    // render would re-seed on every keystroke anywhere on the page.
+  }, [location.id, location.slots, location.threadsPerEngine,
+      location.overrideCPU, location.overrideMemory, touched,
+      fill?.slots, fill?.threads_per_engine, fill?.override_cpu,
+      fill?.override_memory]);
+
   const current = draftOf(location);
-  const edited = (Object.keys(EMPTY) as (keyof Draft)[])
-    .filter((k) => draft[k].trim() !== current[k]);
-  const set = (k: keyof Draft, v: string) => setDraft({ ...draft, [k]: v });
+  const edited = KEYS.filter((k) => draft[k].trim() !== current[k]);
+  const set = (k: keyof Draft, v: string) => {
+    setTouched(true);
+    setDraft({ ...draft, [k]: v });
+  };
 
   const save = async () => {
     setBusy(true); setErr(null); setResult(null);
@@ -93,7 +167,8 @@ export function LocationSettings(props: {
       // edited the location.
       const body: Record<string, string> = {};
       edited.forEach((k) => { body[k] = draft[k].trim(); });
-      const out = await api.updateLocation({ harbor_id: location.id, ...body });
+      const out = await props.api.updateLocation(
+        { harbor_id: location.id, ...body });
       setResult(out);
       props.onUpdated(out.location);
     } catch (e) {
@@ -103,36 +178,12 @@ export function LocationSettings(props: {
     }
   };
 
-  // Applying a size writes the draft, not the location: Save is still the only
-  // thing that reaches the account, and what it will send is visible in the
-  // fields first.
-  //
-  // A null field is left alone rather than blanked. Only `override_cpu` can be
-  // one -- the plan says null where the engine is not a whole number of cores,
-  // which overrideCPU cannot express -- and it used to arrive as a formatted
-  // "500m" that this had to catch with a regex over the plan's own string.
-  // Sizing it so the plan speaks the settings' vocabulary took that out.
-  const applySizing = (fill: Settings) => {
-    setResult(null);
-    setDraft({
-      ...draft,
-      ...Object.fromEntries(
-        (Object.keys(EMPTY) as (keyof Draft)[])
-          .filter((k) => fill[k] !== null)
-          .map((k) => [k, String(fill[k])])),
-    });
-    setSizing(false);
-  };
-
-  const field = (k: keyof Draft, hint: string) => (
-    <Field label={LABELS[k]} hint={hint}>
-      <NumberInput placeholder={current[k] || "not set"} value={draft[k]}
-        onChange={(v) => set(k, v)} />
-    </Field>
-  );
-
   return (
-    <div className="border border-slate-200 rounded-md p-3 space-y-3 bg-slate-50">
+    // Named after the location it is about: it opens inside that location's own
+    // row, and "Location settings" on its own is the same heading whichever row
+    // is open.
+    <section aria-label={`${location.name} settings`}
+      className="border border-slate-200 rounded-md p-3 space-y-3 bg-slate-50">
       <div>
         <p className="text-xs font-semibold text-slate-700">
           Location settings
@@ -142,46 +193,49 @@ export function LocationSettings(props: {
           manifests, so a change here needs no regenerate and no redeploy — it
           applies to the next test that starts.
         </p>
-        {/* Left, under the heading, and the primary blue: it is how you decide
-            what the fields below should say, so it comes before them in the
-            reading order and looks like the thing to press. As a ghost button
-            on the right it read as a secondary action on the panel. */}
-        <div className="pt-0.5">
-          <Button onClick={() => setSizing(!sizing)}>
-            {sizing ? "Hide" : "Calculate"}
-          </Button>
-        </div>
       </div>
 
-      {/* Open/close on the same 0fr -> 1fr grid as everything else that expands
-          on this page, so the pane arrives rather than appears. */}
-      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-        + (sizing ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-        <div className="overflow-hidden">
-          {sizing && (
-            <LocationSizing location={location} onApply={applySizing}
-              onClose={() => setSizing(false)} />
-          )}
-        </div>
-      </div>
+      <ProfileLine plan={plan} agents={agents} busy={planBusy}
+        touched={touched} />
+      <ErrorMsg msg={planErr} />
 
-      <div className="grid grid-cols-2 gap-3">
-        {field("slots", "BlazeMeter's `slots` — one agent's engines, not the "
-                        + "location's total")}
-        {field("threads_per_engine", "unset, every test start fails with 403")}
-        {field("override_cpu",
-               "match the engine's CPU — 2 for a standard engine. Blank = 250m")}
-        {field("override_memory",
-               "match the engine's memory in MB — 8192 for a standard engine. "
-               + "Blank = 256Mi")}
+      {/* Before -> after, with the after column editable. Two panels -- a diff
+          to read and a form to fill -- would be two answers to "what is about
+          to be written", and only one of them would be the one that is sent. */}
+      <div className="space-y-1.5">
+        {KEYS.map((k) => (
+          // The label wraps the whole row, so the value it is about is the one
+          // named beside it however the row is laid out.
+          <label key={k} className="flex items-center gap-2">
+            <span className="grow min-w-0">
+              <span className="text-xs font-medium text-slate-600">
+                {LABELS[k]}
+              </span>
+              <span className="block text-[11px] text-slate-400">{HINTS[k]}</span>
+            </span>
+            <span className="text-xs tabular-nums text-slate-400 w-20 text-right
+                             shrink-0">
+              {current[k] || "not set"}
+            </span>
+            <span aria-hidden="true"
+              className={"text-xs shrink-0 "
+                + (draft[k].trim() !== current[k] ? "text-bzm" : "text-slate-300")}>
+              →
+            </span>
+            <span className="w-28 shrink-0">
+              <NumberInput placeholder={current[k] || "not set"} value={draft[k]}
+                onChange={(v) => set(k, v)} />
+            </span>
+          </label>
+        ))}
       </div>
 
       <p className="text-[11px] text-slate-500">
         <b>Engines per agent</b> multiplies: this location&apos;s concurrency is
-        agents × that figure, so {agentCount} agent{agentCount === 1 ? "" : "s"}
+        agents × that figure, so {agents} agent{agents === 1 ? "" : "s"}
         {" "}at {draft.slots || "?"} each is{" "}
         {Number(draft.slots) > 0
-          ? `${agentCount * Number(draft.slots)} engines at once`
+          ? `${agents * Number(draft.slots)} engines at once`
           : "however many you set"}. Each agent runs its share in its own
         cluster.
       </p>
@@ -195,29 +249,68 @@ export function LocationSettings(props: {
         the engines apart.
       </p>
 
-      <p className="text-[11px] text-amber-700">
-        Saving changes the location for <b>every agent in it</b> and every test
-        that starts on it, including anyone else&apos;s.
-      </p>
-
-      <div className="flex gap-2 items-center">
-        <Button onClick={save} busy={busy} disabled={edited.length === 0}>
-          Save
-        </Button>
-        <Button kind="ghost" disabled={edited.length === 0}
-          onClick={() => { setDraft(draftOf(location)); setResult(null); }}>
-          Reset
-        </Button>
-        <span className="text-[11px] text-slate-500">
+      {/* What it costs on the left, the control that commits on the right --
+          the reading order of the panel is "this is what changes, this is what
+          it costs, do it". */}
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-amber-700">
           {edited.length === 0
             ? "nothing changed yet"
             : `${edited.length} setting${edited.length === 1 ? "" : "s"}: `
-              + edited.map((k) => LABELS[k].toLowerCase()).join(", ")}
+              + edited.map((k) => LABELS[k].toLowerCase()).join(", ")
+              + " — saving changes this location for every agent in it, and "
+              + "every test that starts on it, including anyone else's"}
         </span>
+        <span className="grow" />
+        <Button kind="ghost" disabled={edited.length === 0}
+          onClick={() => {
+            setTouched(false);
+            setDraft(seed(location, fill));
+            setResult(null);
+          }}>
+          Reset
+        </Button>
+        <Button onClick={save} busy={busy} disabled={edited.length === 0}>
+          Save
+        </Button>
       </div>
 
       <ErrorMsg msg={err} />
       {result && <Outcome result={result} />}
+    </section>
+  );
+}
+
+/** Where the numbers in the right-hand column came from.
+ *
+ *  The per-agent division is the line worth saying out loud: the profile sizes
+ *  a run, `slots` is what *one* agent may run, and the same 10 engines is 5
+ *  each against two agents. Writing the run's own figure into `slots` would
+ *  size this location for twenty. */
+function ProfileLine({ plan, agents, busy, touched }: {
+  plan: CapacityPlan | null; agents: number; busy: boolean; touched: boolean;
+}) {
+  if (!plan) {
+    return (
+      <p className="text-[11px] text-amber-700">
+        No capacity profile yet — size one above and these fields open on what
+        it would change here. They can be typed in either way.
+      </p>
+    );
+  }
+  return (
+    <div className={"space-y-1 " + (busy ? "opacity-50" : "")}>
+      <p className="text-[11px] text-slate-500">
+        The profile — <b>{plan.users.toLocaleString()} virtual users</b> at{" "}
+        {plan.vus_per_engine.toLocaleString()} an engine — needs{" "}
+        <b>{plan.engines} engine{plan.engines === 1 ? "" : "s"}</b>, which is{" "}
+        <b>{plan.engines_per_agent} per agent</b> across this location&apos;s{" "}
+        {agents} agent{agents === 1 ? "" : "s"}, on{" "}
+        {plan.nodes_per_agent} node{plan.nodes_per_agent === 1 ? "" : "s"} each.
+        {touched && " The fields below were edited by hand and no longer follow it."}
+      </p>
+      <PlanCaveats compact assumed={plan.vus_per_engine_assumed}
+        vusPerEngine={plan.vus_per_engine} warnings={plan.warnings} />
     </div>
   );
 }

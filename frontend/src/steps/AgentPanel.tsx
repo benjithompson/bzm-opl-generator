@@ -23,7 +23,7 @@
 //     markup, which is the half that belongs beside the agent form it is a pair
 //     with.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Facts, FuncIdChoice, Location, Ship } from "../api";
+import { Api, Facts, FuncIdChoice, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -35,6 +35,9 @@ import { ManualSource } from "../groups/ManualSource";
 // the state on an agent's -- and they were the same call twice.
 import { onlineCount, shipOnline } from "../heartbeat";
 import { rotateHazard } from "../token";
+// What the profile card above this panel is sizing, on its way to the one
+// location panel that measures itself against it.
+import { PlanAsk } from "../usePlan";
 
 /** The two ids typed by hand, for an account nobody here can reach. */
 export interface ManualIds { harbor_id: string; ship_id: string }
@@ -148,10 +151,20 @@ export interface CredentialHandover {
 }
 
 export interface AgentPanelProps {
+  /** Passed straight through to the open location's settings, which is where
+   *  the one write on this step is made (DownloadPanel takes the client for the
+   *  same reason). Nothing in this file calls a route itself. */
+  api: Api;
   source: SourceHandover;
   locations: LocationHandover;
   agents: AgentHandover;
   credential: CredentialHandover;
+  /** What the capacity profile above this panel is sizing. Passed through to
+   *  the open location's settings, which is where a profile turns into four
+   *  numbers about one location -- and where the only control that writes them
+   *  to the account lives. Sizing needs no account, so this is not a record
+   *  about the connection and does not belong in any of the four above. */
+  profile: PlanAsk;
 }
 
 /** Where the confirm has got to. Per agent, and reset by changing agent:
@@ -171,7 +184,7 @@ function matching(list: Location[], query: string): Location[] {
 const FILTER_ABOVE = 8;
 
 export function AgentPanel({
-  source, locations, agents, credential,
+  api, source, locations, agents, credential, profile,
 }: AgentPanelProps) {
   // Derived here rather than passed in beside the list: both are answers to
   // "which location", and only one of them can be the list's.
@@ -240,7 +253,10 @@ export function AgentPanel({
   }, [open]);
 
   const toggle = (id: string) => {
-    if (agents.id !== id) { agents.pick(id); return; }
+    // Choosing an agent by hand is the move on from the location, so the fold
+    // goes back to following the step -- which lands it here. Picking the
+    // location pinned it open (below); this is what releases it.
+    if (agents.id !== id) { agents.pick(id); setPinned(null); return; }
     setOpen((cur) => (cur === id ? null : id));
   };
   const regenerate = async () => {
@@ -300,7 +316,8 @@ export function AgentPanel({
             summary={location
               ? `${location.name} · ${location.slots ?? "?"} engine(s)/agent`
               : "none selected"}
-            hint="A location holds agents. Open one to size it and change its settings.">
+            hint="A location holds agents. Open one to see what the capacity
+                  profile would change about it, and to save that change.">
             <div className="space-y-3">
               {/* Neither picker is here any more: both are at the foot of the
                   nav drawer with the key, because the account decides what
@@ -359,7 +376,22 @@ export function AgentPanel({
                     <div key={l.id}
                       className={on ? "bg-bzm/10 border-l-4 border-bzm"
                         : i % 2 ? "bg-slate-50/70" : "bg-white"}>
-                      <button onClick={() => locations.pick(l.id)}
+                      {/* Pinned open by the click that selects: the row opens
+                          onto what the capacity profile would change about this
+                          location and the one control that saves it, and a
+                          section that folds itself the moment you act on it
+                          takes that decision off screen. It was worse than it
+                          sounds -- a location with one idle agent is auto-picked,
+                          so the panel could arrive and be hidden in the same
+                          frame. Clicking an agent below releases it.
+
+                          Not for an empty location: it has no agent to run
+                          anything under, so the next thing is creating one and
+                          the fold should go where it always went. */}
+                      <button onClick={() => {
+                          locations.pick(l.id);
+                          setPinned((l.ships ?? []).length ? "location" : null);
+                        }}
                         className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
                         <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
                           + (n ? "bg-emerald-500" : "bg-amber-400")} />
@@ -382,7 +414,8 @@ export function AgentPanel({
                         <div className="overflow-hidden">
                           {on && (
                             <div className="px-3 pb-3">
-                              <LocationSettings location={l}
+                              <LocationSettings api={api} location={l}
+                                profile={profile}
                                 onUpdated={locations.updated} />
                             </div>
                           )}

@@ -1,9 +1,15 @@
-// The left drawer: which of the three things this page is.
+// The left drawer: which of the two things this page is.
 //
-// The three views were buttons in the header, competing with the product name
-// and the connected account for the same line. A drawer is where an app this
-// shape keeps them, and it collapses to a rail so the width is the reader's
-// choice rather than the layout's.
+// The views were buttons in the header, competing with the product name and the
+// connected account for the same line. A drawer is where an app this shape
+// keeps them, and it collapses to a rail so the width is the reader's choice
+// rather than the layout's.
+//
+// There were three. "Plan capacity" is now the first card of Generate's first
+// step: it was a view because it needs no account, but sitting beside the flow
+// made the first question look like an alternative to it, and its answer had to
+// be carried across by hand. Needing no account is not a reason to be
+// elsewhere -- it is a reason to be first.
 //
 // The controls follow the convention rather than inventing one: a hamburger
 // opens it, and an outlined left arrow closes it. Both live in the same corner,
@@ -12,7 +18,7 @@
 // controls to learn.
 import { ReactNode } from "react";
 
-export type ViewId = "flow" | "plan" | "capacity";
+export type ViewId = "flow" | "capacity";
 
 export interface NavItem {
   id: ViewId;
@@ -32,14 +38,12 @@ const Icon = ({ d }: { d: string }) => (
   </svg>
 );
 
-/** Deliberately plain shapes: a document for the bundle, a calculator for the
- *  planner, bars for the account rollup. No icon set is worth a dependency for
- *  three glyphs. */
+/** Deliberately plain shapes: a document for the bundle, bars for the account
+ *  rollup. No icon set is worth a dependency for two glyphs. */
 export const NAV: NavItem[] = [
-  { id: "flow", label: "Generate", hint: "manifests for one agent",
+  { id: "flow", label: "Generate",
+    hint: "size the run, then manifests for one agent",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
-  { id: "plan", label: "Plan capacity", hint: "size a cluster you do not have yet",
-    icon: <Icon d="M5.5 2.5h9v15h-9zM8 6h4M8 9.5h1M11 9.5h1M8 13h1M11 13h1" /> },
   { id: "capacity", label: "Account capacity", hint: "what this account can generate",
     icon: <Icon d="M3 16.5h14M6 16.5v-5M10 16.5v-9M14 16.5v-3" /> },
 ];
