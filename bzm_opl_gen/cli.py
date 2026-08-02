@@ -28,11 +28,11 @@ def _client(a):
 
     One construction for every command, and it is core's: it reads the key file
     itself and refuses a bad one with a CoreError -- the sentence the web page
-    and an MCP session get -- where `api.BzmClient(path)` raises SystemExit
-    from inside the constructor. A command with no --api-key at all reaches the
-    environment rather than a TypeError from `open(None)`.
+    and an MCP session get -- where the constructor used to read the file and
+    raise SystemExit from inside it. A command with no --api-key at all reaches
+    the environment rather than a TypeError from `open(None)`.
     """
-    return core.client_from_env(a.api_key)
+    return core.client_from_key(a.api_key)
 
 
 def _resolve_account(client, a):

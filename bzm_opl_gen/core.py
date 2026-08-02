@@ -156,7 +156,7 @@ KEY_SECRET_ENV = "BZM_API_KEY_SECRET"
 KEY_FILE_ENV = "BZM_API_KEY_FILE"
 
 
-def client_from_env(api_key_file=None, *, key_id=None, secret=None):
+def client_from_key(api_key_file=None, *, key_id=None, secret=None):
     """The construction: a BzmClient from a path, an id and secret, or the
     environment -- and a CoreError, never anything else, when there is none.
 
@@ -169,23 +169,29 @@ def client_from_env(api_key_file=None, *, key_id=None, secret=None):
 
     Widened rather than joined by a sibling (#92). The promise worth having in
     one place is the one this already made -- never SystemExit, because the
-    file-reading constructor raises one and a BaseException walks past every
+    file-reading constructor raised one and a BaseException walks past every
     `except Exception` between a route and the top of a server process -- and a
     second function making the same promise about a different input is the
-    thirteen constructions again, one order of magnitude down. The name is now
-    narrower than the function; renaming it belongs to the half of this that
-    migrates every call site at once (#95), because a rename today either
-    breaks the point all three suites stand in at or adds the second name this
-    was written to remove.
+    thirteen constructions again, one order of magnitude down. That promise is
+    structural now rather than a habit: #95 deleted the constructor's path
+    branch, so `api.BzmClient` takes a keyword-only pair and there is no
+    exiting read left anywhere to creep back into a caller.
+
+    `_from_env` until #95, when the callers moved and the name could follow.
+    The environment is the *last* of three places looked, and a name saying it
+    was the only one was read as one -- `--api-key` and a pasted pair reach the
+    same function, and the tests that stand in for an account stand in here.
 
     That widening spends a rule this docstring used to state: that a secret is
     never an argument. It still holds where it was argued -- `mcp_server`
     passes a path and nothing else, and an argument there has travelled through
     a model's context to get here. It does not hold for the UI, whose key
-    arrives pasted into a form with no file behind it: `key_set` writes it to a
-    temp file purely to have a path for a constructor that takes only one, and
-    a secret written to disk to satisfy an argument list is worse than the
-    argument.
+    arrives pasted into a form with no file behind it: `key_set` used to write
+    it to a temp file purely to have a path for a constructor that took only
+    one, and a secret written to disk to satisfy an argument list is worse than
+    the argument. #95 passes the pair and that write is gone -- a `save: true`
+    still writes SAVED_KEY_PATH, which is a key the user asked to keep rather
+    than a detour through the filesystem.
 
     Not "connected" in the sense of having reached BlazeMeter -- there is no
     connection to make, the client is stateless HTTP Basic. Proving the
@@ -193,6 +199,10 @@ def client_from_env(api_key_file=None, *, key_id=None, secret=None):
     the proof; making it here would put a network round-trip inside every
     construction and a second one inside most.
     """
+    # Every branch below decides a *credential*; the construction itself is the
+    # single line at the end. Three returns each building their own was three
+    # places for a fourth to be added beside, and the guard in tests/test_core.py
+    # counts constructions rather than trusting that they all say the same thing.
     if key_id or secret:
         if api_key_file:
             # Both, in one call, and only ever as arguments -- a key in the
@@ -210,32 +220,42 @@ def client_from_env(api_key_file=None, *, key_id=None, secret=None):
             missing = "secret" if key_id else "id"
             raise BadRequest(f"an API key needs both an id and a secret; "
                              f"the {missing} is missing")
-        return api.BzmClient(credentials=(key_id, secret))
-    path = api_key_file or os.environ.get(KEY_FILE_ENV)
-    if path:
-        try:
-            return api.BzmClient(credentials=api.read_key_file(
-                os.path.expanduser(path)))
-        except ValueError as e:
-            # Every failure read_key_file has is a ValueError, deliberately:
-            # an OSError or a UnicodeDecodeError escaping as itself is a bare
-            # exception out of a route.
-            raise NotConfigured(str(e))
-    key_id = os.environ.get(KEY_ID_ENV)
-    secret = os.environ.get(KEY_SECRET_ENV)
-    if key_id and secret:
-        return api.BzmClient(credentials=(key_id, secret))
-    # Deliberately no fall back to detect_keys(): its first candidate is
-    # `./api-key.json`, which is fine for a command someone ran in their own
-    # checkout and wrong for a server whose working directory is wherever a
-    # client launched it -- a customer's project, quite possibly holding an
-    # api-key.json that is theirs. Asking is cheap; using the wrong account is
-    # not. The UI does its own detection, where the person can see the path.
-    raise NotConfigured(
-        f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of an "
-        f"api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} and "
-        f"{KEY_SECRET_ENV}, in the environment of whatever started this. "
-        f"Create the key under Settings -> API Keys in BlazeMeter.")
+        credentials = (key_id, secret)
+    else:
+        path = api_key_file or os.environ.get(KEY_FILE_ENV)
+        if path:
+            try:
+                credentials = api.read_key_file(os.path.expanduser(path))
+            except ValueError as e:
+                # Every failure read_key_file has is a ValueError,
+                # deliberately: an OSError or a UnicodeDecodeError escaping as
+                # itself is a bare exception out of a route. The second
+                # sentence is what the exiting wrapper used to add for the
+                # terminal alone -- a bad path is the same mistake on every
+                # surface, so it is said on all of them.
+                raise NotConfigured(
+                    f"{e}. Create the key under Settings -> API Keys in "
+                    f"BlazeMeter.")
+        else:
+            env_id = os.environ.get(KEY_ID_ENV)
+            env_secret = os.environ.get(KEY_SECRET_ENV)
+            if not (env_id and env_secret):
+                # Deliberately no fall back to detect_keys(): its first
+                # candidate is `./api-key.json`, which is fine for a command
+                # someone ran in their own checkout and wrong for a server
+                # whose working directory is wherever a client launched it -- a
+                # customer's project, quite possibly holding an api-key.json
+                # that is theirs. Asking is cheap; using the wrong account is
+                # not. The UI does its own detection, where the person can see
+                # the path.
+                raise NotConfigured(
+                    f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of "
+                    f"an api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} "
+                    f"and {KEY_SECRET_ENV}, in the environment of whatever "
+                    f"started this. Create the key under Settings -> API Keys "
+                    f"in BlazeMeter.")
+            credentials = (env_id, env_secret)
+    return api.BzmClient(credentials=credentials)
 
 
 def detect_keys():

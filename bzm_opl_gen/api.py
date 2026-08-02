@@ -42,13 +42,14 @@ KEY_FILE_SHAPE = ('a JSON object with the id and secret of a BlazeMeter API '
 def read_key_file(path):
     """The (id, secret) in an api-key.json, or ValueError saying what was wrong.
 
-    Separate from the SystemExit wrapper below so a caller that must not exit
-    -- a server -- can report the same problems its own way. Every way this can
-    fail is a ValueError, and that is the contract rather than a tidiness:
-    `core.client_from_env` turns exactly that into a refusal, so anything
-    escaping as another type escapes as itself, past a route's `except
-    CoreError`, into a 500 with a traceback in it. The two wrappers must differ
-    only in how a failure is reported, never in which failures are handled.
+    A read and a refusal, and no exit: there used to be a `_or_exit` wrapper
+    beside this for the commands, and the constructor below called it, which
+    put a SystemExit inside a construction a server makes. #95 removed both, so
+    this is the only read of a key file and its caller decides what a bad one
+    means. Every way it can fail is a ValueError, and that is the contract
+    rather than a tidiness: `core.client_from_key` turns exactly that into a
+    refusal, so anything escaping as another type escapes as itself, past a
+    route's `except CoreError`, into a 500 with a traceback in it.
     """
     try:
         with open(path) as f:
@@ -70,30 +71,20 @@ def read_key_file(path):
     return d["id"], d["secret"]
 
 
-def read_key_file_or_exit(path):
-    """read_key_file, as a command wants it: the same messages, plus how to
-    create the file, and exit rather than traceback."""
-    try:
-        return read_key_file(path)
-    except ValueError as e:
-        raise SystemExit(
-            f"{e}\nCreate the key under Settings -> API Keys in BlazeMeter, "
-            f"then:\n  cp examples/api-key.example.json {path}   # and fill it in")
-
-
 class BzmClient:
-    def __init__(self, api_key_path=None, credentials=None):
-        """Either a path to an api-key.json, or an (id, secret) pair already
-        read from somewhere else.
+    def __init__(self, *, credentials):
+        """An (id, secret) pair, read from wherever the caller found it.
 
-        `credentials` exists because reading the file here raises SystemExit,
-        which is right for a command and fatal for a long-running server -- it
-        is a BaseException, so a tool wrapper's `except Exception` does not stop
-        it taking the process down with it. A caller that has its own way to
-        report a bad credential reads the file itself and passes the pair.
+        A pair and nothing else, keyword-only, so that a path cannot be handed
+        to this at all. It used to take one and read it here, and that read
+        raised SystemExit -- right for a command, fatal for a long-running
+        server, because a BaseException is not stopped by a tool wrapper's or a
+        route's `except Exception` and takes the process down with it. #95
+        removed the branch rather than leaving it for a caller to avoid:
+        `core.client_from_key` is the one construction, it reads the file with
+        `read_key_file` above, and it refuses with a CoreError that every
+        surface already knows how to report.
         """
-        if credentials is None:
-            credentials = read_key_file_or_exit(api_key_path)
         key_id, secret = credentials
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 

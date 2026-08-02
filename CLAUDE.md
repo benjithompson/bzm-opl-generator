@@ -73,7 +73,7 @@ repoints an existing customer test it must restore the original `executions` (it
 does, in a `finally`, printing the original first). Verify after any live run:
 
 ```
-python -c "from bzm_opl_gen import api; print(api.BzmClient('api-key.json').test(<id>).get('executions'))"
+python -c "from bzm_opl_gen import core; print(core.client_from_key('api-key.json').test(<id>).get('executions'))"
 kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube status -p bzm-opl-test
 ```
 

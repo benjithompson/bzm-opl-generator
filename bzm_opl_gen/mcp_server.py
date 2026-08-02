@@ -302,7 +302,7 @@ def _gate(env, what):
 
 
 def _client(args):
-    return core.client_from_env(args.get("api_key_file"))
+    return core.client_from_key(args.get("api_key_file"))
 
 
 # -- opl_location --------------------------------------------------------------

@@ -59,24 +59,16 @@ def _run(monkeypatch, *args):
 
 
 def _account(monkeypatch, client):
-    """Install `client` as the account, and refuse a construction from a path.
+    """Install `client` as the account this command talks to.
 
-    `core.client_from_env` reads the key file itself and hands the constructor
-    an (id, secret) pair, so every command that reaches BlazeMeter arrives here
-    with `credentials=`. A positional path is `api.BzmClient`'s own file read --
-    the one that raises SystemExit, a BaseException that walks past every
-    `except Exception` between a route and the top of a server process -- which
-    is the construction #93 took the commands off. Asserted in the stand-in
-    rather than in a test of its own so that every command driven through these
-    helpers keeps saying it.
+    At `core.client_from_key`, which is where all three suites stand in since
+    #95 -- this one patched `api.BzmClient` and asserted the keyword it was
+    reached with, which was how it checked that a command had gone through core
+    rather than reading the key file itself. That check is structural now (the
+    constructor takes a keyword-only pair, and tests/test_core.py counts the
+    constructions), so what is left here is the stand-in and nothing else.
     """
-    def ctor(*a, **kw):
-        assert not a and "credentials" in kw, (
-            f"a command built its own client from {a!r}; core.client_from_env "
-            f"is the one construction")
-        return client
-
-    monkeypatch.setattr(cli.api, "BzmClient", ctor)
+    monkeypatch.setattr(cli.core, "client_from_key", lambda *a, **kw: client)
     return client
 
 
@@ -567,9 +559,7 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
 # the first question a customer asks behind the account they have not got.
 
 def test_plan_needs_no_account_and_no_facts(monkeypatch, capsys):
-    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: pytest.fail(
-        "plan reached BlazeMeter"))
-    monkeypatch.setattr(cli.core, "client_from_env", lambda *a, **k: pytest.fail(
+    monkeypatch.setattr(cli.core, "client_from_key", lambda *a, **k: pytest.fail(
         "plan built an account client"))
     _run(monkeypatch, "plan", "--users", "5000")
     out = capsys.readouterr().out
@@ -703,30 +693,32 @@ ACCOUNT_COMMANDS = ("locations", "create-location", "delete-location",
 
 
 @pytest.mark.parametrize("name", ACCOUNT_COMMANDS)
-def test_no_command_builds_its_own_client(monkeypatch, tmp_path, name):
-    """The construction is `core.client_from_env`, whatever the command.
+def test_every_account_command_asks_core_for_its_client(monkeypatch, tmp_path,
+                                                        name):
+    """The construction is `core.client_from_key`, whatever the command.
 
-    It reads the key file and hands over an (id, secret), so the constructor is
-    reached with `credentials=` -- a positional path is `api.BzmClient` reading
-    the file itself and exiting on a bad one, which a server cannot survive.
-    The command is stopped at the construction rather than allowed to run on:
-    what is under test is which one happened, and each of these would otherwise
-    go on to do the command's real work.
+    tests/test_core.py asserts nothing in the package builds a client of its
+    own; this is the other half -- that each of these commands does reach the
+    one that is left, with the `--api-key` it was given. A command that built
+    no client at all, or reached BlazeMeter some other way, passes a source
+    guard and fails here. Stopped at the construction rather than allowed to
+    run on: what is under test is that it happened, and each of these would
+    otherwise go on to do the command's real work.
     """
     class Constructed(Exception):
         pass
 
     seen = []
 
-    def ctor(*a, **kw):
-        seen.append((a, sorted(kw)))
+    def seam(*a, **kw):
+        seen.append((a, kw))
         raise Constructed
 
-    monkeypatch.setattr(cli.api, "BzmClient", ctor)
+    monkeypatch.setattr(cli.core, "client_from_key", seam)
     with pytest.raises(Constructed):
         _run(monkeypatch, *_account_command(tmp_path, name))
-    assert seen == [((), ["credentials"])], \
-        f"{name} built a client from a path rather than through core"
+    assert seen == [((KEY,), {})], \
+        f"{name} did not reach core.client_from_key with its --api-key"
 
 
 @pytest.mark.parametrize("name", ACCOUNT_COMMANDS)
@@ -749,16 +741,16 @@ def test_an_unreadable_key_file_is_answered_by_core(monkeypatch, tmp_path):
     """`--api-key <a directory>` is one keystroke from the path that works.
 
     The message is the same sentence the web UI and an MCP session get, from
-    `core.client_from_env` -- not `api.read_key_file_or_exit`, which is the
-    command-only wrapper #95 removes and which raises SystemExit from inside
-    the constructor.
+    `core.client_from_key` -- and it still says how to make a key, which was
+    the only thing `api.read_key_file_or_exit` added for the terminal before
+    #95 deleted it. `main` turns the CoreError into an exit; the exit does not
+    come from inside a constructor any more.
     """
-    monkeypatch.setattr(cli.api, "read_key_file_or_exit", lambda p: pytest.fail(
-        "a command read the key file through the exiting wrapper"))
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "locations", "--api-key", str(tmp_path),
              "--account-id", "7")
     assert str(tmp_path) in str(caught.value)
+    assert "Settings -> API Keys" in str(caught.value)
 
 
 def test_a_malformed_engine_size_is_a_sentence_not_a_stack(monkeypatch,

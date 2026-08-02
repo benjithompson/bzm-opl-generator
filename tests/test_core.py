@@ -11,6 +11,7 @@ That is deliberate: these are the decisions and those are the status codes, and
 a change that moves one without the other should fail somewhere.
 """
 
+import ast
 import base64
 import inspect
 import io
@@ -192,7 +193,6 @@ def _imports(path):
     session imports fastapi, so by the time these run it is loaded whatever
     core does.
     """
-    import ast
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
     names = set()
@@ -1007,28 +1007,32 @@ def test_a_key_file_that_does_not_parse_is_skipped_not_raised(monkeypatch,
 
 
 def test_a_malformed_key_file_is_a_refusal_rather_than_an_exit(tmp_path):
-    """The contract the server leans on. api.BzmClient(path) raises SystemExit,
-    a BaseException that walks past every `except Exception` between here and
-    the top of the process -- fine for a command, fatal for a server. This is
-    the construction that does not."""
+    """The contract the server leans on. `api.BzmClient(path)` used to read the
+    file and raise SystemExit, a BaseException that walks past every `except
+    Exception` between here and the top of the process -- fine for a command,
+    fatal for a server. This is the construction that does not, and since #95
+    it is the only one: the constructor takes a keyword-only pair, so there is
+    no exiting read left for a caller to reach by accident."""
     bad = tmp_path / "api-key.json"
     bad.write_text("not json")
     with pytest.raises(core.NotConfigured) as e:
-        core.client_from_env(str(bad))
+        core.client_from_key(str(bad))
     assert "not valid JSON" in str(e.value)
-    # ...and the exiting one is still there, which is why this test is.
-    with pytest.raises(SystemExit):
+    with pytest.raises(TypeError):
         api.BzmClient(str(bad))
 
 
 # -- one construction for the client ------------------------------------------
 #
 # #92. Thirteen places built a client and three suites stood in at three
-# different points, so `client_from_env` widened to take all three inputs a
+# different points, so `client_from_key` widened to take all three inputs a
 # caller can have: a path, an id and secret, or nothing and the environment.
+# #95 then moved every caller onto it and deleted the rest, which is what the
+# guard at the end of this section keeps true.
+#
 # Every one of these asserts a CoreError and none asserts SystemExit -- an
 # escaping SystemExit is not caught by pytest.raises(CoreError), so each of the
-# refusal tests below fails rather than passes if the exiting constructor ever
+# refusal tests below fails rather than passes if an exiting constructor ever
 # creeps back in underneath.
 
 @pytest.fixture
@@ -1056,20 +1060,21 @@ def credential_of(client):
 def test_a_client_is_built_from_a_key_file(no_key_env, tmp_path):
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "KID", "secret": "SHHH"}')
-    client = core.client_from_env(str(key))
+    client = core.client_from_key(str(key))
     assert isinstance(client, api.BzmClient)
     assert credential_of(client) == ("KID", "SHHH")
 
 
 def test_a_client_is_built_from_an_id_and_secret(no_key_env, monkeypatch):
     """The UI's input, which arrives pasted into a form and has no file behind
-    it. `key_set` writes it to a temp file purely to have a path to hand to a
-    constructor that only takes one, then unlinks it -- a secret on disk for
-    the duration of a call, to satisfy an argument list. Taken directly, it
-    never lands there, which is what the read_key_file guard below asserts."""
+    it. `key_set` used to write it to a temp file purely to have a path to hand
+    to a constructor that only took one, then unlink it -- a secret on disk for
+    the duration of a call, to satisfy an argument list. It passes the pair
+    since #95, and this is the half that says the pair reaches no disk at all;
+    tests/test_server.py has the half about the route."""
     monkeypatch.setattr(api, "read_key_file", lambda p: pytest.fail(
         f"a pasted id and secret read {p} -- it should reach no disk at all"))
-    client = core.client_from_env(key_id="KID", secret="SHHH")
+    client = core.client_from_key(key_id="KID", secret="SHHH")
     assert credential_of(client) == ("KID", "SHHH")
 
 
@@ -1077,7 +1082,7 @@ def test_a_key_file_that_is_not_there_is_a_refusal_naming_the_path(no_key_env,
                                                                    tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(core.NotConfigured) as e:
-        core.client_from_env(str(missing))
+        core.client_from_key(str(missing))
     assert str(missing) in str(e.value)
 
 
@@ -1085,7 +1090,7 @@ def test_a_key_file_missing_half_the_key_is_a_refusal(no_key_env, tmp_path):
     half = tmp_path / "api-key.json"
     half.write_text('{"id": "KID"}')
     with pytest.raises(core.NotConfigured, match='"id" and "secret"'):
-        core.client_from_env(str(half))
+        core.client_from_key(str(half))
 
 
 def test_a_key_file_that_cannot_be_read_at_all_is_a_refusal(no_key_env,
@@ -1097,13 +1102,13 @@ def test_a_key_file_that_cannot_be_read_at_all_is_a_refusal(no_key_env,
     exceptions, straight past a route's `except CoreError` into a 500 with a
     traceback in it."""
     with pytest.raises(core.NotConfigured) as e:
-        core.client_from_env(str(tmp_path))            # a directory
+        core.client_from_key(str(tmp_path))            # a directory
     assert str(tmp_path) in str(e.value)
 
     binary = tmp_path / "api-key.json"
     binary.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
     with pytest.raises(core.NotConfigured, match="not valid JSON"):
-        core.client_from_env(str(binary))
+        core.client_from_key(str(binary))
 
 
 def test_a_path_and_a_pasted_pair_together_are_refused(no_key_env, tmp_path):
@@ -1113,7 +1118,7 @@ def test_a_path_and_a_pasted_pair_together_are_refused(no_key_env, tmp_path):
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "FILE", "secret": "s"}')
     with pytest.raises(core.BadRequest) as e:
-        core.client_from_env(str(key), key_id="PASTED", secret="s")
+        core.client_from_key(str(key), key_id="PASTED", secret="s")
     assert "not both" in str(e.value)
 
 
@@ -1122,9 +1127,9 @@ def test_half_a_pasted_pair_names_the_half_that_is_missing(no_key_env):
     two plainly has a key and is one field away, and telling it to go set an
     environment variable is an answer to a different question."""
     with pytest.raises(core.BadRequest, match="secret"):
-        core.client_from_env(key_id="KID")
+        core.client_from_key(key_id="KID")
     with pytest.raises(core.BadRequest, match="id"):
-        core.client_from_env(secret="SHHH")
+        core.client_from_key(secret="SHHH")
 
 
 def test_the_environment_is_the_last_place_looked(no_key_env, monkeypatch,
@@ -1135,19 +1140,19 @@ def test_the_environment_is_the_last_place_looked(no_key_env, monkeypatch,
     env_key = tmp_path / "env-key.json"
     env_key.write_text('{"id": "FROM-FILE-ENV", "secret": "s"}')
     monkeypatch.setenv(core.KEY_FILE_ENV, str(env_key))
-    assert credential_of(core.client_from_env())[0] == "FROM-FILE-ENV"
+    assert credential_of(core.client_from_key())[0] == "FROM-FILE-ENV"
 
     named = tmp_path / "named.json"
     named.write_text('{"id": "NAMED", "secret": "s"}')
-    assert credential_of(core.client_from_env(str(named)))[0] == "NAMED"
+    assert credential_of(core.client_from_key(str(named)))[0] == "NAMED"
     assert credential_of(
-        core.client_from_env(key_id="PASTED", secret="s"))[0] == "PASTED"
+        core.client_from_key(key_id="PASTED", secret="s"))[0] == "PASTED"
 
     monkeypatch.delenv(core.KEY_FILE_ENV)
     monkeypatch.setenv(core.KEY_ID_ENV, "FROM-ID-ENV")
     monkeypatch.setenv(core.KEY_SECRET_ENV, "s")
-    assert credential_of(core.client_from_env())[0] == "FROM-ID-ENV"
-    assert credential_of(core.client_from_env(str(named)))[0] == "NAMED"
+    assert credential_of(core.client_from_key())[0] == "FROM-ID-ENV"
+    assert credential_of(core.client_from_key(str(named)))[0] == "NAMED"
 
 
 def test_no_key_anywhere_says_how_to_supply_one(no_key_env, monkeypatch):
@@ -1157,9 +1162,75 @@ def test_no_key_anywhere_says_how_to_supply_one(no_key_env, monkeypatch):
     monkeypatch.setattr(core, "detect_keys", lambda: pytest.fail(
         "the construction discovered a key from the working directory"))
     with pytest.raises(core.NotConfigured) as e:
-        core.client_from_env()
+        core.client_from_key()
     for var in (core.KEY_FILE_ENV, core.KEY_ID_ENV, core.KEY_SECRET_ENV):
         assert var in str(e.value)
+
+
+SEAM = f"core.{core.client_from_key.__name__}"
+
+
+def _client_constructions(path):
+    """Every `BzmClient(...)` a source file builds, by line.
+
+    Parsed rather than grepped: the construction is argued about in half a
+    dozen docstrings and comments here, and a guard that counted those would
+    be turned off within a week. An `ast.Call` is a construction whichever way
+    the class was reached -- `api.BzmClient(...)` or a bare `BzmClient(...)`
+    after `from .api import BzmClient`.
+    """
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    called = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+        if name == "BzmClient":
+            called.append(node.lineno)
+    return called
+
+
+def test_the_client_is_built_in_exactly_one_place():
+    """The contract half of #92-#93-#95, and the only thing that keeps it.
+
+    Thirteen constructions became one, and nothing about the code stops a
+    fourteenth: `api.BzmClient(credentials=...)` is two lines and works. What it
+    costs is invisible at the site that writes it -- a caller building its own
+    decides for itself what a missing key, a directory instead of a file, or a
+    revoked credential means, and the three suites stand in at a point it does
+    not pass through, so it is untested as well as inconsistent.
+
+    Package sources only. Tests build clients directly on purpose: that is what
+    a stand-in account is.
+    """
+    pkg = os.path.dirname(core.__file__)
+    found = {}
+    for root, _dirs, names in os.walk(pkg):
+        for name in sorted(names):
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            for line in _client_constructions(path):
+                found.setdefault(os.path.relpath(path, pkg), []).append(line)
+
+    where = sorted(f"{f}:{n}" for f, lines in found.items() for n in lines)
+    first, last = _line_range(core.client_from_key)
+    assert len(where) == 1 and first <= found.get("core.py", [0])[0] <= last, (
+        f"the client is constructed at {where} -- {SEAM} is the one "
+        f"construction, and a caller that needs a client asks it for one. It "
+        f"takes a key file path, or an id and secret, or neither and reads the "
+        f"environment, and it refuses with a CoreError carrying a status where "
+        f"the constructor cannot. Building one here also puts it outside the "
+        f"point tests/test_cli.py, tests/test_mcp.py and tests/test_server.py "
+        f"stand in at, so nothing in the suite covers the caller.")
+
+
+def _line_range(fn):
+    """First and last line of a function's source, in its own file."""
+    lines, start = inspect.getsourcelines(fn)
+    return start, start + len(lines) - 1
 
 
 def test_the_fake_client_is_a_second_adapter_and_not_a_third_interface():

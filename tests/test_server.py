@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import pathlib
 import re
@@ -19,6 +20,27 @@ from test_generate import FACTS  # noqa: E402
 from test_core import FakeClient, RefusingClient  # noqa: E402
 
 client = TestClient(server.app)
+
+
+def connect(monkeypatch, account):
+    """Put this server process in the state of being connected as `account`.
+
+    The one place this suite stands in at, and it is `server._state` rather
+    than `core.client_from_key` -- which is where tests/test_cli.py and
+    tests/test_mcp.py stand in -- because those two build a client per call and
+    this one does not. A browser session connects once, over `POST /api/key`,
+    and every route afterwards acts as whatever that left in the process; the
+    fact under test in most of what follows is "this server is connected as X",
+    which is a fact about the server and has no equivalent in core. Patching
+    the construction here would leave the state item set to None and every
+    route 401ing before core was reached.
+
+    A function rather than twenty `setitem` calls so that if that ever stops
+    being true there is one place to change. The key-lifecycle tests below set
+    the item directly on purpose: there _state is the subject, not the stand-in.
+    """
+    monkeypatch.setitem(server._state, "client", account)
+    return account
 
 
 def test_generate_preview_no_key_needed():
@@ -129,9 +151,7 @@ def connected(monkeypatch):
     *could* mint and must not, so a fixture with no client would pass for the
     wrong reason.
     """
-    c = FakeClient()
-    monkeypatch.setitem(server._state, "client", c)
-    return c
+    return connect(monkeypatch, FakeClient())
 
 
 @pytest.mark.parametrize("route", ["/api/generate", "/api/generate/zip",
@@ -323,7 +343,7 @@ def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
     class Revoked:
         def user(self):
             raise core.CoreError("401 unauthorized")
-    monkeypatch.setitem(server._state, "client", Revoked())
+    connect(monkeypatch, Revoked())
     assert client.get("/api/key").json() == {"connected": False}
     # ...and it is dropped, rather than left for every later call to fail on.
     assert server._state["client"] is None
@@ -332,11 +352,11 @@ def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
 def test_connecting_with_a_malformed_key_file_refuses_without_exiting(monkeypatch,
                                                                       tmp_path):
     """#91. The file is there, so the route's own existence check passes, and
-    what it hands to the client constructor is unparseable. Built through
-    api.BzmClient(path) that is a SystemExit -- a BaseException raised inside a
-    route, which no `except Exception` anywhere in the stack stops. The
-    assertion is as much that this call *returns* as that it says the right
-    thing: an escaping SystemExit fails it before status_code is reached.
+    what it hands over is unparseable. Read inside `api.BzmClient(path)` that
+    was a SystemExit -- a BaseException raised inside a route, which no `except
+    Exception` anywhere in the stack stops. The assertion is as much that this
+    call *returns* as that it says the right thing: an escaping SystemExit fails
+    it before status_code is reached.
     """
     monkeypatch.setitem(server._state, "client", None)
     bad = tmp_path / "api-key.json"
@@ -364,6 +384,55 @@ def test_connecting_with_a_good_key_file_still_reports_the_user(monkeypatch,
     assert body["user"]["email"] == "se@example.com"
     assert body["default_account_id"] == 7 and body["key_id"] == "KID"
     assert server._state["client"] is not None
+
+
+def _config_dir(monkeypatch, tmp_path):
+    """core's key directory, somewhere disposable. Never the real one: these
+    write a key file, and the developer running this has their own at
+    ~/.config/bzm-opl-gen/api-key.json."""
+    d = tmp_path / "config"
+    monkeypatch.setattr(core, "CONFIG_DIR", str(d))
+    monkeypatch.setattr(core, "SAVED_KEY_PATH", str(d / "api-key.json"))
+    monkeypatch.setattr(core, "user", lambda c: {
+        "email": "se@example.com", "displayName": "SE",
+        "defaultProject": {"accountId": 7}})
+    return d
+
+
+def test_a_pasted_key_reaches_core_as_a_pair_and_never_the_disk(monkeypatch,
+                                                                tmp_path):
+    """#95. A key typed into the connect form has no file behind it, and this
+    route used to make one -- writing the secret to `.session-key.json`, calling
+    a constructor that took only a path, and unlinking it after. A secret on
+    disk to satisfy an argument list is worse than the argument, and since #92
+    the construction takes the pair."""
+    d = _config_dir(monkeypatch, tmp_path)
+    seen = []
+
+    def seam(path=None, **kw):
+        seen.append((path, kw))
+        return FakeClient()
+
+    monkeypatch.setattr(core, "client_from_key", seam)
+    monkeypatch.setitem(server._state, "client", None)
+    body = client.post("/api/key", json={"id": "KID", "secret": "SHHH"}).json()
+    assert seen == [(None, {"key_id": "KID", "secret": "SHHH"})]
+    assert not d.exists(), "the pasted secret was written to disk"
+    assert body["key_id"] == "KID" and body["saved"] is False
+
+
+def test_a_pasted_key_saved_on_purpose_is_written_where_detect_finds_it(
+        monkeypatch, tmp_path):
+    """The other half: `save: true` is a key the user asked to keep, which is a
+    file on disk by definition. Mode 600, and at the path core detects from."""
+    d = _config_dir(monkeypatch, tmp_path)
+    monkeypatch.setitem(server._state, "client", None)
+    body = client.post("/api/key", json={"id": "KID", "secret": "SHHH",
+                                         "save": True}).json()
+    assert body["saved"] is True
+    saved = d / "api-key.json"
+    assert json.loads(saved.read_text()) == {"id": "KID", "secret": "SHHH"}
+    assert os.stat(saved).st_mode & 0o777 == 0o600
 
 
 def test_disconnect_forgets_the_key_without_deleting_a_saved_one(connected, tmp_path):
@@ -398,7 +467,7 @@ def test_an_agent_whose_credential_was_refused_is_still_reported(monkeypatch):
     """The ship exists before the fetch, and some accounts refuse the token
     endpoint outright. A 502 would leave the new agent's id nowhere but a browser
     console -- and the next click creates a second agent in the same location."""
-    monkeypatch.setitem(server._state, "client", RefusingClient())
+    connect(monkeypatch, RefusingClient())
     r = client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     assert r.status_code == 200
     body = r.json()
@@ -421,7 +490,7 @@ def test_issuing_a_token_is_its_own_route(connected):
 
 
 def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
-    monkeypatch.setitem(server._state, "client", RefusingClient())
+    connect(monkeypatch, RefusingClient())
     r = client.post("/api/ships/token",
                     json={"harbor_id": "aaa111", "ship_id": "s1"})
     assert r.status_code == 502
@@ -433,7 +502,7 @@ def test_enabling_a_feature_adds_to_the_location_s_func_ids(monkeypatch):
     mockServices deploys cleanly and is never asked to serve one. This is the
     call that fixes that, and it must not drop what the location already had."""
     fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
-    monkeypatch.setitem(server._state, "client", fake)
+    connect(monkeypatch, fake)
     r = client.post("/api/locations/func-id",
                     json={"harbor_id": "aaa111", "func_id": "mockServices"})
     assert r.status_code == 200
@@ -609,7 +678,7 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
             seen.update(kw, name=name, workspaces=workspace_ids)
             return {"id": "h9", "name": name, "funcIds": kw["func_ids"]}
 
-    monkeypatch.setitem(server._state, "client", FakeClient())
+    connect(monkeypatch, FakeClient())
     r = client.post("/api/locations", json={
         "name": "sv-loc", "account_id": 1, "workspace_id": 2,
         "func_ids": ["mockServices", "proxyRecorder"]})
@@ -635,7 +704,7 @@ def test_a_location_a_test_cannot_start_on_says_so(monkeypatch):
             stored.update(made)
             return stored
 
-    monkeypatch.setitem(server._state, "client", FakeClient())
+    connect(monkeypatch, FakeClient())
 
     def create(**kw):
         return client.post("/api/locations", json={
@@ -1463,7 +1532,7 @@ def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
 def test_plan_answers_a_browser_that_has_connected_to_nothing(monkeypatch):
     """The case this route exists for: the UI open, no key, no account, no
     cluster, and somebody who needs a number to raise a ticket with."""
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: pytest.fail(
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: pytest.fail(
         "the planner asked for a BlazeMeter client"))
     r = client.post("/api/plan", json={"users": 5000})
     assert r.status_code == 200
@@ -1518,7 +1587,7 @@ def test_location_settings_reports_what_the_account_now_holds(monkeypatch):
                            "threadsPerEngine": 500, "overrideCPU": None,
                            "overrideMemory": None},
                    ignores={"overrideCPU"})
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     r = client.post("/api/locations/settings", json={
         "harbor_id": "h1", "threads_per_engine": 1000, "override_cpu": 2})
     assert r.status_code == 200
@@ -1533,7 +1602,7 @@ def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
     written back from a page that may have been open for an hour."""
     c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
                            "overrideCPU": None, "overrideMemory": None})
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     body = client.post("/api/locations/settings", json={
         "harbor_id": "h1", "threads_per_engine": 1000}).json()
     assert body["after"]["slots"] == 2
@@ -1542,7 +1611,7 @@ def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
 
 def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
     """`funcIds` is add_func_id's, and that call is additive by construction."""
-    monkeypatch.setitem(server._state, "client", FakeClient(harbor={"id": "h1"}))
+    connect(monkeypatch, FakeClient(harbor={"id": "h1"}))
     r = client.post("/api/locations/settings",
                     json={"harbor_id": "h1", "funcIds": ["mockServices"]})
     # Not a route argument at all, so the body is simply ignored by the model --
@@ -1574,7 +1643,7 @@ def _empty_cache():
 
 def test_the_account_tree_is_read_once_not_once_per_reload(monkeypatch):
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     for _ in range(3):
         assert client.get("/api/locations?workspace_id=42").status_code == 200
     assert [x[0] for x in c.calls].count("private_locations") == 1
@@ -1584,7 +1653,7 @@ def test_a_created_location_is_not_hidden_by_the_cache(monkeypatch):
     """The write this server made itself is the one staleness it cannot
     tolerate: create a location, and it has to be in the next list."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
     client.post("/api/locations", json={"name": "new", "account_id": 7,
                                         "workspace_id": 42})
@@ -1596,7 +1665,7 @@ def test_changing_a_location_s_settings_drops_the_cache(monkeypatch):
     c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
                            "overrideCPU": None, "overrideMemory": None},
                    locations=[{"id": "h1", "name": "loc", "slots": 2}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
     client.post("/api/locations/settings",
                 json={"harbor_id": "h1", "slots": 4})
@@ -1607,7 +1676,7 @@ def test_changing_a_location_s_settings_drops_the_cache(monkeypatch):
 def test_a_new_agent_drops_the_cache(monkeypatch):
     c = FakeClient(harbor={"id": "h1", "ships": []},
                    locations=[{"id": "h1", "name": "loc", "slots": 1}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
     client.post("/api/ships", json={"harbor_id": "h1", "name": "agent1"})
     client.get("/api/locations?workspace_id=42")
@@ -1617,7 +1686,7 @@ def test_a_new_agent_drops_the_cache(monkeypatch):
 def test_a_different_key_is_a_different_account(monkeypatch, tmp_path):
     """Nothing read with the old credential may survive into the new one."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
     assert server._cache
     client.delete("/api/key")
@@ -1628,7 +1697,7 @@ def test_the_cache_expires(monkeypatch):
     """Sixty seconds, so a change made in the BlazeMeter UI shows up while you
     are still looking for it."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
     now = time.monotonic()
     monkeypatch.setattr(server.time, "monotonic",
@@ -1666,7 +1735,7 @@ def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
     what says an agent came online, and a cached answer would say it had not."""
     c = FakeClient(harbor={"id": "h1", "ships": [
         {"id": "s1", "state": "idle", "lastHeartBeat": 0}]})
-    monkeypatch.setitem(server._state, "client", c)
+    connect(monkeypatch, c)
     for _ in range(3):
         client.get("/api/status?harbor_id=h1&ship_id=s1")
     assert [x[0] for x in c.calls].count("private_location") == 3

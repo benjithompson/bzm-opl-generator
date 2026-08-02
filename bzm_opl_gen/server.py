@@ -211,31 +211,30 @@ def key_clear():
 
 @app.post("/api/key")
 def key_set(k: KeyIn):
+    # One construction either way -- core.client_from_key -- which is what makes
+    # a key that will not parse a refusal the connect form can show rather than
+    # a SystemExit out of the constructor, a BaseException that goes straight
+    # past this route's error handling and takes the server with it.
     if k.path:
         path = os.path.expanduser(k.path)
         if not os.path.isfile(path):
             raise HTTPException(400, f"no such file: {path}")
+        client = _answer(core.client_from_key, path)
     elif k.id and k.secret:
-        os.makedirs(core.CONFIG_DIR, exist_ok=True)
-        path = (core.SAVED_KEY_PATH if k.save
-                else os.path.join(core.CONFIG_DIR, ".session-key.json"))
-        with open(path, "w") as fh:
-            json.dump({"id": k.id, "secret": k.secret}, fh)
-        os.chmod(path, 0o600)
-        if not k.save:
-            # session-only: file exists just long enough to construct the client
-            pass
+        if k.save:
+            # The only reason left to write a key here: the user asked for it
+            # to be kept. A session-only pair reaches core as a pair -- it used
+            # to be written to a temp file and unlinked after the call, purely
+            # to have a path for a constructor that took only one, and a secret
+            # on disk to satisfy an argument list is worse than the argument.
+            os.makedirs(core.CONFIG_DIR, exist_ok=True)
+            with open(core.SAVED_KEY_PATH, "w") as fh:
+                json.dump({"id": k.id, "secret": k.secret}, fh)
+            os.chmod(core.SAVED_KEY_PATH, 0o600)
+        client = _answer(core.client_from_key, key_id=k.id, secret=k.secret)
     else:
         raise HTTPException(400, "provide path, or id+secret")
-    # core's construction, never api.BzmClient(path): that one raises SystemExit
-    # on a file that will not parse, and SystemExit is a BaseException -- it
-    # goes straight past this route's error handling and takes the server with
-    # it. core.client_from_env raises a CoreError instead, which _answer turns
-    # into the refusal the connect form can show.
-    client = _answer(core.client_from_env, path)
     user = _answer(core.user, client)
-    if k.id and k.secret and not k.save:
-        os.unlink(path)
     _state["client"] = client
     _forget()
     _state["key_id"] = json.load(open(os.path.expanduser(k.path)))["id"] if k.path else k.id
@@ -737,7 +736,7 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False,
         # at an unreadable file is worth saying and not worth refusing to start
         # over. The id is read only once the client proves the file parses.
         try:
-            _state["client"] = core.client_from_env(api_key_path)
+            _state["client"] = core.client_from_key(api_key_path)
         except core.CoreError as e:
             print(f"!! --api-key ignored: {e}", flush=True)
         else:

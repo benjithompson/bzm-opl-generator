@@ -94,7 +94,7 @@ def fake_account(monkeypatch):
                            "ships": [{"id": "s1", "state": "idle",
                                       "installedVersion": "3.7.55",
                                       "lastHeartBeat": 0}]})
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     return c
 
 
@@ -201,7 +201,7 @@ def test_only_a_path_may_name_a_key(fake_account, tmp_path):
     key = tmp_path / "k.json"
     key.write_text('{"id": "KID", "secret": "s"}')
     # Accepted as an argument, and it is a path -- the fixture stands in for
-    # what client_from_env would build from it.
+    # what client_from_key would build from it.
     assert ok("opl_location", "whoami", {"api_key_file": str(key)})["email"]
 
 
@@ -239,7 +239,7 @@ def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
     read, whose whole view of the failure is the text of the tool error. So the
     refusal has to carry the alternative itself -- ask for the token, and pass
     it as an option -- or the model has nowhere to go."""
-    monkeypatch.setattr(core, "client_from_env",
+    monkeypatch.setattr(core, "client_from_key",
                         lambda *a, **k: RefusingClient())
     text = err("opl_location", "reveal_token",
                {"harbor_id": "h1", "ship_id": "s1"})
@@ -405,7 +405,7 @@ def _big_account():
 @pytest.fixture
 def big_account(monkeypatch):
     c = FakeClient(locations=_big_account())
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     return c
 
 
@@ -480,7 +480,7 @@ def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
                                "funcIds": ["performance"], "ships": [
         {"id": "live", "state": "idle", "lastHeartBeat": int(time.time())},
         {"id": "nohb", "state": "idle"}]}])
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     entry = ok("opl_location", "list")["locations"][0]
     assert entry["ship_count"] == 2
     assert entry["ships_reporting"] == 1, "the live agent must still show"
@@ -493,7 +493,7 @@ def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
     the answer to one and not the other."""
     def status_of(ship):
         c = FakeClient(harbor={"id": "h1", "name": "loc", "ships": [ship]})
-        monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+        monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
         return ok("opl_agent", "status", {"harbor_id": "h1", "ship_id": "s1"})
 
     never = status_of({"id": "s1", "state": "created"})
@@ -949,7 +949,7 @@ def test_plan_needs_no_credential_at_all(monkeypatch):
     reads a file the customer sent. This one is reached by a session that has
     neither, which is the whole reason it is a tool rather than a note in the
     instructions."""
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: pytest.fail(
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: pytest.fail(
         "opl_plan asked for a BlazeMeter client"))
     body = ok("opl_plan", "capacity", {"users": 5000})
     assert body["engines"] == 10 and body["nodes"] == 10

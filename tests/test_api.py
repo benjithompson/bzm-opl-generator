@@ -69,25 +69,42 @@ def test_update_private_location_no_fields_is_a_read():
 
 
 # A missing or half-filled key file is the first thing a new contributor hits;
-# it used to surface as a FileNotFoundError/KeyError traceback.
-def test_missing_api_key_file_names_the_fix(tmp_path):
-    with pytest.raises(SystemExit) as e:
-        api.BzmClient(str(tmp_path / "nope.json"))
-    assert "api-key.example.json" in str(e.value)
+# it used to surface as a FileNotFoundError/KeyError traceback. The reading is
+# this module's; deciding what a bad file means is the caller's, which is why
+# these assert a ValueError and tests/test_core.py asserts the refusal built
+# from it.
+def test_missing_api_key_file_names_the_path(tmp_path):
+    missing = tmp_path / "nope.json"
+    with pytest.raises(ValueError) as e:
+        api.read_key_file(str(missing))
+    assert str(missing) in str(e.value)
 
 
 def test_malformed_api_key_file(tmp_path):
     p = tmp_path / "api-key.json"
     p.write_text("{not json")
-    with pytest.raises(SystemExit, match="not valid JSON"):
-        api.BzmClient(str(p))
+    with pytest.raises(ValueError, match="not valid JSON"):
+        api.read_key_file(str(p))
 
 
 def test_api_key_file_missing_secret(tmp_path):
     p = tmp_path / "api-key.json"
     p.write_text(json.dumps({"id": "abc"}))
-    with pytest.raises(SystemExit, match='"id" and "secret"'):
-        api.BzmClient(str(p))
+    with pytest.raises(ValueError, match='"id" and "secret"'):
+        api.read_key_file(str(p))
+
+
+def test_a_path_cannot_be_handed_to_the_constructor_at_all(tmp_path):
+    """The construction takes a pair, keyword-only. It used to take a path and
+    read it, and that read raised SystemExit -- a BaseException, straight past
+    a route's error handling and out through the top of the server process.
+    Keyword-only is what makes "one construction" structural rather than a rule
+    each caller has to keep: a path does not fit here any more.
+    """
+    key = tmp_path / "api-key.json"
+    key.write_text(json.dumps({"id": "abc", "secret": "s"}))
+    with pytest.raises(TypeError):
+        api.BzmClient(str(key))
 
 
 def test_api_key_example_has_the_fields_the_client_reads(tmp_path):
