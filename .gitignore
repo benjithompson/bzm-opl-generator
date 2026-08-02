@@ -6,6 +6,9 @@ api-key*.json
 *.env
 kubeconfig*.yaml
 kubeconfig*.yml
+# Working notes and ticket drafts. Nothing here is meant to be committed, and
+# an unignored scratch directory is one `git add -A` away from being.
+.scratch/
 
 # generated artifacts
 out/
