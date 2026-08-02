@@ -7,7 +7,8 @@
 // with, on purpose, with a confirmation.
 //
 //   ?variant=P  four steps -- Plan, Location & agent, Configure, Download
-//   ?variant=Q  three steps under a persistent profile bar
+//   ?variant=Q  three steps under a profile bar that states but does not edit;
+//               one Edit, beside Apply, expanding downward
 //   ?variant=R  one scroll, target first, sections unfold as they are answered
 //   ?variant=S  two-pane first step: the plan on the left, the location it is
 //               being applied to on the right, the difference between them down
@@ -456,41 +457,24 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
   return (
     <div className="max-w-screen-lg mx-auto p-6 space-y-4">
       {/* Not a step. The plan is a property of the whole session -- it is true
-          in step 3 as much as in step 1 -- so it sits above the flow and is
-          editable from anywhere, and the flow keeps the three steps it had. */}
-      <div className={card + " overflow-hidden"}>
-        <div className="flex items-center gap-3 px-3 py-2">
-          <span className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
-            Capacity profile
-          </span>
-          <span className="text-sm text-slate-800">
-            {s.plan
-              ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
-                  {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
-              : <span className="text-amber-700">not sized yet</span>}
-          </span>
-          <span className="grow" />
-          <button className={ghost} onClick={() => setOpen(!open)}>
-            {open ? "Done" : "Edit"}
-          </button>
-        </div>
-        <div className={"grid transition-[grid-template-rows] duration-200 "
-          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-          <div className="overflow-hidden">
-            <div className="border-t border-slate-200 p-3 space-y-3 bg-slate-50">
-              <PlanFields s={s} compact />
-              <PlanAnswer plan={s.plan} />
-              <div className="flex gap-2">
-                <button className={primary} onClick={() => setOpen(false)}>Apply</button>
-                <button className={ghost} onClick={() => setOpen(false)}>Cancel</button>
-                <button className={ghost} disabled={!s.plan}
-                  onClick={() => toast("capacity-request.md downloaded")}>
-                  Download request
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+          in step 3 as much as in step 1 -- so it sits above the flow rather
+          than inside it, and the flow keeps the three steps it had.
+          
+          It states the profile and does not edit it. There used to be an Edit
+          here as well as one beside Apply, and two controls a few centimetres
+          apart both saying "Edit" read as the same control twice however
+          different they were underneath. The one that stayed is the one next
+          to the thing it changes. */}
+      <div className={card + " flex items-center gap-3 px-3 py-2"}>
+        <span className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
+          Capacity profile
+        </span>
+        <span className="text-sm text-slate-800">
+          {s.plan
+            ? <>{s.plan.users.toLocaleString()} VUs · {s.plan.engines} engines
+                {" "}({s.plan.perAgent}/agent) · {s.plan.cpu} CPU / {s.plan.mem}Gi</>
+            : <span className="text-amber-700">not sized yet</span>}
+        </span>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
@@ -506,20 +490,72 @@ function VariantQ({ toast }: { toast: (m: string) => void }) {
           <h3 className="text-sm font-semibold text-slate-800">Location &amp; agent</h3>
           <LocationList plan={s.plan} picked={picked} onPick={setPicked}
             onApply={setApplying} />
-          {picked && s.plan && (
+          {/* Shown as soon as a location is picked, sized or not: without a
+              plan this is the only way back to the planner, and a panel that
+              appears only once you have one is a dead end for anyone who has
+              cleared the target. */}
+          {picked && (
             <div className="border border-slate-200 rounded-md bg-slate-50 p-3 space-y-2">
               <p className="text-xs font-semibold text-slate-700">Location settings</p>
-              {/* No Calculate button here: the profile above *is* the
-                  calculator, and a second one was the redundancy. */}
-              <DiffTable plan={s.plan} loc={LOCS.find((l) => l.id === picked)!} />
+              {/* No Calculate button: the profile *is* the calculator, and a
+                  second one was the redundancy this variant exists to remove. */}
+              {s.plan ? (
+                <DiffTable plan={s.plan} loc={LOCS.find((l) => l.id === picked)!} />
+              ) : (
+                <p className="text-[11px] text-amber-700">
+                  No profile yet — Edit to size one, and this says what it would
+                  change.
+                </p>
+              )}
               <div className="flex gap-2 items-center">
-                <button className={primary}
+                {/* Both stay on screen with a plan or without one; Apply says
+                    what it is waiting for rather than vanishing. */}
+                <button className={primary} disabled={!s.plan}
                   onClick={() => setApplying(LOCS.find((l) => l.id === picked)!)}>
                   Apply profile
                 </button>
-                <button className={ghost} onClick={() => toast("opened the fields for a manual edit")}>
-                  Edit by hand
+                <button className={ghost} onClick={() => setOpen(!open)}
+                  aria-expanded={open}>
+                  {open ? "Done" : "Edit"}
                 </button>
+                {!s.plan && (
+                  <span className="text-[11px] text-amber-700">
+                    size the profile first
+                  </span>
+                )}
+              </div>
+
+              {/* Opens downward, under the button that opened it and directly
+                  above nothing -- the diff it changes is the line above, so the
+                  numbers move while the fields are still on screen. */}
+              <div className={"grid transition-[grid-template-rows] duration-200 "
+                + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                <div className="overflow-hidden">
+                  <div className="rounded-md border border-bzm/40 bg-white p-3
+                                  space-y-3 mt-1">
+                    <p className="text-xs font-semibold text-slate-700">
+                      Capacity profile
+                    </p>
+                    <PlanFields s={s} compact />
+                    <PlanAnswer plan={s.plan} />
+                    {/* No Apply or Cancel in here: the fields *are* the
+                        profile, so a change is already made and the table
+                        above has already moved. Closing is all that is left,
+                        and Apply profile above is the one that writes. */}
+                    <div className="flex gap-2 items-center">
+                      <button className={ghost} onClick={() => setOpen(false)}>
+                        Done
+                      </button>
+                      <button className={ghost} disabled={!s.plan}
+                        onClick={() => toast("capacity-request.md downloaded")}>
+                        Download request
+                      </button>
+                      <span className="text-[11px] text-slate-500">
+                        nothing is written until Apply profile
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
