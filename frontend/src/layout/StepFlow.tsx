@@ -28,6 +28,11 @@ interface StepFlowProps {
    *  field that is empty: the point of the fixed position is that the user is
    *  looking there, not up the page. "" for a step that never blocks. */
   blockedBy: string[];
+  /** A line under the step, outside its scroller and so always on screen --
+   *  what the flow adds up to rather than part of any one step. Inside the
+   *  scrolling area it would sit at the bottom of a panel taller than the
+   *  window, which is to say nowhere. */
+  footer?: ReactNode;
   children: ReactNode;
 }
 
@@ -39,7 +44,7 @@ const dotCls = (state: "done" | "now" | "todo") =>
     todo: "bg-slate-200 text-slate-500",
   })[state];
 
-export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps) {
+export function StepFlow({ at, onGo, done, blockedBy, footer, children }: StepFlowProps) {
   // Steps the user has opened. Every step but the last is "done" on arrival --
   // the namespace and service account have defaults and no group is mandatory
   // -- so a tick on a step nobody has looked at claims something that did not
@@ -64,12 +69,26 @@ export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps)
       : done[i] && seen[i] ? "done" as const : "todo" as const;
 
   return (
-    <>
-      {/* Below the Configure/Preview tabs, which are sticky at the very top:
-          two bars both claiming top-0 is one bar over the other. */}
-      <div className="sticky top-[3.25rem] z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
-        <div className="max-w-screen-xl mx-auto py-2 flex items-center gap-4">
-          <div className="flex items-center gap-1.5 grow min-w-0">
+    // A flex column of the height the page actually has, so the step scrolls
+    // inside it and the footer is the last thing on screen. It was a scroller
+    // of `100vh - 13rem` with the footer after it, and the arithmetic was
+    // always going to be wrong for somebody: on a 900px window it put the line
+    // 21px below the fold. What is above this varies -- the blocked-by sentence
+    // comes and goes -- so nothing here should be counting rem.
+    // 6.75rem is what is above and below this now that the preview is a drawer
+    // rather than a tab bar: the page header (2.75rem) plus main's own padding
+    // (1.5rem top and bottom). Measured rather than guessed.
+    <div className="flex flex-col h-[calc(100vh-6.75rem)]">
+      {/* The only sticky bar on the page now that the preview is a drawer
+          rather than a tab strip above this one -- two bars both claiming
+          top-0 was one bar over the other. */}
+      <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur border-b border-slate-200 -mx-6 px-6">
+        <div className="py-2 flex items-center gap-4">
+          {/* Scrolls rather than collides: the drawer on the right takes the
+              width the three pills and the Back/Next pair used to share, and
+              flex children do not shrink below their content -- so without
+              this the step titles ran under the buttons. */}
+          <div className="flex items-center gap-1.5 grow min-w-0 overflow-x-auto">
             {steps.map((s, i) => (
               <button key={s.n} onClick={() => go(i)}
                 className={"flex items-center gap-1.5 rounded-full pl-1 pr-3 py-1 "
@@ -84,7 +103,7 @@ export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps)
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <span className="text-[11px] text-slate-400 whitespace-nowrap">
               Step {at + 1} of {steps.length}
             </span>
@@ -107,10 +126,13 @@ export function StepFlow({ at, onGo, done, blockedBy, children }: StepFlowProps)
         <p className="text-[11px] text-amber-700 pt-2">{blockedBy[at]}</p>
       )}
       {/* The step owns the scrolling, not the page, so the bar above never
-          leaves the top of the window. */}
-      <div className="mt-3 overflow-y-auto h-[calc(100vh-11rem)] pr-1">
+          leaves the top of the window. The height leaves room for the footer,
+          which is outside the scroller for the same reason the stepper is above
+          it: it must not move. */}
+      <div className="mt-3 flex-1 min-h-0 overflow-y-auto pr-1">
         {steps[at]?.node}
       </div>
-    </>
+      {footer}
+    </div>
   );
 }

@@ -19,10 +19,36 @@ export function Section(props: {
   );
 }
 
-export function Field(props: { label: string; hint?: string; children: ReactNode }) {
+/** The conventional red asterisk on a required field's label.
+ *
+ *  One definition because it appears on three forms now, and a marker that
+ *  means "required" in two shapes means nothing in either. Not a state badge:
+ *  it says the field must be filled in, which is true before anyone types and
+ *  stays true afterwards. Whether it *has* been is the input's own border, and
+ *  the disabled control below it that names what it is waiting for.
+ *
+ *  `aria-hidden` with the word beside it, because an asterisk is a convention
+ *  for sighted readers and silence for everyone else. */
+export function RequiredMark() {
+  return (
+    <>
+      <span aria-hidden="true" className="text-red-600">*</span>
+      <span className="sr-only">(required)</span>
+    </>
+  );
+}
+
+export function Field(props: {
+  label: string; hint?: string; children: ReactNode;
+  /** Marks the label with the asterisk. Whether the field is *filled in* is a
+   *  different question and is not shown here -- see RequiredMark. */
+  required?: boolean;
+}) {
   return (
     <label className="block">
-      <span className="text-xs font-medium text-slate-600">{props.label}</span>
+      <span className="text-xs font-medium text-slate-600">
+        {props.label}{props.required && <RequiredMark />}
+      </span>
       {props.children}
       {props.hint && <span className="text-[11px] text-slate-400">{props.hint}</span>}
     </label>
@@ -112,6 +138,99 @@ export function Check(props: {
   );
 }
 
+/** A whole-number field. Seven of these were `<input type="number">` with
+ *  `inputCls` concatenated by hand, and they had already drifted -- one without
+ *  a `min`, one with a width bolted onto the class string. The blank string is
+ *  a legitimate value and means "not given"; see server._typed, which is the
+ *  same fact on the other side of the wire. */
+export function NumberInput(props: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  min?: number;
+  className?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input type="number" min={props.min ?? 1}
+      className={inputCls + (props.className ? " " + props.className : "")}
+      placeholder={props.placeholder} value={props.value}
+      disabled={props.disabled}
+      onChange={(e) => props.onChange(e.target.value)} />
+  );
+}
+
+/** The white card everything on these pages sits in. Was six copies of the
+ *  same class string across three files, one of which had already drifted to
+ *  `space-y-2`. */
+export const cardCls =
+  "bg-white border border-slate-200 rounded-lg p-4 space-y-3";
+
+/** One number out of a plan: the figure, what it counts, and what it costs.
+ *
+ *  Both places that size something show a row of these, and they had a copy
+ *  each -- the same three lines at two type scales. `big` is the standalone
+ *  planner, where the row is the answer to the whole page; the pane inside a
+ *  location sits under four form fields and would shout over them. */
+export function Figure(props: {
+  n: number | string; unit: string; sub: string; big?: boolean;
+}) {
+  return (
+    <div className={"border border-slate-200 rounded-md "
+      + (props.big ? "p-3" : "px-2.5 py-2")}>
+      <div className={"font-bold text-slate-900 leading-none "
+        + (props.big ? "text-2xl" : "text-lg")}>{props.n}</div>
+      <div className={"font-medium text-slate-600 "
+        + (props.big ? "text-xs mt-1" : "text-[11px] mt-0.5")}>{props.unit}</div>
+      <div className={"text-slate-400 "
+        + (props.big ? "text-[11px] mt-0.5" : "text-[10px]")}>{props.sub}</div>
+    </div>
+  );
+}
+
+/** What a plan cannot know, and what it wants to warn about.
+ *
+ *  Both sizing panels showed this and had a copy each, in two wordings -- and
+ *  the wording is the point: the users-per-engine figure is the number the
+ *  whole plan multiplies by, nothing on this side can measure it, and a panel
+ *  that softened the sentence would be the one people believed. `compact` is
+ *  the pane inside a location, where it sits under a form rather than being
+ *  the page.
+ *
+ *  The warnings themselves are plan.py's prose, rendered as it wrote them. */
+export function PlanCaveats(props: {
+  assumed: boolean;
+  vusPerEngine: number;
+  warnings: string[];
+  compact?: boolean;
+}) {
+  const small = props.compact;
+  return (
+    <>
+      {props.assumed && (
+        <div className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
+          <p className={small ? "text-[11px] text-amber-700" : "text-xs text-amber-900"}>
+            <b>{props.vusPerEngine.toLocaleString()} virtual users per engine is
+            assumed</b>, not measured — it is what an engine of this size is
+            rated for. How many virtual users one engine really carries depends
+            on what your script does between requests, and every number above is
+            that figure multiplied out. Run the real script against one engine,
+            find where it saturates, and put that number in the field above.
+          </p>
+        </div>
+      )}
+      {props.warnings.map((w) => (
+        <div key={w}
+          className={small ? "" : "border border-slate-200 bg-slate-50 rounded-lg p-3"}>
+          <p className={small ? "text-[11px] text-slate-500" : "text-xs text-slate-600"}>
+            {w}
+          </p>
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** Indeterminate progress, for a wait whose length we cannot predict -- a
  *  round-trip to BlazeMeter over someone's corporate network. `currentColor`
  *  so it works on both button kinds without being told which it is on. */
@@ -168,23 +287,89 @@ export function Switch({ on, onChange }: { on: boolean; onChange: (v: boolean) =
 
 /** A step within a numbered Section -- same heading shape, no number of its
  *  own. Used where several former steps were folded into one. */
+/** One panel of a step: a bordered card with a header, optionally collapsible.
+ *
+ *  A card rather than a rule between blocks. Three sections separated by a
+ *  hairline on one white background read as one long form with bold words in
+ *  it -- where a panel starts and ends is the thing a reader needs before they
+ *  need anything inside it, and a border is how that gets said.
+ *
+ *  When it collapses, the header follows the disclosure convention rather than
+ *  inventing one: the whole bar is the control, the pointer changes over it, it
+ *  tints on hover, and a chevron on the left points right when closed and down
+ *  when open. A header that is clickable and does not look it is a header
+ *  nobody clicks.
+ */
 export function SubSection(props: {
   title: string; hint?: string; done?: boolean; children: ReactNode;
+  /** Collapsible when both are given. Controlled from the caller, because what
+   *  should be open is a fact about where you are in the step -- the next
+   *  unfinished thing -- and only the caller knows that. Given neither, the
+   *  section is always open and has no header control. */
+  open?: boolean;
+  onToggle?: () => void;
+  /** A word or two of state on the header, visible while collapsed: a folded
+   *  section that says nothing is a section you have to open to find out
+   *  whether you needed to. */
+  summary?: string;
 }) {
-  return (
-    <div className="border-t border-slate-100 pt-3 first:border-t-0 first:pt-0">
-      <div className="flex items-baseline gap-2 mb-2">
-        {/* Only the finished state is marked. An "unfinished" glyph on every
-            step you have not reached yet reads as a list of failures. The span
-            keeps its width either way so the headings stay aligned. */}
-        <span className="text-xs text-emerald-600 w-2.5 shrink-0">
-          {props.done ? "✓" : ""}
+  const collapsible = props.open !== undefined && !!props.onToggle;
+  const open = !collapsible || props.open;
+  const heading = (
+    <>
+      {collapsible && (
+        <span aria-hidden="true"
+          className={"text-slate-400 text-sm leading-none transition-transform "
+            + "duration-150 shrink-0 " + (open ? "rotate-90" : "")}>›</span>
+      )}
+      {/* Only the finished state is marked. An "unfinished" glyph on every step
+          you have not reached yet reads as a list of failures. */}
+      <span className="text-xs text-emerald-600 w-2.5 shrink-0">
+        {props.done ? "✓" : ""}
+      </span>
+      <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
+      {props.summary && (
+        <span className="text-[11px] text-slate-500 truncate">
+          {props.summary}
         </span>
-        <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
+      )}
+    </>
+  );
+  return (
+    <section className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+      {collapsible ? (
+        <button type="button" onClick={props.onToggle} aria-expanded={open}
+          className={"w-full flex items-center gap-2 px-3 py-2.5 text-left "
+            + "bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer "
+            + (open ? "border-b border-slate-200" : "")}>
+          {heading}
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50 border-b border-slate-200">
+          {heading}
+        </div>
+      )}
+      {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the
+          body's height is not knowable in advance and `height: auto` does not
+          transition. Kept mounted while closed so what was typed into it is
+          still there when it reopens. */}
+      {/* `invisible` as well as zero-height, and that is not decoration: the body
+          stays mounted while closed so what was typed into it survives, and a
+          mounted body inside a 0fr row is still in the hit-testing and
+          accessibility trees. Its buttons took clicks aimed at whatever was
+          drawn over them, and a keyboard tab walked into a section nobody could
+          see. visibility:hidden takes it out of both while keeping the state. */}
+      <div aria-hidden={!open}
+        className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
+        <div className="overflow-hidden">
+          <div className="p-3">
+            {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+            {props.children}
+          </div>
+        </div>
       </div>
-      {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
-      {props.children}
-    </div>
+    </section>
   );
 }
 
@@ -260,8 +445,19 @@ export function SearchSelect(props: {
   options: SelectOption[];
   value: string | number | null;
   onChange: (v: string | number) => void;
+  /** Un-choose. Given, the clear button empties the box itself once the typed
+   *  search is gone -- because "clear the dropdown" means the value in it, and
+   *  onChange has no way to say "none". Without it the button only clears the
+   *  search, since a control that empties a field the page still depends on
+   *  would be worse than no control. */
+  onClear?: () => void;
   placeholder?: string;
   disabled?: boolean;
+  /** The options are on their way. Shown in the box rather than beside it: an
+   *  empty dropdown and a slow one look identical, and the account and
+   *  workspace lists are a round trip to BlazeMeter over whatever network the
+   *  user is on. */
+  busy?: boolean;
 }) {
   const { options, value, onChange } = props;
   const selected = options.find((o) => o.value === value) ?? null;
@@ -270,6 +466,7 @@ export function SearchSelect(props: {
   const [hi, setHi] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -290,6 +487,15 @@ export function SearchSelect(props: {
     listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
   }, [hi]);
 
+  // What the button would clear, or null when the box is already empty. The
+  // search wins while there is one: two presses to get from "typed a filter
+  // over a chosen account" to "nothing chosen" is the order people expect,
+  // and it makes the first press undoable.
+  const clearing: "query" | "selection" | null =
+    (props.disabled || props.busy) ? null
+      : query ? "query"
+        : (selected && props.onClear) ? "selection" : null;
+
   const pick = (o: SelectOption) => {
     onChange(o.value);
     setOpen(false);
@@ -299,9 +505,11 @@ export function SearchSelect(props: {
   return (
     <div ref={rootRef} className="relative">
       <input
+        ref={inputRef}
         className={inputCls + " pr-7"}
         disabled={props.disabled}
-        placeholder={selected?.label ?? props.placeholder ?? "type to search…"}
+        placeholder={props.busy ? "loading…"
+          : selected?.label ?? props.placeholder ?? "type to search…"}
         value={open ? query : selected?.label ?? ""}
         onFocus={() => { setOpen(true); setQuery(""); }}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
@@ -313,7 +521,40 @@ export function SearchSelect(props: {
           else if (e.key === "Escape") { setOpen(false); setQuery(""); (e.target as HTMLInputElement).blur(); }
         }}
       />
-      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+      {/* Clear, in place of the chevron rather than beside it: while the list is
+          open "this opens" is the one thing the arrow no longer has to say, and
+          two glyphs crowd a box this size.
+
+          There whenever there is something to clear, which is the fix for the
+          first version of this: focusing the box empties it to show the full
+          list, so an X gated on the typed search appeared only *after* a
+          keystroke -- click in, and there was nothing there to find.
+
+          Two things to clear, in order. The search first, if one has been
+          typed; then the selection, if the caller gave us a way to un-choose.
+
+          mousedown, and prevented: on click the input would blur first, and the
+          list would close under the pointer that was clearing it. */}
+      {props.busy ? (
+        <Spinner className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bzm" />
+      ) : clearing ? (
+        <button type="button"
+          aria-label={clearing === "query" ? "Clear search" : "Clear selection"}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-500
+                     hover:text-slate-800 hover:bg-slate-200 rounded w-5 h-5
+                     flex items-center justify-center text-xs leading-none"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setQuery("");
+            if (clearing === "selection") props.onClear?.();
+            inputRef.current?.focus();
+            setOpen(true);
+          }}>
+          ✕
+        </button>
+      ) : (
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+      )}
       {open && (
         <div ref={listRef}
           className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-md shadow-lg">
@@ -330,6 +571,51 @@ export function SearchSelect(props: {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** A centred modal. Unlike the two drawers -- which are furniture and stay
+ *  where they are put -- this one is a question being asked, so it dims what is
+ *  behind it and both Escape and a click outside answer "not now".
+ *
+ *  Nothing is rendered while closed, because what it holds is a form whose
+ *  half-typed contents should not survive being dismissed. */
+export function Modal(props: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  useEffect(() => {
+    if (!props.open) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") props.onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [props]);
+  if (!props.open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={props.onClose}>
+      <div className="absolute inset-0 bg-slate-900/40" />
+      <div role="dialog" aria-modal="true" aria-label={props.title}
+        onClick={(e) => e.stopPropagation()}
+        className="relative bg-white rounded-xl shadow-2xl w-full max-w-xl
+                   border border-slate-200">
+        <div className="flex items-baseline gap-2 px-4 py-3 border-b border-slate-200">
+          <h2 className="text-sm font-semibold text-slate-900">{props.title}</h2>
+          {props.hint && (
+            <span className="text-[11px] text-slate-500 truncate">{props.hint}</span>
+          )}
+          <span className="grow" />
+          <button onClick={props.onClose} aria-label="Close"
+            className="text-slate-400 hover:text-slate-700 text-sm leading-none px-1">
+            ✕
+          </button>
+        </div>
+        <div className="p-4">{props.children}</div>
+      </div>
     </div>
   );
 }

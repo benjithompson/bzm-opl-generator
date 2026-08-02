@@ -5,14 +5,17 @@
 // id and a token; that is enough to render everything, because every other fact
 // the generator wants has a documented default.
 //
-// Nothing here validates. The ids are opaque, there is no account to check them
-// against, and a format guess would only ever reject input that was correct.
-// The fields say what each value is instead, so a wrong paste is visible.
+// It checks their *shape* and nothing else -- see manualIds.ts, which is where
+// that argument and its tests live. This file used to say it checked nothing at
+// all, on the grounds that a format guess can only reject correct input; the
+// shapes turned out not to be a guess, and the failure it was tolerating is
+// silent (a bundle that applies cleanly and never joins anything).
 //
 // Identity only. What the location *runs* is declared once, in the Configure
 // step -- asking it here as well made one fact two questions in two
 // vocabularies (funcIds here, features there).
 import { Field, SecretInput, TextInput } from "../components";
+import { checkId, HARBOR, IdRule, SHIP, tidy, TOKEN } from "../manualIds";
 
 export function ManualSource(props: {
   harborId: string;
@@ -25,33 +28,49 @@ export function ManualSource(props: {
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
-        From the agent's install command in BlazeMeter (Settings → Private
+        From the agent&apos;s install command in BlazeMeter (Settings → Private
         Locations → your agent). Nothing is sent to BlazeMeter and nothing is
-        checked — this only fills in what the manifests need.
+        looked up — only the shape of each value is checked here.
       </p>
 
-      <Field label="Harbor ID (private location)"
+      <Field label="Harbor ID (private location)" required
         hint="HARBOR_ID — identifies the location the agent joins">
+        {/* Whitespace is removed rather than complained about: the install
+            command wraps, so a copy off it arrives with a newline in the
+            middle, and that is a paste artefact rather than a typo. */}
         <TextInput mono placeholder="6a63a79dcc45dccca90bf440"
-          value={props.harborId} onChange={props.onHarborId} />
+          value={props.harborId} onChange={(v) => props.onHarborId(tidy(v))} />
+        <Complaint rule={HARBOR} value={props.harborId} />
       </Field>
 
-      <Field label="Ship ID (agent)"
+      <Field label="Ship ID (agent)" required
         hint="SHIP_ID — this agent's own identity, and part of the Deployment's selector">
         <TextInput mono placeholder="6a679d3445115b6651011715"
-          value={props.shipId} onChange={props.onShipId} />
+          value={props.shipId} onChange={(v) => props.onShipId(tidy(v))} />
+        <Complaint rule={SHIP} value={props.shipId} />
       </Field>
 
       {/* Masked: the same field the connected path now has, and the same reason
           -- see SecretInput. Left empty the bundle still generates, with the
-          placeholder and a banner beside the download saying so. */}
+          placeholder and a banner beside the download saying so, which is why
+          this one is not marked required. */}
       <Field label="Auth token"
         hint="AUTH_TOKEN — goes into the Secret. Anyone holding it can register as this agent.">
         <SecretInput placeholder="af1736ce6c96ec3ecd2c3838ad20ed3c…"
-          value={props.authToken} onChange={props.onAuthToken} />
+          value={props.authToken} onChange={(v) => props.onAuthToken(tidy(v))} />
+        <Complaint rule={TOKEN} value={props.authToken} />
       </Field>
-
-
     </div>
   );
+}
+
+/** What is wrong with the field above, where its hint would be.
+ *
+ *  Nothing while it is blank and nothing while it is right, so the layout does
+ *  not move as a correct value is typed -- only a value that has stopped being
+ *  plausible pushes anything down. */
+function Complaint({ rule, value }: { rule: IdRule; value: string }) {
+  const msg = checkId(rule, value);
+  if (!msg) return null;
+  return <span className="text-[11px] text-red-600 block">{msg}</span>;
 }

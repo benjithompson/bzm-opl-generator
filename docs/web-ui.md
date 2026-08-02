@@ -7,7 +7,17 @@ bzm-opl-gen ui          # opens http://127.0.0.1:8765
 Installed from the release wheel with the `[ui]` extra (see the
 [README](../README.md#install)); from a checkout, `pip install -e ".[ui]"`.
 
-Three steps, one on screen at a time, with the stepper and Back/Next in one bar
+Two views, chosen in the header. **Plan capacity** sizes a load target — how
+many engines a number of virtual users needs, how many nodes those engines need,
+the machine size, and a request document to send to whoever provisions the
+cluster — and reaches nothing at all, so it works with no key, no account and no
+cluster ([capacity-planning.md](capacity-planning.md)). It is not a step for
+that reason: everything the first step asks for is what somebody sizing a
+cluster has not got yet. *Use this plan* carries its numbers into **Generate** —
+the location's concurrent engines and virtual users per engine, and the bundle's
+engine size — and writes nothing to BlazeMeter.
+
+**Generate** is the three steps, one on screen at a time, with the stepper and Back/Next in one bar
 at the top: **Agent details** — either connect (key stays local) and pick or
 create a location & agent, or enter the harbor id, ship id and token by hand →
 **Configure** → **Download & verify**, which is also where you watch the agent
@@ -30,6 +40,16 @@ on from the same folder. Saving into a folder that already holds this ship's
 bundle reuses the token already there, so a re-render with one option changed is
 the same bytes and leaves the deployed agent alone.
 
+**Test deploy**, beside the evidence-file picker under *Preflight the target
+cluster*, hands over crane-hook as a manifest to apply to the cluster under
+test: the same Pod, Role and RoleBinding the bundle would carry, rendered for
+the namespace and registry currently configured. It does not turn the option on
+— applying the check and shipping it inside the agent's bundle are different
+decisions, and this is the one you make before deploying anything. There is no
+chart to fetch: crane-hook publishes an image, packaged as a `helm test` hook
+inside the separate [helm-crane](https://github.com/Blazemeter/helm-crane/releases)
+chart, and documents a manifest as the standalone way to run it.
+
 **Cluster check (crane-hook)** under *Deployment settings* adds
 [crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
 Pod, plus its own read-only Role and RoleBinding, that checks node capacity,
@@ -39,6 +59,66 @@ report, and deleting it changes nothing. In a Helm bundle it is the chart's
 `helm test` hook instead. This is a different thing from **Preflight the target
 cluster** below the download button, which needs no cluster access at all — see
 [Preflight](preflight.md).
+
+Under the step, and outside its scroller so it does not move, is the summary
+line: which location and which agent everything is being generated for, and
+"none yet" in amber where one is missing. It stays as the steps change, because
+that is a question you have in step 2 and step 3 as much as in step 1.
+
+Step 1's three sections — **Connect**, **Private location**, **Agent (ship)** —
+are bordered panels that fold. The header is the control: a chevron on its left
+points right when closed and down when open, and the bar tints under the
+pointer. They open on whichever section the step has reached until you pin a
+different one, and a folded one carries its state on the header (who you are
+connected as, which location, which agent), so nothing has to be opened to find
+out whether it needed opening.
+
+The account tree — accounts, workspaces, locations and an agent's facts — is
+**remembered for 60 seconds** by the server, so reloading the page costs one
+local round trip rather than four to BlazeMeter (2.5s on a small account; the
+location list alone is 1.3s on one holding 171). Anything this server writes —
+creating a location or an agent, changing a location's settings, enabling a
+feature, or connecting a different key — drops the cache immediately, so your
+own changes are never the stale ones. An agent's heartbeat is never cached: the
+status poll is what says an agent came online.
+
+### Changing a location after it exists
+
+Selecting a location expands it, the way an agent row does, and its settings are
+inside: **concurrent engines** (`slots`), **virtual users per engine**
+(`threadsPerEngine`) and the engine's CPU and memory **requests**
+(`overrideCPU` / `overrideMemory`). They open out of the location rather than
+sitting under the list, because they belong to the one that is selected and to
+nothing else. The case is the correction rather than the setup — a location
+built for 500 virtual users an engine that a real run says should be 1,000.
+
+**Calculate**, beside the settings heading, sizes that location from a virtual
+user target. It starts from what the location already says — its virtual users
+per engine, its engine size — so the first thing it shows is what the location
+as it stands would cost: 5,000 virtual users at 50 an engine is 100 engines and
+100 nodes, which is the argument for raising the figure rather than the pool.
+It answers in engines, **nodes** and peak vCPU, flags the users-per-engine
+figure as an assumption when nothing supplied one, and *Apply* fills the fields
+above. It also asks how many **agents** will serve the location, defaulting to
+the number it has: `slots` is engines per *agent*, so the run divides across
+them and each agent's cluster only has to hold its share. Applying is not saving: the location is untouched until **Save**, which
+is still the only control that writes.
+
+The standalone **Plan capacity** view remains, and is the one for a location
+that does not exist yet — no account, no cluster, and a request document to
+raise the infrastructure ticket with ([capacity-planning.md](capacity-planning.md)).
+
+None of those four values is in a manifest, so changing one needs no
+regenerate, no re-apply and no restart; it applies to the next test that
+starts. Save sends only the fields that changed, and the answer is a **re-read
+of the location**, not an echo of the request: a field the account did not
+store comes back reported as not stored. That is not hypothetical — BlazeMeter's
+own create endpoint accepts `threadsPerEngine` and drops it, which is why a
+freshly created location 403s every test start until it is PATCHed.
+
+It changes the location for every agent in it and every test that starts on it,
+which the panel says before the button is pressed. Clearing a setting is not
+offered: blank means "leave this one alone", and the two are different intents.
 
 ### The AUTH_TOKEN, and where it comes from
 

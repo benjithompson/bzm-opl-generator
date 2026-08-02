@@ -15,11 +15,25 @@
 // Plain data in, data out: no React here, which is what makes session.test.ts
 // possible without a DOM.
 import { Options } from "./api";
+// The planner's form, as the planner declares it. A second copy of the
+// shape here is a field that gets added to one and not the other.
+import type { PlanInputs } from "./usePlan";
 
 /** Bumped when the shape changes. A snapshot from an older build is dropped
  *  rather than half-read: the fields are ids and options that other code
- *  believes, and a partially-understood one is worse than starting over. */
-const VERSION = 1;
+ *  believes, and a partially-understood one is worse than starting over.
+ *
+ *  Exported for the test that forges a snapshot at the *current* version --
+ *  written against a literal, it started passing for the wrong reason the
+ *  first time this was bumped. */
+// 3: the planner grew an `agents` field. 4: it lost it again -- a v3 snapshot
+// would restore a key PlanInputs no longer has, and the panel would carry a
+// value nothing reads. Half-reading either way is what the version stops.
+// 5: the planner became step 1's capacity profile. Its engine size moved into
+// the bundle options (which are stored here already), so PlanInputs is down to
+// the two figures it owns -- and `view` no longer has a "plan" to restore, so a
+// v4 snapshot would land the page on a view that does not exist.
+export const VERSION = 5;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -33,7 +47,16 @@ export interface Session {
   manual: { harbor_id: string; ship_id: string };
   options: Options;
   step: number;
+  /** Which of the two views is open. The account rollup is not a step, so the
+   *  step number cannot say. */
+  view: "flow" | "capacity";
+  /** What was typed into the capacity profile. Kept for the same reason the
+   *  option values are: they were typed, and nothing else can recover them --
+   *  and somebody who refreshes while sizing a run must not come back to an
+   *  empty target. */
+  plan: PlanInputs;
 }
+
 
 /** The options minus anything that must not be written down. Exported because
  *  it is the whole safety argument: one function, one test, one place to look

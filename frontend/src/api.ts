@@ -10,6 +10,35 @@ export interface Ship {
 export interface Location {
   id: string; name: string; funcIds?: string[]; slots?: number; ships?: Ship[];
   workspacesId?: number[];
+  /** The three concurrency settings beyond `slots`, as BlazeMeter names them.
+   *  `overrideCPU` / `overrideMemory` are the engine pod's *requests* (memory
+   *  in MB) and are null on the great majority of locations, which is what
+   *  makes the scheduler place engines at 250m/256Mi. */
+  threadsPerEngine?: number | null;
+  overrideCPU?: number | null;
+  overrideMemory?: number | null;
+}
+
+/** The four settings this tool will change, as it names them. */
+export interface LocationSettings {
+  slots: number | null;
+  threads_per_engine: number | null;
+  override_cpu: number | null;
+  override_memory: number | null;
+}
+
+/** The answer to a settings change: what the account holds *now*.
+ *
+ *  `changed` is what moved, `ignored` is what was sent and came back unchanged
+ *  — a real case, since BlazeMeter's own POST accepts `threadsPerEngine` and
+ *  drops it. Reporting the request as the outcome is the failure this shape
+ *  exists to prevent; see core.update_location. */
+export interface LocationUpdate {
+  location: Location;
+  changed: Partial<LocationSettings>;
+  ignored: string[];
+  before: LocationSettings;
+  after: LocationSettings;
 }
 export interface Facts {
   harbor_id: string; harbor_name?: string; func_ids?: string[];
@@ -28,6 +57,90 @@ export interface AgentStatus {
   installed_version?: string; online: boolean;
 }
 export interface Options { [k: string]: unknown }
+
+/** What a load target costs, from core.capacity_plan.
+ *
+ *  The arithmetic is all on the server, not because it is hard -- it is a
+ *  division and two multiplications -- but because doctor judges a cluster
+ *  against the same constants and the planner and the preflight disagreeing is
+ *  the one failure this feature can have. A second copy in TypeScript would be
+ *  a second engine footprint to keep in step.
+ *
+ *  `vus_per_engine_assumed` is the field the panel must never drop: the whole
+ *  plan is that number multiplied out, and nothing here can measure it. */
+export interface CapacityPlan {
+  /** Virtual users: the load target. A location holds agents, an agent runs
+   *  engines, and each engine drives virtual users -- that hierarchy is the
+   *  vocabulary this whole panel speaks. */
+  users: number;
+  vus_per_engine: number;
+  vus_per_engine_assumed: boolean;
+  engines: number;
+  /** `slots` is engines per *agent*, so a location's concurrency is
+   *  agents x slots. These carry the division. */
+  agents: number;
+  engines_per_agent: number;
+  engines_per_node: number;
+  nodes_per_agent: number;
+  nodes: number;
+  engine: {
+    cpu: string; memory: string; disk_gb: number; tmp_gb: number;
+    supported_vus: number;
+  };
+  node: { cpu: string; memory: string; disk_gb: number };
+  peak: { cpu: string; memory: string; disk_gb: number };
+  crane: { cpu_limit: string; memory_limit: string };
+  /** The four location settings, in LOCATION_SETTINGS' own names and the
+   *  units its PATCH takes -- so a plan can be applied to the settings form
+   *  without renaming or re-parsing anything on the way. `override_cpu` is
+   *  null when the engine is not a whole number of cores, which is the one
+   *  thing the field cannot express. */
+  location: LocationSettings & {
+    // A plan always has these three; only override_cpu can be missing, and
+    // only because the field takes whole cores and the engine may not be one.
+    slots: number; threads_per_engine: number; override_memory: number;
+  };
+  egress: string[];
+  warnings: string[];
+  document: string;
+  document_file: string;
+}
+
+/** One private location's share of an account's rated capacity. */
+export interface CapLocation {
+  id: string;
+  name: string;
+  func_ids: string[];
+  agents: number;
+  /** Agents the payload vouches for, and agents it says nothing about. Two
+   *  counts because one cannot carry both: a listing need not include a
+   *  heartbeat, and "we did not look" is not "it is down". */
+  agents_reporting: number;
+  agents_unknown: number;
+  /** BlazeMeter's `slots`: engines per *agent*, so a location's concurrency is
+   *  agents x slots. Null when the location has never been given one. */
+  slots: number | null;
+  threads_per_engine: number | null;
+  engines: number;
+  /** null, not 0: a location missing slots or threadsPerEngine has no rating
+   *  to state, and 0 would read as "no capacity" when the truth is "nobody has
+   *  said". */
+  rated_vus: number | null;
+  workspace_ids: number[];
+  workspace_names: string[];
+  /** In more than one workspace, so its capacity is claimable from either. */
+  shared: boolean;
+}
+
+export interface Capacity {
+  account_id: number;
+  workspaces: { id: number; name: string }[];
+  locations: CapLocation[];
+  /** Shared locations counted once, which is why this is not the sum of the
+   *  workspace totals. */
+  rated_vus: number;
+  unrated: number;
+}
 
 /** Which of four ways a bundle's AUTH_TOKEN arrived, from core.resolve_auth_token.
  *  GIVEN: the token in the form. ROTATED: a new one was issued and the previous
@@ -50,6 +163,17 @@ export interface TokenReport {
   message: string;
 }
 
+/** What a bundle request carries about the credential — spread into the body
+ *  as it stands, under the server's own name for it.
+ *
+ *  A record rather than a boolean argument, and that is the whole of #104: the
+ *  decision has one producer (token.downloadPlan) and travels as the thing that
+ *  will be sent, so no call site converts it and no second call site converts
+ *  it differently. `rotate_token` revokes the credential a deployed agent is
+ *  running on, and there is no default here — a caller that has not been handed
+ *  a plan cannot ask for a bundle at all. */
+export interface TokenRequest { rotate_token: boolean }
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
     method,
@@ -57,9 +181,23 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
-    let detail = r.statusText;
-    try { detail = (await r.json()).detail ?? detail; } catch { /* ignore */ }
-    throw new Error(detail);
+    let detail: string | null = null;
+    try { detail = (await r.json()).detail ?? null; } catch { /* not our JSON */ }
+    // 404/405 with no `detail` is not this API answering -- it is the SPA's
+    // static mount, which is what serves a path FastAPI has no route for and
+    // answers 405 to any POST. In practice that means one thing: the page is
+    // newer than the process serving it. The UI bundle is read from disk on
+    // every request, so a long-running server hands out a build whose calls it
+    // has never heard of, and the feature looks broken rather than stale.
+    // Twice now that has cost a debugging session, so it says so itself.
+    if (detail === null && (r.status === 404 || r.status === 405)) {
+      throw new Error(
+        `this page is newer than the server it is talking to — ${method} ${url} `
+        + `is not a route it knows (HTTP ${r.status}). Restart it: `
+        + `launchctl kickstart -k gui/$UID/com.blazemeter.bzm-opl-gen.ui, `
+        + `or stop and re-run \`bzm-opl-gen ui\``);
+    }
+    throw new Error(detail ?? r.statusText);
   }
   return r.json();
 }
@@ -108,6 +246,18 @@ export const api = {
   issueToken: (harborId: string, shipId: string) =>
     req<{ auth_token: string }>(
       "POST", "/api/ships/token", { harbor_id: harborId, ship_id: shipId }),
+  /** Change a location's concurrency settings. A partial update: send only the
+   *  fields being changed. The answer says what the account holds afterwards,
+   *  which is not necessarily what was sent -- see LocationUpdate. */
+  /* Keyed on LocationSettings rather than Record<string, string>: the four
+     names are a closed set on the server too (core.LOCATION_SETTINGS, so a
+     caller that meant to change one cannot replace something else), and an
+     open record here let a typo through to a 400 that named a field nobody
+     had heard of. Values stay strings — the form's blanks are what "leave
+     this one alone" means, and parsing them here would lose that. */
+  updateLocation: (body: { harbor_id: string }
+    & Partial<Record<keyof LocationSettings, string>>) =>
+    req<LocationUpdate>("POST", "/api/locations/settings", body),
   /** Turn a feature on for a location. Additive and idempotent server-side --
    *  see core.add_func_id, which reads the location's own list first. */
   addFuncId: (harborId: string, funcId: string) =>
@@ -134,6 +284,23 @@ export const api = {
   generate: (facts: Facts, options: Options, outDir?: string) =>
     req<{ files: GeneratedFile[]; token: TokenReport }>("POST", "/api/generate",
       { facts, options, rotate_token: false, out_dir: outDir ?? null }),
+  /** Size a load target. Reaches no account and no cluster, which is why the
+   *  planner panel works with nothing connected -- see core.capacity_plan.
+   *  Blank fields are sent as typed; the server reads "" as "not given". */
+  plan: (body: {
+    users: string; vus_per_engine?: string; engine_cpu?: string;
+    engine_mem?: string; engines_per_node?: string; agents?: string;
+  }) => req<CapacityPlan>("POST", "/api/plan", body),
+  /** What an engine of this size is rated for, so a field can suggest it. The
+   *  ratio stays on the server -- doctor judges locations against the same one,
+   *  and a second copy here is how the two come to disagree. */
+  engineVus: (cpu: string, mem: string) =>
+    req<{ cpu: string; memory: string; supported_vus: number }>(
+      "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
+  /** What the account can generate, by workspace. See core.account_capacity
+   *  for what "rated" means and why a shared location is counted once. */
+  capacity: (accountId: number) =>
+    req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
@@ -150,7 +317,62 @@ export const api = {
   preflight: (facts: Facts | null, options: Options, evidence: unknown) =>
     req<PreflightOut>("POST", "/api/preflight",
       { facts: facts ?? {}, options, evidence }),
+  /** Download the bundle, and report what that did to the credential.
+   *
+   *  Here rather than beside `saveBlob` below, which is where it used to be: it
+   *  is a route, and a route outside this object is outside the seam -- the
+   *  only way to drive it from a test was to stub `fetch`, so the one path that
+   *  can revoke a running agent's credential was the one path not drivable the
+   *  way every other route is (#104).
+   *
+   *  `credential` is token.downloadPlan's, spread into the body as it stands.
+   *  It used to be a boolean defaulting to true -- downloading a bundle to read
+   *  it revoked a working agent's credential, and the pod that broke looked
+   *  like a slow boot (#64). */
+  downloadZip: async (
+    facts: Facts, options: Options, credential: TokenRequest,
+  ): Promise<TokenReport> => {
+    const r = await fetch("/api/generate/zip", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ facts, options, ...credential }),
+    });
+    if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
+    // Read before the bytes: a zip cannot carry a JSON envelope and still be a
+    // zip, so what happened to the credential travels beside the
+    // Content-Disposition.
+    const token = tokenFromHeaders(r);
+    saveBlob(await r.blob(),
+      `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
+    return token;
+  },
+  /** Write the bundle to a directory on the machine running this server -- the
+   *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
+   *  reads, so the folder is the handoff between this page and those.
+   *
+   *  Saving twice into one folder is the ordinary way to use it, and it no
+   *  longer costs a rotation: the server generates *into* the directory, so the
+   *  token already there is reused and the agent deployed from the last save
+   *  keeps working. `token.branch` says which happened. */
+  saveBundle: (
+    facts: Facts, options: Options, outDir: string, credential: TokenRequest,
+  ) => req<SavedBundle>("POST", "/api/generate/save",
+    { facts, options, ...credential, out_dir: outDir }),
 };
+
+/** Every route the page calls, as one thing it is handed rather than one it
+ *  imports. `typeof api` rather than a hand-written interface: the two would
+ *  drift, and what the page is allowed to reach is exactly what this module
+ *  serves -- a route added below is available to a caller without a second
+ *  declaration, and a fake that has fallen behind fails to typecheck.
+ *
+ *  Its point is the seam. Imported at module level there is nowhere to put a
+ *  different implementation, so every effect on the page -- the session restore
+ *  ordering, the debounced preview, the guarded account-capacity read, the poll
+ *  that travels by ref -- can only be exercised against a live server. Passed
+ *  in, a test drives them. See App.tsx, which takes it as a prop, and main.tsx,
+ *  which is the one place the real one is chosen. */
+export type Api = typeof api;
 
 /** One verdict, exactly as `doctor` reaches it. FAIL = a test would not start;
  *  WARN = the numbers are wrong or it will bite later, but a test still starts.
@@ -167,6 +389,11 @@ export interface PreflightCheck {
  *  the one collected for (the leading check says so when it is not). */
 export interface PreflightOut {
   namespace: string;
+  /** The list in one sentence, as `doctor` prints it under its own report: the
+   *  counts, and -- only where something FAILed -- what that costs. Served
+   *  rather than composed here, because when to state the consequence is a
+   *  judgement about the verdicts and doctor is the one that makes it. */
+  summary: string;
   /** What the file says about itself. Distinct from `namespace` above on
    *  purpose: that is the namespace being preflighted, this is the one the
    *  file describes, and a file collected for another namespace says little
@@ -193,6 +420,12 @@ export interface PreflightOut {
 export interface EvidenceSummary {
   collected_at: string | null;
   namespace: string | null;
+  /** Whether that namespace is a different one from the namespace being
+   *  preflighted, so every namespaced verdict below describes the other one.
+   *  The comparison is doctor's -- it is what the leading verdict says in
+   *  prose -- and false is "nothing to report", which is why `namespace` is
+   *  still here beside it: a file that named none is not a mismatch. */
+  elsewhere: boolean;
   /** Section names, in the order the collector wrote them; empty when it read
    *  everything it asked for. */
   unreadable: string[];
@@ -240,6 +473,21 @@ export interface Suggestion {
   /** What the configuration holds for this option right now. Shown whatever the
    *  state: applying is always a value replacing a value. */
   current: unknown;
+  /** The four values above as a reader sees them, from suggest.shown: JSON the
+   *  way profile.json would carry it (`false`, not `False`), and unset said in
+   *  words. Served rather than formatted here -- the same rule was written
+   *  twice, in two languages, and `JSON.stringify` and `json.dumps` do not
+   *  even agree about the space after a colon. The raw values stay beside
+   *  them: they are what applying writes. */
+  current_shown: string;
+  value_shown: string;
+  candidates_shown: string[];
+  ruled_out_shown: string[];
+  /** Why this row cannot be offered, or null. generate() takes one CA mode of
+   *  three, so writing one over another produces a bundle that does not
+   *  generate -- the refusal belongs where that rule is, and arrives already
+   *  written. */
+  blocked: string | null;
 }
 
 /** Served rather than declared here: generate.py owns both lists, and a copy in
@@ -357,44 +605,9 @@ function tokenFromHeaders(r: Response): TokenReport {
   };
 }
 
-/** Download the bundle, and report what that did to the credential.
- *
- *  `rotateToken` issues a NEW AUTH_TOKEN and kills the one any deployed agent is
- *  running on, so it is off unless the caller asked for exactly that. It used to
- *  default to true — downloading a bundle to read it revoked a working agent's
- *  credential, and the pod that broke looked like a slow boot (#64). */
-export async function downloadZip(
-  facts: Facts, options: Options, rotateToken = false,
-): Promise<TokenReport> {
-  const r = await fetch("/api/generate/zip", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ facts, options, rotate_token: rotateToken }),
-  });
-  if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
-  const token = tokenFromHeaders(r);
-  saveBlob(await r.blob(),
-    `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
-  return token;
-}
-
+/** What a save wrote, and where. */
 export interface SavedBundle {
   out_dir: string;
   files: { name: string; bytes: number }[];
   token: TokenReport;
-}
-
-/** Write the bundle to a directory on the machine running this server — the
- *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
- *  reads, so the folder is the handoff between this page and those.
- *
- *  Saving twice into one folder is the ordinary way to use it, and it no longer
- *  costs a rotation: the server generates *into* the directory, so the token
- *  already there is reused and the agent deployed from the last save keeps
- *  working. `token.branch` says which happened. */
-export function saveBundle(
-  facts: Facts, options: Options, outDir: string, rotateToken = false,
-): Promise<SavedBundle> {
-  return req<SavedBundle>("POST", "/api/generate/save",
-    { facts, options, rotate_token: rotateToken, out_dir: outDir });
 }

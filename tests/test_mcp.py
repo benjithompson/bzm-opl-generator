@@ -28,13 +28,14 @@ SHIP = FACTS["ships"][0]["id"]
 
 # What each tool promises a client about side effects. Asserted as a whole
 # table rather than a few hand-picked cells: a client that asks before running
-# something reads all five, and the interesting property is how they compare --
-# that the two read-only ones really are, and that the two that can change a
+# something reads every row, and the interesting property is how they compare --
+# that the read-only ones really are, and that the two that can change a
 # customer's account say so.
 EXPECTED_ANNOTATIONS = {
     "opl_location":  {"read_only": False, "destructive": True},
     "opl_facts":     {"read_only": True,  "destructive": False},
     "opl_bundle":    {"read_only": False, "destructive": True},
+    "opl_plan":      {"read_only": True,  "destructive": False},
     "opl_preflight": {"read_only": True,  "destructive": False},
     "opl_agent":     {"read_only": False, "destructive": False},
 }
@@ -93,7 +94,7 @@ def fake_account(monkeypatch):
                            "ships": [{"id": "s1", "state": "idle",
                                       "installedVersion": "3.7.55",
                                       "lastHeartBeat": 0}]})
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     return c
 
 
@@ -108,17 +109,24 @@ def no_ambient_credentials(monkeypatch):
 
 # -- what a session is handed -------------------------------------------------
 
-def test_the_five_tools_are_the_agreed_surface():
+def test_the_tools_are_the_agreed_surface():
     assert sorted(listing()["tools"]) == sorted(EXPECTED_ANNOTATIONS)
 
 
 def test_every_tool_enumerates_its_actions_in_the_schema():
-    """The action list is an enum, not prose: a wrong one is then refused by
-    the client's own validation, naming the valid ones, instead of arriving
-    here to be guessed at."""
+    """The action list is machine-readable, not prose: a wrong one is then
+    refused by the client's own validation, naming the valid ones, instead of
+    arriving here to be guessed at.
+
+    A one-action tool schematises as `const` rather than `enum` -- pydantic
+    collapses a single-member Literal -- and that is the same guarantee said in
+    the narrower way, not a tool that failed to declare itself. Both are
+    accepted; neither being present is the failure.
+    """
     for name, tool in listing()["tools"].items():
         action = tool.input_schema["properties"]["action"]
-        assert action.get("enum"), f"{name} does not enumerate its actions"
+        assert action.get("enum") or action.get("const"), \
+            f"{name} does not enumerate its actions"
 
 
 def test_every_tool_says_whether_it_changes_anything():
@@ -193,7 +201,7 @@ def test_only_a_path_may_name_a_key(fake_account, tmp_path):
     key = tmp_path / "k.json"
     key.write_text('{"id": "KID", "secret": "s"}')
     # Accepted as an argument, and it is a path -- the fixture stands in for
-    # what client_from_env would build from it.
+    # what client_from_key would build from it.
     assert ok("opl_location", "whoami", {"api_key_file": str(key)})["email"]
 
 
@@ -231,7 +239,7 @@ def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
     read, whose whole view of the failure is the text of the tool error. So the
     refusal has to carry the alternative itself -- ask for the token, and pass
     it as an option -- or the model has nowhere to go."""
-    monkeypatch.setattr(core, "client_from_env",
+    monkeypatch.setattr(core, "client_from_key",
                         lambda *a, **k: RefusingClient())
     text = err("opl_location", "reveal_token",
                {"harbor_id": "h1", "ship_id": "s1"})
@@ -397,7 +405,7 @@ def _big_account():
 @pytest.fixture
 def big_account(monkeypatch):
     c = FakeClient(locations=_big_account())
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     return c
 
 
@@ -472,7 +480,7 @@ def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
                                "funcIds": ["performance"], "ships": [
         {"id": "live", "state": "idle", "lastHeartBeat": int(time.time())},
         {"id": "nohb", "state": "idle"}]}])
-    monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     entry = ok("opl_location", "list")["locations"][0]
     assert entry["ship_count"] == 2
     assert entry["ships_reporting"] == 1, "the live agent must still show"
@@ -485,7 +493,7 @@ def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
     the answer to one and not the other."""
     def status_of(ship):
         c = FakeClient(harbor={"id": "h1", "name": "loc", "ships": [ship]})
-        monkeypatch.setattr(core, "client_from_env", lambda *a, **k: c)
+        monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
         return ok("opl_agent", "status", {"harbor_id": "h1", "ship_id": "s1"})
 
     never = status_of({"id": "s1", "state": "created"})
@@ -531,6 +539,18 @@ def test_creating_a_location_still_answers_in_full(fake_account):
     assert loc["func_ids"] == ["performance"] and loc["slots"] == 1
     # The per-ship list itself, not a count of one.
     assert loc["ships"] == [] and "ship_count" not in loc
+
+
+def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
+    """The warning was the terminal's alone, so a session that created a
+    location this way got one that 403s every start with nothing anywhere
+    saying why. It comes from core.create_location now, like the location
+    itself, and rides beside the summary rather than inside it -- present only
+    when it applies, as the listing's `note` is."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99})
+    assert "403" in body["warning"]
+    assert "Not enough available resources" in body["warning"]
 
 
 def test_the_listing_names_the_account_it_actually_listed(fake_account):
@@ -632,7 +652,7 @@ def test_manual_facts_need_no_account():
 
 
 def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS
     monkeypatch.setattr(core.livetest, "cli_tool",
                         lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
@@ -643,7 +663,7 @@ def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
 
 
 def test_suggest_answers_the_other_question_about_the_same_file():
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     body = ok("opl_preflight", "suggest", {"evidence": _evidence()})
     assert "suggestions" in body
 
@@ -655,7 +675,7 @@ def test_suggest_answers_the_other_question_about_the_same_file():
 # which is why `api_key_file` is a path here too.
 
 def _evidence_file(tmp_path, **kw):
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     path = tmp_path / "cluster-evidence.json"
     path.write_text(json.dumps(_evidence(**kw)))
     return str(path)
@@ -674,7 +694,7 @@ def test_doctor_takes_the_evidence_file_as_the_path_it_is(tmp_path, monkeypatch)
 def test_a_path_and_the_object_it_holds_give_the_same_preflight(tmp_path):
     """Both forms stay accepted, and neither is a second opinion about the
     file: a caller with the document in hand loses nothing by inlining it."""
-    from test_cluster_evidence import _evidence
+    from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS
     args = {"facts": LOC_FACTS, "options": {"namespace": "blazemeter"}}
     from_path = ok("opl_preflight", "doctor",
@@ -920,3 +940,51 @@ def test_toolcheck_answers_rather_than_exiting(quiet_workstation):
     SystemExit here would take the process down past any except Exception."""
     body = ok("opl_preflight", "toolcheck", {"cluster": "minikube"})
     assert body["checks"] and isinstance(body["ok"], bool)
+
+
+# -- opl_plan ------------------------------------------------------------------
+
+def test_plan_needs_no_credential_at_all(monkeypatch):
+    """Every other tool that answers something useful either holds a client or
+    reads a file the customer sent. This one is reached by a session that has
+    neither, which is the whole reason it is a tool rather than a note in the
+    instructions."""
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: pytest.fail(
+        "opl_plan asked for a BlazeMeter client"))
+    body = ok("opl_plan", "capacity", {"users": 5000})
+    assert body["engines"] == 10 and body["nodes"] == 10
+
+
+def test_plan_hands_back_the_document_to_send_on():
+    """The deliverable is the request, not the arithmetic -- a session with no
+    checkout has nothing else to turn these numbers into."""
+    body = ok("opl_plan", "capacity", {"users": 5000})
+    assert body["document"].startswith("# Infrastructure request")
+    assert "5,000 virtual users" in body["document"]
+
+
+def test_plan_marks_the_assumption_a_model_would_otherwise_report_as_fact():
+    body = ok("opl_plan", "capacity", {"users": 5000})
+    assert body["vus_per_engine_assumed"] is True
+    supplied = ok("opl_plan", "capacity",
+                  {"users": 5000, "vus_per_engine": 250})
+    assert supplied["vus_per_engine_assumed"] is False
+    assert supplied["engines"] == 20
+
+
+def test_plan_refuses_a_target_it_cannot_plan():
+    r = call("opl_plan", "capacity", {"users": 0})
+    assert r.is_error and "at least 1" in r.content[0].text
+
+
+def test_plan_names_the_argument_it_is_missing():
+    r = call("opl_plan", "capacity", {})
+    assert r.is_error and "users" in r.content[0].text
+
+
+def test_the_instructions_offer_planning_before_the_account():
+    """A session whose customer has no cluster has to be able to find this
+    without knowing the tool exists."""
+    text = listing()["instructions"]
+    assert "opl_plan" in text
+    assert "no cluster" in text or "before there is a cluster" in text

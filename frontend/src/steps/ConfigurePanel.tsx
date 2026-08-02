@@ -12,7 +12,9 @@
 // "what is in this bundle" is answered without scrolling the form.
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
-import { Button, Check, Field, inputCls, Switch } from "../components";
+import {
+  Button, Check, Field, inputCls, RequiredMark, Switch,
+} from "../components";
 import { GroupRow } from "../groups/GroupRow";
 import {
   GroupFlags, GroupId, groupsOf, OptionGroup, SHARED_GROUPS,
@@ -64,14 +66,15 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
  *  here: every deployment has both, and putting the required half of a pair
  *  behind a toggle makes it look optional. */
 function CoreFields(p: ConfigurePanelProps) {
-  const ok = (good: boolean) => good
-    ? <span className="text-[10px] font-bold uppercase tracking-wide bg-emerald-100 text-emerald-700 rounded px-1.5 py-0.5">✓ set</span>
-    : <span className="text-[10px] font-bold uppercase tracking-wide bg-red-100 text-red-700 rounded px-1.5 py-0.5">required</span>;
+  // The asterisk says the field is required; the input's border says whether it
+  // has been filled in. Two jobs, and the badge that used to do both said
+  // "REQUIRED" in red on a form where nothing was wrong yet.
+  const ok = () => <RequiredMark />;
   return (
     <div className="space-y-3">
       <label className="block">
         <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-          Namespace {ok(p.namespaceOk)}
+          Namespace{ok()}
         </span>
         <input className={inputCls + (p.namespaceOk ? " border-emerald-400" : " border-red-300")}
           value={String(p.options.namespace ?? "")} placeholder="e.g. blazemeter"
@@ -80,7 +83,7 @@ function CoreFields(p: ConfigurePanelProps) {
       <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
         <label className="block">
           <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-            Service account {ok(p.saOk)}
+            Service account{ok()}
           </span>
           <input className={inputCls + (p.saOk ? "" : " border-red-300")}
             value={String(p.options.service_account_name ?? "")}
@@ -246,7 +249,7 @@ function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
               location says it runs.
             </p>
             <div className="flex gap-2 mt-2">
-              <Button onClick={enable} busy={busy}>Enable on location</Button>
+              <Button onClick={enable} busy={busy}>Enable</Button>
               {!busy && (
                 <Button kind="ghost" onClick={() => setAsking(false)}>Cancel</Button>
               )}

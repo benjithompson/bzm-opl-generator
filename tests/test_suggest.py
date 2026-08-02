@@ -14,77 +14,29 @@ evidence that eliminates values says so rather than handing back the survivor.
 import dis
 import json
 import os
+import re
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor, suggest  # noqa: E402
+from bzm_opl_gen import cli, doctor, evidence, suggest  # noqa: E402
 from bzm_opl_gen.generate import SV_INGRESS_TYPES as SV_TYPES  # noqa: E402
 
-DEGRADED = os.path.join(os.path.dirname(__file__), "cluster-evidence.degraded.json")
 EXAMPLE_FACTS = os.path.join(os.path.dirname(__file__), "..", "examples",
                              "facts.example.json")
 
-# A cluster the collector could actually read: OpenShift, one nginx
-# IngressClass, a namespace with a couple of ServiceAccounts. Every test below
-# overrides one top-level section of this and asserts on the one suggestion it
-# moves.
-API_GROUPS = {"openshift_route": True, "openshift_security": True,
-              "istio": False, "contour": False}
-PERMS = {"namespaced": {"create serviceaccounts": True, "create roles": True,
-                        "create rolebindings": True, "create configmaps": True,
-                        "create secrets": True, "create deployments": True,
-                        "create ingresses": True},
-         "cluster_scoped": {"list nodes": True, "create clusterroles": True,
-                            "create clusterrolebindings": True}}
-# `kubectl version -o json` carries this only when a server answered -- see
-# test_nothing_is_suggested_from_a_file_whose_collector_never_reached_a_cluster.
-SERVED = {"clientVersion": {"gitVersion": "v1.29.4"},
-          "serverVersion": {"gitVersion": "v1.29.4"}}
-
-
-def _sa(name):
-    return {"kind": "ServiceAccount", "metadata": {"name": name}}
-
-
-def _scoped(*accounts):
-    return {"apiVersion": "v1", "kind": "List", "items": list(accounts)}
-
-
-def _classes(*names):
-    return {"apiVersion": "v1", "kind": "List",
-            "items": [{"kind": "IngressClass", "metadata": {"name": n},
-                       "spec": {"controller": "k8s.io/ingress-nginx"}}
-                      for n in names]}
-
-
-def _evidence(**over):
-    """An evidence file as the script emits one, with any top-level section
-    replaced wholesale -- that is the granularity the collector fails at."""
-    doc = {
-        "schema": doctor.EVIDENCE_SCHEMA,
-        "collected_at": "2026-07-27T10:00:00Z",
-        "namespace": "blazemeter",
-        "cli": "oc",
-        "raw": {"nodes": None, "ingressclasses": _classes("nginx"),
-                "namespace": {}, "scoped": _scoped(_sa("default"))},
-        "inventory": {"configmaps": [], "secrets": []},
-        "permissions": PERMS,
-        "api_groups": API_GROUPS,
-        "openshift": {"ingress_config": None, "proxy_config": None},
-        "versions": SERVED,
-        "notes": [],
-    }
-    doc.update(over)
-    return doc
-
-
-def _raw(**over):
-    """`raw` with one section replaced -- `scoped=None` is a denied read."""
-    sections = dict(_evidence()["raw"])
-    sections.update(over)
-    return sections
+# The one document these tests and the preflight's share -- a cluster the
+# collector read whole, from a machine that reached it. Every test below
+# overrides one section of it and asserts on the one suggestion that moves.
+# It used to be a second builder with its own defaults, which meant the file
+# `test_server` fed the browser and the file the doctor tests read were two
+# different documents claiming the same schema.
+from evidence_fixtures import (API_GROUPS, CLUSTER_SCOPED_DENIED,  # noqa: E402
+                               DEGRADED, NAMESPACE_DENIED,
+                               PERMISSIONS as PERMS, SERVED,
+                               classes as _classes, document as _evidence,
+                               load, raw as _raw, scoped as _scoped)
 
 
 def _by_option(suggestions):
@@ -151,7 +103,7 @@ def _every_fixture():
     """Every shape the tests below build, so the invariants above are checked
     against all of them rather than against a happy path."""
     return [_evidence(), _evidence(api_groups=dict(API_GROUPS, contour=True)),
-            _evidence(raw=_raw(scoped=_scoped(_sa("default"), _sa("crane")))),
+            _evidence(raw=_raw(scoped=_scoped("default", "crane"))),
             _evidence(inventory={"configmaps": ["corp-ca-bundle"],
                                  "secrets": [{"name": "regcred",
                                               "type": "kubernetes.io/dockerconfigjson"}]}),
@@ -306,7 +258,7 @@ def test_an_existing_crane_service_account_settles_the_create_toggle():
     """The issue's own example of decisive: the namespace already holds the
     account the bundle would create, and creating it again is at best a no-op
     over somebody else's object."""
-    s = _for(_evidence(raw=_raw(scoped=_scoped(_sa("default"), _sa("crane")))),
+    s = _for(_evidence(raw=_raw(scoped=_scoped("default", "crane"))),
              "service_account_create")
     assert s.strength == suggest.DECISIVE and s.value is False
     assert "raw.scoped" in s.evidence
@@ -317,8 +269,7 @@ def test_the_accounts_in_the_namespace_are_a_shortlist_not_a_choice():
     never among the candidates -- every namespace has one, and binding crane's
     Role to the account every other pod runs as is exactly what generate's own
     refusal exists to prevent."""
-    s = _for(_evidence(raw=_raw(scoped=_scoped(_sa("default"), _sa("builder"),
-                                               _sa("deployer")))),
+    s = _for(_evidence(raw=_raw(scoped=_scoped("default", "builder", "deployer"))),
              "service_account_name")
     assert s.strength == suggest.SUGGESTIVE
     assert s.candidates == ("builder", "deployer")
@@ -517,7 +468,7 @@ def test_suggest_reads_an_evidence_file_with_no_cluster_and_no_api_key(
         monkeypatch, capsys, tmp_path):
     path = tmp_path / "evidence.json"
     path.write_text(json.dumps(_evidence(
-        raw=_raw(scoped=_scoped(_sa("default"), _sa("crane"))))))
+        raw=_raw(scoped=_scoped("default", "crane")))))
     code = _run(monkeypatch, "suggest", "--cluster-evidence", str(path))
     out = capsys.readouterr().out
     assert code == 0
@@ -778,3 +729,150 @@ def test_an_applied_value_is_indistinguishable_from_a_typed_one():
     assert profile["pull_secret"] == "regcred"
     assert set(profile) == set(json.loads(
         gen.generate(facts, typed)[gen.PROFILE_FILE]))
+
+
+# -- the row a caller renders -------------------------------------------------
+#
+# What `merged_as_dict` adds beyond the suggestion and its state: the values as
+# a reader sees them, and why a row cannot be offered. Both were the browser's
+# own copies of a rule that lives here -- how a value is written, and generate's
+# one-of for CA trust -- and a copy is what stops agreeing quietly.
+
+def test_a_value_is_shown_the_way_the_file_that_would_carry_it_writes_it():
+    assert suggest.shown("nginx") == "nginx"
+    assert suggest.shown(False) == "false"          # not `False`
+    assert suggest.shown(True) == "true"
+    assert suggest.shown({"https": "http://p:3128"}) == '{"https": "http://p:3128"}'
+
+
+def test_unset_is_said_in_words_rather_than_printed_as_null():
+    """"what is configured now" is a question `null` does not answer. The empty
+    string goes with it: it is what a form seeds into a field it reveals, not a
+    value somebody chose."""
+    assert suggest.shown(None) == "not set"
+    assert suggest.shown("") == "not set"
+    # ...and a value that is merely falsy is still a value.
+    assert suggest.shown(False) != "not set"
+    assert suggest.shown(0) == "0"
+
+
+def test_a_row_carries_every_value_it_displays_already_written():
+    doc = _evidence(**REGCRED)
+    row = suggest.merged_as_dict(_for(doc, "pull_secret"), {})
+    assert row["current_shown"] == suggest.shown(row["current"])
+    assert row["value_shown"] == suggest.shown(row["value"])
+    assert row["candidates_shown"] == [suggest.shown(c) for c in row["candidates"]]
+    assert row["ruled_out_shown"] == [suggest.shown(v) for v in row["ruled_out"]]
+
+
+def test_a_ca_mode_cannot_be_offered_over_one_that_already_holds_a_value():
+    """generate() takes exactly one of the three, so applying this would need
+    the other cleared -- and clearing it is precisely the silent overwrite this
+    feature may not make. The refusal is generate's; it is stated once, here,
+    rather than restated by every caller that draws a button."""
+    doc = _evidence(openshift={"ingress_config": None, "proxy_config": PROXY_CONFIG})
+    s = _for(doc, "ca_openshift_inject")
+    blocked = suggest.merged_as_dict(s, {"ca_existing_configmap": "corp-ca"})
+    assert "an existing ConfigMap" in blocked["blocked"]
+    assert "does not generate" in blocked["blocked"]
+    # Nothing claims the slot -> nothing to say.
+    assert suggest.merged_as_dict(s, {})["blocked"] is None
+    # An empty field is not a value, for the same reason it is not a choice.
+    assert suggest.merged_as_dict(s, {"ca_bundle": ""})["blocked"] is None
+
+
+def test_an_option_is_never_blocked_by_its_own_value():
+    """Replacing a CA mode with the same mode is one mode, not two."""
+    doc = _evidence(inventory={"configmaps": ["corp-trusted-ca"], "secrets": []})
+    s = _for(doc, "ca_existing_configmap")
+    assert s is not None
+    assert suggest.merged_as_dict(s, {"ca_existing_configmap": "older-ca"})["blocked"] \
+        is None
+
+
+def test_the_blocked_rule_names_the_modes_generate_actually_refuses():
+    """The set is generate's, and a copy here is how a fourth mode arrives
+    offerable over the other three."""
+    from bzm_opl_gen.generate import CA_MODES, DEFAULT_OPTIONS
+    for option in CA_MODES:
+        assert option in DEFAULT_OPTIONS
+
+
+# -- the paths a suggestion cites --------------------------------------------
+#
+# A path is what sends a reader to the file to disagree with the tool, and a
+# path that is no longer in the document sends them to a section that is not
+# there -- which reads, from the file's side, exactly like a collector that was
+# refused it. So the paths are built from the document's shape rather than
+# typed, and these are the tests that say so.
+
+def test_every_path_a_suggestion_cites_is_one_the_document_defines():
+    """Over every fixture here, because a rule that cites a stale path is one
+    nobody notices until somebody follows it."""
+    for doc in _every_fixture():
+        for s in suggest.from_evidence(doc):
+            for path in s.evidence:
+                assert evidence.known(*path.split(".")), (
+                    f"{s.option} cites '{path}', which is not a path in the "
+                    f"cluster evidence document")
+
+
+def test_a_rule_that_reads_a_path_the_document_has_no_key_for_is_refused():
+    """The other half of the same rule, and why this is not just a lint: a file
+    that does not carry a path is "nobody answered", which is a legitimate
+    answer every rule here handles. Code asking for a path the *format* does not
+    define is not -- no file will ever carry it, so it would be a rule that has
+    quietly stopped asking. Loud, at the read."""
+    with pytest.raises(evidence.UnknownSection) as e:
+        suggest._read(_evidence(), "api_groups.openshift_sec", kind=bool)
+    assert "api_groups.openshift_sec" in str(e.value)
+
+
+def test_the_dotted_paths_the_docs_quote_still_resolve():
+    """docs/preflight.md tells a reader which part of their file each suggestion
+    came from, and it is the one copy of these paths that no import can reach.
+    Every dotted token there whose first segment names a section of the document
+    has to be a path the document actually defines."""
+    text = open(os.path.join(os.path.dirname(__file__), "..", "docs",
+                             "preflight.md")).read()
+    quoted = set(re.findall(r"`([a-z_]+(?:\.[a-zA-Z_]+)+)`", text))
+    cited = {q for q in quoted if q.split(".")[0] in evidence.DOCUMENT}
+    assert cited, "no evidence paths found in docs/preflight.md at all"
+    for path in sorted(cited):
+        assert evidence.known(*path.split(".")), (
+            f"docs/preflight.md sends a reader to '{path}', which the cluster "
+            f"evidence document does not define")
+
+
+# -- the half-read files -----------------------------------------------------
+#
+# The degraded file is all-null, so a reader that lost the null-vs-empty
+# distinction still comes out looking right on it. These two carry both answers
+# at once, which is the case the rule is actually about: what was read is
+# suggested from, and what was not is not.
+
+def test_a_half_read_file_suggests_from_what_was_read_and_not_from_what_was_not():
+    doc = load(CLUSTER_SCOPED_DENIED)
+    by = _by_option(suggest.from_evidence(doc))
+    # raw.ingressclasses was refused, so nginx is neither open nor ruled out --
+    # and the api groups, which were read, still decide the rest.
+    assert "nginx" not in by["sv_ingress"].candidates
+    assert "nginx" not in by["sv_ingress"].ruled_out
+    assert "contour" in by["sv_ingress"].candidates
+    # ...and what the cluster-scoped refusals themselves imply is still said.
+    assert by["cluster_rbac"].value is False
+
+
+def test_a_file_whose_namespaced_reads_were_refused_says_nothing_about_them():
+    """The mirror image: the collector reached the cluster and was refused
+    everything inside the namespace. An empty inventory would suggest no pull
+    secret and no CA bundle, which is the same silence -- but the ServiceAccount
+    rules must not read a refused `raw.scoped` as a namespace with no accounts,
+    and the namespaced permission map is a real `false` here rather than a
+    missing read, so it still settles the create toggle."""
+    doc = load(NAMESPACE_DENIED)
+    by = _by_option(suggest.from_evidence(doc))
+    assert "service_account_name" not in by
+    assert by["service_account_create"].value is False
+    assert by["service_account_create"].evidence == ("permissions.namespaced",)
+    assert "pull_secret" not in by and "ca_existing_configmap" not in by

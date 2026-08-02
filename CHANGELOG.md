@@ -11,6 +11,226 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **`bzm-opl-gen plan --users N`: how much infrastructure a load target needs,
+  before any of it exists.** Every other command here starts from something that
+  already exists — a location, an agent, a cluster, an evidence file. This one
+  starts from a number somebody has in a planning meeting, and takes **no API
+  key, no facts file and no cluster**, because the customer who needs it most has
+  none of them: the cluster is a ticket they have not raised yet, and this is
+  what they raise it with.
+
+  ```
+  bzm-opl-gen plan --users 5000 -o ./plan
+  ```
+
+  5,000 virtual users → 10 engines of 2 CPU / 8Gi → 10 nodes of 3 vCPU / 10Gi
+  capacity, a peak of 30 vCPU / 100Gi that idles at zero between runs, one small
+  always-on node for the agent, the egress hosts a firewall rule needs, and the
+  four BlazeMeter-side settings (`slots`, `threadsPerEngine`, `overrideCPU`,
+  `overrideMemory`) without which the cluster is provisioned and then not used.
+
+  **One vocabulary, BlazeMeter's own:** a location holds agents, an agent runs
+  engines, and each engine drives virtual users. `slots` and `threadsPerEngine`
+  appear only as the names of the two location *fields* they are — concurrent
+  engines, and virtual users per engine — rather than as terms anything is
+  explained in. The document says nothing about *what* is being tested: the
+  request is for capacity to run load tests from this cluster, and naming an
+  application invites the reply that it should be sized per application.
+
+  `-o DIR` writes **`capacity-request.md`** — the same numbers written for a
+  platform team that has never heard of BlazeMeter, showing the arithmetic so
+  the request can be *checked* rather than only read. `--markdown` prints it,
+  `--json` gives the whole plan as data.
+
+  **The virtual-users-per-engine figure is an assumption, and everything says
+  so.** How many virtual users one engine carries is a property of the script,
+  not of the engine — a chatty API test with no think time exhausts one far
+  sooner than a browsing journey does — so unset, `--vus-per-engine` assumes what
+  an engine of the chosen size is *rated* for (500 for 2 CPU / 8Gi, scaled
+  linearly on whichever of CPU and memory is tighter for any other size) and the
+  plan carries `vus_per_engine_assumed`. It follows the engine size rather than
+  sitting at a flat 500: on the Small preset a flat 500 assumed load the engine
+  cannot carry — and then warned about the figure the planner itself had chosen —
+  and on Large it asked for twice the nodes needed. The document leads with it, the web panel shows
+  it as a callout, and the MCP tool's description tells a model to pass the
+  qualifier on. The honest sequence is plan → provision small → measure →
+  re-plan, and the document says that too.
+
+  The same calculator is in all three surfaces: **`plan`** in the CLI, a
+  **Plan capacity** view in the web UI (a view rather than a step, since
+  everything step 1 asks for is what somebody sizing a cluster has not got yet),
+  and **`opl_plan capacity`** on the MCP server, which returns the numbers and
+  the document together. In the UI, *Use this plan* fills in the location's
+  concurrent engines and virtual users per engine, and the bundle's engine size;
+  it writes nothing to BlazeMeter. Full reference in
+  [docs/capacity-planning.md](docs/capacity-planning.md).
+
+  **None of the BlazeMeter side waits for the cluster**, and the document says
+  so: a location and its agent are records in BlazeMeter, so both can be created
+  with the planned settings while the infrastructure request is still being read.
+  An agent that has never sent a heartbeat is the expected state until its
+  manifests are applied, not a half-finished setup — so the wait for nodes is
+  setup time rather than dead time.
+
+  `doctor` and the planner now share the virtual-users-per-engine ratio
+  (`plan.supported_vus`) rather than each carrying it, so a plan the preflight
+  would then warn about cannot be produced.
+
+- **Change a location's settings from the web UI, after it exists.** The
+  correction that follows a setup: a location and its agent are built for 500
+  virtual users an engine, a real run says the figure is 1,000, and until now
+  the only answer was "go and edit it in BlazeMeter" — the one place this tool
+  otherwise never sends you.
+
+  Step 1 now edits the selected location's **concurrent engines** (`slots`),
+  **virtual users per engine** (`threadsPerEngine`) and the engine's CPU and
+  memory **requests** (`overrideCPU` / `overrideMemory`). None of those four is
+  in a manifest, so a change needs no regenerate, no re-apply and no restart —
+  it applies to the next test that starts, which the panel says.
+
+  **The answer is a re-read of the location, not an echo of the request.**
+  BlazeMeter's own create endpoint accepts `threadsPerEngine` and does not store
+  it — that is why a freshly created location 403s every test start — so a form
+  that reported what it sent would show a number the account never took. Fields
+  that came back unchanged are reported as not stored, in amber, beside the ones
+  that saved.
+
+  **`slots` is engines per agent, and the calculator divides by them.**
+  BlazeMeter's UI calls the field "Engines per agent" — "the number of
+  engines/tests that can run on one agent" — so a location's concurrency is
+  `agents × slots`. The planner had it as the location's total, which on a
+  two-agent location asks for twice the engines and twice the cluster. It now
+  takes the agent count (the UI defaults to the number the location has), sets
+  `slots` to the run divided by it, and reports **nodes per agent**, because one
+  agent is one cluster and the infrastructure request is for one of them. The
+  field is labelled "Engines per agent" throughout, and `doctor` — which
+  measures one cluster, so was right all along — says "engine(s) per agent" too.
+
+  **The settings open out of the location, and size themselves.** Selecting a
+  location expands it the way an agent row does, and the settings are inside it
+  — they belong to the one that is selected and to nothing else. **Calculate**,
+  beside the heading, sizes *that* location from a virtual user target, starting
+  from what it already says: 5,000 virtual users at the 50 an engine a location
+  currently advertises is 100 engines and 100 nodes, which is the argument for
+  changing the figure rather than the pool.
+
+  It is guidance, not a form. It answers in engines, **nodes** and peak vCPU —
+  the cost that lands off this page, on a cluster nobody sees from here — flags
+  the users-per-engine figure as an assumption when nothing supplied one, and
+  carries the same warnings the planner does. *Apply* fills concurrent engines
+  and the two engine requests; applying is not saving, and **Save** is still the
+  only control that writes.
+
+  Step 1's three sections (Connect, Private location, Agent) are now bordered
+  panels with tinted headers, and they fold: a chevron on the left of the
+  header, pointing right when closed and down when open, and the whole bar is
+  the control. They open on whichever section the step has reached until one is
+  pinned, and a folded one says on its header what it holds. Three sections
+  divided by a hairline on one white background read as a single long form; a
+  panel's extent is the thing a reader needs before anything inside it.
+
+  Only changed fields are sent, so a page left open does not write back three
+  values somebody else has since edited; blank means "leave alone", so there is
+  no way to *clear* a setting here; and `funcIds` is deliberately not in the set
+  (it is `add_func_id`'s, which is additive by construction — a passthrough
+  would let a caller replace the whole list by accident). This is the third and
+  last write the page makes to a customer's account, and like the other two it
+  is a control of its own that says what it costs first.
+
+### Fixed
+
+- **The account listing was truncated at 100 workspaces, and two fifths of a
+  real account went missing with it.** `/workspaces` was asked for the first
+  100; BlazeMeter SE Demo has 166, and the 66 that fell off held 105,270 rated
+  virtual users across 52 locations — including the account's largest workspace,
+  which had no card on the Account capacity page at all. Locations were already
+  asking for 1,000; workspaces do now.
+
+- **`slots` in a plan is engines per *agent*, and the document says so.** A
+  location's concurrency is agents x engines per agent, and a plan that read
+  `slots` as the whole run told a four-agent location to set four times the
+  engines it needs. `bzm-opl-gen plan --agents N` divides by it, and the pane
+  inside an existing location reads the count off the location.
+
+  **Plan capacity does not ask how many agents you will have.** It was a field
+  for one release and should not have been: the panel exists for somebody with
+  no cluster, and how many agents they end up running is decided afterwards and
+  changed at will. Asked up front it is a guess that silently halves or doubles
+  `slots`. One agent is what it sizes for, and the request document says to
+  multiply if you add more.
+
+- **The planner's "virtual users per engine" suggestion follows the engine size
+  before a target is typed.** It was read off the last plan, so choosing Large
+  and reading the field showed BlazeMeter's 500 — the standard engine's figure —
+  next to an engine rated for 1,000. It now asks the server what the chosen size
+  is rated for, which is what the plan will assume.
+
+- **A location with no rating is counted as unknown rather than as zero.** The
+  Account capacity header says how many locations have no engines-per-agent or
+  no virtual-users-per-engine set. The number was already served and never
+  shown, so the page quietly rounded an unanswered question down to nothing.
+
+- **The generated request document called `slots` "concurrent engines".** It is
+  engines per *agent* — BlazeMeter's own label — and the row now says so, with
+  the multiplication spelled out (`4 x 3 = 12 engines`).
+
+- **The web UI stops re-reading the account on every page load.** Accounts,
+  workspaces, locations and an agent's facts are held for 60 seconds by the
+  server, which turns a reload from four BlazeMeter round trips into one local
+  one — measured on a real account, the location list alone went from 1.29s to
+  0.04s. Every write this server makes (a new location or agent, a settings
+  change, a feature enabled, a different key) drops the cache, so the staleness
+  it can produce is never your own change. An agent's heartbeat is deliberately
+  not cached: the status poll is what says an agent came online.
+
+  It lives in `server.py` rather than `core.py` on purpose. This process is one
+  browser session holding one client, so its own writes are the only changes it
+  can miss. `core` is also the MCP server's, which is long-lived and whose
+  caller has other ways to change the account — a cache there would answer
+  "list the locations" with one that has since been deleted.
+
+- **The location/agent summary moved out of step 1 and under the flow.** It was
+  a line between the Connect and Private location panels, where it read as a
+  divider between two sections rather than as the result of all three. It is now
+  a footer under the step — outside the scrolling area, so it does not move, and
+  present on every step, because "which location and agent am I generating for?"
+  is as much a question in Configure and Download as in Agent details.
+
+- **The account and workspace dropdowns say when they are loading.** Both are a
+  round trip to BlazeMeter over whatever network the user is on, and both were
+  silent while it happened — an empty dropdown and a slow one look identical, so
+  the answer to "my account is not in the list" was to wait and try again. They
+  now show `loading…` and a small spinner inside the field, and cannot be
+  cleared or opened until the options arrive.
+
+- **A collapsed step-1 section kept its controls clickable.** The body stays
+  mounted while folded so what was typed into it survives, but a mounted body
+  inside a zero-height row is still in the hit-testing and accessibility trees:
+  its buttons took clicks aimed at whatever was drawn over them, and a keyboard
+  tab walked into a section nobody could see. Folded sections are now
+  `visibility: hidden` as well as zero-height, which keeps the state and takes
+  them out of both.
+
+- **An API call the running server has never heard of now says so.** The UI
+  bundle is read from disk on every request, so a server left running for a day
+  serves a page whose calls it cannot answer — FastAPI has no route, the SPA's
+  static mount answers the POST with `405 Method Not Allowed`, and a working
+  feature looks broken. A 404 or 405 carrying no `detail` is exactly that case,
+  and the page now reports it as "this page is newer than the server it is
+  talking to" with the command to restart, rather than as the feature's own
+  error.
+
+- **The web UI's engine-sizing hint still claimed engine requests could not be
+  set.** "Crane stamps them at 250m/256Mi and the scheduler packs nodes on
+  those" was the belief a live GKE run disproved in the previous release — the
+  bundle sets the engine's *limits*, the location's `overrideCPU`/
+  `overrideMemory` set its *requests*, and 250m/256Mi is only the default for a
+  location that sets neither. The correction reached the generator, the node
+  pool recipe and `doctor`; this hint was missed, so the one place a user
+  configures engine size still told them the fix was unavailable.
+
 ### Changed
 
 - **BREAKING: `generate --api-key` no longer fetches an AUTH_TOKEN.** It fetched

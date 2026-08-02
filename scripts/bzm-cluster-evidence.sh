@@ -125,7 +125,17 @@ has_api() {
     "$CLI" api-resources --api-group="$1" -o name 2>/dev/null | grep -q . && echo true || echo false
 }
 
-# ---------------------------------------------------------------------------
+# -- the document -----------------------------------------------------------
+#
+# Everything below writes the evidence file, one key per line at an indent that
+# is its depth. Those keys are also stated in bzm_opl_gen/evidence.py, which is
+# where the tool that reads this file gets them from -- and renaming one here
+# alone does not fail anything at all: every reader treats a section it cannot
+# find as one nobody could read, so the report says "could not read nodes"
+# about a section sitting right there in the file. So the two are held together
+# by a test: tests/test_cluster_evidence.py parses this half of the script from
+# the marker above and compares the keys it writes against that table. Rename a
+# section in either place and it names the section.
 
 printf '{\n'
 printf '  "schema": "bzm-opl-cluster-evidence/1",\n'

@@ -8,99 +8,205 @@
 //
 // The state stays in App: `harborId` and `shipId` are what everything
 // downstream is generated from, and the effects that clear the token when
-// either moves live there too.
-import { useEffect, useRef, useState } from "react";
-import { Facts, Location, Ship } from "../api";
+// either moves live there too. What changed (#103) is the interface -- four
+// records in DownloadPanel's shape rather than thirty-six props, and three
+// things this file used to be handed that it can answer for itself:
+//
+//   * the filtered list. It arrived beside the full one, from a filter this
+//     panel renders the box for. Two lists side by side are two answers to one
+//     question: the count on the placeholder came off `locations` and the rows
+//     under it off `filteredLocs`, free to be about different lists.
+//   * the freshness rule. A predicate passed down is a rule with no tests of
+//     its own -- see heartbeat.ts, which is now the only statement of it.
+//   * the create-location form, which arrived as a finished element. The write
+//     behind it is still App's (see NewLocation below); what moved here is the
+//     markup, which is the half that belongs beside the agent form it is a pair
+//     with.
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Api, Facts, FuncIdChoice, Location, Ship } from "../api";
 import {
-  Button, Check, ErrorMsg, Field, inputCls, NoticeMsg, SearchSelect,
+  Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
+import { LocationSettings } from "../groups/LocationSettings";
 import { ManualSource } from "../groups/ManualSource";
+// Whether an agent is reporting, from one module rather than from a function
+// this panel is handed. Two readers here -- the count on a location's row and
+// the state on an agent's -- and they were the same call twice.
+import { onlineCount, shipOnline } from "../heartbeat";
 import { rotateHazard } from "../token";
+// What the profile card above this panel is sizing, on its way to the one
+// location panel that measures itself against it.
+import { PlanAsk } from "../usePlan";
 
-export interface AgentPanelProps {
-  // -- where the three values come from
-  sourceMode: "connect" | "manual";
-  switchMode: (m: "connect" | "manual") => void;
-  manual: { harbor_id: string; ship_id: string };
-  setManual: (f: (m: { harbor_id: string; ship_id: string }) =>
-    { harbor_id: string; ship_id: string }) => void;
-  sourceOpen: boolean;
-  setSourceOpen: (v: boolean) => void;
-  // -- the API key
+/** The two ids typed by hand, for an account nobody here can reach. */
+export interface ManualIds { harbor_id: string; ship_id: string }
+
+/** Where the three values come from: read off the account, or typed. */
+export interface SourceHandover {
+  mode: "connect" | "manual";
+  switchTo: (m: "connect" | "manual") => void;
+  manual: ManualIds;
+  setManual: (f: (m: ManualIds) => ManualIds) => void;
+  /** Who the page is connected as. Read here, never asked for: the key is the
+   *  Account menu's, and what this step needs is whether there is one -- a
+   *  location list needs a key, not the form that supplies it. */
   who: { email: string; keyId: string } | null;
-  /** Hand the key back. The server forgets it; a key saved to disk stays. */
-  disconnect: () => void;
-  keyPath: string;
-  setKeyPath: (v: string) => void;
-  pasteId: string;
-  setPasteId: (v: string) => void;
-  pasteSecret: string;
-  setPasteSecret: (v: string) => void;
-  saveKey: boolean;
-  setSaveKey: (v: boolean) => void;
-  connect: (body: { path?: string; id?: string; secret?: string; save?: boolean }) => void;
-  connErr: string | null;
-  setConnErr: (v: string | null) => void;
-  connecting: boolean;
-  // -- the account tree
-  accounts: { id: number; name: string }[];
-  accountId: number | null;
-  setAccountId: (id: number) => void;
-  workspaces: { id: number; name: string }[];
-  workspaceId: number | null;
-  setWorkspaceId: (id: number) => void;
-  locations: Location[];
-  filteredLocs: Location[];
-  locFilter: string;
-  setLocFilter: (v: string) => void;
-  harborId: string | null;
-  setHarborId: (id: string) => void;
-  location: Location | null;
-  locBusy: boolean;
-  locErr: string | null;
-  /** The create-location form: App's, because it owns the form's state and the
-   *  call that writes to the account. Rendered in place of the button. */
-  showCreateLoc: boolean;
-  setShowCreateLoc: (v: boolean) => void;
-  createLocationForm: React.ReactNode;
-  // -- the agents in it
-  ships: Ship[];
-  shipId: string | null;
-  pickShip: (id: string) => void;
-  shipOnline: (s: Ship) => boolean;
-  factsBusy: boolean;
+}
+
+/** What a new location is being asked for. The four fields the account takes,
+ *  in its own names, so nothing is renamed between this form and the request.
+ *  `workspace_id` is not here: the workspace is chosen at the foot of the nav
+ *  drawer and the write picks it up there, which is why the name field says
+ *  which one it is about to write into. */
+export interface LocationDraft {
+  name: string;
+  func_ids: string[];
+  slots: number;
+  threads_per_engine: number;
+}
+
+/** Making a private location: the form's fields, and the one call that writes
+ *  it to the account.
+ *
+ *  `submit` is App's. Creating a location is one of the writes CLAUDE.md holds
+ *  to the rule that a request touching the account is made where its cost is on
+ *  screen -- so this panel renders the fields and the button, and what the
+ *  button does stays a named function in App, exactly as the agent form beside
+ *  it already worked. Nothing here can reach the client, so no click can grow
+ *  into a second write by accident. */
+export interface NewLocationHandover {
+  open: boolean;
+  /** Also drops whatever the last attempt was refused for: an error about a
+   *  form that is no longer on screen describes nothing. */
+  setOpen: (v: boolean) => void;
+  /** The workspace it would be created in, by name. */
+  workspace: string | null;
+  draft: LocationDraft;
+  setDraft: (f: (d: LocationDraft) => LocationDraft) => void;
+  /** What a location may be for. Served (facts.CATEGORY_BY_FUNC), never spelled
+   *  in the frontend -- the copy that used to be here lost sv-bridge. */
+  choices: FuncIdChoice[];
+  /** What Create is waiting for, as the sentence it shows; "" when ready. */
+  blockedBy: string;
+  submit: () => Promise<void>;
+}
+
+/** The locations to choose from, the one chosen, and making a new one. */
+export interface LocationHandover {
+  // Both are chosen at the foot of the nav drawer (AccountMenu), because every
+  // view reads the account and the location list is the only thing here the
+  // workspace narrows -- so this step names them rather than asking again.
+  accountName: string | null;
+  workspaceName: string | null;
+  /** Every location in that workspace. One list: the box below narrows it, and
+   *  the panel that renders the box is the one that applies it. */
+  list: Location[];
+  filter: string;
+  setFilter: (v: string) => void;
+  selectedId: string | null;
+  pick: (id: string) => void;
+  busy: boolean;
+  error: string | null;
+  /** The location came back changed: App owns the list and the selection, so
+   *  it is App that puts it back. */
+  updated: (loc: Location) => void;
+  create: NewLocationHandover;
+}
+
+/** The agents inside the selected location, and making one.
+ *
+ *  No list of its own: the agents are the selected location's, and a second
+ *  copy passed in beside it is a copy that can be about a different location
+ *  than the row the user is looking at. */
+export interface AgentHandover {
+  id: string | null;
+  pick: (id: string) => void;
+  /** Reading this location's agents and images. */
+  busy: boolean;
   facts: Facts | null;
-  creatingShip: boolean;
-  setShowCreateShip: (v: boolean) => void;
-  newShipName: string;
-  setNewShipName: (v: string) => void;
-  createShip: () => Promise<void>;
-  shipErr: string | null;
-  shipTokenNotice: string | null;
-  // -- the credential
-  authToken: string;
-  setAuthToken: (v: string) => void;
+  /** Whether the create form was asked for. Whether it is *shown* is not this:
+   *  a location with no agents has nothing to pick, so it opens on the form
+   *  regardless -- see `creating` below, which is a view's decision and made in
+   *  the view. */
+  showCreate: boolean;
+  setShowCreate: (v: boolean) => void;
+  newName: string;
+  setNewName: (v: string) => void;
+  create: () => Promise<void>;
+  error: string | null;
+  /** The agent WAS created and only its credential was refused. In the red
+   *  error slot that reads as a failed creation, and the next click makes a
+   *  second agent. */
+  tokenNotice: string | null;
+}
+
+/** The credential the chosen agent runs on. */
+export interface CredentialHandover {
+  token: string;
+  setToken: (v: string) => void;
   /** Issue a new one for an agent that already exists. Resolves once the token
    *  is in the field; throws with the account's own refusal if it is refused. */
-  regenerateToken: () => Promise<void>;
+  regenerate: () => Promise<void>;
+}
+
+export interface AgentPanelProps {
+  /** Passed straight through to the open location's settings, which is where
+   *  the one write on this step is made (DownloadPanel takes the client for the
+   *  same reason). Nothing in this file calls a route itself. */
+  api: Api;
+  source: SourceHandover;
+  locations: LocationHandover;
+  agents: AgentHandover;
+  credential: CredentialHandover;
+  /** What the capacity profile above this panel is sizing. Passed through to
+   *  the open location's settings, which is where a profile turns into four
+   *  numbers about one location -- and where the only control that writes them
+   *  to the account lives. Sizing needs no account, so this is not a record
+   *  about the connection and does not belong in any of the four above. */
+  profile: PlanAsk;
 }
 
 /** Where the confirm has got to. Per agent, and reset by changing agent:
  *  "Regenerated" is a statement about one identity. */
 type Arm = "idle" | "armed" | "done";
 
-export function AgentPanel(p: AgentPanelProps) {
-  const connected = !!p.who;
-  // A pasted pair outranks the path: typing both is the deliberate act, and
-  // the path field is prefilled from whatever key was detected on this machine.
-  const pasted = !!p.pasteId && !!p.pasteSecret;
-  const empty = !!p.location && p.ships.length === 0;
-  const ship = p.ships.find((s) => s.id === p.shipId);
+/** The rows a query leaves. Trimmed, because a filter pasted with a trailing
+ *  space is a paste artefact rather than a search for one. */
+function matching(list: Location[], query: string): Location[] {
+  const q = query.trim().toLowerCase();
+  return q ? list.filter((l) => l.name.toLowerCase().includes(q)) : list;
+}
+
+/** Above this many, the list gets a filter box. A real account has 171
+ *  locations and eight fit on the screen they are on, so the box appears where
+ *  scrolling stops being enough and not before. */
+const FILTER_ABOVE = 8;
+
+export function AgentPanel({
+  api, source, locations, agents, credential, profile,
+}: AgentPanelProps) {
+  // Derived here rather than passed in beside the list: both are answers to
+  // "which location", and only one of them can be the list's.
+  const location = locations.list.find((l) => l.id === locations.selectedId)
+    ?? null;
+  const ships: Ship[] = location?.ships ?? [];
+  const shown = useMemo(() => matching(locations.list, locations.filter),
+                        [locations.list, locations.filter]);
+  const empty = !!location && ships.length === 0;
+  // Which half of the agent section is on screen -- picking an identity and
+  // minting one are one-of, because reusing an identity that is already running
+  // conflicts with that install while creating one is free. Derived, not a
+  // second piece of state: a location with no agents has nothing to pick, so it
+  // opens on the create form, and creating the first agent drops back to the
+  // list showing it. The same derivation is why Cancel appears only when there
+  // is a list to go back to.
+  const creating = agents.showCreate || ships.length === 0;
+  const ship = ships.find((s) => s.id === agents.id);
   // An identity that already existed, with no credential in hand for it: its
   // token was issued once, at creation, and no API reads one back. Selecting
   // the row does not rotate anything -- the button below is what does.
-  const reusing = !!ship && !p.authToken;
+  const reusing = !!ship && !credential.token;
 
   const [arm, setArm] = useState<Arm>("idle");
   const [issuing, setIssuing] = useState(false);
@@ -109,6 +215,22 @@ export function AgentPanel(p: AgentPanelProps) {
   // Which row is open. Separate from `shipId`: closing a row is a view action
   // and must not un-choose the agent the bundle is for.
   const [open, setOpen] = useState<string | null>(null);
+  // Which of the three sections is expanded. `null` means "wherever the step
+  // has got to", which is what makes the panel open on the next thing to do
+  // rather than on all of it; a click pins one and stops it moving underneath
+  // whoever clicked -- a section that re-folds itself when the state behind it
+  // changes is the worst of both.
+  type Fold = "location" | "agent";
+  // null = follow the step; "none" = the user closed the open one and wants all
+  // three folded. Three states rather than two, because "closed everything" is
+  // a choice and re-opening the current step over it would fight the click.
+  const [pinned, setPinned] = useState<Fold | "none" | null>(null);
+  const reached: Fold = !locations.selectedId ? "location" : "agent";
+  const section = pinned ?? reached;
+  const fold = (id: Fold) => ({
+    open: section === id,
+    onToggle: () => setPinned(section === id ? "none" : id),
+  });
   // The row on its way out. Its body stays mounted for the length of the
   // transition, or switching agents collapses the old row in one frame while
   // the new one animates -- the jump the animation exists to remove.
@@ -119,8 +241,8 @@ export function AgentPanel(p: AgentPanelProps) {
   // rather than on the click so the lone-agent auto-pick opens its row too, and
   // so a row closed by hand stays closed.
   useEffect(() => {
-    setArm("idle"); setIssueErr(null); setOpen(p.shipId);
-  }, [p.shipId]);
+    setArm("idle"); setIssueErr(null); setOpen(agents.id);
+  }, [agents.id]);
   useEffect(() => {
     const prev = wasOpen.current;
     wasOpen.current = open;
@@ -131,7 +253,10 @@ export function AgentPanel(p: AgentPanelProps) {
   }, [open]);
 
   const toggle = (id: string) => {
-    if (p.shipId !== id) { p.pickShip(id); return; }
+    // Choosing an agent by hand is the move on from the location, so the fold
+    // goes back to following the step -- which lands it here. Picking the
+    // location pinned it open (below); this is what releases it.
+    if (agents.id !== id) { agents.pick(id); setPinned(null); return; }
     setOpen((cur) => (cur === id ? null : id));
   };
   const regenerate = async () => {
@@ -139,7 +264,7 @@ export function AgentPanel(p: AgentPanelProps) {
     if (arm === "idle") { setArm("armed"); return; }
     setIssuing(true); setIssueErr(null);
     try {
-      await p.regenerateToken();
+      await credential.regenerate();
       setArm("done");
     } catch (e) {
       // The account's own refusal, which names the ship and says a token read
@@ -151,54 +276,33 @@ export function AgentPanel(p: AgentPanelProps) {
   };
   const createShip = async () => {
     setMakingShip(true);
-    try { await p.createShip(); } finally { setMakingShip(false); }
+    try { await agents.create(); } finally { setMakingShip(false); }
   };
-
-  const pathSeg = (label: string, value: string | null, warn = false) => (
-    <span className="flex items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
-      <span className={"text-xs font-medium "
-        + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
-        {value ?? (warn ? "none yet" : "—")}
-      </span>
-    </span>
-  );
 
   return (
     <div className="space-y-3">
       <SegmentedControl
-        value={p.sourceMode}
-        onChange={(v) => p.switchMode(v as "connect" | "manual")}
+        value={source.mode}
+        onChange={(v) => source.switchTo(v as "connect" | "manual")}
         options={[
           { value: "connect", label: "Connect to BlazeMeter",
-            hint: "Pick a location and agent; a new agent's token is issued once, when you create it." },
+            hint: "Pick a location and agent; a new agent's token is issued once, when you create it.",
+            // Nothing to pick from without a key, and the key is not this
+            // step's to ask for any more -- it is the key at the foot of the nav drawer.
+            disabledReason: source.who ? undefined
+              : "connect an account first — the key at the foot of the menu" },
           { value: "manual", label: "Enter values manually",
             hint: "For an account you cannot reach — generation only, nothing is checked." },
         ]} />
 
-      {p.sourceMode === "manual" ? (
+      {source.mode === "manual" ? (
         <ManualSource
-          harborId={p.manual.harbor_id}
-          shipId={p.manual.ship_id}
-          authToken={p.authToken}
-          onHarborId={(v) => p.setManual((m) => ({ ...m, harbor_id: v }))}
-          onShipId={(v) => p.setManual((m) => ({ ...m, ship_id: v }))}
-          onAuthToken={p.setAuthToken} />
-      ) : !p.sourceOpen ? (
-        /* Settled: say what was chosen, and offer the way back. Reached only by
-           switching away from manual entry and back -- picking an agent no
-           longer folds the step away, because in a step flow there is nothing
-           underneath for it to make room for. */
-        <div className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-          <p className="text-xs text-slate-600 grow">
-            <b>{p.location?.name ?? p.harborId}</b>
-            {" · agent "}<code>{p.shipId}</code>
-            <span className="block text-slate-400">
-              {p.who?.email} · images: {p.facts?.images_source}
-            </span>
-          </p>
-          <Button kind="ghost" onClick={() => p.setSourceOpen(true)}>Change</Button>
-        </div>
+          harborId={source.manual.harbor_id}
+          shipId={source.manual.ship_id}
+          authToken={credential.token}
+          onHarborId={(v) => source.setManual((m) => ({ ...m, harbor_id: v }))}
+          onShipId={(v) => source.setManual((m) => ({ ...m, ship_id: v }))}
+          onAuthToken={credential.setToken} />
       ) : (
         <>
           {/* One block, in one place, whatever state it is in. It used to
@@ -207,141 +311,50 @@ export function AgentPanel(p: AgentPanelProps) {
               way out moved with it. The fields stay put and describe the key
               in use; the button that connected is the button that
               disconnects. */}
-          <SubSection title="Connect" done={!!p.who}
-            hint="API key stays on this machine; only used server-side.">
+          <SubSection title="Private location" done={!!locations.selectedId}
+            {...fold("location")}
+            summary={location
+              ? `${location.name} · ${location.slots ?? "?"} engine(s)/agent`
+              : "none selected"}
+            hint="A location holds agents. Open one to see what the capacity
+                  profile would change about it, and to save that change.">
             <div className="space-y-3">
-              {/* Above the path, because it is the answer to "I do not have a
-                  file" and that is the question someone with no file is asking.
-                  Still folded: the path is prefilled from a detected key, so
-                  most sessions never open this. */}
-              <details className="text-sm">
-                <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
-                <div className="mt-2 space-y-2">
-                  <Field label="Key ID">
-                    <TextInput value={p.pasteId} onChange={p.setPasteId} mono
-                      disabled={connected} /></Field>
-                  <Field label="Secret">
-                    <input type="password"
-                      className={inputCls + " font-mono text-xs"
-                        + (connected ? " bg-slate-50 text-slate-500" : "")}
-                      value={p.pasteSecret} disabled={connected}
-                      onChange={(e) => p.setPasteSecret(e.target.value)} />
-                  </Field>
-                </div>
-              </details>
-              <div className="flex gap-2 items-end">
-                <div className="grow">
-                  <Field label="…or api-key.json">
-                    <TextInput value={p.keyPath} onChange={p.setKeyPath} mono
-                      disabled={connected}
-                      placeholder="/path/to/api-key.json" />
-                  </Field>
-                </div>
-                {/* A label, not a Button, so it cannot be `disabled` -- while a
-                    connect is in flight, or one is already made, it is taken
-                    out of reach instead. */}
-                <label className={"rounded-md px-3 py-1.5 text-sm font-medium border "
-                  + "border-slate-300 text-slate-600 whitespace-nowrap "
-                  + (p.connecting || connected
-                    ? "opacity-40 pointer-events-none"
-                    : "hover:bg-slate-50 cursor-pointer")}>
-                  Browse…
-                  <input type="file" accept=".json,application/json" className="hidden"
-                    onChange={async (e) => {
-                      const f = e.target.files?.[0];
-                      if (!f) return;
-                      e.target.value = "";
-                      p.setConnErr(null);
-                      try {
-                        const d = JSON.parse(await f.text());
-                        if (!d.id || !d.secret) throw new Error();
-                        p.connect({ id: d.id, secret: d.secret, save: p.saveKey });
-                      } catch {
-                        p.setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
-                      }
-                    }} />
-                </label>
-                {/* The same button, in the same place, doing the other half of
-                    the same job. The fixed box is the point: three labels of
-                    three widths in a row whose text field is `grow` would
-                    resize the field under the cursor every time the state
-                    changed. */}
-                <div className="w-32 shrink-0">
-                  {/* One button for both ways in: a pasted id and secret if
-                      there is one, the file otherwise. Two Connects meant two
-                      places to look for the one that was going to work, and
-                      the pasted pair is the deliberate act -- if it is filled
-                      in, it is what was meant. */}
-                  <Button block kind={connected ? "ghost" : "primary"}
-                    onClick={connected ? p.disconnect
-                      : () => p.connect(pasted
-                        ? { id: p.pasteId, secret: p.pasteSecret, save: p.saveKey }
-                        : { path: p.keyPath })}
-                    disabled={!connected && !pasted && !p.keyPath}
-                    busy={p.connecting}>
-                    {connected ? "Disconnect"
-                      : p.connecting ? "Connecting…" : "Connect"}
-                  </Button>
-                </div>
-              </div>
-              <Check label="Remember this key on this machine" checked={p.saveKey}
-                onChange={p.setSaveKey} disabled={connected}
-                hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
-              {/* Status and failure share the slot under the form, so neither
-                  arriving moves anything. */}
-              {connected
-                ? <p className="text-sm text-emerald-700">Connected as {p.who!.email}</p>
-                : <ErrorMsg msg={p.connErr} />}
-            </div>
-          </SubSection>
-
-          {/* Where you are, always, and what is still missing. A location with
-              no agent says so here rather than in a panel further down that you
-              have to reach before the absence is visible. */}
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 flex items-center gap-2 flex-wrap">
-            {pathSeg("location", p.location?.name ?? null)}
-            <span className="text-slate-300">›</span>
-            {pathSeg("agent", ship?.name ?? null, !!p.location)}
-            {empty && (
-              <span className="text-[11px] text-amber-700 ml-1">
-                — this location is empty; the first agent has to be created
-              </span>
-            )}
-          </div>
-
-          <SubSection title="Private location" done={!!p.harborId}
-            hint="A location holds agents.">
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Account">
-                  <SearchSelect
-                    options={p.accounts.map((a) => ({ value: a.id, label: `${a.name} (${a.id})` }))}
-                    value={p.accountId} disabled={!p.who}
-                    onChange={(v) => p.setAccountId(Number(v))} />
-                </Field>
-                <Field label="Workspace">
-                  <SearchSelect
-                    options={p.workspaces.map((w) => ({ value: w.id, label: w.name }))}
-                    value={p.workspaceId} disabled={!p.who || p.workspaces.length === 0}
-                    onChange={(v) => p.setWorkspaceId(Number(v))} />
-                </Field>
-              </div>
+              {/* Neither picker is here any more: both are at the foot of the
+                  nav drawer with the key, because the account decides what
+                  three separate views show and the workspace comes with it.
+                  What is left is the sentence saying which of them this list
+                  is -- a list of locations with no idea which account they are
+                  from is the thing the pickers were really for. */}
+              <p className="text-[11px] text-slate-500">
+                {locations.accountName ? (
+                  <>Locations in <b>{locations.workspaceName ?? "every workspace"}</b>
+                  {" · "}{locations.accountName}. Change either at the foot of the menu.</>
+                ) : (
+                  <span className="text-amber-700">
+                    Choose an account at the foot of the menu to list its
+                    locations.
+                  </span>
+                )}
+              </p>
+              {/* Outside the form rather than only beside the button that opens
+                  it: a refused create leaves the form open, so an error shown
+                  only in the closed state is an error nobody sees. */}
+              <ErrorMsg msg={locations.error} />
               {/* Above the list, like the agent panel below: the two read the
                   same way down the page -- make one, or choose one. */}
-              {p.showCreateLoc ? p.createLocationForm : (
-                <>
-                  <ErrorMsg msg={p.locErr} />
-                  <Button kind="ghost" disabled={!p.who}
-                    onClick={() => p.setShowCreateLoc(true)}>
-                    + New location (new harbor_id)
-                  </Button>
-                </>
+              {locations.create.open ? (
+                <NewLocation create={locations.create} />
+              ) : (
+                <Button kind="ghost" disabled={!source.who}
+                  onClick={() => locations.create.setOpen(true)}>
+                  + New location
+                </Button>
               )}
-              {p.locations.length > 8 && (
-                <TextInput value={p.locFilter} onChange={p.setLocFilter}
-                  placeholder={`filter ${p.locations.length} locations…`} />
+              {locations.list.length > FILTER_ABOVE && (
+                <TextInput value={locations.filter} onChange={locations.setFilter}
+                  placeholder={`filter ${locations.list.length} locations…`} />
               )}
-              {p.locBusy && (
+              {locations.busy && (
                 <p className="flex items-center gap-2 text-xs text-slate-500">
                   <Spinner className="text-bzm" /> reading this workspace&apos;s locations…
                 </p>
@@ -349,52 +362,93 @@ export function AgentPanel(p: AgentPanelProps) {
               {/* A list has to look like one: zebra banding and a divider a
                   shade darker than the card's own border. Rows that share a
                   background and a hairline read as one block of text. */}
-              <div className={"max-h-56 overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
-                + (p.locBusy ? "opacity-40" : "")}>
-                {p.filteredLocs.map((l, i) => {
+              <div className={"max-h-[32rem] overflow-y-auto border border-slate-300 rounded-md divide-y divide-slate-200 "
+                + (locations.busy ? "opacity-40" : "")}>
+                {shown.map((l, i) => {
                   const n = (l.ships ?? []).length;
-                  const up = (l.ships ?? []).filter(p.shipOnline).length;
+                  const up = onlineCount(l.ships);
+                  const on = l.id === locations.selectedId;
                   return (
-                    <button key={l.id} onClick={() => p.setHarborId(l.id)}
-                      className={"w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100 flex items-center gap-2 "
-                        + (l.id === p.harborId ? "bg-bzm/10 border-l-4 border-bzm"
-                          : i % 2 ? "bg-slate-50/70" : "bg-white")}>
-                      <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
-                        + (n ? "bg-emerald-500" : "bg-amber-400")} />
-                      <span className="font-medium">{l.name}</span>
-                      <span className="text-xs text-slate-400 truncate">
-                        {l.slots} slot{l.slots === 1 ? "" : "s"}
-                      </span>
-                      <span className="grow" />
-                      <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
-                        {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
-                           : "no agents yet"}
-                      </span>
-                    </button>
+                    // A div wrapping the row and its body, like an agent row:
+                    // the settings belong to this location, so they open out of
+                    // it rather than sitting under the list where they would
+                    // read as the list's.
+                    <div key={l.id}
+                      className={on ? "bg-bzm/10 border-l-4 border-bzm"
+                        : i % 2 ? "bg-slate-50/70" : "bg-white"}>
+                      {/* Pinned open by the click that selects: the row opens
+                          onto what the capacity profile would change about this
+                          location and the one control that saves it, and a
+                          section that folds itself the moment you act on it
+                          takes that decision off screen. It was worse than it
+                          sounds -- a location with one idle agent is auto-picked,
+                          so the panel could arrive and be hidden in the same
+                          frame. Clicking an agent below releases it.
+
+                          Not for an empty location: it has no agent to run
+                          anything under, so the next thing is creating one and
+                          the fold should go where it always went. */}
+                      <button onClick={() => {
+                          locations.pick(l.id);
+                          setPinned((l.ships ?? []).length ? "location" : null);
+                        }}
+                        className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
+                        <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
+                          + (n ? "bg-emerald-500" : "bg-amber-400")} />
+                        <span className="font-medium">{l.name}</span>
+                        <span className="text-xs text-slate-400 truncate">
+                          {l.slots} engine{l.slots === 1 ? "" : "s"}/agent
+                          {l.threadsPerEngine
+                            ? ` × ${l.threadsPerEngine.toLocaleString()} VUs` : ""}
+                        </span>
+                        <span className="grow" />
+                        <span className={"text-[11px] " + (n ? "text-slate-500" : "text-amber-700")}>
+                          {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
+                             : "no agents yet"}
+                        </span>
+                        <span className={"text-slate-400 text-xs transition-transform duration-150 "
+                          + (on ? "rotate-90" : "")}>›</span>
+                      </button>
+                      <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+                        + (on ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                        <div className="overflow-hidden">
+                          {on && (
+                            <div className="px-3 pb-3">
+                              <LocationSettings api={api} location={l}
+                                profile={profile}
+                                onUpdated={locations.updated} />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
-                {!!p.who && p.filteredLocs.length === 0 && !p.locBusy && (
+                {!!source.who && shown.length === 0 && !locations.busy && (
                   <p className="px-3 py-2 text-sm text-slate-400">no locations match</p>
                 )}
               </div>
             </div>
           </SubSection>
 
-          <SubSection title="Agent (ship)" done={!!p.shipId}
+          <SubSection title="Agent (ship)" done={!!agents.id} {...fold("agent")}
+            summary={agents.id
+              ? (ships.find((x) => x.id === agents.id)?.name ?? agents.id)
+              : (location ? "none selected" : "pick a location first")}
             hint="One agent = one deployment, inside the location above.">
             <div className="space-y-3">
-              {p.factsBusy && (
+              {agents.busy && (
                 <p className="flex items-center gap-2 text-xs text-slate-500">
                   <Spinner className="text-bzm" /> reading this location&apos;s agents…
                 </p>
               )}
-              {!p.factsBusy && !p.location && (
+              {!agents.busy && !location && (
                 <p className="text-xs text-slate-400">Pick a location above first.</p>
               )}
-              {!p.factsBusy && empty && (
+              {!agents.busy && empty && (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
                   <p className="text-xs text-amber-900">
-                    <b>{p.location!.name}</b> has no agents yet — nothing is
+                    <b>{location!.name}</b> has no agents yet — nothing is
                     deployed to it.
                   </p>
                   <p className="text-[11px] text-amber-700 mt-0.5">
@@ -402,16 +456,16 @@ export function AgentPanel(p: AgentPanelProps) {
                   </p>
                 </div>
               )}
-              {!p.factsBusy && p.location && (
+              {!agents.busy && location && (
                 <>
-                  {p.creatingShip ? (
+                  {creating ? (
                     <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
                       <p className="text-xs font-semibold text-slate-700">
                         {empty ? "Create the first agent in this location"
                                : "New agent in this location"}
                       </p>
                       <Field label="Name">
-                        <TextInput value={p.newShipName} onChange={p.setNewShipName}
+                        <TextInput value={agents.newName} onChange={agents.setNewName}
                           placeholder="e.g. k8s-prod-cluster" />
                       </Field>
                       <div className="flex gap-2 items-center">
@@ -419,28 +473,28 @@ export function AgentPanel(p: AgentPanelProps) {
                             its token; the button says so while it waits rather
                             than looking ignored, which is how a second click --
                             and a second agent -- happens. */}
-                        <Button disabled={!p.harborId || !p.newShipName}
+                        <Button disabled={!locations.selectedId || !agents.newName}
                           busy={makingShip} onClick={createShip}>
                           {makingShip ? "Creating…" : "Create"}
                         </Button>
-                        {p.ships.length > 0 && !makingShip && (
-                          <Button kind="ghost" onClick={() => p.setShowCreateShip(false)}>
+                        {ships.length > 0 && !makingShip && (
+                          <Button kind="ghost" onClick={() => agents.setShowCreate(false)}>
                             Cancel
                           </Button>
                         )}
                       </div>
                     </div>
                   ) : (
-                    <Button kind="ghost" onClick={() => p.setShowCreateShip(true)}>
+                    <Button kind="ghost" onClick={() => agents.setShowCreate(true)}>
                       + New agent identity (recommended)
                     </Button>
                   )}
 
-                  {p.ships.length > 0 && (
+                  {ships.length > 0 && (
                     <div className="border border-slate-300 rounded-md divide-y divide-slate-200">
-                      {p.ships.map((s, i) => {
-                        const up = p.shipOnline(s);
-                        const on = s.id === p.shipId;
+                      {ships.map((s, i) => {
+                        const up = shipOnline(s);
+                        const on = s.id === agents.id;
                         const isOpen = open === s.id;
                         return (
                           // Selected is the same blue as a selected location
@@ -466,7 +520,7 @@ export function AgentPanel(p: AgentPanelProps) {
                                 {up ? "online" : s.state}
                               </span>
                               <span className="grow" />
-                              {on && (p.authToken || arm === "done") && (
+                              {on && (credential.token || arm === "done") && (
                                 <span className="text-[11px] text-emerald-700">
                                   {arm === "done" ? "token regenerated" : "token in hand"}
                                 </span>
@@ -486,8 +540,8 @@ export function AgentPanel(p: AgentPanelProps) {
                                       <span className="text-xs font-medium text-slate-600">
                                         Agent AUTH_TOKEN
                                       </span>
-                                      <SecretInput value={p.authToken}
-                                        onChange={p.setAuthToken}
+                                      <SecretInput value={credential.token}
+                                        onChange={credential.setToken}
                                         placeholder="paste the token this agent was created with" />
                                     </label>
                                     <div className="flex items-center gap-2 flex-wrap">
@@ -567,18 +621,88 @@ export function AgentPanel(p: AgentPanelProps) {
                   )}
                 </>
               )}
-              <ErrorMsg msg={p.shipErr} />
-              <NoticeMsg msg={p.shipTokenNotice} />
-              {p.facts && (
+              <ErrorMsg msg={agents.error} />
+              <NoticeMsg msg={agents.tokenNotice} />
+              {agents.facts && (
                 <p className="text-xs text-slate-500">
-                  image inventory: {p.facts.images_source} · features:{" "}
-                  {p.facts.func_ids?.join(", ")}
+                  image inventory: {agents.facts.images_source} · features:{" "}
+                  {agents.facts.func_ids?.join(", ")}
                 </p>
               )}
             </div>
           </SubSection>
         </>
       )}
+    </div>
+  );
+}
+
+/** The new-location form: four fields, and App's write behind Create.
+ *
+ *  Rendered here rather than handed over as a finished element (#103), and the
+ *  distinction that makes it safe is that `submit` is still App's -- this file
+ *  has no client and cannot reach the account, so what a click costs is decided
+ *  in one place and said in this one. The agent form above it has worked that
+ *  way all along; a location arriving pre-rendered was the odd one out.
+ *
+ *  Busy while it waits, like that form and for the same reason: this is a round
+ *  trip to BlazeMeter, and a button that looks ignored gets a second click --
+ *  which here means a second location in the customer's account. */
+function NewLocation({ create }: { create: NewLocationHandover }) {
+  const [busy, setBusy] = useState(false);
+  const { draft, setDraft } = create;
+  const submit = async () => {
+    setBusy(true);
+    try { await create.submit(); } finally { setBusy(false); }
+  };
+  return (
+    <div className="border border-slate-200 rounded-md p-3 space-y-2 bg-slate-50">
+      <p className="text-xs font-semibold text-slate-700">
+        New private location
+      </p>
+      {/* The workspace is named on the field rather than asked for: it is the
+          one at the foot of the drawer, and this write lands in it. */}
+      <Field required
+        label={`Name (created in workspace: ${create.workspace ?? "?"})`}>
+        <TextInput value={draft.name}
+          onChange={(v) => setDraft((d) => ({ ...d, name: v }))} /></Field>
+      <div className="flex gap-4 items-end">
+        <div className="flex gap-3 flex-wrap">
+          {create.choices.map((c) => (
+            <Check key={c.id} label={c.label}
+              checked={draft.func_ids.includes(c.id)}
+              onChange={(on) => setDraft((d) => ({
+                ...d,
+                func_ids: on ? [...d.func_ids, c.id]
+                  : d.func_ids.filter((x) => x !== c.id),
+              }))} />
+          ))}
+        </div>
+        <Field label="Slots" hint="concurrent engines">
+          <NumberInput className="w-20" value={String(draft.slots)}
+            onChange={(v) => setDraft((d) => ({ ...d, slots: Number(v) }))} />
+        </Field>
+        <Field label="Threads per engine"
+          hint="required — tests can't start without it">
+          <NumberInput className="w-24" value={String(draft.threads_per_engine)}
+            onChange={(v) =>
+              setDraft((d) => ({ ...d, threads_per_engine: Number(v) }))} />
+        </Field>
+      </div>
+      {/* Create stays put and greys out, and says which of the two things it is
+          waiting for -- a button that disables itself without a reason is the
+          same dead end as one that disappears. */}
+      <div className="flex gap-2 items-center">
+        <Button disabled={!!create.blockedBy} busy={busy} onClick={submit}>
+          {busy ? "Creating…" : "Create"}
+        </Button>
+        <Button kind="ghost" onClick={() => create.setOpen(false)}>
+          Cancel
+        </Button>
+        {create.blockedBy && (
+          <span className="text-[11px] text-amber-700">{create.blockedBy}</span>
+        )}
+      </div>
     </div>
   );
 }

@@ -14,46 +14,27 @@ none").
 
 import json
 import os
+import re
 import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import cli, doctor, facts as facts_mod  # noqa: E402
-# The cluster fixtures live with the checks that read them; reused rather than
-# re-declared so both paths are fed literally the same objects.
-from test_doctor import (FACTS, LR_MATCHING, NS_BASELINE, QUOTA_ITEM,  # noqa: E402
-                         SA_ITEM, SV_NGINX, _big, _find, _ingressclass,
-                         _statuses)
+from bzm_opl_gen import cli, doctor, evidence, facts as facts_mod  # noqa: E402
+# One document for every test that reads one, and the files a collector really
+# wrote. The cluster objects inside it are `test_doctor`'s, so the imported and
+# the live paths are fed literally the same objects.
+from evidence_fixtures import (CLASSES, CLUSTER_SCOPED_DENIED,  # noqa: E402
+                               DEGRADED, FILES as FIXTURES, HALF_READ,
+                               NAMESPACE_DENIED, NODES, SCOPED, document,
+                               load, raw)
+from test_doctor import (FACTS, NS_BASELINE, SV_NGINX, _big,  # noqa: E402
+                         _find, _statuses)
 
-DEGRADED = os.path.join(os.path.dirname(__file__), "cluster-evidence.degraded.json")
 EXAMPLE_FACTS = os.path.join(os.path.dirname(__file__), "..", "examples",
                              "facts.example.json")
 
 OPTS = {"platform": "k8s"}
-
-# What kubectl really returns: whole List documents, `.items` inside. The script
-# copies them into the evidence file verbatim, so both paths start from these.
-NODES = {"apiVersion": "v1", "kind": "NodeList", "items": [_big("a"), _big("b")]}
-CLASSES = {"apiVersion": "v1", "kind": "List",
-           "items": [_ingressclass("nginx")]}
-SCOPED = {"apiVersion": "v1", "kind": "List",
-          "items": [dict(LR_MATCHING, kind="LimitRange"), QUOTA_ITEM, SA_ITEM]}
-
-
-def _evidence(namespace="blazemeter", notes=(), **raw):
-    """An evidence file as the script emits one, with `raw` sections
-    overridable -- `nodes=None` is what a denied `get nodes` looks like."""
-    sections = {"nodes": NODES, "ingressclasses": CLASSES,
-                "namespace": NS_BASELINE, "scoped": SCOPED}
-    sections.update(raw)
-    return {"schema": doctor.EVIDENCE_SCHEMA,
-            "collected_at": "2026-07-27T10:00:00Z",
-            "namespace": namespace, "cli": "kubectl", "raw": sections,
-            "inventory": {"configmaps": [], "secrets": []},
-            "permissions": {"namespaced": {}, "cluster_scoped": {}},
-            "api_groups": {}, "openshift": {}, "versions": None,
-            "notes": list(notes)}
 
 
 def _live(monkeypatch, **served):
@@ -87,7 +68,9 @@ def test_run_reports_exactly_what_evaluate_decided(capsys):
     assert checks == doctor.evaluate(FACTS, OPTS, "blazemeter",
                                      cluster_data=cluster, probes={})
     assert out.startswith("doctor: location Test Location")
-    assert "location slots" in out and "warning(s)" in out
+    assert "location slots" in out
+    # The summary the browser shows too, printed rather than composed again.
+    assert doctor.summary_line(checks) in out
 
 
 def test_run_prints_extra_checks_the_caller_already_made(capsys):
@@ -107,7 +90,7 @@ def test_an_evidence_is_passed_whole_rather_than_taken_apart():
     than unpacking it into three keywords and hoping each lands in its slot.
     The spelled-out form stays -- the live path supplies no evidence at all --
     so the two have to agree."""
-    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    imported = doctor.cluster_from_evidence(document(), "blazemeter")
     assert doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported) == \
         doctor.evaluate(FACTS, OPTS, "blazemeter", cluster_data=imported.cluster,
                         probes=imported.probes, extra_checks=imported.checks)
@@ -116,7 +99,7 @@ def test_an_evidence_is_passed_whole_rather_than_taken_apart():
 def test_an_evidence_and_the_parts_it_carries_are_not_combined():
     """Both spellings at once would have one set silently win, and which is not
     something a reader of the call site could tell."""
-    imported = doctor.cluster_from_evidence(_evidence(), "blazemeter")
+    imported = doctor.cluster_from_evidence(document(), "blazemeter")
     with pytest.raises(TypeError):
         doctor.evaluate(FACTS, OPTS, "blazemeter", evidence=imported,
                         extra_checks=[doctor.Check("x", doctor.WARN, "y")])
@@ -137,7 +120,7 @@ def test_an_empty_evidence_still_means_go_and_look(monkeypatch):
 
 
 def _evidence_cluster():
-    return doctor.cluster_from_evidence(_evidence()).cluster
+    return doctor.cluster_from_evidence(document()).cluster
 
 
 # -- parity with the live path ----------------------------------------------
@@ -172,7 +155,7 @@ def test_a_section_that_could_not_be_read_warns_rather_than_failing(
     same way -- kget's {} -- so both are asserted here."""
     imported = doctor.evaluate(FACTS, SV_NGINX, "blazemeter", probes={},
                                cluster_data=doctor.cluster_from_evidence(
-                                   _evidence(**{section: None})).cluster)
+                                   document(raw=raw(**{section: None}))).cluster)
     live = doctor.evaluate(FACTS, SV_NGINX, "blazemeter", probes={},
                            cluster_data=_live(monkeypatch, **{live_kind: {}}))
     assert imported == live
@@ -184,7 +167,8 @@ def test_an_empty_section_still_fails_where_it_should(monkeypatch):
     """The other half of the distinction: the cluster served the kind and has
     none of it. Nothing will claim crane's Ingress, and that is a FAIL."""
     empty = {"apiVersion": "v1", "kind": "List", "items": []}
-    cluster = doctor.cluster_from_evidence(_evidence(ingressclasses=empty)).cluster
+    cluster = doctor.cluster_from_evidence(
+        document(raw=raw(ingressclasses=empty))).cluster
     assert cluster["ingressclasses"] == []
     assert _find(doctor.evaluate(FACTS, SV_NGINX, "blazemeter", probes={},
                                  cluster_data=cluster),
@@ -198,8 +182,8 @@ def test_a_namespace_nobody_could_read_is_not_reported_as_one_that_is_absent():
     it". A collector that was refused `get ns` described nothing of the sort,
     and that advice sends its reader after something that is not missing.
     """
-    doc = _evidence(notes=["namespace: Error from server (Forbidden)"])
-    doc["raw"]["namespace"] = None
+    doc = document(raw=raw(namespace=None),
+                   notes=["namespace: Error from server (Forbidden)"])
     imported = doctor.cluster_from_evidence(doc, "blazemeter")
     assert imported.cluster["namespace"] is None
     c = _find(doctor.evaluate(FACTS, OPTS, "blazemeter", probes={},
@@ -212,7 +196,7 @@ def test_a_namespace_nobody_could_read_is_not_reported_as_one_that_is_absent():
 def test_an_unreadable_quota_is_not_a_pass(monkeypatch):
     """`no ResourceQuota in the namespace` is a claim, and a denied read is no
     basis for making it -- that is the one place an empty list PASSes."""
-    denied = doctor.cluster_from_evidence(_evidence(scoped=None)).cluster
+    denied = doctor.cluster_from_evidence(document(raw=raw(scoped=None))).cluster
     assert denied["quotas"] is None and denied["limitranges"] is None
     assert _find(doctor.evaluate(FACTS, OPTS, "blazemeter", probes={},
                                  cluster_data=denied), "quota").status == doctor.WARN
@@ -262,10 +246,67 @@ def test_no_account_and_no_cluster_reports_nothing_as_broken():
         assert _find(checks, name).status == doctor.WARN
 
 
+# -- the half-read files -----------------------------------------------------
+#
+# The degraded file is all-null, which is the easy half: a reader that had lost
+# the null-vs-empty distinction entirely would still come out of it looking
+# right, because there is nothing there to be right about. These two carry both
+# answers at once -- the shape a real customer's token produces -- so what was
+# read has to reach a verdict and what was not has to reach a WARN saying so,
+# in the same report.
+
+def _checks(path, opts, namespace="blazemeter"):
+    return doctor.evaluate(FACTS, opts, namespace,
+                           evidence=doctor.cluster_from_evidence(load(path),
+                                                                 namespace))
+
+
+@pytest.mark.parametrize("path", HALF_READ, ids=os.path.basename)
+def test_a_half_read_file_fails_on_nothing_it_could_not_read(path):
+    checks = _checks(path, {**OPTS, **SV_NGINX})
+    assert doctor.FAIL not in _statuses(checks)
+    # ...and every refusal is accounted for: what the collector recorded as
+    # unreadable is what the leading verdict names.
+    unreadable = doctor.evidence_summary(load(path))["unreadable"]
+    assert unreadable
+    for section in unreadable:
+        assert section in _find(checks, "evidence").detail
+
+
+def test_a_token_with_namespaced_rbac_only_still_judges_the_namespace():
+    """The common customer token: `list nodes` and IngressClasses refused, the
+    namespace read whole. The cluster-scoped verdicts go unverified and the
+    namespaced ones are as real as on a live cluster -- half a report, and the
+    half that is there is not hedged."""
+    checks = _checks(CLUSTER_SCOPED_DENIED, {**OPTS, **SV_NGINX})
+    for name in ("capacity", "engine packing", "node disk", "sv ingress class"):
+        c = _find(checks, name)
+        assert c.status == doctor.WARN
+        assert "could not be read" in c.detail
+    for name in ("limitrange", "quota", "admission"):
+        assert _find(checks, name).status == doctor.PASS
+
+
+def test_a_reader_outside_the_namespace_does_not_report_it_as_absent():
+    """The mirror image, and the failure it exists to pin: `raw.namespace` null
+    with the nodes read is exactly the file where "the namespace does not exist
+    yet -- create it" would look plausible, because the rest of the report is
+    full of real verdicts. The namespace was refused, not missing."""
+    checks = _checks(NAMESPACE_DENIED, OPTS)
+    admission = _find(checks, "admission")
+    assert admission.status == doctor.WARN
+    assert "could not be read" in admission.detail
+    assert "does not exist" not in admission.detail
+    for name in ("limitrange", "resourcequota"):
+        assert _find(checks, name).status == doctor.WARN
+    # The nodes were read, so the capacity verdicts are the cluster's own.
+    assert _find(checks, "capacity").status == doctor.PASS
+
+
 def test_egress_is_reported_unavailable_rather_than_guessed():
     """Egress is the one thing an evidence file cannot carry: it needs a pod in
     the namespace to curl from. Unknown, never an assumed PASS."""
-    imported = doctor.cluster_from_evidence(_evidence())
+    imported = doctor.cluster_from_evidence(document())
     assert imported.probes == {}
     checks = doctor.evaluate(FACTS, OPTS, "blazemeter", cluster_data=imported.cluster,
                              probes=imported.probes)
@@ -294,7 +335,7 @@ def test_a_hand_edited_section_is_refused_by_name():
     a kubectl document or null; anything else is said out loud rather than
     reaching a check as an AttributeError."""
     with pytest.raises(ValueError) as e:
-        doctor.cluster_from_evidence(_evidence(nodes=[_big("a")]))
+        doctor.cluster_from_evidence(document(raw=raw(nodes=[_big("a")])))
     assert "raw.nodes" in str(e.value) and "list" in str(e.value)
 
 
@@ -302,18 +343,52 @@ def test_evidence_for_another_namespace_is_reported_not_quietly_used():
     """LimitRanges, quotas, ServiceAccounts and the PSA labels are all
     per-namespace, so evidence from one namespace says little about another --
     but it is not nothing, so this reports rather than refuses."""
-    imported = doctor.cluster_from_evidence(_evidence("their-ns"), "blazemeter")
+    imported = doctor.cluster_from_evidence(document(namespace="their-ns"),
+                                            "blazemeter")
     c = _find(imported.checks, "evidence")
     assert c.status == doctor.WARN
     assert "their-ns" in c.detail and "blazemeter" in c.detail
 
 
 def test_matching_namespace_just_says_where_the_data_came_from():
-    c = _find(doctor.cluster_from_evidence(_evidence(), "blazemeter").checks,
+    c = _find(doctor.cluster_from_evidence(document(), "blazemeter").checks,
               "evidence")
     assert c.status == doctor.PASS
     assert "2026-07-27T10:00:00Z" in c.detail       # how stale the verdicts are
     assert "blazemeter" in c.detail
+
+
+def test_the_summary_reports_the_same_mismatch_the_verdict_states():
+    """One decision, two renderings. A caller that puts the file's facts in a
+    header rather than in a verdict list gets the mismatch as a field -- and the
+    browser used to re-derive it by comparing the two namespaces itself, which
+    is a second opinion about the same file."""
+    doc = document(namespace="their-ns")
+    assert doctor.evidence_summary(doc, "blazemeter")["elsewhere"] is True
+    assert doctor.evidence_summary(doc, "their-ns")["elsewhere"] is False
+    # ...and it agrees with the verdict, which is the same file read by the same
+    # function.
+    c = _find(doctor.cluster_from_evidence(doc, "blazemeter").checks, "evidence")
+    assert c.status == doctor.WARN
+
+
+def test_a_file_naming_no_namespace_is_not_a_mismatch():
+    """There is nothing to mismatch with. A warning nobody can act on is one
+    more line between the reader and the ones they can -- and the header still
+    says the file named no namespace, so the two are not collapsed."""
+    doc = document(namespace=None)
+    summary = doctor.evidence_summary(doc, "blazemeter")
+    assert summary["elsewhere"] is False
+    assert summary["namespace"] is None
+    c = _find(doctor.cluster_from_evidence(doc, "blazemeter").checks, "evidence")
+    assert c.status == doctor.PASS
+
+
+def test_a_summary_nobody_named_a_namespace_for_claims_no_mismatch():
+    """`evidence_summary` is also asked without one -- there is no preflight to
+    compare against, which is not the same as agreeing."""
+    assert doctor.evidence_summary(document(namespace="their-ns"))["elsewhere"] \
+        is False
 
 
 def test_notes_reach_the_report_because_they_explain_the_nulls():
@@ -321,8 +396,8 @@ def test_notes_reach_the_report_because_they_explain_the_nulls():
     says the collector was denied. The script writes "<section>: <error>" and
     repeats the same error per section, so the sections are listed and each
     distinct reason given once."""
-    imported = doctor.cluster_from_evidence(_evidence(
-        nodes=None, ingressclasses=None,
+    imported = doctor.cluster_from_evidence(document(
+        raw=raw(nodes=None, ingressclasses=None),
         notes=["nodes: forbidden", "ingressclasses: forbidden"]))
     c = _find(imported.checks, "evidence")
     assert c.status == doctor.WARN
@@ -358,8 +433,13 @@ def test_doctor_runs_from_an_evidence_file_with_no_cluster(monkeypatch, capsys,
     # The count, not just the presence: a refactor that dropped a check's
     # unread branch would still leave *some* WARN in the output and pass an
     # "is there a WARN" assertion. Every section of this file is null, so the
-    # number is what says each one was noticed. Update it deliberately when a
-    # check is added -- that is the point of pinning it.
+    # number is what says each one was noticed.
+    #
+    # This is no longer the thing *protecting* that -- @reads and the two
+    # source-level guards in test_doctor.py are, and they name the check rather
+    # than leaving you to work out which of nine went missing. It stays as a
+    # plain regression pin over the whole degraded run; update it deliberately
+    # when a check is added.
     # 9: +1 for check_engine_packing, which reads the same unread `nodes`
     # section as capacity and disk and says so separately rather than borrowing
     # theirs, and +1 for check_engine_heap, which has no engineXmx to read.
@@ -401,3 +481,117 @@ def test_doctor_says_where_to_get_an_evidence_file_it_cannot_find(monkeypatch,
 
 def _find_line(out, needle):
     return next(line for line in out.splitlines() if needle in line)
+
+
+# -- the collector and the table it writes to --------------------------------
+#
+# The document's keys used to be written out longhand everywhere they were
+# read, the collector included, so the script could rename a section and the
+# only thing that noticed was a runtime WARN about a section that "could not be
+# read" -- which is exactly the sentence a section nobody was allowed to read
+# produces. `bzm_opl_gen/evidence.py` states them once; these two tests are what
+# hold the shell script and the fixtures to that statement.
+#
+# A shell script cannot import a Python table, so the script is parsed. That is
+# the honest version of the claim a comment in either file would have made, and
+# this repo already reads sources in tests (test_doctor's two @reads guards).
+
+COLLECTOR = os.path.join(os.path.dirname(__file__), "..", "scripts",
+                         "bzm-cluster-evidence.sh")
+# The line the script's emitting half opens with. Everything above it is
+# argument parsing and the four helpers; everything below writes the document.
+DOCUMENT_MARKER = "# -- the document"
+
+# One key per line, at an indent that is its depth: two spaces for a top-level
+# section, four for a key inside one, six for a permission probe. The three
+# helpers emit theirs from the argument they are called with, always at the
+# same depth -- get_json/get_names inside a section, can_i inside a permission
+# group.
+_PRINTF_KEY = re.compile(r"""^\s*printf '(\s*)"([^"%]+)":""")
+_COLLECT = re.compile(r"^(?:get_json|get_names)\s+(\S+)")
+_PROBE = re.compile(r'^can_i\s+"([^"]+)"')
+
+
+def _collector_paths():
+    """Every key the collector writes, as dotted paths, read off the script."""
+    with open(COLLECTOR) as fh:
+        script = fh.read()
+    assert DOCUMENT_MARKER in script, (
+        f"{DOCUMENT_MARKER!r} is what says where the document starts in "
+        f"{COLLECTOR}; without it nothing holds the script to evidence.DOCUMENT")
+    paths, trail = set(), [None, None, None]
+    for line in script[script.index(DOCUMENT_MARKER):].splitlines():
+        key = _PROBE.match(line) or _COLLECT.match(line)
+        if key:
+            indent = 6 if line.startswith("can_i") else 4
+            key = key.group(1)
+        elif _PRINTF_KEY.match(line):
+            indent, key = (len(_PRINTF_KEY.match(line).group(1)),
+                           _PRINTF_KEY.match(line).group(2))
+        else:
+            continue
+        assert indent in (2, 4, 6), f"unexpected depth in {line!r}"
+        depth = indent // 2 - 1
+        trail[depth] = key
+        paths.add(".".join(trail[:depth + 1]))
+    return paths
+
+
+def test_the_collector_writes_exactly_the_document_the_table_states():
+    """Rename a section in either place and this names it.
+
+    The set is compared both ways on purpose: a key the script writes and the
+    table does not know is a section every reader will treat as absent, and a
+    key the table states and the script does not write is a reader waiting for
+    something that never arrives.
+    """
+    written, stated = _collector_paths(), set(evidence.collector_paths())
+    assert not stated - written, (
+        f"bzm_opl_gen/evidence.py states {sorted(stated - written)}, which "
+        f"{evidence.SCRIPT} does not write -- so every reader of those paths "
+        f"reads a section that is never collected")
+    assert not written - stated, (
+        f"{evidence.SCRIPT} writes {sorted(written - stated)}, which "
+        f"bzm_opl_gen/evidence.py does not state -- so nothing reads them, and "
+        f"a reader that renamed one would report it as unreadable instead")
+
+
+def test_no_key_in_the_document_carries_a_dot():
+    """The paths readers cite are the keys joined with one, so a key holding a
+    dot would split into two that are not there -- and `known()` would report
+    the path as one the document does not define, which is the one answer that
+    is never about the file."""
+    for path in evidence.paths():
+        assert evidence.known(*path.split(".")), path
+
+
+@pytest.mark.parametrize("path", sorted(FIXTURES), ids=os.path.basename)
+def test_every_evidence_fixture_carries_the_document_the_table_states(path):
+    """The fixtures are files a collector wrote, so they answer to the same
+    table -- otherwise a rename leaves them describing the old shape and every
+    test over them keeps passing while the readers see nothing."""
+    with open(path) as fh:
+        doc = json.load(fh)
+    assert _paths_in(doc) == set(evidence.collector_paths())
+
+
+def test_the_built_document_carries_the_same_shape_as_a_collected_one():
+    """The builder is a fixture like the files are, and a section renamed in
+    the table leaves it building the old shape just as quietly."""
+    assert _paths_in(document()) == set(evidence.collector_paths())
+
+
+def _paths_in(doc, prefix=()):
+    """Every dotted path a fixture carries, walked exactly as deep as the table
+    goes -- below that a section is the kubectl document it copied, which is
+    nobody's to name here."""
+    stated = set(evidence.collector_paths())
+    paths = set()
+    for key, value in doc.items():
+        here = prefix + (key,)
+        dotted = ".".join(here)
+        paths.add(dotted)
+        if isinstance(value, dict) and any(p.startswith(dotted + ".")
+                                           for p in stated):
+            paths |= _paths_in(value, here)
+    return paths

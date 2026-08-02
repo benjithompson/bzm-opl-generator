@@ -1,0 +1,983 @@
+// @vitest-environment jsdom
+//
+// The page's effects, driven through the seam.
+//
+// Every effect below has gone wrong once, and none of the failures is visible
+// in a type or in a review: each needs two things outstanding at the same time,
+// or a timer that has not fired yet. `deferred` is what holds an answer open;
+// vi's clock is what holds a debounce or a poll interval open. The four the
+// page documents in prose are all pinned here -- the account-capacity guard
+// (the slower answer landing under the newer account's name), the session
+// restore ordering, the preview debounce and its dependency on the save
+// folder, and the status poll's target.
+//
+// Driven through the real controls rather than by poking state: switching
+// account is the menu at the foot of the drawer, and a test that reached
+// setAccountId directly would keep passing if that control stopped calling it.
+//
+// Under fake timers, nothing from testing-library that waits may be used:
+// `waitFor` and every `findBy*` poll on a real interval, and this jsdom's
+// testing-library only recognises jest's clock, so it would spin against a
+// clock nothing is advancing. The tests below therefore set up under the real
+// clock and install the fake one at the point the behaviour under test starts
+// -- which for the poll has to be before the interval is created, or it is a
+// real interval vi will never advance.
+import {
+  act, cleanup, fireEvent, render, screen, waitFor, within,
+} from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+
+import App from "./App";
+import {
+  AgentStatus, Api, Capacity, CapacityPlan, Facts, Location, Options,
+  SavedBundle, Ship, TokenRequest,
+} from "./api";
+import { deferred, fakeApi } from "./fakeApi";
+// The snapshot writer the page itself uses. A literal forged here would be a
+// second declaration of the shape, and one that starts passing for the wrong
+// reason the first time the version is bumped -- see session.VERSION.
+import * as session from "./session";
+import { EMPTY_PLAN_INPUTS } from "./usePlan";
+
+afterEach(cleanup);
+// The page writes its selections to sessionStorage, and one test's would
+// otherwise be restored into the next one's page.
+afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// Before cleanup, which unmounts: hooks run in reverse, and an effect cleanup
+// clearing a faked interval on the way out is one more thing to get right for
+// nothing.
+afterEach(() => { vi.useRealTimers(); });
+
+/** Let the fake clock run, with React's own work flushed around it. */
+const tick = (ms: number) =>
+  act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+
+/** One account's rollup, identifiable on screen by its workspace name. */
+function capacityOf(accountId: number, workspace: string): Capacity {
+  return {
+    account_id: accountId,
+    workspaces: [{ id: accountId * 10, name: workspace }],
+    locations: [{
+      id: `loc-${accountId}`, name: `location ${accountId}`,
+      func_ids: ["performance"], agents: 1, agents_reporting: 1,
+      agents_unknown: 0, slots: 1, threads_per_engine: 500, engines: 1,
+      rated_vus: 500, workspace_ids: [accountId * 10],
+      workspace_names: [workspace], shared: false,
+    }],
+    rated_vus: 500,
+    unrated: 0,
+  };
+}
+
+test("a slow capacity answer for the previous account never lands under the new one",
+  async () => {
+    const alpha = deferred<Capacity>();
+    const bravo = deferred<Capacity>();
+    const api = fakeApi({
+      keyDetect: async () => ({ candidates: [], active_key_id: null }),
+      keyStatus: async () => ({
+        connected: true, user: { email: "someone@example.com" },
+        default_account_id: 1, key_id: "key-1",
+      }),
+      accounts: async () => [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
+      // Empty, so nothing downstream of the account tree is fetched: this test
+      // is about the capacity read and a location list would only add noise.
+      workspaces: async () => [],
+      optionDefaults: async () => ({}),
+      funcIdChoices: async () => [],
+      features: async () => [],
+      svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+      capacity: (accountId: number) =>
+        (accountId === 1 ? alpha : bravo).promise,
+    });
+
+    render(<App api={api} />);
+
+    // Connected, on account 1, looking at the rollup -- which is what puts the
+    // first (slow) capacity read in flight.
+    // Disabled until the key answers -- there is no account to roll up before
+    // that, so the click has to wait for the same thing the user does.
+    const capacityTab = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Account capacity/ });
+    await waitFor(() => expect(capacityTab.disabled).toBe(false));
+    fireEvent.click(capacityTab);
+    expect(await screen.findByText(/reading the account/)).toBeTruthy();
+
+    // Change account while that read is still outstanding.
+    fireEvent.click(screen.getByTitle(/the key everything is read with/));
+    const accountBox = screen.getByLabelText("Account");
+    fireEvent.focus(accountBox);
+    // mouseDown, not click: the option commits there, because a click would
+    // blur the box and close the list under the pointer.
+    fireEvent.mouseDown(screen.getByText("Bravo (2)"));
+
+    // The second account answers first...
+    bravo.settle(capacityOf(2, "Bravo workspace"));
+    expect(await screen.findByText("Bravo workspace")).toBeTruthy();
+
+    // ...and only then does the first account's, which is the ordering the
+    // guard exists for. Settled inside `act` and awaited to the end of its own
+    // handlers: the unguarded version lands one microtask later, so an
+    // assertion made before that flush passes over a page about to be wrong --
+    // and a `waitFor` would be worse, since it returns on its first successful
+    // check, which is that same too-early moment.
+    await act(async () => {
+      alpha.settle(capacityOf(1, "Alpha workspace"));
+      await alpha.promise;
+    });
+
+    expect(screen.queryByText("Alpha workspace")).toBeNull();
+    expect(screen.queryByText("Bravo workspace")).not.toBeNull();
+  });
+
+// -- service virtualization, through the page --------------------------------
+// sv.ts is tested as plain data (sv.test.ts) -- what needs a page is the wiring
+// it replaced: an effect that WROTE the ingress option and another that READ it
+// back. The bundle really carrying the seeded value, and doing so once, is the
+// thing neither a type nor the module's own tests can show.
+
+/** An account holding one location that runs virtual services, ready to
+ *  generate for. `record` collects the options every preview is asked for --
+ *  the bundle as the server would see it, rather than what the form shows.
+ *  `extra` is what the test under way adds: the watch routes, which only the
+ *  poll calls. */
+function svAccount(record: Options[], extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-mocks", name: "Mocks", funcIds: ["mock-services"], slots: 1,
+      // Offline, so the page's own rule auto-picks it -- a running agent is
+      // never cloned into a new deployment.
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-mocks", func_ids: ["mock-services"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      platform: "openshift", output_format: "helm",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [{
+      id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
+      func_ids: ["mock-services"],
+    }],
+    // The funcId that means "runs virtual services" is served, never spelled
+    // in the frontend -- this is the fixture standing in for that vocabulary.
+    svConstants: async () => ({
+      func_ids: ["mock-services"],
+      ingress_types: ["nginx", "istio"],
+      backends: {
+        nginx: { group: "networking.k8s.io", resources: ["ingresses"],
+                 creates: "Ingress", nodeport_ok: true },
+      },
+    }),
+    generate: async (_facts: unknown, options: Options) => {
+      record.push(options);
+      return { files: [], token: { branch: "placeholder" as const,
+                                   ship_id: "s-1", message: "" } };
+    },
+    ...extra,
+  });
+}
+
+test("an SV location seeds a backend into the bundle, once, and is held to manifests",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={svAccount(asked)} />);
+
+    // Pick the location. Its funcIds are what make SV required -- nothing was
+    // configured, and nothing was pressed in the group.
+    fireEvent.click(await screen.findByText("Mocks"));
+
+    // The seed reaches the bundle, not just the select: with sv_ingress unset
+    // generate() refuses such a location outright, and the select showing its
+    // own nginx fallback would hide that.
+    const latest = () => asked[asked.length - 1] ?? {};
+    await waitFor(() => expect(latest().sv_ingress).toBe("nginx"));
+    // ...and the imported default of `helm`, which this location cannot have,
+    // is corrected in the same pass.
+    expect(latest().output_format).toBe("manifests");
+    // Settled: the correction is applied and then there is nothing left to
+    // correct. A loop would keep minting options identities and re-POSTing the
+    // preview for a configuration that stopped changing.
+    const settled = asked.length;
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked.length).toBe(settled);
+
+    // The row says the location is what demands it...
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
+
+    // ...and the chart is refused with the sentence, rather than disappearing.
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const chart = await screen.findByRole<HTMLButtonElement>(
+      "radio", { name: /Helm chart/ });
+    expect(chart.disabled).toBe(true);
+    expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
+  });
+
+// -- the download step, through the page -------------------------------------
+// The two requests this step exists to make now go through the same seam as
+// every other route (#104), so what is asserted here is what the page handed
+// the client: the facts, the options with the agent's id, and the credential
+// request -- the record the whole of #64 was about. Stubbing `fetch` proved the
+// same thing one transport layer lower and could not reach the decision that
+// produces it; the wire shape those two routes put on the request is pinned in
+// api.test.ts, which is where a transport belongs.
+
+/** What the page handed the client for a bundle, whichever route it used. */
+interface Sent {
+  route: "zip" | "save";
+  facts: Facts;
+  options: Options;
+  credential: TokenRequest;
+  outDir?: string;
+}
+
+/** The two bundle routes, recording what left and answering as the server
+ *  would -- the credential sentence included, because it is core's wording and
+ *  arrives on the answer rather than being composed on this side. */
+function transfers(sent: Sent[], save: () => Promise<SavedBundle>): Partial<Api> {
+  return {
+    downloadZip: async (facts, options, credential) => {
+      sent.push({ route: "zip", facts, options, credential });
+      return {
+        branch: credential.rotate_token ? "rotated" : "given",
+        ship_id: "s-1",
+        message: credential.rotate_token
+          ? "a NEW AUTH_TOKEN was issued" : "the AUTH_TOKEN you supplied",
+      };
+    },
+    saveBundle: async (facts, options, outDir, credential) => {
+      sent.push({ route: "save", facts, options, credential, outDir });
+      return save();
+    },
+  };
+}
+
+/** One folder written, as the server reports it: the expanded path rather than
+ *  the `~` that was typed. */
+const savedTo = async (): Promise<SavedBundle> => ({
+  out_dir: "/home/me/bzm-opl/blazemeter",
+  files: [{ name: "crane.yaml", bytes: 12 }],
+  token: { branch: "given", ship_id: "s-1", message: "kept the token" },
+});
+
+/** An account with one performance location and one idle agent in it: enough
+ *  to reach step 3 with the buttons enabled. `extra` is what the test under way
+ *  adds -- the two bundle routes, which nothing else on this page calls. */
+function perfAccount(extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-perf", name: "Perf", funcIds: ["performance"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-perf", func_ids: ["performance"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [{
+      id: "perf", label: "Performance", namespace: "blazemeter",
+      func_ids: ["performance"],
+    }],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    generate: async () => ({
+      files: [{ name: "crane.yaml", content: "kind: Deployment" }],
+      token: { branch: "placeholder" as const, ship_id: "s-1",
+               message: "no AUTH_TOKEN — the bundle carries a placeholder" },
+    }),
+    ...extra,
+  });
+}
+
+/** Pick the location, then open step 3 with the buttons live. */
+async function atDownloadStep() {
+  fireEvent.click(await screen.findByText("Perf"));
+  fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+  const button = await screen.findByRole<HTMLButtonElement>(
+    "button", { name: /Download bundle/ });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  return button;
+}
+
+test("downloading sends the configured bundle for the selected agent, and rotates nothing",
+  async () => {
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent, savedTo))} />);
+
+    fireEvent.click(await atDownloadStep());
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].route).toBe("zip");
+    expect(sent[0].facts).toMatchObject({ harbor_id: "h-perf" });
+    expect(sent[0].options).toMatchObject({
+      namespace: "blazemeter", ship_id: "s-1" });
+    // The default, and the whole of #64: reading a bundle must not revoke the
+    // credential the deployed agent is running on. Asserted on the record the
+    // request is made of, so there is no boolean left for the button to
+    // re-apply and no second place it could be re-applied differently.
+    expect(sent[0].credential).toEqual({ rotate_token: false });
+
+    // ...and what it did is reported in core's own words, off the answer.
+    expect(await screen.findByText(/the AUTH_TOKEN you supplied/)).toBeTruthy();
+  });
+
+test("saving reports where it landed, and a refusal replaces that with why",
+  async () => {
+    const sent: Sent[] = [];
+    let refuse = false;
+    const save = () => (refuse
+      ? Promise.reject(new Error("no such folder")) : savedTo());
+    render(<App api={perfAccount(transfers(sent, save))} />);
+    await atDownloadStep();
+
+    fireEvent.change(screen.getByLabelText("Folder"),
+                     { target: { value: "~/bzm-opl/blazemeter" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].route).toBe("save");
+    expect(sent[0].outDir).toBe("~/bzm-opl/blazemeter");
+    // The save is the other half of #64: writing into a folder a second time
+    // is the ordinary way to use it, and it must not cost a rotation either.
+    expect(sent[0].credential).toEqual({ rotate_token: false });
+    // The expanded path the server echoed, not the `~` that was typed: it is
+    // what a kubectl command can be copied against.
+    expect(await screen.findByText(/Wrote 1 files to/)).toBeTruthy();
+    expect(screen.getByText("/home/me/bzm-opl/blazemeter")).toBeTruthy();
+
+    // A refused save says why, and takes the previous save's claim with it --
+    // that folder is not where this bundle went.
+    refuse = true;
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+    expect(await screen.findByText("no such folder")).toBeTruthy();
+    expect(screen.queryByText(/Wrote 1 files to/)).toBeNull();
+  });
+
+test("ticking the rotate box is what makes the request issue a credential",
+  async () => {
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent, savedTo))} />);
+    const download = await atDownloadStep();
+
+    // Offered because this agent has no token in the field, the page is
+    // connected, and an agent is selected -- minting is an API call.
+    fireEvent.click(screen.getByLabelText(/Issue a NEW AUTH_TOKEN/));
+    // What it kills, said while the box is being ticked, which is the only
+    // moment anyone can still decide not to.
+    expect(await screen.findByText(/kills the current one at once/)).toBeTruthy();
+
+    fireEvent.click(download);
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].credential).toEqual({ rotate_token: true });
+    expect(await screen.findByText(/a NEW AUTH_TOKEN was issued/)).toBeTruthy();
+  });
+
+test("the box is the only thing that rotates: a save after one is asked for does too",
+  async () => {
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent, savedTo))} />);
+    await atDownloadStep();
+
+    // Both routes read one plan, so the pair cannot disagree about what the
+    // click costs -- which is what a flag re-applied at two call sites could.
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].credential).toEqual({ rotate_token: false });
+
+    fireEvent.click(screen.getByLabelText(/Issue a NEW AUTH_TOKEN/));
+    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
+    await waitFor(() => expect(sent.length).toBe(2));
+    expect(sent[1].credential).toEqual({ rotate_token: true });
+  });
+
+// -- step 1: the two lists, and the two forms that write to the account -------
+// A location holds agents and both are picked from a list, so both are driven
+// here rather than only typechecked. The filter is part of it: a real account
+// has 171 locations and the box only appears above eight, so a list that stops
+// filtering is a list nobody can get to the bottom of.
+
+/** One location in a workspace, as the listing carries it. */
+const loc = (id: string, name: string, ships: Ship[] = []): Location =>
+  ({ id, name, funcIds: ["performance"], slots: 1, ships });
+
+/** An account holding exactly `locations`, and nothing else of interest. The
+ *  list is the fixture's own array, so a test can have a create call add to it
+ *  the way the account would. */
+function accountOf(locations: Location[], extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    // A copy each time, as a fetch would be: the page stores what it is handed,
+    // and one array mutated in place is a re-read React sees no change in.
+    locations: async () => [...locations],
+    facts: async (harborId: string) => ({
+      harbor_id: harborId, func_ids: ["performance"],
+      ships: [], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [
+      { id: "performance", label: "Performance", changes_images: true },
+    ],
+    features: async () => [{
+      id: "perf", label: "Performance", namespace: "blazemeter",
+      func_ids: ["performance"],
+    }],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    generate: async () => ({
+      files: [], token: { branch: "placeholder" as const, ship_id: null,
+                          message: "" },
+    }),
+    ...extra,
+  });
+}
+
+test("a short list has no filter over it", async () => {
+  const eight = Array.from({ length: 8 }, (_, i) => loc(`h-${i}`, `Region ${i}`));
+  render(<App api={accountOf(eight)} />);
+
+  expect(await screen.findByText("Region 0")).toBeTruthy();
+  // Eight rows fit on the screen they are on; a box over them would be furniture
+  // asking to be filled in.
+  expect(screen.queryByPlaceholderText(/^filter /)).toBeNull();
+});
+
+test("a long list is filtered, and the row picked is the one whose facts are read",
+  async () => {
+    const asked: string[] = [];
+    const many = [...Array.from({ length: 8 }, (_, i) => loc(`h-${i}`, `Region ${i}`)),
+                  loc("h-dublin", "Dublin")];
+    render(<App api={accountOf(many, {
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    // The count is the whole list's, not the filtered one's -- it is what the
+    // box is offering to narrow.
+    const box = await screen.findByPlaceholderText("filter 9 locations…");
+    fireEvent.change(box, { target: { value: "dub" } });
+
+    expect(screen.queryByText("Region 0")).toBeNull();
+    // Picked from what the filter left, which is the only way to reach a row on
+    // a real account's list.
+    fireEvent.click(screen.getByText("Dublin"));
+    await waitFor(() => expect(asked).toEqual(["h-dublin"]));
+
+    // ...and a query nothing matches says so, rather than showing an empty box
+    // that reads like an empty workspace.
+    fireEvent.change(box, { target: { value: "zzz" } });
+    expect(screen.getByText("no locations match")).toBeTruthy();
+  });
+
+test("creating a location sends what the form holds, and selects what comes back",
+  async () => {
+    const created: unknown[] = [];
+    const listing = [loc("h-0", "Region 0")];
+    const asked: string[] = [];
+    render(<App api={accountOf(listing, {
+      createLocation: async (body) => {
+        created.push(body);
+        const made = loc("h-new", body.name);
+        listing.push(made);
+        return made;
+      },
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /New location/ }));
+    // Named after the workspace it would be created in, because the workspace is
+    // chosen at the foot of the drawer and this is a write into it.
+    const name = await screen.findByLabelText(/^Name \(created in workspace/);
+    fireEvent.change(name, { target: { value: "Frankfurt" } });
+    fireEvent.change(screen.getByLabelText(/^Slots/), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText(/^Threads per engine/),
+                     { target: { value: "250" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // The account this writes into, and the four fields, exactly as typed.
+    await waitFor(() => expect(created.length).toBe(1));
+    expect(created[0]).toEqual({
+      name: "Frankfurt", account_id: 1, workspace_id: 10,
+      func_ids: ["performance"], slots: 4, threads_per_engine: 250,
+    });
+    // Selected, so the agent section below is about the location just made --
+    // which is the only reason anyone makes one here. It is on screen twice by
+    // then (its row, and the path line under the step), so the read of the
+    // account is what this asserts on.
+    await waitFor(() => expect(asked).toEqual(["h-new"]));
+    expect(screen.getAllByText("Frankfurt").length).toBeGreaterThan(0);
+  });
+
+test("creating an agent in an empty location keeps the credential it is issued with",
+  async () => {
+    const listing = [loc("h-0", "Empty")];
+    render(<App api={accountOf(listing, {
+      createShip: async (_harborId: string, name: string) => {
+        const ship = { id: "s-new", name, state: "IDLE" };
+        listing[0] = { ...listing[0], ships: [ship] };
+        return { ship, auth_token: "tok-from-the-account", token_error: null };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Empty"));
+    // A location with no agents opens on the create form: there is nothing to
+    // pick, so there is no list to offer first.
+    expect(await screen.findByText(/has no agents yet/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name"),
+                     { target: { value: "k8s-prod" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // The agent now exists (its row, the section summary and the path line
+    // under the step all name it) and is the one selected.
+    await waitFor(() =>
+      expect(screen.getAllByText("k8s-prod").length).toBeGreaterThan(1));
+    expect(screen.getByText("token in hand")).toBeTruthy();
+    // ...and the token it was created with, in the field. This is the one moment
+    // it is free -- nothing reads a credential back afterwards.
+    await waitFor(() => expect(
+      screen.getByPlaceholderText(/paste the token this agent was created with/),
+    ).toHaveProperty("value", "tok-from-the-account"));
+  });
+
+test("a lone agent that is reporting is not auto-picked, and says why when it is",
+  async () => {
+    // Fresh by the rule in heartbeat.ts, which is the whole difference between
+    // this location and the ones above.
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Busy", [live])])} />);
+
+    fireEvent.click(await screen.findByText("Busy"));
+    // Counted as online in the row for its location...
+    expect(await screen.findByText(/1 agent · 1 online/)).toBeTruthy();
+    // ...and left unpicked: a new deployment on an identity that is already
+    // running conflicts with the install that is working.
+    expect(screen.queryByText(/already running somewhere/)).toBeNull();
+
+    fireEvent.click(screen.getByText("agent-live"));
+    expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
+  });
+
+// -- what survives a refresh, and when it may be written back ----------------
+
+test("nothing is written back over a saved session until the restore has resolved",
+  async () => {
+    // Written with the page's own writer, at the page's own version.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-dublin", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "restored-ns" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+
+    // The key check is the last thing the mount effect waits on. Held open,
+    // it is the refresh this guard was written for: the server had not
+    // answered, the page saved the empty state it was about to restore *from*,
+    // and every selection was gone for good.
+    const key = deferred<Awaited<ReturnType<Api["keyStatus"]>>>();
+    const listing = [
+      loc("h-0", "Region 0"),
+      loc("h-dublin", "Dublin", [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+    ];
+    render(<App api={accountOf(listing, {
+      keyStatus: () => key.promise,
+    })} />);
+
+    // The options are back on screen before the connection resolves -- which is
+    // the ordering, not an accident of it: the location list has to arrive
+    // already filtered to the restored workspace.
+    const ns = await screen.findByPlaceholderText("e.g. blazemeter");
+    expect(ns).toHaveProperty("value", "restored-ns");
+    // ...and the snapshot they came from is untouched. None of these four is
+    // page state yet -- they are still waiting for the account to confirm the
+    // things they name still exist -- so anything written now writes nulls
+    // over them.
+    expect(session.load()).toMatchObject({
+      accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
+    });
+
+    key.settle({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    });
+
+    // Only now does the page write. Asserted with an edit on top of the
+    // restored ids, so this cannot pass by nothing having been written at all:
+    // the snapshot has to hold both the typed value and the four ids.
+    fireEvent.change(ns, { target: { value: "typed-ns" } });
+    await waitFor(() => expect(session.load()).toMatchObject({
+      accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
+      step: 1, options: { namespace: "typed-ns" },
+    }));
+  });
+
+// -- the live preview, and the two things that decide when it is asked -------
+
+test("the preview waits for the typing to stop, and the save folder is part of what it asks",
+  async () => {
+    const asked: { options: Options; outDir?: string }[] = [];
+    render(<App api={perfAccount({
+      generate: async (_facts: Facts, options: Options, outDir?: string) => {
+        asked.push({ options, outDir });
+        return {
+          files: [{ name: "crane.yaml", content: "kind: Deployment" }],
+          // What a folder already holding this ship's bundle answers: the save
+          // would keep the token that is in it. Core's branch, on the answer --
+          // the page never works one out.
+          token: outDir
+            ? { branch: "reused" as const, ship_id: "s-1",
+                message: "the folder already holds one" }
+            : { branch: "placeholder" as const, ship_id: "s-1",
+                message: "no AUTH_TOKEN — the bundle carries a placeholder" },
+        };
+      },
+    })} />);
+    await atDownloadStep();
+    // Settled: the location's facts, the feature it opens on and the option
+    // defaults all move the configuration, and each moves it once.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    const before = asked.length;
+
+    // From here the clock is ours, because the point is what does *not* happen
+    // inside the 250ms.
+    vi.useFakeTimers();
+    const folder = screen.getByLabelText("Folder");
+    for (const typed of ["~/b", "~/bz", "~/bzm"]) {
+      fireEvent.change(folder, { target: { value: typed } });
+      await tick(100);
+    }
+    // Three keystrokes, 300ms, no request: /api/generate renders the whole
+    // bundle, and a preview that ran per keystroke rendered it three times.
+    expect(asked.length).toBe(before);
+
+    await tick(250);
+    // ...and then exactly one, carrying the folder. The folder is a dependency
+    // because it changes the answer, not because the request has room for it.
+    expect(asked.length).toBe(before + 1);
+    expect(asked[asked.length - 1].outDir).toBe("~/bzm");
+    // The changed answer, on screen: pointed at a folder this ship's bundle is
+    // already in, the credential branch is `reused` -- so the step stops
+    // announcing a placeholder over a bundle that has a real token.
+    expect(screen.getByText(/the AUTH_TOKEN already in that folder/)).toBeTruthy();
+  });
+
+// -- the watch, and what it is watching --------------------------------------
+
+/** An agent that is up, which is all these two ask of a status read. */
+const IDLE: AgentStatus = { state: "IDLE", heartbeat_age_s: 3, online: true };
+
+test("the status poll moves with the agent, and leaves no interval behind",
+  async () => {
+    const polled: string[] = [];
+    const both = loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ]);
+    render(<App api={accountOf([both], {
+      status: async (harborId: string, shipId: string) => {
+        polled.push(`${harborId}/${shipId}`);
+        return IDLE;
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    // Two agents, so neither is auto-picked: the one being watched is the one
+    // that was chosen, which is what makes changing it a change of target.
+    fireEvent.click(await screen.findByText("agent-1"));
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const watch = await screen.findByRole("switch");
+
+    // Installed before the click, because the click is what creates the
+    // interval -- afterwards it would be a real one, and vi would advance a
+    // clock nothing is using.
+    vi.useFakeTimers();
+    fireEvent.click(watch);
+    // Read at once: ten seconds of "polling every 10s…" over an agent that is
+    // already up reads as a page that has not started.
+    expect(polled).toEqual(["h-perf/s-1"]);
+    await tick(20_000);
+    expect(polled).toEqual(["h-perf/s-1", "h-perf/s-1", "h-perf/s-1"]);
+
+    // Move the target. The switch is still on -- what changed is which agent
+    // the answers would be about.
+    fireEvent.click(screen.getByRole("button", { name: /Capacity & agent/ }));
+    fireEvent.click(screen.getByText("agent-2"));
+    expect(polled[polled.length - 1]).toBe("h-perf/s-2");
+
+    // The agent left behind is not still being polled beside the new one: one
+    // request per tick, for the agent on screen. An interval that outlives its
+    // effect keeps asking about an agent nothing is looking at, and every
+    // change of agent adds another.
+    await tick(20_000);
+    expect(polled.filter((p) => p === "h-perf/s-1").length).toBe(3);
+    expect(polled.filter((p) => p === "h-perf/s-2").length).toBe(3);
+  });
+
+test("the SV read travels by ref: typing in the namespace does not restart the poll",
+  async () => {
+    const asked: Options[] = [];
+    const read: string[] = [];
+    render(<App api={svAccount(asked, {
+      status: async () => IDLE,
+      svMocks: async (namespace: string) => {
+        read.push(namespace);
+        return { status: "no_mocks" as const, mocks: [],
+                 message: "nothing deployed" };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Mocks"));
+    // The location's own funcIds are what make this an SV watch, and the seed
+    // that follows from them is what makes it configured -- so the poll reads
+    // the namespace as well as the heartbeat only once that has landed.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx"));
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const watch = await screen.findByRole("switch");
+
+    vi.useFakeTimers();
+    fireEvent.click(watch);
+    expect(read).toEqual(["blazemeter"]);
+
+    // One second short of the next tick, the namespace is edited. Back rather
+    // than the stepper: the unfinished-group block on this step offers a
+    // "Configure" button of its own, and both go to the same place.
+    await tick(9_000);
+    fireEvent.click(screen.getByRole("button", { name: /Back/ }));
+    fireEvent.change(screen.getByPlaceholderText("e.g. blazemeter"),
+                     { target: { value: "mocks-ns" } });
+
+    // Half a second later: nothing. A namespace in the dependency array tears
+    // the interval down and stands a new one up, which reads at once -- so the
+    // cluster would be read on every keystroke in the field.
+    await tick(500);
+    expect(read).toEqual(["blazemeter"]);
+
+    // The tick that was already due arrives on time, and reads what the field
+    // says now: the ref is what carries the new value into an interval that
+    // was never restarted.
+    await tick(1_000);
+    expect(read).toEqual(["blazemeter", "mocks-ns"]);
+  });
+
+// -- the capacity profile, and the location it lands on ----------------------
+// The planner reaches nothing -- no key, no account, no cluster -- and that is
+// the requirement rather than a property: it is the question somebody asks
+// *before* they have any of it, which is why it is the first card of step 1
+// rather than a view beside the flow. The first test below is that claim, made
+// on a page nobody has connected. The second is the other half: what the
+// profile says is filled into a location's own fields, and the only thing that
+// reaches the account is Save.
+
+/** A plan as core would answer it. The arithmetic is plan.py's and is tested
+ *  there; what these two need is an answer that divides by the agents it was
+ *  asked with, because that division is the whole reason a location re-asks. */
+function planFor(body: {
+  users: string; agents?: string; vus_per_engine?: string;
+}): CapacityPlan {
+  const agents = Math.max(Number(body.agents) || 1, 1);
+  const vus = Number(body.vus_per_engine) || 500;
+  const engines = Math.ceil(Number(body.users) / vus);
+  const perAgent = Math.ceil(engines / agents);
+  return {
+    users: Number(body.users), vus_per_engine: vus,
+    vus_per_engine_assumed: !body.vus_per_engine,
+    engines, agents, engines_per_agent: perAgent, engines_per_node: 1,
+    nodes_per_agent: perAgent, nodes: perAgent * agents,
+    engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
+              supported_vus: 500 },
+    node: { cpu: "4", memory: "16Gi", disk_gb: 100 },
+    peak: { cpu: String(engines * 2), memory: `${engines * 8}Gi`,
+            disk_gb: engines * 60 },
+    crane: { cpu_limit: "1", memory_limit: "2Gi" },
+    location: { slots: perAgent, threads_per_engine: vus, override_cpu: 2,
+                override_memory: 8192 },
+    egress: ["a.blazemeter.com"], warnings: [],
+    document: "# infrastructure request", document_file: "capacity-request.md",
+  };
+}
+
+test("with no key connected, step 1 still sizes a capacity profile", async () => {
+  const asked: { users: string; agents?: string }[] = [];
+  // Not connected, and nothing account-shaped is stubbed: every route but the
+  // four the page reads at mount rejects by naming itself, so a profile that
+  // had come to need an account could not pass this.
+  const api = fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({ connected: false }),
+    optionDefaults: async () => ({ namespace: "blazemeter" }),
+    funcIdChoices: async () => [],
+    features: async () => [],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+    plan: async (body) => { asked.push(body); return planFor(body); },
+  });
+  render(<App api={api} />);
+
+  // The card is on screen before anything is connected, and says it has no
+  // answer yet rather than hiding until it does.
+  expect(await screen.findByText("not sized yet")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+                   { target: { value: "5000" } });
+
+  // The summary is the answer, on the row that is visible with the editor shut.
+  expect(await screen.findByText(/5,000 VUs · 10 engines · 2 CPU \/ 8Gi/))
+    .toBeTruthy();
+  // Asked for the run, not for a location: how many agents will serve it is a
+  // fact about a location, and there is no location here to have one.
+  expect(asked[asked.length - 1].agents).toBeUndefined();
+  // ...and the document that is the point of sizing without a cluster is
+  // reachable from inside the editor.
+  const download = screen.getByRole<HTMLButtonElement>(
+    "button", { name: "Download" });
+  await waitFor(() => expect(download.disabled).toBe(false));
+});
+
+test("the profile fills a location's settings, and Save is the only write",
+  async () => {
+    const asked: { users: string; agents?: string }[] = [];
+    const sent: Record<string, string>[] = [];
+    // What the account holds, moved only by a request that reaches it -- so
+    // "before" on the second save is what the first one actually did.
+    let held = loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ]);
+    const state = () => ({
+      slots: held.slots ?? null,
+      threads_per_engine: held.threadsPerEngine ?? null,
+      override_cpu: held.overrideCPU ?? null,
+      override_memory: held.overrideMemory ?? null,
+    });
+    render(<App api={accountOf([held], {
+      // The list is re-read on nothing here, so the fixture hands back what it
+      // holds now rather than the array it was built from.
+      locations: async () => [held],
+      engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+      plan: async (body) => { asked.push(body); return planFor(body); },
+      updateLocation: async (body) => {
+        const { harbor_id: _h, ...fields } = body;
+        sent.push(fields as Record<string, string>);
+        const before = state();
+        held = { ...held,
+          slots: fields.slots ? Number(fields.slots) : held.slots,
+          threadsPerEngine: fields.threads_per_engine
+            ? Number(fields.threads_per_engine) : held.threadsPerEngine ?? null,
+          // override_memory is deliberately not applied: BlazeMeter's own POST
+          // accepts `threadsPerEngine` and drops it on some accounts, and a
+          // field that comes back unstored is the case the answer exists for.
+          overrideCPU: fields.override_cpu
+            ? Number(fields.override_cpu) : held.overrideCPU ?? null };
+        const after = state();
+        const changed = Object.fromEntries(
+          (Object.keys(after) as (keyof typeof after)[])
+            .filter((k) => after[k] !== before[k]).map((k) => [k, after[k]]));
+        return { location: held, changed, before, after,
+                 ignored: fields.override_memory ? ["override_memory"] : [] };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+                     { target: { value: "5000" } });
+    fireEvent.click(await screen.findByText("Perf"));
+
+    // The row opens on this location's own arithmetic: 10 engines over its two
+    // agents is 5 each, and writing the run's own figure into `slots` would
+    // size the location for twenty.
+    const panel = await screen.findByRole("region", { name: "Perf settings" });
+    await waitFor(() => expect(asked.some((a) => a.agents === "2")).toBe(true));
+    const field = (label: RegExp) =>
+      within(panel).getByLabelText<HTMLInputElement>(label);
+    await waitFor(() => expect(field(/^Engines per agent/).value).toBe("5"));
+    expect(field(/^Virtual users per engine/).value).toBe("500");
+    expect(field(/^Engine CPU request/).value).toBe("2");
+    expect(field(/^Engine memory request/).value).toBe("8192");
+    // Filled, and nothing has been written: filling a field applies nothing,
+    // and Save is the only thing here that reaches the account.
+    expect(sent).toEqual([]);
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]).toEqual({ slots: "5", threads_per_engine: "500",
+                              override_cpu: "2", override_memory: "8192" });
+    // What the account holds now, not what was sent: three landed and one came
+    // back unstored, and the two are reported apart. It survives the re-read
+    // the save itself caused -- the location arrives changed, which is what
+    // used to clear this the moment it appeared.
+    expect(await within(panel).findByText(/engines per agent 1 → 5/)).toBeTruthy();
+    expect(within(panel).getByText(/BlazeMeter did not store engine memory request/))
+      .toBeTruthy();
+
+    // The fields are still fields. A hand edit outranks the profile, and only
+    // what differs from the account is sent -- the two the first save landed
+    // are not written back.
+    fireEvent.change(field(/^Engines per agent/), { target: { value: "6" } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent.length).toBe(2));
+    expect(sent[1]).toEqual({ slots: "6", override_memory: "8192" });
+  });
+
+
+test("a location with no agents is not a bundle request", async () => {
+  // Picking an empty location used to spend a 400 on saying so: the preview
+  // asked for a bundle, and generate() refused -- correctly -- with a sentence
+  // about a ship_id nobody had been asked for yet. An empty location is a
+  // normal state this page has a whole amber panel for, so the preview waits
+  // for the agent instead of asking a question it already knows the answer to.
+  const generated: unknown[] = [];
+  const api = accountOf([loc("h-empty", "no agents here")], {
+    generate: async (...args: unknown[]) => {
+      generated.push(args);
+      throw new Error("ship_id required: location has 0 ships ([])");
+    },
+  });
+  render(<App api={api} />);
+
+  fireEvent.click(await screen.findByText("no agents here"));
+  // The page says the location is empty...
+  expect(await screen.findByText(/has no agents yet/)).toBeTruthy();
+  // ...and asked for nothing. Waited past the preview's own debounce, so this
+  // is "never asked" rather than "has not asked yet".
+  await new Promise((r) => setTimeout(r, 400));
+  expect(generated).toEqual([]);
+});

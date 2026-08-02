@@ -538,6 +538,113 @@ def test_point_test_at_location_returns_original(monkeypatch):
     assert sent["overrideExecutions"][0]["locations"] == {"harbor-abc123": 1}
 
 
+# -- the directory is the bundle under test -----------------------------------
+#
+# #107: a run given --ship-id and --auth-token deployed a nine-day-old bundle
+# for a *different* agent, because --manifests defaults to out/ and out/ is
+# whatever the last `generate` left there. Crane came up with an identity it
+# could not register, the rollout timed out saying only that, and the rig then
+# deleted the cluster. Every fact needed to refuse it was in two files that had
+# been sitting on disk the whole time.
+
+def _bundle(tmp_path, facts=FACTS, **opts):
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "tok",
+                                   **opts}), str(tmp_path))
+    return str(tmp_path)
+
+
+def test_bundle_check_passes_this_generators_own_output(tmp_path):
+    d = _bundle(tmp_path)
+    check = livetest.bundle_check(d, "aaa111", "bbb222",
+                                  gen.load_profile(d))
+    assert check == livetest.BundleCheck([], [])
+
+
+def test_bundle_check_names_the_ship_on_disk_and_the_ship_asked_for(tmp_path):
+    """The reported case. The refusal has to carry both ids: the operator typed
+    one of them and has no idea the other is in the directory."""
+    d = _bundle(tmp_path)
+    refusals = livetest.bundle_check(d, "aaa111", "ccc333").refusals
+    assert refusals and all("bbb222" in r and "ccc333" in r for r in refusals)
+    assert any(livetest.CONFIGMAP_FILE in r for r in refusals)
+
+
+def test_bundle_check_names_the_harbor_on_disk_and_the_harbor_asked_for(tmp_path):
+    """The other half of the identity, and the one that changes when the
+    directory was generated for a different account entirely."""
+    d = _bundle(tmp_path)
+    r = " ".join(livetest.bundle_check(d, "zzz999", "bbb222").refusals)
+    assert "aaa111" in r and "zzz999" in r
+
+
+def test_bundle_check_catches_a_stale_ship_in_the_profile(tmp_path):
+    """profile.json is what the re-rendering paths merge their overlay onto, and
+    _regenerator prefers the ship_id it finds there -- so a stale one deploys the
+    wrong agent even on a path that does re-render."""
+    d = _bundle(tmp_path)
+    prof = {**gen.load_profile(d), "ship_id": "ddd444"}
+    r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals)
+    assert "ddd444" in r and "bbb222" in r and gen.PROFILE_FILE in r
+
+
+def test_bundle_check_refuses_a_yaml_this_generator_does_not_emit(tmp_path):
+    """bzm_limitrange.yaml is the file that happened: emitted by a version that
+    is gone, left behind in out/, and applied by the rig as part of the run."""
+    d = _bundle(tmp_path)
+    open(os.path.join(d, "bzm_limitrange.yaml"), "w").write("kind: LimitRange\n")
+    r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222").refusals)
+    assert "bzm_limitrange.yaml" in r
+
+
+def test_every_yaml_this_generator_emits_is_one_the_rig_expects():
+    """The drift guard on the refusal above. A new manifest file that
+    emitted_yaml_files() had to be told about separately would be refused as an
+    older version's leftover -- a good bundle, rejected, with a message pointing
+    at the wrong thing. The option matrix is helm_parity's, imported rather than
+    restated: it is the one place in this suite that already enumerates every
+    combination that changes which files come out."""
+    import helm_parity                                  # no helm binary needed
+    for name, extra in helm_parity.CASES.items():
+        files = gen.generate(FACTS, {**helm_parity.COMMON, **extra})
+        unknown = [f for f in files if f.endswith(".yaml")
+                   and f not in livetest.emitted_yaml_files()]
+        assert not unknown, f"case {name} emits {unknown}"
+
+
+def test_bundle_check_judges_exactly_what_deploy_would_apply(tmp_path):
+    """Same glob as deploy(), so there is nothing it applies that this did not
+    look at -- and nothing it refuses that would never have been applied. The
+    rig's own .egress-policy.yaml is dot-prefixed for that reason; a README or a
+    mirror script is not applied either."""
+    d = _bundle(tmp_path)
+    open(os.path.join(d, ".egress-policy.yaml"), "w").write("kind: NetworkPolicy\n")
+    open(os.path.join(d, "notes.txt"), "w").write("scratch\n")
+    assert livetest.bundle_check(d, "aaa111", "bbb222").refusals == []
+
+
+def test_bundle_check_does_not_invent_an_identity_it_could_not_read(tmp_path):
+    """A directory with no ConfigMap of ours says nothing about which agent it
+    is for, which is not the same as saying the wrong one. It is a note, and the
+    run goes ahead -- unreadable and mismatched must not share a
+    representation."""
+    check = livetest.bundle_check(str(tmp_path), "aaa111", "bbb222")
+    assert check.refusals == []
+    assert any("aaa111" in n and "bbb222" in n for n in check.notes)
+
+
+def test_run_refuses_before_it_builds_anything(monkeypatch, tmp_path):
+    """Building a cluster and waiting out a 300s rollout is the expensive part of
+    this failure; the check is a file read. In run() as well as in the CLI
+    because the MCP server deploys through run() directly."""
+    d = _bundle(tmp_path)
+    for name in ("ensure_cluster", "deploy", "teardown", "ensure_registry"):
+        monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
+            f"{name} ran on a bundle built for another agent"))
+    with pytest.raises(livetest.BundleMismatch) as caught:
+        livetest.run(None, d, "ns1", "aaa111", "ccc333", cluster="minikube")
+    assert "bbb222" in str(caught.value) and "ccc333" in str(caught.value)
+
+
 def test_profile_json_roundtrip(tmp_path):
     files = gen.generate(FACTS, {"namespace": "ns1", "platform": "k8s",
                                  "private_registry": "reg:5001",

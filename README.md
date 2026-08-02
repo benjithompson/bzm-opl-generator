@@ -73,24 +73,31 @@ create things (`create-location`, `create-ship`, `livetest`).
 `bzm-opl-gen ui` walks the whole thing in a browser. The CLI equivalent:
 
 ```
-# 0. find (or create) the location and agent
+# 0. before any of it exists: how much cluster does the load target need?
+bzm-opl-gen plan --users 5000 -o ./plan     # writes capacity-request.md
+
+# 1. find (or create) the location and agent
 bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
 bzm-opl-gen create-ship --api-key api-key.json --harbor-id <HARBOR_ID> \
     --name my-k8s-agent        # prints ship_id + AUTH_TOKEN -- keep the token
 
-# 1. gather the location's facts from the account
+# 2. gather the location's facts from the account
 bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>
 
-# 2. generate manifests. The token comes from you, not from the API: generate
+# 3. generate manifests. The token comes from you, not from the API: generate
 #    never mints one, because minting revokes the token a running agent holds
 bzm-opl-gen generate --namespace my-project --auth-token <AUTH_TOKEN> -o out/
 
-# 3. preflight the target cluster before anyone waits on a stuck run
+# 4. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 
-# 4. deploy
+# 5. deploy
 kubectl apply -n my-project -f out/
 ```
+
+Step 0 needs no account and no cluster, which is the case it exists for: the
+answer is what you raise the request for the cluster with
+([docs/capacity-planning.md](docs/capacity-planning.md)).
 
 `out/README.md` is written for whoever receives the bundle and covers applying
 it. `out/profile.json` is the resolved options, minus the token — replay it with
@@ -114,7 +121,7 @@ to a local cluster and wait for the agent to report online
 
 ### Without a BlazeMeter account
 
-Two paths need no account at all. The sample facts file gets you to real
+Three paths need no account at all — and `plan` above needs no cluster either. The sample facts file gets you to real
 manifests — edit it and watch which images land in `IMAGE_OVERRIDES`:
 
 ```
@@ -160,6 +167,7 @@ behind it and whether it settles the option or only narrows it
 
 | | |
 |---|---|
+| [docs/capacity-planning.md](docs/capacity-planning.md) | `plan` — how much infrastructure a load target needs, and the request document to ask for it with |
 | [docs/mcp.md](docs/mcp.md) | `bzm-opl-gen mcp` — the MCP server, for an AI session with no checkout of this repo |
 | [docs/options.md](docs/options.md) | every `generate` option and profile key |
 | [docs/web-ui.md](docs/web-ui.md) | what each step of `bzm-opl-gen ui` does, and why it binds locally |

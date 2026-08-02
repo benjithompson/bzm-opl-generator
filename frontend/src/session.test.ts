@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clear, load, save, strip } from "./session";
+import { clear, load, save, strip, VERSION } from "./session";
 
 // A memory stand-in for sessionStorage: these tests are about what is written,
 // not about a browser, and the module deliberately guards every call so that a
@@ -23,6 +23,10 @@ const BASE = {
   manual: { harbor_id: "", ship_id: "" },
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
+  view: "flow" as const,
+  // The two figures the capacity profile owns. Its engine size is a bundle
+  // option and is remembered with the rest of them.
+  plan: { users: "5000", vusPerEngine: "750" },
 };
 
 beforeEach(() => {
@@ -42,6 +46,17 @@ describe("what is remembered", () => {
 
   it("returns null when nothing was stored", () => {
     expect(load()).toBeNull();
+  });
+
+  it("remembers which view was open, and what was typed into the profile", () => {
+    // A refresh while sizing a run must not come back to an empty target: the
+    // profile is the first thing on step 1 and nothing else can recover what
+    // was typed into it.
+    save({ ...BASE, view: "capacity" });
+    const back = load();
+    expect(back?.view).toBe("capacity");
+    expect(back?.plan.users).toBe("5000");
+    expect(back?.plan.vusPerEngine).toBe("750");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {
@@ -76,8 +91,14 @@ describe("what is never remembered", () => {
   });
 
   it("does not put one back if something else wrote one", () => {
+    // Written at the *current* version on purpose: at an old one this would
+    // pass because the whole snapshot was dropped, which is not the property
+    // being asserted. Hence VERSION rather than a literal — as a literal it
+    // silently became that weaker test the first time the version moved.
     sessionStorage.setItem("bzm-opl-gen.session", JSON.stringify(
-      { ...BASE, v: 1, options: { namespace: "ns1", auth_token: "LEAKED" } }));
+      { ...BASE, v: VERSION,
+        options: { namespace: "ns1", auth_token: "LEAKED" } }));
+    expect(load()?.harborId).toBe("h1");
     expect(load()?.options.auth_token).toBeUndefined();
   });
 

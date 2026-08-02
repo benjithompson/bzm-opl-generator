@@ -1,7 +1,9 @@
 import io
+import json
 import os
 import pathlib
 import re
+import time
 import zipfile
 
 import pytest
@@ -18,6 +20,27 @@ from test_generate import FACTS  # noqa: E402
 from test_core import FakeClient, RefusingClient  # noqa: E402
 
 client = TestClient(server.app)
+
+
+def connect(monkeypatch, account):
+    """Put this server process in the state of being connected as `account`.
+
+    The one place this suite stands in at, and it is `server._state` rather
+    than `core.client_from_key` -- which is where tests/test_cli.py and
+    tests/test_mcp.py stand in -- because those two build a client per call and
+    this one does not. A browser session connects once, over `POST /api/key`,
+    and every route afterwards acts as whatever that left in the process; the
+    fact under test in most of what follows is "this server is connected as X",
+    which is a fact about the server and has no equivalent in core. Patching
+    the construction here would leave the state item set to None and every
+    route 401ing before core was reached.
+
+    A function rather than twenty `setitem` calls so that if that ever stops
+    being true there is one place to change. The key-lifecycle tests below set
+    the item directly on purpose: there _state is the subject, not the stand-in.
+    """
+    monkeypatch.setitem(server._state, "client", account)
+    return account
 
 
 def test_generate_preview_no_key_needed():
@@ -128,9 +151,7 @@ def connected(monkeypatch):
     *could* mint and must not, so a fixture with no client would pass for the
     wrong reason.
     """
-    c = FakeClient()
-    monkeypatch.setitem(server._state, "client", c)
-    return c
+    return connect(monkeypatch, FakeClient())
 
 
 @pytest.mark.parametrize("route", ["/api/generate", "/api/generate/zip",
@@ -322,10 +343,96 @@ def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
     class Revoked:
         def user(self):
             raise core.CoreError("401 unauthorized")
-    monkeypatch.setitem(server._state, "client", Revoked())
+    connect(monkeypatch, Revoked())
     assert client.get("/api/key").json() == {"connected": False}
     # ...and it is dropped, rather than left for every later call to fail on.
     assert server._state["client"] is None
+
+
+def test_connecting_with_a_malformed_key_file_refuses_without_exiting(monkeypatch,
+                                                                      tmp_path):
+    """#91. The file is there, so the route's own existence check passes, and
+    what it hands over is unparseable. Read inside `api.BzmClient(path)` that
+    was a SystemExit -- a BaseException raised inside a route, which no `except
+    Exception` anywhere in the stack stops. The assertion is as much that this
+    call *returns* as that it says the right thing: an escaping SystemExit fails
+    it before status_code is reached.
+    """
+    monkeypatch.setitem(server._state, "client", None)
+    bad = tmp_path / "api-key.json"
+    bad.write_text("not json")
+    r = client.post("/api/key", json={"path": str(bad)})
+    assert r.status_code in (400, 401, 502)
+    assert "not valid JSON" in r.json()["detail"]      # core's own sentence
+    assert server._state["client"] is None
+    # The process is still serving, which is the whole point.
+    assert client.get("/api/key").json() == {"connected": False}
+
+
+def test_connecting_with_a_good_key_file_still_reports_the_user(monkeypatch,
+                                                                tmp_path):
+    """The other half of #91: the happy path goes through the same
+    construction and is unchanged by it."""
+    monkeypatch.setitem(server._state, "client", None)
+    monkeypatch.setitem(server._state, "key_id", None)
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    monkeypatch.setattr(core, "user", lambda c: {
+        "email": "se@example.com", "displayName": "SE",
+        "defaultProject": {"accountId": 7}})
+    body = client.post("/api/key", json={"path": str(key)}).json()
+    assert body["user"]["email"] == "se@example.com"
+    assert body["default_account_id"] == 7 and body["key_id"] == "KID"
+    assert server._state["client"] is not None
+
+
+def _config_dir(monkeypatch, tmp_path):
+    """core's key directory, somewhere disposable. Never the real one: these
+    write a key file, and the developer running this has their own at
+    ~/.config/bzm-opl-gen/api-key.json."""
+    d = tmp_path / "config"
+    monkeypatch.setattr(core, "CONFIG_DIR", str(d))
+    monkeypatch.setattr(core, "SAVED_KEY_PATH", str(d / "api-key.json"))
+    monkeypatch.setattr(core, "user", lambda c: {
+        "email": "se@example.com", "displayName": "SE",
+        "defaultProject": {"accountId": 7}})
+    return d
+
+
+def test_a_pasted_key_reaches_core_as_a_pair_and_never_the_disk(monkeypatch,
+                                                                tmp_path):
+    """#95. A key typed into the connect form has no file behind it, and this
+    route used to make one -- writing the secret to `.session-key.json`, calling
+    a constructor that took only a path, and unlinking it after. A secret on
+    disk to satisfy an argument list is worse than the argument, and since #92
+    the construction takes the pair."""
+    d = _config_dir(monkeypatch, tmp_path)
+    seen = []
+
+    def seam(path=None, **kw):
+        seen.append((path, kw))
+        return FakeClient()
+
+    monkeypatch.setattr(core, "client_from_key", seam)
+    monkeypatch.setitem(server._state, "client", None)
+    body = client.post("/api/key", json={"id": "KID", "secret": "SHHH"}).json()
+    assert seen == [(None, {"key_id": "KID", "secret": "SHHH"})]
+    assert not d.exists(), "the pasted secret was written to disk"
+    assert body["key_id"] == "KID" and body["saved"] is False
+
+
+def test_a_pasted_key_saved_on_purpose_is_written_where_detect_finds_it(
+        monkeypatch, tmp_path):
+    """The other half: `save: true` is a key the user asked to keep, which is a
+    file on disk by definition. Mode 600, and at the path core detects from."""
+    d = _config_dir(monkeypatch, tmp_path)
+    monkeypatch.setitem(server._state, "client", None)
+    body = client.post("/api/key", json={"id": "KID", "secret": "SHHH",
+                                         "save": True}).json()
+    assert body["saved"] is True
+    saved = d / "api-key.json"
+    assert json.loads(saved.read_text()) == {"id": "KID", "secret": "SHHH"}
+    assert os.stat(saved).st_mode & 0o777 == 0o600
 
 
 def test_disconnect_forgets_the_key_without_deleting_a_saved_one(connected, tmp_path):
@@ -360,7 +467,7 @@ def test_an_agent_whose_credential_was_refused_is_still_reported(monkeypatch):
     """The ship exists before the fetch, and some accounts refuse the token
     endpoint outright. A 502 would leave the new agent's id nowhere but a browser
     console -- and the next click creates a second agent in the same location."""
-    monkeypatch.setitem(server._state, "client", RefusingClient())
+    connect(monkeypatch, RefusingClient())
     r = client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     assert r.status_code == 200
     body = r.json()
@@ -383,7 +490,7 @@ def test_issuing_a_token_is_its_own_route(connected):
 
 
 def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
-    monkeypatch.setitem(server._state, "client", RefusingClient())
+    connect(monkeypatch, RefusingClient())
     r = client.post("/api/ships/token",
                     json={"harbor_id": "aaa111", "ship_id": "s1"})
     assert r.status_code == 502
@@ -395,7 +502,7 @@ def test_enabling_a_feature_adds_to_the_location_s_func_ids(monkeypatch):
     mockServices deploys cleanly and is never asked to serve one. This is the
     call that fixes that, and it must not drop what the location already had."""
     fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
-    monkeypatch.setitem(server._state, "client", fake)
+    connect(monkeypatch, fake)
     r = client.post("/api/locations/func-id",
                     json={"harbor_id": "aaa111", "func_id": "mockServices"})
     assert r.status_code == 200
@@ -571,13 +678,45 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
             seen.update(kw, name=name, workspaces=workspace_ids)
             return {"id": "h9", "name": name, "funcIds": kw["func_ids"]}
 
-    monkeypatch.setitem(server._state, "client", FakeClient())
+    connect(monkeypatch, FakeClient())
     r = client.post("/api/locations", json={
         "name": "sv-loc", "account_id": 1, "workspace_id": 2,
         "func_ids": ["mockServices", "proxyRecorder"]})
     assert r.status_code == 200
     assert seen["func_ids"] == ["mockServices", "proxyRecorder"]
     assert r.json()["funcIds"] == ["mockServices", "proxyRecorder"]
+
+
+def test_a_location_a_test_cannot_start_on_says_so(monkeypatch):
+    """The warning came back from the terminal only, so the page could create a
+    location that 403s every start and show nothing about it. core decides it
+    now; the field rides beside the location document rather than nesting it,
+    because the page reads `id` off this response to select what it just made.
+    """
+    made = {}
+
+    class FakeClient:
+        def create_private_location(self, name, account_id, workspace_ids, **kw):
+            stored = {"id": "h9", "name": name, "funcIds": kw["func_ids"],
+                      "slots": kw["slots"],
+                      "threadsPerEngine": kw.get("threads_per_engine")}
+            # Applied last: `made` is what this account declined to store.
+            stored.update(made)
+            return stored
+
+    connect(monkeypatch, FakeClient())
+
+    def create(**kw):
+        return client.post("/api/locations", json={
+            "name": "loc", "account_id": 1, "workspace_id": 2, **kw}).json()
+
+    # threadsPerEngine is the one POST /private-locations accepts and drops.
+    made["threadsPerEngine"] = None
+    body = create(slots=2)
+    assert body["id"] == "h9"
+    assert "403" in body["warning"]
+    made.clear()
+    assert create(slots=2, threads_per_engine=500)["warning"] is None
 
 
 def test_api_requires_key():
@@ -603,6 +742,7 @@ def test_key_detection_sees_a_key_named_after_startup(monkeypatch, tmp_path):
 # what this list guards is that they still point at something.
 DOCUMENTED_ROUTES = [
     ("get", "/api/status"), ("post", "/api/facts/manual"),
+    ("post", "/api/plan"),
     ("post", "/api/preflight"), ("get", "/api/sv-mocks"),
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
@@ -695,6 +835,30 @@ def test_ui_warns_when_the_bind_leaves_this_machine(monkeypatch, capsys):
     assert _served(monkeypatch, host="0.0.0.0")["host"] == "0.0.0.0"
     warning = capsys.readouterr().out
     assert "reachable" in warning and "AUTH_TOKEN" in warning
+
+
+def test_a_bad_api_key_flag_does_not_stop_the_server_starting(monkeypatch,
+                                                              tmp_path, capsys):
+    """#91's start-up half. `--api-key` pointing at an unparseable file used to
+    SystemExit out of main() before uvicorn was ever reached. The page this
+    serves has a connect form on it, so opening unconnected with the reason on
+    stdout is a better answer than not opening."""
+    monkeypatch.setitem(server._state, "client", None)
+    bad = tmp_path / "api-key.json"
+    bad.write_text("not json")
+    assert _served(monkeypatch, api_key_path=str(bad))["host"] == "127.0.0.1"
+    assert "not valid JSON" in capsys.readouterr().out
+    assert server._state["client"] is None
+
+
+def test_a_good_api_key_flag_connects_at_startup(monkeypatch, tmp_path):
+    monkeypatch.setitem(server._state, "client", None)
+    monkeypatch.setitem(server._state, "key_id", None)
+    key = tmp_path / "api-key.json"
+    key.write_text('{"id": "KID", "secret": "s"}')
+    _served(monkeypatch, api_key_path=str(key))
+    assert server._state["client"] is not None
+    assert server._state["key_id"] == "KID"
 
 
 def test_ui_dev_mode_binds_the_same_host(monkeypatch):
@@ -976,10 +1140,11 @@ def test_group_tags_name_features_the_server_actually_serves():
 # exists for is the customer whose account and cluster are both out of reach.
 
 from bzm_opl_gen import doctor, suggest  # noqa: E402
-# The fixtures live with the checks that read them, so the HTTP layer is fed the
-# same documents the doctor tests are -- a difference between the two would be a
-# difference in what the browser is told.
-from test_cluster_evidence import DEGRADED, _evidence  # noqa: E402
+# One document for every reader of one, so the HTTP layer is fed what the doctor
+# and suggest tests read -- a difference between the two would be a difference in
+# what the browser is told. It used to be two builders, and this file imported
+# both.
+from evidence_fixtures import DEGRADED, document as _evidence, raw as _raw  # noqa: E402
 from test_doctor import FACTS as LOC_FACTS, SV_NGINX  # noqa: E402
 
 
@@ -1048,6 +1213,10 @@ def test_preflight_carries_what_the_file_says_about_itself_as_data():
     assert body["evidence"] == {
         "collected_at": "2026-07-28T02:51:50Z",
         "namespace": "some-ns",
+        # Whether the file describes a different namespace than the one being
+        # preflighted. Decided here rather than by comparing the two fields in
+        # the browser: it is the judgement the leading verdict already makes.
+        "elsewhere": False,
         # Every section this collector was refused, named -- one entry per
         # section, in the order the script wrote them.
         "unreadable": ["nodes", "ingressclasses", "namespace", "scoped",
@@ -1108,18 +1277,42 @@ def test_preflight_reports_evidence_collected_for_another_namespace():
     """Most of what follows is per-namespace. The file still describes the same
     nodes, so this is reported rather than refused -- and the namespace judged
     is the one being configured, never the one the file happens to name."""
-    body = _preflight(_evidence("their-ns")).json()
+    body = _preflight(_evidence(namespace="their-ns")).json()
     first = body["checks"][0]
     assert body["namespace"] == "blazemeter"
     assert first["status"] == "WARN"
     assert "their-ns" in first["detail"] and "blazemeter" in first["detail"]
 
 
+def test_preflight_says_the_file_describes_another_namespace():
+    """The header's own line, as a field rather than as two fields to compare.
+    The browser used to decide this itself -- namespace != evidence.namespace --
+    which is the same judgement the leading verdict makes, made twice."""
+    assert _preflight(_evidence(namespace="their-ns")).json()["evidence"]["elsewhere"]
+    assert not _preflight(_evidence()).json()["evidence"]["elsewhere"]
+
+
+def test_preflight_summarises_the_verdict_list_in_one_sentence():
+    """The line beside the imported file's name, in doctor's words rather than
+    the browser's: the counts, and what a FAIL costs. A browser composing it
+    from the same list is a second place the "a test would not start" rule can
+    be got wrong."""
+    doc = _evidence()
+    body = _preflight(doc).json()
+    assert body["summary"] == doctor.summary_line(
+        [doctor.Check(**c) for c in body["checks"]])
+    assert doctor.NO_TEST_WOULD_START not in body["summary"]
+    # ...and it is stated where something failed.
+    huge = _preflight(doc, {"engine_cpu_limit": "64",
+                            "engine_mem_limit": "256Gi"}).json()
+    assert doctor.NO_TEST_WOULD_START in huge["summary"]
+
+
 def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     """Same precedence as the command: what is being configured wins, and the
     file's own namespace is the last resort rather than the first."""
     r = client.post("/api/preflight", json={
-        "facts": LOC_FACTS, "options": {}, "evidence": _evidence("their-ns")})
+        "facts": LOC_FACTS, "options": {}, "evidence": _evidence(namespace="their-ns")})
     assert r.status_code == 200
     assert r.json()["namespace"] == "their-ns"
 
@@ -1134,7 +1327,7 @@ def test_preflight_falls_back_to_the_namespace_the_file_was_collected_for():
     # error, so the message says what was found instead of naming a field.
     ([{"schema": doctor.EVIDENCE_SCHEMA}], "a JSON array"),
     # Mailed in and trimmed on the way.
-    (_evidence(nodes=[{"metadata": {"name": "n1"}}]), "raw.nodes"),
+    (_evidence(raw=_raw(nodes=[{"metadata": {"name": "n1"}}])), "raw.nodes"),
 ])
 def test_preflight_refuses_a_file_that_is_not_evidence(evidence, says):
     r = _preflight(evidence)
@@ -1162,8 +1355,13 @@ def test_preflight_refuses_options_no_bundle_could_be_generated_from():
 # to move together on every option change. Two endpoints is two round trips that
 # can disagree about which options the answer describes.
 
-from test_suggest import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
-from test_suggest import REGCRED, _evidence as _read_evidence  # noqa: E402
+from evidence_fixtures import API_GROUPS as SUGGEST_GROUPS  # noqa: E402
+from test_suggest import PROXY_CONFIG, REGCRED  # noqa: E402
+
+# A cluster whose own proxy carries a trust bundle: the one fixture that
+# produces a CA-trust suggestion, which is where the one-of refusal is read.
+_CA_DOC = _evidence(openshift={"ingress_config": None,
+                               "proxy_config": PROXY_CONFIG})
 
 
 def _suggestions(evidence, options=None):
@@ -1175,7 +1373,7 @@ def test_preflight_carries_what_the_evidence_implies_about_the_options():
     """The same suggestions `bzm-opl-gen suggest` prints, in the same order and
     the same wire shape -- compared against suggest itself, because the failure
     to guard is the server quietly reshaping them on the way to the browser."""
-    doc = _read_evidence()
+    doc = _evidence()
     body = _preflight(doc).json()
     expected = suggest.from_evidence(doc)
     assert [s["option"] for s in body["suggestions"]] == [s.option for s in expected]
@@ -1189,7 +1387,7 @@ def test_preflight_carries_what_the_evidence_implies_about_the_options():
 def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
     """Not against the defaults: the same evidence is a fill for a configuration
     that named no pull secret and a conflict for one that named another."""
-    doc = _read_evidence(**REGCRED)
+    doc = _evidence(**REGCRED)
     assert _suggestions(doc)["pull_secret"]["state"] == suggest.FILL
     conflict = _suggestions(doc, {"pull_secret": "team-creds"})["pull_secret"]
     assert conflict["state"] == suggest.CONFLICT
@@ -1200,7 +1398,7 @@ def test_preflight_says_how_each_suggestion_stands_against_this_configuration():
 def test_preflight_never_offers_a_value_for_a_suggestive_suggestion():
     """The invariant, over HTTP, where a browser could otherwise read `value`
     off a shortlist and call it a default."""
-    doc = _read_evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
+    doc = _evidence(api_groups=dict(SUGGEST_GROUPS, contour=True))
     for s in _preflight(doc).json()["suggestions"]:
         if s["strength"] == suggest.SUGGESTIVE:
             assert s["value"] is None
@@ -1216,8 +1414,35 @@ def test_preflight_says_why_it_has_nothing_to_suggest():
 
 
 def test_preflight_drops_the_reason_once_there_is_something_to_show():
-    body = _preflight(_read_evidence()).json()
+    body = _preflight(_evidence()).json()
     assert body["suggestions"] and body["why_nothing"] is None
+
+
+def test_preflight_shows_every_value_a_row_displays():
+    """Values as profile.json would carry them -- `false`, not `False` -- said
+    once, here. The browser had its own formatter beside suggest's, and the two
+    agreeing was nobody's job."""
+    doc = _evidence(**REGCRED)
+    row = _suggestions(doc)["pull_secret"]
+    assert row["value_shown"] == "regcred"
+    # An option nobody set is unset in words: printing `null` at somebody is not
+    # an answer to "what is configured now".
+    assert row["current_shown"] == "not set" and row["current"] is None
+    assert _suggestions(_CA_DOC)["ca_openshift_inject"]["candidates_shown"] \
+        == ["true"]
+
+
+def test_preflight_says_when_a_suggestion_cannot_be_offered():
+    """generate() takes one CA mode of the three, so writing this one over a
+    configuration already holding another produces a bundle that does not
+    generate -- and clearing the other is the silent overwrite this feature may
+    not make. One statement of that, on the row."""
+    held = {"ca_bundle": "-----BEGIN CERTIFICATE-----"}
+    rows = _suggestions(_CA_DOC, held)
+    assert "inline PEM" in rows["ca_openshift_inject"]["blocked"]
+    # Only the row it is about, and only while something else claims the slot.
+    assert [o for o, r in rows.items() if r["blocked"]] == ["ca_openshift_inject"]
+    assert _suggestions(_CA_DOC)["ca_openshift_inject"]["blocked"] is None
 
 
 # -- saving a bundle to disk ---------------------------------------------------
@@ -1300,3 +1525,217 @@ def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
     assert "b1" in again.json()["detail"] and "b2" in again.json()["detail"]
     assert "B1TOKEN" in open(os.path.join(out, "bzm_secret.yaml")).read(), \
         "the refusal must not have destroyed the token it was protecting"
+
+
+# -- planning, with nothing connected -----------------------------------------
+
+def test_plan_answers_a_browser_that_has_connected_to_nothing(monkeypatch):
+    """The case this route exists for: the UI open, no key, no account, no
+    cluster, and somebody who needs a number to raise a ticket with."""
+    monkeypatch.setattr(core, "client_from_key", lambda *a, **k: pytest.fail(
+        "the planner asked for a BlazeMeter client"))
+    r = client.post("/api/plan", json={"users": 5000})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["engines"] == 10 and body["nodes"] == 10
+    assert body["location"]["slots"] == 10
+
+
+def test_plan_returns_the_document_with_the_numbers():
+    """One call, one plan. Two would let a panel show numbers from one request
+    and a document from another."""
+    body = client.post("/api/plan", json={"users": 5000}).json()
+    assert body["document"].startswith("# Infrastructure request")
+    assert "5,000 virtual users" in body["document"]
+    assert body["document_file"] == "capacity-request.md"
+
+
+def test_plan_refuses_a_bad_number_in_the_planner_s_own_words():
+    """400 naming the field, not a 422 naming a model attribute -- the person
+    reading it typed a load target, not a request body."""
+    r = client.post("/api/plan", json={"users": 0})
+    assert r.status_code == 400
+    assert "users must be at least 1" in r.json()["detail"]
+
+
+def test_plan_takes_the_empty_strings_a_form_posts():
+    """Every optional field arrives as "" from an untouched number input, and
+    that has to mean 'not given' rather than a number that will not parse --
+    otherwise the panel refuses the very first thing anyone types."""
+    r = client.post("/api/plan", json={
+        "users": "5000", "vus_per_engine": "", "engine_cpu": "",
+        "engine_mem": "  ", "engines_per_node": ""})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["vus_per_engine_assumed"] is True
+    assert body["engines"] == 10 and body["engines_per_node"] == 1
+    assert body["engine"]["memory"] == "8Gi"       # the documented default
+
+
+def test_plan_still_refuses_a_target_that_was_never_typed():
+    """`users` is the one field with no default, so blank is a refusal rather
+    than an assumption -- there is no plan without a load target."""
+    assert client.post("/api/plan", json={"users": ""}).status_code == 400
+
+
+# -- changing a location's settings -------------------------------------------
+
+def test_location_settings_reports_what_the_account_now_holds(monkeypatch):
+    """Not what was sent. The panel shows this answer, so a field the account
+    dropped has to arrive as dropped rather than as saved."""
+    c = FakeClient(harbor={"id": "h1", "name": "loc", "slots": 2,
+                           "threadsPerEngine": 500, "overrideCPU": None,
+                           "overrideMemory": None},
+                   ignores={"overrideCPU"})
+    connect(monkeypatch, c)
+    r = client.post("/api/locations/settings", json={
+        "harbor_id": "h1", "threads_per_engine": 1000, "override_cpu": 2})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["changed"] == {"threads_per_engine": 1000}
+    assert body["ignored"] == ["override_cpu"]
+    assert body["before"]["threads_per_engine"] == 500
+
+
+def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
+    """The browser sends only the fields it changed; the rest must not be
+    written back from a page that may have been open for an hour."""
+    c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
+                           "overrideCPU": None, "overrideMemory": None})
+    connect(monkeypatch, c)
+    body = client.post("/api/locations/settings", json={
+        "harbor_id": "h1", "threads_per_engine": 1000}).json()
+    assert body["after"]["slots"] == 2
+    assert body["changed"] == {"threads_per_engine": 1000}
+
+
+def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
+    """`funcIds` is add_func_id's, and that call is additive by construction."""
+    connect(monkeypatch, FakeClient(harbor={"id": "h1"}))
+    r = client.post("/api/locations/settings",
+                    json={"harbor_id": "h1", "funcIds": ["mockServices"]})
+    # Not a route argument at all, so the body is simply ignored by the model --
+    # what matters is that nothing was written.
+    assert r.status_code == 200
+    assert r.json()["changed"] == {}
+
+
+def test_location_settings_needs_a_key(monkeypatch):
+    monkeypatch.setitem(server._state, "client", None)
+    r = client.post("/api/locations/settings",
+                    json={"harbor_id": "h1", "slots": 3})
+    assert r.status_code == 401
+
+
+# -- the account tree, remembered for a minute --------------------------------
+# A page load is four round trips to BlazeMeter and reloading is what you do all
+# day while configuring. What these defend is not the speed -- it is that the
+# cache cannot outlive a change this server made itself.
+
+@pytest.fixture(autouse=True)
+def _empty_cache():
+    """Every test starts cold. Without this the cache is process-wide state
+    shared between tests, which is how one passes because another ran first."""
+    server._forget()
+    yield
+    server._forget()
+
+
+def test_the_account_tree_is_read_once_not_once_per_reload(monkeypatch):
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    for _ in range(3):
+        assert client.get("/api/locations?workspace_id=42").status_code == 200
+    assert [x[0] for x in c.calls].count("private_locations") == 1
+
+
+def test_a_created_location_is_not_hidden_by_the_cache(monkeypatch):
+    """The write this server made itself is the one staleness it cannot
+    tolerate: create a location, and it has to be in the next list."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/locations", json={"name": "new", "account_id": 7,
+                                        "workspace_id": 42})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_changing_a_location_s_settings_drops_the_cache(monkeypatch):
+    c = FakeClient(harbor={"id": "h1", "slots": 2, "threadsPerEngine": 500,
+                           "overrideCPU": None, "overrideMemory": None},
+                   locations=[{"id": "h1", "name": "loc", "slots": 2}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/locations/settings",
+                json={"harbor_id": "h1", "slots": 4})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_a_new_agent_drops_the_cache(monkeypatch):
+    c = FakeClient(harbor={"id": "h1", "ships": []},
+                   locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    client.post("/api/ships", json={"harbor_id": "h1", "name": "agent1"})
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_a_different_key_is_a_different_account(monkeypatch, tmp_path):
+    """Nothing read with the old credential may survive into the new one."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    assert server._cache
+    client.delete("/api/key")
+    assert not server._cache
+
+
+def test_the_cache_expires(monkeypatch):
+    """Sixty seconds, so a change made in the BlazeMeter UI shows up while you
+    are still looking for it."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    now = time.monotonic()
+    monkeypatch.setattr(server.time, "monotonic",
+                        lambda: now + server.CACHE_TTL_S + 1)
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_every_write_route_drops_the_cache():
+    """The rule is the decorator's, not each route's memory of it.
+
+    `/api/ships/token` is the one that had forgotten -- which is why this
+    asserts over the app's own routes rather than over a list written here.
+    Anything that POSTs to a customer's account and leaves a read cached is
+    a page showing what the account held before the click.
+    """
+    writes = [r for r in app_routes()
+              if "POST" in r.methods and r.path in {
+                  "/api/locations", "/api/ships", "/api/locations/func-id",
+                  "/api/locations/settings", "/api/ships/token"}]
+    assert len(writes) == 5, "a write route was renamed; name it here too"
+    missing = [r.path for r in writes
+               if getattr(r.endpoint, "__wrapped__", None) is None]
+    assert not missing, (
+        f"{missing} write to the account without _writes, so a read cached "
+        f"before the click survives it")
+
+
+def app_routes():
+    return [r for r in server.app.routes if hasattr(r, "methods")]
+
+
+def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
+    """Liveness is the one read that must always be live: the status poll is
+    what says an agent came online, and a cached answer would say it had not."""
+    c = FakeClient(harbor={"id": "h1", "ships": [
+        {"id": "s1", "state": "idle", "lastHeartBeat": 0}]})
+    connect(monkeypatch, c)
+    for _ in range(3):
+        client.get("/api/status?harbor_id=h1&ship_id=s1")
+    assert [x[0] for x in c.calls].count("private_location") == 3

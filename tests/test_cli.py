@@ -20,9 +20,19 @@ from bzm_opl_gen import cli, core, generate as gen, livetest
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
-# The stand-in account, and the one that will not issue a credential, as core's
-# suite declares them.
-from test_core import FakeClient, RefusingClient  # noqa: E402
+# The stand-in account, the one that will not issue a credential, and the one
+# whose key BlazeMeter has stopped accepting, as core's suite declares them.
+from test_core import (EXPIRED_401, ExpiredClient, FakeClient,  # noqa: E402
+                       RefusingClient)
+
+# Absolute, because several tests below run the command from a directory of
+# their own -- a command that writes into the working directory has to be given
+# one that is not this checkout.
+KEY = os.path.abspath("examples/api-key.example.json")
+EVIDENCE = os.path.abspath("tests/cluster-evidence.cluster-scoped-denied.json")
+# Collected for a namespace that is neither the documented default nor anything
+# a test configures, so which step of the precedence answered is visible.
+ELSEWHERE_EVIDENCE = os.path.abspath("tests/cluster-evidence.degraded.json")
 
 SV_PODS = json.dumps({"items": [
     _sv_pod("vs1svc2", 8080, "aaa111", "bbb222"),
@@ -46,6 +56,20 @@ def fake_cluster(monkeypatch):
 def _run(monkeypatch, *args):
     monkeypatch.setattr("sys.argv", ["bzm-opl-gen", *args])
     cli.main()
+
+
+def _account(monkeypatch, client):
+    """Install `client` as the account this command talks to.
+
+    At `core.client_from_key`, which is where all three suites stand in since
+    #95 -- this one patched `api.BzmClient` and asserted the keyword it was
+    reached with, which was how it checked that a command had gone through core
+    rather than reading the key file itself. That check is structural now (the
+    constructor takes a keyword-only pair, and tests/test_core.py counts the
+    constructions), so what is left here is the stand-in and nothing else.
+    """
+    monkeypatch.setattr(cli.core, "client_from_key", lambda *a, **kw: client)
+    return client
 
 
 def _docs(path):
@@ -223,8 +247,7 @@ def _facts_file(tmp_path, ships):
 def _generate(monkeypatch, tmp_path, *extra, ships=("b1",), out=None,
               client=None):
     """`generate` with a faked account, run the way a user runs it."""
-    monkeypatch.setattr(cli.api, "BzmClient",
-                        lambda *a, **k: client or FakeClient())
+    _account(monkeypatch, client or FakeClient())
     _run(monkeypatch, "generate", "--facts", _facts_file(tmp_path, list(ships)),
          "-o", str(out or (tmp_path / "out")), *extra)
 
@@ -310,12 +333,18 @@ def test_generate_says_which_ship_it_needs_rather_than_raising(monkeypatch,
                                                                tmp_path):
     """Facts carrying no ships used to reach `len(f["ships"])` and come back a
     bare KeyError. The refusal generate() already writes names the count and
-    the flag that fixes it, and is what a hand-edited facts file deserves."""
+    the flag that fixes it, and is what a hand-edited facts file deserves.
+
+    It arrives as an exit rather than as a ValueError now: the command goes
+    through core.generate_bundle, where every sentence generate() writes
+    becomes a BadRequest and main() prints it.
+    """
     monkeypatch.setattr("sys.argv", [
         "bzm-opl-gen", "generate", "--facts", _facts_file(tmp_path, None),
         "-o", str(tmp_path / "out")])
-    with pytest.raises(ValueError, match="ship_id required"):
+    with pytest.raises(SystemExit) as caught:
         cli.main()
+    assert "ship_id required" in str(caught.value)
 
 
 def test_generate_mints_nothing_without_an_api_key(monkeypatch, tmp_path,
@@ -332,7 +361,7 @@ def test_generate_mints_nothing_without_an_api_key(monkeypatch, tmp_path,
 
 
 def _create_ship(monkeypatch, client):
-    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: client)
+    _account(monkeypatch, client)
     monkeypatch.setattr("sys.argv", [
         "bzm-opl-gen", "create-ship", "--api-key",
         "examples/api-key.example.json", "--harbor-id", "aaa111",
@@ -434,7 +463,7 @@ def _livetest(monkeypatch, tmp_path, client, *extra):
         return True
 
     monkeypatch.setattr(cli.livetest, "run", fake_run)
-    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: client)
+    _account(monkeypatch, client)
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "livetest", "--api-key",
              "examples/api-key.example.json",
@@ -501,13 +530,61 @@ def test_livetest_refuses_a_placeholder_bundle_with_nothing_to_re_render(
     gen.write(gen.generate(facts, {"namespace": "ns1"}), str(manifests))
     monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
         "it deployed a bundle whose token can never authenticate"))
-    monkeypatch.setattr(cli.api, "BzmClient", lambda *a, **k: FakeClient())
+    _account(monkeypatch, FakeClient())
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "livetest", "--api-key",
              "examples/api-key.example.json",
              "--facts", str(tmp_path / "facts.json"),
              "--manifests", str(manifests), "--namespace", "ns1")
     assert "AUTH_TOKEN" in str(caught.value)
+
+
+def test_livetest_refuses_a_bundle_built_for_another_agent(monkeypatch, tmp_path):
+    """#107, as it happened: --manifests defaults to out/, out/ is whatever the
+    last `generate` left there, and a run with --ship-id and --auth-token
+    deployed a nine-day-old bundle for a different agent. Crane could not
+    register, the rollout timed out saying nothing else, and the rig deleted the
+    cluster. The refusal names the ship on disk and the ship asked for, and
+    arrives before anything is built."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(manifests))
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it deployed a bundle built for a different agent"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--ship-id", "6a6f7270aaaabbbbccccdddd",
+             "--auth-token", "REAL")
+    msg = str(caught.value)
+    assert SHIP in msg and "6a6f7270aaaabbbbccccdddd" in msg
+
+
+def test_livetest_refuses_a_leftover_from_an_older_generator(monkeypatch,
+                                                             tmp_path):
+    """The other half of the same stale directory: bzm_limitrange.yaml, emitted
+    by a version that no longer exists and applied by the rig regardless."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(manifests))
+    (manifests / "bzm_limitrange.yaml").write_text("kind: LimitRange\n")
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it applied a file this generator does not emit"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--auth-token", "REAL")
+    assert "bzm_limitrange.yaml" in str(caught.value)
 
 
 def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
@@ -522,3 +599,289 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     regenerate({"ca_bundle": "PEM"})
     assert c.calls == []
     assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()
+
+
+# -- plan ---------------------------------------------------------------------
+# The one command that takes neither an API key nor a facts file. What these
+# defend is that it stays that way: a flag that made either mandatory would put
+# the first question a customer asks behind the account they have not got.
+
+def test_plan_needs_no_account_and_no_facts(monkeypatch, capsys):
+    monkeypatch.setattr(cli.core, "client_from_key", lambda *a, **k: pytest.fail(
+        "plan built an account client"))
+    _run(monkeypatch, "plan", "--users", "5000")
+    out = capsys.readouterr().out
+    assert "10 engines" in out
+    assert "10 node(s) per agent of 3 vCPU / 10Gi" in out
+    assert "slots=10" in out
+
+
+def test_plan_says_when_the_vus_per_engine_figure_is_assumed(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000")
+    assert "assumed" in capsys.readouterr().out
+    _run(monkeypatch, "plan", "--users", "5000", "--vus-per-engine", "500")
+    assert "assumed" not in capsys.readouterr().out
+
+
+def test_plan_assumes_from_the_engine_size(monkeypatch, capsys):
+    """A Large engine carries twice what the standard one does, so a blank
+    figure has to follow the size rather than sit at BlazeMeter's 500."""
+    _run(monkeypatch, "plan", "--users", "10000",
+         "--engine-cpu-limit", "4", "--engine-mem-limit", "16Gi")
+    out = capsys.readouterr().out
+    assert "10,000 virtual users at 1,000 per engine" in out
+    assert "10 engines" in out
+
+
+def test_plan_writes_the_request_document(monkeypatch, capsys, tmp_path):
+    out_dir = tmp_path / "plan"
+    _run(monkeypatch, "plan", "--users", "2500", "-o", str(out_dir))
+    doc = (out_dir / "capacity-request.md").read_text()
+    assert doc.startswith("# Infrastructure request: load testing\n")
+    assert "5** × 3 vCPU" in doc
+    assert str(out_dir) in capsys.readouterr().out
+
+
+def test_plan_output_directory_may_be_relative_to_the_shell(monkeypatch, tmp_path):
+    """core refuses a relative out_dir because a server's working directory is
+    whatever launched it. A shell is the one caller that chose its own, so the
+    command resolves the path rather than passing the refusal on."""
+    monkeypatch.chdir(tmp_path)
+    _run(monkeypatch, "plan", "--users", "100", "-o", "here")
+    assert (tmp_path / "here" / "capacity-request.md").exists()
+
+
+def test_plan_json_is_the_whole_plan(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--json")
+    p = json.loads(capsys.readouterr().out)
+    assert p["engines"] == 10 and p["nodes"] == 10
+    assert p["document"].startswith("# Infrastructure request")
+
+
+def test_plan_markdown_prints_the_document_alone(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--markdown")
+    out = capsys.readouterr().out
+    assert out.startswith("# Infrastructure request")
+    assert "slots=10" not in out          # the summary, not this
+
+
+def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "0")
+    assert "at least 1" in str(caught.value)
+
+
+def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):
+    """Same two flag names as `generate`, so a plan and the bundle it leads to
+    are described in one vocabulary."""
+    _run(monkeypatch, "plan", "--users", "1000", "--vus-per-engine", "250",
+         "--engine-cpu-limit", "4", "--engine-mem-limit", "16Gi")
+    out = capsys.readouterr().out
+    assert "4 engines of 4 CPU / 16Gi" in out
+    assert "overrideMemory=16384" in out
+
+
+def test_plan_divides_the_run_across_agents(monkeypatch, capsys):
+    """`slots` is engines per *agent*, so the same run on three agents is a
+    third of the location's setting -- and a third of each cluster."""
+    _run(monkeypatch, "plan", "--users", "10000", "--vus-per-engine", "500",
+         "--agents", "3")
+    out = capsys.readouterr().out
+    assert "20 engines" in out
+    assert "7 engines per agent across 3 agent(s)" in out
+    assert "slots=7 (engines per agent)" in out
+
+
+# -- the terminal answers what the other surfaces answer ------------------------
+#
+# #93. Every command that reaches the account or the cluster goes through
+# `core`, so a refusal reads the same in a terminal as it does in the browser.
+# Before this, nine commands built their own client and called the underlying
+# modules directly, and `main` catches only CoreError -- so an expired key was a
+# traceback where the web UI answers with a written sentence.
+
+def _account_command(tmp_path, name):
+    """One invocation per command that reaches BlazeMeter, with every file it
+    needs somewhere disposable.
+
+    `livetest` gets a real bundle and `--run-test`, because every guard it
+    makes before the account is reached is a guard about the bundle on disk --
+    without one it refuses the run and never gets as far as a credential.
+    """
+    if name == "livetest":
+        facts = json.load(open("examples/facts.example.json"))
+        (tmp_path / "lt.json").write_text(json.dumps(facts))
+        gen.write(gen.generate(facts, {"namespace": "ns1"}),
+                  str(tmp_path / "lt"))
+    return {
+        "locations": ("locations", "--api-key", KEY, "--account-id", "7"),
+        "create-location": ("create-location", "--api-key", KEY, "--name",
+                            "loc1", "--account-id", "7", "--workspace-id", "2"),
+        "delete-location": ("delete-location", "--api-key", KEY,
+                            "--harbor-id", "h1"),
+        "create-ship": ("create-ship", "--api-key", KEY, "--harbor-id", "h1",
+                        "--name", "agent1"),
+        "facts": ("facts", "--api-key", KEY, "--harbor-id", "h1", "-o",
+                  str(tmp_path / "facts.json")),
+        "images": ("images", "--api-key", KEY, "--harbor-id", "h1"),
+        "doctor": ("doctor", "--api-key", KEY, "--harbor-id", "h1",
+                   "--manifests", str(tmp_path / "nothing")),
+        "generate": ("generate", "--api-key", KEY, "--rotate-token", "--facts",
+                     _facts_file(tmp_path, ["b1"]), "-o", str(tmp_path / "out")),
+        "livetest": ("livetest", "--api-key", KEY, "--facts",
+                     str(tmp_path / "lt.json"), "--manifests",
+                     str(tmp_path / "lt"), "--namespace", "ns1",
+                     "--run-test", "12345"),
+    }[name]
+
+
+ACCOUNT_COMMANDS = ("locations", "create-location", "delete-location",
+                    "create-ship", "facts", "images", "doctor", "generate",
+                    "livetest")
+
+
+@pytest.mark.parametrize("name", ACCOUNT_COMMANDS)
+def test_every_account_command_asks_core_for_its_client(monkeypatch, tmp_path,
+                                                        name):
+    """The construction is `core.client_from_key`, whatever the command.
+
+    tests/test_core.py asserts nothing in the package builds a client of its
+    own; this is the other half -- that each of these commands does reach the
+    one that is left, with the `--api-key` it was given. A command that built
+    no client at all, or reached BlazeMeter some other way, passes a source
+    guard and fails here. Stopped at the construction rather than allowed to
+    run on: what is under test is that it happened, and each of these would
+    otherwise go on to do the command's real work.
+    """
+    class Constructed(Exception):
+        pass
+
+    seen = []
+
+    def seam(*a, **kw):
+        seen.append((a, kw))
+        raise Constructed
+
+    monkeypatch.setattr(cli.core, "client_from_key", seam)
+    with pytest.raises(Constructed):
+        _run(monkeypatch, *_account_command(tmp_path, name))
+    assert seen == [((KEY,), {})], \
+        f"{name} did not reach core.client_from_key with its --api-key"
+
+
+@pytest.mark.parametrize("name", ACCOUNT_COMMANDS)
+def test_a_key_the_account_has_stopped_accepting_is_a_sentence(monkeypatch,
+                                                               tmp_path, name):
+    """An expired or revoked key is only discovered on the first call, so it is
+    the failure every one of these can hit. `core._upstream` turns it into an
+    UpstreamError and `main` turns that into an exit -- before, it came out of
+    the command as a BzmApiError nobody caught."""
+    _account(monkeypatch, ExpiredClient())
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "the rig deployed against an account that answered 401"))
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, *_account_command(tmp_path, name))
+    assert EXPIRED_401 in str(caught.value), \
+        f"{name} did not report what BlazeMeter said"
+
+
+def test_an_unreadable_key_file_is_answered_by_core(monkeypatch, tmp_path):
+    """`--api-key <a directory>` is one keystroke from the path that works.
+
+    The message is the same sentence the web UI and an MCP session get, from
+    `core.client_from_key` -- and it still says how to make a key, which was
+    the only thing `api.read_key_file_or_exit` added for the terminal before
+    #95 deleted it. `main` turns the CoreError into an exit; the exit does not
+    come from inside a constructor any more.
+    """
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "locations", "--api-key", str(tmp_path),
+             "--account-id", "7")
+    assert str(tmp_path) in str(caught.value)
+    assert "Settings -> API Keys" in str(caught.value)
+
+
+def test_a_malformed_engine_size_is_a_sentence_not_a_stack(monkeypatch,
+                                                           tmp_path, capsys):
+    """`generate` reached `generate()` directly, so every refusal it writes --
+    each one a sentence for whoever set the option -- arrived as a ValueError
+    traceback. core.generate_bundle is where they become BadRequest."""
+    with pytest.raises(SystemExit) as caught:
+        _generate(monkeypatch, tmp_path, "--engine-cpu-limit", "banana")
+    assert "not a Kubernetes CPU quantity" in str(caught.value)
+    assert "Traceback" not in capsys.readouterr().err
+
+
+# -- the location a test cannot start on ---------------------------------------
+
+def test_create_location_warns_that_a_test_cannot_start_on_it(monkeypatch,
+                                                              capsys):
+    """The warning is core's now (the browser and an MCP session need it too),
+    and it still arrives here, on stderr, ahead of the next step."""
+    _account(monkeypatch, FakeClient())
+    _run(monkeypatch, "create-location", "--api-key", KEY, "--name", "loc1",
+         "--account-id", "7", "--workspace-id", "2")
+    out = capsys.readouterr()
+    assert "403" in out.err and "Not enough available resources" in out.err
+    assert "created location" in out.out
+
+
+def test_create_location_says_nothing_extra_when_the_location_is_runnable(
+        monkeypatch, capsys):
+    from test_core import _RunnableClient
+    _account(monkeypatch, _RunnableClient())
+    _run(monkeypatch, "create-location", "--api-key", KEY, "--name", "loc1",
+         "--account-id", "7", "--workspace-id", "2", "--slots", "2")
+    assert capsys.readouterr().err == ""
+
+
+# -- which namespace a preflight is about --------------------------------------
+#
+# One rule, in `core.preflight_cluster`, rather than the copy this command used
+# to hold: an explicit -n, then the bundle's own namespace, then the one the
+# evidence was collected for. The file's is last because evidence collected
+# elsewhere is reported by cluster_from_evidence rather than silently adopted.
+
+def _doctor_namespace(monkeypatch, capsys, tmp_path, *extra):
+    """The namespace `doctor` says it preflighted, off its own report."""
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "doctor", "--facts", _facts_file(tmp_path, ["b1"]),
+             "--cluster-evidence", ELSEWHERE_EVIDENCE, *extra)
+    line = next(l for l in capsys.readouterr().out.splitlines()
+                if l.startswith("doctor: "))
+    return line.rsplit("namespace ", 1)[1]
+
+
+def test_doctor_namespace_precedence(monkeypatch, capsys, tmp_path):
+    """The file was collected for `some-ns`, which is neither the documented
+    default nor anything else here -- so each step is visible in the answer."""
+    profile = tmp_path / "bundle"
+    gen.write(gen.generate(json.load(open("examples/facts.example.json")),
+                           {"namespace": "from-profile"}), str(profile))
+    absent = str(tmp_path / "no-bundle")
+
+    assert _doctor_namespace(monkeypatch, capsys, tmp_path,
+                             "--manifests", absent) == "some-ns"
+    assert _doctor_namespace(monkeypatch, capsys, tmp_path,
+                             "--manifests", str(profile)) == "from-profile"
+    assert _doctor_namespace(monkeypatch, capsys, tmp_path, "--manifests",
+                             str(profile), "-n", "asked-for") == "asked-for"
+
+
+def test_doctor_and_the_other_surfaces_answer_from_one_rule(monkeypatch, capsys,
+                                                            tmp_path):
+    """The command and `core.preflight` agree about which namespace is being
+    preflighted, because they ask the same function -- this command used to
+    hold its own copy of the precedence, comment included."""
+    from bzm_opl_gen import doctor as doctor_mod
+    doc = doctor_mod.load_evidence(ELSEWHERE_EVIDENCE)
+    facts = json.load(open("examples/facts.example.json"))
+    configured = tmp_path / "bundle"
+    gen.write(gen.generate(facts, {"namespace": "configured"}), str(configured))
+    # A bundle configured for a namespace, and no bundle at all: the two
+    # inputs the browser's panel has, spelled as this command spells them.
+    for options, manifests in (({"namespace": "configured"}, str(configured)),
+                               ({}, str(tmp_path / "no-bundle"))):
+        printed = _doctor_namespace(monkeypatch, capsys, tmp_path,
+                                    "--manifests", manifests)
+        assert printed == core.preflight(facts, options, doc)["namespace"]

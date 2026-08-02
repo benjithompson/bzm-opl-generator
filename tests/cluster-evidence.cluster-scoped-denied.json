@@ -1,0 +1,119 @@
+{
+  "schema": "bzm-opl-cluster-evidence/1",
+  "collected_at": "2026-07-30T09:12:44Z",
+  "namespace": "blazemeter",
+  "cli": "kubectl",
+  "raw": {
+    "nodes": null,
+    "ingressclasses": null,
+    "namespace": {
+      "metadata": {
+        "name": "blazemeter",
+        "labels": {
+          "pod-security.kubernetes.io/enforce": "baseline"
+        }
+      }
+    },
+    "scoped": {
+      "apiVersion": "v1",
+      "kind": "List",
+      "items": [
+        {
+          "metadata": {
+            "name": "blazemeter-engine-sizing"
+          },
+          "spec": {
+            "limits": [
+              {
+                "type": "Container",
+                "defaultRequest": {
+                  "cpu": "2",
+                  "memory": "8Gi"
+                },
+                "default": {
+                  "cpu": "2",
+                  "memory": "8Gi"
+                },
+                "max": {
+                  "cpu": "2",
+                  "memory": "8Gi"
+                }
+              }
+            ]
+          },
+          "kind": "LimitRange"
+        },
+        {
+          "kind": "ResourceQuota",
+          "metadata": {
+            "name": "q"
+          },
+          "status": {
+            "hard": {},
+            "used": {}
+          }
+        },
+        {
+          "kind": "ServiceAccount",
+          "metadata": {
+            "name": "default"
+          }
+        }
+      ]
+    }
+  },
+  "inventory": {
+    "configmaps": [
+      "kube-root-ca.crt",
+      "corp-ca-bundle"
+    ],
+    "secrets": [
+      {
+        "name": "regcred",
+        "type": "kubernetes.io/dockerconfigjson"
+      }
+    ]
+  },
+  "permissions": {
+    "namespaced": {
+      "create serviceaccounts": true,
+      "create roles": true,
+      "create rolebindings": true,
+      "create configmaps": true,
+      "create secrets": true,
+      "create deployments": true,
+      "create ingresses": true
+    },
+    "cluster_scoped": {
+      "list nodes": false,
+      "create clusterroles": false,
+      "create clusterrolebindings": false
+    }
+  },
+  "api_groups": {
+    "openshift_route": false,
+    "openshift_security": false,
+    "istio": false,
+    "contour": true
+  },
+  "openshift": {
+    "ingress_config": null,
+    "proxy_config": null
+  },
+  "versions": {
+    "clientVersion": {
+      "gitVersion": "v1.29.4",
+      "platform": "linux/amd64"
+    },
+    "serverVersion": {
+      "major": "1",
+      "minor": "29",
+      "gitVersion": "v1.29.4",
+      "platform": "linux/amd64"
+    }
+  },
+  "notes": [
+    "nodes: Error from server (Forbidden): nodes is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"nodes\" in API group \"\" at the cluster scope",
+    "ingressclasses: Error from server (Forbidden): ingressclasses.networking.k8s.io is forbidden: User \"system:serviceaccount:blazemeter:deployer\" cannot list resource \"ingressclasses\" in API group \"networking.k8s.io\" at the cluster scope"
+  ]
+}

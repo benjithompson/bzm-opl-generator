@@ -15,6 +15,13 @@ API_BASE = "https://a.blazemeter.com/api/v4"
 # test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
 DEFAULT_THREADS_PER_ENGINE = 500
 
+# Hosts only an engine talks to: results and artifact upload. Crane itself uses
+# a.blazemeter.com. A fact about the product, so it lives here with the API host
+# rather than in the live-test rig, which is where it was first needed -- the
+# planner has to name the egress a cluster will need and cannot import the rig
+# to find out, and doctor probes the same three hosts.
+ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+
 
 class BzmApiError(RuntimeError):
     pass
@@ -35,46 +42,49 @@ KEY_FILE_SHAPE = ('a JSON object with the id and secret of a BlazeMeter API '
 def read_key_file(path):
     """The (id, secret) in an api-key.json, or ValueError saying what was wrong.
 
-    Separate from the SystemExit wrapper below so a caller that must not exit
-    -- a server -- can report the same three problems its own way.
+    A read and a refusal, and no exit: there used to be a `_or_exit` wrapper
+    beside this for the commands, and the constructor below called it, which
+    put a SystemExit inside a construction a server makes. #95 removed both, so
+    this is the only read of a key file and its caller decides what a bad one
+    means. Every way it can fail is a ValueError, and that is the contract
+    rather than a tidiness: `core.client_from_key` turns exactly that into a
+    refusal, so anything escaping as another type escapes as itself, past a
+    route's `except CoreError`, into a 500 with a traceback in it.
     """
     try:
         with open(path) as f:
             d = json.load(f)
     except FileNotFoundError:
         raise ValueError(f"no API key file at '{path}'. It is {KEY_FILE_SHAPE}")
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        # A binary file decodes before it parses, so UnicodeDecodeError is the
+        # same answer arriving one step earlier -- and it is a ValueError only
+        # by inheritance, with a message about codecs rather than about keys.
         raise ValueError(f"API key file '{path}' is not valid JSON: {e}")
+    except OSError as e:
+        # A directory, a mode nobody can read, a dead symlink: `--api-key
+        # ~/.config/bzm-opl-gen` is one keystroke from the path that works.
+        raise ValueError(f"could not read API key file '{path}': {e}")
     if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
         raise ValueError(f"API key file '{path}' needs both \"id\" and "
                          f"\"secret\" (see examples/api-key.example.json)")
     return d["id"], d["secret"]
 
 
-def read_key_file_or_exit(path):
-    """read_key_file, as a command wants it: the same three messages, plus how
-    to create the file, and exit rather than traceback."""
-    try:
-        return read_key_file(path)
-    except ValueError as e:
-        raise SystemExit(
-            f"{e}\nCreate the key under Settings -> API Keys in BlazeMeter, "
-            f"then:\n  cp examples/api-key.example.json {path}   # and fill it in")
-
-
 class BzmClient:
-    def __init__(self, api_key_path=None, credentials=None):
-        """Either a path to an api-key.json, or an (id, secret) pair already
-        read from somewhere else.
+    def __init__(self, *, credentials):
+        """An (id, secret) pair, read from wherever the caller found it.
 
-        `credentials` exists because reading the file here raises SystemExit,
-        which is right for a command and fatal for a long-running server -- it
-        is a BaseException, so a tool wrapper's `except Exception` does not stop
-        it taking the process down with it. A caller that has its own way to
-        report a bad credential reads the file itself and passes the pair.
+        A pair and nothing else, keyword-only, so that a path cannot be handed
+        to this at all. It used to take one and read it here, and that read
+        raised SystemExit -- right for a command, fatal for a long-running
+        server, because a BaseException is not stopped by a tool wrapper's or a
+        route's `except Exception` and takes the process down with it. #95
+        removed the branch rather than leaving it for a caller to avoid:
+        `core.client_from_key` is the one construction, it reads the file with
+        `read_key_file` above, and it refuses with a CoreError that every
+        surface already knows how to report.
         """
-        if credentials is None:
-            credentials = read_key_file_or_exit(api_key_path)
         key_id, secret = credentials
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 
@@ -137,7 +147,22 @@ class BzmClient:
         return self.get("/accounts?limit=100")
 
     def workspaces(self, account_id):
-        return self.get(f"/workspaces?accountId={account_id}&limit=100")
+        """The account's workspaces, asked for in one big page.
+
+        Still a page, and the same failure returns above 1000 -- but the
+        endpoint honours `offset`, so the day an account has more this becomes
+        a loop rather than a bigger number. (`private-locations` cannot: it
+        ignores `offset`, which is why that one asks for 1000 and stops.)
+
+        The limit was 100, which is a real account's *middle*: SE Demo has 166
+        and the missing 66 held 105,270 rated VUs -- 40% of the account. It
+        cost nothing visible for a long time because a truncated list only
+        looks short, and the workspace you wanted was usually in it. What
+        showed it was the account-capacity bar, which draws segments that have
+        to add up to the account total: two fifths of the account turned up in
+        a segment for locations whose workspace nobody had listed.
+        """
+        return self.get(f"/workspaces?accountId={account_id}&limit=1000")
 
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")
@@ -166,12 +191,28 @@ class BzmClient:
             h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None, func_ids=None):
+                                threads_per_engine=None, func_ids=None,
+                                override_cpu=None, override_memory=None):
+        """PATCH the location's settings. Only what is passed is sent.
+
+        `override_cpu` / `override_memory` are the engine pod's CPU and memory
+        *requests* (memory in MB), which the scheduler and the autoscaler place
+        on -- see generate.ENGINE_DEFAULT_REQUEST_CPU for why they matter more
+        than they look. They are read back from the location by facts.gather,
+        so the field names are known; that BlazeMeter accepts them on a PATCH
+        is not something this repo has proved on every account, which is why
+        core.update_location re-reads and reports what actually changed rather
+        than assuming the body was honoured.
+        """
         body = {}
         if slots is not None:
             body["slots"] = slots
         if threads_per_engine is not None:
             body["threadsPerEngine"] = threads_per_engine
+        if override_cpu is not None:
+            body["overrideCPU"] = override_cpu
+        if override_memory is not None:
+            body["overrideMemory"] = override_memory
         # The whole list, because PATCH replaces it: sending one funcId is how a
         # location that ran performance and mocks comes back running only mocks.
         # Callers add to what the location already has -- see core.add_func_id.

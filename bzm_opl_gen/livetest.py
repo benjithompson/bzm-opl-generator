@@ -35,6 +35,10 @@ import subprocess
 import time
 
 from . import generate
+# Which hosts an engine uploads to is a fact about BlazeMeter, not about this
+# rig -- doctor probes them and the planner names them as required egress, and
+# neither should have to import the deploy rig to find out.
+from .api import ENGINE_UPLOAD_HOSTS
 
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
@@ -439,11 +443,9 @@ def wait_for_engine_pod(cli, namespace, timeout=420, poll=10):
     return seen        # spec is still checkable without an IP
 
 
-# Hosts only an engine talks to: results and artifact upload. Crane itself uses
-# a.blazemeter.com. Pod IPs cannot be used to tell them apart -- pod traffic is
-# SNAT'd to the node address before it reaches the proxy, so every flow in the
-# proxy log has the same source.
-ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+# ENGINE_UPLOAD_HOSTS (api.py) is how engine traffic is told apart here: pod IPs
+# cannot do it, because pod traffic is SNAT'd to the node address before it
+# reaches the proxy, so every flow in the proxy log has the same source.
 
 
 def engine_upload_marks():
@@ -946,6 +948,138 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     return False
 
 
+# -- the directory is the bundle under test -----------------------------------
+#
+# deploy() applies <dir>/*.yaml as it finds it, and --manifests defaults to out/,
+# which holds whatever the last `generate` left there. #107: a run given
+# --ship-id and --auth-token deployed a nine-day-old bundle for a *different*
+# agent -- its ConfigMap named another HARBOR_ID/SHIP_ID and its Secret held
+# another agent's token, so both flags were ignored in substance. Crane came up
+# with an identity it could not register, `rollout status` timed out saying only
+# that, and the rig then deleted the cluster. Nothing in the run said which of
+# the many possible causes it was.
+#
+# The cluster build and the 300s rollout are the expensive part of that failure.
+# Everything needed to refuse it was in two files on disk the whole time.
+
+CONFIGMAP_FILE = "bzm_configmap.yaml"
+
+# HARBOR_ID / SHIP_ID as templates/configmap writes them. A regex rather than a
+# YAML parse because this package has no runtime dependencies --
+# generate.existing_auth_token reads its own field back the same way.
+_IDENTITY_RE = re.compile(r'^\s*(HARBOR_ID|SHIP_ID):\s*"?([^"\s]+)"?\s*$', re.M)
+
+BundleCheck = collections.namedtuple("BundleCheck", "refusals notes")
+
+
+class BundleMismatch(RuntimeError):
+    """The manifests on disk are not the ones this run was told to test."""
+
+
+def manifest_identity(manifest_dir):
+    """{"HARBOR_ID": ..., "SHIP_ID": ...} as the bundle on disk names them.
+
+    A key is absent when the file is missing or does not carry it. "The
+    directory does not say" and "the directory says something else" must not
+    share a representation: only the second is a refusal, and a hand-assembled
+    directory legitimately answers the first.
+    """
+    try:
+        with open(os.path.join(manifest_dir, CONFIGMAP_FILE)) as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    return {m.group(1): m.group(2) for m in _IDENTITY_RE.finditer(text)}
+
+
+def emitted_yaml_files():
+    """Every *.yaml a *manifests* bundle from this generator can hold, taken
+    from the generator's own constants rather than restated here -- a list that
+    has to be told separately about a new manifest file is a list that goes
+    stale, and the failure mode of a stale one is refusing a good bundle.
+
+    The chart's values file is deliberately absent: this rig deploys manifests,
+    so a bzm-opl-values.yaml at the top level is either a chart (refused by name
+    in cmd_livetest, which reads the profile) or what a chart render left behind
+    in a directory since re-rendered as manifests. Applying it is a kubectl
+    error at best.
+    """
+    return frozenset(generate.APPLY_ORDER) | {generate.HOOK_FILE,
+                                              generate.SV_EXPOSE_FILE}
+
+
+def bundle_yaml(manifest_dir):
+    """The files deploy() would apply, by basename. Deliberately the same glob:
+    a check over a different set than the one applied has a hole in it either
+    way round. (glob does not match a leading dot, which is why the rig's own
+    .egress-policy.yaml is neither applied by that loop nor judged by this.)"""
+    return sorted(os.path.basename(p) for p in
+                  glob.glob(os.path.join(manifest_dir, "*.yaml")))
+
+
+def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
+    """Is this directory the bundle this run was told to test?
+
+    Returns refusals (deploy nothing) and notes (what could not be checked).
+    Costs two file reads, and is worth making before the cluster exists.
+    """
+    refusals, notes = [], []
+    path = os.path.join(manifest_dir, CONFIGMAP_FILE)
+    claimed = manifest_identity(manifest_dir)
+    if not claimed:
+        notes.append(
+            f"{path} carries no HARBOR_ID/SHIP_ID, so this bundle's identity "
+            f"could not be read and was not checked against harbor {harbor_id} "
+            f"/ ship {ship_id}")
+    for field, want in (("HARBOR_ID", harbor_id), ("SHIP_ID", ship_id)):
+        got = claimed.get(field)
+        if claimed and got is None:
+            notes.append(f"{path} names no {field}, so it was not checked "
+                         f"against {want}")
+        elif got and want and got != want:
+            refusals.append(
+                f"{path} names {field} {got}, but this run was told to test "
+                f"{want}. The directory holds the bundle for a different agent: "
+                f"crane would come up with an identity BlazeMeter will not "
+                f"register, the rollout would time out saying only that, and "
+                f"the cluster would be deleted with nothing left to read. "
+                f"Re-generate into {manifest_dir}/, or point --manifests at the "
+                f"bundle built for {want}")
+    # profile.json is what the re-rendering paths merge their overlay onto, and
+    # _regenerator prefers the ship_id it finds there over the one on the command
+    # line -- so a stale profile deploys the wrong agent even on a path that does
+    # re-render, which is why re-rendering could never have been this guard.
+    prof_ship = (profile or {}).get("ship_id")
+    if prof_ship and ship_id and prof_ship != ship_id:
+        refusals.append(
+            f"{os.path.join(manifest_dir, generate.PROFILE_FILE)} was generated "
+            f"for ship {prof_ship}, not the {ship_id} this run was told to "
+            f"test, and every re-render this run makes would merge onto it")
+    unknown = [n for n in bundle_yaml(manifest_dir)
+               if n not in emitted_yaml_files()]
+    if unknown:
+        # Refused, not warned. The file is applied, so it is part of what the run
+        # deploys: bzm_limitrange.yaml -- the one that happened -- was dropped
+        # from this generator precisely because what a LimitRange actually
+        # reached was crane's own test-job pods, which declare nothing and were
+        # handed a full engine's worth of CPU and memory, reserving capacity a
+        # real engine then could not get. So the leftover changes the run it is
+        # part of. It is also evidence the directory is an older version's
+        # output, which is the failure this whole check exists for, and the
+        # identity above can still match by luck. A printed warning would be
+        # true and useless -- it scrolls past in the first seconds of a 12-20
+        # minute run, which is exactly how the nine-day-old bundle went
+        # unnoticed. The fix costs one rm, or a --manifests pointed somewhere
+        # empty.
+        refusals.append(
+            f"{manifest_dir}/ holds {', '.join(unknown)}, which this generator "
+            f"does not emit -- and livetest applies every *.yaml in the "
+            f"directory, so an older version's leftovers are deployed as part "
+            f"of the run and the run stops being a test of generator output. "
+            f"Delete them, or generate into an empty directory")
+    return BundleCheck(refusals, notes)
+
+
 def _apply(cli, namespace, path):
     """Client-side apply stashes the whole object in the
     kubectl.kubernetes.io/last-applied-configuration annotation, which the API
@@ -1008,6 +1142,16 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
 
     opts -- the generate() options the manifests were built from; enables the
     read-back assertions in assert_live_config()."""
+    # Before anything is created, and outside the try below -- whose finally
+    # would tear down a cluster this run never touched. Raised rather than
+    # returned False: "the manifests are somebody else's" must not arrive
+    # looking like "the agent did not come online", which is the whole defect.
+    # Here as well as in the CLI because the MCP server deploys through run().
+    check = bundle_check(manifest_dir, harbor_id, ship_id, opts)
+    for note in check.notes:
+        print("note: " + note)
+    if check.refusals:
+        raise BundleMismatch("\n".join(check.refusals))
     ok = False
     try:
         insecure = None

@@ -4,103 +4,179 @@
 // preview's token report, the preflight re-run, the status poll), and state
 // that two owners write is the bug this split must not introduce.
 //
-// The props are a wide list rather than a bag: every one of them is something
-// this panel actually reads, and a `Record<string, unknown>` would hide the day
-// one of them stops being passed.
+// The interface is four records and one report, not forty props. The wide list
+// was the honest first move -- every prop was something this panel read -- but
+// it had eight of them as value-and-setter pairs the page only ever reset before
+// a call, and a panel whose signature is that long is a panel you cannot see the
+// shape of. What each record is, is a question this step asks: what is being
+// generated, what that does to the credential, what the last attempt did, what
+// the imported evidence says, and whether the agent came up. Nothing here holds
+// state; the records are assembled in App from state App still owns, so the
+// distribution of ownership is exactly what it was.
+//
+// The two calls that produce a bundle stay in this file deliberately. Both can
+// mint a credential, and CLAUDE.md's rule is that a request which touches the
+// account is made where its cost is on screen -- which is beside these buttons,
+// under the warning that says what a rotation kills. They are made through the
+// injected client like every other route, and what they carry about the
+// credential is credential.plan.request, taken whole: this file has no say in
+// it, which is what stops the two buttons disagreeing (#104).
+import { useState } from "react";
 import {
-  AgentStatus, Facts, Options, SavedBundle, Ship, SvCheckOut, SvMocksOut,
-  TokenReport, Feature, Suggestion, downloadZip, saveBundle,
+  Api, AgentStatus, Facts, GeneratedFile, Options, SvCheckOut, SvMocksOut,
+  TokenReport, Suggestion,
 } from "../api";
+import {
+  Attempt, NO_ATTEMPT, downloadFailed, downloaded, saveFailed, savedTo,
+} from "../attempt";
 import {
   Button, Check, ErrorMsg, inputCls, SegmentedControl, Switch,
 } from "../components";
-import { OptionGroup, svConfigured } from "../optionGroups";
+import { OptionGroup } from "../optionGroups";
 import {
-  EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, verdictLine,
-  worstStatus,
+  EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, worstStatus,
 } from "../preflight";
 import { Applied } from "../suggestions";
 import { SuggestionList } from "../SuggestionList";
 import { DownloadPlan } from "../token";
+// Service virtualization as one record: whether this bundle can be a chart,
+// whether its settings are finished, how a published endpoint is probed. It
+// used to arrive as four props derived four places in App.
+import { Sv } from "../sv";
 
-export interface DownloadPanelProps {
-  // -- what is being generated for whom
+/** What is being generated, for whom, and whether it can be. */
+export interface BundleHandover {
   facts: Facts | null;
   shipId: string | null;
-  ships: Ship[];
-  sourceMode: "connect" | "manual";
-  who: { email: string; keyId: string } | null;
+  /** The options as they stand. Spread into both requests, and read for the
+   *  three things this step says about the bundle -- its namespace, whether it
+   *  carries the mirror script, and the folder placeholder. The panel is handed
+   *  the record rather than a reader per key: it sends the whole thing. */
   options: Options;
-  set: (k: string, v: unknown) => void;
-  raw: (k: string) => string;
-  txt: (k: string) => string;
-  // -- the download guard, and why it is closed when the reason is elsewhere
+  /** The one option this step writes, as the write rather than as a key. Three
+   *  readings of the options (the record, a text reader, a setter) used to
+   *  arrive for two keys; the other key was the AUTH_TOKEN, and what this panel
+   *  actually wanted to know about it is credential.mayRotate. */
+  format: string;
+  setFormat: (v: string) => void;
+  /** Everything about service virtualization, from sv.ts. Four things are read
+   *  off it here -- whether the settings are finished, whether the chart is
+   *  refused and why, whether a mock watch is meaningful at all, and the scheme
+   *  an endpoint is probed over -- and they are one answer, so they arrive as
+   *  one value. */
+  sv: Sv;
+  /** The two blocks that are not a group's: an unusable service account name,
+   *  and a preview that did not render. Neither is shown here -- the field and
+   *  the preview pane say so where they are -- but both stop the buttons. */
   saOk: boolean;
-  svOk: boolean;
   genErr: string | null;
   /** Groups in use but unfinished. They are on the configure step, which is by
    *  definition not this one, so the block names them and offers the way back
    *  rather than pointing at a form nobody can see. */
   unfinished: OptionGroup[];
   goToConfigure: () => void;
-  format: string;
-  helmBlocked?: string;
-  // -- the credential this bundle will carry
-  previewToken: TokenReport | null;
-  rotate: boolean;
-  setRotate: (v: boolean) => void;
-  tokenPlan: DownloadPlan;
-  lastTokenReport: TokenReport | null;
-  setLastTokenReport: (r: TokenReport | null) => void;
-  dlErr: string | null;
-  setDlErr: (v: string | null) => void;
-  // -- saving to a folder
+  /** Where a save writes. Typed here, read in App too: a folder already holding
+   *  this ship's bundle changes what the preview says about the credential. */
   saveDir: string;
   setSaveDir: (v: string) => void;
-  saved: SavedBundle | null;
-  setSaved: (v: SavedBundle | null) => void;
-  saveErr: string | null;
-  setSaveErr: (v: string | null) => void;
-  // -- preflight, from a file somebody else collected
-  preflight: PreflightState;
-  preflightBusy: boolean;
-  importEvidence: (f: File) => void;
-  evidence: EvidenceHeader | null;
+}
+
+/** What the next download or save will do about the agent's credential. */
+export interface CredentialHandover {
+  /** The three answers that must agree -- the hint beside the button, the
+   *  warning over it, and the credential request both buttons send. From
+   *  token.ts, and `request` is sent rather than read: this panel is handed
+   *  what to send, so it has nothing to get wrong about it. */
+  plan: DownloadPlan;
+  /** What the preview's bundle currently carries, for the sentence naming where
+   *  a real token comes from. Null only before the first preview lands. */
+  preview: TokenReport | null;
+  rotate: boolean;
+  setRotate: (v: boolean) => void;
+  /** Whether the rotate box may be offered at all. Minting is an API call, so
+   *  it needs the account and an agent -- and a token already in the field wins
+   *  over it, so offering one there would promise an issue core will not
+   *  perform. */
+  mayRotate: boolean;
+}
+
+/** The cluster read somebody else collected, and what may be applied from it. */
+export interface PreflightHandover {
+  /** The imported file, its verdicts and whatever the last import was refused
+   *  for -- preflight.ts's own state, unchanged. */
+  read: PreflightState;
+  busy: boolean;
+  /** What the file says about itself: collected when, for which namespace, and
+   *  what its collector could not read. */
+  header: EvidenceHeader | null;
+  importFile: (f: File) => void;
   applied: Applied;
   applySuggestion: (s: Suggestion, value: unknown) => void;
   undoSuggestion: (option: string) => void;
-  // -- watching the agent that gets deployed
-  polling: boolean;
-  setPolling: (v: boolean) => void;
-  status: AgentStatus | null;
-  svMocks: { ns: string; read: SvMocksOut } | null;
-  svChecks: Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>;
-  svScheme: "https" | "http";
-  svCheckTone: (r: SvCheckOut) => string;
-  checkEndpoint: (host: string) => void;
 }
 
+/** Watching the agent this bundle deploys, and the virtual services under it. */
+export interface WatchHandover {
+  /** Whether it can be watched at all: polling is an API call, and manual entry
+   *  is the mode that exists to do without a key. */
+  available: boolean;
+  on: boolean;
+  setOn: (v: boolean) => void;
+  /** The agent's name, or its id where it has none. The status belongs to an
+   *  agent, so the row names it: a bare "online" beside a page with four other
+   *  identities on it says less than it looks like it does. */
+  agent: string | null;
+  status: AgentStatus | null;
+  mocks: { ns: string; read: SvMocksOut } | null;
+  checks: Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>;
+  check: (host: string) => void;
+}
+
+export interface DownloadPanelProps {
+  /** The route caller, from App. Every request this panel makes goes through
+   *  it -- the two that produce a bundle and the crane-hook render behind Test
+   *  deploy, which was the last call site on the page still importing the real
+   *  client at module level and so the last one outside the seam. */
+  api: Api;
+  bundle: BundleHandover;
+  credential: CredentialHandover;
+  /** What the last download or save did, and where the next one is reported.
+   *  The record is App's -- this panel makes attempts and hands them over, and
+   *  holds nothing. */
+  attempt: Attempt;
+  report: (a: Attempt) => void;
+  preflight: PreflightHandover;
+  watch: WatchHandover;
+}
+
+/** How an endpoint check reads. A 503 is amber, not red: the check worked and
+ *  this is its answer -- the one `bzm-opl-gen sv-expose` exists to fix, which
+ *  the message names. Anything else that answered routed, so only a probe that
+ *  got no status line at all is red. Here rather than in App: it is a class
+ *  name for a row this file renders, and nothing else asks. */
+const checkTone = (r: SvCheckOut) =>
+  r.status !== "ok" ? "text-red-600"
+    : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
+
 export function DownloadPanel(p: DownloadPanelProps) {
-  // Destructured rather than read off `p` throughout: the markup below is the
-  // markup that was in App, and rewriting every reference to prove it moved is
-  // how a move turns into a rewrite nobody diffed.
-  const {
-    facts, shipId, ships, sourceMode, who, options, set, raw, txt,
-    saOk, svOk, genErr, unfinished, goToConfigure, format, helmBlocked,
-    previewToken, rotate, setRotate, tokenPlan, lastTokenReport,
-    setLastTokenReport, dlErr, setDlErr,
-    saveDir, setSaveDir, saved, setSaved, saveErr, setSaveErr,
-    preflight, preflightBusy, importEvidence, evidence,
-    applied, applySuggestion, undoSuggestion,
-    polling, setPolling, status, svMocks, svChecks, svScheme, svCheckTone,
-    checkEndpoint,
-  } = p;
+  const { api, bundle, credential, attempt, report, preflight, watch } = p;
+  // The names the markup below already used, for the values it reads most: the
+  // markup is the markup that was in App, and rewriting every reference to
+  // prove it moved is how a move turns into a rewrite nobody diffed.
+  const { facts, shipId, options, format, sv } = bundle;
+  const { plan, preview } = credential;
+  const { read } = preflight;
+  // One expression for both buttons rather than the same five terms twice. It
+  // is a judgement this panel makes and keeps: two of the five are elsewhere on
+  // screen (the service account field, the preview pane), and the other three
+  // are said right here.
+  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok && bundle.saOk;
   return (
             <div className="space-y-3">
               <SegmentedControl
                 label="Output format"
                 value={format}
-                onChange={(v) => set("output_format", v)}
+                onChange={bundle.setFormat}
                 options={[
                   {
                     value: "manifests",
@@ -111,17 +187,17 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     value: "helm",
                     label: "Helm chart",
                     hint: "The chart plus a values overlay from this account. helm install / upgrade.",
-                    disabledReason: helmBlocked,
+                    disabledReason: sv.helmBlocked,
                   },
                 ]} />
               <div className="flex gap-2 items-center">
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
+                <Button disabled={!ready}
                   onClick={() => {
-                    setDlErr(null); setLastTokenReport(null);
-                    downloadZip(facts!, { ...options, ship_id: shipId },
-                                tokenPlan.rotates)
-                      .then(setLastTokenReport)
-                      .catch((e) => setDlErr(String(e.message)));
+                    report(NO_ATTEMPT);
+                    api.downloadZip(facts!, { ...options, ship_id: shipId },
+                                    plan.request)
+                      .then((t) => report(downloaded(t)))
+                      .catch((e) => report(downloadFailed(String(e.message))));
                   }}>
                   ⬇ Download bundle (.zip)
                 </Button>
@@ -130,7 +206,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     ? "helm/ + bzm-opl-values.yaml + README"
                     : "manifests + README"}
                   {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
-                  {" "}{tokenPlan.hint}
+                  {" "}{plan.hint}
                 </span>
               </div>
               {/* What the bundle does about the credential, before the click.
@@ -138,14 +214,14 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   breaks a working install: a download that mints. `incomplete`
                   carries core's own sentence -- where a real token comes from,
                   kubectl included -- rather than a copy of it in TypeScript. */}
-              {tokenPlan.incomplete && previewToken && (
+              {plan.incomplete && preview && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                   <p className="text-xs font-semibold text-amber-800">
                     This bundle carries a placeholder AUTH_TOKEN — fill it in
                     before applying it.
                   </p>
                   <p className="text-[11px] text-amber-700 whitespace-pre-line mt-1">
-                    {previewToken.message}
+                    {preview.message}
                   </p>
                 </div>
               )}
@@ -155,23 +231,23 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   hidden once a token is in the field, because core answers that
                   contradiction by ignoring the rotation rather than performing
                   it. Needs the account: minting is an API call. */}
-              {!!who && sourceMode === "connect" && !!shipId && !raw("auth_token") && (
+              {credential.mayRotate && (
                 <div className="space-y-1.5">
-                  <Check checked={rotate} onChange={setRotate}
+                  <Check checked={credential.rotate} onChange={credential.setRotate}
                     label="Issue a NEW AUTH_TOKEN with this bundle (rotates)"
                     hint="For an agent whose token nobody kept — it replaces the credential; none can be read back." />
-                  {tokenPlan.warning && (
+                  {plan.warning && (
                     <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                      {tokenPlan.warning}
+                      {plan.warning}
                     </p>
                   )}
                 </div>
               )}
               {/* Afterwards as well as before: once a rotation has happened the
                   bundle just handed over is the only copy of that credential. */}
-              {lastTokenReport && (
+              {attempt.token && (
                 <p className="text-xs text-slate-600 whitespace-pre-line">
-                  {lastTokenReport.message}
+                  {attempt.token.message}
                 </p>
               )}
               {/* The zip is for handing the bundle to somebody; saving writes
@@ -184,58 +260,58 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   <span className="text-xs font-medium text-slate-600">Folder</span>
                   <input className={inputCls + " font-mono"}
                     placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
-                    value={saveDir}
-                    onChange={(e) => setSaveDir(e.target.value)} />
+                    value={bundle.saveDir}
+                    onChange={(e) => bundle.setSaveDir(e.target.value)} />
                 </label>
                 {/* A plain button of the same size as every other one here. The
                     label is typed rather than browsed because a browser cannot
                     hand back an absolute directory path -- webkitdirectory
                     yields file names relative to the folder, which is not what
                     the server needs -- and `~` is expanded server-side. */}
-                <Button disabled={!facts || !shipId || !!genErr || !svOk || !saOk}
+                <Button disabled={!ready}
                   onClick={() => {
-                    setSaveErr(null); setSaved(null); setLastTokenReport(null);
-                    const dir = saveDir.trim() ||
+                    report(NO_ATTEMPT);
+                    const dir = bundle.saveDir.trim() ||
                       `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
-                    saveBundle(facts!, { ...options, ship_id: shipId }, dir,
-                               tokenPlan.rotates)
-                      .then((s) => { setSaved(s); setLastTokenReport(s.token); })
-                      .catch((e) => setSaveErr(String(e.message)));
+                    api.saveBundle(facts!, { ...options, ship_id: shipId }, dir,
+                                   plan.request)
+                      .then((s) => report(savedTo(s)))
+                      .catch((e) => report(saveFailed(String(e.message))));
                   }}>
                   Save to folder
                 </Button>
               </div>
-              {saved && (
+              {attempt.saved && (
                 <p className="text-xs text-emerald-700">
-                  Wrote {saved.files.length} files to{" "}
-                  <code className="font-mono">{saved.out_dir}</code>. Apply with{" "}
+                  Wrote {attempt.saved.files.length} files to{" "}
+                  <code className="font-mono">{attempt.saved.out_dir}</code>. Apply with{" "}
                   <code className="font-mono">
                     {format === "helm"
-                      ? `helm install bzm-opl ${saved.out_dir}/helm -f ${saved.out_dir}/bzm-opl-values.yaml`
-                      : `kubectl apply -f ${saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
+                      ? `helm install bzm-opl ${attempt.saved.out_dir}/helm -f ${attempt.saved.out_dir}/bzm-opl-values.yaml`
+                      : `kubectl apply -f ${attempt.saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
                   </code>
                   {" "}— or point <code className="font-mono">livetest</code> or
                   an MCP session at the folder.
                 </p>
               )}
-              <ErrorMsg msg={saveErr} />
+              <ErrorMsg msg={attempt.saveError} />
               {/* Why the button is disabled, when the reason is a step back.
                   A disabled button whose cause is elsewhere is the failure this
                   is here to remove, so it names the group and offers the way
                   to it. */}
-              {unfinished.map((g) => (
+              {bundle.unfinished.map((g) => (
                 <div key={g.id}
                   className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
                   <p className="text-xs text-amber-800 grow">
                     <b>{g.title}</b> is not finished:{" "}
                     {g.requiredHint ?? g.hint}.
                   </p>
-                  <Button kind="ghost" onClick={goToConfigure}>
-                    Back to Configure
+                  <Button kind="ghost" onClick={bundle.goToConfigure}>
+                    Configure
                   </Button>
                 </div>
               ))}
-              <ErrorMsg msg={dlErr} />
+              <ErrorMsg msg={attempt.downloadError} />
 
               {/* Will the cluster take it? Answered from a file rather than
                   from a cluster, because the person configuring this usually
@@ -256,24 +332,31 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       <code className="font-mono">bzm-opl-gen doctor</code> runs.
                     </p>
                   </div>
+                  {/* Above the file picker, because it comes first in time:
+                      this is what you run *on* the cluster, and the evidence
+                      file is what comes back from it. Stacked rather than in a
+                      row so the order reads as the sequence it is. */}
+                  <div className="flex flex-col items-start gap-2">
+                  <TestDeploy api={api} facts={facts} options={options} />
                   {/* A label rather than a Button so the file dialog is the
                       click, as in Connect and Import above. */}
                   <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
                     + "border border-slate-300 text-slate-600 whitespace-nowrap "
-                    + (!facts || preflightBusy
+                    + (!facts || preflight.busy
                       ? "opacity-40 pointer-events-none"
                       : "hover:bg-slate-50 cursor-pointer")}>
-                    {preflightBusy ? "Checking…"
-                      : preflight.out ? "Choose another file…"
+                    {preflight.busy ? "Checking…"
+                      : read.out ? "Choose another file…"
                       : "Choose evidence file…"}
                     <input type="file" accept=".json,application/json"
-                      className="hidden" disabled={!facts || preflightBusy}
+                      className="hidden" disabled={!facts || preflight.busy}
                       onChange={(e) => {
                         const f = e.target.files?.[0];
                         e.target.value = "";      // so the same file re-imports
-                        if (f) importEvidence(f);
+                        if (f) preflight.importFile(f);
                       }} />
                   </label>
+                  </div>
                 </div>
                 {!facts && (
                   <p className="text-[11px] text-slate-400 mt-1">
@@ -281,8 +364,8 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     against this location's slots, engine size and namespace.
                   </p>
                 )}
-                <ErrorMsg msg={preflight.error} />
-                {preflight.out && evidence && (
+                <ErrorMsg msg={read.error} />
+                {read.out && preflight.header && (
                   <div className="mt-2">
                     {/* What was imported, before what it implies. All of this
                         is in the leading verdict's prose as well, and that is
@@ -290,36 +373,39 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         access reads as a clean bill of health if the only place
                         that says so is the tenth line of a list (#53). */}
                     <p className="text-[11px] text-slate-500">
-                      <b className="text-slate-700">{preflight.file}</b>
+                      <b className="text-slate-700">{read.file}</b>
                       {" · collected "}
-                      <code className="font-mono">{evidence.collected}</code>
+                      <code className="font-mono">{preflight.header.collected}</code>
                       {" · describes namespace "}
-                      <code className="font-mono">{evidence.describes}</code>
+                      <code className="font-mono">{preflight.header.describes}</code>
                       {" · preflighting "}
-                      <code className="font-mono">{preflight.out.namespace}</code>
+                      <code className="font-mono">{read.out.namespace}</code>
                       {" · "}
-                      <span className={worstStatus(preflight.out.checks)
-                        ? STATUS_STYLE[worstStatus(preflight.out.checks)!].text
+                      {/* doctor's own sentence about the list, in the colour
+                          the worst verdict in it takes. The tone is a
+                          rendering; the sentence is not, and is served. */}
+                      <span className={worstStatus(read.out.checks)
+                        ? STATUS_STYLE[worstStatus(read.out.checks)!].text
                         : ""}>
-                        {verdictLine(preflight.out.checks)}
+                        {read.out.summary}
                       </span>
                     </p>
                     {/* The namespaced verdicts -- LimitRanges, quotas,
                         ServiceAccounts, the PSA labels -- are all about the
                         namespace the file describes, whichever one is being
                         configured here. */}
-                    {evidence.elsewhere && (
+                    {preflight.header.elsewhere && (
                       <p className="text-[11px] text-amber-700">
                         This file was collected for{" "}
-                        <code className="font-mono">{evidence.describes}</code>,
+                        <code className="font-mono">{preflight.header.describes}</code>,
                         so every namespaced verdict below describes that
                         namespace and not{" "}
-                        <code className="font-mono">{preflight.out.namespace}</code>.
+                        <code className="font-mono">{read.out.namespace}</code>.
                       </p>
                     )}
-                    {evidence.unreadableLine && (
+                    {preflight.header.unreadableLine && (
                       <p className="text-[11px] text-amber-700">
-                        {evidence.unreadableLine}
+                        {preflight.header.unreadableLine}
                       </p>
                     )}
                     {/* doctor's order, kept: where the answers came from leads,
@@ -329,7 +415,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         sorted by severity would bury the reason for all of
                         them. */}
                     <ul className="mt-1.5 space-y-1">
-                      {preflight.out.checks.map((c, i) => (
+                      {read.out.checks.map((c, i) => (
                         <li key={`${c.name}-${i}`}
                           className="flex items-start gap-2 text-[11px] text-slate-500">
                           <span className={"shrink-0 rounded px-1.5 py-0.5 "
@@ -352,16 +438,17 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         from this list is a click on a row showing both the value
                         it writes and the one it replaces. */}
                     <SuggestionList
-                      suggestions={preflight.out.suggestions}
-                      whyNothing={preflight.out.why_nothing}
-                      options={options} applied={applied}
-                      onApply={applySuggestion} onUndo={undoSuggestion} />
+                      suggestions={read.out.suggestions}
+                      whyNothing={read.out.why_nothing}
+                      options={options} applied={preflight.applied}
+                      onApply={preflight.applySuggestion}
+                      onUndo={preflight.undoSuggestion} />
                   </div>
                 )}
               </div>
 
               <div className="border-t border-slate-100 pt-3">
-                {sourceMode === "manual" ? (
+                {!watch.available ? (
                   /* Watching needs the API this mode exists to do without. Said
                      plainly, with the way to get it, rather than a dead
                      checkbox. */
@@ -380,32 +467,32 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     other identities on it says less than it looks like it
                     does. */}
                 <div className="rounded-xl border border-slate-200 px-3 py-2.5 flex items-center gap-3">
-                  <Switch on={polling} onChange={setPolling} />
+                  <Switch on={watch.on} onChange={watch.setOn} />
                   <div className="min-w-0 grow">
                     <p className="text-sm font-medium text-slate-700">
                       Watch agent status
                       <span className="ml-2 font-mono text-[11px] text-slate-500">
-                        {ships.find((s) => s.id === shipId)?.name || shipId}
+                        {watch.agent}
                       </span>
                     </p>
                     <p className="text-[11px] text-slate-400">
-                      {polling
-                        ? status
-                          ? `${status.state}`
-                            + (status.heartbeat_age_s != null
-                              ? ` · heartbeat ${status.heartbeat_age_s}s ago` : "")
+                      {watch.on
+                        ? watch.status
+                          ? `${watch.status.state}`
+                            + (watch.status.heartbeat_age_s != null
+                              ? ` · heartbeat ${watch.status.heartbeat_age_s}s ago` : "")
                           : "polling every 10s…"
                         : "polls every 10s — green once the applied deployment heartbeats"}
                     </p>
                   </div>
-                  {polling && (
+                  {watch.on && (
                     <span className={"flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 shrink-0 "
-                      + (status?.online
+                      + (watch.status?.online
                         ? "bg-emerald-100 text-emerald-700"
                         : "bg-slate-100 text-slate-500")}>
                       <span className={"h-1.5 w-1.5 rounded-full "
-                        + (status?.online ? "bg-emerald-500" : "bg-slate-400 animate-pulse")} />
-                      {status?.online ? "Online" : "Waiting"}
+                        + (watch.status?.online ? "bg-emerald-500" : "bg-slate-400 animate-pulse")} />
+                      {watch.status?.online ? "Online" : "Waiting"}
                     </span>
                   )}
                 </div>
@@ -413,15 +500,15 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     became reachable, which is the part of an SV deploy that
                     actually stalls. Only for an SV deployment -- the
                     performance panel is exactly as it was. */}
-                {polling && svConfigured(txt("sv_ingress")) && svMocks && (
+                {watch.on && sv.configured && watch.mocks && (
                   <div className="mt-3">
                     <p className="text-xs font-medium text-slate-600 mb-1">
-                      Virtual services in {svMocks.ns}
+                      Virtual services in {watch.mocks.ns}
                     </p>
-                    {svMocks.read.mocks.length > 0 ? (
+                    {watch.mocks.read.mocks.length > 0 ? (
                       <ul className="space-y-1.5">
-                        {svMocks.read.mocks.map((m) => {
-                          const chk = m.host ? svChecks[m.host] : undefined;
+                        {watch.mocks.read.mocks.map((m) => {
+                          const chk = m.host ? watch.checks[m.host] : undefined;
                           return (
                             <li key={`${m.name}-${m.port}`} className="text-[11px] text-slate-500">
                               <span className="font-medium text-slate-700">{m.name}</span>
@@ -430,22 +517,22 @@ export function DownloadPanel(p: DownloadPanelProps) {
                                 <>
                                   {" — "}
                                   <a className="text-bzm hover:underline font-mono break-all"
-                                    href={`${svScheme}://${m.host}/`}
+                                    href={`${sv.scheme}://${m.host}/`}
                                     target="_blank" rel="noreferrer">
-                                    {svScheme}://{m.host}/
+                                    {sv.scheme}://{m.host}/
                                   </a>
                                   {/* The check is made from the machine serving
                                       this page, against the host shown above --
                                       never a second copy of that string. */}
                                   <button type="button" disabled={chk?.busy}
-                                    onClick={() => checkEndpoint(m.host!)}
+                                    onClick={() => watch.check(m.host!)}
                                     className="ml-2 align-baseline rounded border border-slate-300 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40">
                                     {chk?.busy ? "checking…" : "check endpoint"}
                                   </button>
                                 </>
                               ) : <> — set a wildcard domain to get the endpoint host</>}
                               {chk?.res && (
-                                <p className={`mt-0.5 ${svCheckTone(chk.res)}`}>
+                                <p className={`mt-0.5 ${checkTone(chk.res)}`}>
                                   {chk.res.message}
                                   {chk.res.status !== "ok" && chk.res.detail && (
                                     <span className="block text-slate-400 font-mono break-all">
@@ -464,7 +551,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     ) : (
                       // "Nothing deployed" and "cannot look" are different
                       // answers, and the second must not read as the first.
-                      <p className="text-[11px] text-slate-400">{svMocks.read.message}</p>
+                      <p className="text-[11px] text-slate-400">{watch.mocks.read.message}</p>
                     )}
                   </div>
                 )}
@@ -472,5 +559,66 @@ export function DownloadPanel(p: DownloadPanelProps) {
                 )}
               </div>
             </div>
+  );
+}
+
+/** crane-hook, as a manifest to apply to the cluster under test.
+ *
+ *  There is deliberately no chart to fetch. crane-hook is an image, published
+ *  as a `helm test` hook inside the separate helm-crane chart -- its own
+ *  repository ships no chart at all, and documents a Kubernetes manifest as the
+ *  standalone way to run it. That manifest is one this generator already
+ *  renders (`crane_hook`), so this hands over the one it would put in the
+ *  bundle: the same Pod, Role and RoleBinding, for the namespace and registry
+ *  currently configured, rather than a generic copy that ignores both.
+ *
+ *  It does not turn the option on. Applying the check and shipping it inside
+ *  the agent's bundle are different decisions -- this is the one you make
+ *  before deploying anything.
+ *
+ *  `api` is handed down rather than imported, as everywhere else on the page:
+ *  a module-level import here was the one call site left with nowhere to put a
+ *  different implementation, so the one thing this component does could not be
+ *  driven from a test at all.
+ */
+function TestDeploy(
+  { api, facts, options }:
+  { api: Api; facts: Facts | null; options: Options },
+) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async () => {
+    if (!facts) return;
+    setBusy(true); setErr(null);
+    try {
+      const out = await api.generate(facts, { ...options, crane_hook: true });
+      const f = out.files.find((x: GeneratedFile) => x.name.includes("cranehook"));
+      if (!f) throw new Error("this bundle renders no crane-hook manifest");
+      const url = URL.createObjectURL(
+        new Blob([f.content], { type: "text/yaml" }));
+      const a = document.createElement("a");
+      a.href = url; a.download = f.name; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(String((e as Error).message));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <span className="flex items-center gap-1">
+      <Button kind="ghost" onClick={run} disabled={!facts} busy={busy}>
+        Test deploy
+      </Button>
+      <a href="https://github.com/Blazemeter/crane-hook" target="_blank"
+        rel="noreferrer" title="crane-hook on GitHub — what this checks and how"
+        aria-label="About crane-hook"
+        className="w-5 h-5 rounded-full border border-slate-300 text-slate-500
+                   hover:text-slate-900 hover:bg-slate-100 flex items-center
+                   justify-center text-[10px] font-serif italic shrink-0">
+        i
+      </a>
+      <ErrorMsg msg={err} />
+    </span>
   );
 }

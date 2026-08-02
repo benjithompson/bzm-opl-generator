@@ -33,6 +33,7 @@ caller, and the one that has them wrong is the one that would never say so.
 """
 
 import collections
+import concurrent.futures
 import http.client
 import io
 import json
@@ -45,8 +46,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from . import (api, doctor, facts as facts_mod, generate as gen_mod, livetest,
-               options as options_mod, suggest as suggest_mod, workstation)
+from . import (api, doctor, evidence as evidence_mod, facts as facts_mod,
+               generate as gen_mod, livetest, options as options_mod, plan,
+               suggest as suggest_mod, workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -154,45 +156,106 @@ KEY_SECRET_ENV = "BZM_API_KEY_SECRET"
 KEY_FILE_ENV = "BZM_API_KEY_FILE"
 
 
-def client_from_env(api_key_file=None):
-    """A BzmClient from the environment, or NotConfigured saying how to give one.
+def client_from_key(api_key_file=None, *, key_id=None, secret=None):
+    """The construction: a BzmClient from a path, an id and secret, or the
+    environment -- and a CoreError, never anything else, when there is none.
 
-    Two sources, in precedence order: a path the caller named, then the
-    id/secret pair in the environment. Nothing is discovered from the working
-    directory -- see the comment below for why that matters here and not for a
-    command.
+    Precedence, and each step is somebody's real input: the path in the
+    argument (a `--api-key` flag, an MCP tool argument, a file picked in the
+    page), then an id and secret in the argument (typed into the connect form,
+    where there is no file), then KEY_FILE_ENV, then the id/secret pair in the
+    environment. Nothing is discovered from the working directory -- see the
+    comment at the refusal for why that matters here and not for a command.
 
-    A *path* is something a caller may pass in an argument; the secret itself is
-    not, and there is deliberately no way to send one -- an argument travels
-    through whatever is between the caller and here, and gets logged by things
-    nobody is thinking about at the time.
+    Widened rather than joined by a sibling (#92). The promise worth having in
+    one place is the one this already made -- never SystemExit, because the
+    file-reading constructor raised one and a BaseException walks past every
+    `except Exception` between a route and the top of a server process -- and a
+    second function making the same promise about a different input is the
+    thirteen constructions again, one order of magnitude down. That promise is
+    structural now rather than a habit: #95 deleted the constructor's path
+    branch, so `api.BzmClient` takes a keyword-only pair and there is no
+    exiting read left anywhere to creep back into a caller.
 
-    Never SystemExit, which is what the file-reading constructor raises: this
-    runs inside a server, and SystemExit is a BaseException that would take the
-    process down past any `except Exception` in the way.
+    `_from_env` until #95, when the callers moved and the name could follow.
+    The environment is the *last* of three places looked, and a name saying it
+    was the only one was read as one -- `--api-key` and a pasted pair reach the
+    same function, and the tests that stand in for an account stand in here.
+
+    That widening spends a rule this docstring used to state: that a secret is
+    never an argument. It still holds where it was argued -- `mcp_server`
+    passes a path and nothing else, and an argument there has travelled through
+    a model's context to get here. It does not hold for the UI, whose key
+    arrives pasted into a form with no file behind it: `key_set` used to write
+    it to a temp file purely to have a path for a constructor that took only
+    one, and a secret written to disk to satisfy an argument list is worse than
+    the argument. #95 passes the pair and that write is gone -- a `save: true`
+    still writes SAVED_KEY_PATH, which is a key the user asked to keep rather
+    than a detour through the filesystem.
+
+    Not "connected" in the sense of having reached BlazeMeter -- there is no
+    connection to make, the client is stateless HTTP Basic. Proving the
+    credential works is `user(client)`, one call, made by the callers that need
+    the proof; making it here would put a network round-trip inside every
+    construction and a second one inside most.
     """
-    path = api_key_file or os.environ.get(KEY_FILE_ENV)
-    if path:
-        try:
-            return api.BzmClient(credentials=api.read_key_file(
-                os.path.expanduser(path)))
-        except ValueError as e:
-            raise NotConfigured(str(e))
-    key_id = os.environ.get(KEY_ID_ENV)
-    secret = os.environ.get(KEY_SECRET_ENV)
-    if key_id and secret:
-        return api.BzmClient(credentials=(key_id, secret))
-    # Deliberately no fall back to detect_keys(): its first candidate is
-    # `./api-key.json`, which is fine for a command someone ran in their own
-    # checkout and wrong for a server whose working directory is wherever a
-    # client launched it -- a customer's project, quite possibly holding an
-    # api-key.json that is theirs. Asking is cheap; using the wrong account is
-    # not. The UI does its own detection, where the person can see the path.
-    raise NotConfigured(
-        f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of an "
-        f"api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} and "
-        f"{KEY_SECRET_ENV}, in the environment of whatever started this. "
-        f"Create the key under Settings -> API Keys in BlazeMeter.")
+    # Every branch below decides a *credential*; the construction itself is the
+    # single line at the end. Three returns each building their own was three
+    # places for a fourth to be added beside, and the guard in tests/test_core.py
+    # counts constructions rather than trusting that they all say the same thing.
+    if key_id or secret:
+        if api_key_file:
+            # Both, in one call, and only ever as arguments -- a key in the
+            # environment losing to one the caller named is precedence, but two
+            # in the same call is a caller that does not know which account it
+            # is about, and taking one silently is how a bundle gets built
+            # against the wrong one with nothing anywhere saying so.
+            raise BadRequest("give an API key file path, or an id and secret, "
+                             "not both")
+        if not (key_id and secret):
+            # Half a pair gets its own sentence: this caller plainly has a key
+            # and is one field short, and the "no API key anywhere" message
+            # below -- which talks about environment variables -- answers a
+            # question it did not ask.
+            missing = "secret" if key_id else "id"
+            raise BadRequest(f"an API key needs both an id and a secret; "
+                             f"the {missing} is missing")
+        credentials = (key_id, secret)
+    else:
+        path = api_key_file or os.environ.get(KEY_FILE_ENV)
+        if path:
+            try:
+                credentials = api.read_key_file(os.path.expanduser(path))
+            except ValueError as e:
+                # Every failure read_key_file has is a ValueError,
+                # deliberately: an OSError or a UnicodeDecodeError escaping as
+                # itself is a bare exception out of a route. The second
+                # sentence is what the exiting wrapper used to add for the
+                # terminal alone -- a bad path is the same mistake on every
+                # surface, so it is said on all of them.
+                raise NotConfigured(
+                    f"{e}. Create the key under Settings -> API Keys in "
+                    f"BlazeMeter.")
+        else:
+            env_id = os.environ.get(KEY_ID_ENV)
+            env_secret = os.environ.get(KEY_SECRET_ENV)
+            if not (env_id and env_secret):
+                # Deliberately no fall back to detect_keys(): its first
+                # candidate is `./api-key.json`, which is fine for a command
+                # someone ran in their own checkout and wrong for a server
+                # whose working directory is wherever a client launched it -- a
+                # customer's project, quite possibly holding an api-key.json
+                # that is theirs. Asking is cheap; using the wrong account is
+                # not. The UI does its own detection, where the person can see
+                # the path.
+                raise NotConfigured(
+                    f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of "
+                    f"an api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} "
+                    f"and {KEY_SECRET_ENV}, in the environment of whatever "
+                    f"started this. Create the key under Settings -> API Keys "
+                    f"in BlazeMeter.")
+            credentials = (env_id, env_secret)
+    return api.BzmClient(credentials=credentials)
 
 
 def detect_keys():
@@ -307,12 +370,47 @@ def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
             "omitted_by_limit": len(matched) - len(kept)}
 
 
+# What BlazeMeter needs before it will hand a run to a location, and what it
+# says when one of them is missing. The 403 names neither field -- it reads as
+# an account that is busy rather than a location that was never finished -- and
+# `threadsPerEngine` is exactly where this goes wrong, because POST
+# /private-locations accepts the field and does not store it (see
+# api.create_private_location's follow-up PATCH). So the moment to say it is the
+# one where the location is made, on every surface that can make one.
+LOCATION_UNRUNNABLE = (
+    "WARNING: location is not runnable -- tests will fail to start with "
+    "403 'Not enough available resources'. Set the missing field(s) in "
+    "the BlazeMeter UI (Settings -> Private Locations).")
+
+
+def location_runnable(location):
+    """Whether a location has both the fields a test start needs.
+
+    Both, rather than the one that usually goes missing: either alone produces
+    the same 403, and a check that looked at one would vouch for the other.
+    """
+    return bool(location.get("slots") and location.get("threadsPerEngine"))
+
+
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
-    return _upstream(client.create_private_location, name, account_id,
-                     [workspace_id], func_ids=list(func_ids), slots=slots,
-                     threads_per_engine=threads_per_engine)
+    """Create a private location, and say whether a test can start on it.
+
+    The verdict travels with the location rather than being left for each
+    caller to work out: it was the CLI's alone, so the two surfaces that create
+    a location without a terminal -- the web page and an MCP session -- made
+    one that 403s every start and said nothing about it.
+
+    `warning` is None for a runnable location, so a caller shows what it is
+    given rather than deciding when the sentence applies.
+    """
+    loc = _upstream(client.create_private_location, name, account_id,
+                    [workspace_id], func_ids=list(func_ids), slots=slots,
+                    threads_per_engine=threads_per_engine)
+    runnable = location_runnable(loc)
+    return {"location": loc, "runnable": runnable,
+            "warning": None if runnable else LOCATION_UNRUNNABLE}
 
 
 def create_ship(client, harbor_id, name):
@@ -340,6 +438,83 @@ def add_func_id(client, harbor_id, func_id):
         return loc
     return _upstream(client.update_private_location, harbor_id,
                      func_ids=have + [func_id])
+
+
+# The location settings this tool will change, as {name: the field BlazeMeter
+# calls it}. A closed set on purpose: `funcIds` is add_func_id's, which is
+# additive by construction, and a general "PATCH whatever you send" would let a
+# caller replace it wholesale by accident -- the exact failure that function
+# exists to prevent.
+LOCATION_SETTINGS = {
+    "slots": "slots",
+    "threads_per_engine": "threadsPerEngine",
+    "override_cpu": "overrideCPU",
+    "override_memory": "overrideMemory",
+}
+
+
+def update_location(client, harbor_id, **settings):
+    """Change a location's concurrency settings, and report what actually took.
+
+    The case this exists for: the location and its agent were set up, a test
+    was planned against 500 virtual users per engine, and the real figure turns
+    out to be 1,000. That is a change to the *location*, not to the bundle --
+    none of these four values appears in a manifest, so nothing has to be
+    regenerated, re-applied or restarted for a new one to take effect on the
+    next test start.
+
+    **Reads back rather than trusting the write.** The answer names, per field,
+    what it was, what was asked for and what the location says afterwards --
+    because this API has already been caught accepting a field and not storing
+    it: `create_private_location` sends threadsPerEngine to POST, which ignores
+    it, and the location comes back null and 403s every test start. A UI that
+    reported the request as the outcome would show the number the user typed
+    while the account held something else, which is the same failure wearing a
+    tick. `ignored` is what came back unchanged.
+
+    Unknown settings are refused rather than passed through: a typo in a field
+    name would otherwise be a silent no-op that this function then reported as
+    "nothing changed", which reads as the account rejecting a legitimate value.
+
+    `None` means "leave this one alone", so there is deliberately no way to
+    *clear* a setting here -- an override that has been set can be changed but
+    not unset. Clearing one is a different intent from not mentioning it, and
+    collapsing the two is how a partial update wipes a field nobody named.
+    """
+    unknown = sorted(set(settings) - set(LOCATION_SETTINGS))
+    if unknown:
+        raise BadRequest(
+            f"not a location setting: {', '.join(unknown)} -- this changes "
+            f"{', '.join(sorted(LOCATION_SETTINGS))}. Features are "
+            f"add_func_id's, which is additive; anything else is BlazeMeter's "
+            f"own UI")
+    wanted = {k: v for k, v in settings.items() if v is not None}
+    before = _upstream(client.private_location, harbor_id)
+    # Snapshotted here, not after the write. Reading the four values out of
+    # `before` further down would be right only for as long as the client hands
+    # back a document nothing else holds a reference to -- and "what it was" is
+    # the one thing that cannot be re-derived once the PATCH has landed.
+    was = _settings_of(before)
+    if not wanted:
+        # Not an error: a form submitted with nothing changed is a no-op, and
+        # answering with the location keeps one shape for every caller.
+        return {"location": before, "changed": {}, "ignored": [],
+                "before": was, "after": dict(was)}
+    _upstream(client.update_private_location, harbor_id, **wanted)
+    # A second GET rather than the PATCH's own body: the response to a write is
+    # what the write claimed, and what this has to report is what the account
+    # now holds.
+    after = _upstream(client.private_location, harbor_id)
+    now = _settings_of(after)
+    changed = {k: now[k] for k in wanted if now[k] != was[k]}
+    ignored = sorted(k for k in wanted if now[k] == was[k] and wanted[k] != was[k])
+    return {"location": after, "changed": changed, "ignored": ignored,
+            "before": was, "after": now}
+
+
+def _settings_of(location):
+    """The four settings as this tool names them, from a location document."""
+    return {name: location.get(field) for name, field in LOCATION_SETTINGS.items()}
 
 
 def issue_auth_token(client, harbor_id, ship_id):
@@ -931,6 +1106,127 @@ def bundle_images(facts, all_images=False):
     return facts_mod.image_refs(facts, all_images=all_images)
 
 
+# -- planning, before any of the above exists ---------------------------------
+
+def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None, agents=None):
+    """What a load target needs, as numbers and as a document to request it with.
+
+    The only thing here that reaches nothing at all -- no key, no account, no
+    cluster, no evidence file. That is deliberate and it is the whole case:
+    this is used *before* there is an account to connect to or a cluster to
+    preflight, by somebody who has to raise a ticket for the infrastructure the
+    rest of this tool assumes. Putting it behind a credential would put the
+    first step behind the last one.
+
+    The document comes back with the numbers rather than from a second call.
+    Both describe one plan, and two round trips is two answers that can end up
+    describing different ones -- the same reason preflight() returns its
+    suggestions alongside its verdicts.
+    """
+    try:
+        # Blanks are forwarded as they arrive: what "not given" defaults to is
+        # plan's, and restating it here was a second copy that could drift.
+        p = plan.capacity_plan(
+            users, vus_per_engine=vus_per_engine,
+            engine_cpu=engine_cpu, engine_mem=engine_mem,
+            engines_per_node=engines_per_node, agents=agents)
+    except ValueError as e:
+        # Every one of these is the caller's number rather than a failure here,
+        # and each names the field it is about. 400, not 500.
+        raise BadRequest(str(e))
+    return dict(p,
+                document=plan.plan_document(p),
+                document_file=plan.DOCUMENT_FILE)
+
+
+def engine_vus(engine_cpu=None, engine_mem=None):
+    """How many virtual users an engine of this size is rated for.
+
+    The same ratio capacity_plan assumes from and doctor judges against, asked
+    on its own so a form can *suggest* the figure beside the field rather than
+    leaving "virtual users per engine" as a number the user has to know. 500 is
+    only right for the 2 CPU / 8Gi engine, which is exactly the mistake the
+    planner's own default used to make.
+    """
+    try:
+        cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
+                                        "engine_mem_limit": engine_mem})
+    except ValueError as e:
+        raise BadRequest(str(e))
+    return {"cpu": gen_mod.format_cpu(cpu),
+            "memory": gen_mod.format_memory(mem),
+            "supported_vus": plan.supported_vus(cpu, mem)}
+
+
+def account_capacity(client, account_id):
+    """Rated virtual-user capacity across an account, by workspace.
+
+    "Rated", not "allowed", and the distinction was measured rather than
+    assumed. A live run settled two halves of it on a location with 2 agents,
+    slots=1 and threadsPerEngine=50:
+
+      * `agents x slots` is the **engine** count, and it is enforced -- asking
+        for 3 engines allocated 2, and a start while those 2 are busy is
+        refused with 403 "Not enough available resources".
+      * `x threadsPerEngine` is what those engines are *sized* for, and is not
+        a gate: 101 virtual users started happily, packed onto the same 2
+        engines. So this number is what the location is built to serve well,
+        not a ceiling BlazeMeter enforces.
+
+    A location in several workspaces is *shared*: its capacity is claimable
+    from either, so adding it into both workspace totals counts engines that
+    cannot run twice. It is flagged, and the account total counts it once --
+    which is why the account figure is not the sum of the workspace figures.
+    """
+    # Both at once: they are independent reads and the locations one is the
+    # slow half (1.3s on a 171-location account), so in series the workspace
+    # names were pure added wait on every cold view. Threads rather than async
+    # because the client is stdlib urllib and every caller here is synchronous
+    # -- and because two of them is the whole concurrency this needs.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        want_locs = pool.submit(_upstream, client.private_locations,
+                                account_id=account_id)
+        want_spaces = pool.submit(_upstream, client.workspaces, account_id)
+        locs = want_locs.result()
+        spaces = {w["id"]: w["name"] for w in want_spaces.result()}
+    out = []
+    for l in locs:
+        ships = l.get("ships") or []
+        slots, tpe = l.get("slots"), l.get("threadsPerEngine")
+        engines = (slots or 0) * len(ships)
+        ws = list(l.get("workspacesId") or [])
+        out.append({
+            "id": l["id"], "name": l.get("name"),
+            "func_ids": l.get("funcIds") or [],
+            "agents": len(ships),
+            # Two counts, for the reason mcp_server's listing carries two: a
+            # locations *listing* need not carry `lastHeartBeat` at all, and
+            # `ship_reporting` answers None there rather than False. Folding
+            # that into "not reporting" would print "1 not reporting" about an
+            # agent nothing had looked at -- the collapse this package has made
+            # four times. Reporting is what the payload vouches for; unknown is
+            # what it declined to say.
+            "agents_reporting": sum(1 for s in ships if ship_reporting(s)),
+            "agents_unknown": sum(1 for s in ships
+                                  if ship_reporting(s) is None),
+            "slots": slots, "threads_per_engine": tpe,
+            "engines": engines,
+            # None, not 0: a location with slots or threadsPerEngine unset has
+            # no rating to state, and 0 would read as "no capacity" when the
+            # truth is "nobody has said".
+            "rated_vus": engines * tpe if (slots and tpe) else None,
+            "workspace_ids": ws,
+            "workspace_names": [spaces.get(w, str(w)) for w in ws],
+            "shared": len(ws) > 1,
+        })
+    return {"account_id": account_id,
+            "workspaces": [{"id": i, "name": n} for i, n in spaces.items()],
+            "locations": out,
+            "rated_vus": sum(x["rated_vus"] or 0 for x in out),
+            "unrated": sum(1 for x in out if x["rated_vus"] is None)}
+
+
 # -- preflight -----------------------------------------------------------------
 
 def evidence_document(evidence):
@@ -970,6 +1266,47 @@ def evidence_document(evidence):
         raise EvidenceUnreadable(str(e))
 
 
+def preflight_cluster(evidence, options=None, namespace=None):
+    """The cluster read a preflight works from, and the namespace it is about.
+
+    Two answers from one function because the second decides the first:
+    `cluster_from_evidence` is told which namespace is being preflighted so it
+    can report a file collected for a different one, rather than adopting it.
+
+    The precedence, and each step is somebody's input: a namespace asked for
+    outright (`doctor -n`, which the options cannot carry -- the bundle's
+    namespace is what it was *generated* for), then the configuration's, then
+    the one the evidence was collected for, then the documented default.
+
+    Reachable on its own, and not only from preflight(), because one caller
+    prints its own report: `doctor --cluster-evidence` runs doctor.run, which
+    writes to stdout, and core is not a terminal. That command restated this
+    precedence line for line, comment included, so a change to one rule was a
+    change to one of its two copies.
+
+    A falsy `evidence` is a run against a cluster this machine can reach, and
+    comes back as the empty Evidence -- which says exactly what doctor's own
+    defaults say: no cluster data, no probes, and no verdicts reached before
+    the checks ran. Not a refusal, and not a None the call site then has to
+    test three times over.
+    """
+    options = options or {}
+    doc_ns = (evidence.get(evidence_mod.NAMESPACE)
+              if isinstance(evidence, dict) else None)
+    want = namespace or options.get("namespace") or doc_ns
+    if not evidence:
+        return doctor.Evidence(None, None, ()), doctor.resolve_namespace(
+            want, options)
+    try:
+        imported = doctor.cluster_from_evidence(evidence, want)
+    except ValueError as e:
+        # Every way a file can be the wrong one is a sentence doctor already
+        # writes, and it carries no verdicts -- so whatever the caller was
+        # already showing stays on screen.
+        raise BadRequest(str(e))
+    return imported, doctor.resolve_namespace(want, options)
+
+
 def preflight(facts, options, evidence):
     """The verdicts `doctor --cluster-evidence` prints, for one configuration.
 
@@ -985,19 +1322,7 @@ def preflight(facts, options, evidence):
     because it qualifies every one of them.
     """
     options = options or {}
-    doc_ns = evidence.get("namespace") if isinstance(evidence, dict) else None
-    # Same precedence as the command: the namespace being configured wins, and
-    # the one the file was collected for is the last resort. A file collected
-    # elsewhere is then reported by cluster_from_evidence rather than adopted.
-    namespace = options.get("namespace") or doc_ns
-    try:
-        imported = doctor.cluster_from_evidence(evidence, namespace)
-    except ValueError as e:
-        # Every way a file can be the wrong one is a sentence doctor already
-        # writes, and it carries no verdicts -- so whatever the caller was
-        # already showing stays on screen.
-        raise BadRequest(str(e))
-    namespace = doctor.resolve_namespace(namespace, options)
+    imported, namespace = preflight_cluster(evidence, options)
     try:
         checks = doctor.evaluate(facts, options, namespace, evidence=imported)
     except (ValueError, KeyError) as e:
@@ -1013,12 +1338,19 @@ def preflight(facts, options, evidence):
     suggestions = suggest_mod.from_evidence(evidence)
     return {"namespace": namespace,
             **_verdicts(checks),
-            # The same three facts the leading check states in prose, apart
-            # from it: a caller can put them in a header, where they cannot be
-            # read past. Which namespace the *file* describes is not
-            # `namespace` above -- that is the one being preflighted, and the
-            # difference is the point.
-            "evidence": doctor.evidence_summary(evidence),
+            # The list in one sentence, in doctor's words -- the line the
+            # command prints under its report. A caller that renders a header
+            # rather than a report needs the same sentence, and composing it
+            # from the counts is where the rule for when to state the
+            # consequence gets decided a second time.
+            "summary": doctor.summary_line(checks),
+            # The same facts the leading check states in prose, apart from it:
+            # a caller can put them in a header, where they cannot be read
+            # past. Which namespace the *file* describes is not `namespace`
+            # above -- that is the one being preflighted, and the difference is
+            # the point, so doctor is asked for it rather than left to a
+            # caller comparing the two fields.
+            "evidence": doctor.evidence_summary(evidence, namespace),
             **suggestions_from_evidence(evidence, options)}
 
 

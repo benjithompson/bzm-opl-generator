@@ -2,6 +2,7 @@
 from a customer's actual BlazeMeter account.
 
 Subcommands:
+  plan        how much infrastructure a load target needs -- no account, no cluster
   locations   list private locations (harbors) across the account
   create-ship create an agent (ship) in a location, print id + AUTH_TOKEN
   facts       query the account, write facts.json (harbor, ships, images, features)
@@ -15,31 +16,52 @@ Subcommands:
 
 import argparse
 import json
+import os
 import sys
 
 from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
-               livetest, suggest as suggest_mod, workstation)
+               livetest, plan, suggest as suggest_mod, workstation)
+
+
+def _client(a):
+    """The account client, from whatever --api-key this command was given.
+
+    One construction for every command, and it is core's: it reads the key file
+    itself and refuses a bad one with a CoreError -- the sentence the web page
+    and an MCP session get -- where the constructor used to read the file and
+    raise SystemExit from inside it. A command with no --api-key at all reaches
+    the environment rather than a TypeError from `open(None)`.
+    """
+    return core.client_from_key(a.api_key)
 
 
 def _resolve_account(client, a):
-    """--account-id wins; --account-name matches case-insensitive substring."""
+    """--account-id wins; --account-name matches case-insensitive substring.
+
+    The matching is the terminal's own -- there is no other surface where an
+    account is named by typing part of it -- so it stays here. What the account
+    tree *is* comes from core, which is what turns a refused key into a
+    sentence instead of a BzmApiError nobody caught.
+    """
     if a.account_id:
         return a.account_id
-    accounts = client.accounts()
+    accounts = core.accounts(client)
     if a.account_name:
         hits = [x for x in accounts if a.account_name.lower() in (x.get("name") or "").lower()]
         if len(hits) != 1:
             sys.exit(f"--account-name '{a.account_name}' matched {len(hits)} accounts: "
                      f"{[(x['id'], x.get('name')) for x in hits or accounts]}")
         return hits[0]["id"]
-    u = client.user()
+    u = core.user(client)
     return u["defaultProject"]["accountId"]
 
 
 def cmd_locations(a):
-    client = api.BzmClient(a.api_key)
+    client = _client(a)
     account_id = _resolve_account(client, a)
-    locs = client.private_locations(account_id)
+    # No narrowing and no cap: a terminal scrolls, and select_locations' limit
+    # exists for the caller with a result ceiling. See its docstring.
+    locs = core.locations(client, account_id)
     print(f"account {account_id}: {len(locs)} private locations")
     for l in locs:
         ships = ", ".join(f"{s['id']} ({s.get('name')}, {s.get('state')})"
@@ -49,41 +71,43 @@ def cmd_locations(a):
 
 
 def cmd_create_location(a):
-    client = api.BzmClient(a.api_key)
+    client = _client(a)
     account_id = _resolve_account(client, a)
     if a.workspace_id:
         wsid = a.workspace_id
     else:
         if not a.workspace_name:
             sys.exit("--workspace-id or --workspace-name required")
-        wss = client.workspaces(account_id)
+        wss = core.workspaces(client, account_id)
         hits = [w for w in wss if a.workspace_name.lower() in (w.get("name") or "").lower()]
         if len(hits) != 1:
             sys.exit(f"--workspace-name '{a.workspace_name}' matched {len(hits)}: "
                      f"{[(w['id'], w.get('name')) for w in hits]}")
         wsid = hits[0]["id"]
-    h = client.create_private_location(a.name, account_id, [wsid],
-                                       func_ids=a.func_ids, slots=a.slots,
-                                       threads_per_engine=a.threads_per_engine)
+    made = core.create_location(client, a.name, account_id, wsid,
+                                func_ids=a.func_ids, slots=a.slots,
+                                threads_per_engine=a.threads_per_engine)
+    h = made["location"]
     print(f"created location '{h.get('name')}' harbor_id={h['id']} "
           f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, "
           f"slots={h.get('slots')}, threadsPerEngine={h.get('threadsPerEngine')})")
-    if not h.get("slots") or not h.get("threadsPerEngine"):
-        print("WARNING: location is not runnable -- tests will fail to start with "
-              "403 'Not enough available resources'. Set the missing field(s) in "
-              "the BlazeMeter UI (Settings -> Private Locations).", file=sys.stderr)
+    # core's sentence, not one written here: a location that cannot start a
+    # test 403s the same way whoever created it, and the web page and an MCP
+    # session had no warning at all while this one did.
+    if made["warning"]:
+        print(made["warning"], file=sys.stderr)
     print(f"next: bzm-opl-gen create-ship --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
 
 
 def cmd_delete_location(a):
-    gone = core.delete_location(api.BzmClient(a.api_key), a.harbor_id)
+    gone = core.delete_location(_client(a), a.harbor_id)
     print(f"deleted location '{gone['name']}' ({gone['deleted']}) and its "
           f"{len(gone['ships_deleted'])} ship(s)")
 
 
 def cmd_create_ship(a):
-    client = api.BzmClient(a.api_key)
-    ship = client.create_ship(a.harbor_id, a.name)
+    client = _client(a)
+    ship = core.create_ship(client, a.harbor_id, a.name)
     # The ids first, then the token: the agent exists whatever the token endpoint
     # answers, and an account that refuses the fetch would otherwise leave the
     # only record of it in a traceback -- so the next attempt creates a second
@@ -120,12 +144,15 @@ def cmd_facts(a):
         if not a.ship_id:
             sys.exit("--manual needs --ship-id: it is what identifies this agent "
                      "to BlazeMeter, and the API is not there to look it up")
+        # facts.manual, not core.manual_facts: it reaches nothing, so there is
+        # no refusal for core to carry, and its wrapper's second field is the
+        # gui note this command already prints for both branches at once.
         f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
     else:
         if not a.api_key:
             sys.exit("facts needs --api-key, or --manual --ship-id to build them "
                      "from values you already have")
-        f = facts_mod.gather(api.BzmClient(a.api_key), a.harbor_id)
+        f = core.gather_facts(_client(a), a.harbor_id)
     facts_mod.save(f, a.output)
     # Manual facts carry no location name -- nothing knows it -- so fall back to
     # the id rather than printing "location 'None'".
@@ -207,7 +234,7 @@ def cmd_generate(a):
     # branches of it. What is left here is the flags: a client is built only
     # for the one that mints, so a bad key file is not read on a run that was
     # never going to touch the account.
-    client = api.BzmClient(a.api_key) if a.api_key and a.rotate_token else None
+    client = _client(a) if a.api_key and a.rotate_token else None
     if a.api_key and not a.rotate_token:
         print("note: --api-key has no effect on `generate`. It no longer "
               "fetches an AUTH_TOKEN, because that fetch issues a new one and "
@@ -224,9 +251,18 @@ def cmd_generate(a):
     # itself. Which of the four happened decides whether an agent is still
     # running, and the run that said nothing was the one that rotated (#64).
     print(source.message)
-    files = gen_mod.generate(f, opts)
-    written = gen_mod.write(files, a.output)
-    print(f"wrote {len(written)} files to {a.output}/: " + ", ".join(written))
+    # Through core, so every refusal generate() writes -- an engine limit that
+    # is not a quantity, a service account named as the empty string -- arrives
+    # as the sentence it was written as rather than at the foot of a traceback.
+    # The token is already in `opts`, so this resolution takes the first branch.
+    files = core.generate_bundle(f, opts)
+    written = core.write_bundle(files, os.path.abspath(a.output))
+    # `a.output` as it was typed, not the absolute path core needs: a shell is
+    # the one caller that chose its own working directory. Sorted, because that
+    # is the order this line has always listed them in -- preview_order is for
+    # a reader being shown the files, and this is a receipt.
+    print(f"wrote {len(written)} files to {a.output}/: "
+          + ", ".join(sorted(w["name"] for w in written)))
 
 
 def cmd_sv_expose(a):
@@ -257,12 +293,65 @@ def cmd_sv_expose(a):
     print(f"apply with: kubectl apply -n {opts['namespace']} -f {a.output}")
 
 
+def cmd_plan(a):
+    """Size the infrastructure a load target needs, before any of it exists."""
+    try:
+        p = core.capacity_plan(
+            a.users, vus_per_engine=a.vus_per_engine,
+            engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
+            engines_per_node=a.engines_per_node, agents=a.agents)
+    except core.CoreError as e:
+        sys.exit(str(e))
+    if a.json:
+        print(json.dumps(p, indent=2))
+        return
+    if a.markdown:
+        print(p["document"])
+        return
+
+    eng, node = p["engine"], p["node"]
+    print(f"{p['users']:,} virtual users at {p['vus_per_engine']:,} per engine"
+          + ("  (assumed -- what an engine this size is rated for)"
+             if p["vus_per_engine_assumed"] else ""))
+    print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
+          f"{eng['disk_gb']}GB disk")
+    print(f"  {p['engines_per_agent']} engines per agent across {p['agents']} "
+          f"agent(s) -- the location's slots")
+    print(f"  {p['nodes_per_agent']} node(s) per agent of {node['cpu']} vCPU / "
+          f"{node['memory']} capacity, at {p['engines_per_node']} engine(s) each"
+          + (f" ({p['nodes']} nodes in all)" if p["agents"] > 1 else ""))
+    print(f"  peak {p['peak']['cpu']} vCPU / {p['peak']['memory']} per agent's "
+          f"cluster; 0 between runs")
+    print(f"  agent: 1 small always-on node ({p['crane']['cpu_limit']} CPU / "
+          f"{p['crane']['memory_limit']})")
+    # The location block keeps BlazeMeter's own field names: it is what to type
+    # into those fields, not a description of the plan.
+    print(f"  location: slots={p['location']['slots']} (engines per agent), "
+          f"threadsPerEngine={p['location']['threads_per_engine']} (virtual "
+          f"users per engine),")
+    print(f"            overrideCPU={p['location']['override_cpu']}, "
+          f"overrideMemory={p['location']['override_memory']}")
+    for w in p["warnings"]:
+        print(f"  ! {w}")
+    if a.output:
+        # Through core so the absolute-path rule is the same one every other
+        # written artifact obeys, rather than a second opinion about paths.
+        out = os.path.abspath(a.output)
+        core.write_bundle({p["document_file"]: p["document"]}, out)
+        print(f"\nwrote {os.path.join(out, p['document_file'])} -- the request "
+              f"to hand to whoever provisions the cluster")
+    else:
+        print(f"\n-o DIR writes {p['document_file']}: the same numbers as a "
+              f"document to raise the infrastructure request with "
+              f"(--markdown prints it here)")
+
+
 def cmd_doctor(a):
     """Preflight the cluster against the location's advertised concurrency."""
     if a.harbor_id:
         if not a.api_key:
             sys.exit("--harbor-id needs --api-key (or drop both and use --facts)")
-        f = facts_mod.gather(api.BzmClient(a.api_key), a.harbor_id)
+        f = core.gather_facts(_client(a), a.harbor_id)
     else:
         f = facts_mod.load(a.facts)
     # The generated profile is what the checks measure against -- engine size,
@@ -273,26 +362,18 @@ def cmd_doctor(a):
         opts = {}
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
-    # The three things an evidence file contributes travel together as one
-    # Evidence, from here to the `evidence=` doctor takes, so an absent file is
-    # an empty Evidence rather than a None the call site then has to test three
-    # times over. Empty says exactly what doctor's own defaults say: no cluster
-    # data, no probes, and no verdicts reached before the checks ran.
-    imported = doctor.Evidence(None, None, ())
-    if a.cluster_evidence:
-        try:
-            doc = doctor.load_evidence(a.cluster_evidence)
-            # The namespace the evidence was collected for is the last fallback,
-            # not the first: an explicit -n or the bundle's own namespace is what
-            # the user is preflighting, and evidence for a different one is
-            # reported by cluster_from_evidence rather than silently adopted.
-            namespace = (a.namespace or opts.get("namespace")
-                         or doc.get("namespace"))
-            imported = doctor.cluster_from_evidence(doc, namespace)
-        except ValueError as e:
-            sys.exit(str(e))
-    else:
-        namespace = a.namespace
+    # What is being preflighted, and against which namespace, is core's --
+    # `preflight_cluster` is the same call the web UI's panel makes, and the
+    # precedence between -n, the bundle and the file used to be stated here as
+    # well as there. An unreadable or wrong file is a CoreError, which main()
+    # exits on with the sentence doctor wrote.
+    doc = (core.evidence_document(a.cluster_evidence)
+           if a.cluster_evidence else None)
+    imported, namespace = core.preflight_cluster(doc, opts, a.namespace)
+    # doctor.run rather than core.preflight, and that is the whole of what stays
+    # here: run() prints the verdict list and evaluate() does not, which is the
+    # split every non-terminal caller depends on. The suggestions preflight()
+    # returns alongside are `suggest`'s, which answers a different question.
     checks = doctor.run(f, opts, namespace, evidence=imported)
     sys.exit(1 if doctor.has_failures(checks) else 0)
 
@@ -305,8 +386,17 @@ def cmd_suggest(a):
     it would not, and this one answers how it should have been configured. Same
     file, different question, and nothing here is applied to anything.
     """
+    # The read is core's -- the same EvidenceUnreadable a browser and an MCP
+    # session get for a file that is not there or will not parse.
+    #
+    # The suggestions are not, and that is this ticket's one deliberate
+    # omission: `core.suggestions_from_evidence` merges each one against a
+    # configuration (state, current) for a panel that has one, and this command
+    # has no bundle to merge against -- `--json` is the bare suggestion, and
+    # `report` prints the objects rather than dicts. Folding the two together
+    # would change what this command answers, which #93 asked not to do.
+    doc = core.evidence_document(a.cluster_evidence)
     try:
-        doc = doctor.load_evidence(a.cluster_evidence)
         suggestions = suggest_mod.from_evidence(doc)
     except ValueError as e:
         sys.exit(str(e))
@@ -321,16 +411,18 @@ def cmd_toolcheck(a):
     opts = {"cluster": a.cluster, "local_registry": a.local_registry,
             "local_proxy": a.local_proxy}
     checks = workstation.run(opts)
-    # core.toolcheck answers the same question without printing; what this
-    # command adds is the report and the exit code.
+    # `workstation.run`, not `core.toolcheck`, and for the reason cmd_doctor
+    # keeps doctor.run: core answers without printing, because for the MCP
+    # server stdout is the JSON-RPC channel, and the report is the whole of what
+    # this command is. It reaches no account and no cluster, so there is no
+    # refusal for core to be carrying either.
     sys.exit(0 if not doctor.has_failures(checks) else 1)
 
 
 def cmd_images(a):
     f = facts_mod.load(a.facts) if a.facts else None
     if f is None:
-        client = api.BzmClient(a.api_key)
-        f = facts_mod.gather(client, a.harbor_id)
+        f = core.gather_facts(_client(a), a.harbor_id)
     imgs = core.bundle_images(f, all_images=a.all)
     for ref in imgs:
         print(ref)
@@ -366,15 +458,17 @@ def _regenerator(facts, a, ship_id, auth_token):
         opts["namespace"] = a.namespace
         opts["ship_id"] = opts.get("ship_id") or ship_id
         opts["auth_token"] = auth_token
-        written = gen_mod.write(gen_mod.generate(facts, opts), a.manifests)
+        written = core.write_bundle(core.generate_bundle(facts, opts),
+                                    os.path.abspath(a.manifests))
         print(f"regenerated {len(written)} files in {a.manifests}/ with "
-              f"proxy + CA trust: " + ", ".join(written))
+              f"proxy + CA trust: "
+              + ", ".join(sorted(w["name"] for w in written)))
     return regenerate
 
 
 def cmd_livetest(a):
     f = facts_mod.load(a.facts)
-    client = api.BzmClient(a.api_key)
+    client = _client(a)
     ship_id = core.sole_ship_id(f, a.ship_id)
     if not ship_id:
         sys.exit(f"--ship-id required (location has {len(f['ships'])} ships)")
@@ -396,6 +490,16 @@ def cmd_livetest(a):
             f"(the two render the same objects), or install the chart yourself "
             f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
             f"logs -l role=role-crane -f")
+    # Is the directory this agent's bundle at all? --manifests defaults to out/,
+    # which holds whatever the last `generate` left there, and the rig applies
+    # every *.yaml in it. First of the bundle guards and before the mint below,
+    # because a run that is about to be refused must not rotate a credential
+    # some other agent is holding. See livetest.bundle_check for the incident.
+    check = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id, opts)
+    for note in check.notes:
+        print("note: " + note)
+    if check.refusals:
+        sys.exit("\n".join(check.refusals))
     # Same shape of guard, for the same reason. The rig deploys into a namespace
     # it creates itself, so a ServiceAccount the bundle does not create is never
     # there: every object applies, no pod is ever created, and the run burns its
@@ -535,6 +639,41 @@ def main():
     p = argparse.ArgumentParser(prog="bzm-opl-gen", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    # Deliberately takes no --api-key and no --facts. It answers the question
+    # that comes before both: how much cluster to ask for. Requiring either
+    # would put it behind the thing it exists to help get funded.
+    pl = sub.add_parser("plan",
+                        help="how much infrastructure a load target needs "
+                             "(no account, no cluster)")
+    pl.add_argument("--users", required=True, metavar="N",
+                    help="virtual users the test has to reach")
+    pl.add_argument("--vus-per-engine", dest="vus_per_engine",
+                    help=f"virtual users one engine carries (BlazeMeter's "
+                         f"`threadsPerEngine`). Default is what an engine of "
+                         f"the chosen size is rated for -- "
+                         f"{api.DEFAULT_THREADS_PER_ENGINE} for the "
+                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
+                         f"there. Your script decides the real number: measure "
+                         f"it against one engine and re-run this")
+    pl.add_argument("--engine-cpu-limit", dest="engine_cpu_limit",
+                    help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
+    pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
+                    help=f'engine memory limit (default {gen_mod.ENGINE_DEFAULT_MEM})')
+    pl.add_argument("--agents",
+                    help="agents that will serve this location (default 1). "
+                         "BlazeMeter's `slots` is engines per *agent*, so the "
+                         "run is divided by this")
+    pl.add_argument("--engines-per-node", dest="engines_per_node",
+                    help="engines to a node (default 1; more is cheaper and "
+                         "they contend)")
+    pl.add_argument("-o", "--output", metavar="DIR",
+                    help=f"write {plan.DOCUMENT_FILE} here")
+    pl.add_argument("--markdown", action="store_true",
+                    help="print that document instead of the summary")
+    pl.add_argument("--json", action="store_true", help="the plan as data")
+    pl.set_defaults(fn=cmd_plan)
 
     l = sub.add_parser("locations", help="list private locations in an account")
     l.add_argument("--api-key", required=True)
