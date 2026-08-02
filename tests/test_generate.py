@@ -1241,3 +1241,68 @@ def test_a_written_bundle_carries_an_executable_mirror_script(tmp_path):
     gen.write(files, str(tmp_path))
     script = tmp_path / "bzm-opl-image-mirror.sh"
     assert script.exists() and os.access(script, os.X_OK)
+
+
+# -- what the bundle says about the location it deploys into -------------------
+
+def _readme(**facts_over):
+    return gen.generate({**FACTS, **facts_over}, {"namespace": "ns1"})["README.md"]
+
+
+def test_the_readme_states_the_location_settings_it_found():
+    """The bundle deploys an agent and cannot set the location, so the handover
+    has to say what the location must hold -- neither figure is in a manifest."""
+    r = _readme(slots=4, threads_per_engine=1000)
+    assert "4 engine(s) per agent at 1,000 virtual users" in r
+    assert "`slots` / `threadsPerEngine`" in r
+    # And says which way it multiplies, because that is the half people get
+    # wrong: agents x slots, not slots per location.
+    assert "times the agents in" in r
+
+
+def test_the_readme_names_the_403_when_a_figure_is_missing():
+    """The most-documented failure in this project, and the handover used to be
+    silent on it: the agent comes online, looks healthy, and every test start
+    fails."""
+    for over in ({"slots": 1, "threads_per_engine": None},
+                 {"slots": None, "threads_per_engine": 500},
+                 {"slots": None, "threads_per_engine": None}):
+        r = _readme(**over)
+        assert "Not enough available resources" in r, over
+        assert "Check this location's" in r, over
+
+
+def test_the_readme_does_not_diagnose_a_location_nobody_asked_about():
+    """`facts.manual()` leaves both None because there was no account to ask,
+    and `gather()` returns the same None for a location that genuinely has
+    neither. Nothing that *generates* may read the marker that tells those
+    apart -- see facts.from_manual_entry -- so the README does not claim which
+    it is. It says *check*, which is true either way.
+    """
+    typed = gen.generate(facts_mod.manual("aaa111", "bbb222"),
+                         {"namespace": "ns1"})["README.md"]
+    assert "Check this location's" in typed
+    for claim in ("has no `slots`", "has no `threadsPerEngine`",
+                  "typed in", "manual"):
+        assert claim not in typed, claim
+
+
+def test_generate_never_asks_how_the_facts_arrived():
+    """The manifests are identical either way, and that is the property
+    manual() exists to preserve -- so the source marker is doctor's to read and
+    nothing here may branch on it.
+
+    Over the *parsed* source rather than its text, so the rule can be explained
+    in a comment -- as it is at _location_bullet -- without the explanation
+    tripping it. A docstring naming the marker is a Constant; reading it is a
+    Name or an Attribute.
+    """
+    import ast
+    tree = ast.parse(pathlib.Path(gen.__file__).read_text())
+    banned = {"from_manual_entry", "MANUAL_SOURCE"}
+    read = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    read |= {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert not (read & banned), (
+        f"generate reads {sorted(read & banned)} -- the manifests are identical "
+        f"however the facts arrived, and that is the property facts.manual() "
+        f"exists to preserve. The marker is doctor's to read.")
