@@ -648,6 +648,86 @@ test("nothing is written back over a saved session until the restore has resolve
     }));
   });
 
+test("a key check that could not be made keeps the ids, and a later connect re-selects them",
+  async () => {
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-dublin", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "restored-ns" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+
+    const listing = [
+      loc("h-0", "Region 0"),
+      loc("h-dublin", "Dublin", [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+    ];
+    render(<App api={accountOf(listing, {
+      // The refusal this test is about. Nothing has said anything about the
+      // four ids the snapshot holds -- the account could not be asked.
+      keyStatus: async () => { throw new Error("the server did not answer"); },
+      keySet: async () => ({ user: { email: "someone@example.com" },
+                             default_account_id: 1, key_id: "key-1" }),
+    })} />);
+
+    // The restore has resolved -- on the rejection, which is the only way it
+    // can resolve here -- so the page is writing again...
+    const ns = await screen.findByPlaceholderText("e.g. blazemeter");
+    await waitFor(() => expect(ns).toHaveProperty("value", "restored-ns"));
+    fireEvent.change(ns, { target: { value: "typed-ns" } });
+    // ...and what it writes still carries the four ids. Asserted with the edit
+    // in it, so it cannot pass by nothing having been written at all.
+    await waitFor(() => expect(session.load()).toMatchObject({
+      options: { namespace: "typed-ns" },
+      accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
+    }));
+    // Kept is not selected: no account has confirmed the location, so nothing
+    // on the page is pointed at one.
+    expect(screen.queryByText("Dublin")).toBeNull();
+
+    // Connect for real. This is the next attempt the ids were kept for.
+    fireEvent.click(screen.getByTitle(/not connected/));
+    fireEvent.click(screen.getByRole("button", { name: "Connect…" }));
+    const form = within(
+      screen.getByRole("dialog", { name: "Connect to BlazeMeter" }));
+    fireEvent.change(form.getByLabelText("Key ID"), { target: { value: "id-1" } });
+    fireEvent.change(form.getByLabelText("Secret"), { target: { value: "sec" } });
+    fireEvent.click(form.getByRole("button", { name: "Connect" }));
+
+    // The location comes back, and the agent inside it. Read on step 1, which
+    // the restored step is not: both are on screen twice there -- in their
+    // list, and in the summary of what the step is for -- which is what a
+    // selection looks like here, rather than an id in storage.
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Capacity & agent/ }));
+    await waitFor(() =>
+      expect(screen.getAllByText("Dublin").length).toBeGreaterThan(1));
+    await waitFor(() =>
+      expect(screen.getAllByText("agent-1").length).toBeGreaterThan(1));
+  });
+
+test("an id the account no longer has is written away once the account has said so",
+  async () => {
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-gone", shipId: "s-gone",
+      manual: { harbor_id: "", ship_id: "" },
+      // Step 1, where the location list is, so the answer arriving is visible.
+      options: { namespace: "restored-ns" }, step: 0, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+    // The account answers, and the location the snapshot named is not in it.
+    render(<App api={accountOf([loc("h-0", "Region 0")])} />);
+
+    expect(await screen.findByText("Region 0")).toBeTruthy();
+    // Both ids go: this is the answer that refutes them, and the agent belonged
+    // to the location that is gone. The account and workspace are still there
+    // and stay -- being kept is not being kept indiscriminately.
+    await waitFor(() => expect(session.load()).toMatchObject({
+      accountId: 1, workspaceId: 10, harborId: null, shipId: null,
+    }));
+  });
+
 // -- the live preview, and the two things that decide when it is asked -------
 
 test("the preview waits for the typing to stop, and the save folder is part of what it asks",
