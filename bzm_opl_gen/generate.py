@@ -1223,6 +1223,42 @@ def _sizing_bullet(o):
             + (f" and `{reg}`." if reg else "."))
 
 
+def _location_bullet(facts):
+    """What the location must be set to, in the file the person applying this
+    bundle actually reads.
+
+    The bundle deploys an agent; it cannot set the location, and neither figure
+    is in the manifests. Left unset, the agent comes online, looks healthy, and
+    every test start fails with 403 *Not enough available resources* -- the
+    most-documented failure in this project, and the handover said nothing
+    about it. `capacity-request.md` states them, but that is a different
+    artefact for a different reader and it is not in here.
+
+    **This deliberately does not ask how the facts arrived.** `facts.manual()`
+    leaves both None because there was no account to ask, and `gather()` returns
+    the same None for a location that genuinely has neither -- the distinction
+    that `from_manual_entry` exists for. But nothing that generates may read
+    that marker (its own docstring says so, and the manifests being identical
+    either way is the property manual() preserves), so the way out is not to
+    branch: when the figures are unknown this says *check them*, which is true
+    however they came to be unknown, and claims nothing about a location nobody
+    looked up. Only when both are known does it state them.
+
+    One line per branch, because `test_readme_is_short_and_actionable` caps the
+    file at 45 and is right to: this is a handover somebody skims while holding
+    a cluster, not documentation.
+    """
+    slots, tpe = facts.get("slots"), facts.get("threads_per_engine")
+    if not slots or not tpe:
+        return ("\n- **Check this location's `slots` and `threadsPerEngine`** "
+                "(Settings -> Private Locations): unset, the agent comes online "
+                "and looks healthy, and every test start fails with 403 *Not "
+                "enough available resources*.")
+    return (f"\n- This location runs **{slots} engine(s) per agent at {tpe:,} "
+            f"virtual users each** (`slots` / `threadsPerEngine`); its total is "
+            f"that times the agents in it.")
+
+
 def _sa_bullet(o):
     """Named in the handover only when the bundle does not create it: the pod
     stays Pending with `serviceaccount not found` on its ReplicaSet, which is an
@@ -1867,7 +1903,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}{_sa_bullet(o)}
+{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
@@ -2216,7 +2252,7 @@ def _readme(facts, o, files):
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}{_sa_bullet(o)}
+{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}
 - Engine *requests* come from the location, not this bundle: `overrideCPU` and
   `overrideMemory` under Settings -> Private Locations, defaulting to
   {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set

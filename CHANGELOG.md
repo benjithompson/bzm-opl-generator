@@ -141,6 +141,21 @@ anything that breaks.
 
 ### Fixed
 
+- **A generated bundle now says what the location must be set to.** The bundle
+  deploys an agent and cannot set the location, and neither `slots` nor
+  `threadsPerEngine` is in a manifest — so a bundle handed to a colleague
+  deployed cleanly, the agent came online looking healthy, and the first test
+  start failed with 403 *Not enough available resources*, with nothing in the
+  43-line README mentioning it. The README states both figures when they were
+  read, and says to check them when they were not.
+
+  It does **not** say *why* they are unknown, and that is the point: facts typed
+  in by hand carry no location settings because there was no account to ask,
+  and a location that genuinely has neither reads the same. Only `doctor` may
+  tell those apart. A test asserts over the parsed source that `generate` never
+  reads that marker — the manifests are identical however the facts arrived,
+  which is the property manual entry exists to preserve.
+
 - **A refresh while the server is down no longer loses which location and agent
   you were on.** The page already waited for the connection check before writing
   its session back, so the empty starting state could not overwrite what it was
