@@ -141,6 +141,17 @@ anything that breaks.
 
 ### Fixed
 
+- **A refresh while the server is down no longer loses which location and agent
+  you were on.** The page already waited for the connection check before writing
+  its session back, so the empty starting state could not overwrite what it was
+  about to restore — but a check that *failed* released that guard anyway, and
+  saved nulls over the account, workspace, location and agent ids one tick
+  later. A failed check means the account could not be asked, which is not the
+  same as the location being gone: the ids are kept and the next attempt — a
+  reload, or connecting a key from the page — re-selects them. Each is still
+  applied only where the account confirms it still exists, and one deleted from
+  the account is written away the moment the list says so.
+
 - **The account listing was truncated at 100 workspaces, and two fifths of a
   real account went missing with it.** `/workspaces` was asked for the first
   100; BlazeMeter SE Demo has 166, and the 66 that fell off held 105,270 rated

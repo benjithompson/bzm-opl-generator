@@ -307,6 +307,10 @@ export default function App({ api }: { api: Api }) {
       setView(saved.view);
       setPlanInputs(saved.plan);
       pendingShip.current = saved.shipId;
+      // The four account-side ids are not page state yet, and may never become
+      // it -- see `held`, which is what carries them until something answers.
+      setHeld({ accountId: saved.accountId, workspaceId: saved.workspaceId,
+                harborId: saved.harborId, shipId: saved.shipId });
     }
     api.keyStatus().then(async (r) => {
       if (!r.connected || !r.user) return;
@@ -317,12 +321,19 @@ export default function App({ api }: { api: Api }) {
       pendingWorkspace.current = saved?.workspaceId ?? null;
       pendingHarbor.current = saved?.harborId ?? null;
       setAccountId(saved?.accountId ?? r.default_account_id ?? accts[0]?.id ?? null);
+      // The account list has arrived, so it is what answers for the account id.
+      release("accountId");
     }).catch(() => {})
       // Only now may the page write its own state back. Saving before this
       // resolves overwrites the snapshot with the empty state it is about to
       // restore *from* -- which is what happened the first time: one refresh
       // against a server that did not answer, and the selections were gone for
       // good.
+      //
+      // Resolving is not answering, though, and this fires on the rejection
+      // too. What the page may write from here does not include the four ids
+      // nothing has answered for: they are `held` below, which is where the
+      // decision about a failed key check is argued.
       .finally(() => setRestored(true));
   }, []);
   const [restored, setRestored] = useState(false);
@@ -336,14 +347,59 @@ export default function App({ api }: { api: Api }) {
   const pendingHarbor = useRef<string | null>(null);
   const pendingShip = useRef<string | null>(null);
 
+  // The four ids the restored snapshot named, for as long as nothing has
+  // answered for them -- and what the page writes back in their place while
+  // that is true (#106).
+  //
+  // `restored` above only defers the loss it was written to stop: a key check
+  // that *rejects* flips it too, and the page then saves harborId and shipId as
+  // null over the ids it had just read back. One unanswered request and the
+  // selections are gone, which is the original bug with an extra tick in front
+  // of it.
+  //
+  // The decision, and the reason: a failed key check means the account could
+  // not be *asked*, and "we could not read" is not "there is nothing there" --
+  // the rule this codebase keeps everywhere else. Nothing has said the location
+  // was deleted; a server that did not answer says nothing about the account at
+  // all. So the snapshot keeps what it held, and the next attempt -- another
+  // refresh, or the Connect form below -- gets to use it.
+  //
+  // The case for clearing them is that with no account there is nothing to
+  // validate an id against, so writing them away is honest. It answers a
+  // different question. The page state IS empty and stays empty: a held id is
+  // never selected, never rendered and never generated for -- it is handed to
+  // the pending refs above and applied only where the account confirms the
+  // thing still exists. What is at stake is only what a later attempt may try,
+  // and an id that turns out to be gone costs one list lookup to find out.
+  //
+  // Each id is released by the answer that could refute it and by nothing else:
+  // the account list for accountId, the workspace list for workspaceId, the
+  // location list for harborId (and for shipId, when the location it belonged
+  // to is gone), the location's own agents for shipId. A list that could not be
+  // read releases nothing, for the same reason a failed key check does not.
+  type HeldIds = Pick<session.Session,
+                      "accountId" | "workspaceId" | "harborId" | "shipId">;
+  const [held, setHeld] = useState<HeldIds | null>(null);
+  /** Stop writing these ids back: what could refute them has arrived. */
+  const release = (...keys: (keyof HeldIds)[]) => setHeld((h) => {
+    if (!h || keys.every((k) => h[k] == null)) return h;
+    const next = { ...h };
+    for (const k of keys) next[k] = null;
+    return next;
+  });
+
   // Remember what a refresh would otherwise lose. Never the AUTH_TOKEN -- see
   // session.strip, which is where that decision lives and is tested.
   useEffect(() => {
     if (!restored) return;
-    session.save({ sourceMode, accountId, workspaceId, harborId, shipId,
+    session.save({ sourceMode,
+                   accountId: accountId ?? held?.accountId ?? null,
+                   workspaceId: workspaceId ?? held?.workspaceId ?? null,
+                   harborId: harborId ?? held?.harborId ?? null,
+                   shipId: shipId ?? held?.shipId ?? null,
                    manual, options, step, view, plan: planInputs });
-  }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, manual,
-      options, step, view, planInputs]);
+  }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
+      manual, options, step, view, planInputs]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -356,6 +412,11 @@ export default function App({ api }: { api: Api }) {
     setStatus(null); setPolling(false); setConnErr(null);
     forgetToken();
     session.clear();
+    // The held ids too, or the next save writes them straight back into a fresh
+    // snapshot and this clear undoes itself. Nothing is being refuted here --
+    // the key is simply being handed back, and what it was pointed at goes with
+    // it, which is the same reason the account tree above is dropped.
+    setHeld(null);
     // Land somewhere that still works. Account capacity has nothing to roll up
     // without a key, and Generate's "Connect to BlazeMeter" source has no
     // account to read a location from -- so the page goes to the flow's first
@@ -390,7 +451,23 @@ export default function App({ api }: { api: Api }) {
       setAccountsBusy(true);
       const accts = await api.accounts().finally(() => setAccountsBusy(false));
       setAccounts(accts);
-      setAccountId(r.default_account_id ?? accts[0]?.id ?? null);
+      // A snapshot whose ids nothing has answered for gets its chance here:
+      // after a failed key check this is the first account the page has
+      // reached, and without this a successful connect would leave the ids kept
+      // above with nothing to be applied by. They go through the same pending
+      // refs a restore uses, so each is still applied only where the account
+      // confirms it. The account itself is confirmed against the list rather
+      // than set from the snapshot, because this key may be a different one.
+      const h = held;
+      if (h) {
+        pendingWorkspace.current = h.workspaceId;
+        pendingHarbor.current = h.harborId;
+        pendingShip.current = h.shipId;
+      }
+      const known = h?.accountId != null
+        && accts.some((a) => a.id === h.accountId) ? h.accountId : null;
+      setAccountId(known ?? r.default_account_id ?? accts[0]?.id ?? null);
+      release("accountId");
     } catch (e) { setConnErr(String((e as Error).message)); }
     finally { setConnecting(false); }
   };
@@ -408,6 +485,9 @@ export default function App({ api }: { api: Api }) {
       const want = pendingWorkspace.current;
       pendingWorkspace.current = null;
       setWorkspaceId(ws.find((w) => w.id === want)?.id ?? ws[0]?.id ?? null);
+      // The list is what answers for a held workspace id -- including when the
+      // account has none, which is the empty answer rather than no answer.
+      release("workspaceId");
     }).catch((e) => setLocErr(e.message))
       .finally(() => setWorkspacesBusy(false));
   }, [accountId, who]);
@@ -425,7 +505,17 @@ export default function App({ api }: { api: Api }) {
       pendingHarbor.current = null;
       // Only if it is still there. An id restored blind would leave the page
       // configured for a location the account no longer has.
-      if (want && ls.some((l) => l.id === want)) setHarborId(want);
+      //
+      // Either way this list is the answer for a held location id, so it stops
+      // being written back here -- and it takes the agent id with it when the
+      // location is gone, because an agent outlives its location nowhere. A
+      // location that is still there answers for its own agents, below.
+      if (want && ls.some((l) => l.id === want)) {
+        setHarborId(want);
+        release("harborId");
+      } else {
+        release("harborId", "shipId");
+      }
     }).catch((e) => setLocErr(e.message))
       .finally(() => setLocBusy(false));
   }, [workspaceId]);
@@ -460,11 +550,15 @@ export default function App({ api }: { api: Api }) {
     if (want && ships.some((s) => s.id === want)) {
       pendingShip.current = null;
       setShipId(want);
-      return;
+    } else if (ships.length === 1 && !shipOnline(ships[0])) {
+      // Auto-pick a lone agent only if it isn't running somewhere already --
+      // a new deployment should get a NEW agent identity, not clone a live one.
+      setShipId(ships[0].id);
     }
-    // Auto-pick a lone agent only if it isn't running somewhere already --
-    // a new deployment should get a NEW agent identity, not clone a live one.
-    if (ships.length === 1 && !shipOnline(ships[0])) setShipId(ships[0].id);
+    // The location carries its own agents, so a location on screen is the
+    // answer for a held agent id: re-selected just above if it is still there,
+    // and written away if it is not.
+    if (harborId) release("shipId");
   }, [harborId, ships.length]);
 
   // Which half of the agent section is on screen -- picking an identity or
