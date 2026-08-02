@@ -67,11 +67,18 @@ interface Plan {
   cpu: number; mem: number; agents: number; perAgent: number; nodes: number;
 }
 
+// No agents input. On Kubernetes the usual shape is one crane deployment that
+// schedules engine pods across a node pool -- you scale `slots` and let the
+// cluster autoscale, rather than adding agents. Multi-agent is the Docker
+// pattern, where an agent is a host. And how many a location ends up with is
+// decided after the cluster exists and changed at will, so asking here gets a
+// guess that silently halves or doubles `slots`. Where the count is a *fact* --
+// a location that already exists -- it is read off that location: perAgentIn().
 function usePlan(initialUsers = "") {
   const [users, setUsers] = useState(initialUsers);
   const [sizeId, setSizeId] = useState("standard");
   const [vusOverride, setVusOverride] = useState("");
-  const [agents, setAgents] = useState("1");
+  const agents = "1";
   const size = SIZES.find((s) => s.id === sizeId)!;
   const rated = supportedVus(size.cpu, size.mem);
   const plan: Plan | null = useMemo(() => {
@@ -85,7 +92,7 @@ function usePlan(initialUsers = "") {
              agents: a, perAgent, nodes: perAgent * a };
   }, [users, vusOverride, agents, sizeId, rated, size]);
   return { users, setUsers, sizeId, setSizeId, vusOverride, setVusOverride,
-           agents, setAgents, rated, plan };
+           rated, plan };
 }
 
 type PlanState = ReturnType<typeof usePlan>;
@@ -155,10 +162,6 @@ function PlanFields({ s, compact }: { s: PlanState; compact?: boolean }) {
           value={s.vusOverride}
           onChange={(e) => s.setVusOverride(e.target.value)} />
       </F>
-      <F label="Agents available" hint="engines are shared out between them">
-        <input type="number" className={inp} placeholder="1"
-          value={s.agents} onChange={(e) => s.setAgents(e.target.value)} />
-      </F>
     </div>
   );
 }
@@ -182,8 +185,8 @@ function PlanAnswer({ plan }: { plan: Plan | null }) {
     <div className="grid grid-cols-4 gap-3">
       {stat(plan.engines, plan.engines === 1 ? "engine" : "engines",
             `${plan.cpu} CPU / ${plan.mem}Gi each`)}
-      {stat(plan.perAgent, "engines per agent", `across ${plan.agents} agent${plan.agents === 1 ? "" : "s"}`)}
       {stat(plan.nodes, plan.nodes === 1 ? "node" : "nodes", "one engine each")}
+      {stat(plan.engines * plan.mem, "Gi at peak", `${plan.engines * plan.cpu} vCPU`)}
       {stat(plan.engines * plan.cpu, "vCPU at peak",
             `${plan.engines * plan.mem}Gi RAM`)}
     </div>
