@@ -219,21 +219,35 @@ missing tools. The rest is what it cannot fix for you.
   **`frontend/src/optionGroups.ts` is out of scope for it** — it holds
   `detect`/`enable`/`disable` *functions*, which a Python registry cannot carry.
 
-- **The UI: three views, three steps, two option buckets.** `layout/NavDrawer`
-  picks the view (Generate / Plan capacity / Account capacity) and holds the key
-  at its foot; `layout/AccountMenu` is that key plus the account and workspace,
-  because all three last the session while an agent is chosen per bundle, and
-  three separate things read the account. `layout/StepFlow` shows one step at a
-  time (controlled from App, because the download step sends you back to
-  Configure); `layout/PreviewDrawer` pushes the manifests in from the right
-  rather than covering the form. The steps are `steps/AgentPanel`,
-  `steps/ConfigurePanel`, `steps/DownloadPanel` — **App keeps every piece of
-  state and every effect and hands them down as typed props**, so `core`-style
-  ownership holds here too. A group belongs to no feature (`SHARED_GROUPS`) or
-  to one (`groupsOf`), and both are on screen at once — there is no
-  `visibleGroups`/`setButHidden`/`hiddenBlockers` any more, and nothing that
-  hands back what a view was hiding. Don't reintroduce one: a feature is a view
-  over a location's options, never a scope on what gets generated.
+- **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
+  picks the view (Generate / Account capacity) and holds the key at its foot;
+  `layout/AccountMenu` is that key plus the account and workspace, because all
+  three last the session while an agent is chosen per bundle, and three separate
+  things read the account. `layout/StepFlow` shows one step at a time (controlled
+  from App, because the download step sends you back to Configure);
+  `layout/PreviewDrawer` pushes the manifests in from the right rather than
+  covering the form. The steps are `steps/AgentPanel`, `steps/ConfigurePanel`,
+  `steps/DownloadPanel` — **App keeps every piece of state and every effect and
+  hands them down as typed props**, so `core`-style ownership holds here too. A
+  group belongs to no feature (`SHARED_GROUPS`) or to one (`groupsOf`), and both
+  are on screen at once — there is no `visibleGroups`/`setButHidden`/
+  `hiddenBlockers` any more, and nothing that hands back what a view was hiding.
+  Don't reintroduce one: a feature is a view over a location's options, never a
+  scope on what gets generated.
+
+  **The planner is step 1's first card, not a view of its own.** `steps/
+  CapacityProfile` states the profile and one Edit expands it downward; picking
+  a location opens what that profile would change about it, as before → after
+  against what the account holds. That fold is only legitimate because step 1
+  needs no account -- the planner sizing a cluster for somebody who has none is
+  the whole reason it exists, and `App.test.tsx` drives the page with no key and
+  sizes a profile, which is what keeps it true. The profile *fills* the location
+  draft and the fields stay editable; a hand edit outranks later profile changes
+  until Reset. It has no `agents` field on purpose (see `usePlan.ts`): on
+  Kubernetes an agent is a cluster, so you scale `slots` and let the node pool
+  autoscale -- 78% of the locations in one real account have exactly one agent,
+  and the largest is one agent at 50 slots. Where the count is a *fact* -- a
+  location that exists -- it is read off that location.
 
   **Three writes to the account come from this page and nowhere else** —
   `POST /api/ships/token` (regenerate), `POST /api/locations/func-id` (enable a
@@ -241,11 +255,32 @@ missing tools. The rest is what it cannot fix for you.
   before it is pressed. The third re-reads the location afterwards and reports
   *that*, not the request: BlazeMeter's own POST accepts `threadsPerEngine` and
   does not store it, so a form echoing back what was typed would show a value
-  the account never took. `core.LOCATION_SETTINGS` is a closed set for the same
-  reason `add_func_id` exists — a general passthrough would let `funcIds` be
-  replaced wholesale by a caller that meant to add one. Every route that writes
-  carries `server._writes`, which drops the cache after it; a test asserts that
-  over the app's own routes, because the one that had to remember had forgotten.
+  the account never took. Verified live against a real location: the panel
+  reported `1 → 4, 500 → 400, not set → 2, not set → 8192` and the account held
+  exactly that. `core.LOCATION_SETTINGS` is a closed set for the same reason
+  `add_func_id` exists — a general passthrough would let `funcIds` be replaced
+  wholesale by a caller that meant to add one. Every route that writes carries
+  `server._writes`, which drops the cache after it; a test asserts that over the
+  app's own routes, because the one that had to remember had forgotten.
+
+- **`profile.json` is the bundle, and only the bundle.** It carries every
+  resolved *option* — 35 of them — so `generate --profile` replays a bundle
+  exactly, and `livetest` judges one. Three things are deliberately not in it,
+  and each absence is load-bearing:
+  **the AUTH_TOKEN** (`SECRET_OPTIONS`), because a profile is the file people
+  commit, diff and paste into tickets, and the bundle beside it is where a
+  regenerate reads the token back from;
+  **`harbor_id`**, which comes from facts rather than options — which is why
+  `livetest.bundle_check` reads HARBOR_ID out of the ConfigMap rather than from
+  here;
+  **the four location settings**, because they are BlazeMeter-side and no
+  regenerate or redeploy applies them. A file that recorded them would invite
+  exactly that belief.
+  So a bundle does not carry the location configuration it was sized for. The
+  request document (`capacity-request.md`) states those four, and the settings
+  panel writes them; if that split ever stops being enough, record them under
+  their own key rather than beside the options, so nothing reads them as
+  something a regenerate applies.
 
 ## "Could not read" and "there is nothing there" must never share a representation
 
