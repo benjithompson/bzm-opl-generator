@@ -355,6 +355,7 @@ export default function App({ api }: { api: Api }) {
       setStep(saved.step);
       setView(saved.view);
       setPlanInputs(saved.plan);
+      setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
@@ -446,9 +447,10 @@ export default function App({ api }: { api: Api }) {
                    workspaceId: workspaceId ?? held?.workspaceId ?? null,
                    harborId: harborId ?? held?.harborId ?? null,
                    shipId: shipId ?? held?.shipId ?? null,
-                   manual, options, step, view, plan: planInputs });
+                   manual, options, step, view, plan: planInputs,
+                   confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      manual, options, step, view, planInputs]);
+      manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse

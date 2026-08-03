@@ -33,7 +33,11 @@ import type { PlanInputs } from "./usePlan";
 // the bundle options (which are stored here already), so PlanInputs is down to
 // the two figures it owns -- and `view` no longer has a "plan" to restore, so a
 // v4 snapshot would land the page on a view that does not exist.
-export const VERSION = 5;
+// 6: step 1 grew the two confirmations. A v5 snapshot has none, and a missing
+// pair would read as "confirmed nothing" -- which is the honest answer, but it
+// is the same answer as a deliberate one, and this is the file whose whole rule
+// is that a half-understood snapshot is worse than starting over.
+export const VERSION = 6;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -44,6 +48,19 @@ export interface Session {
   harborId: string | null;
   /** Re-selected only if the location still has it -- see App. */
   shipId: string | null;
+  /** Which location and which agent were confirmed on step 1.
+   *
+   *  The ids, matching what App holds, and not two booleans -- for the reason
+   *  they are ids there: a confirmation is about a selection, so it has to
+   *  withdraw when the selection changes. Stored as flags they would survive a
+   *  restore that put back a *different* agent, and the step would come back
+   *  finished for a pairing this session never checked. Restored as ids they
+   *  simply fail to match, which is the same rule doing the same work.
+   *
+   *  Kept for the same reason the selections are: a refresh is not a decision,
+   *  and re-confirming what was already confirmed is asking somebody to repeat
+   *  themselves to prove the browser was listening. */
+  confirmed: { loc: string | null; ship: string | null };
   manual: { harbor_id: string; ship_id: string };
   options: Options;
   step: number;

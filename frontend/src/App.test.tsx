@@ -346,6 +346,7 @@ test("a restored profile's SV options for a location without mockServices are cl
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
+      confirmed: { loc: "h-perf", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
@@ -409,6 +410,7 @@ test("an SV configuration no location demanded still takes away the formats that
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
+      confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: {
         namespace: "blazemeter", output_format: "docker",
@@ -448,6 +450,7 @@ test("a feature this bundle's format cannot serve is stated, not offered",
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
+      confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
@@ -985,12 +988,50 @@ test("the workspace picker is not clipped by the row it grows into", async () =>
 
 // -- what survives a refresh, and when it may be written back ----------------
 
+test("a refresh keeps the confirmations, and keeps them attached to what was confirmed",
+  async () => {
+    // A refresh is not a decision. Asking somebody to confirm again what they
+    // already confirmed is asking them to repeat themselves to prove the
+    // browser was listening.
+    const listing = [loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])];
+    const snapshot = (ship: string) => ({
+      sourceMode: "connect" as const, accountId: 1, workspaceId: 10,
+      harborId: "h-perf", shipId: "s-1",
+      confirmed: { loc: "h-perf", ship },
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "ns" }, step: 0, view: "flow" as const,
+      plan: EMPTY_PLAN_INPUTS,
+    });
+
+    session.save(snapshot("s-1"));
+    render(<App api={accountOf(listing)} />);
+    // Finished on arrival, with nothing pressed this time round.
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>(
+      "button", { name: /Next/ }).disabled).toBe(false));
+
+    // ...and it is still a confirmation *of an agent*. Restored beside a
+    // different one -- the location's list changed under it, or the snapshot
+    // is older than the choice -- it does not answer for this pairing. Stored
+    // as a flag it would have, which is the whole reason it is not one.
+    cleanup();
+    sessionStorage.clear();
+    session.save(snapshot("s-2"));
+    render(<App api={accountOf(listing)} />);
+    await waitFor(() => expect(screen.getByText(/confirm the agent/)).toBeTruthy());
+    expect(screen.getByRole<HTMLButtonElement>(
+      "button", { name: /Next/ }).disabled).toBe(true);
+  });
+
 test("nothing is written back over a saved session until the restore has resolved",
   async () => {
     // Written with the page's own writer, at the page's own version.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
+      confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1042,6 +1083,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
+      confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1100,6 +1142,7 @@ test("an id the account no longer has is written away once the account has said 
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-gone", shipId: "s-gone",
+      confirmed: { loc: "h-gone", ship: "s-gone" },
       manual: { harbor_id: "", ship_id: "" },
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
