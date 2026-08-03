@@ -373,6 +373,16 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   `cmd_livetest` before the token mint and again at the top of `livetest.run`
   before the try block — outside it, because that `finally` tears down a cluster.
   Unreadable is a note, not a refusal.
+- **`--format docker` is a different platform, not a third rendering.** One
+  agent as one container; there is no namespace, no ServiceAccount, no pod, and
+  around twenty options reach nothing. They are *named* rather than refused --
+  `DOCKER_IGNORED`, listed in the bundle's README and only where set away from
+  their default, because the failure is silent otherwise (a bundle handed over
+  and believed to have applied a node selector). `helm_parity.py` does not cover
+  it and should not: there is nothing to render the same objects as. What holds
+  it instead is `sh -n` over every branch of the generated script and the shape
+  BlazeMeter's own Docker Command tab returns -- see `docs/docker.md`.
+
 - **The chart is copied, never re-rendered.** `--format helm` walks
   `templates/helm/` and emits it verbatim, so anything added there ships in every
   bundle — including files `package-data` would drop. Its globs do not recurse
@@ -380,10 +390,10 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   directory are named explicitly in `pyproject.toml`; the release workflow
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
-- `--format helm` refuses a service-virtualization location, `livetest` refuses
-  a chart directory, a profile with `service_account_create: false`, a
-  placeholder `AUTH_TOKEN` it will not re-render over, and a bundle whose
-  identity is not the agent under test. Guards over silent failures: a chart
+- `--format helm` and `--format docker` refuse a service-virtualization
+  location; `livetest` refuses a chart directory, a docker bundle, a profile
+  with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
+  re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart
   without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob
   comes back empty, and a namespace the rig was told already exists never gets
   created, so every object applies, no pod is created, and the run waits out its

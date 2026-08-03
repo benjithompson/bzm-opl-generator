@@ -22,12 +22,24 @@ import {
 } from "./optionGroups";
 import { SvCtx } from "./SvPrereqs";
 
-/** Why the chart segment is disabled for an SV location. A chart without the
- *  ingress stalls at WAITING_FOR_DOMAIN, so `--format helm` refuses one
- *  outright; the segment says so rather than disappearing. */
-const HELM_BLOCKED =
-  "Not for this location — service virtualization needs an ingress, its RBAC "
-  + "and a TLS secret, which this chart does not carry.";
+/** Why a format is disabled for an SV location, by format.
+ *
+ *  Both refusals are generate()'s, and both are about the same missing thing:
+ *  publishing a virtual service needs an ingress, its RBAC and a TLS secret.
+ *  A chart without them stalls at WAITING_FOR_DOMAIN and a docker agent
+ *  publishes nothing at all, so each segment says so rather than disappearing
+ *  -- a format that vanishes leaves the page unable to explain the error the
+ *  server would have given.
+ *
+ *  Keyed by format because there are two of them now and there is one segmented
+ *  control: the panel looks each segment up rather than testing for helm and
+ *  then for docker. */
+const BLOCKED_FORMATS: Record<string, string> = {
+  helm: "Not for this location — service virtualization needs an ingress, its "
+    + "RBAC and a TLS secret, which this chart does not carry.",
+  docker: "Not for this location — a docker agent publishes virtual services "
+    + "with HOSTNAME_OVERRIDE and a TLS pair, which this bundle does not carry.",
+};
 
 /** Everything the page, the group and the download step ask about service
  *  virtualization. One record, so a consumer takes this instead of eleven
@@ -69,9 +81,9 @@ export interface Sv {
   /** What a published endpoint is probed over. Follows the TLS secret, because
    *  that is what decides whether the endpoint terminates TLS. */
   scheme: SvScheme;
-  /** The sentence the chart segment is disabled with, or undefined when the
-   *  chart is available. */
-  helmBlocked?: string;
+  /** Why each output format is unavailable, by format name. Empty when the
+   *  location runs no virtual services, which is when all three are. */
+  blockedFormats: Record<string, string>;
   /** What a group cannot read off the options: SV is required by the location,
    *  not by anything configured. Keyed by group id so the walk over the groups
    *  never has to test for one by name. */
@@ -135,7 +147,7 @@ export function svState(
     },
     rbac: constants.backends[ingress],
     scheme: txt(o, "sv_tls_secret") ? "https" : "http",
-    helmBlocked: required ? HELM_BLOCKED : undefined,
+    blockedFormats: required ? BLOCKED_FORMATS : {},
     groupRequired: { sv: required },
     groupDeclined: { sv: location && declined },
     patch: correction(o, required),
@@ -172,13 +184,15 @@ function correction(o: Options, required: boolean): OptionPatch | null {
   // Dropped here rather than only in the select's onChange for that reason.
   const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
   // A location can turn out to be an SV one after the format was picked, and an
-  // imported profile can arrive already set to helm. Fall back rather than
-  // leaving a disabled segment selected and every generate call failing.
-  const fromHelm = required && o.output_format === "helm";
-  if (!toNginx && !clearGateway && !fromHelm) return null;
+  // imported profile can arrive already set to one of the two that refuse it.
+  // Fall back rather than leaving a disabled segment selected and every
+  // generate call failing.
+  const fromBlocked = required
+    && !!BLOCKED_FORMATS[String(o.output_format ?? "")];
+  if (!toNginx && !clearGateway && !fromBlocked) return null;
   return {
     ...(toNginx ? { sv_ingress: "nginx" } : {}),
     ...(clearGateway ? { sv_istio_gateway: null } : {}),
-    ...(fromHelm ? { output_format: "manifests" } : {}),
+    ...(fromBlocked ? { output_format: "manifests" } : {}),
   };
 }

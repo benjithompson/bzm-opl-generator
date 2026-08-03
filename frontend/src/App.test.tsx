@@ -217,12 +217,51 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
-    // ...and the chart is refused with the sentence, rather than disappearing.
+    // ...and both formats that cannot publish a virtual service are refused
+    // with their own sentence, rather than disappearing.
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     const chart = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
     expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
+    const docker = screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(true);
+    expect(screen.getByText(/HOSTNAME_OVERRIDE/)).toBeTruthy();
+  });
+
+test("the docker format is a third bundle, and it is what gets generated",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={accountOf([loc("h-0", "Dublin",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      generate: async (_facts: unknown, options: Options) => {
+        asked.push(options);
+        return { files: [], token: { branch: "placeholder" as const,
+                                     ship_id: "s-1", message: "" } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    // The row, not the path line under the flow: an offline lone agent is
+    // auto-picked, so its name is already on screen twice.
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+
+    // Offered for an ordinary performance location -- the two Kubernetes
+    // formats are not the only platform BlazeMeter runs a private location on.
+    const docker = await screen.findByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(false);
+    fireEvent.click(docker);
+
+    // The choice reaches the request rather than only the control: the whole
+    // bundle is decided server-side from this one option.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.output_format).toBe("docker"));
+    // ...and the line beside the button says what it will hold, which is not
+    // a manifest.
+    expect(screen.getByText(/bzm-opl-agent\.sh/)).toBeTruthy();
   });
 
 // -- the download step, through the page -------------------------------------

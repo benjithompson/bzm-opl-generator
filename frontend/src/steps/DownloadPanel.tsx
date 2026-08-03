@@ -158,6 +158,25 @@ const checkTone = (r: SvCheckOut) =>
   r.status !== "ok" ? "text-red-600"
     : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
+/** What each format's bundle contains, for the line beside the download button.
+ *  A lookup rather than a chain of ternaries: there are three formats now, and
+ *  the next one should be a row here rather than another branch. */
+const BUNDLE_HOLDS: Record<string, string> = {
+  manifests: "manifests + README",
+  helm: "helm/ + bzm-opl-values.yaml + README",
+  docker: "bzm-opl-agent.sh + .env + README",
+};
+
+/** The command that installs what was just saved. Docker's runs on the host
+ *  rather than against a cluster, which is why it takes no namespace. */
+function runCommand(format: string, dir: string, namespace: string) {
+  if (format === "helm") {
+    return `helm install bzm-opl ${dir}/helm -f ${dir}/bzm-opl-values.yaml`;
+  }
+  if (format === "docker") return `sh ${dir}/bzm-opl-agent.sh`;
+  return `kubectl apply -f ${dir}/ -n ${namespace}`;
+}
+
 export function DownloadPanel(p: DownloadPanelProps) {
   const { api, bundle, credential, attempt, report, preflight, watch } = p;
   // The names the markup below already used, for the values it reads most: the
@@ -187,7 +206,13 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     value: "helm",
                     label: "Helm chart",
                     hint: "The chart plus a values overlay from this account. helm install / upgrade.",
-                    disabledReason: sv.helmBlocked,
+                    disabledReason: sv.blockedFormats.helm,
+                  },
+                  {
+                    value: "docker",
+                    label: "Docker",
+                    hint: "One agent as one container on a host. A docker run script, not a cluster.",
+                    disabledReason: sv.blockedFormats.docker,
                   },
                 ]} />
               <div className="flex gap-2 items-center">
@@ -202,9 +227,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   ⬇ Download bundle (.zip)
                 </Button>
                 <span className="text-xs text-slate-400">
-                  {format === "helm"
-                    ? "helm/ + bzm-opl-values.yaml + README"
-                    : "manifests + README"}
+                  {BUNDLE_HOLDS[format] ?? BUNDLE_HOLDS.manifests}
                   {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
                   {" "}{plan.hint}
                 </span>
@@ -286,12 +309,13 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   Wrote {attempt.saved.files.length} files to{" "}
                   <code className="font-mono">{attempt.saved.out_dir}</code>. Apply with{" "}
                   <code className="font-mono">
-                    {format === "helm"
-                      ? `helm install bzm-opl ${attempt.saved.out_dir}/helm -f ${attempt.saved.out_dir}/bzm-opl-values.yaml`
-                      : `kubectl apply -f ${attempt.saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
+                    {runCommand(format, attempt.saved.out_dir,
+                                (options.namespace as string) || "blazemeter")}
                   </code>
-                  {" "}— or point <code className="font-mono">livetest</code> or
-                  an MCP session at the folder.
+                  {format === "docker"
+                    ? " — on the host that is to be the private location."
+                    : (<>{" "}— or point <code className="font-mono">livetest</code> or
+                      an MCP session at the folder.</>)}
                 </p>
               )}
               <ErrorMsg msg={attempt.saveError} />

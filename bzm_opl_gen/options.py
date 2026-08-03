@@ -137,13 +137,18 @@ OPTIONS = [
             "on vanilla Kubernetes too wherever the namespace assigns UIDs."),
     Option(
         "output_format", "string", "Platform and output",
-        choices=["manifests", "helm"],
-        summary="Emit flat YAML to kubectl apply, or the Helm chart plus a values overlay.",
+        choices=["manifests", "helm", "docker"],
+        summary="Flat YAML for kubectl, the Helm chart plus a values overlay, or a docker run script.",
         doc="`manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus "
             "a values overlay -- see [Helm](helm.md). The same deployment "
             "expressed twice rather than two codebases, which `tests/helm_parity.py` "
-            "is what holds it to. Refused for a service-virtualization location, "
-            "whose ingress the chart does not carry."),
+            "is what holds it to. `docker` is the other platform entirely: one "
+            "agent as one container on a host with a docker daemon, emitted as a "
+            "`docker run` script in BlazeMeter's own documented shape -- see "
+            "[Docker](docker.md). Most options here are Kubernetes vocabulary and "
+            "reach nothing in it, and its README names the ones this bundle set. "
+            "All three refuse a service-virtualization location except "
+            "`manifests`, whose ingress is the only one carried."),
     Option(
         "namespace", "string", "Platform and output",
         summary="Namespace every generated object is placed in, and the one crane's Role covers.",

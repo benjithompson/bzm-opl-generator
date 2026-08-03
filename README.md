@@ -104,7 +104,8 @@ it. `out/profile.json` is the resolved options, minus the token — replay it wi
 `generate --profile out/profile.json`.
 
 Other things you'll reach for: `--format helm` for a chart instead of flat YAML
-([docs/helm.md](docs/helm.md)), `--private-registry` plus `bzm-opl-gen images
+([docs/helm.md](docs/helm.md)), `--format docker` for a host that runs the agent
+as a container ([docs/docker.md](docs/docker.md)), `--private-registry` plus `bzm-opl-gen images
 --pull --mirror` for an air-gapped cluster, and `bzm-opl-gen livetest` to deploy
 to a local cluster and wait for the agent to report online
 ([docs/live-test.md](docs/live-test.md)).
@@ -172,6 +173,7 @@ behind it and whether it settles the option or only narrows it
 | [docs/options.md](docs/options.md) | every `generate` option and profile key |
 | [docs/web-ui.md](docs/web-ui.md) | what each step of `bzm-opl-gen ui` does, and why it binds locally |
 | [docs/helm.md](docs/helm.md) | `--format helm`, and managing the release with `helm upgrade` |
+| [docs/docker.md](docs/docker.md) | `--format docker`: one agent as one container, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, which to pick, and `sv-expose` |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, and engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: local registry, proxy + CA, egress containment, real engine runs |

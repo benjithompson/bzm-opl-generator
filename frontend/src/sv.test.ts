@@ -138,18 +138,24 @@ describe("whether the configuration is finished", () => {
   });
 });
 
-// -- the chart ---------------------------------------------------------------
+// -- the formats that cannot publish a virtual service ------------------------
 
-describe("the Helm chart", () => {
-  it("is refused for a location that needs virtual services", () => {
-    expect(sv(SV_LOC).helmBlocked).toBe(
-      "Not for this location — service virtualization needs an ingress, its RBAC "
-      + "and a TLS secret, which this chart does not carry.");
+describe("the blocked formats", () => {
+  it("names both, for a location that needs virtual services", () => {
+    // Both refusals are generate()'s and both are about the same missing
+    // thing. The sentences differ because the reason a chart cannot do it is
+    // not the reason a container cannot.
+    const blocked = sv(SV_LOC).blockedFormats;
+    expect(blocked.helm).toMatch(/ingress, its RBAC and a TLS secret/);
+    expect(blocked.docker).toMatch(/HOSTNAME_OVERRIDE/);
+    // Never manifests: it is the one that carries the ingress, and the
+    // fallback every correction below points at.
+    expect(blocked.manifests).toBeUndefined();
   });
 
-  it("is offered where nothing needs an ingress", () => {
-    expect(sv(PERF_LOC).helmBlocked).toBeUndefined();
-    expect(sv(SV_LOC, { sv_ingress: SV_NONE }).helmBlocked).toBeUndefined();
+  it("blocks nothing where nothing needs an ingress", () => {
+    expect(sv(PERF_LOC).blockedFormats).toEqual({});
+    expect(sv(SV_LOC, { sv_ingress: SV_NONE }).blockedFormats).toEqual({});
   });
 });
 
@@ -257,21 +263,25 @@ describe("the option patch", () => {
       .toEqual({ sv_ingress: "nginx", sv_istio_gateway: null });
   });
 
-  it("falls back from a chart this location cannot have", () => {
+  it("falls back from a format this location cannot have", () => {
     // A location can turn out to be an SV one after the format was picked, and
-    // an imported profile can arrive already set to helm. Leaving it selected
-    // fails every generate call against a disabled segment.
-    expect(sv(SV_LOC, { ...CONFIGURED, output_format: "helm" }).patch)
-      .toEqual({ output_format: "manifests" });
-    expect(sv(PERF_LOC, { output_format: "helm" }).patch).toBeNull();
-    expect(sv(SV_LOC, { sv_ingress: SV_NONE, output_format: "helm" }).patch)
-      .toBeNull();
+    // an imported profile can arrive already set to one that refuses it.
+    // Leaving it selected fails every generate call against a disabled segment.
+    for (const format of ["helm", "docker"]) {
+      expect(sv(SV_LOC, { ...CONFIGURED, output_format: format }).patch)
+        .toEqual({ output_format: "manifests" });
+      expect(sv(PERF_LOC, { output_format: format }).patch).toBeNull();
+      expect(sv(SV_LOC, { sv_ingress: SV_NONE, output_format: format }).patch)
+        .toBeNull();
+    }
   });
 
   it("settles in one pass from every state that needs correcting", () => {
     expect(settle(SV_LOC, { output_format: "helm", sv_istio_gateway: "gw" }))
       .toEqual({ output_format: "manifests", sv_ingress: "nginx",
                  sv_istio_gateway: null });
+    expect(settle(SV_LOC, { output_format: "docker" }))
+      .toEqual({ output_format: "manifests", sv_ingress: "nginx" });
     expect(settle(PERF_LOC, { sv_ingress: "openshift", platform: "k8s",
                               sv_istio_gateway: "gw" }))
       .toEqual({ sv_ingress: "nginx", platform: "k8s",
@@ -279,9 +289,11 @@ describe("the option patch", () => {
   });
 
   it("leaves a declined location's format alone", () => {
-    // Declining is an answer, and the chart is generated for the performance
-    // bundle it leaves behind.
+    // Declining is an answer, and the chart -- or the container -- is
+    // generated for the performance bundle it leaves behind.
     expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "helm" }))
       .toEqual({ sv_ingress: SV_NONE, output_format: "helm" });
+    expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "docker" }))
+      .toEqual({ sv_ingress: SV_NONE, output_format: "docker" });
   });
 });

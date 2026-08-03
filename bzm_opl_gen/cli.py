@@ -490,6 +490,16 @@ def cmd_livetest(a):
             f"(the two render the same objects), or install the chart yourself "
             f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
             f"logs -l role=role-crane -f")
+    # Same guard, other platform: a docker bundle is a shell script and no
+    # cluster is involved at all. Without this the *.yaml glob comes back empty,
+    # every object "applies", no pod is created, and the run waits out its
+    # timeout -- 12 to 20 minutes and a deleted cluster.
+    if opts and opts.get("output_format") == "docker":
+        sys.exit(
+            f"{a.manifests}/ holds a docker bundle -- one container on a host, "
+            f"not a cluster deployment -- and livetest deploys manifests with "
+            f"kubectl. Run ./{gen_mod.DOCKER_RUN_FILE} on the host itself, or "
+            f"re-generate that directory with --format manifests.")
     # Is the directory this agent's bundle at all? --manifests defaults to out/,
     # which holds whatever the last `generate` left there, and the rig applies
     # every *.yaml in it. First of the bundle guards and before the mint below,
@@ -742,8 +752,10 @@ def main():
                    choices=list(gen_mod.OUTPUT_FORMATS),
                    help="manifests (default): flat YAML to kubectl apply. "
                         "helm: a chart in helm/ with values.yaml filled in from "
-                        "the account. Both render the same objects; helm covers "
-                        "performance testing only")
+                        "the account -- both render the same objects. docker: a "
+                        "docker run script for one agent on a host with a docker "
+                        "daemon, where most of the options below mean nothing. "
+                        "helm and docker cover performance testing only")
     g.add_argument("--platform", choices=["openshift", "k8s"])
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")

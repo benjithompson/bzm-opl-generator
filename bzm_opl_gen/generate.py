@@ -32,8 +32,9 @@ DEFAULT_OPTIONS = {
     # see auto_update() for why this generator departs from BlazeMeter's own
     # manifest there. The chart's `autoUpdate` is the same tri-state with the
     # same default, which is why the overlay leaves it unset unless it was
-    # chosen. (BlazeMeter's AUTO_UPDATE is a different variable and a
-    # Docker-only one, so nothing here emits it.)
+    # chosen. (BlazeMeter's AUTO_UPDATE is a different variable for a different
+    # mechanism; the docker format is where it is emitted, off this same
+    # option -- see docker_env.)
     "auto_update": None,             # None | True | False
     "cluster_rbac": False,           # include optional ClusterRole/Binding files
     # The ServiceAccount crane runs as. The name is used either way -- what
@@ -482,17 +483,21 @@ def proxy_url(url, p):
 DEFAULT_NO_PROXY = "kubernetes.default,127.0.0.1,localhost"
 
 
-def proxy_env(o):
+def proxy_env(o, no_proxy=DEFAULT_NO_PROXY):
     """The proxy environment a pod needs, as {NAME: value}, credentials already
-    embedded in the URLs. One builder for the three places that need it: the
-    ConfigMap, the Secret, and doctor's probe pod."""
+    embedded in the URLs. One builder for the four places that need it: the
+    ConfigMap, the Secret, doctor's probe pod, and the docker command.
+
+    `no_proxy` is what an unanswered `no_proxy` falls back to, and the docker
+    format passes its own: the default names `kubernetes.default`, which is the
+    cluster's API service and nothing a Docker host can resolve."""
     p = o.get("proxy") or {}
     env = {}
     for name, key in (("HTTP_PROXY", "http"), ("HTTPS_PROXY", "https")):
         if p.get(key):
             env[name] = proxy_url(p[key], p)
     if p:
-        env["NO_PROXY"] = p.get("no_proxy", DEFAULT_NO_PROXY)
+        env["NO_PROXY"] = p.get("no_proxy", no_proxy)
     return env
 
 
@@ -1192,10 +1197,19 @@ def _bundle_table(facts, o, extra=()):
     rows = [
         ("Location", f"`{facts['harbor_id']}`"),
         ("Agent", f"`{o['ship_id']}`"),
-        ("Namespace", f"`{o['namespace']}`"),
-        ("Platform", o["platform"]),
-        ("Images from", f"`{o['private_registry'] or PUBLIC_REGISTRY_LABEL}`"),
-    ] + list(extra)
+    ]
+    # Namespace and platform are Kubernetes answers. A docker bundle carries
+    # them in profile.json because a profile is every option, but stating them
+    # at the top of its README would advertise two settings the same page then
+    # says are not applied.
+    if o["output_format"] != "docker":
+        rows += [("Namespace", f"`{o['namespace']}`"),
+                 ("Platform", o["platform"])]
+    else:
+        rows.append(("Container", f"`{docker_container_name(o['ship_id'])}`"))
+    rows.append(("Images from",
+                 f"`{o['private_registry'] or PUBLIC_REGISTRY_LABEL}`"))
+    rows += list(extra)
     head = f"# BlazeMeter agent -- {facts.get('harbor_name') or facts['harbor_id']}\n\n"
     return head + "| | |\n|---|---|\n" + "".join(
         f"| {k} | {v} |\n" for k, v in rows)
@@ -1582,7 +1596,7 @@ def _sv_rbac_block(sv):
 
 # -- helm output --------------------------------------------------------------
 
-OUTPUT_FORMATS = ("manifests", "helm")
+OUTPUT_FORMATS = ("manifests", "helm", "docker")
 
 # The chart is copied verbatim, and what the account supplies is emitted beside
 # it as an overlay passed with `-f`. Deliberately an overlay rather than a
@@ -1910,6 +1924,315 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 """
 
 
+# -- docker output ------------------------------------------------------------
+#
+# One agent, one container, on a host with a docker daemon -- BlazeMeter's other
+# way of running a private location, and the one their own UI hands you from the
+# Docker Command tab. The command is built here rather than fetched from
+# `/private-locations/{harbor}/ships/{ship}/docker-command` (api.docker_command,
+# which this repo already calls to mint a token) for the same reason every other
+# format is built here: generate() reaches nothing, so a bundle can be produced
+# for an account nobody here can log in to -- facts.manual() is the whole point.
+# The shape is BlazeMeter's, from their Docker installation page and their
+# agent-environment-variables reference; what this adds is the bundle's own
+# settings folded in, which is the part their generated command cannot know.
+#
+# Most of this generator's options are Kubernetes vocabulary and reach nothing
+# here -- there is no namespace, no ServiceAccount, no toleration on a docker
+# host. That is stated in the README rather than refused, and stated per bundle:
+# only the options actually set away from their default are listed, so the note
+# says what *this* bundle asked for and did not get.
+
+DOCKER_RUN_FILE = "bzm-opl-agent.sh"
+DOCKER_ENV_FILE = "bzm-opl-agent.env"
+DOCKER_CA_FILE = "ca-bundle.crt"
+# Where BlazeMeter's Docker documentation says the trust bundle has to land, and
+# what the two variables below have to point at. Not ours to choose: the
+# container's own CA store is at this path and crane reads it from there.
+DOCKER_CA_PATH = "/etc/ssl/certs/ca-certificates.crt"
+# NO_PROXY for a docker host. The Kubernetes default names `kubernetes.default`,
+# which is the cluster's API service and resolves to nothing here; 127.0.0.1 and
+# localhost are required by BlazeMeter's proxy documentation, or transaction
+# based virtual services break against their own local calls.
+DOCKER_NO_PROXY = "127.0.0.1,localhost"
+# The fixed part of the command, in BlazeMeter's own order and spelling. The
+# socket is how crane starts engines -- it is a container manager, and on this
+# platform the manager is the host's docker daemon; /tmp is shared so an engine
+# can hand artifacts back; --net=host is what lets the agent advertise a
+# reachable address.
+DOCKER_MOUNTS = ["/var/run/docker.sock:/var/run/docker.sock", "/tmp:/tmp"]
+DOCKER_WORKDIR = "/usr/src/app/"
+DOCKER_ENTRYPOINT = "python agent/agent.py"
+
+# Options whose value a docker bundle cannot carry, with what each one is for.
+# Every one of them is Kubernetes vocabulary; the docker agent's equivalents are
+# either the daemon's own configuration or nothing at all.
+DOCKER_IGNORED = {
+    "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
+    "namespace": "containers are not namespaced",
+    "service_account_name": "there is no ServiceAccount to run as",
+    "service_account_create": "there is no ServiceAccount to create",
+    "cluster_rbac": "there is no RBAC",
+    "service_type": "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
+    "pull_secret": "the host's own docker login is what authenticates a pull",
+    "run_as_user": "the container runs as its image says; see the docs on "
+                   "INHERIT_RUNNING_USER_AND_GROUP",
+    "restrict_engines": "engine security context is a pod field",
+    "tolerations": "scheduling is a Kubernetes concern",
+    "node_selector": "scheduling is a Kubernetes concern",
+    "engine_tolerations": "scheduling is a Kubernetes concern",
+    "engine_node_selector": "scheduling is a Kubernetes concern",
+    "engine_cpu_limit": "KUBERNETES_RESOURCES_LIMITS_CPU is a Kubernetes variable",
+    "engine_mem_limit": "KUBERNETES_RESOURCES_LIMITS_MEMORY is a Kubernetes variable",
+    "engine_ephemeral_request_mb": "ephemeral storage is a pod field",
+    "engine_ephemeral_limit_mb": "ephemeral storage is a pod field",
+    "crane_ephemeral_storage": "ephemeral storage is a pod field",
+    "ca_existing_configmap": "there is no ConfigMap; the bundle mounts a file",
+    "ca_configmap_key": "there is no ConfigMap; the bundle mounts a file",
+    "ca_openshift_inject": "nothing injects a trust bundle into a container",
+    "engines_per_node": "there is one host, and it is this one",
+}
+
+
+def docker_container_name(ship_id):
+    """What BlazeMeter's own command calls the container, so an agent installed
+    from this bundle is the one their documentation talks about."""
+    return f"bzm-crane-{ship_id}"
+
+
+def docker_env(facts, o):
+    """Every environment variable the container needs, in the order they are
+    written, as {NAME: value}.
+
+    Split from the command itself because `use_secret` decides where each one is
+    written rather than whether it exists -- see docker_split_env."""
+    env = {
+        "HARBOR_ID": facts["harbor_id"],
+        "SHIP_ID": o["ship_id"],
+        "AUTH_TOKEN": o["auth_token"],
+        # Stated rather than left to the default, exactly as the Kubernetes
+        # ConfigMap states KUBERNETES: a file that says which manager it is for
+        # can be read on its own.
+        "CONTAINER_MANAGER_TYPE": "DOCKER",
+        # Where engine images come from. Always set, like the ConfigMap's, so
+        # the file names its registry rather than implying one.
+        "DOCKER_REGISTRY": o["private_registry"] or PUBLIC_REGISTRY,
+    }
+    # AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE: a different variable for a
+    # different mechanism, and this is the format where it belongs. Only emitted
+    # when the option was answered -- unlike the Kubernetes path, which forces
+    # it off. What it does here is pull a newer crane image for a container the
+    # operator started; there is no Deployment for it to fight over, which is
+    # the specific hazard auto_update() departs from BlazeMeter's default for.
+    if o["auto_update"] is not None:
+        env["AUTO_UPDATE"] = "true" if o["auto_update"] else "false"
+    env.update(proxy_env(o, no_proxy=DOCKER_NO_PROXY))
+    if _ca_cfg(o):
+        # Both, per BlazeMeter's CA page: crane's own HTTP client reads the
+        # first and boto the second, and a bundle trusted by one and not the
+        # other fails in whichever half was missed.
+        env["REQUESTS_CA_BUNDLE"] = DOCKER_CA_PATH
+        env["AWS_CA_BUNDLE"] = DOCKER_CA_PATH
+    return env
+
+
+def docker_split_env(facts, o):
+    """The environment, split into (command, env_file).
+
+    `use_secret` means the same thing here as it does for Kubernetes -- the
+    credential lives apart from the configuration -- and docker's own mechanism
+    for it is --env-file. The difference it makes is real rather than cosmetic:
+    a value passed with --env is in the host's process list for anyone running
+    `ps`, and in the shell history of whoever ran it.
+
+    With it off, everything is inline, which is the shape BlazeMeter's own
+    generated command has."""
+    env = docker_env(facts, o)
+    if not o["use_secret"]:
+        return env, {}
+    secret = {"AUTH_TOKEN": env.pop("AUTH_TOKEN")}
+    if _proxy_has_creds(o):
+        # The proxy URL carries user:password (see proxy_url), so it is a
+        # credential too -- the same rule the Kubernetes Secret follows.
+        for name in ("HTTP_PROXY", "HTTPS_PROXY"):
+            if name in env:
+                secret[name] = env.pop(name)
+    return env, secret
+
+
+def _docker_run_lines(facts, o):
+    """The `docker run` invocation, one argument per line."""
+    cmd, secret = docker_split_env(facts, o)
+    lines = ["docker run -d \\",
+             '  --name "$NAME" \\',
+             # on-failure rather than always: a crane that exits cleanly has
+             # been told to stop, and BlazeMeter's own command says on-failure.
+             "  --restart on-failure \\"]
+    if secret:
+        lines.append('  --env-file "$ENV_FILE" \\')
+    lines += [f"  --env {k}={_sh_value(v)} \\" for k, v in cmd.items()]
+    lines += [f"  -v {m} \\" for m in DOCKER_MOUNTS]
+    if _ca_cfg(o):
+        lines.append(f'  -v "$CA_BUNDLE":{DOCKER_CA_PATH}:ro \\')
+    lines += [f"  -w {DOCKER_WORKDIR} \\",
+              # The agent has to advertise an address the engines it starts can
+              # reach, and on this platform they are containers on the same
+              # host. Bridge networking gives it a private address it cannot
+              # hand out.
+              "  --net=host \\",
+              f"  {_crane_image(facts, o)} {DOCKER_ENTRYPOINT}"]
+    return "\n".join(lines)
+
+
+def _sh_value(value):
+    """A value as one shell word. Quoted only where it has to be, so the common
+    case reads like BlazeMeter's own command -- a proxy URL with a password in
+    it is the case that needs it, and special characters there are exactly what
+    their documentation warns about."""
+    text = str(value)
+    if text and all(c.isalnum() or c in "_-.:/" for c in text):
+        return text
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def _docker_ignored(o):
+    """The options this bundle set that a docker agent cannot carry, as
+    (name, why) pairs.
+
+    Compared against the defaults rather than listed wholesale: a note that
+    named all twenty-two every time would be read as boilerplate, and the one
+    line that matters -- "you asked for a node selector and it is not here" --
+    would be in the middle of it."""
+    return [(k, why) for k, why in sorted(DOCKER_IGNORED.items())
+            if o.get(k) != DEFAULT_OPTIONS[k]]
+
+
+def _docker_run_sh(facts, o):
+    ca = _ca_cfg(o)
+    name = docker_container_name(o["ship_id"])
+    # Both sibling files are resolved against the script rather than against the
+    # working directory: this is a file people copy onto a host and run from
+    # wherever they happen to be, and a relative --env-file that resolves to
+    # nothing fails inside docker with a message about the file, not about the
+    # directory. CA_BUNDLE stays overridable -- a host may already have the
+    # trust bundle the platform team maintains.
+    ca_line = (f'CA_BUNDLE="${{CA_BUNDLE:-$DIR/{DOCKER_CA_FILE}}}"\n') if ca else ""
+    ca_check = ('''
+if [ ! -f "$CA_BUNDLE" ]; then
+  echo "trust bundle not found: $CA_BUNDLE" >&2
+  echo "set CA_BUNDLE=/path/to/your/bundle.crt, or put it beside this script" >&2
+  exit 1
+fi
+''') if ca else ""
+    env_check = (f'''
+if [ ! -f "$ENV_FILE" ]; then
+  echo "{DOCKER_ENV_FILE} not found beside this script -- it holds the AUTH_TOKEN" >&2
+  exit 1
+fi
+''') if o["use_secret"] else ""
+    env_line = f'ENV_FILE="$DIR/{DOCKER_ENV_FILE}"\n' if o["use_secret"] else ""
+    return f'''#!/bin/sh
+# The BlazeMeter agent for private location {facts.get("harbor_name") or facts["harbor_id"]},
+# as one container on this host. Generated by bzm-opl-gen; see README.md.
+#
+# Run it on the machine that is to be the private location. Needs a docker
+# daemon and permission to reach its socket -- crane starts the engines as
+# sibling containers through it, which is why the socket is mounted.
+set -eu
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+NAME={name}
+{env_line}{ca_line}
+if docker ps -a --format '{{{{.Names}}}}' | grep -qx "$NAME"; then
+  # Not removed automatically: the container of this name may be the agent that
+  # is currently serving this location, and taking it away is a decision rather
+  # than a step.
+  echo "$NAME already exists." >&2
+  echo "Remove it first if it is the old agent: docker rm -f $NAME" >&2
+  exit 1
+fi
+{env_check}{ca_check}
+{_docker_run_lines(facts, o)}
+
+echo "started $NAME -- follow it with: docker logs -f $NAME"
+'''
+
+
+def _docker_env_file(facts, o):
+    """The credential half, for --env-file. Docker parses this itself: one
+    NAME=value per line, no quoting and no shell -- a quoted value arrives with
+    the quotes in it."""
+    _, secret = docker_split_env(facts, o)
+    if not secret:
+        return None
+    return ("# Read by docker --env-file, not by a shell: no quotes, no export.\n"
+            "# Anyone holding this token can register as this agent. chmod 600.\n"
+            + "".join(f"{k}={v}\n" for k, v in secret.items()))
+
+
+def _docker_readme(facts, o):
+    ignored = _docker_ignored(o)
+    token = ""
+    if not o["auth_token"] or o["auth_token"] == DEFAULT_OPTIONS["auth_token"]:
+        where = DOCKER_ENV_FILE if o["use_secret"] else DOCKER_RUN_FILE
+        token = (f"\n> **The AUTH_TOKEN in `{where}` is a placeholder.** Replace it "
+                 f"with the agent's own, from BlazeMeter's Docker Command tab "
+                 f"(Settings -> Private Locations -> this agent), or re-generate "
+                 f"with `--auth-token`.\n")
+    ignored_block = ""
+    if ignored:
+        rows = "\n".join(f"| `{k}` | {why} |" for k, why in ignored)
+        ignored_block = f"""
+## Set here, but not carried
+
+These were configured for this bundle and a docker agent has nowhere to put
+them. Nothing is silently applied -- if you need them, the Kubernetes formats
+are where they mean something.
+
+| option | why |
+|---|---|
+{rows}
+"""
+    ca = _ca_cfg(o)
+    ca_block = ""
+    if ca:
+        ca_block = f"""
+- **Trust.** `{DOCKER_CA_FILE}` is mounted at `{DOCKER_CA_PATH}`, which is where
+  `REQUESTS_CA_BUNDLE` and `AWS_CA_BUNDLE` point. It replaces the container's CA
+  store rather than adding to it, so it has to be a full bundle -- your CA *and*
+  the public roots -- or the agent stops trusting BlazeMeter itself.
+"""
+    return f"""{_bundle_table(facts, o)}
+## Run it
+{token}
+```
+chmod +x {DOCKER_RUN_FILE}
+./{DOCKER_RUN_FILE}
+```
+
+The agent should report online in BlazeMeter within a minute or two; the first
+run pulls crane and can take considerably longer. Watch it with
+`docker logs -f {docker_container_name(o["ship_id"])}`.
+
+## Worth knowing
+
+{_sizing_bullet(o)}{_location_bullet(facts)}
+- **The socket is the point.** Crane starts engines as containers on this host
+  through `/var/run/docker.sock`, so whoever runs the script needs access to it.
+  That is effectively root on the machine -- BlazeMeter's own instructions say
+  the same.
+- **One agent per host.** The container is named after the agent
+  (`{docker_container_name(o["ship_id"])}`), and the script refuses rather than
+  replacing an existing one, because that container may be the agent currently
+  serving this location.
+- **Engines run beside it, not inside it.** Size the host for the whole
+  location, not for crane: every engine is another container here.{ca_block}
+- BlazeMeter's Docker Command tab generates the same command without this
+  bundle's settings. This one is that command with them folded in; the identity
+  (`HARBOR_ID`, `SHIP_ID`) is the same either way.
+{ignored_block}"""
+
+
 PREVIEW_TAIL = ["bzm-opl-image-mirror.sh", "README.md"]
 
 
@@ -1923,6 +2246,10 @@ def preview_order(files):
     if HELM_CHART_FILE in files:
         lead = [HELM_VALUES_FILE, "README.md", f"{CHART_DIR}/README.md",
                 HELM_CHART_FILE, f"{CHART_DIR}/values.yaml"]
+    elif DOCKER_RUN_FILE in files:
+        # The command first: it is the bundle, and the other three files are
+        # about it.
+        lead = [DOCKER_RUN_FILE, DOCKER_ENV_FILE, DOCKER_CA_FILE] + PREVIEW_TAIL
     else:
         lead = APPLY_ORDER + PREVIEW_TAIL
     return [n for n in lead if n in files] + sorted(set(files) - set(lead))
@@ -1966,6 +2293,36 @@ def generate(facts, options):
             f"location is configured for service virtualization (sv_ingress="
             f"{sv['type']}). Generate it as --format manifests, or use the "
             "upstream Blazemeter/helm-crane chart, which supports both.")
+
+    if sv and o["output_format"] == "docker":
+        # The same refusal as helm's above, for the same reason: a docker agent
+        # can serve virtual services, but it publishes them with
+        # HOSTNAME_OVERRIDE and a TLS_CERT/TLS_KEY pair, and this generator has
+        # no options for that shape -- every sv_* option here is a
+        # KUBERNETES_WEB_EXPOSE_* one. A command that quietly dropped them would
+        # install, report idle, and never publish anything.
+        raise ValueError(
+            "output_format=docker covers performance testing only, and this "
+            f"location is configured for service virtualization (sv_ingress="
+            f"{sv['type']}). Generate it as --format manifests, or install the "
+            "docker agent from BlazeMeter's own Docker Command tab and set "
+            "HOSTNAME_OVERRIDE, TLS_CERT and TLS_KEY by hand.")
+
+    if o["output_format"] == "docker":
+        out = {DOCKER_RUN_FILE: _docker_run_sh(facts, o)}
+        env_file = _docker_env_file(facts, o)
+        if env_file:
+            out[DOCKER_ENV_FILE] = env_file
+        if o["ca_bundle"]:
+            # The inline PEM, as the file the command mounts. The other two CA
+            # modes name a ConfigMap, which is why they are in DOCKER_IGNORED:
+            # there is nothing here to read one out of.
+            out[DOCKER_CA_FILE] = o["ca_bundle"]
+        if o["private_registry"]:
+            out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
+        out["README.md"] = _docker_readme(facts, o)
+        out[PROFILE_FILE] = _profile_json(o)
+        return out
 
     if o["output_format"] == "helm":
         out = _helm_chart_files()
