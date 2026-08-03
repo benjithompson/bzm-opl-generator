@@ -594,6 +594,44 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
     expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
   });
 
+test("a second click on a location's header folds it, and chooses nothing else",
+  async () => {
+    const asked: string[] = [];
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Dublin", [live])], {
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    // The row itself, not the path line under the flow -- both say "Dublin"
+    // once the location is chosen, and only one of them is a control.
+    const header = await screen.findByRole("button", { name: /Dublin/ });
+
+    // Choosing opens it onto the settings, which is a lot of panel.
+    fireEvent.click(header);
+    expect(await screen.findByLabelText("Dublin settings")).toBeTruthy();
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // The same header folds it back up...
+    fireEvent.click(header);
+    await waitFor(() => expect(
+      screen.queryByLabelText("Dublin settings")).toBeNull());
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    // ...and that is all it does. The location is still the one being generated
+    // for -- its agents are still listed, the path line still names it, and no
+    // second read of the account was provoked. Folding a panel that changes
+    // what the bundle is for would be a strange way to hide some text.
+    expect(screen.getByText("agent-live")).toBeTruthy();
+    const bar = screen.getByText("account").parentElement!.parentElement!;
+    expect(bar.textContent).toMatch(/location.*Dublin/);
+    expect(asked).toEqual(["h-0"]);
+  });
+
 test("the path under the flow starts at the account, not at the location",
   async () => {
     const live = { id: "s-live", name: "agent-live", state: "IDLE",
