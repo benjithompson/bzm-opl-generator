@@ -86,9 +86,9 @@ class FakeClient:
         self.calls.append(("delete", harbor_id))
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None, func_ids=None,
+                                threads_per_engine=None,
                                 override_cpu=None, override_memory=None):
-        self.calls.append(("update_private_location", harbor_id, func_ids))
+        self.calls.append(("update_private_location", harbor_id))
         # The write lands on the harbor this fake hands back, so a caller that
         # re-reads sees what it wrote -- which is the whole point of
         # core.update_location's second GET, and untestable against a fake
@@ -98,31 +98,25 @@ class FakeClient:
         for field, value in sent.items():
             if value is not None and field not in self._ignores:
                 self._harbor[field] = value
-        if func_ids is not None:
-            self._harbor["funcIds"] = list(func_ids)
         return dict(self._harbor)
 
 
-# -- turning a feature on for a location --------------------------------------
-
-def test_add_func_id_keeps_the_ones_the_location_already_has():
-    """The PATCH replaces `funcIds`, so the additive part is ours to get right:
-    sending only what was asked for is how a location running performance and
-    mocks comes back running only mocks."""
-    client = FakeClient(harbor={"id": "h1", "funcIds": ["performance"]})
-    out = core.add_func_id(client, "h1", "mockServices")
-    assert out["funcIds"] == ["performance", "mockServices"]
-    assert ("update_private_location", "h1",
-            ["performance", "mockServices"]) in client.calls
+# -- nothing here turns a feature on for a location ---------------------------
+#
+# core.add_func_id was here, additive by construction, behind the configure
+# page's "Enable on this location…". Both went in #113: what funcIds a location
+# carries is what the location *is*, and BlazeMeter's own UI is where that
+# changes. The client cannot send them any more either -- see
+# test_the_client_cannot_replace_a_location_s_features.
 
 
-def test_add_func_id_is_idempotent_and_asks_the_account_first():
-    """Already enabled is the answer, not an error -- and the list is read from
-    the account rather than from the caller, whose copy may be an hour old."""
-    client = FakeClient(harbor={"id": "h1", "funcIds": ["performance"]})
-    out = core.add_func_id(client, "h1", "performance")
-    assert out["funcIds"] == ["performance"]
-    assert [c for c in client.calls if c[0] == "update_private_location"] == []
+def test_the_client_cannot_replace_a_location_s_features():
+    """BlazeMeter's PATCH replaces `funcIds` wholesale, so a caller meaning to
+    add one drops the rest. With nothing left that adds them additively, the
+    parameter would be that hazard with nothing guarding it."""
+    assert "func_ids" not in inspect.signature(
+        api.BzmClient.update_private_location).parameters
+    assert not hasattr(core, "add_func_id")
 
 
 # -- creating one, and whether it can start a test -----------------------------
@@ -1405,8 +1399,8 @@ def test_update_location_with_nothing_to_change_writes_nothing():
 
 
 def test_update_location_refuses_a_setting_it_does_not_own():
-    """`funcIds` in particular: add_func_id is additive by construction, and a
-    general passthrough would let a caller replace the list wholesale."""
+    """`funcIds` in particular: the PATCH replaces the list wholesale, so a
+    general passthrough would drop every feature the caller did not name."""
     client = FakeClient(harbor=_loc())
     with pytest.raises(core.BadRequest, match="funcIds"):
         core.update_location(client, "h1", funcIds=["mockServices"])

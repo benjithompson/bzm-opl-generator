@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
-  allGroupsOff, configureBlockedBy, detectGroups, groupsOf, SHARED_GROUPS,
-  ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
-  incompleteGroups, OPTION_GROUPS, OptionGroup, serviceAccountOk, startFeature,
+  allGroupsOff, configureBlockedBy, detectGroups, enabledFeatures, groupsOf,
+  SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
+  incompleteGroups, notRunPatch, OPTION_GROUPS, OptionGroup, runsFeature,
+  serviceAccountOk, startFeature,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
 
@@ -362,6 +363,77 @@ describe("which feature a location starts on", () => {
 
   it("claims nothing when the vocabulary has not arrived", () => {
     expect(startFeature(["performance"], [])).toBe(null);
+  });
+});
+
+// -- a feature the location does not run --------------------------------------
+// #113. Stated on the page, configured nowhere. The three answers below have to
+// stay three: run, not run, and nobody has said -- collapse the third into
+// either and the page either takes the switches off a location that does run
+// the feature, or claims an enablement no account has confirmed.
+
+describe("which features a location runs", () => {
+  it("takes manual mode's declaration, and nothing else", () => {
+    // No account to read, so the declaration is the whole answer -- and it is
+    // an answer, which is why this is never null.
+    expect(enabledFeatures("manual", "performance", [])).toEqual(["performance"]);
+    expect(enabledFeatures("manual", "sv", ["performance"])).toEqual(["sv"]);
+    expect(enabledFeatures("manual", null, [])).toEqual([]);
+  });
+
+  it("keeps unanswered distinct from answered-none", () => {
+    expect(enabledFeatures("connect", "performance", [])).toBe(null);
+    expect(enabledFeatures("connect", "performance", ["sv"])).toEqual(["sv"]);
+  });
+
+  it("treats unanswered as running everything", () => {
+    // The safe direction: a switch shown for a feature that turns out not to
+    // apply is corrected the moment the account answers, where one hidden on a
+    // guess leaves a location with nowhere to configure what it does run.
+    expect(runsFeature(null, "sv")).toBe(true);
+    expect(runsFeature(["performance"], "sv")).toBe(false);
+    expect(runsFeature(["performance", "sv"], "sv")).toBe(true);
+    expect(runsFeature([], "sv")).toBe(false);
+  });
+});
+
+describe("options set for a feature the location does not run", () => {
+  const perfOnly = ["performance"];
+
+  it("clears them, through the group's own disable", () => {
+    // The state a profile, a restored session or a location picked after the
+    // form was filled in can all reach, and which no control on the page can
+    // undo -- there is no SV switch on a location that does not run mocks.
+    expect(notRunPatch({ sv_ingress: "nginx" }, perfOnly))
+      .toEqual({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
+                 sv_istio_gateway: null });
+  });
+
+  it("settles in one pass", () => {
+    // Applying the patch has to make its own condition false, or the page's
+    // effect writes forever -- the property sv.correction is held to as well.
+    const o: Options = { sv_ingress: "nginx", sv_subdomain: "apps.x.com" };
+    const once = { ...o, ...notRunPatch(o, perfOnly) };
+    expect(notRunPatch(once, perfOnly)).toBe(null);
+  });
+
+  it("leaves the shared groups and the features that are run alone", () => {
+    // Registry belongs to no feature, so no location is without it; sizing
+    // belongs to performance, which this one runs.
+    expect(notRunPatch({ private_registry: "reg.corp/bzm",
+                         engine_cpu_limit: "2" }, perfOnly)).toBe(null);
+  });
+
+  it("clears nothing while nobody has answered", () => {
+    // An account still being read must not have its options wiped on the way.
+    expect(notRunPatch({ sv_ingress: "nginx" }, null)).toBe(null);
+  });
+
+  it("declines rather than clears where the location demands the feature", () => {
+    // SV_NONE is the recorded decline of a location that runs mockServices --
+    // an answer, not a configuration -- so `detect` is false and there is
+    // nothing here to do even when the feature is not in `enabled`.
+    expect(notRunPatch({ sv_ingress: SV_NONE }, perfOnly)).toBe(null);
   });
 });
 

@@ -274,19 +274,33 @@ missing tools. The rest is what it cannot fix for you.
   and the largest is one agent at 50 slots. Where the count is a *fact* -- a
   location that exists -- it is read off that location.
 
-  **Three writes to the account come from this page and nowhere else** —
-  `POST /api/ships/token` (regenerate), `POST /api/locations/func-id` (enable a
-  feature) and `POST /api/locations/settings` — and each says what it costs
-  before it is pressed. The third re-reads the location afterwards and reports
-  *that*, not the request: BlazeMeter's own POST accepts `threadsPerEngine` and
-  does not store it, so a form echoing back what was typed would show a value
-  the account never took. Verified live against a real location: the panel
-  reported `1 → 4, 500 → 400, not set → 2, not set → 8192` and the account held
-  exactly that. `core.LOCATION_SETTINGS` is a closed set for the same reason
-  `add_func_id` exists — a general passthrough would let `funcIds` be replaced
-  wholesale by a caller that meant to add one. Every route that writes carries
-  `server._writes`, which drops the cache after it; a test asserts that over the
-  app's own routes, because the one that had to remember had forgotten.
+  **Two writes to the account come from this page and nowhere else** —
+  `POST /api/ships/token` (regenerate) and `POST /api/locations/settings` — and
+  each says what it costs before it is pressed. The second re-reads the location
+  afterwards and reports *that*, not the request: BlazeMeter's own POST accepts
+  `threadsPerEngine` and does not store it, so a form echoing back what was
+  typed would show a value the account never took. Verified live against a real
+  location: the panel reported `1 → 4, 500 → 400, not set → 2, not set → 8192`
+  and the account held exactly that. `core.LOCATION_SETTINGS` is a closed set
+  because BlazeMeter's PATCH replaces `funcIds` wholesale, so a general
+  passthrough would drop every feature a caller did not name. Every route that
+  writes carries `server._writes`, which drops the cache after it; a test
+  asserts that over the app's own routes, because the one that had to remember
+  had forgotten.
+
+  There was a third — `POST /api/locations/func-id`, behind "Enable on this
+  location…" on the configure step — and #113 removed it, along with
+  `core.add_func_id` and `api.update_private_location`'s `func_ids`. The other
+  two change an agent's credential and a location's concurrency; turning a
+  funcId on changes what the location *is*, which is BlazeMeter's own UI's.
+  **A feature the location does not run is stated, never configured**: its card
+  names it and says where it is enabled, and `optionGroups.runsFeature` takes
+  its groups off the page. Hiding a row is only half — `notRunPatch` clears the
+  options too, through each group's own `disable`, because `generate()` refuses
+  an `sv_ingress` with no subdomain whatever the location runs and a hidden row
+  would just move the blocker to the server. The three states stay three
+  (`enabledFeatures`): runs, does not run, and nobody has said, which is null
+  and shows everything.
 
 - **`profile.json` is the bundle, and only the bundle.** It carries every
   resolved *option* — 35 of them — so `generate --profile` replays a bundle

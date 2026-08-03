@@ -232,6 +232,143 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     expect(screen.getByText(/HOSTNAME_OVERRIDE/)).toBeTruthy();
   });
 
+// -- a feature the location does not run -------------------------------------
+// #113. It was half-configurable, in both source modes and differently in each.
+// Manual mode had no guard at all: flipping Service virtualization on for an
+// identity declared as performance seeded `sv_ingress: nginx` behind empty
+// subdomain and TLS fields, and the rail went red for something nothing on the
+// page had asked for. Connect mode had the mirror -- the card body carried
+// `pointer-events-none` AND the click handler meant to intercept it, on the
+// same element, so a group opened by a restored profile had a switch that could
+// not be pressed and a download blocked by a row nobody could reach.
+//
+// Both need a page: what a *card* offers, and what the options end up as after
+// the page has settled, is exactly what optionGroups.test.ts cannot see.
+
+/** An account whose vocabulary carries both features and whose one location
+ *  runs only the first -- which is the state the card has to state. */
+function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-perf", name: "Perf", funcIds: ["performance"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-perf", func_ids: ["performance"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [
+      { id: "performance", label: "Performance & functional testing",
+        namespace: "blazemeter", func_ids: ["performance"] },
+      { id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
+        func_ids: ["mockServices"] },
+    ],
+    svConstants: async () => ({
+      func_ids: ["mockServices"], ingress_types: ["nginx"],
+      backends: { nginx: { group: "networking.k8s.io",
+                           resources: ["ingresses"], creates: "Ingress",
+                           nodeport_ok: true } },
+    }),
+    generate: async (_facts: unknown, options: Options) => {
+      record.push(options);
+      return { files: [], token: { branch: "placeholder" as const,
+                                   ship_id: "s-1", message: "" } };
+    },
+    ...extra,
+  });
+}
+
+/** One feature's card, by the anchor the rail already links to. Found by id
+ *  rather than by its label, which is on screen twice -- the card and the rail
+ *  entry pointing at it. */
+const card = (featureId: string) =>
+  within(document.getElementById("cfg-f-" + featureId)!);
+
+test("a feature a manually entered identity was not declared to run has no switches",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={twoFeatureAccount(asked)} />);
+
+    // Manual entry, which is where there was no guard: nothing is read, so the
+    // declaration below is the only thing that says what this location runs.
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+    fireEvent.change(screen.getByLabelText(/^Harbor ID/),
+                     { target: { value: "6a63a79dcc45dccca90bf440" } });
+    fireEvent.change(screen.getByLabelText(/^Ship ID/),
+                     { target: { value: "6a679d3445115b6651011715" } });
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // Declared performance -- the first served feature, which is what a manual
+    // identity opens on.
+    await waitFor(() => expect(
+      card("performance").getByLabelText("Enabled")).toHaveProperty("checked", true));
+
+    // The card for the other one states it and offers nothing. A switch here
+    // was pressable, seeded an ingress with no domain behind it, and turned the
+    // step red for a feature nobody had asked for.
+    expect(card("sv").queryByRole("switch")).toBeNull();
+    expect(card("sv").getByText(/pick/)).toBeTruthy();
+    // ...and this is not passing because no card rendered anything: the
+    // declared feature keeps its own group.
+    expect(card("performance").getAllByRole("switch").length).toBeGreaterThan(0);
+
+    // ...and nothing was seeded, so the rail has nothing to complain about.
+    // The switch used to write `sv_ingress: nginx` over empty subdomain and TLS
+    // fields, which is what turned this step red.
+    expect(screen.queryByText(/needs attention/)).toBeNull();
+  });
+
+test("a restored profile's SV options for a location without mockServices are cleared, not left blocking",
+  async () => {
+    // The state the page cannot be clicked out of: nothing here pressed the SV
+    // switch, so nothing on screen could press it back.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-perf", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "blazemeter", sv_ingress: "nginx" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={twoFeatureAccount(asked)} />);
+
+    // The download is not blocked. This is the failure: the option opens the SV
+    // group through detectGroups, `svIncomplete` sees an ingress with no
+    // subdomain, and the rail reds -- for a row that was inert (connect mode
+    // put `pointer-events-none` on the body) and is now not there at all.
+    const next = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Next/ });
+    await waitFor(() => expect(next.disabled).toBe(false));
+    expect(screen.queryByText(/needs attention/)).toBeNull();
+    expect(screen.queryByText(/Service virtualization first/)).toBeNull();
+    // ...and the option itself is gone from the bundle, not merely off screen:
+    // generate() refuses an ingress with no subdomain whatever the location
+    // runs, so hiding the row alone moves the blocker to the server.
+    await waitFor(() => expect(
+      asked[asked.length - 1]?.sv_ingress).toBeFalsy());
+
+    // The card states the feature and names where it is turned on -- with the
+    // funcId, because that is what the customer has to add and this page will
+    // not. No switch: nothing here can put the options back.
+    expect(card("sv").getByText(/Not enabled on this location/)).toBeTruthy();
+    expect(card("sv").getByText("mockServices")).toBeTruthy();
+    expect(card("sv").getByText(/Settings → Private Locations/)).toBeTruthy();
+    expect(card("sv").queryByRole("switch")).toBeNull();
+  });
+
 test("the docker format is a third bundle, and it is what gets generated",
   async () => {
     const asked: Options[] = [];

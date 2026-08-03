@@ -22,8 +22,8 @@ import { downloadPlan } from "./token";
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
   allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
-  detectGroups, enginePreset,
-  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups,
+  detectGroups, enabledFeatures, enginePreset,
+  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
   serviceAccountOk, startFeature, suggestNamespace, unclaimedFuncIds,
 } from "./optionGroups";
 // What the bundle is, and which options that leaves reaching something. The
@@ -945,27 +945,23 @@ export default function App({ api }: { api: Api }) {
   // the honest version of a page that quietly models five funcIds.
   const locFeatures = featuresOf(facts?.func_ids, features);
   const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
-  // Features this location does not carry. Not "unavailable" any more: the card
-  // offers to turn one on, which is a real PATCH of the location's funcIds. The
-  // list is empty whenever the question has not been answered -- manual entry
-  // declares rather than reads, and before a location is chosen an empty
-  // locFeatures means "not asked yet", not "none".
-  const notEnabled = sourceMode === "connect" && !!facts && locFeatures.length
-    ? features.map((f) => f.id).filter((id) => !locFeatures.includes(id))
-    : [];
-  /** Turn a feature on for the selected location, then re-read the facts so the
-   *  card's state comes from the account rather than from local memory. */
-  const enableFeature = useCallback(async (id: string) => {
-    const funcId = features.find((f) => f.id === id)?.func_ids[0];
-    if (!harborId || !funcId) return;
-    await api.addFuncId(harborId, funcId);
-    const [ls, fresh] = await Promise.all([
-      workspaceId != null ? api.locations(workspaceId) : Promise.resolve(null),
-      api.facts(harborId),
-    ]);
-    if (ls) setLocations(ls);
-    setFacts(fresh);
-  }, [features, harborId, workspaceId]);
+  // ...and the same answer in the shape everything downstream needs, with the
+  // third state kept: manual entry declares, a location read off the account
+  // carries funcIds, and null is nobody having said yet. A feature not in it is
+  // stated by its card and configured nowhere.
+  const enabled = enabledFeatures(sourceMode, feature, locFeatures);
+  // The second and last place an option is written without anyone pressing
+  // anything, and the same shape as the SV correction above: what has to change
+  // is a value optionGroups decides, this only applies it. A profile, a
+  // restored session or a location picked after the form was filled in can all
+  // leave options set for a feature the location does not run -- and the switch
+  // that would clear them is deliberately not on screen, so nothing else can.
+  // Below `enabled` rather than beside the other effects because it reads it.
+  const notRun = notRunPatch(options, enabled);
+  useEffect(() => {
+    if (!notRun) return;
+    setOptions((o) => ({ ...o, ...notRun }));
+  }, [notRun]);
   // Which groups are in use but not finished. Each group declares its own rule,
   // so a feature gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
@@ -1318,9 +1314,8 @@ export default function App({ api }: { api: Api }) {
             hint="Everything re-renders the preview live.">
             <ConfigurePanel
               features={features} feature={feature} pickFeature={pickFeature}
-              sourceMode={sourceMode} locFeatures={locFeatures}
-              locUnclaimed={locUnclaimed} notEnabled={notEnabled}
-              enableFeature={enableFeature}
+              sourceMode={sourceMode} enabled={enabled}
+              locUnclaimed={locUnclaimed}
               options={options} set={set}
               format={format} setFormat={(v) => set("output_format", v)}
               blockedFormats={sv.blockedFormats} applies={applies}

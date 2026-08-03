@@ -191,9 +191,17 @@ class BzmClient:
             h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
     def update_private_location(self, harbor_id, slots=None,
-                                threads_per_engine=None, func_ids=None,
+                                threads_per_engine=None,
                                 override_cpu=None, override_memory=None):
         """PATCH the location's settings. Only what is passed is sent.
+
+        No `funcIds`. This PATCH replaces the list wholesale, so a caller that
+        meant to add a feature drops every other one the location runs; it used
+        to take them, additively, for core.add_func_id, and that went with the
+        page affordance that was its only caller (#113). What a location runs is
+        what it *is*, and BlazeMeter's own UI is where it changes. Leaving the
+        parameter here would be the wholesale-replace hazard with nothing left
+        guarding it.
 
         `override_cpu` / `override_memory` are the engine pod's CPU and memory
         *requests* (memory in MB), which the scheduler and the autoscaler place
@@ -213,11 +221,6 @@ class BzmClient:
             body["overrideCPU"] = override_cpu
         if override_memory is not None:
             body["overrideMemory"] = override_memory
-        # The whole list, because PATCH replaces it: sending one funcId is how a
-        # location that ran performance and mocks comes back running only mocks.
-        # Callers add to what the location already has -- see core.add_func_id.
-        if func_ids is not None:
-            body["funcIds"] = list(func_ids)
         if not body:
             return self.private_location(harbor_id)
         return self.patch(f"/private-locations/{harbor_id}", body)

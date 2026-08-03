@@ -34,7 +34,31 @@ anything that breaks.
   a value set for Kubernetes survives the switch, is still in `profile.json`,
   and is still named in the README.
 
+### Removed
+
+- **The web UI no longer offers to turn a feature on for a location, and
+  `POST /api/locations/func-id` is gone with it.** Which funcIds a private
+  location carries is what the location *is*, and BlazeMeter's own UI (Settings
+  → Private Locations) is where it changes; the other two writes this page makes
+  change an agent's credential and a location's concurrency, which is what a
+  page for configuring a bundle is for. `core.add_func_id` and
+  `api.update_private_location`'s `func_ids` went too — with nothing adding them
+  additively, the parameter was only the wholesale-replace hazard it existed to
+  guard. `bzm-opl-gen create-location --func-ids` is unaffected.
+
 ### Fixed
+
+- **A feature the location does not run is stated, and offers no controls.** It
+  used to be half-configurable, and reachable enough to block a bundle nobody
+  meant to change. Entering an identity by hand, declaring it performance and
+  then flipping the **Service virtualization** switch seeded an ingress behind
+  empty subdomain and TLS fields, and the step went red with *needs attention*
+  for something nothing on the page had asked for. Connect mode had the mirror:
+  the card body was inert, so a restored session or an imported profile carrying
+  `sv_ingress` opened the group and left a switch that could not be pressed
+  back. Such a card now names the feature, says where it is enabled, and shows
+  nothing to press — and the options it would have configured are cleared rather
+  than merely hidden, so nothing blocks a download from off screen.
 
 - **The line saying why a step is not finished names only fields that are on
   screen.** It was a fixed sentence — "namespace, service account and any

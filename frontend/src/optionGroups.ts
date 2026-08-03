@@ -50,7 +50,13 @@ export interface OptionGroup {
    *  configured -- registry, proxy, CA trust, scheduling -- and such a group is
    *  never hidden, so it can never be the reason a download is blocked off
    *  screen. This tag is the whole frontend half of adding a feature: the list
-   *  of features itself is served, never enumerated here. */
+   *  of features itself is served, never enumerated here.
+   *
+   *  A tag must name a feature the server serves. It always had to -- a group
+   *  tagged with anything else is on no card and reachable from nowhere -- but
+   *  since notRunPatch clears the groups of a feature the location does not
+   *  run, an unserved tag would clear itself silently as well. Held to
+   *  core.FEATURES by test_server.py, which reads the tags out of this file. */
   features: string[];
   /** Does this config already mean the group is on? Runs on every option
    *  change, including the ones a preset or an imported profile brings in. */
@@ -391,6 +397,71 @@ export const SHARED_GROUPS = OPTION_GROUPS.filter((g) => !g.features.length);
  *  "nothing to configure" and "not shown" are different answers. */
 export function groupsOf(featureId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.features.includes(featureId));
+}
+
+// -- a feature the location does not run -------------------------------------
+// Stated, and configured nowhere. The card names it and says where it is turned
+// on; it offers no switch, seeds no option, and can never be the reason a
+// download is blocked. Half-configurable was the state before (#113): manual
+// mode had no guard at all, so flipping Service virtualization on for an
+// identity declared as performance seeded `sv_ingress: nginx` over empty
+// subdomain and TLS fields, and the step went red for something nothing on the
+// page had asked for.
+
+/** Which features this location runs, or null while nobody has answered.
+ *
+ *  Three states in one value, and the third is why it is not a plain array.
+ *  Manual entry *declares* a feature; a location read off the account carries
+ *  the funcIds its features come from; before either has happened the question
+ *  is simply unanswered. Answering the unanswered case with `[]` takes every
+ *  card's switches off the page while the account is still being read, and
+ *  answering it with the whole list claims an enablement nobody has confirmed
+ *  -- the same collapse from either end. */
+export function enabledFeatures(
+    mode: "connect" | "manual", declared: string | null,
+    locFeatures: string[]): string[] | null {
+  // Manual declares rather than reads, so there is nothing outstanding: the
+  // answer is the declaration, and no declaration yet is an empty one.
+  if (mode === "manual") return declared ? [declared] : [];
+  // An account that has not been read and a location whose funcIds carry no
+  // served feature both arrive as an empty list, and "nothing has said" is the
+  // honest answer to both.
+  return locFeatures.length ? locFeatures : null;
+}
+
+/** Does this location run the feature? Unanswered counts as yes, deliberately:
+ *  a switch shown for a feature that turns out not to apply is corrected the
+ *  moment the account answers, where one hidden on a guess leaves a location
+ *  that does run the feature with nowhere to configure it. */
+export function runsFeature(
+    enabled: string[] | null, featureId: string): boolean {
+  return enabled == null || enabled.includes(featureId);
+}
+
+/** What must be cleared because it configures a feature the location does not
+ *  run, or null when nothing must.
+ *
+ *  The options can reach that state without anyone choosing it -- an imported
+ *  profile, a restored session, or a location picked after the form was filled
+ *  in -- and the switch that would clear it is deliberately not on screen. Left
+ *  set they are an off-screen blocker twice over: `incompleteGroups` counts the
+ *  group, and generate() refuses outright (an `sv_ingress` with no subdomain is
+ *  a hard error whatever the location runs).
+ *
+ *  Each group's own `disable()`, never a wipe list written here -- the drift
+ *  between the two is what this file exists to stop. `required` is false by
+ *  construction: a demand comes from the location's funcIds, and these are the
+ *  features those funcIds do not carry. Applying the patch makes every `detect`
+ *  it fired on false, so the next answer is null and the page settles in one
+ *  pass -- the property sv.correction is written to hold too. */
+export function notRunPatch(
+    o: Options, enabled: string[] | null): OptionPatch | null {
+  const patch: OptionPatch = {};
+  for (const g of OPTION_GROUPS) {
+    if (g.features.length && !g.features.some((f) => runsFeature(enabled, f))
+        && g.detect(o)) Object.assign(patch, g.disable(o, false));
+  }
+  return Object.keys(patch).length ? patch : null;
 }
 
 /** ...and of those, the ones this bundle's format can carry.

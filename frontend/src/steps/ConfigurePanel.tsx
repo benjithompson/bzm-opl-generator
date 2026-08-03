@@ -30,7 +30,8 @@ import {
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, SHARED_GROUPS,
+  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFeature,
+  SHARED_GROUPS,
 } from "../optionGroups";
 
 export interface ConfigurePanelProps {
@@ -40,15 +41,12 @@ export interface ConfigurePanelProps {
   feature: string | null;
   pickFeature: (id: string) => void;
   sourceMode: "connect" | "manual";
-  /** What the location's funcIds say it runs, and the funcIds no feature
-   *  claims. Empty in manual mode: there is no account to have read. */
-  locFeatures: string[];
+  /** The funcIds this location carries that no feature claims. */
   locUnclaimed: string[];
-  /** Features the location does not run. Not "unavailable": they can be
-   *  switched on here, which is what the card asks about. */
-  notEnabled: string[];
-  /** Turn a feature on for this location. Returns once the account has it. */
-  enableFeature: (id: string) => Promise<void>;
+  /** Which features this location runs, or null while nobody has answered --
+   *  see optionGroups.enabledFeatures. A feature not in it is stated by its
+   *  card and configured nowhere. */
+  enabled: string[] | null;
   options: Options;
   set: (k: string, v: unknown) => void;
   /** What the bundle is, and the one option this step writes as a write rather
@@ -214,32 +212,33 @@ function AdvancedRow(p: ConfigurePanelProps) {
   );
 }
 
-/** One feature: whether it is on, and the options it owns. */
+/** One feature: whether it is on, and -- only where it is -- the options it
+ *  owns.
+ *
+ *  A feature the location does not run is *stated* and nothing more (#113). It
+ *  used to be half-configurable: the card offered "Enable on this location…",
+ *  which PATCHed the location's funcIds, and its group rows sat under a div
+ *  carrying both `pointer-events-none` and the click handler that opened that
+ *  offer -- so the rows were simply dead, and a restored session that had
+ *  opened the SV group left a switch nobody could reach. In manual mode the
+ *  guard was `!on && !manual && known`, which is no guard at all: the switch
+ *  flipped, seeded an ingress with no domain behind it, and blocked the step.
+ *
+ *  Turning a funcId on changes what the location *is*, which is BlazeMeter's
+ *  own UI's to do -- unlike this page's other two writes, which change an
+ *  agent's credential and a location's concurrency. So the card says where. */
 function FeatureCard(
     p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
   const { feat, own } = p;
   const manual = p.sourceMode === "manual";
   // Enabled means the location runs it -- or, in manual mode, that this is what
-  // the typed identity was declared to be.
-  const on = manual ? p.feature === feat.id : !p.notEnabled.includes(feat.id);
-  // Before the account has been read there is nothing to say: `notEnabled` is
-  // empty then, and claiming "enabled" from an unanswered question is the
-  // collapse this codebase keeps refusing to make.
-  const known = manual || p.locFeatures.length > 0;
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const enable = async () => {
-    setBusy(true);
-    try {
-      await p.enableFeature(feat.id);
-      setAsking(false);
-      // The pane is the group's own body, so turning the group on is what
-      // expands it -- and its enable() seeds whatever the group needs (SV lands
-      // on nginx rather than on no backend at all).
-      const first = own[0];
-      if (first && !p.grpOn[first.id]) p.flipGroup(first.id, true);
-    } finally { setBusy(false); }
-  };
+  // the typed identity was declared to be. Unanswered reads as on: see
+  // runsFeature for why that direction is the safe one.
+  const on = runsFeature(p.enabled, feat.id);
+  // Before the account has been read there is nothing to say: `enabled` is null
+  // then, and claiming "enabled" from an unanswered question is the collapse
+  // this codebase keeps refusing to make.
+  const known = p.enabled != null;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
@@ -266,45 +265,29 @@ function FeatureCard(
         <p className="text-[11px] text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Off on this location, so its switches are inert until the question
-          under them is answered. The click still lands -- it is what asks --
-          but nothing is written by it. */}
-      {!on && !manual && known && (
-        asking ? (
-          <div className="px-3 py-2.5 border-b border-slate-100 bg-white">
-            <p className="text-xs text-slate-700">
-              <b>{feat.label}</b> is not enabled on this location. Enable it and
-              configure it here?
-            </p>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Adds <span className="font-mono">{feat.func_ids[0]}</span> to the
-              location in BlazeMeter — the agent is only asked to serve what the
-              location says it runs.
-            </p>
-            <div className="flex gap-2 mt-2">
-              <Button onClick={enable} busy={busy}>Enable</Button>
-              {!busy && (
-                <Button kind="ghost" onClick={() => setAsking(false)}>Cancel</Button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <button className="w-full text-left px-3 py-1.5 text-[11px] text-bzm hover:underline"
-            onClick={() => setAsking(true)}>
-            Enable on this location…
-          </button>
-        )
+      {/* Three answers, and they stay three. Not run: where to turn it on, and
+          no control. Run with nothing of its own: said so, rather than left
+          blank. Run: its rows. */}
+      {known && !on ? (
+        <p className="px-3 py-3 text-[11px] text-slate-500">
+          {manual ? (
+            <>Not what this identity was declared to run — pick <b>Enabled</b>{" "}
+              above to configure it.</>
+          ) : (
+            <>Not enabled on this location. Add{" "}
+              <span className="font-mono">{feat.func_ids[0]}</span> to it in
+              BlazeMeter (Settings → Private Locations), then pick the location
+              again — an agent is only asked to serve what its location says it
+              runs.</>
+          )}
+        </p>
+      ) : own.length ? (
+        <div className="divide-y divide-slate-100">{rows(p, own)}</div>
+      ) : (
+        <p className="px-3 py-3 text-[11px] text-slate-400">
+          nothing extra to configure — it uses the settings above
+        </p>
       )}
-
-      <div className={!on && !manual && known ? "opacity-60 pointer-events-none select-none" : ""}
-        onClickCapture={!on && !manual && known
-          ? (e) => { e.preventDefault(); setAsking(true); } : undefined}>
-        {own.length
-          ? <div className="divide-y divide-slate-100">{rows(p, own)}</div>
-          : <p className="px-3 py-3 text-[11px] text-slate-400">
-              nothing extra to configure — it uses the settings above
-            </p>}
-      </div>
     </div>
   );
 }
@@ -327,14 +310,23 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const placed = keysApply(PLACEMENT_KEYS, p.applies);
   const secs = [
     ...p.features.map((f) => ({
-      id: "f-" + f.id, label: f.label, gs: groupsFor(groupsOf(f.id), p.applies),
+      id: "f-" + f.id, label: f.label,
+      // A feature the location does not run owns nothing here: its card states
+      // it and the rail agrees, rather than the rail listing groups the card
+      // does not show. The options those groups hold are cleared in App --
+      // hiding a row does not empty it, and the group is what does.
+      gs: runsFeature(p.enabled, f.id)
+        ? groupsFor(groupsOf(f.id), p.applies) : [],
+      // ...and the rail says which of the two "no groups set" is: a feature
+      // running on defaults, or one the location does not run at all.
+      off: p.enabled != null && !runsFeature(p.enabled, f.id),
       anchor: "cfg-f-" + f.id,
     })),
     ...(placed
       ? [{ id: "core", label: "Placement", gs: [] as OptionGroup[],
-           anchor: "cfg-core" }]
+           off: false, anchor: "cfg-core" }]
       : []),
-    { id: "shared", label: "Agent settings",
+    { id: "shared", label: "Agent settings", off: false,
       gs: groupsFor(SHARED_GROUPS, p.applies), anchor: "cfg-shared" },
   ];
   /** A section's groups, as the rail worked them out. */
@@ -376,6 +368,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               : s.gs.some((g) => p.incomplete.includes(g));
             const detail = todo ? "needs attention"
               : s.id === "core" ? String(p.options.namespace ?? "")
+              : s.off ? "not enabled"
               : set.length ? set.map((g) => g.title).join(", ")
               : "defaults";
             return (

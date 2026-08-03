@@ -321,6 +321,30 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     assert m.group(1) == gen_mod.SV_INGRESS_NONE
 
 
+def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
+    """Read out of the TypeScript for the same reason again, and load-bearing
+    since #113.
+
+    A group tags itself with the feature ids it belongs to; the ids themselves
+    are served from core.FEATURES and enumerated nowhere in the frontend. A tag
+    naming something not in that list was always a group on no card -- and now
+    it is worse than invisible: `notRunPatch` clears the groups of a feature the
+    location does not run, and a feature nothing serves is never run, so the
+    group's options would be wiped by a rule nobody could see applying.
+    """
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(r"export const OPTION_GROUPS: OptionGroup\[\] = \[(.*?)\n\];",
+                     (src / "optionGroups.ts").read_text(), re.S)
+    assert body, "OPTION_GROUPS not found -- was it renamed or moved?"
+    tagged = set(re.findall(r'"([^"]+)"',
+                            " ".join(re.findall(r"^\s*features: \[(.*?)\],$",
+                                                body.group(1), re.M))))
+    # Not empty: every group being untagged would pass a subset check silently,
+    # and that is the shape a bad regex leaves behind.
+    assert tagged, "no feature tags found -- did the field move or get renamed?"
+    assert tagged <= {f["id"] for f in core.FEATURES}
+
+
 # -- the connection outlives the page -----------------------------------------
 
 def test_key_status_reports_the_connection_the_process_still_holds(connected):
@@ -497,16 +521,21 @@ def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
     assert "could not be issued" in r.json()["detail"]
 
 
-def test_enabling_a_feature_adds_to_the_location_s_func_ids(monkeypatch):
-    """A bundle for mock services against a location that does not carry
-    mockServices deploys cleanly and is never asked to serve one. This is the
-    call that fixes that, and it must not drop what the location already had."""
+def test_no_route_here_turns_a_feature_on_for_a_location(monkeypatch):
+    """POST /api/locations/func-id went with the affordance that was its only
+    caller (#113). What funcIds a location carries is what the location *is*,
+    and BlazeMeter's own UI is where that changes -- so a page that offered it
+    made a bundle's configuration a reason to edit the account. 404 rather than
+    a passthrough that has quietly stopped being reachable."""
+    assert "/api/locations/func-id" not in {r.path for r in app_routes()}
     fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
     connect(monkeypatch, fake)
     r = client.post("/api/locations/func-id",
                     json={"harbor_id": "aaa111", "func_id": "mockServices"})
-    assert r.status_code == 200
-    assert r.json()["funcIds"] == ["performance", "mockServices"]
+    # 405, not 404: the SPA catch-all claims every unmatched path for GET. What
+    # matters is the same either way -- refused, and nothing reached the account.
+    assert r.status_code >= 400
+    assert not [c for c in fake.calls if c[0] == "update_private_location"]
 
 
 def test_func_ids_mark_which_ones_change_the_images():
@@ -1666,7 +1695,8 @@ def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
 
 
 def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
-    """`funcIds` is add_func_id's, and that call is additive by construction."""
+    """`funcIds` is nobody's here: what a location runs changes in BlazeMeter's
+    own UI, and this PATCH would replace the list wholesale."""
     connect(monkeypatch, FakeClient(harbor={"id": "h1"}))
     r = client.post("/api/locations/settings",
                     json={"harbor_id": "h1", "funcIds": ["mockServices"]})
@@ -1772,9 +1802,9 @@ def test_every_write_route_drops_the_cache():
     """
     writes = [r for r in app_routes()
               if "POST" in r.methods and r.path in {
-                  "/api/locations", "/api/ships", "/api/locations/func-id",
+                  "/api/locations", "/api/ships",
                   "/api/locations/settings", "/api/ships/token"}]
-    assert len(writes) == 5, "a write route was renamed; name it here too"
+    assert len(writes) == 4, "a write route was renamed; name it here too"
     missing = [r.path for r in writes
                if getattr(r.endpoint, "__wrapped__", None) is None]
     assert not missing, (
