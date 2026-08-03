@@ -470,6 +470,11 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   it and should not: there is nothing to render the same objects as. What holds
   it instead is `sh -n` over every branch of the generated script and the shape
   BlazeMeter's own Docker Command tab returns -- see `docs/docker.md`.
+  **Check it against the command their API returns, never against the pages
+  describing it.** Their generated command carries `-u 0` and
+  `DOCKER_PORT_RANGE`; neither page mentions either, this was built from the
+  pages, and the bundle did not start -- the container ran as the image's
+  non-root user and died on the docker socket it exists to use.
 
 - **The chart is copied, never re-rendered.** `--format helm` walks
   `templates/helm/` and emits it verbatim, so anything added there ships in every

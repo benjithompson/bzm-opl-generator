@@ -11,6 +11,25 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A generated docker bundle now starts.** The container ran as the crane
+  image's own non-root user, and `/var/run/docker.sock` is `root:docker 0660` on
+  a stock daemon — so the agent came up, reached the socket and died with
+  `PermissionError(13, 'Permission denied')`, a traceback naming neither the uid
+  that could not open it nor the flag that would have. `-u 0` is now set, as
+  BlazeMeter's own generated command has always set it. Starting engines through
+  that socket is the only thing the agent does, so the bundle was unusable
+  without it.
+
+  `DOCKER_PORT_RANGE` was missing for the same reason and is now set too:
+  `--net=host` makes an engine's ports the host's ports, and their command
+  always names the range.
+
+  Both are in the command their API returns and in neither of the pages
+  describing it, which is what building this format from the documentation
+  alone cost.
+
 ### Added
 
 - **`--format docker`: the agent as one container on a docker host.** A third

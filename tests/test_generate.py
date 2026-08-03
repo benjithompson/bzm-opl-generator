@@ -1330,7 +1330,7 @@ def test_docker_command_is_the_documented_shape():
     stay theirs, because their documentation is what a customer reads next."""
     sh = docker_sh(use_secret=False)
     assert "docker run -d" in sh
-    for flag in ("--restart on-failure",
+    for flag in ("--restart on-failure", "-u 0",
                  "-v /var/run/docker.sock:/var/run/docker.sock",
                  "-v /tmp:/tmp", "-w /usr/src/app/", "--net=host",
                  "python agent/agent.py"):
@@ -1344,6 +1344,43 @@ def test_docker_command_is_the_documented_shape():
     assert "--env CONTAINER_MANAGER_TYPE=DOCKER" in sh
     # And it is the crane image the account reports, not a guess.
     assert FACTS["crane_image"] in sh
+
+
+def test_docker_runs_as_root_so_it_can_open_the_socket():
+    """The bug this exists for, from a real host.
+
+    The crane image runs as a non-root user and `/var/run/docker.sock` is
+    root:docker 0660 on a stock daemon, so without `-u 0` the container starts,
+    reaches the socket and dies:
+
+        docker.errors.DockerException: Error while fetching server API version:
+        ('Connection aborted.', PermissionError(13, 'Permission denied'))
+
+    -- a Python traceback about a unix socket, which names neither the uid that
+    could not open it nor the flag that would have. Starting engines through
+    that socket is the only thing this agent does, so this is not a preference:
+    the bundle was unusable without it, and BlazeMeter's own generated command
+    has carried `-u 0` all along. Built from their documentation, which does not
+    mention it, this did not.
+
+    Asserted in every branch, because a flag that survives only the default one
+    is a flag one option away from going missing again."""
+    for opts in ({}, {"use_secret": False}, {"proxy": {"http": "http://p:3128"}},
+                 {"ca_bundle": "-----BEGIN CERTIFICATE-----"},
+                 {"private_registry": "reg.corp/bzm"}):
+        assert "-u 0" in docker_sh(**opts), opts
+
+
+def test_docker_hands_its_engines_a_port_range():
+    """`--net=host` makes an engine's ports the *host's* ports, and BlazeMeter's
+    own command always names the range. Left out, the range is whatever crane
+    defaults to -- which is not visible in the bundle, and so is not a thing the
+    operator whose host it is can check or change."""
+    for sh in (docker_sh(), docker_sh(use_secret=False)):
+        assert f"DOCKER_PORT_RANGE={gen.DOCKER_PORT_RANGE}" in sh
+    # In the command, not the env file: it is configuration, not a credential.
+    bundle = gen.generate(FACTS, DOCKER)
+    assert "DOCKER_PORT_RANGE" not in bundle[gen.DOCKER_ENV_FILE]
 
 
 def test_docker_scripts_are_valid_shell():

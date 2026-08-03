@@ -2007,6 +2007,11 @@ DOCKER_NO_PROXY = "127.0.0.1,localhost"
 # can hand artifacts back; --net=host is what lets the agent advertise a
 # reachable address.
 DOCKER_MOUNTS = ["/var/run/docker.sock:/var/run/docker.sock", "/tmp:/tmp"]
+# The host ports crane may give the engines it starts, as BlazeMeter's own
+# generated command sets it. A literal rather than an option: it is one range on
+# one host, the script is editable text, and an option for it would be a
+# Kubernetes-shaped answer to a question only this format has.
+DOCKER_PORT_RANGE = "6000-7000"
 DOCKER_WORKDIR = "/usr/src/app/"
 DOCKER_ENTRYPOINT = "python agent/agent.py"
 
@@ -2026,8 +2031,8 @@ DOCKER_IGNORED = {
     "cluster_rbac": "there is no RBAC",
     "service_type": "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
     "pull_secret": "the host's own docker login is what authenticates a pull",
-    "run_as_user": "the container runs as its image says; see the docs on "
-                   "INHERIT_RUNNING_USER_AND_GROUP",
+    "run_as_user": "the container runs as root (-u 0) because that is what "
+                   "opens the docker socket it starts engines through",
     "restrict_engines": "engine security context is a pod field",
     "tolerations": "scheduling is a Kubernetes concern",
     "node_selector": "scheduling is a Kubernetes concern",
@@ -2073,6 +2078,13 @@ def docker_env(facts, o):
         # Where engine images come from. Always set, like the ConfigMap's, so
         # the file names its registry rather than implying one.
         "DOCKER_REGISTRY": o["private_registry"] or PUBLIC_REGISTRY,
+        # The ports crane hands its engines. `--net=host` below means they are
+        # the *host's* ports, so this is a range that has to be free on the
+        # machine -- edit it in the script if something else there wants it.
+        # BlazeMeter's own generated command carries it; built from their docs,
+        # this did not, and a variable their command always sets is not one to
+        # leave to a default nobody here can see.
+        "DOCKER_PORT_RANGE": DOCKER_PORT_RANGE,
     }
     # AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE: a different variable for a
     # different mechanism, and this is the format where it belongs. Only emitted
@@ -2123,7 +2135,21 @@ def _docker_run_lines(facts, o):
              '  --name "$NAME" \\',
              # on-failure rather than always: a crane that exits cleanly has
              # been told to stop, and BlazeMeter's own command says on-failure.
-             "  --restart on-failure \\"]
+             "  --restart on-failure \\",
+             # As root, because the socket below is how this agent starts
+             # engines and on a stock host it is root:docker 0660. The crane
+             # image runs as a non-root user, so without this the container
+             # comes up, reaches the daemon, and dies on
+             # `PermissionError: [Errno 13]` out of docker/transport/unixconn --
+             # an error about a Python socket that says nothing about the uid
+             # that could not open it. BlazeMeter's own generated command
+             # carries `-u 0`; this generator was built from their *docs*, which
+             # do not mention it, and that is how it came to be missing.
+             #
+             # Not `run_as_user`: that option is a pod securityContext field
+             # (see DOCKER_IGNORED), and this is not a preference -- an agent
+             # that cannot open the socket cannot do the one thing it is for.
+             "  -u 0 \\"]
     if secret:
         lines.append('  --env-file "$ENV_FILE" \\')
     lines += [f"  --env {k}={_sh_value(v)} \\" for k, v in cmd.items()]
