@@ -439,6 +439,17 @@ export interface SelectOption {
   label: string;
 }
 
+/** The room the open list leaves at the window's edge, and the least it will
+ *  make do with. The floor matters where nothing else does: a box pinned to the
+ *  bottom of the window has no room below it and none above it either once the
+ *  drawer is short, and two rows behind a scrollbar still beats none. */
+const LIST_EDGE = 8;
+const LIST_MIN = 96;
+/** Room enough not to bother flipping the list to the other side -- about the
+ *  fixed height it used to have, which was a comfortable list everywhere it had
+ *  the space for one. */
+const LIST_COMFORTABLE = 224;
+
 // Combobox with type-to-filter: shows the selected label; typing filters the
 // list; ↑/↓ + Enter select, Esc/blur closes and restores the selection.
 export function SearchSelect(props: {
@@ -486,6 +497,37 @@ export function SearchSelect(props: {
   useEffect(() => {
     listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
   }, [hi]);
+
+  // Where the list will fit, measured when it opens rather than assumed. This
+  // control is used at the top of a form and at the *foot* of the nav drawer,
+  // and a fixed height that suits the first runs off the bottom of the window
+  // in the second -- which is where the workspace picker is, with 166 options
+  // in it. So it takes the room that is actually there, and opens upward when
+  // there is more above than below.
+  const [drop, setDrop] = useState({ up: false, max: LIST_MIN });
+  useEffect(() => {
+    if (!open) return;
+    const measure = () => {
+      const r = rootRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - LIST_EDGE;
+      const above = r.top - LIST_EDGE;
+      // Downward while there is a usable list's worth of room, whatever is
+      // above: a list that flips sides because the window happens to be a
+      // little taller upward is a control that moves for no reason the person
+      // using it can see.
+      const up = below < LIST_COMFORTABLE && above > below;
+      // No upper bound: this is a ceiling, and a short list is still as tall as
+      // its options. Capping it is how the picker came to show one row of a
+      // list that had room for twenty.
+      setDrop({ up, max: Math.max(LIST_MIN, up ? above : below) });
+    };
+    measure();
+    // Resizing with the list open is rare; a zoom or a rotate that leaves it
+    // hanging off the screen is the kind of thing nobody reports.
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
 
   // What the button would clear, or null when the box is already empty. The
   // search wins while there is one: two presses to get from "typed a filter
@@ -556,8 +598,15 @@ export function SearchSelect(props: {
         <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
       )}
       {open && (
+        // z-40, not z-30: this list has to come out over whatever it is nested
+        // in, and inside the account menu z-30 put it under the fields below
+        // it. It is still under the modal layer (z-50), which is deliberate --
+        // a dialog covers the page it was opened from.
         <div ref={listRef}
-          className="absolute z-30 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-300 rounded-md shadow-lg">
+          style={{ maxHeight: drop.max }}
+          className={"absolute z-40 w-full overflow-y-auto bg-white border "
+            + "border-slate-300 rounded-md shadow-lg "
+            + (drop.up ? "bottom-full mb-1" : "mt-1")}>
           {filtered.map((o, i) => (
             <button key={o.value} type="button"
               className={`w-full text-left px-2.5 py-1.5 text-sm ${i === hi ? "bg-bzm/10 text-bzm-dark" : "hover:bg-slate-50"} ${o.value === value ? "font-semibold" : ""}`}

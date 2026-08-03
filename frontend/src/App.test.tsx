@@ -594,6 +594,88 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
     expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
   });
 
+test("a second click on a location's header folds it, and chooses nothing else",
+  async () => {
+    const asked: string[] = [];
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Dublin", [live])], {
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    // The row itself, not the path line under the flow -- both say "Dublin"
+    // once the location is chosen, and only one of them is a control.
+    const header = await screen.findByRole("button", { name: /Dublin/ });
+
+    // Choosing opens it onto the settings, which is a lot of panel.
+    fireEvent.click(header);
+    expect(await screen.findByLabelText("Dublin settings")).toBeTruthy();
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    // The same header folds it back up...
+    fireEvent.click(header);
+    await waitFor(() => expect(
+      screen.queryByLabelText("Dublin settings")).toBeNull());
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    // ...and that is all it does. The location is still the one being generated
+    // for -- its agents are still listed, the path line still names it, and no
+    // second read of the account was provoked. Folding a panel that changes
+    // what the bundle is for would be a strange way to hide some text.
+    expect(screen.getByText("agent-live")).toBeTruthy();
+    const bar = screen.getByText("account").parentElement!.parentElement!;
+    expect(bar.textContent).toMatch(/location.*Dublin/);
+    expect(asked).toEqual(["h-0"]);
+  });
+
+test("the path under the flow starts at the account, not at the location",
+  async () => {
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Dublin", [live])])} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(await screen.findByText("agent-live"));
+
+    // All four, in order. The account and the workspace are chosen at the foot
+    // of the drawer, which is shut for most of a session, so this line is the
+    // only place on screen that says whose account a bundle is being built for
+    // -- and two customers' bundles differ in exactly that.
+    const bar = screen.getByText("account").parentElement!.parentElement!;
+    await waitFor(() => expect(bar.textContent).toMatch(
+      /account.*Alpha.*workspace.*Alpha workspace.*location.*Dublin.*agent.*agent-live/));
+  });
+
+test("the workspace picker is not clipped by the row it grows into", async () => {
+  // A CSS clip, which is the one kind of breakage nothing else here can see:
+  // the row animates by growing inside `overflow-hidden`, and the picker's list
+  // hangs out of that box, so it was cut to the height of the field -- one row
+  // of a 166-workspace account. jsdom does no layout, so the assertion is on
+  // the class that does the clipping rather than on anything measured.
+  vi.useFakeTimers();
+  render(<App api={accountOf([loc("h-0", "Dublin")])} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+  fireEvent.click(screen.getByTitle(/the key everything is read with/));
+  // Anchored: the Field's hint is inside its label, so the accessible name is
+  // the label and the sentence under it.
+  const field = screen.getByLabelText(/^Workspace/);
+  // The animation's own wrapper: the grid row, and the box inside it that the
+  // height is clipped to.
+  const clipped = () => field.closest("div.overflow-hidden");
+
+  // Hidden while the height is moving, so the row still grows in...
+  expect(clipped()).not.toBeNull();
+  // ...and released once it has stopped, which is when a list has to be able to
+  // leave it.
+  await tick(400);
+  expect(clipped()).toBeNull();
+});
+
 // -- what survives a refresh, and when it may be written back ----------------
 
 test("nothing is written back over a saved session until the restore has resolved",
@@ -904,9 +986,13 @@ function planFor(body: {
     nodes_per_agent: perAgent, nodes: perAgent * agents,
     engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
               supported_vus: 500 },
-    node: { cpu: "4", memory: "16Gi", disk_gb: 100 },
-    peak: { cpu: String(engines * 2), memory: `${engines * 8}Gi`,
-            disk_gb: engines * 60 },
+    // A node is one engine plus what the node spends on itself (1 CPU / 2Gi,
+    // in generate.py), and the peak is that times the nodes. Coherent rather
+    // than arbitrary because the summary line states all three, and a fixture
+    // whose figures do not multiply cannot show whether the page's do.
+    node: { cpu: "3", memory: "10Gi", disk_gb: 100 },
+    peak: { cpu: String(perAgent * 3), memory: `${perAgent * 10}Gi`,
+            disk_gb: perAgent * 60 },
     crane: { cpu_limit: "1", memory_limit: "2Gi" },
     location: { slots: perAgent, threads_per_engine: vus, override_cpu: 2,
                 override_memory: 8192 },
@@ -940,8 +1026,14 @@ test("with no key connected, step 1 still sizes a capacity profile", async () =>
                    { target: { value: "5000" } });
 
   // The summary is the answer, on the row that is visible with the editor shut.
-  expect(await screen.findByText(/5,000 VUs · 10 engines · 2 CPU \/ 8Gi/))
-    .toBeTruthy();
+  const summary = await screen.findByText(/5,000 VUs · 10 engines × 2 CPU/);
+  // Every step, because the total is node capacity: 10 engines at 2 CPU is 20
+  // and the answer is 30, and the node line is where the difference enters. A
+  // summary that skipped it read as arithmetic that does not work. Read off
+  // textContent because the total is emphasised in a span of its own.
+  expect(summary.textContent).toMatch(/10 engines × 2 CPU \/ 8Gi/);
+  expect(summary.textContent).toMatch(/10 nodes × 3 vCPU \/ 10Gi/);
+  expect(summary.textContent).toMatch(/30 vCPU \/ 100Gi total/);
   // Asked for the run, not for a location: how many agents will serve it is a
   // fact about a location, and there is no location here to have one.
   expect(asked[asked.length - 1].agents).toBeUndefined();

@@ -22,7 +22,7 @@
 //     behind it is still App's (see NewLocation below); what moved here is the
 //     markup, which is the half that belongs beside the agent form it is a pair
 //     with.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Api, Facts, FuncIdChoice, Location, Ship } from "../api";
 import {
   Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
@@ -34,6 +34,7 @@ import { ManualSource } from "../groups/ManualSource";
 // this panel is handed. Two readers here -- the count on a location's row and
 // the state on an agent's -- and they were the same call twice.
 import { onlineCount, shipOnline } from "../heartbeat";
+import { useOpenRow } from "../openRow";
 import { rotateHazard } from "../token";
 // What the profile card above this panel is sizing, on its way to the one
 // location panel that measures itself against it.
@@ -212,9 +213,11 @@ export function AgentPanel({
   const [issuing, setIssuing] = useState(false);
   const [issueErr, setIssueErr] = useState<string | null>(null);
   const [makingShip, setMakingShip] = useState(false);
-  // Which row is open. Separate from `shipId`: closing a row is a view action
-  // and must not un-choose the agent the bundle is for.
-  const [open, setOpen] = useState<string | null>(null);
+  // Which row of each list is open. Separate from what the list selects,
+  // because closing a row is a view action and must not un-choose the location
+  // or the agent the bundle is for -- see openRow.ts.
+  const agentRow = useOpenRow();
+  const locRow = useOpenRow();
   // Which of the three sections is expanded. `null` means "wherever the step
   // has got to", which is what makes the panel open on the next thing to do
   // rather than on all of it; a click pins one and stops it moving underneath
@@ -231,33 +234,38 @@ export function AgentPanel({
     open: section === id,
     onToggle: () => setPinned(section === id ? "none" : id),
   });
-  // The row on its way out. Its body stays mounted for the length of the
-  // transition, or switching agents collapses the old row in one frame while
-  // the new one animates -- the jump the animation exists to remove.
-  const [closing, setClosing] = useState<string | null>(null);
-  const wasOpen = useRef<string | null>(null);
-
   // Disarm on every change of agent, and open that agent's row. Keyed on shipId
   // rather than on the click so the lone-agent auto-pick opens its row too, and
   // so a row closed by hand stays closed.
   useEffect(() => {
-    setArm("idle"); setIssueErr(null); setOpen(agents.id);
+    setArm("idle"); setIssueErr(null); agentRow.setOpen(agents.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents.id]);
+  // The same, one list up: choosing a location opens it, including when the
+  // choice was a session restore rather than a click.
   useEffect(() => {
-    const prev = wasOpen.current;
-    wasOpen.current = open;
-    if (!prev || prev === open) return;
-    setClosing(prev);
-    const t = setTimeout(() => setClosing(null), 200);
-    return () => clearTimeout(t);
-  }, [open]);
+    locRow.setOpen(locations.selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locations.selectedId]);
 
   const toggle = (id: string) => {
     // Choosing an agent by hand is the move on from the location, so the fold
     // goes back to following the step -- which lands it here. Picking the
     // location pinned it open (below); this is what releases it.
     if (agents.id !== id) { agents.pick(id); setPinned(null); return; }
-    setOpen((cur) => (cur === id ? null : id));
+    agentRow.toggle(id);
+  };
+  /** The location list's rows. A row that is not selected is chosen, which
+   *  opens it; the one that is already chosen folds and unfolds, because the
+   *  body is long and hiding it is not a reason to generate for somewhere
+   *  else. */
+  const toggleLocation = (l: Location) => {
+    if (locations.selectedId !== l.id) {
+      locations.pick(l.id);
+      setPinned((l.ships ?? []).length ? "location" : null);
+      return;
+    }
+    locRow.toggle(l.id);
   };
   const regenerate = async () => {
     if (arm === "done" || issuing) return;
@@ -367,7 +375,10 @@ export function AgentPanel({
                 {shown.map((l, i) => {
                   const n = (l.ships ?? []).length;
                   const up = onlineCount(l.ships);
+                  // Chosen and open are two things now: the row folds without
+                  // giving up being the location the bundle is for.
                   const on = l.id === locations.selectedId;
+                  const isOpen = locRow.open === l.id;
                   return (
                     // A div wrapping the row and its body, like an agent row:
                     // the settings belong to this location, so they open out of
@@ -387,11 +398,14 @@ export function AgentPanel({
 
                           Not for an empty location: it has no agent to run
                           anything under, so the next thing is creating one and
-                          the fold should go where it always went. */}
-                      <button onClick={() => {
-                          locations.pick(l.id);
-                          setPinned((l.ships ?? []).length ? "location" : null);
-                        }}
+                          the fold should go where it always went.
+
+                          A second click on the same header folds the body back
+                          up. Before, the only way to put that much text away was
+                          to click a different location -- which changes what is
+                          being generated in order to hide something. */}
+                      <button onClick={() => toggleLocation(l)}
+                        aria-expanded={isOpen}
                         className="w-full text-left px-3 py-2.5 text-sm hover:bg-slate-100/60 flex items-center gap-2">
                         <span className={"h-1.5 w-1.5 rounded-full shrink-0 "
                           + (n ? "bg-emerald-500" : "bg-amber-400")} />
@@ -406,13 +420,16 @@ export function AgentPanel({
                           {n ? `${n} agent${n === 1 ? "" : "s"}${up ? ` · ${up} online` : ""}`
                              : "no agents yet"}
                         </span>
+                        {/* The chevron follows the body, not the selection:
+                            it is the control's own state, and a chosen row
+                            folded shut points down at nothing. */}
                         <span className={"text-slate-400 text-xs transition-transform duration-150 "
-                          + (on ? "rotate-90" : "")}>›</span>
+                          + (isOpen ? "rotate-90" : "")}>›</span>
                       </button>
                       <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-                        + (on ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+                        + (isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
                         <div className="overflow-hidden">
-                          {on && (
+                          {locRow.shown(l.id) && (
                             <div className="px-3 pb-3">
                               <LocationSettings api={api} location={l}
                                 profile={profile}
@@ -495,7 +512,7 @@ export function AgentPanel({
                       {ships.map((s, i) => {
                         const up = shipOnline(s);
                         const on = s.id === agents.id;
-                        const isOpen = open === s.id;
+                        const isOpen = agentRow.open === s.id;
                         return (
                           // Selected is the same blue as a selected location
                           // above: the two lists are the same kind of choice,
@@ -534,7 +551,7 @@ export function AgentPanel({
                             <div className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
                               + (isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
                               <div className="overflow-hidden">
-                                {(isOpen || closing === s.id) && (
+                                {agentRow.shown(s.id) && (
                                   <div className="px-3 pb-3 pl-10 space-y-2">
                                     <label className="block">
                                       <span className="text-xs font-medium text-slate-600">

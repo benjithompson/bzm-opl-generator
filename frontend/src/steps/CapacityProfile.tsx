@@ -120,10 +120,23 @@ export function CapacityProfile(props: {
           </p>
           <p className={"text-sm mt-0.5 " + (busy ? "opacity-50" : "")}>
             {plan ? (
+              // The whole chain, because the total is node capacity and no two
+              // adjacent figures multiply into it: 10 engines at 2 CPU is 20,
+              // and the answer is 30, the difference being the CPU and memory
+              // a node spends on itself before any pod sees any (one per node,
+              // so it scales with nodes rather than with engines). Stated as
+              // "10 engines × 2 CPU / 8Gi · 30 vCPU total" it read as
+              // arithmetic that does not work, and a summary a reader has to
+              // distrust is worse than one that is longer.
               <span className="text-slate-800 tabular-nums">
                 {plan.users.toLocaleString()} VUs · {plan.engines} engine
-                {plan.engines === 1 ? "" : "s"} · {plan.engine.cpu} CPU
-                {" / "}{plan.engine.memory}
+                {plan.engines === 1 ? "" : "s"} × {plan.engine.cpu} CPU
+                {" / "}{plan.engine.memory} · {plan.nodes} node
+                {plan.nodes === 1 ? "" : "s"} × {plan.node.cpu} vCPU
+                {" / "}{plan.node.memory} ·{" "}
+                <span className="font-semibold">
+                  {plan.peak.cpu} vCPU / {plan.peak.memory}
+                </span> total
               </span>
             ) : <span className="text-amber-700">not sized yet</span>}
           </p>
