@@ -354,6 +354,21 @@ export default function App({ api }: { api: Api }) {
       setPlanInputs(saved.plan);
       setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
+      // Manual entry's declaration, and only manual entry's: connected, the
+      // feature is derived from the location's funcIds, and putting one back
+      // would pin the page to a stale one (#118).
+      //
+      // Selected now rather than held until the vocabulary confirms it, unlike
+      // the ids above -- because `feature` cannot carry the wait. Null here does
+      // not mean "not answered yet", it means "declared nothing", and
+      // notRunPatch reads it on the very first render and clears every SV option
+      // the snapshot has just restored. So it is applied, and the effect that
+      // watches the vocabulary land is what drops it if it turns out not to be
+      // offered any more.
+      if (saved.sourceMode === "manual" && saved.declaredFeature) {
+        setFeature(saved.declaredFeature);
+        restoredFeature.current = saved.declaredFeature;
+      }
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
       setHeld({ accountId: saved.accountId, workspaceId: saved.workspaceId,
@@ -393,6 +408,12 @@ export default function App({ api }: { api: Api }) {
   const pendingWorkspace = useRef<number | null>(null);
   const pendingHarbor = useRef<string | null>(null);
   const pendingShip = useRef<string | null>(null);
+  // ...and the restored declaration, for as long as nothing could have refuted
+  // it. Not one of the three above: those are ids waiting to be *selected*,
+  // where this is already selected (it has to be -- see the restore) and waiting
+  // to be *checked*. What could refute it is the served vocabulary, and the
+  // effect below is where that arrives.
+  const restoredFeature = useRef<string | null>(null);
 
   // The four ids the restored snapshot named, for as long as nothing has
   // answered for them -- and what the page writes back in their place while
@@ -444,10 +465,15 @@ export default function App({ api }: { api: Api }) {
                    workspaceId: workspaceId ?? held?.workspaceId ?? null,
                    harborId: harborId ?? held?.harborId ?? null,
                    shipId: shipId ?? held?.shipId ?? null,
+                   // Only manual entry has declared anything. Connected, this
+                   // is a view over the location's funcIds and re-derives
+                   // itself from them, so writing it down could only pin the
+                   // next page load to a feature the account never said.
+                   declaredFeature: sourceMode === "manual" ? feature : null,
                    manual, options, step, view, plan: planInputs,
                    confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      manual, options, step, view, planInputs, confirmed]);
+      feature, manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -936,13 +962,43 @@ export default function App({ api }: { api: Api }) {
   // the starting feature every time the user chose a different one.
   useEffect(() => {
     if (!features.length) return;
-    // facts is cleared while the next location's are fetched. Falling back to
-    // the default in that gap would flip the view (and the suggested namespace)
-    // to performance and back for every SV location picked.
-    if (!facts) { if (!feature) pickFeature(features[0].id, true); return; }
+    // ...and where a restored declaration is checked, because this is where the
+    // thing that could refute it arrives: it names a feature from the served
+    // vocabulary, and until that has landed there is nothing to check it
+    // against. Still offered means it stands, and nothing below may touch it --
+    // hence the return rather than a fall-through.
+    const declared = restoredFeature.current;
+    if (declared) {
+      restoredFeature.current = null;
+      if (features.some((f) => f.id === declared)) return;
+      // Not offered any more: dropped rather than kept. A feature this build
+      // does not serve names no funcId, so the identity's facts would be
+      // gathered as though nothing had been declared, and no radio would be
+      // selected to say so or to change it with -- which is what being stuck on
+      // it looks like. So the page lands where a fresh manual session lands.
+      // Without the namespace suggestion, though: a restore is not a hand
+      // switch and not a location being picked, and what it read back is
+      // generated into every manifest.
+      pickFeature(features[0].id);
+      return;
+    }
+    // Manual entry declares rather than reads, so the facts have nothing to say
+    // here: their funcIds *are* the declaration (manualFuncIds), and reading
+    // them back can only restate it -- or lose it, where the declared feature
+    // has no image-changing funcId and startFeature falls back to the first
+    // served one. What went with it is a namespace suggestion that fired when
+    // the ship id was finished being typed, which is not a location being picked
+    // either.
+    if (sourceMode === "manual" || !facts) {
+      // facts is cleared while the next location's are fetched. Falling back to
+      // the default in that gap would flip the view (and the suggested
+      // namespace) to performance and back for every SV location picked.
+      if (!feature) pickFeature(features[0].id, true);
+      return;
+    }
     const start = startFeature(facts.func_ids, features);
     if (start) pickFeature(start, true);
-  }, [facts?.harbor_id, features, pickFeature]);
+  }, [facts?.harbor_id, features, pickFeature, sourceMode]);
 
   // -- has the choice been made, or only landed on? ---------------------------
   // Both lists auto-pick: a lone agent is chosen for you, and a session restore

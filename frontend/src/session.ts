@@ -37,7 +37,11 @@ import type { PlanInputs } from "./usePlan";
 // pair would read as "confirmed nothing" -- which is the honest answer, but it
 // is the same answer as a deliberate one, and this is the file whose whole rule
 // is that a half-understood snapshot is worse than starting over.
-export const VERSION = 6;
+// 7: manual entry's feature declaration joined the ids it belongs with. A v6
+// snapshot cannot say what a typed identity was declared to run, and its
+// absence reads as "declared nothing" -- which is what fell back to the first
+// served feature and gathered another feature's images (#118).
+export const VERSION = 7;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -62,6 +66,21 @@ export interface Session {
    *  themselves to prove the browser was listening. */
   confirmed: { loc: string | null; ship: string | null };
   manual: { harbor_id: string; ship_id: string };
+  /** What manual entry declared the typed identity runs, or null.
+   *
+   *  Kept with the ids because it is one of them: in manual entry the feature
+   *  is not a view over a location, it is the declaration -- it names the funcId
+   *  the facts are gathered for, which names the images the bundle carries. It
+   *  was the one input deciding the bundle that a refresh did not restore, so a
+   *  service-virtualization identity came back a performance one (#118).
+   *
+   *  Null in connect mode, and structurally rather than by convention: there the
+   *  feature is derived from the location's funcIds, so a value written here
+   *  would pin a restored page to whatever was last on screen instead of to what
+   *  the account says. Restoring it is `App`'s, and it checks it against the
+   *  served vocabulary first -- the same rule the confirmations keep by being
+   *  stored as the ids they were made against. */
+  declaredFeature: string | null;
   options: Options;
   step: number;
   /** Which of the two views is open. The account rollup is not a step, so the

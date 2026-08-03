@@ -39,7 +39,9 @@ export interface ConfigurePanelProps {
   /** Manual mode's declaration of what the location runs. Connected it is read
    *  off the account and this is only which card is highlighted. */
   feature: string | null;
-  pickFeature: (id: string) => void;
+  /** `suggestNs` is passed only where picking is a declaration rather than a
+   *  view -- manual entry's radio. See its call site. */
+  pickFeature: (id: string, suggestNs?: boolean) => void;
   sourceMode: "connect" | "manual";
   /** The funcIds this location carries that no feature claims. */
   locUnclaimed: string[];
@@ -263,8 +265,16 @@ function FeatureCard(
             the control rather than a chip. */}
         {manual ? (
           <label className="flex items-center gap-2 text-[11px] font-medium text-slate-600 mb-1">
+            {/* ...and it suggests a namespace, which the same control does not
+                do connected. The rule there is that switching a *view* must not
+                change the bundle; here the radio is not a view, it is the
+                declaration -- picking service virtualization is choosing to
+                build an SV bundle, and connected the equivalent act (picking an
+                SV location) suggests one too. It only ever replaces a namespace
+                nothing has typed over (suggestNamespace), so a hand-written one
+                still wins. */}
             <input type="radio" checked={on}
-              onChange={() => p.pickFeature(feat.id)} />
+              onChange={() => p.pickFeature(feat.id, true)} />
             Enabled
           </label>
         ) : known && (
