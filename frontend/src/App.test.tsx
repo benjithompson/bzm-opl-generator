@@ -1472,6 +1472,52 @@ test("a location nobody needs to change still has a way on", async () => {
 });
 
 
+test("Next waits for both confirmations, and a changed agent withdraws one",
+  async () => {
+    // Both lists auto-pick -- a lone agent is chosen for you, and a session
+    // restore brings back a pairing nobody has looked at this time round -- so
+    // "something is selected" was never "somebody said this is the one". Step 1
+    // asked the first while claiming the second.
+    render(<App api={accountOf([loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])])} />);
+
+    const next = () =>
+      screen.getByRole<HTMLButtonElement>("button", { name: /Next/ });
+    fireEvent.click(await screen.findByText("Perf"));
+    const settings = await screen.findByRole("region", { name: "Perf settings" });
+    expect(next().disabled).toBe(true);
+
+    // Confirming the location folds it away and opens the agents. Two of them,
+    // so nothing was auto-picked and the step is still waiting for the choice
+    // itself rather than for a confirmation of one.
+    fireEvent.click(within(settings).getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
+    expect(screen.getByText(/fill in the agent details/)).toBeTruthy();
+    expect(next().disabled).toBe(true);
+
+    // Chosen, and now it is the confirmation that is outstanding -- the block
+    // names that half rather than repeating the whole step.
+    // eslint-disable-next-line no-console
+    fireEvent.click(await screen.findByText("agent-1"));
+    await waitFor(() =>
+      expect(screen.getByText(/confirm the agent/)).toBeTruthy());
+    expect(next().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(next().disabled).toBe(false));
+
+    // ...and it is a confirmation *of that agent*. Picking the other one is a
+    // different bundle, so the step is unfinished again -- which is why what
+    // was confirmed is stored rather than a flag saying that something was.
+    fireEvent.click(screen.getByText("agent-2"));
+    await waitFor(() => expect(next().disabled).toBe(true));
+    expect(screen.getByText(/confirm the agent/)).toBeTruthy();
+  });
+
+
 test("a location with no agents is not a bundle request", async () => {
   // Picking an empty location used to spend a 400 on saying so: the preview
   // asked for a bundle, and generate() refused -- correctly -- with a sentence
