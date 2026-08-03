@@ -39,11 +39,31 @@ It is **built** rather than fetched, for the same reason every other format is:
 `generate` reaches nothing, so a bundle can be produced for an account nobody
 here can log in to — which is what `facts.manual()` exists for.
 
+That has a cost, and it has been paid once: **their generated command carries
+two things their documentation does not mention**, and building from the docs
+alone missed both.
+
+- **`-u 0`.** The crane image runs as a non-root user and `/var/run/docker.sock`
+  is `root:docker 0660` on a stock daemon, so the container started, reached the
+  socket and died with `PermissionError(13, 'Permission denied')` out of
+  `docker/transport/unixconn` — a traceback naming neither the uid that could
+  not open it nor the flag that would have. Starting engines through that socket
+  is the only thing the agent does.
+- **`DOCKER_PORT_RANGE`.** `--net=host` makes an engine's ports the host's
+  ports, and their command always names the range.
+
+So when checking this format against BlazeMeter, check it against the **command
+their API returns**, not against the pages describing it.
+
 ## Most options mean nothing here
 
 There is no namespace, no ServiceAccount, no toleration, no pod. Two dozen of
 this generator's options are Kubernetes vocabulary, and a docker agent has
 nowhere to put them.
+
+`run_as_user` is the one to read twice: it is ignored *because the answer is
+fixed*, not because the container has no user. It runs as root (`-u 0`), which
+is what opens the docker socket.
 
 They are **named rather than refused**, per bundle: the README lists only the
 ones set away from their default, so it says what *this* bundle asked for and

@@ -25,8 +25,8 @@ export const DOCKER_IGNORED: Record<string, string> = {
   cluster_rbac: "there is no RBAC",
   service_type: "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
   pull_secret: "the host's own docker login is what authenticates a pull",
-  run_as_user: "the container runs as its image says; see the docs on "
-    + "INHERIT_RUNNING_USER_AND_GROUP",
+  run_as_user: "the container runs as root (-u 0) because that is what opens "
+    + "the docker socket it starts engines through",
   restrict_engines: "engine security context is a pod field",
   tolerations: "scheduling is a Kubernetes concern",
   node_selector: "scheduling is a Kubernetes concern",
