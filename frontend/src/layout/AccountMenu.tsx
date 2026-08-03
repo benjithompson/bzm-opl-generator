@@ -56,6 +56,11 @@ export interface ConnectProps {
   collapsed?: boolean;
 }
 
+/** How long the workspace row takes to grow in. Kept beside the `duration-200`
+ *  the row is actually animated with -- the two have to agree, and the class is
+ *  a literal because Tailwind reads the source rather than the value. */
+const GROW_MS = 200;
+
 export function AccountMenu(p: ConnectProps) {
   const [menu, setMenu] = useState(false);
   const [form, setForm] = useState(false);
@@ -93,6 +98,20 @@ export function AccountMenu(p: ConnectProps) {
   // one there is no list to choose from, and a disabled picker sitting there
   // reads as a step that has been skipped rather than one not yet reached.
   const askWorkspace = connected && p.accountId != null;
+
+  // The clip that makes the row grow in is also a clip on anything that has to
+  // *leave* it, and the workspace picker's list is absolutely positioned: it
+  // was being cut to the height of the field it hangs off, which showed one row
+  // of a 166-workspace account. So the overflow is hidden only while the height
+  // is moving. On a timer rather than transitionend, because an animation that
+  // does not run -- reduced motion, a browser that skips it -- fires no event,
+  // and the failure that leaves is the one being fixed here.
+  const [clip, setClip] = useState(!askWorkspace);
+  useEffect(() => {
+    if (!askWorkspace) { setClip(true); return; }
+    const t = window.setTimeout(() => setClip(false), GROW_MS + 20);
+    return () => window.clearTimeout(t);
+  }, [askWorkspace]);
 
   return (
     <div ref={root} className="relative">
@@ -174,7 +193,7 @@ export function AccountMenu(p: ConnectProps) {
                   rather than making the menu jump to a new height. */}
               <div className={"grid transition-[grid-template-rows] duration-200 "
                 + "ease-out " + (askWorkspace ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                <div className="overflow-hidden">
+                <div className={clip ? "overflow-hidden" : ""}>
                   <Field label="Workspace"
                     hint="the locations in step 1 are this workspace's">
                     <SearchSelect

@@ -594,6 +594,50 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
     expect(await screen.findByText(/already running somewhere/)).toBeTruthy();
   });
 
+test("the path under the flow starts at the account, not at the location",
+  async () => {
+    const live = { id: "s-live", name: "agent-live", state: "IDLE",
+                   lastHeartBeat: Date.now() / 1000 - 10 };
+    render(<App api={accountOf([loc("h-0", "Dublin", [live])])} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(await screen.findByText("agent-live"));
+
+    // All four, in order. The account and the workspace are chosen at the foot
+    // of the drawer, which is shut for most of a session, so this line is the
+    // only place on screen that says whose account a bundle is being built for
+    // -- and two customers' bundles differ in exactly that.
+    const bar = screen.getByText("account").parentElement!.parentElement!;
+    await waitFor(() => expect(bar.textContent).toMatch(
+      /account.*Alpha.*workspace.*Alpha workspace.*location.*Dublin.*agent.*agent-live/));
+  });
+
+test("the workspace picker is not clipped by the row it grows into", async () => {
+  // A CSS clip, which is the one kind of breakage nothing else here can see:
+  // the row animates by growing inside `overflow-hidden`, and the picker's list
+  // hangs out of that box, so it was cut to the height of the field -- one row
+  // of a 166-workspace account. jsdom does no layout, so the assertion is on
+  // the class that does the clipping rather than on anything measured.
+  vi.useFakeTimers();
+  render(<App api={accountOf([loc("h-0", "Dublin")])} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+  fireEvent.click(screen.getByTitle(/the key everything is read with/));
+  // Anchored: the Field's hint is inside its label, so the accessible name is
+  // the label and the sentence under it.
+  const field = screen.getByLabelText(/^Workspace/);
+  // The animation's own wrapper: the grid row, and the box inside it that the
+  // height is clipped to.
+  const clipped = () => field.closest("div.overflow-hidden");
+
+  // Hidden while the height is moving, so the row still grows in...
+  expect(clipped()).not.toBeNull();
+  // ...and released once it has stopped, which is when a list has to be able to
+  // leave it.
+  await tick(400);
+  expect(clipped()).toBeNull();
+});
+
 // -- what survives a refresh, and when it may be written back ----------------
 
 test("nothing is written back over a saved session until the restore has resolved",
@@ -940,8 +984,12 @@ test("with no key connected, step 1 still sizes a capacity profile", async () =>
                    { target: { value: "5000" } });
 
   // The summary is the answer, on the row that is visible with the editor shut.
-  expect(await screen.findByText(/5,000 VUs · 10 engines · 2 CPU \/ 8Gi/))
-    .toBeTruthy();
+  const summary = await screen.findByText(/5,000 VUs · 10 engines × 2 CPU/);
+  // Both quantities, and which is which: the engine size multiplies, and the
+  // total is what the infrastructure request is actually for. Read off
+  // textContent because the total is emphasised in a span of its own.
+  expect(summary.textContent).toMatch(/10 engines × 2 CPU \/ 8Gi/);
+  expect(summary.textContent).toMatch(/20 vCPU \/ 80Gi total/);
   // Asked for the run, not for a location: how many agents will serve it is a
   // fact about a location, and there is no location here to have one.
   expect(asked[asked.length - 1].agents).toBeUndefined();

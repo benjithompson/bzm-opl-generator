@@ -120,10 +120,19 @@ export function CapacityProfile(props: {
           </p>
           <p className={"text-sm mt-0.5 " + (busy ? "opacity-50" : "")}>
             {plan ? (
+              // The engine size is per engine and the total is not, so the
+              // summary has to say which is which: "10 engines · 2 CPU / 8Gi"
+              // read as the whole profile's CPU to anyone who had not opened
+              // the card, and the whole profile's CPU is the number the
+              // infrastructure request is for. Times-sign for the one that
+              // multiplies, and the total spelled out after it.
               <span className="text-slate-800 tabular-nums">
                 {plan.users.toLocaleString()} VUs · {plan.engines} engine
-                {plan.engines === 1 ? "" : "s"} · {plan.engine.cpu} CPU
-                {" / "}{plan.engine.memory}
+                {plan.engines === 1 ? "" : "s"} × {plan.engine.cpu} CPU
+                {" / "}{plan.engine.memory} ·{" "}
+                <span className="font-semibold">
+                  {plan.peak.cpu} vCPU / {plan.peak.memory}
+                </span> total
               </span>
             ) : <span className="text-amber-700">not sized yet</span>}
           </p>

@@ -1130,6 +1130,15 @@ export default function App({ api }: { api: Api }) {
       setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
     } catch (e) { setLocErr(String((e as Error).message)); }
   };
+  /** Where in BlazeMeter the page is pointed. Named once because four things
+   *  ask -- the summary line under the flow, the location list's heading, and
+   *  the new-location form -- and three of them were each doing the find. */
+  const accountName = useMemo(
+    () => accounts.find((a) => a.id === accountId)?.name ?? null,
+    [accounts, accountId]);
+  const workspaceName = useMemo(
+    () => workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+    [workspaces, workspaceId]);
   /** One segment of the summary line under the flow: a label nobody has to
    *  read twice, and a value that says "none yet" in amber where the absence is
    *  the thing worth knowing. */
@@ -1169,6 +1178,15 @@ export default function App({ api }: { api: Api }) {
              steps change. */
           footer={sourceMode === "connect" ? (
             <div className="mt-3 pt-2.5 border-t border-slate-200 flex items-center gap-2 flex-wrap">
+              {/* The whole path, account first: the account and workspace are
+                  chosen in the drawer, which is collapsed for most of a
+                  session, so a bar that started at the location said which
+                  location without saying which account's. Two bundles for two
+                  customers differ in exactly that. */}
+              {pathSeg("account", accountName)}
+              <span className="text-slate-300">›</span>
+              {pathSeg("workspace", workspaceName)}
+              <span className="text-slate-300">›</span>
               {pathSeg("location", location?.name ?? null)}
               <span className="text-slate-300">›</span>
               {pathSeg("agent",
@@ -1228,8 +1246,7 @@ export default function App({ api }: { api: Api }) {
                 manual, setManual, who,
               }}
               locations={{
-                accountName: accounts.find((a) => a.id === accountId)?.name ?? null,
-                workspaceName: workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+                accountName, workspaceName,
                 list: locations, filter: locFilter, setFilter: setLocFilter,
                 selectedId: harborId, pick: setHarborId,
                 busy: locBusy, error: locErr, updated: locationUpdated,
@@ -1239,7 +1256,7 @@ export default function App({ api }: { api: Api }) {
                   // an error about a form nobody is looking at describes
                   // nothing.
                   setOpen: (v) => { setLocErr(null); setShowCreateLoc(v); },
-                  workspace: workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+                  workspace: workspaceName,
                   draft: newLoc,
                   // The draft the panel edits is four of the five fields; the
                   // workspace id is the drawer's and is merged back here.
