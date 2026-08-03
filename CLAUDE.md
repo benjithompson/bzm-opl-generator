@@ -293,6 +293,38 @@ missing tools. The rest is what it cannot fix for you.
   `core.add_func_id` and `api.update_private_location`'s `func_ids`. The other
   two change an agent's credential and a location's concurrency; turning a
   funcId on changes what the location *is*, which is BlazeMeter's own UI's.
+  **A feature is judged twice, and the two are different questions.** The
+  location decides whether it is *run*; the format decides whether this bundle
+  can *serve* it, and a card can be silent for either reason without them being
+  the same reason. `sv.featureBlocked` is the second, keyed by feature id, and
+  it says so in its own sentence — "not possible in this bundle" and "not
+  enabled on this location" are separate answers and the card gives only the
+  true one. Don't generalise it into a served "which features does a format
+  refuse" table: helm and docker refuse *one* feature and nothing else refuses
+  any, and `DOCKER_IGNORED` is docker-only precisely because helm ignores
+  nothing — it refuses. **A format's refusal clears no options**; the *format*
+  gives way (`sv.correction`), because a configuration somebody wrote outranks
+  a segment, and only `notRunPatch` — the location's answer — wipes anything.
+
+  **`blockedFormats` follows what is configured, never what is demanded** (#115).
+  `generate()` refuses a helm or docker bundle on `_sv_cfg` returning a config,
+  and `_sv_cfg` never reads the funcIds before it does. Read off the demand, the
+  gap was a location whose funcIds carry no served feature — `enabledFeatures`
+  answers null, `runsFeature` reads null as yes, so every switch is offered and
+  `notRunPatch` clears nothing — and a full SV configuration generated as docker
+  and was refused by the server with the segment still enabled. Real accounts
+  have such locations (tdm, dataPublisher, delphix). `svState` therefore takes
+  `runs` as a fourth input: options on their way out must not take a format with
+  them, or a docker choice valid all along is lost on the way past. The
+  formats the page blocks are held to the ones `generate()` actually raises on,
+  by `test_server.py`, because the two refusals are far apart and easy to grow a
+  third of.
+
+  **A format the user picked is never replaced in silence.** The correction is
+  the one write on this page that overrides a choice made on it rather than
+  completing one, so App records what it replaced and the panel says so until a
+  format is picked.
+
   **A feature the location does not run is stated, never configured**: its card
   names it and says where it is enabled, and `optionGroups.runsFeature` takes
   its groups off the page. Hiding a row is only half — `notRunPatch` clears the

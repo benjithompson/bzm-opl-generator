@@ -646,6 +646,47 @@ def test_the_page_knows_the_same_three_formats_the_generator_does():
         == gen_mod.OUTPUT_FORMATS
 
 
+def test_the_page_blocks_exactly_the_formats_that_refuse_a_virtual_service():
+    """sv.ts takes an output format away from a bundle that carries a virtual
+    service, and the refusal it is mirroring is generate()'s.
+
+    Derived by asking the generator rather than by reading it: the refusals are
+    two separate raises a long way apart, and this is the one thing about them
+    the page restates. A third format growing one would leave a segment offered
+    that cannot generate -- an off-screen blocker -- and helm losing its would
+    leave a working segment disabled with a sentence about a chart that now
+    carries an ingress.
+
+    #115 was this same mismatch one level up and is why it is pinned: the page
+    disabled these segments off the *location's demand*, while `_sv_cfg`
+    refuses on the *configuration* and never looks at the funcIds. A location
+    demanding nothing could therefore be configured for service virtualization
+    and generated as docker, which the server refused with nothing on screen
+    having said so.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    facts = {"harbor_id": "aaa111", "func_ids": ["mockServices"],
+             "crane_image": "example.invalid/blazemeter/crane:3.7.55",
+             "images": [], "ships": []}
+    sv_opts = {"ship_id": "bbb222", "auth_token": "de" * 32,
+               "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
+               "sv_tls_secret": "wildcard-credential"}
+    refused = set()
+    for fmt in gen_mod.OUTPUT_FORMATS:
+        try:
+            gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
+        except ValueError as exc:
+            assert "service virtualization" in str(exc)
+            refused.add(fmt)
+    assert refused, "no format refuses a virtual service -- did the check move?"
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(
+        r"const BLOCKED_FORMATS: Record<string, string> = \{(.*?)\n\};",
+        (src / "sv.ts").read_text(), re.S)
+    assert body, "BLOCKED_FORMATS not found -- was it renamed or moved?"
+    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) == refused
+
+
 def test_the_pages_copy_of_the_ignored_table_is_the_generators():
     """The one copy of DOCKER_IGNORED in TypeScript, held equal to this one.
 
@@ -1217,6 +1258,15 @@ def test_group_tags_name_features_the_server_actually_serves():
         f"{sorted(tagged - served)}. Either the id was renamed in "
         f"server.FEATURES, or the tag is a typo -- the group's options would "
         f"never appear.")
+    # sv.ts keys one answer by feature id rather than by group id -- which
+    # format cannot serve the feature at all -- so that literal is the same
+    # join and fails the same way: the card would render its switches on a
+    # bundle that cannot carry them, and nothing would say so.
+    sv_src = os.path.join(os.path.dirname(src), "sv.ts")
+    with open(sv_src) as fh:
+        feature = re.search(r'const SV_FEATURE = "([^"]+)"', fh.read())
+    assert feature, "SV_FEATURE not found -- was it renamed or moved?"
+    assert feature.group(1) in served
 
 
 # -- preflight from an evidence file -------------------------------------------

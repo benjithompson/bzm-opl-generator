@@ -24,7 +24,8 @@ import {
   allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
   detectGroups, enabledFeatures, enginePreset,
   featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
-  serviceAccountOk, startFeature, suggestNamespace, unclaimedFuncIds,
+  runsFeature, serviceAccountOk, startFeature, suggestNamespace,
+  unclaimedFuncIds,
 } from "./optionGroups";
 // What the bundle is, and which options that leaves reaching something. The
 // table of what a docker bundle drops is the generator's and is fetched, never
@@ -174,15 +175,40 @@ export default function App({ api }: { api: Api }) {
   // typing a space -- so the two are separate rather than one with a flag.
   const raw = useCallback(
     (k: string) => String(options[k] ?? ""), [options]);
+  // What this location runs, and the third state kept: manual entry declares,
+  // a location read off the account carries funcIds, and null is nobody having
+  // said yet. Up here because `sv` reads it -- which of the SV options are on
+  // their way out is what decides whether they may block an output format, and
+  // deriving that below the record that needs it was how the two got out of
+  // step. `locUnclaimed` and `notRun` stay where they are used.
+  const locFeatures = featuresOf(facts?.func_ids, features);
+  const enabled = enabledFeatures(sourceMode, feature, locFeatures);
   // Everything about service virtualization, answered once. Four blocks of this
   // file used to derive it -- what the location demands, whether that demand
   // was declined, whether what is set is finished, what the panels render
   // against -- and each read the options for itself, so one question had four
   // answers free to disagree. Declared up here because the status poll below
   // asks it too. See sv.ts; it is tested as plain data, with no page at all.
+  //
+  // The fourth input is whether this bundle still carries the feature at all:
+  // notRunPatch clears the SV options of a location known to run something
+  // else, and options on their way out must not take an output format with
+  // them. Unanswered reads as yes, which is the direction that over-blocks
+  // rather than letting a bundle the server refuses through.
+  const svRuns = runsFeature(enabled, "sv");
   const sv = useMemo(
-    () => svState(facts?.func_ids, options, svConst),
-    [facts?.func_ids, options, svConst]);
+    () => svState(facts?.func_ids, options, svConst, svRuns),
+    [facts?.func_ids, options, svConst, svRuns]);
+  // What the bundle is. Declared here rather than beside the two predicates it
+  // feeds, because the SV correction below reads it to say which format it is
+  // replacing -- see the effect that applies sv.patch.
+  const format = String(options.output_format ?? "manifests");
+  // ...and the last format the correction took away, or null. Not derived: once
+  // the patch is applied the options no longer hold what was replaced, so a
+  // derivation would state it for exactly the render it is already too late to
+  // read. Cleared by picking a format, which is the answer to it.
+  const [formatNotice, setFormatNotice] =
+    useState<{ was: string; why: string } | null>(null);
   /** Drop the credential and everything said about it.
    *
    *  One function because it is one fact -- the token, the rotate choice and the
@@ -830,9 +856,25 @@ export default function App({ api }: { api: Api }) {
   // sv.ts as a value -- which is what makes it testable, and what stops this
   // being two effects writing what a third reads back. Applying the patch makes
   // the next one null, so this settles in one pass.
+  //
+  // Where the patch moves the output format, it is recorded rather than only
+  // applied. That correction is the one thing here that overrides a choice the
+  // user made on this page, and it used to happen in silence: pick Docker,
+  // switch service virtualization back on, and the segment moved to Kubernetes
+  // manifests with nothing said. The notice carries the generator's own
+  // sentence for the refusal, and `setFormat` clears it -- a format chosen
+  // after the fact is the answer, not something to keep explaining.
   useEffect(() => {
     const patch = sv.patch;
     if (!patch) return;
+    // Read off the same render that produced the patch -- `sv` is derived from
+    // `options`, so a new patch and the format it is correcting are always the
+    // one pair. The sentence is the generator's, taken from the table that
+    // disabled the segment, so the notice and the tooltip cannot drift.
+    const was = format;
+    if (patch.output_format && was && was !== patch.output_format) {
+      setFormatNotice({ was, why: sv.blockedFormats[was] ?? "" });
+    }
     setOptions((o) => ({ ...o, ...patch }));
   }, [sv.patch]);
   const flipGroup = (id: GroupId, on: boolean) => {
@@ -899,9 +941,10 @@ export default function App({ api }: { api: Api }) {
   // two dozen options reach nothing in it. So the choice is made at the top of
   // the configure step and the form follows it -- asking for a namespace and a
   // ServiceAccount and then handing over a bundle with neither is the silent
-  // failure this arrangement exists to stop. Which formats a location refuses
-  // is sv.blockedFormats, with the sentence each is refused in.
-  const format = String(options.output_format ?? "manifests");
+  // failure this arrangement exists to stop. Which formats this *configuration*
+  // refuses is sv.blockedFormats, with the sentence each is refused in, and the
+  // mirror of it -- which features this format refuses -- is sv.featureBlocked.
+  // `format` itself is declared with `sv`, which reads it.
   /** Does this option reach anything in the bundle being generated? What the
    *  configure step hides by, and what the two blockers below are judged
    *  against. The table is the generator's; see formats.ts. */
@@ -940,16 +983,11 @@ export default function App({ api }: { api: Api }) {
   const mayRotate =
     !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
   // -- what this location runs -----------------------------------------------
-  // The features it carries, and the funcIds it carries that the tool has no
-  // options for. Locations already run tdm/dataPublisher/delphix; naming them is
+  // `locFeatures` and `enabled` are derived above, beside the record that reads
+  // them. This is the funcIds the location carries that the tool has no options
+  // for: locations already run tdm/dataPublisher/delphix, and naming them is
   // the honest version of a page that quietly models five funcIds.
-  const locFeatures = featuresOf(facts?.func_ids, features);
   const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
-  // ...and the same answer in the shape everything downstream needs, with the
-  // third state kept: manual entry declares, a location read off the account
-  // carries funcIds, and null is nobody having said yet. A feature not in it is
-  // stated by its card and configured nowhere.
-  const enabled = enabledFeatures(sourceMode, feature, locFeatures);
   // The second and last place an option is written without anyone pressing
   // anything, and the same shape as the SV correction above: what has to change
   // is a value optionGroups decides, this only applies it. A profile, a
@@ -1317,8 +1355,11 @@ export default function App({ api }: { api: Api }) {
               sourceMode={sourceMode} enabled={enabled}
               locUnclaimed={locUnclaimed}
               options={options} set={set}
-              format={format} setFormat={(v) => set("output_format", v)}
-              blockedFormats={sv.blockedFormats} applies={applies}
+              format={format}
+              setFormat={(v) => { setFormatNotice(null); set("output_format", v); }}
+              blockedFormats={sv.blockedFormats}
+              featureBlocked={sv.featureBlocked} formatNotice={formatNotice}
+              applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}

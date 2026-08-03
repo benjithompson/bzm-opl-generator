@@ -225,11 +225,19 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     const chart = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
-    expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
     const docker = screen.getByRole<HTMLButtonElement>(
       "radio", { name: /Docker/ });
     expect(docker.disabled).toBe(true);
     expect(screen.getByText(/HOSTNAME_OVERRIDE/)).toBeTruthy();
+
+    // #115: the profile arrived asking for a chart and is being generated as
+    // manifests instead, so the page says so. It used to happen in silence,
+    // which is the one correction here that overrides a choice rather than
+    // completing one. The chart's own sentence is therefore on screen twice --
+    // under the disabled segment, and in the notice naming what was replaced.
+    expect(screen.getAllByText(/which this chart does not carry/).length)
+      .toBe(2);
+    expect(screen.getByText(/Switched to/)).toBeTruthy();
   });
 
 // -- a feature the location does not run -------------------------------------
@@ -367,6 +375,99 @@ test("a restored profile's SV options for a location without mockServices are cl
     expect(card("sv").getByText("mockServices")).toBeTruthy();
     expect(card("sv").getByText(/Settings → Private Locations/)).toBeTruthy();
     expect(card("sv").queryByRole("switch")).toBeNull();
+  });
+
+// -- a format that cannot serve a feature ------------------------------------
+// #115, and what #113 left reachable. The blocked formats were read off the
+// location's *demand*, and generate() refuses on the *configuration*: _sv_cfg
+// returns a config without ever looking at the funcIds. The gap between the two
+// is a location whose funcIds carry no served feature -- `enabled` is null,
+// nobody has said, so notRunPatch clears nothing and every switch is offered.
+// Real accounts have them: tdm, dataPublisher and delphix are all funcIds this
+// tool models no feature for.
+
+/** ...that account, with such a location. */
+const unclaimedAccount = (record: Options[]) =>
+  twoFeatureAccount(record, {
+    locations: async () => [{
+      id: "h-tdm", name: "Tdm", funcIds: ["tdm"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-tdm", func_ids: ["tdm"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+  });
+
+test("an SV configuration no location demanded still takes away the formats that refuse it",
+  async () => {
+    // A restored session is one of the three ways these options arrive without
+    // anyone pressing anything, and the only one that needs no account to
+    // reproduce. Docker plus a complete SV configuration: generate() refuses
+    // the pair outright, and nothing on the page used to say so -- the segment
+    // was enabled, the rail was green and the download was not blocked.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-tdm", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: {
+        namespace: "blazemeter", output_format: "docker",
+        sv_ingress: "nginx", sv_subdomain: "apps.example.com",
+        sv_tls_secret: "wildcard",
+      },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={unclaimedAccount(asked)} />);
+
+    // The acceptance criterion, as the assertion: no request carries the pair
+    // the server refuses. Not "the error is nicer" -- the combination never
+    // reaches generate() at all.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked.filter((o) => o.output_format === "docker" && o.sv_ingress
+      && o.sv_ingress !== "none")).toEqual([]);
+    // The SV options are what survive; the format is what gives way. Nothing
+    // here wipes a configuration somebody wrote in order to keep a format.
+    expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx");
+    expect(asked[asked.length - 1]?.output_format).toBe("manifests");
+
+    // ...and the page said so rather than swapping the segment in silence.
+    expect(await screen.findByText(/Switched to/)).toBeTruthy();
+    const docker = screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(true);
+  });
+
+test("a feature this bundle's format cannot serve is stated, not offered",
+  async () => {
+    // The same card as #113's, for the other reason it can carry no switches --
+    // and the two must not be confused. This location's funcIds say nothing, so
+    // "not enabled here" is false; what is true is that no docker bundle can
+    // publish a virtual service whatever the location runs.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-tdm", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "blazemeter", output_format: "docker" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={unclaimedAccount(asked)} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
+
+    // No switch: pressing one would configure a bundle the generator refuses,
+    // and the format would then be yanked out from under the choice just made.
+    await waitFor(() => expect(card("sv").queryByRole("switch")).toBeNull());
+    // It says which of the two answers this is, and names the format that can.
+    expect(card("sv").getByText(/Not possible in this bundle/)).toBeTruthy();
+    expect(card("sv").queryByText(/Not enabled on this location/)).toBeNull();
+
+    // ...and it comes back on a format that can serve it, rather than being
+    // gone for good: the card is a view over the bundle, not a decision.
+    fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
+    await waitFor(() =>
+      expect(card("sv").queryByRole("switch")).not.toBeNull());
   });
 
 test("the docker format is a third bundle, and it is what gets generated",

@@ -54,11 +54,19 @@ export interface ConfigurePanelProps {
    *  asks: see the header. */
   format: string;
   setFormat: (v: string) => void;
-  /** Why a format is unavailable for this location, by format id -- from sv.ts,
-   *  and empty for a location that runs no virtual services. The segment says
+  /** Why a format is unavailable for this bundle, by format id -- from sv.ts,
+   *  and empty where nothing configured needs an ingress. The segment says
    *  so rather than disappearing: a format that vanishes leaves the page unable
    *  to explain the error the server would have given. */
   blockedFormats: Record<string, string>;
+  /** ...and the same refusal from the other end: why this format cannot serve
+   *  a feature at all, by feature id. The card renders it instead of its
+   *  switches, so a docker bundle stops offering an ingress, a subdomain and a
+   *  TLS secret that would make the whole bundle unbuildable. */
+  featureBlocked: Record<string, string>;
+  /** The format the SV correction replaced, and why -- or null. A format the
+   *  user picked is never swapped in silence; see the effect in App. */
+  formatNotice: { was: string; why: string } | null;
   /** Does this option reach anything in a bundle of this format? Everything
    *  below hides by it -- whole groups, the placement card, the crane-hook row,
    *  Advanced, and the individual fields inside a group's own body. From
@@ -239,6 +247,12 @@ function FeatureCard(
   // then, and claiming "enabled" from an unanswered question is the collapse
   // this codebase keeps refusing to make.
   const known = p.enabled != null;
+  // ...and the third thing that can be true of a card, which is about the
+  // bundle rather than the location: this format cannot serve this feature at
+  // all. Only asked where the location does run it -- "not enabled here" and
+  // "not possible in this format" are different answers and the card may give
+  // only the one that is true.
+  const noFormat = on ? p.featureBlocked[feat.id] : undefined;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
@@ -265,9 +279,11 @@ function FeatureCard(
         <p className="text-[11px] text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Three answers, and they stay three. Not run: where to turn it on, and
-          no control. Run with nothing of its own: said so, rather than left
-          blank. Run: its rows. */}
+      {/* Four answers, and they stay four. Not run: where to turn it on, and no
+          control. Run but not by a bundle of this format: which format would,
+          and no control either -- the switches would configure a bundle the
+          generator refuses outright. Run with nothing of its own: said so,
+          rather than left blank. Run: its rows. */}
       {known && !on ? (
         <p className="px-3 py-3 text-[11px] text-slate-500">
           {manual ? (
@@ -280,6 +296,11 @@ function FeatureCard(
               again — an agent is only asked to serve what its location says it
               runs.</>
           )}
+        </p>
+      ) : noFormat ? (
+        <p className="px-3 py-3 text-[11px] text-slate-500">
+          Not possible in this bundle — {noFormat}. Pick{" "}
+          <b>Kubernetes manifests</b> above to configure it.
         </p>
       ) : own.length ? (
         <div className="divide-y divide-slate-100">{rows(p, own)}</div>
@@ -311,11 +332,13 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const secs = [
     ...p.features.map((f) => ({
       id: "f-" + f.id, label: f.label,
-      // A feature the location does not run owns nothing here: its card states
-      // it and the rail agrees, rather than the rail listing groups the card
-      // does not show. The options those groups hold are cleared in App --
-      // hiding a row does not empty it, and the group is what does.
-      gs: runsFeature(p.enabled, f.id)
+      // A feature the location does not run owns nothing here, and neither does
+      // one this format cannot serve: the card states it either way and the
+      // rail agrees, rather than listing groups the card does not show. The
+      // options of a feature that is not run are cleared in App -- hiding a row
+      // does not empty it, and the group is what does. A format's refusal
+      // clears nothing, because the format is what gives way (see sv.patch).
+      gs: runsFeature(p.enabled, f.id) && !p.featureBlocked[f.id]
         ? groupsFor(groupsOf(f.id), p.applies) : [],
       // ...and the rail says which of the two "no groups set" is: a feature
       // running on defaults, or one the location does not run at all.
@@ -341,8 +364,27 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
         onChange={p.setFormat}
         options={OUTPUT_FORMATS.map((f) => ({
           value: f.id, label: f.label, hint: f.hint,
-          disabledReason: p.blockedFormats[f.id],
+          // The lead-in is this reader's; sv.ts hands over the clause. What
+          // takes a segment away is what is configured, never the location --
+          // a location that runs mockServices and was answered no generates
+          // any of the three.
+          disabledReason: p.blockedFormats[f.id]
+            && `Not for this configuration — ${p.blockedFormats[f.id]}.`,
         }))} />
+
+      {/* A format the user picked is never replaced in silence. It is the one
+          correction on this page that overrides a choice made on it, and it
+          survives until a format is picked -- which is the answer to it. */}
+      {p.formatNotice && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          Switched to <b>Kubernetes manifests</b>: the{" "}
+          {OUTPUT_FORMATS.find((f) => f.id === p.formatNotice!.was)?.label
+            ?? p.formatNotice.was}{" "}
+          bundle you had chosen cannot serve service virtualization
+          {p.formatNotice.why ? ` — ${p.formatNotice.why}` : ""}. Switch it off
+          in <b>Service virtualization</b> below to pick that format again.
+        </p>
+      )}
 
       <div className="flex gap-2 items-center flex-wrap">
         <span className="flex-1" />

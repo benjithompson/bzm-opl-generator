@@ -157,6 +157,66 @@ describe("the blocked formats", () => {
     expect(sv(PERF_LOC).blockedFormats).toEqual({});
     expect(sv(SV_LOC, { sv_ingress: SV_NONE }).blockedFormats).toEqual({});
   });
+
+  it("blocks on what is configured, not on what the location asked for", () => {
+    // #115. generate() refuses on _sv_cfg returning a config, and _sv_cfg
+    // never looks at the funcIds before it does -- so an SV configuration on a
+    // location that demanded nothing is a docker bundle the server refuses.
+    // Read off `required`, this said nothing about it and the segment stayed
+    // enabled: an off-screen blocker, which is the shape the page keeps
+    // removing.
+    const s = sv(PERF_LOC, CONFIGURED);
+    expect(s.required).toBe(false);
+    expect(s.blockedFormats.docker).toMatch(/HOSTNAME_OVERRIDE/);
+    expect(s.blockedFormats.helm).toMatch(/ingress, its RBAC and a TLS secret/);
+  });
+
+  it("blocks nothing for options that are on their way out", () => {
+    // ...and the other end of the same question. A location known to run
+    // something else has notRunPatch clearing every SV option through the
+    // group's own disable(), so an sv_ingress still in the options is not a
+    // bundle anybody will generate -- and taking the docker segment away for
+    // it would lose a format choice that was valid all along.
+    expect(svState(PERF_LOC, CONFIGURED, CONST, false).blockedFormats)
+      .toEqual({});
+  });
+
+  it("keeps 'no virtual services' apart from 'the constants have not landed'", () => {
+    // Read off `required` these shared an answer: func_ids arrives empty
+    // before /api/sv-constants lands, which makes every location a non-SV one
+    // and every format available. What is configured is an option this page
+    // wrote, so an unread table cannot make it lie.
+    const unread: SvConstants = { func_ids: [], ingress_types: [], backends: {} };
+    expect(svState(SV_LOC, CONFIGURED, unread).blockedFormats.docker)
+      .toMatch(/HOSTNAME_OVERRIDE/);
+  });
+});
+
+// -- and the same refusal read from the other end -----------------------------
+
+describe("the feature a format cannot serve", () => {
+  it("names the format's own refusal, keyed by feature", () => {
+    // The card renders this instead of its switches: a docker bundle offering
+    // an ingress, a subdomain and a TLS secret is offering three fields that
+    // make the whole bundle unbuildable.
+    expect(sv(SV_LOC, { output_format: "docker" }).featureBlocked.sv)
+      .toMatch(/HOSTNAME_OVERRIDE/);
+    expect(sv(SV_LOC, { output_format: "helm" }).featureBlocked.sv)
+      .toMatch(/ingress, its RBAC and a TLS secret/);
+  });
+
+  it("says nothing about a format that can serve it", () => {
+    expect(sv(SV_LOC, { output_format: "manifests" }).featureBlocked).toEqual({});
+    expect(sv(SV_LOC, {}).featureBlocked).toEqual({});
+  });
+
+  it("leaves a feature the location does not run to say so itself", () => {
+    // "Not enabled here" and "not possible in this format" are different
+    // answers and the card must not give the second where the first is true --
+    // the location's own funcIds are what that card is about.
+    expect(svState(PERF_LOC, { output_format: "docker" }, CONST, false)
+      .featureBlocked).toEqual({});
+  });
 });
 
 // -- what the panels render against ------------------------------------------
@@ -211,10 +271,10 @@ describe("the prerequisite context", () => {
 describe("the option patch", () => {
   /** Apply the patch until there is none, or give up. A loop that does not
    *  settle is the bug this shape exists to make visible. */
-  const settle = (funcIds: string[] | undefined, o: Options) => {
+  const settle = (funcIds: string[] | undefined, o: Options, runs = true) => {
     let cur = o;
     for (let i = 0; i < 5; i += 1) {
-      const { patch } = svState(funcIds, cur, CONST);
+      const { patch } = svState(funcIds, cur, CONST, runs);
       if (!patch) return cur;
       cur = { ...cur, ...patch };
     }
@@ -295,5 +355,29 @@ describe("the option patch", () => {
       .toEqual({ sv_ingress: SV_NONE, output_format: "helm" });
     expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "docker" }))
       .toEqual({ sv_ingress: SV_NONE, output_format: "docker" });
+  });
+
+  it("falls back from a format a configuration nobody demanded refuses", () => {
+    // #115: the same correction, for the state the demand could not see. An
+    // imported profile can carry docker and a full SV configuration for a
+    // location whose funcIds carry no served feature at all, and nothing was
+    // clearing either half.
+    expect(settle(PERF_LOC, { ...CONFIGURED, output_format: "docker" }))
+      .toEqual({ ...CONFIGURED, output_format: "manifests" });
+  });
+
+  it("keeps the format of a bundle whose SV options are being cleared", () => {
+    // The regression the `runs` input exists to stop. A location known to run
+    // something else has notRunPatch clearing these options through the
+    // group's own disable(); resetting the format on the way past would take
+    // away a docker choice that was valid all along, and the options it was
+    // reset for are gone by the next render.
+    expect(settle(PERF_LOC, { ...CONFIGURED, output_format: "docker" }, false))
+      .toEqual({ ...CONFIGURED, output_format: "docker" });
+    // ...including the stranded backend, which is a correction of its own and
+    // must not become a format reset by the back door.
+    expect(settle(PERF_LOC, { sv_ingress: "openshift", platform: "k8s",
+                              output_format: "docker" }, false).output_format)
+      .toBe("docker");
   });
 });

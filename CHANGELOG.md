@@ -48,6 +48,26 @@ anything that breaks.
 
 ### Fixed
 
+- **A format that cannot serve service virtualization says so, instead of
+  offering it.** The Helm and Docker segments were taken away for a location
+  whose funcIds *demand* virtual services, but the generator refuses on what is
+  *configured* — it never looks at the funcIds first. Between the two sat a
+  location carrying only funcIds this tool models no feature for (`tdm`,
+  `dataPublisher`, `delphix`): nobody had said whether it runs mocks, so every
+  switch was offered, nothing cleared them, both segments stayed enabled, and a
+  complete SV configuration generated as a docker bundle the server then refused
+  outright — with nothing on screen having said so. The segments now follow the
+  configuration, and on a Helm or Docker bundle the **Service virtualization**
+  card states that this bundle cannot serve it and offers nothing to press —
+  which is a different answer from "not enabled on this location", and reads as
+  one. Switching to **Kubernetes manifests** brings the controls back.
+
+- **The output format is never replaced in silence.** Turning service
+  virtualization back on with Docker selected, or importing a profile that
+  pairs the two, moved the segment to *Kubernetes manifests* without a word.
+  The page now says which format was replaced and why, carrying the generator's
+  own sentence for the refusal, until a format is picked.
+
 - **A feature the location does not run is stated, and offers no controls.** It
   used to be half-configurable, and reachable enough to block a bundle nobody
   meant to change. Entering an identity by hand, declaring it performance and
