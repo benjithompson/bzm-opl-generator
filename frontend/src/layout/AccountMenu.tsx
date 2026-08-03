@@ -68,10 +68,25 @@ export function AccountMenu(p: ConnectProps) {
   const connected = !!p.who;
 
   // A menu closes when you look elsewhere; the modal it opens does not.
+  //
+  // Against the event's own path, not `root.contains(e.target)`. The two agree
+  // on every click except the ones this menu is made of: picking an option
+  // commits on *mousedown*, and the list unmounts in that same handler, so by
+  // the time a document-level listener runs its target is a node with no parent
+  // -- `contains` says false, and choosing an account shut the menu you were
+  // choosing a workspace in. `composedPath()` is taken when the event is
+  // dispatched, so it still holds the ancestors the click actually went
+  // through. Falling back to `contains` covers a dispatch that carries no path
+  // (older jsdom, synthetic events in tests).
   useEffect(() => {
     if (!menu) return;
     const h = (e: MouseEvent) => {
-      if (!root.current?.contains(e.target as Node)) setMenu(false);
+      const el = root.current;
+      if (!el) return;
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      const inside = path.length
+        ? path.includes(el) : el.contains(e.target as Node);
+      if (!inside) setMenu(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -155,10 +170,23 @@ export function AccountMenu(p: ConnectProps) {
       </button>
 
       {menu && (
-        <div className="absolute bottom-full left-0 mb-1 w-80 z-50 bg-white
-                        border border-slate-200 rounded-lg shadow-lg p-1.5">
+        <div className="absolute bottom-full left-0 mb-1 w-96 z-50 bg-white
+                        border border-slate-200 rounded-lg shadow-lg p-2">
+          {/* The way out, said rather than only implied. Clicking away still
+              closes -- that is what a menu does -- but this one is worked in
+              rather than glanced at: two pickers, a search in each, and a list
+              that can be 166 long. Something you spend a minute inside should
+              not leave "click somewhere else" as its only exit. */}
+          <button type="button" onClick={() => setMenu(false)} aria-label="Close"
+            className="absolute top-1.5 right-1.5 w-6 h-6 rounded text-slate-400
+                       hover:text-slate-800 hover:bg-slate-100 flex items-center
+                       justify-center text-sm leading-none">
+            ✕
+          </button>
           <div className="px-2 py-1.5">
-            <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
+            {/* Room kept for the button, so a long address wraps beside it
+                rather than under it. */}
+            <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold pr-6">
               Connected as
             </p>
             {connected ? (

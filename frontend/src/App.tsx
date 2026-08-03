@@ -126,6 +126,19 @@ export default function App({ api }: { api: Api }) {
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
 
+  // Which location and which agent have been confirmed, **by id** rather than
+  // as two booleans.
+  //
+  // A confirmation is about a selection, so changing the selection has to
+  // withdraw it -- otherwise step 1 stays finished for a pairing nobody
+  // checked, which is the whole thing the gate exists to stop. Stored as what
+  // was confirmed, that follows from the comparison and no effect has to
+  // remember to clear anything; two booleans would need one per list, and the
+  // one that had to remember is the one that forgets.
+  const [confirmed, setConfirmed] =
+    useState<{ loc: string | null; ship: string | null }>(
+      { loc: null, ship: null });
+
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
   const [showCreateShip, setShowCreateShip] = useState(false);
@@ -342,6 +355,7 @@ export default function App({ api }: { api: Api }) {
       setStep(saved.step);
       setView(saved.view);
       setPlanInputs(saved.plan);
+      setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
@@ -433,9 +447,10 @@ export default function App({ api }: { api: Api }) {
                    workspaceId: workspaceId ?? held?.workspaceId ?? null,
                    harborId: harborId ?? held?.harborId ?? null,
                    shipId: shipId ?? held?.shipId ?? null,
-                   manual, options, step, view, plan: planInputs });
+                   manual, options, step, view, plan: planInputs,
+                   confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      manual, options, step, view, planInputs]);
+      manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -934,6 +949,28 @@ export default function App({ api }: { api: Api }) {
     if (start) pickFeature(start, true);
   }, [facts?.harbor_id, features, pickFeature]);
 
+  // -- has the choice been made, or only landed on? ---------------------------
+  // Both lists auto-pick: a lone agent is chosen for you, and a session restore
+  // brings back a location and an agent nobody has looked at this time round.
+  // So "something is selected" was never the same question as "somebody has
+  // said this is the one", and step 1 asked the first while claiming the
+  // second. Confirm on each list answers it.
+  //
+  // Manual entry has neither list. Typing a harbor id and a ship id by hand IS
+  // the deliberate act, and there is no panel to press -- so it is finished on
+  // the ids alone, exactly as before.
+  const locConfirmed = !!harborId && confirmed.loc === harborId;
+  const shipConfirmed = !!shipId && confirmed.ship === shipId;
+  const chosen = sourceMode === "manual" || (locConfirmed && shipConfirmed);
+  /** What step 1 is still waiting for, or "" when nothing. Same shape as the
+   *  configure step's: one derivation behind the tick and the sentence. */
+  const agentBlocked = !facts || !shipId
+    ? "fill in the agent details to continue"
+    : chosen ? ""
+    : "confirm " + [!locConfirmed ? "the location" : "",
+                    !shipConfirmed ? "the agent" : ""]
+      .filter(Boolean).join(" and ");
+
   // -- what the bundle is ----------------------------------------------------
   // Flat YAML to kubectl apply, the chart with a values overlay, or one agent
   // as one container. The first two render the same objects and differ only in
@@ -1271,9 +1308,8 @@ export default function App({ api }: { api: Api }) {
              and the sentence under it cannot disagree -- and the sentence
              names what this bundle actually still needs rather than the three
              things a Kubernetes one would. */
-          done={[!!facts && !!shipId, !configureBlocked, false]}
-          blockedBy={["fill in the agent details to continue",
-                      configureBlocked, ""]}>
+          done={[!agentBlocked, !configureBlocked, false]}
+          blockedBy={[agentBlocked, configureBlocked, ""]}>
           {/* 1 · How big the run is, and which agent it is generated for.
               The profile comes first because it decides everything after it and
               needs none of it -- no key, no account, no cluster -- and because
@@ -1282,7 +1318,7 @@ export default function App({ api }: { api: Api }) {
               another one. Under it, where the harbor id, ship id and token come
               from: connected they are picked from the account, manually they
               are typed, and both end at the same three values. */}
-          <Section n={1} title="Capacity & agent" done={!!facts && !!shipId}
+          <Section n={1} title="Capacity & agent" done={!agentBlocked}
             hint="Size the run, then the location and agent it is generated for.">
             <div className="space-y-3">
             <CapacityProfile
@@ -1329,6 +1365,8 @@ export default function App({ api }: { api: Api }) {
                   choices: funcIdChoices, blockedBy: createLocBlockedBy,
                   submit: createLocationNow,
                 },
+                confirmed: locConfirmed,
+                confirm: () => setConfirmed((c) => ({ ...c, loc: harborId })),
               }}
               agents={{
                 id: shipId,
@@ -1338,6 +1376,8 @@ export default function App({ api }: { api: Api }) {
                 newName: newShipName, setNewName: setNewShipName,
                 create: createShipNow,
                 error: shipErr, tokenNotice: shipTokenNotice,
+                confirmed: shipConfirmed,
+                confirm: () => setConfirmed((c) => ({ ...c, ship: shipId })),
               }}
               credential={{
                 token: raw("auth_token"),

@@ -112,6 +112,12 @@ export interface LocationHandover {
   /** The location came back changed: App owns the list and the selection, so
    *  it is App that puts it back. */
   updated: (loc: Location) => void;
+  /** Has this location been confirmed? Not "is one selected": the settings
+   *  under it are a real read, and step 1 is finished when somebody has said so
+   *  rather than when a row happens to be highlighted. Withdrawn by choosing a
+   *  different location -- App holds which one was confirmed, not a flag. */
+  confirmed: boolean;
+  confirm: () => void;
   create: NewLocationHandover;
 }
 
@@ -140,6 +146,12 @@ export interface AgentHandover {
    *  error slot that reads as a failed creation, and the next click makes a
    *  second agent. */
   tokenNotice: string | null;
+  /** As the location's: confirmed, and withdrawn by choosing another agent.
+   *  A lone agent is auto-picked, so without this the whole step could complete
+   *  itself and the one screen naming what the bundle is for would never have
+   *  been looked at. */
+  confirmed: boolean;
+  confirm: () => void;
 }
 
 /** The credential the chosen agent runs on. */
@@ -195,6 +207,8 @@ export function AgentPanel({
   const shown = useMemo(() => matching(locations.list, locations.filter),
                         [locations.list, locations.filter]);
   const empty = !!location && ships.length === 0;
+  /** The chosen agent's name, for the rows that name it. */
+  const shipName = ships.find((x) => x.id === agents.id)?.name ?? null;
   // Which half of the agent section is on screen -- picking an identity and
   // minting one are one-of, because reusing an identity that is already running
   // conflicts with that install while creating one is free. Derived, not a
@@ -267,6 +281,29 @@ export function AgentPanel({
     }
     locRow.toggle(l.id);
   };
+  /** Done with the location: fold its row and its whole section away, and open
+   *  the agent list under it.
+   *
+   *  The one move the panel could not make on its own. `pinned` follows the
+   *  step until something is clicked, and choosing a location pins it *open* --
+   *  correctly, since its settings are the next thing to read -- so nothing
+   *  released it again except picking an agent, which is inside the section
+   *  that was in the way. Both halves are needed: the section carries the
+   *  fold, and the row carries the settings form, which would otherwise still
+   *  be open behind it the next time the section is expanded. */
+  const confirmLocation = () => {
+    locations.confirm();
+    locRow.setOpen(null);
+    setPinned("agent");
+  };
+  /** ...and done with the agent: fold it away too. Nothing opens after it --
+   *  the step is finished, which is what Next now waits for. */
+  const confirmAgent = () => {
+    agents.confirm();
+    agentRow.setOpen(null);
+    setPinned("none");
+  };
+
   const regenerate = async () => {
     if (arm === "done" || issuing) return;
     if (arm === "idle") { setArm("armed"); return; }
@@ -433,7 +470,8 @@ export function AgentPanel({
                             <div className="px-3 pb-3">
                               <LocationSettings api={api} location={l}
                                 profile={profile}
-                                onUpdated={locations.updated} />
+                                onUpdated={locations.updated}
+                                onConfirm={confirmLocation} />
                             </div>
                           )}
                         </div>
@@ -645,6 +683,28 @@ export function AgentPanel({
                   image inventory: {agents.facts.images_source} · features:{" "}
                   {agents.facts.func_ids?.join(", ")}
                 </p>
+              )}
+              {/* The same row, in the same place, as the location's above: what
+                  is being confirmed on the left, the control on the right.
+                  Nothing to write here -- an agent is chosen, not edited -- so
+                  the only reason this button exists is the one the location's
+                  Confirm turned out to need as well: somebody has to say the
+                  choice is made. A lone agent is auto-picked, so without it the
+                  step could complete itself. */}
+              {!agents.busy && location && !empty && (
+                <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
+                  <span className="text-[11px] text-slate-500">
+                    {!agents.id
+                      ? "pick the agent this bundle is for"
+                      : agents.confirmed
+                        ? `confirmed — ${shipName ?? agents.id}`
+                        : `${shipName ?? agents.id} — Confirm to finish this step`}
+                  </span>
+                  <span className="grow" />
+                  <Button disabled={!agents.id} onClick={confirmAgent}>
+                    Confirm
+                  </Button>
+                </div>
               )}
             </div>
           </SubSection>

@@ -133,6 +133,35 @@ test("a slow capacity answer for the previous account never lands under the new 
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
   });
 
+test("the account menu stays up while both of its pickers are used", async () => {
+  // It is one control narrowed twice -- an account, then a workspace inside it
+  // -- so choosing the first is the middle of the job, not the end of it.
+  // Closing there meant reopening the menu to answer the question the first
+  // answer had just revealed.
+  render(<App api={accountOf([], {
+    accounts: async () => [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
+    workspaces: async () => [{ id: 10, name: "WS one" }, { id: 11, name: "WS two" }],
+  })} />);
+
+  fireEvent.click(await screen.findByTitle(/the key everything is read with/));
+  fireEvent.focus(screen.getByLabelText("Account"));
+  fireEvent.mouseDown(await screen.findByText("Bravo (2)"));
+
+  // The hint is part of the label element, so this matches its start rather
+  // than the whole of it.
+  const workspace = await screen.findByLabelText(/^Workspace/);
+  fireEvent.focus(workspace);
+  fireEvent.mouseDown(await screen.findByText("WS two"));
+  expect(screen.getByLabelText("Account")).toBeTruthy();
+  expect(screen.getByLabelText(/^Workspace/)).toBeTruthy();
+
+  // ...and it has a way out of its own, which is what earns the right to stay
+  // open. Clicking away still closes it -- that is what a menu does.
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByLabelText("Account")).toBeNull());
+});
+
+
 // -- service virtualization, through the page --------------------------------
 // sv.ts is tested as plain data (sv.test.ts) -- what needs a page is the wiring
 // it replaced: an effect that WROTE the ingress option and another that READ it
@@ -346,6 +375,7 @@ test("a restored profile's SV options for a location without mockServices are cl
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
+      confirmed: { loc: "h-perf", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
@@ -409,6 +439,7 @@ test("an SV configuration no location demanded still takes away the formats that
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
+      confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: {
         namespace: "blazemeter", output_format: "docker",
@@ -448,6 +479,7 @@ test("a feature this bundle's format cannot serve is stated, not offered",
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
+      confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
@@ -985,12 +1017,50 @@ test("the workspace picker is not clipped by the row it grows into", async () =>
 
 // -- what survives a refresh, and when it may be written back ----------------
 
+test("a refresh keeps the confirmations, and keeps them attached to what was confirmed",
+  async () => {
+    // A refresh is not a decision. Asking somebody to confirm again what they
+    // already confirmed is asking them to repeat themselves to prove the
+    // browser was listening.
+    const listing = [loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])];
+    const snapshot = (ship: string) => ({
+      sourceMode: "connect" as const, accountId: 1, workspaceId: 10,
+      harborId: "h-perf", shipId: "s-1",
+      confirmed: { loc: "h-perf", ship },
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "ns" }, step: 0, view: "flow" as const,
+      plan: EMPTY_PLAN_INPUTS,
+    });
+
+    session.save(snapshot("s-1"));
+    render(<App api={accountOf(listing)} />);
+    // Finished on arrival, with nothing pressed this time round.
+    await waitFor(() => expect(screen.getByRole<HTMLButtonElement>(
+      "button", { name: /Next/ }).disabled).toBe(false));
+
+    // ...and it is still a confirmation *of an agent*. Restored beside a
+    // different one -- the location's list changed under it, or the snapshot
+    // is older than the choice -- it does not answer for this pairing. Stored
+    // as a flag it would have, which is the whole reason it is not one.
+    cleanup();
+    sessionStorage.clear();
+    session.save(snapshot("s-2"));
+    render(<App api={accountOf(listing)} />);
+    await waitFor(() => expect(screen.getByText(/confirm the agent/)).toBeTruthy());
+    expect(screen.getByRole<HTMLButtonElement>(
+      "button", { name: /Next/ }).disabled).toBe(true);
+  });
+
 test("nothing is written back over a saved session until the restore has resolved",
   async () => {
     // Written with the page's own writer, at the page's own version.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
+      confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1042,6 +1112,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
+      confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" },
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1100,6 +1171,7 @@ test("an id the account no longer has is written away once the account has said 
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-gone", shipId: "s-gone",
+      confirmed: { loc: "h-gone", ship: "s-gone" },
       manual: { harbor_id: "", ship_id: "" },
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
@@ -1434,6 +1506,87 @@ test("the profile fills a location's settings, and Save is the only write",
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sent.length).toBe(2));
     expect(sent[1]).toEqual({ slots: "6", override_memory: "8192" });
+  });
+
+
+test("a location nobody needs to change still has a way on", async () => {
+  // The panel's only control used to be Save, greyed whenever nothing had been
+  // typed -- which is most locations, since most are already configured. So
+  // choosing one opened a form whose one button was dead and left the next
+  // thing to do somewhere else on the page with nothing pointing at it.
+  const sent: unknown[] = [];
+  render(<App api={accountOf([loc("h-perf", "Perf",
+    [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+    updateLocation: async (body) => { sent.push(body); throw new Error("no"); },
+  })} />);
+
+  fireEvent.click(await screen.findByText("Perf"));
+  const panel = await screen.findByRole("region", { name: "Perf settings" });
+
+  // Live, and it says what it does: nothing has been typed, so it is the way
+  // on rather than a write.
+  const confirm = within(panel).getByRole<HTMLButtonElement>(
+    "button", { name: "Confirm" });
+  expect(confirm.disabled).toBe(false);
+  expect(within(panel).getByText(/nothing to save/)).toBeTruthy();
+  expect(within(panel).queryByRole("button", { name: "Save" })).toBeNull();
+
+  fireEvent.click(confirm);
+
+  // The location folds away -- both its settings row and the section over it --
+  // and the agent list under it opens. Asserted through the agent becoming
+  // reachable, which is the point of the move.
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
+  expect(screen.getByRole("button", { name: /agent-1/ })).toBeTruthy();
+  // ...and it reached the account for none of it. Confirm is not a write.
+  expect(sent).toEqual([]);
+});
+
+
+test("Next waits for both confirmations, and a changed agent withdraws one",
+  async () => {
+    // Both lists auto-pick -- a lone agent is chosen for you, and a session
+    // restore brings back a pairing nobody has looked at this time round -- so
+    // "something is selected" was never "somebody said this is the one". Step 1
+    // asked the first while claiming the second.
+    render(<App api={accountOf([loc("h-perf", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])])} />);
+
+    const next = () =>
+      screen.getByRole<HTMLButtonElement>("button", { name: /Next/ });
+    fireEvent.click(await screen.findByText("Perf"));
+    const settings = await screen.findByRole("region", { name: "Perf settings" });
+    expect(next().disabled).toBe(true);
+
+    // Confirming the location folds it away and opens the agents. Two of them,
+    // so nothing was auto-picked and the step is still waiting for the choice
+    // itself rather than for a confirmation of one.
+    fireEvent.click(within(settings).getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
+    expect(screen.getByText(/fill in the agent details/)).toBeTruthy();
+    expect(next().disabled).toBe(true);
+
+    // Chosen, and now it is the confirmation that is outstanding -- the block
+    // names that half rather than repeating the whole step.
+    // eslint-disable-next-line no-console
+    fireEvent.click(await screen.findByText("agent-1"));
+    await waitFor(() =>
+      expect(screen.getByText(/confirm the agent/)).toBeTruthy());
+    expect(next().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(next().disabled).toBe(false));
+
+    // ...and it is a confirmation *of that agent*. Picking the other one is a
+    // different bundle, so the step is unfinished again -- which is why what
+    // was confirmed is stored rather than a flag saying that something was.
+    fireEvent.click(screen.getByText("agent-2"));
+    await waitFor(() => expect(next().disabled).toBe(true));
+    expect(screen.getByText(/confirm the agent/)).toBeTruthy();
   });
 
 

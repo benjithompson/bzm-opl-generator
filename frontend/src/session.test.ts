@@ -21,6 +21,9 @@ const BASE = {
   harborId: "h1",
   shipId: "s1",
   manual: { harbor_id: "", ship_id: "" },
+  // Confirmed, and of *these* ids: step 1 is finished when somebody has said
+  // so, and a refresh is not a reason to ask again.
+  confirmed: { loc: "h1", ship: "s1" },
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
@@ -42,6 +45,7 @@ describe("what is remembered", () => {
     expect(back?.shipId).toBe("s1");
     expect(back?.step).toBe(1);
     expect(back?.options.namespace).toBe("ns1");
+    expect(back?.confirmed).toEqual({ loc: "h1", ship: "s1" });
   });
 
   it("returns null when nothing was stored", () => {
