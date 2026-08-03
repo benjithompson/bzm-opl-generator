@@ -948,9 +948,13 @@ function planFor(body: {
     nodes_per_agent: perAgent, nodes: perAgent * agents,
     engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
               supported_vus: 500 },
-    node: { cpu: "4", memory: "16Gi", disk_gb: 100 },
-    peak: { cpu: String(engines * 2), memory: `${engines * 8}Gi`,
-            disk_gb: engines * 60 },
+    // A node is one engine plus what the node spends on itself (1 CPU / 2Gi,
+    // in generate.py), and the peak is that times the nodes. Coherent rather
+    // than arbitrary because the summary line states all three, and a fixture
+    // whose figures do not multiply cannot show whether the page's do.
+    node: { cpu: "3", memory: "10Gi", disk_gb: 100 },
+    peak: { cpu: String(perAgent * 3), memory: `${perAgent * 10}Gi`,
+            disk_gb: perAgent * 60 },
     crane: { cpu_limit: "1", memory_limit: "2Gi" },
     location: { slots: perAgent, threads_per_engine: vus, override_cpu: 2,
                 override_memory: 8192 },
@@ -985,11 +989,13 @@ test("with no key connected, step 1 still sizes a capacity profile", async () =>
 
   // The summary is the answer, on the row that is visible with the editor shut.
   const summary = await screen.findByText(/5,000 VUs · 10 engines × 2 CPU/);
-  // Both quantities, and which is which: the engine size multiplies, and the
-  // total is what the infrastructure request is actually for. Read off
+  // Every step, because the total is node capacity: 10 engines at 2 CPU is 20
+  // and the answer is 30, and the node line is where the difference enters. A
+  // summary that skipped it read as arithmetic that does not work. Read off
   // textContent because the total is emphasised in a span of its own.
   expect(summary.textContent).toMatch(/10 engines × 2 CPU \/ 8Gi/);
-  expect(summary.textContent).toMatch(/20 vCPU \/ 80Gi total/);
+  expect(summary.textContent).toMatch(/10 nodes × 3 vCPU \/ 10Gi/);
+  expect(summary.textContent).toMatch(/30 vCPU \/ 100Gi total/);
   // Asked for the run, not for a location: how many agents will serve it is a
   // fact about a location, and there is no location here to have one.
   expect(asked[asked.length - 1].agents).toBeUndefined();
