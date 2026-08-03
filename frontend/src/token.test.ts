@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TokenReport } from "./api";
-import { downloadPlan, rotateHazard } from "./token";
+import { downloadPlan, recallNote, recalled, rotateHazard } from "./token";
 
 const report = (branch: TokenReport["branch"]): TokenReport =>
   ({ branch, ship_id: "bbb222", message: "…" });
@@ -58,5 +58,42 @@ describe("rotateHazard", () => {
     // No dangling "for agent undefined", which is what a template read as
     // optional-but-always-there produces.
     expect(rotateHazard(null)).not.toContain("for agent");
+  });
+});
+
+// What this app still holds of a credential it minted (#123). These are about
+// the states and never about the value: the pair that must not merge is
+// "nothing was minted" against "nobody could be asked", which is the same
+// distinction the Python side keeps between an empty read and a denied one.
+describe("recalled", () => {
+  it("reads a token as held and a null as none", () => {
+    expect(recalled({ auth_token: "tok" })).toBe("held");
+    expect(recalled({ auth_token: null })).toBe("none");
+  });
+});
+
+describe("recallNote", () => {
+  it("explains an empty field for the state that can explain it", () => {
+    // The sentence that was the only one there was, for what used to be the
+    // only case: an agent whose token was issued once, at creation.
+    expect(recallNote("none")).toMatch(/cannot be read back/);
+  });
+
+  it("never says a token cannot be read back when it could not be asked for", () => {
+    const unread = recallNote("unread");
+    // The failure this exists to stop: an unreachable store rendering as a
+    // statement about the agent -- "could not read" wearing "there is nothing
+    // there", and wrong about exactly the agents this app made itself.
+    expect(unread).not.toMatch(/cannot be read back/);
+    expect(unread).toMatch(/could not ask/);
+    expect(unread).not.toBe(recallNote("none"));
+  });
+
+  it("says nothing while the answer is outstanding, or once there is a token", () => {
+    // Not the `none` sentence: until the answer lands the field is empty for a
+    // reason that has nothing to do with the agent, and a claim made without
+    // having asked is the same bug one tick earlier.
+    expect(recallNote("asking")).toBeNull();
+    expect(recallNote("held")).toBeNull();
   });
 });

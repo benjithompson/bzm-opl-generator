@@ -132,14 +132,23 @@ saving now mint nothing, and each says which of four ways its bundle got a token
 
 - **Creating an agent captures its token**, in a masked field with a *Show*
   toggle. That is the one moment issuing one is free — a new ship has no previous
-  credential to invalidate — and it is the only copy: nothing here writes it down.
-  Keep it as you would what `create-ship` prints.
-- **Pointing at an agent that already exists leaves the field empty**, because no
-  API reads an existing token back. Paste what you kept — or press **Regenerate
-  token** in that agent's own row, which arms to *I'm sure* (beside a *Cancel*)
-  and names, before it issues anything, the agent whose credential it kills and
-  what that looks like when it happens. The new token lands in the field above
-  the button, and the download then carries it rather than issuing a second one.
+  credential to invalidate — and the bundle you download is the copy to keep, as
+  you would what `create-ship` prints.
+- **A token this app minted comes back after a refresh**, silently and with
+  nothing typed. The two moments it is ever shown one — creating an agent, and
+  Regenerate — are its own writes, so the server keeps what it handed over: in
+  memory, for that agent, until you disconnect or the server restarts. Nothing
+  is written to disk and nothing to browser storage. A token you **paste**
+  yourself wins for that agent and drops the remembered one, so it is not
+  quietly replaced on the next load — and it is gone with the page, because a
+  pasted value is not one this app can offer back.
+- **Pointing at an agent this app did not create leaves the field empty**,
+  because no API reads an existing token back, and it says so. Paste what you
+  kept — or press **Regenerate token** in that agent's own row, which arms to
+  *I'm sure* (beside a *Cancel*) and names, before it issues anything, the agent
+  whose credential it kills and what that looks like when it happens. The new
+  token lands in the field above the button, and the download then carries it
+  rather than issuing a second one.
 - **A download with neither is a placeholder bundle**, which is a fine thing to
   read and an unusable thing to apply, so the page says so over the button and
   names both places a real token comes from — including the `kubectl … get secret`
@@ -156,10 +165,11 @@ connection — the page simply forgot. It now asks on load, and puts back the
 account, workspace, location, agent, step and options it was pointed at. Each
 selection is re-applied only once the account has confirmed it still exists, so
 a location deleted since the last load comes back as nothing rather than as an
-id the page believes. **The AUTH_TOKEN is never stored** — see `session.strip`
-— because the page's promise is that it is held for this browser session and
-that nothing writes it down, and browser storage is a file in the browser's
-profile.
+id the page believes. **The AUTH_TOKEN is never written to browser storage** —
+see `session.strip` — because browser storage is a file in the browser's
+profile. What comes back instead is what the *server* minted, from its own
+memory, for the agent it minted it for; a restart forgets it, and so does
+disconnecting.
 
 **The Connect button becomes the Disconnect button.** The key form stays where
 it is — the paste fields, the `api-key.json` path, Browse, *Remember this key* —

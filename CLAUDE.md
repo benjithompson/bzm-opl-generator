@@ -366,6 +366,29 @@ missing tools. The rest is what it cannot fix for you.
   (`preflight.fromSnapshot`, carried as `restored`) and the panel says so —
   never `doc === null`, which "nothing was imported" already means.
 
+  **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
+  not** (#123). It is seen at exactly two moments, both this page's own writes —
+  creating an agent, and Regenerate — and the browser held the only copy, so a
+  reload lost it for good: no API reads a token back, and the next bundle fell to
+  a placeholder for an agent created a minute earlier. The backup is
+  `server._minted_tokens`, keyed by ship id, and it is **transport rather than
+  core** because it exists only where a *browser* forgets — the CLI and the MCP
+  server mint and write the bundle in one process, so a store there would be a
+  lifetime nothing needed. It is named at `_state`, with the client and the
+  cache, which together are the single-user seam. `session.strip()` is untouched,
+  and that is also why a *pasted* token **evicts** the remembered one
+  (`DELETE /api/ships/minted-token`) rather than out-ranking it: the page cannot
+  keep what was typed, so a copy left in the store comes back on the next load
+  and silently replaces it. Keying by ship is the rest of the safety — the page
+  used to hold one token and clear it whenever the target moved, which is the
+  same guarantee resting on every caller remembering to let go. **The lookup's
+  answers are three and stay three**: a token; `null` for "this process holds
+  none", which is honestly what a restart says too and so is never worded as
+  "nothing was ever minted"; and a request that failed, which is not a body at
+  all. `token.Recall` carries that on the page, and only `none` may say a
+  credential cannot be read back — `unread` saying it would be "could not read"
+  wearing "there is nothing there", about exactly the agents this app created.
+
 - **`profile.json` is the bundle, and only the bundle.** It carries every
   resolved *option* — 35 of them — so `generate --profile` replays a bundle
   exactly, and `livetest` judges one. Three things are deliberately not in it,

@@ -15,7 +15,7 @@ import { Section } from "./components";
 // token arrived by is core's and comes back on the answer; this decides what to
 // say about the click that has not happened yet, which is the only moment a
 // rotation can still be reconsidered (#64).
-import { downloadPlan } from "./token";
+import { downloadPlan, Recall, recalled, recallNote } from "./token";
 // The option groups of the Configure step: one declaration each (title, hint, the option
 // keys it owns, the features it belongs to, and its detect/enable/disable),
 // plus a body per group. This file only wires them -- what a group *is*, and
@@ -238,6 +238,13 @@ export default function App({ api }: { api: Api }) {
     // under a different agent's bundle is the same claim about the wrong thing.
     setAttempt(NO_ATTEMPT);
   }, []);
+  /** What this app still holds of a credential it minted for the chosen agent.
+   *
+   *  Four states rather than a token-or-not, and the pair that matters is
+   *  `none` against `unread`: an agent nobody minted for and an agent nobody
+   *  could be asked about are different answers, and only the first is entitled
+   *  to the sentence saying a token cannot be read back. See token.Recall. */
+  const [recall, setRecall] = useState<Recall>("asking");
 
   const [files, setFiles] = useState<GeneratedFile[]>([]);
   const [genErr, setGenErr] = useState<string | null>(null);
@@ -511,6 +518,10 @@ export default function App({ api }: { api: Api }) {
     setLocations([]); setHarborId(null); setShipId(null); setFacts(null);
     setStatus(null); setPolling(false); setConnErr(null);
     forgetToken();
+    // The server drops every token it minted with this key (see key_clear), so
+    // the record of which of them were typed over goes too -- kept, it would
+    // stop a token minted after a reconnect from ever being evicted.
+    evicted.current.clear();
     session.clear();
     // The held ids too, or the next save writes them straight back into a fresh
     // snapshot and this clear undoes itself. Nothing is being refuted here --
@@ -666,6 +677,75 @@ export default function App({ api }: { api: Api }) {
   // in the panel that renders both: it is a view's decision, and the state it
   // is derived from is still here.
 
+  // The credential of an agent this app minted for, back after a refresh (#123).
+  //
+  // A token is seen at exactly two moments -- creating an agent, and Regenerate
+  // -- and both are this app's own writes, so the server keeps what it handed
+  // over. Nothing else can: BlazeMeter shows a token once and no API reads one
+  // back, which is why a reload used to lose it permanently and the next bundle
+  // fell to a placeholder for an agent created a minute earlier.
+  //
+  // **Silently**, with no "restored" notice, and that is the difference from the
+  // preflight this page also puts back: a restored verdict is a statement about
+  // a cluster that has moved on since, where a token claims nothing about the
+  // world. It is the same value that was handed over, and it fails identically
+  // whether it came from here or from a clipboard.
+  //
+  // Connect mode only. In manual entry the token is typed beside the two ids it
+  // belongs to and switchMode clears it deliberately, so a lookup there would
+  // put back exactly what that clear was for.
+  useEffect(() => {
+    setRecall("asking");
+    if (sourceMode !== "connect" || !shipId) return;
+    // Guarded like the capacity read: picking through a list of agents leaves
+    // two answers in flight, and the slower one must not land under the agent
+    // now selected.
+    let live = true;
+    api.mintedToken(shipId).then((r) => {
+      if (!live) return;
+      setRecall(recalled(r));
+      // Only where there is one. A null is the server saying it holds nothing,
+      // and writing that into the field would be this effect clearing a token
+      // rather than restoring one -- forgetToken is what clears, on the move
+      // that makes the old one wrong.
+      if (r.auth_token) setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+    }).catch(() => {
+      // Not `none`. The app may well be holding this agent's token and simply
+      // be unable to say so, and the sentence for `none` would be a claim about
+      // an account nothing here managed to ask.
+      if (live) setRecall("unread");
+    });
+    return () => { live = false; };
+  }, [sourceMode, shipId]);
+
+  /** Which agents' remembered tokens have been typed over this session.
+   *
+   *  The token field is a controlled input, so `setToken` runs on every
+   *  keystroke and the eviction must not. Once per agent is enough -- there is
+   *  nothing left to forget after the first -- and a failed request re-arms it,
+   *  because a store that still holds the old value is exactly the state this
+   *  is for. */
+  const evicted = useRef<Set<string>>(new Set());
+  /** A hand-typed token wins, and goes on winning after a reload.
+   *
+   *  Without this the remembered copy comes back on the next page load and
+   *  silently replaces what somebody typed over it. The page cannot keep the
+   *  pasted one instead -- session.strip is where that is decided -- and this
+   *  server only ever remembers what it minted, so dropping ours is the whole
+   *  of it. */
+  const forgetMintedToken = useCallback(() => {
+    if (sourceMode !== "connect" || !shipId) return;
+    if (evicted.current.has(shipId)) return;
+    const ship = shipId;
+    evicted.current.add(ship);
+    api.forgetMintedToken(ship)
+      // The store is empty for this agent now, and the field may yet be
+      // cleared: `none` is what the sentence under an empty field should then
+      // be reasoning from.
+      .then(() => setRecall((r) => (r === "held" ? "none" : r)))
+      .catch(() => { evicted.current.delete(ship); });
+  }, [sourceMode, shipId]);
+
   /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
    *
    *  This is the one way to mint from the page now: the download step had a
@@ -675,6 +755,12 @@ export default function App({ api }: { api: Api }) {
     if (!harborId || !shipId) return;
     const r = await api.issueToken(harborId, shipId);
     setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+    // The server remembered this one as it issued it, so the page is holding
+    // what a reload would get back. The eviction re-arms with it: a token typed
+    // over *this* one has a fresh copy to displace, and an agent left in the
+    // evicted set would keep a dead credential alive across the next refresh.
+    setRecall("held");
+    evicted.current.delete(shipId);
   };
 
   // Creating the agent identity. A named function rather than the button's own
@@ -1457,8 +1543,15 @@ export default function App({ api }: { api: Api }) {
               }}
               credential={{
                 token: raw("auth_token"),
-                setToken: (v) => set("auth_token", v || null),
+                // Typing is the one write to this field the app did not make,
+                // so it is where the remembered copy is dropped -- see
+                // forgetMintedToken.
+                setToken: (v) => {
+                  set("auth_token", v || null);
+                  forgetMintedToken();
+                },
                 regenerate: regenerateToken,
+                note: recallNote(recall),
               }} />
             </div>
           </Section>
