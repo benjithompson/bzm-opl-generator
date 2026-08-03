@@ -133,6 +133,35 @@ test("a slow capacity answer for the previous account never lands under the new 
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
   });
 
+test("the account menu stays up while both of its pickers are used", async () => {
+  // It is one control narrowed twice -- an account, then a workspace inside it
+  // -- so choosing the first is the middle of the job, not the end of it.
+  // Closing there meant reopening the menu to answer the question the first
+  // answer had just revealed.
+  render(<App api={accountOf([], {
+    accounts: async () => [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
+    workspaces: async () => [{ id: 10, name: "WS one" }, { id: 11, name: "WS two" }],
+  })} />);
+
+  fireEvent.click(await screen.findByTitle(/the key everything is read with/));
+  fireEvent.focus(screen.getByLabelText("Account"));
+  fireEvent.mouseDown(await screen.findByText("Bravo (2)"));
+
+  // The hint is part of the label element, so this matches its start rather
+  // than the whole of it.
+  const workspace = await screen.findByLabelText(/^Workspace/);
+  fireEvent.focus(workspace);
+  fireEvent.mouseDown(await screen.findByText("WS two"));
+  expect(screen.getByLabelText("Account")).toBeTruthy();
+  expect(screen.getByLabelText(/^Workspace/)).toBeTruthy();
+
+  // ...and it has a way out of its own, which is what earns the right to stay
+  // open. Clicking away still closes it -- that is what a menu does.
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByLabelText("Account")).toBeNull());
+});
+
+
 // -- service virtualization, through the page --------------------------------
 // sv.ts is tested as plain data (sv.test.ts) -- what needs a page is the wiring
 // it replaced: an effect that WROTE the ingress option and another that READ it
