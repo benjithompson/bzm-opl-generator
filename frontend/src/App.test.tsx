@@ -1437,6 +1437,41 @@ test("the profile fills a location's settings, and Save is the only write",
   });
 
 
+test("a location nobody needs to change still has a way on", async () => {
+  // The panel's only control used to be Save, greyed whenever nothing had been
+  // typed -- which is most locations, since most are already configured. So
+  // choosing one opened a form whose one button was dead and left the next
+  // thing to do somewhere else on the page with nothing pointing at it.
+  const sent: unknown[] = [];
+  render(<App api={accountOf([loc("h-perf", "Perf",
+    [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+    updateLocation: async (body) => { sent.push(body); throw new Error("no"); },
+  })} />);
+
+  fireEvent.click(await screen.findByText("Perf"));
+  const panel = await screen.findByRole("region", { name: "Perf settings" });
+
+  // Live, and it says what it does: nothing has been typed, so it is the way
+  // on rather than a write.
+  const confirm = within(panel).getByRole<HTMLButtonElement>(
+    "button", { name: "Confirm" });
+  expect(confirm.disabled).toBe(false);
+  expect(within(panel).getByText(/nothing to save/)).toBeTruthy();
+  expect(within(panel).queryByRole("button", { name: "Save" })).toBeNull();
+
+  fireEvent.click(confirm);
+
+  // The location folds away -- both its settings row and the section over it --
+  // and the agent list under it opens. Asserted through the agent becoming
+  // reachable, which is the point of the move.
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
+  expect(screen.getByRole("button", { name: /agent-1/ })).toBeTruthy();
+  // ...and it reached the account for none of it. Confirm is not a write.
+  expect(sent).toEqual([]);
+});
+
+
 test("a location with no agents is not a bundle request", async () => {
   // Picking an empty location used to spend a 400 on saying so: the preview
   // asked for a bundle, and generate() refused -- correctly -- with a sentence

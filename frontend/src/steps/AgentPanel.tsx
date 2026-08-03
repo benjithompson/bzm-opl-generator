@@ -267,6 +267,21 @@ export function AgentPanel({
     }
     locRow.toggle(l.id);
   };
+  /** Done with the location: fold its row and its whole section away, and open
+   *  the agent list under it.
+   *
+   *  The one move the panel could not make on its own. `pinned` follows the
+   *  step until something is clicked, and choosing a location pins it *open* --
+   *  correctly, since its settings are the next thing to read -- so nothing
+   *  released it again except picking an agent, which is inside the section
+   *  that was in the way. Both halves are needed: the section carries the
+   *  fold, and the row carries the settings form, which would otherwise still
+   *  be open behind it the next time the section is expanded. */
+  const confirmLocation = () => {
+    locRow.setOpen(null);
+    setPinned("agent");
+  };
+
   const regenerate = async () => {
     if (arm === "done" || issuing) return;
     if (arm === "idle") { setArm("armed"); return; }
@@ -433,7 +448,8 @@ export function AgentPanel({
                             <div className="px-3 pb-3">
                               <LocationSettings api={api} location={l}
                                 profile={profile}
-                                onUpdated={locations.updated} />
+                                onUpdated={locations.updated}
+                                onConfirm={confirmLocation} />
                             </div>
                           )}
                         </div>

@@ -106,6 +106,14 @@ export function LocationSettings(props: {
   profile: PlanAsk;
   /** Put the changed location back into the page's own list and selection. */
   onUpdated: (loc: Location) => void;
+  /** Done with this location: fold it away and open the agent under it.
+   *
+   *  The panel needed a way *out*. Its only button was Save, greyed whenever
+   *  nothing had been typed -- which is the common case, since most locations
+   *  are already configured -- so choosing a location opened a form whose one
+   *  control was dead, and the next thing to do was somewhere else on the page
+   *  with nothing pointing at it. */
+  onConfirm: () => void;
 }) {
   const { location } = props;
   const [busy, setBusy] = useState(false);
@@ -251,11 +259,23 @@ export function LocationSettings(props: {
 
       {/* What it costs on the left, the control that commits on the right --
           the reading order of the panel is "this is what changes, this is what
-          it costs, do it". */}
+          it costs, do it".
+
+          One button, always live, and its label is what pressing it does.
+          Nothing typed, it is the way on: Confirm folds this location away and
+          opens the agent under it, writing nothing. Something typed, it is
+          Save, and the sentence beside it says what that costs -- which is why
+          the two are not one control called Confirm that sometimes writes to
+          somebody's account. Saving does not fold: the outcome under this row
+          is a re-read of the location saying what it now holds, and collapsing
+          the panel would take that off screen at the moment it arrived. So a
+          save leaves nothing edited, the label falls back to Confirm, and the
+          way on is the same button it always was. */}
       <div className="flex items-center gap-2">
-        <span className="text-[11px] text-amber-700">
+        <span className={"text-[11px] "
+          + (edited.length ? "text-amber-700" : "text-slate-500")}>
           {edited.length === 0
-            ? "nothing changed yet"
+            ? "nothing to save — Confirm moves on to the agent"
             : `${edited.length} setting${edited.length === 1 ? "" : "s"}: `
               + edited.map((k) => LABELS[k].toLowerCase()).join(", ")
               + " — saving changes this location for every agent in it, and "
@@ -270,8 +290,9 @@ export function LocationSettings(props: {
           }}>
           Reset
         </Button>
-        <Button onClick={save} busy={busy} disabled={edited.length === 0}>
-          Save
+        <Button busy={busy}
+          onClick={edited.length === 0 ? props.onConfirm : save}>
+          {edited.length === 0 ? "Confirm" : "Save"}
         </Button>
       </div>
 
