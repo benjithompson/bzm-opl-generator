@@ -1183,6 +1183,25 @@ async function declareManually() {
   fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 }
 
+test("declaring a feature in manual entry suggests that feature's namespace",
+  async () => {
+    // Connected, picking a *location* that runs virtual services suggests
+    // blazemeter-sv. Manually there is no location to read it off -- the radio
+    // is how it is said -- and the suggestion used to arrive through a facts
+    // read-back that fired when the ship id was finished being typed. Not
+    // reading the declaration back out of the facts it produced is the whole of
+    // #118, so the suggestion belongs on the control that declares, which is
+    // also where the connected page puts it: on the act, not on a re-read.
+    const generated: Options[] = [];
+    render(<App api={manualPage([], generated)} />);
+    await declareManually();
+    fireEvent.click(card("sv").getByRole("radio"));
+
+    await waitFor(() => expect(generated.length).toBeGreaterThan(0));
+    await waitFor(() =>
+      expect(generated[generated.length - 1].namespace).toBe("blazemeter-sv"));
+  });
+
 test("a feature declared in manual entry is what the facts are gathered for after a refresh",
   async () => {
     const asked: string[][] = [];
