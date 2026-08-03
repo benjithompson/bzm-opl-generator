@@ -14,23 +14,22 @@
 // state; the records are assembled in App from state App still owns, so the
 // distribution of ownership is exactly what it was.
 //
-// The two calls that produce a bundle stay in this file deliberately. Both can
-// mint a credential, and CLAUDE.md's rule is that a request which touches the
-// account is made where its cost is on screen -- which is beside these buttons,
-// under the warning that says what a rotation kills. They are made through the
-// injected client like every other route, and what they carry about the
+// The call that produces a bundle stays in this file deliberately. It can mint
+// a credential, and CLAUDE.md's rule is that a request which touches the
+// account is made where its cost is on screen -- which is beside that button,
+// under the warning that says what a rotation kills. It is made through the
+// injected client like every other route, and what it carries about the
 // credential is credential.plan.request, taken whole: this file has no say in
-// it, which is what stops the two buttons disagreeing (#104).
+// it, which is what stopped the two buttons disagreeing (#104) back when there
+// were two.
 import { useState } from "react";
 import {
   Api, AgentStatus, Facts, GeneratedFile, Options, SvCheckOut, SvMocksOut,
   TokenReport, Suggestion,
 } from "../api";
-import {
-  Attempt, NO_ATTEMPT, downloadFailed, downloaded, saveFailed, savedTo,
-} from "../attempt";
-import { Button, Check, ErrorMsg, inputCls, Switch } from "../components";
-import { isDocker, OUTPUT_FORMATS } from "../formats";
+import { Attempt, NO_ATTEMPT, downloadFailed, downloaded } from "../attempt";
+import { Button, Check, ErrorMsg, Switch } from "../components";
+import { isDocker } from "../formats";
 import { OptionGroup } from "../optionGroups";
 import {
   EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, worstStatus,
@@ -47,19 +46,21 @@ import { Sv } from "../sv";
 export interface BundleHandover {
   facts: Facts | null;
   shipId: string | null;
-  /** The options as they stand. Spread into both requests, and read for the
-   *  three things this step says about the bundle -- its namespace, whether it
-   *  carries the mirror script, and the folder placeholder. The panel is handed
-   *  the record rather than a reader per key: it sends the whole thing. */
+  /** The options as they stand. Spread into the request, and read for what
+   *  this step says the bundle holds -- whether it carries the mirror script.
+   *  The panel is handed the record rather than a reader per key: it sends the
+   *  whole thing. */
   options: Options;
-  /** What is being generated. Read, not written: the choice moved to the top of
+  /** What is being generated. Read, not written: the choice is at the top of
    *  the configure step, because it decides which questions that step asks --
    *  a docker bundle has no namespace, no ServiceAccount and no scheduling, and
    *  a form that asked for all three and then dropped them was the silent
-   *  failure. This step still names it, beside the command that installs it. */
+   *  failure. Read here for what the bundle holds and whether a cluster
+   *  preflight means anything. */
   format: string;
-  /** Back to where it is chosen, for the row that names the format. The same
-   *  callback the unfinished-group blocks use. */
+  /** Back to the configure step, for the blocks that name an unfinished
+   *  group -- the reason the button is disabled is a step away, so the block
+   *  offers the way to it. */
   goToConfigure: () => void;
   /** Everything about service virtualization, from sv.ts. Four things are read
    *  off it here -- whether the settings are finished, whether the chart is
@@ -76,10 +77,6 @@ export interface BundleHandover {
    *  definition not this one, so the block names them and offers the way back
    *  rather than pointing at a form nobody can see. */
   unfinished: OptionGroup[];
-  /** Where a save writes. Typed here, read in App too: a folder already holding
-   *  this ship's bundle changes what the preview says about the credential. */
-  saveDir: string;
-  setSaveDir: (v: string) => void;
 }
 
 /** What the next download or save will do about the agent's credential. */
@@ -141,8 +138,8 @@ export interface DownloadPanelProps {
   api: Api;
   bundle: BundleHandover;
   credential: CredentialHandover;
-  /** What the last download or save did, and where the next one is reported.
-   *  The record is App's -- this panel makes attempts and hands them over, and
+  /** What the last download did, and where the next one is reported. The
+   *  record is App's -- this panel makes attempts and hands them over, and
    *  holds nothing. */
   attempt: Attempt;
   report: (a: Attempt) => void;
@@ -168,16 +165,6 @@ const BUNDLE_HOLDS: Record<string, string> = {
   docker: "bzm-opl-agent.sh + .env + README",
 };
 
-/** The command that installs what was just saved. Docker's runs on the host
- *  rather than against a cluster, which is why it takes no namespace. */
-function runCommand(format: string, dir: string, namespace: string) {
-  if (format === "helm") {
-    return `helm install bzm-opl ${dir}/helm -f ${dir}/bzm-opl-values.yaml`;
-  }
-  if (format === "docker") return `sh ${dir}/bzm-opl-agent.sh`;
-  return `kubectl apply -f ${dir}/ -n ${namespace}`;
-}
-
 export function DownloadPanel(p: DownloadPanelProps) {
   const { api, bundle, credential, attempt, report, preflight, watch } = p;
   // The names the markup below already used, for the values it reads most: the
@@ -193,24 +180,6 @@ export function DownloadPanel(p: DownloadPanelProps) {
   const ready = !!facts && !!shipId && !bundle.genErr && sv.ok && bundle.saOk;
   return (
             <div className="space-y-3">
-              {/* What is about to be generated, and the way back to change it.
-                  The control itself is at the top of Configure: it decides
-                  which questions that step asks, so choosing it here meant
-                  filling in a namespace and a ServiceAccount for a bundle that
-                  carries neither. Named rather than assumed -- everything
-                  below, from the file list to the install command, reads
-                  differently per format. */}
-              <p className="text-xs text-slate-500">
-                Format:{" "}
-                <b className="text-slate-700">
-                  {OUTPUT_FORMATS.find((f) => f.id === format)?.label ?? format}
-                </b>
-                {" — "}
-                <button type="button" onClick={bundle.goToConfigure}
-                  className="text-bzm hover:underline">
-                  change it in Configure
-                </button>
-              </p>
               <div className="flex gap-2 items-center">
                 <Button disabled={!ready}
                   onClick={() => {
@@ -262,59 +231,19 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   )}
                 </div>
               )}
-              {/* Afterwards as well as before: once a rotation has happened the
-                  bundle just handed over is the only copy of that credential. */}
-              {attempt.token && (
+              {/* Afterwards as well as before, and only for the branch that
+                  did something: once a rotation has happened the bundle just
+                  handed over is the only copy of that credential, and that has
+                  to be said where it happened.
+                  The other branches are core telling the page that nothing was
+                  issued -- true, and the answer to a question nobody asked. A
+                  line under every download saying the download was uneventful
+                  is what teaches people not to read the line. */}
+              {attempt.token?.branch === "rotated" && (
                 <p className="text-xs text-slate-600 whitespace-pre-line">
                   {attempt.token.message}
                 </p>
               )}
-              {/* The zip is for handing the bundle to somebody; saving writes
-                  the same files (profile.json included) to a folder on this
-                  machine -- the shape livetest re-renders from and an MCP
-                  session's opl_bundle reads, so the folder is the shared
-                  state between this page and those. */}
-              <div className="flex gap-2 items-end">
-                <label className="grow block">
-                  <span className="text-xs font-medium text-slate-600">Folder</span>
-                  <input className={inputCls + " font-mono"}
-                    placeholder={`~/bzm-opl/${(options.namespace as string) || "blazemeter"}`}
-                    value={bundle.saveDir}
-                    onChange={(e) => bundle.setSaveDir(e.target.value)} />
-                </label>
-                {/* A plain button of the same size as every other one here. The
-                    label is typed rather than browsed because a browser cannot
-                    hand back an absolute directory path -- webkitdirectory
-                    yields file names relative to the folder, which is not what
-                    the server needs -- and `~` is expanded server-side. */}
-                <Button disabled={!ready}
-                  onClick={() => {
-                    report(NO_ATTEMPT);
-                    const dir = bundle.saveDir.trim() ||
-                      `~/bzm-opl/${(options.namespace as string) || "blazemeter"}`;
-                    api.saveBundle(facts!, { ...options, ship_id: shipId }, dir,
-                                   plan.request)
-                      .then((s) => report(savedTo(s)))
-                      .catch((e) => report(saveFailed(String(e.message))));
-                  }}>
-                  Save to folder
-                </Button>
-              </div>
-              {attempt.saved && (
-                <p className="text-xs text-emerald-700">
-                  Wrote {attempt.saved.files.length} files to{" "}
-                  <code className="font-mono">{attempt.saved.out_dir}</code>. Apply with{" "}
-                  <code className="font-mono">
-                    {runCommand(format, attempt.saved.out_dir,
-                                (options.namespace as string) || "blazemeter")}
-                  </code>
-                  {format === "docker"
-                    ? " — on the host that is to be the private location."
-                    : (<>{" "}— or point <code className="font-mono">livetest</code> or
-                      an MCP session at the folder.</>)}
-                </p>
-              )}
-              <ErrorMsg msg={attempt.saveError} />
               {/* Why the button is disabled, when the reason is a step back.
                   A disabled button whose cause is elsewhere is the failure this
                   is here to remove, so it names the group and offers the way

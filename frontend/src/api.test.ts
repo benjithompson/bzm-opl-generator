@@ -72,15 +72,3 @@ test("a zip with no credential headers reads as the placeholder, not as nothing"
     // have is the failure worth avoiding, and "" is a message, not a token.
     expect(token.branch).toBe("placeholder");
   });
-
-test("saveBundle sends the folder and the same credential request", async () => {
-  const calls = stubFetch(() => new Response(JSON.stringify({
-    out_dir: "/home/me/bzm-opl", files: [], token: { branch: "reused" },
-  })));
-
-  await api.saveBundle(facts, {}, "~/bzm-opl", { rotate_token: false });
-
-  expect(calls[0].url).toBe("/api/generate/save");
-  expect(calls[0].body).toMatchObject({
-    out_dir: "~/bzm-opl", rotate_token: false });
-});

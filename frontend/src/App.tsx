@@ -313,7 +313,6 @@ export default function App({ api }: { api: Api }) {
   // Where a save writes. Not part of the attempt: it is what was typed rather
   // than what happened, and the preview reads it too -- a folder already
   // holding this ship's bundle supplies the token the save would reuse.
-  const [saveDir, setSaveDir] = useState("");
   // The imported cluster evidence, its verdicts, and whatever the last import
   // was refused for. The document itself is kept, not just its verdicts: the
   // preflight re-runs against it on every option change, because verdicts that
@@ -674,10 +673,7 @@ export default function App({ api }: { api: Api }) {
     previewTimer.current = window.setTimeout(async () => {
       try {
         const opts = { ...options, ship_id: shipId ?? undefined };
-        // The typed save folder goes with it: if it already holds this ship's
-        // bundle, the save will keep that token, and the preview should say so
-        // rather than announcing a placeholder over a bundle that has one.
-        const r = await api.generate(facts, opts, saveDir.trim() || undefined);
+        const r = await api.generate(facts, opts);
         setFiles(r.files);
         setPreviewToken(r.token);
         setGenErr(null);
@@ -688,10 +684,12 @@ export default function App({ api }: { api: Api }) {
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
-    // saveDir is a dependency because it changes the answer: point the folder at
-    // a bundle this ship already has and the token branch becomes `reused`. The
-    // 250ms debounce above is what keeps that from being a request per keystroke.
-  }, [facts, options, shipId, saveDir]);
+    // No save folder in the dependencies any more: the page used to send one, so
+    // that a directory already holding this ship's bundle made the token branch
+    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
+    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
+    // the branch is unreachable and there is nothing to debounce it against.
+  }, [facts, options, shipId]);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
@@ -1423,7 +1421,6 @@ export default function App({ api }: { api: Api }) {
                 facts, shipId, options, format,
                 sv, saOk, genErr,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
-                saveDir, setSaveDir,
               }}
               credential={{
                 plan: tokenPlan, preview: previewToken,

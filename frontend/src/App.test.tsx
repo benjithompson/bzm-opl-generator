@@ -30,7 +30,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import App from "./App";
 import {
   AgentStatus, Api, Capacity, CapacityPlan, Facts, Location, Options,
-  SavedBundle, Ship, TokenRequest,
+  Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table, from the one copy of it.
@@ -556,7 +556,6 @@ test("the docker format is a third bundle, and it is what gets generated",
     // bundle holds -- which is not a manifest.
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     expect(await screen.findByText(/bzm-opl-agent\.sh/)).toBeTruthy();
-    expect(screen.getByText(/change it in Configure/)).toBeTruthy();
   });
 
 // -- the download step, through the page -------------------------------------
@@ -577,10 +576,10 @@ interface Sent {
   outDir?: string;
 }
 
-/** The two bundle routes, recording what left and answering as the server
- *  would -- the credential sentence included, because it is core's wording and
- *  arrives on the answer rather than being composed on this side. */
-function transfers(sent: Sent[], save: () => Promise<SavedBundle>): Partial<Api> {
+/** The bundle route, recording what left and answering as the server would --
+ *  the credential sentence included, because it is core's wording and arrives
+ *  on the answer rather than being composed on this side. */
+function transfers(sent: Sent[]): Partial<Api> {
   return {
     downloadZip: async (facts, options, credential) => {
       sent.push({ route: "zip", facts, options, credential });
@@ -591,20 +590,8 @@ function transfers(sent: Sent[], save: () => Promise<SavedBundle>): Partial<Api>
           ? "a NEW AUTH_TOKEN was issued" : "the AUTH_TOKEN you supplied",
       };
     },
-    saveBundle: async (facts, options, outDir, credential) => {
-      sent.push({ route: "save", facts, options, credential, outDir });
-      return save();
-    },
   };
 }
-
-/** One folder written, as the server reports it: the expanded path rather than
- *  the `~` that was typed. */
-const savedTo = async (): Promise<SavedBundle> => ({
-  out_dir: "/home/me/bzm-opl/blazemeter",
-  files: [{ name: "crane.yaml", bytes: 12 }],
-  token: { branch: "given", ship_id: "s-1", message: "kept the token" },
-});
 
 /** An account with one performance location and one idle agent in it: enough
  *  to reach step 3 with the buttons enabled. `extra` is what the test under way
@@ -658,7 +645,7 @@ async function atDownloadStep() {
 test("downloading sends the configured bundle for the selected agent, and rotates nothing",
   async () => {
     const sent: Sent[] = [];
-    render(<App api={perfAccount(transfers(sent, savedTo))} />);
+    render(<App api={perfAccount(transfers(sent))} />);
 
     fireEvent.click(await atDownloadStep());
 
@@ -673,46 +660,18 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     // re-apply and no second place it could be re-applied differently.
     expect(sent[0].credential).toEqual({ rotate_token: false });
 
-    // ...and what it did is reported in core's own words, off the answer.
-    expect(await screen.findByText(/the AUTH_TOKEN you supplied/)).toBeTruthy();
-  });
-
-test("saving reports where it landed, and a refusal replaces that with why",
-  async () => {
-    const sent: Sent[] = [];
-    let refuse = false;
-    const save = () => (refuse
-      ? Promise.reject(new Error("no such folder")) : savedTo());
-    render(<App api={perfAccount(transfers(sent, save))} />);
-    await atDownloadStep();
-
-    fireEvent.change(screen.getByLabelText("Folder"),
-                     { target: { value: "~/bzm-opl/blazemeter" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
-
-    await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].route).toBe("save");
-    expect(sent[0].outDir).toBe("~/bzm-opl/blazemeter");
-    // The save is the other half of #64: writing into a folder a second time
-    // is the ordinary way to use it, and it must not cost a rotation either.
-    expect(sent[0].credential).toEqual({ rotate_token: false });
-    // The expanded path the server echoed, not the `~` that was typed: it is
-    // what a kubectl command can be copied against.
-    expect(await screen.findByText(/Wrote 1 files to/)).toBeTruthy();
-    expect(screen.getByText("/home/me/bzm-opl/blazemeter")).toBeTruthy();
-
-    // A refused save says why, and takes the previous save's claim with it --
-    // that folder is not where this bundle went.
-    refuse = true;
-    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
-    expect(await screen.findByText("no such folder")).toBeTruthy();
-    expect(screen.queryByText(/Wrote 1 files to/)).toBeNull();
+    // Nothing is said about the credential, because nothing happened to it.
+    // Core still answers with its own sentence -- "nothing was issued" -- and
+    // the page keeps it for the branch where something was: a line under every
+    // download reporting that the download was uneventful is what teaches
+    // people not to read the line. The rotated branch is asserted below.
+    expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
   });
 
 test("ticking the rotate box is what makes the request issue a credential",
   async () => {
     const sent: Sent[] = [];
-    render(<App api={perfAccount(transfers(sent, savedTo))} />);
+    render(<App api={perfAccount(transfers(sent))} />);
     const download = await atDownloadStep();
 
     // Offered because this agent has no token in the field, the page is
@@ -728,23 +687,11 @@ test("ticking the rotate box is what makes the request issue a credential",
     expect(await screen.findByText(/a NEW AUTH_TOKEN was issued/)).toBeTruthy();
   });
 
-test("the box is the only thing that rotates: a save after one is asked for does too",
-  async () => {
-    const sent: Sent[] = [];
-    render(<App api={perfAccount(transfers(sent, savedTo))} />);
-    await atDownloadStep();
-
-    // Both routes read one plan, so the pair cannot disagree about what the
-    // click costs -- which is what a flag re-applied at two call sites could.
-    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
-    await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].credential).toEqual({ rotate_token: false });
-
-    fireEvent.click(screen.getByLabelText(/Issue a NEW AUTH_TOKEN/));
-    fireEvent.click(screen.getByRole("button", { name: "Save to folder" }));
-    await waitFor(() => expect(sent.length).toBe(2));
-    expect(sent[1].credential).toEqual({ rotate_token: true });
-  });
+// Saving to a folder was the other route, and the pair had a test each for
+// reading one credential plan -- which is what stopped them disagreeing about
+// what a click cost (#64). The button is gone from this step (the CLI's -o and
+// the MCP server's opl_bundle write folders now), so there is one route, and
+// what is left to assert is that it carries the plan: the two tests above.
 
 // -- step 1: the two lists, and the two forms that write to the account -------
 // A location holds agents and both are picked from a list, so both are driven
@@ -1191,26 +1138,25 @@ test("an id the account no longer has is written away once the account has said 
 
 // -- the live preview, and the two things that decide when it is asked -------
 
-test("the preview waits for the typing to stop, and the save folder is part of what it asks",
-  async () => {
-    const asked: { options: Options; outDir?: string }[] = [];
+test("the preview waits for the typing to stop", async () => {
+    // /api/generate renders the whole bundle, so a preview that ran per
+    // keystroke rendered it per keystroke. The folder field used to drive this
+    // test; it was removed with the Save button, and the debounce it was
+    // testing belongs to every option on the page -- so this types into one.
+    const asked: Options[] = [];
     render(<App api={perfAccount({
-      generate: async (_facts: Facts, options: Options, outDir?: string) => {
-        asked.push({ options, outDir });
+      generate: async (_facts: Facts, options: Options) => {
+        asked.push(options);
         return {
           files: [{ name: "crane.yaml", content: "kind: Deployment" }],
-          // What a folder already holding this ship's bundle answers: the save
-          // would keep the token that is in it. Core's branch, on the answer --
-          // the page never works one out.
-          token: outDir
-            ? { branch: "reused" as const, ship_id: "s-1",
-                message: "the folder already holds one" }
-            : { branch: "placeholder" as const, ship_id: "s-1",
-                message: "no AUTH_TOKEN — the bundle carries a placeholder" },
+          token: { branch: "placeholder" as const, ship_id: "s-1",
+                   message: "no AUTH_TOKEN — the bundle carries a placeholder" },
         };
       },
     })} />);
     await atDownloadStep();
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    const ns = await screen.findByLabelText(/^Namespace/);
     // Settled: the location's facts, the feature it opens on and the option
     // defaults all move the configuration, and each moves it once.
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
@@ -1220,24 +1166,18 @@ test("the preview waits for the typing to stop, and the save folder is part of w
     // From here the clock is ours, because the point is what does *not* happen
     // inside the 250ms.
     vi.useFakeTimers();
-    const folder = screen.getByLabelText("Folder");
-    for (const typed of ["~/b", "~/bz", "~/bzm"]) {
-      fireEvent.change(folder, { target: { value: typed } });
+    for (const typed of ["bzm", "bzm-", "bzm-ns"]) {
+      fireEvent.change(ns, { target: { value: typed } });
       await tick(100);
     }
-    // Three keystrokes, 300ms, no request: /api/generate renders the whole
-    // bundle, and a preview that ran per keystroke rendered it three times.
+    // Three keystrokes, 300ms, no request.
     expect(asked.length).toBe(before);
 
     await tick(250);
-    // ...and then exactly one, carrying the folder. The folder is a dependency
-    // because it changes the answer, not because the request has room for it.
+    // ...and then exactly one, carrying what was typed rather than any of the
+    // values it was typed through.
     expect(asked.length).toBe(before + 1);
-    expect(asked[asked.length - 1].outDir).toBe("~/bzm");
-    // The changed answer, on screen: pointed at a folder this ship's bundle is
-    // already in, the credential branch is `reused` -- so the step stops
-    // announcing a placeholder over a bundle that has a real token.
-    expect(screen.getByText(/the AUTH_TOKEN already in that folder/)).toBeTruthy();
+    expect(asked[asked.length - 1].namespace).toBe("bzm-ns");
   });
 
 // -- the watch, and what it is watching --------------------------------------

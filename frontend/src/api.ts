@@ -351,18 +351,6 @@ export const api = {
       `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
     return token;
   },
-  /** Write the bundle to a directory on the machine running this server -- the
-   *  same shape `bzm-opl-gen livetest` consumes and an MCP session's opl_bundle
-   *  reads, so the folder is the handoff between this page and those.
-   *
-   *  Saving twice into one folder is the ordinary way to use it, and it no
-   *  longer costs a rotation: the server generates *into* the directory, so the
-   *  token already there is reused and the agent deployed from the last save
-   *  keeps working. `token.branch` says which happened. */
-  saveBundle: (
-    facts: Facts, options: Options, outDir: string, credential: TokenRequest,
-  ) => req<SavedBundle>("POST", "/api/generate/save",
-    { facts, options, ...credential, out_dir: outDir }),
 };
 
 /** Every route the page calls, as one thing it is handed rather than one it
@@ -610,9 +598,3 @@ function tokenFromHeaders(r: Response): TokenReport {
   };
 }
 
-/** What a save wrote, and where. */
-export interface SavedBundle {
-  out_dir: string;
-  files: { name: string; bytes: number }[];
-  token: TokenReport;
-}
