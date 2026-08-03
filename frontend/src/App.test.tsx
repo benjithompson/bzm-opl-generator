@@ -731,6 +731,12 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       func_ids: ["performance"],
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    // An account whose agents were all made somewhere else, which is the
+    // ordinary one: the server has minted nothing this session. Stubbed rather
+    // than left to fakeApi's rejection because an empty store and an
+    // unreachable one are different answers and the page says different things
+    // about them -- the tests that mean the second say so themselves.
+    mintedToken: async () => ({ auth_token: null }),
     // generate.DOCKER_IGNORED as the page receives it, from the one copy of
     // that table (see fixtures.ts -- this used to be a second, shorter slice,
     // which is how a page test comes to assert against a table the unit test
@@ -856,6 +862,164 @@ test("creating an agent in an empty location keeps the credential it is issued w
     await waitFor(() => expect(
       screen.getByPlaceholderText(/paste the token this agent was created with/),
     ).toHaveProperty("value", "tok-from-the-account"));
+  });
+
+// -- ...and keeping it, which is the other half of the same moment -----------
+// The credential is captured where it is free and the browser was the only copy
+// of it, so a refresh threw it away for good: no API reads an AUTH_TOKEN back,
+// and the next bundle silently carried a placeholder for an agent this app had
+// created a minute earlier (#123). What the server remembers is what these
+// drive, and every one of them asserts on the *bundle request* rather than on
+// the field -- a field showing a value the request does not send is the failure
+// being replaced, not evidence against it.
+
+/** The bundle request most recently sent, or an empty one before the first. */
+const last = (sent: Options[]): Options => sent[sent.length - 1] ?? {};
+
+/** The server's memory, standing in. Filled by the one call that mints and read
+ *  by the one that looks up, which is the pairing under test. */
+function mintingAccount(listing: Location[], minted: Record<string, string>,
+                        asked: Options[], extra: Partial<Api> = {}) {
+  return accountOf(listing, {
+    mintedToken: async (shipId: string) =>
+      ({ auth_token: minted[shipId] ?? null }),
+    generate: async (_facts: Facts, options: Options) => {
+      asked.push(options);
+      return { files: [], token: { branch: "given" as const,
+                                   ship_id: null, message: "" } };
+    },
+    ...extra,
+  });
+}
+
+test("an agent this app created keeps its credential across a refresh",
+  async () => {
+    const listing = [loc("h-0", "Empty")];
+    const minted: Record<string, string> = {};
+    const asked: Options[] = [];
+    const api = mintingAccount(listing, minted, asked, {
+      createShip: async (_harborId: string, name: string) => {
+        const ship = { id: "s-new", name, state: "IDLE" };
+        listing[0] = { ...listing[0], ships: [ship] };
+        // The server remembers as it hands it over; there is no second moment
+        // at which it could, which is the whole reason it does this one.
+        minted[ship.id] = "tok-at-creation";
+        return { ship, auth_token: "tok-at-creation", token_error: null };
+      },
+    });
+
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByText("Empty"));
+    fireEvent.change(await screen.findByLabelText("Name"),
+                     { target: { value: "k8s-prod" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(
+      asked.some((o) => o.auth_token === "tok-at-creation")).toBe(true));
+
+    // The refresh, and what it may not carry the token in: session.strip is the
+    // whole safety argument and this change does not touch it, so the value has
+    // to come back from the server or not at all.
+    cleanup();
+    expect(JSON.stringify(sessionStorage)).not.toContain("tok-at-creation");
+    asked.length = 0;
+    render(<App api={api} />);
+
+    // Nothing typed, and the bundle carries the real credential rather than the
+    // placeholder it used to fall to.
+    await waitFor(() => expect(last(asked)).toMatchObject({
+      ship_id: "s-new", auth_token: "tok-at-creation" }));
+  });
+
+test("a credential is only ever found under the agent it was minted for",
+  async () => {
+    // Two agents in one location, which is what a store holding "the token" and
+    // one holding a token per ship cannot both survive. The page used to keep
+    // exactly one and clear it whenever the target moved -- the same guarantee,
+    // held together by every caller remembering to let go.
+    const listing = [loc("h-0", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])];
+    const asked: Options[] = [];
+    render(<App api={mintingAccount(
+      listing, { "s-1": "tok-one", "s-2": "tok-two" }, asked)} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByText("agent-2"));
+    await waitFor(() => expect(last(asked)).toMatchObject({
+      ship_id: "s-2", auth_token: "tok-two" }));
+    // Back to the first, which is the move the old page had no answer for.
+    fireEvent.click(screen.getByText("agent-1"));
+    await waitFor(() => expect(last(asked)).toMatchObject({
+      ship_id: "s-1", auth_token: "tok-one" }));
+    // ...and neither agent's credential was ever attached to the other, in any
+    // request, including the ones in between.
+    expect(asked.filter(
+      (o) => o.auth_token === "tok-one" && o.ship_id !== "s-1")).toEqual([]);
+    expect(asked.filter(
+      (o) => o.auth_token === "tok-two" && o.ship_id !== "s-2")).toEqual([]);
+  });
+
+test("a token typed by hand beats the remembered one, and it does not come back",
+  async () => {
+    const listing = [loc("h-0", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" }])];
+    const minted: Record<string, string> = { "s-1": "tok-remembered" };
+    const forgotten: string[] = [];
+    const asked: Options[] = [];
+    const api = mintingAccount(listing, minted, asked, {
+      forgetMintedToken: async (shipId: string) => {
+        forgotten.push(shipId);
+        return { forgotten: delete minted[shipId] };
+      },
+    });
+
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByText("Perf"));
+    const field = await screen.findByPlaceholderText(/paste the token/);
+    await waitFor(() => expect(field).toHaveProperty("value", "tok-remembered"));
+
+    fireEvent.change(field, { target: { value: "tok-typed" } });
+    await waitFor(() => expect(last(asked).auth_token).toBe("tok-typed"));
+    // Evicted at the server, not merely out-ranked in the page: the page cannot
+    // keep the pasted one (session.strip), so a remembered copy left in place
+    // is one that silently replaces it on the next load.
+    await waitFor(() => expect(forgotten).toEqual(["s-1"]));
+
+    cleanup();
+    asked.length = 0;
+    render(<App api={api} />);
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    // A bundle with no token, which is the honest state -- what was typed is
+    // gone with the page that held it, and what it replaced does not return.
+    expect(asked.every((o) => !o.auth_token)).toBe(true);
+  });
+
+test("an agent this app could not be asked about claims nothing about its token",
+  async () => {
+    // The distinction this codebase keeps everywhere: an agent nobody minted a
+    // token for and an agent nobody could be asked about are different answers,
+    // and only the first may say a credential cannot be read back. Read as the
+    // same thing, the page tells somebody their own agent's token is
+    // unrecoverable while the server is holding it.
+    const listing = [loc("h-0", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" }])];
+    render(<App api={accountOf(listing, {
+      mintedToken: async () => { throw new Error("no route there"); },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    expect(await screen.findByText(/could not ask this app/)).toBeTruthy();
+    expect(screen.queryByText(/cannot be read back/)).toBeNull();
+
+    // ...where an account that answered gets the sentence that was always here.
+    // A fresh page, not a reload: the snapshot would restore the selection and
+    // this half is about making the same one.
+    cleanup();
+    sessionStorage.clear();
+    render(<App api={accountOf(listing)} />);
+    fireEvent.click(await screen.findByText("Perf"));
+    expect(await screen.findByText(/cannot be read back/)).toBeTruthy();
   });
 
 test("a lone agent that is reporting is not auto-picked, and says why when it is",

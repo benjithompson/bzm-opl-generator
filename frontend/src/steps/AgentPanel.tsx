@@ -161,6 +161,15 @@ export interface CredentialHandover {
   /** Issue a new one for an agent that already exists. Resolves once the token
    *  is in the field; throws with the account's own refusal if it is refused. */
   regenerate: () => Promise<void>;
+  /** Why the field is empty, or null where there is nothing to say.
+   *
+   *  Written by token.recallNote rather than chosen here, because the choice is
+   *  between the two states this codebase never lets share a representation: an
+   *  agent this app minted nothing for, and one it could not be asked about.
+   *  Null covers both "there is a token in the field" and "the answer has not
+   *  arrived yet" -- neither is a sentence, and the second must not borrow the
+   *  first's. */
+  note: string | null;
 }
 
 export interface AgentPanelProps {
@@ -630,10 +639,20 @@ export function AgentPanel({
                                           Cancel
                                         </button>
                                       )}
-                                      {reusing && arm === "idle" && !issuing && (
+                                      {/* Whichever of the two it is. It used to
+                                          be one sentence, because there was one
+                                          state: nothing remembered a token, so
+                                          an empty field could only mean the
+                                          agent predated this app's knowledge of
+                                          it. Now the field can be empty because
+                                          the store could not be asked, and
+                                          saying "cannot be read back" over that
+                                          would be a claim about the agent made
+                                          without asking. */}
+                                      {reusing && arm === "idle" && !issuing
+                                        && credential.note && (
                                         <span className="text-[11px] text-slate-500">
-                                          its token was issued once, at creation,
-                                          and cannot be read back
+                                          {credential.note}
                                         </span>
                                       )}
                                     </div>

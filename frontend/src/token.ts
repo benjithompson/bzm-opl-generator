@@ -1,4 +1,10 @@
-// What the download button is about to do to the agent's credential.
+// What the download button is about to do to the agent's credential, and what
+// this app still holds of one it minted.
+//
+// Two questions about one value, so one module: what a click will cost, and
+// what a refresh left behind (#123). Both are answers *about* a credential and
+// neither is one -- nothing here holds a token, and the second half deals only
+// in which of four things the server said.
 //
 // Which of four ways a bundle's token arrived is core's rule and arrives on the
 // answer (TokenReport) -- nothing here re-decides one. What is left is what to
@@ -69,4 +75,53 @@ export function downloadPlan(report: TokenReport | null): DownloadPlan {
   const branch = report?.branch ?? "placeholder";
   return { request: { rotate_token: false }, hint: CARRIES[branch],
            incomplete: branch === "placeholder" };
+}
+
+
+/** What the server said it still holds for the selected agent (#123).
+ *
+ *  Four states, because the question is asked over a request and a request has
+ *  a before as well as three afters:
+ *
+ *    asking  -- the answer is outstanding. Not "none": for the moment before it
+ *               lands the field is empty for a reason that has nothing to do
+ *               with the agent, and the sentence for `none` would be a claim
+ *               made without having asked.
+ *    held    -- there is one, and it is already in the field. Silently, on
+ *               purpose: unlike a restored preflight verdict a token claims
+ *               nothing about the world, so there is nothing to caveat.
+ *    none    -- this process holds no token for that ship. A ship this app never
+ *               minted for, one whose credential was typed over, and a server
+ *               that has restarted since, are all honestly this -- so the
+ *               sentence is about what is held, never about what was minted.
+ *    unread  -- the server could not be asked. **Not `none`.** This is the
+ *               distinction this codebase keeps everywhere: an agent nobody
+ *               minted for and an agent nobody could ask about are different
+ *               answers, and only one of them is entitled to say a credential
+ *               cannot be read back. */
+export type Recall = "asking" | "held" | "none" | "unread";
+
+/** How the store's answer reads. `auth_token` is null for "holds none"; a
+ *  failed request never reaches here, because it is not an answer. */
+export const recalled = (answer: { auth_token: string | null }): Recall =>
+  (answer.auth_token ? "held" : "none");
+
+/** What to say beside an agent with no credential in hand, or null for nothing.
+ *
+ *  Only reached where the field is empty -- a token in it explains itself. Kept
+ *  here rather than as a ternary at the field because the two sentences it
+ *  chooses between are the two states that must never be confused, and one of
+ *  them was the only one that existed before there was a store to ask. */
+export function recallNote(recall: Recall): string | null {
+  if (recall === "unread") {
+    // No claim about the agent: the app may well be holding this one's token
+    // and simply be unable to say so. What it offers instead is the way on,
+    // which is the same way on an agent it never created has.
+    return "could not ask this app what it still holds for this agent — "
+      + "paste the token, or try again";
+  }
+  if (recall === "none") {
+    return "its token was issued once, at creation, and cannot be read back";
+  }
+  return null;
 }

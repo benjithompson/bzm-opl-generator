@@ -246,6 +246,29 @@ export const api = {
   issueToken: (harborId: string, shipId: string) =>
     req<{ auth_token: string }>(
       "POST", "/api/ships/token", { harbor_id: harborId, ship_id: shipId }),
+  /** The AUTH_TOKEN this app minted for an agent, if the server still holds it.
+   *
+   *  A read of the server's own memory: it asks BlazeMeter nothing and mints
+   *  nothing, which is what separates it from the POST above despite the
+   *  neighbouring name. There is no endpoint that reads a credential back --
+   *  that is the reason the server remembers at all (#123).
+   *
+   *  `auth_token: null` is "this process holds none for that ship", which is
+   *  also what a restarted server honestly says. A request that *fails* is the
+   *  third answer and arrives as a rejection, never as a null -- see
+   *  token.recallNote for what the page is allowed to say about each. */
+  mintedToken: (shipId: string) =>
+    req<{ auth_token: string | null }>(
+      "GET", `/api/ships/minted-token?ship_id=${encodeURIComponent(shipId)}`),
+  /** Forget it: something has been typed over it.
+   *
+   *  The pasted value wins for this bundle and has to go on winning across a
+   *  reload, and the page cannot keep it (session.strip) -- so the remembered
+   *  copy is dropped rather than out-ranked. The ship is the argument and the
+   *  token never is: a secret in a query string is a secret in an access log. */
+  forgetMintedToken: (shipId: string) =>
+    req<{ forgotten: boolean }>(
+      "DELETE", `/api/ships/minted-token?ship_id=${encodeURIComponent(shipId)}`),
   /** Change a location's concurrency settings. A partial update: send only the
    *  fields being changed. The answer says what the account holds afterwards,
    *  which is not necessarily what was sent -- see LocationUpdate. */

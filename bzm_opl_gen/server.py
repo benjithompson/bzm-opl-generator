@@ -13,7 +13,9 @@ nothing extra.
 
 What is here and what is in core: this module is the request. Routes, request
 bodies, status codes, the zip download's headers, where an API key is kept for
-the length of a browser session, and how the process is bound. Every decision
+the length of a browser session -- and, for the same reason, the credentials
+this app minted, because what a *browser* forgets on a refresh is a fact about
+serving one and about nothing else -- and how the process is bound. Every decision
 *about OPL* is core's, so that a caller with no requests at all -- the MCP
 server -- reaches the same answers rather than restating them. The translation
 is one line, `_answer`: core raises CoreError carrying the status, and nothing
@@ -36,6 +38,45 @@ from . import api, core
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 _state = {"client": None, "key_id": None}
+
+# **This is the single-user seam, and all of it is here**: the client above, the
+# tokens below, and the TTL cache further down. One person on one machine is
+# what this server is for, and each of the three is process-global rather than
+# per browser session -- so two tabs are one session, which is right for one
+# person and wrong for two.
+#
+# Named together because making it multi-user is not one of them scoped: it is
+# `_state` per session, `_cache` per session (`_cached("accounts", ...)` would
+# otherwise serve one user's accounts to another), `_minted_tokens` per session,
+# and then the key detection and save-to-disk below, which are about *this*
+# machine's filesystem and would have to go. Whoever revisits that should find
+# the list rather than discover it an item at a time.
+
+# The AUTH_TOKENs this process minted, by ship id. In memory, and nowhere else.
+#
+# This app sees a token at exactly two moments and both are its own writes --
+# creating an agent (the credential is free there: a ship created a second ago
+# has no previous one for the issue to invalidate) and Regenerate. Nothing reads
+# one back afterwards, because BlazeMeter shows it once. So the browser's copy
+# was the only copy, and a *refresh* lost it permanently: the bundle fell to a
+# placeholder for an agent this app had created a minute earlier, and the person
+# was left doing by hand what had already been done for them.
+#
+# Here rather than in core: this exists because a *browser* forgets. core is
+# driven by a CLI and by the MCP server too, and neither has the problem -- a
+# CLI run mints and writes the bundle in one process, so a store there would be
+# a lifetime nothing needed answering a question nobody asked.
+#
+# Keyed by ship id, and holding all of them rather than the selected agent's:
+# that is what makes mixing two up impossible by construction, because a token
+# can only be found under the ship it belongs to. Not keyed by a browser handle,
+# which would scope it per browser and this is one person's local tool.
+#
+# Not on disk. The downloaded bundle is the durable copy; this remembers only
+# long enough to get a token into one. A credential at rest that nothing revokes
+# when its agent is deleted is a liability with no cleanup path -- so a restart
+# forgets, and that is the intended lifetime rather than a gap in it.
+_minted_tokens: dict[str, str] = {}
 
 # Nothing of core's is re-exported here, not even as a convenience: an alias is
 # a second name for one value, it does not follow when the value is replaced,
@@ -203,8 +244,16 @@ def key_clear():
     core.SAVED_KEY_PATH and stays there, because deleting a file the user asked
     to keep is not what a Disconnect button on a web page should mean. Detect
     still lists it, so reconnecting is one click.
+
+    The minted tokens go with the account tree, for the reason the page drops
+    that tree: they were issued with the key being handed back. `POST /api/key`
+    deliberately does *not* clear them -- connecting again (the paste form after
+    a browse, a retry after a refusal) is not a decision to forget anything, and
+    a second key cannot be served the first one's tokens anyway, because the
+    store is keyed by ship id.
     """
     _state["client"] = _state["key_id"] = None
+    _minted_tokens.clear()
     _forget()
     return {"connected": False}
 
@@ -323,6 +372,12 @@ def ship_create(s: ShipIn):
     token, refused = None, None
     try:
         token = core.fetch_ship_token(client, s.harbor_id, ship["id"])
+        # One of the two moments this app is ever shown a token, so it is one of
+        # the two that can remember it -- see _minted_tokens. Only on success:
+        # the refused branch below has nothing to store, and storing None would
+        # be an entry meaning "asked and got nothing", which is not what the
+        # lookup's null says.
+        _minted_tokens[ship["id"]] = token
     except core.CoreError as e:
         # The sentence core wrote, which names the ship and says a token read off
         # the agent in BlazeMeter's own UI works just as well. Not _answer'd:
@@ -383,10 +438,59 @@ def ship_issue_token(t: TokenIn):
 
     The token comes back in the body because there is nowhere else for it to
     go: BlazeMeter will not show it again, and the caller's next move is to put
-    it in the Secret. Nothing here writes it down -- same as ship_create.
+    it in the Secret. Nothing writes it *down* -- `_minted_tokens` is memory for
+    the length of this process, and the second of the two moments that fills it.
     """
-    return {"auth_token": _answer(core.issue_auth_token, _client(),
-                                  t.harbor_id, t.ship_id)}
+    token = _answer(core.issue_auth_token, _client(), t.harbor_id, t.ship_id)
+    _minted_tokens[t.ship_id] = token
+    return {"auth_token": token}
+
+
+@app.get("/api/ships/minted-token")
+def ship_minted_token(ship_id: str):
+    """The AUTH_TOKEN this process minted for `ship_id`, if it still holds one.
+
+    A read of this server's own memory, so it takes no client and asks
+    BlazeMeter nothing: there is no endpoint that reads a credential back, which
+    is the whole reason `_minted_tokens` exists. It mints nothing either -- the
+    route that does is the POST above, and this one cannot be mistaken for it
+    because it is a different path as well as a different verb.
+
+    **Three answers, and they must stay three.** A token is `auth_token: <the
+    value>`; no entry is `auth_token: null`; and "could not be read" is not a
+    body at all -- this route has no failure of its own, so a caller that gets
+    no answer got one from the transport and knows the difference structurally
+    rather than by inspecting a field.
+
+    A restart is honestly the *second* of those and not a fourth: the process
+    holds nothing for that ship, which is exactly what null says. Nothing here
+    can tell it apart from a ship this app never minted for, so nothing here
+    claims to -- the page's sentence is about what is held rather than about
+    what the agent's history was, and stays true either way.
+    """
+    return {"auth_token": _minted_tokens.get(ship_id)}
+
+
+@app.delete("/api/ships/minted-token")
+def ship_forget_minted_token(ship_id: str):
+    """Forget what was minted for `ship_id`, because something was typed over it.
+
+    A pasted token wins for the bundle being configured, and it has to go on
+    winning after a reload -- a remembered copy that came back would silently
+    replace what somebody typed over it. The page cannot keep the pasted one
+    instead (session.strip is why: a credential is never written to browser
+    storage) and this server only ever remembers what it minted itself, so
+    dropping ours is the whole of it.
+
+    **The ship is the argument; the token never is.** A secret in a query string
+    is a secret in every access log between here and the browser, and this route
+    needs no more than the key to the entry.
+
+    Deliberately not `_writes`. That decorator drops the account cache after a
+    call that changed the customer's account, and nothing in the account changed
+    here -- a forget that invalidated the location list would be saying it had.
+    """
+    return {"forgotten": _minted_tokens.pop(ship_id, None) is not None}
 
 
 @app.get("/api/facts")

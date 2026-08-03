@@ -1,5 +1,7 @@
+import inspect
 import io
 import json
+import logging
 import os
 import pathlib
 import re
@@ -519,6 +521,174 @@ def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
                     json={"harbor_id": "aaa111", "ship_id": "s1"})
     assert r.status_code == 502
     assert "could not be issued" in r.json()["detail"]
+
+
+# -- ...and remembering it, so a refresh does not throw it away ----------------
+# The other half of the two moments above. This app is shown a token exactly
+# where it mints one, and until #123 the browser's options were the only copy:
+# no API reads an AUTH_TOKEN back, so a reload dropped it for good and the next
+# bundle silently carried a placeholder for an agent created a minute earlier.
+# What these pin is that the store answers for the ship it was asked about and
+# for no other, and that "nothing here" never arrives looking like anything else.
+
+@pytest.fixture(autouse=True)
+def _no_remembered_tokens():
+    """Every test starts having minted nothing.
+
+    Process-wide state shared between tests, like the cache below -- and worse
+    to leave lying about, because the value is a credential and the assertion
+    most of these make is that there is *not* one.
+    """
+    server._minted_tokens.clear()
+    yield
+    server._minted_tokens.clear()
+
+
+class TwoAgentAccount(FakeClient):
+    """An account where each agent is genuinely a different agent.
+
+    FakeClient answers `s2` to every create and one constant to every token
+    request, which is enough for the routes above and not enough here: a store
+    keyed by ship and a store holding only the last token it was shown look
+    identical against it.
+    """
+
+    def create_ship(self, harbor_id, name):
+        return {"id": f"s-{name}", "name": name}
+
+    def auth_token(self, harbor_id, ship_id):
+        self.calls.append(("auth_token", harbor_id, ship_id))
+        return f"TOKEN-{ship_id}"
+
+
+def test_a_created_agent_s_credential_outlives_the_page_that_asked_for_it(
+        connected):
+    """The whole of #123: the token is captured at creation, and a refresh used
+    to lose it because the browser held the only copy."""
+    client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
+    r = client.get("/api/ships/minted-token?ship_id=s2")
+    assert r.status_code == 200
+    assert r.json()["auth_token"] == "TOKEN-FROM-API"
+    # Read out of this process, not off the account: nothing reads a credential
+    # back from BlazeMeter, and a lookup that asked would be minting.
+    assert connected.calls == [("auth_token", "aaa111", "s2")]
+
+
+def test_a_regenerated_credential_is_what_is_remembered_afterwards(connected):
+    """The second of the two moments. A store that only followed creation would
+    hand back the dead token after a Regenerate -- which applies cleanly and
+    leaves the agent at 0/1."""
+    client.post("/api/ships/token",
+                json={"harbor_id": "aaa111", "ship_id": "s1"})
+    assert client.get("/api/ships/minted-token?ship_id=s1").json() == {
+        "auth_token": "TOKEN-FROM-API"}
+
+
+def test_a_token_is_only_ever_found_under_the_ship_it_belongs_to(monkeypatch):
+    """Two agents in one location, and neither one's credential can be attached
+    to the other. By construction rather than by forgetting: the page used to
+    keep one token and clear it whenever the target moved, which is the same
+    guarantee held together by every caller remembering to let go."""
+    connect(monkeypatch, TwoAgentAccount())
+    for name in ("alpha", "bravo"):
+        client.post("/api/ships", json={"harbor_id": "aaa111", "name": name})
+    for name in ("alpha", "bravo"):
+        assert client.get(
+            f"/api/ships/minted-token?ship_id=s-{name}").json() == {
+                "auth_token": f"TOKEN-s-{name}"}
+
+
+def test_an_agent_this_app_never_minted_for_reads_as_no_token(connected):
+    """Null, and a 200 -- an agent that already existed is the ordinary case,
+    not a failure. Its token was issued once at creation and no API reads one
+    back, so the page shows the placeholder and says why."""
+    r = client.get("/api/ships/minted-token?ship_id=s1")
+    assert r.status_code == 200 and r.json() == {"auth_token": None}
+    assert connected.calls == []
+
+
+def test_a_credential_that_was_refused_is_not_remembered_as_one(monkeypatch):
+    """The agent exists and its token does not. Storing the None would make an
+    entry meaning "asked, got nothing", which reads back as the same null the
+    ship nobody minted for gives -- and this is the codebase where those two
+    must not share a representation. There is nothing to remember, so nothing
+    is written, and the answer is the honest empty one."""
+    connect(monkeypatch, RefusingClient())
+    assert client.post(
+        "/api/ships", json={"harbor_id": "aaa111", "name": "agent1"}
+    ).json()["auth_token"] is None
+    assert server._minted_tokens == {}
+    assert client.get("/api/ships/minted-token?ship_id=s2").json() == {
+        "auth_token": None}
+
+
+def test_a_token_typed_over_evicts_the_one_that_was_minted(connected):
+    """A pasted token wins, and has to go on winning after a reload -- otherwise
+    the remembered copy comes back and quietly replaces what was typed over it.
+    The page cannot store the pasted one instead (session.strip), so the
+    eviction is the whole mechanism."""
+    client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
+    assert client.delete("/api/ships/minted-token?ship_id=s2").json() == {
+        "forgotten": True}
+    assert client.get("/api/ships/minted-token?ship_id=s2").json() == {
+        "auth_token": None}
+    # Idempotent, because the field it is driven from is a controlled input and
+    # a second keystroke must not be an error.
+    assert client.delete("/api/ships/minted-token?ship_id=s2").json() == {
+        "forgotten": False}
+
+
+def test_disconnecting_forgets_every_credential_this_app_minted(monkeypatch):
+    """They were issued with the key being handed back, and they go with it and
+    with the account tree -- the same clear the page makes of everything read
+    under that key. Reconnecting offers a token for nothing."""
+    connect(monkeypatch, FakeClient())
+    client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
+    assert server._minted_tokens
+    client.delete("/api/key")
+    assert server._minted_tokens == {}
+    assert client.get("/api/ships/minted-token?ship_id=s2").json() == {
+        "auth_token": None}
+
+
+def test_forgetting_a_minted_token_is_not_a_write_to_the_account(monkeypatch):
+    """`_writes` is about the customer's account, and this changed nothing in
+    one. Dropping the cache here would say a location list read a moment ago had
+    been invalidated by somebody typing in a password field."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    assert server._cache
+    client.delete("/api/ships/minted-token?ship_id=s1")
+    assert server._cache
+
+
+def test_the_store_is_addressed_by_ship_and_never_by_token():
+    """A secret in a query string is a secret in every access log between the
+    browser and here, and a lookup keyed by the value would have needed one. The
+    key to the entry is all either route takes."""
+    for name in ("ship_minted_token", "ship_forget_minted_token"):
+        params = inspect.signature(getattr(server, name)).parameters
+        assert set(params) == {"ship_id"}, (
+            f"{name} takes {sorted(params)}; the token is not an argument to "
+            f"anything that remembers it")
+
+
+def test_a_remembered_credential_never_reaches_a_log_line(connected, caplog):
+    """Not a hypothetical: a print left in while debugging a store is a
+    credential in a terminal, in a screen share, and in whatever collects the
+    stdout of the LaunchAgent this runs under. The whole lifecycle, at the
+    loudest level anything here could log at."""
+    with caplog.at_level(logging.DEBUG):
+        client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
+        client.get("/api/ships/minted-token?ship_id=s2")
+        client.delete("/api/ships/minted-token?ship_id=s2")
+        # ...and the shape of a request that is not one, which is where FastAPI
+        # echoes the input back: the ship id is the only input there is.
+        missing = client.get("/api/ships/minted-token")
+    assert "TOKEN-FROM-API" not in caplog.text
+    assert missing.status_code == 422
+    assert "TOKEN-FROM-API" not in missing.text and "ship_id" in missing.text
 
 
 def test_no_route_here_turns_a_feature_on_for_a_location(monkeypatch):
