@@ -114,16 +114,45 @@ export interface PreflightState {
   doc: unknown | null;
   out: PreflightOut | null;
   error: string | null;
+  /** Whether these verdicts came back from a session snapshot rather than from
+   *  a file this page holds -- which is to say whether they can still be
+   *  re-judged, because re-judging needs the document and a snapshot does not
+   *  carry one (session.SavedPreflight says why).
+   *
+   *  Its own field, and not `doc === null`, for the reason this codebase has
+   *  had to learn six times: read off the document alone, "no file has been
+   *  imported" and "a file was imported and its document is not held" are the
+   *  same value. They are not the same state -- the first has nothing to say
+   *  and the second has verdicts on screen that have stopped following the
+   *  configuration -- and the reader that has to tell them apart is the panel,
+   *  which is exactly where a remembered rule goes wrong. */
+  restored: boolean;
 }
 
 export const NO_PREFLIGHT: PreflightState =
-  { file: null, doc: null, out: null, error: null };
+  { file: null, doc: null, out: null, error: null, restored: false };
 
 /** A file that produced verdicts. Committed only once the server has accepted
  *  it, so a refused file never displaces one that worked. */
 export function imported(
     file: string, doc: unknown, out: PreflightOut): PreflightState {
-  return { file, doc, out, error: null };
+  return { file, doc, out, error: null, restored: false };
+}
+
+/** Verdicts read back from a session snapshot: the answer and the file it came
+ *  from, with no document behind them.
+ *
+ *  A transition of its own rather than an `imported()` with a null doc, because
+ *  what it produces is a different state and the difference is what the panel
+ *  reports: nothing here will re-judge, so an option changed after this leaves
+ *  the verdicts describing the configuration as it stood when the snapshot was
+ *  written. Picking the file again is what makes them live -- `imported()` over
+ *  this replaces it whole, document and all.
+ *
+ *  Named for where it came from rather than `restored()`, which App already
+ *  calls the flag that says its own session restore has settled. */
+export function fromSnapshot(file: string, out: PreflightOut): PreflightState {
+  return { file, doc: null, out, error: null, restored: true };
 }
 
 /** The same file, judged again against the configuration as it now stands. */

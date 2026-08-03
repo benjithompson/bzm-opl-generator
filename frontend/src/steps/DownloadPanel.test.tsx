@@ -15,10 +15,15 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { CheckStatus, Facts, Options, PreflightCheck, PreflightOut } from "../api";
+import { Facts, Options, PreflightOut } from "../api";
 import { NO_ATTEMPT } from "../attempt";
 import { fakeApi } from "../fakeApi";
-import { evidenceHeader, imported } from "../preflight";
+// The served answer, from the one builder for it: the panel that renders it,
+// the snapshot that stores it and the page that restores it all want one, and
+// three sets of defaults for one schema is the divergence fixtures.ts exists to
+// stop.
+import { preflightOut as out } from "../fixtures";
+import { evidenceHeader, fromSnapshot, imported, PreflightState } from "../preflight";
 import { NOTHING_APPLIED } from "../suggestions";
 import { svState } from "../sv";
 import { downloadPlan } from "../token";
@@ -29,21 +34,9 @@ afterEach(cleanup);
 const FACTS: Facts = { harbor_id: "H1", ships: [{ id: "S1" }], images: [] };
 const OPTIONS: Options = { namespace: "blazemeter" };
 
-const check = (status: CheckStatus, name: string, detail = ""): PreflightCheck =>
-  ({ name, status, detail });
-
-const out = (over: Partial<PreflightOut> = {}): PreflightOut => ({
-  namespace: "blazemeter",
-  summary: "3 passed, 1 warning, no failures",
-  evidence: { collected_at: "2026-07-28T02:51:50Z", namespace: "some-ns",
-              elsewhere: false, unreadable: [] },
-  checks: [check("PASS", "location slots", "2 concurrent engine(s)")],
-  suggestions: [], why_nothing: null,
-  ...over,
-});
-
-function panel(preflightOut: PreflightOut, format = "manifests") {
-  const read = imported("cluster-evidence.json", { schema: "x" }, preflightOut);
+function panel(preflightOut: PreflightOut, format = "manifests",
+               read: PreflightState =
+                 imported("cluster-evidence.json", { schema: "x" }, preflightOut)) {
   return render(
     <DownloadPanel api={fakeApi()}
       bundle={{
@@ -90,6 +83,27 @@ test("says the file describes another namespace when it was told so", () => {
   panel(out({ evidence: { collected_at: null, namespace: "blazemeter",
                           elsewhere: true, unreadable: [] } }));
   expect(screen.getByText(/every namespaced verdict below describes/)).toBeTruthy();
+});
+
+test("says a restored answer is no longer being re-judged", () => {
+  // A verdict is about a cluster at a moment, and the header already dates the
+  // collection. This is the other staleness, and only a restore has it: the
+  // page no longer holds the file, so the verdicts have stopped following the
+  // configuration they are judged against. Unsaid, a restored list looks exactly
+  // like one re-judged on the last keystroke.
+  const o = out();
+  panel(o, "manifests", fromSnapshot("cluster-evidence.json", o));
+  // ...and the file is named in the sentence itself, not only in the header
+  // above it, because picking it again is the fix the sentence offers.
+  expect(screen.getByText(/not being re-judged/).textContent)
+    .toContain("cluster-evidence.json");
+});
+
+test("says nothing of the sort about verdicts it can still re-judge", () => {
+  // The same panel over an imported file, which is re-judged on every option
+  // change. A page that says this either way is a page saying nothing.
+  panel(out());
+  expect(screen.queryByText(/not being re-judged/)).toBeNull();
 });
 
 test("says nothing about a mismatch it was not told about", () => {
