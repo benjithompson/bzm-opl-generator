@@ -19,8 +19,11 @@
 import { useMemo, useState } from "react";
 
 import { Capacity, CapLocation } from "./api";
-import { accountBands, byWorkspace, matching } from "./capacity";
-import { cardCls, inputCls } from "./components";
+import {
+  accountBands, byWorkspace, matching, WorkspaceRollup,
+} from "./capacity";
+import { Button, cardCls, inputCls } from "./components";
+import { useFoldSet } from "./foldSet";
 
 const n = (x: number) => x.toLocaleString();
 
@@ -77,6 +80,14 @@ export function CapacityView({ cap }: { cap: Capacity }) {
   const spaces = useMemo(() => matching(all, filter), [all, filter]);
   const holding = new Set(cap.locations.flatMap((l) => l.workspace_ids)).size;
   const sharedCount = cap.locations.filter((l) => l.shared).length;
+  // Which workspaces are folded away. An account has tens of these and each
+  // carries a table as long as its location count, so the page is several
+  // screens before it says anything; folded, it is an index of the account.
+  const fold = useFoldSet();
+  // Which way the one control goes, judged on what is on screen -- a button
+  // offering to expand when everything visible is already open is a button
+  // about workspaces the filter is hiding.
+  const allFolded = fold.allFolded(spaces.map((w) => w.id));
 
   return (
     <div className="space-y-4">
@@ -106,6 +117,14 @@ export function CapacityView({ cap }: { cap: Capacity }) {
             )}
           </div>
           <span className="grow" />
+          {/* Folds every workspace on the account, not every one on screen:
+              leaving the ones a filter is hiding open is a state that only
+              shows itself when the filter is cleared. */}
+          <Button kind="ghost"
+            onClick={() => (allFolded ? fold.unfoldAll()
+                                      : fold.foldAll(all.map((w) => w.id)))}>
+            {allFolded ? "Expand all" : "Collapse all"}
+          </Button>
           <div className="w-56 max-w-full">
             <input className={inputCls} value={filter} type="search"
               placeholder={`Filter ${holding} workspaces…`}
@@ -166,91 +185,146 @@ export function CapacityView({ cap }: { cap: Capacity }) {
         <p className="text-sm text-slate-500">no workspace matches “{filter}”.</p>
       )}
 
-      {spaces.map((w) => {
-        const locs = w.locs;
-        return (
-          <div key={w.id} className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <div className="px-3 pt-2.5 pb-2">
-              <div className="flex items-baseline gap-2">
-                {/* The colour this workspace has in the account bar above. A
-                    workspace whose capacity is *all* shared has no segment up
-                    there and so has no swatch here either, rather than being
-                    given a colour that appears nowhere. */}
-                {bandColour.get(w.name) && (
-                  <Swatch className={"self-center " + bandColour.get(w.name)!} />
-                )}
-                <span className="text-sm font-semibold text-slate-800">{w.name}</span>
-                {w.shared.length > 0 && (
-                  <span className="text-[10px] font-bold uppercase tracking-wide
-                                   bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
-                    {w.shared.length} shared
-                  </span>
-                )}
-                <span className="text-xs text-slate-400">
-                  {w.locs.length} location{w.locs.length === 1 ? "" : "s"}
-                </span>
-                <span className="grow" />
-                <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
-                <span className="text-[11px] text-slate-400">
-                  {Math.round((w.total / (cap.rated_vus || 1)) * 100)}% of the account
-                </span>
-              </div>
-              <div className="flex h-5 rounded overflow-hidden bg-slate-100 mt-1.5"
-                   style={{ width: `${Math.max((w.total / widest) * 100, 2)}%` }}>
-                {locs.map((l, i) => (
-                  <div key={l.id}
-                    title={`${l.name} — ${n(l.rated_vus ?? 0)} rated VUs`
-                      + (l.shared ? " (shared)" : "")}
-                    className={BAND[i % BAND.length] + " h-full"}
-                    style={{
-                      width: `${((l.rated_vus ?? 0) / (w.total || 1)) * 100}%`,
-                      backgroundImage: l.shared ? STRIPE : undefined,
-                    }} />
-                ))}
-              </div>
-            </div>
-            <table className="w-full text-xs border-t border-slate-100">
-              <thead className="text-slate-500">
-                <tr className="border-b border-slate-100">
-                  <th className="text-left font-medium px-3 py-1.5">location</th>
-                  <th className="text-right font-medium px-2">agents</th>
-                  <th className="text-right font-medium px-2">engines/agent</th>
-                  <th className="text-right font-medium px-2">engines</th>
-                  <th className="text-right font-medium px-2">VUs/engine</th>
-                  <th className="text-right font-medium px-3">rated VUs</th>
-                </tr>
-              </thead>
-              <tbody>
-                {locs.map((l, i) => <Row key={l.id} l={l} i={i} workspace={w.name} />)}
-              </tbody>
-            </table>
-            {/* A shared location with no agents yet has no segment to stripe,
-                and the sentence about the stripe then explains something that
-                is not on screen -- and says "0 of 2,650 is claimable", which
-                reads as a rounding error rather than as "nothing is deployed
-                there". Both are worth saying; they are not the same sentence. */}
-            {w.shared.length > 0 && (
-              <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200">
-                {w.sharedVus > 0 ? (
-                  <>
-                    Striped segments are shared — {n(w.sharedVus)} of this
-                    workspace&apos;s {n(w.total)} is claimable from another
-                    workspace too. Running it there leaves none of it here, and
-                    the account total counts it once.
-                  </>
-                ) : (
-                  <>
-                    {w.shared.length === 1 ? "One location here is" : `${w.shared.length} locations here are`}
-                    {" "}shared with another workspace, but {w.shared.length === 1 ? "has" : "have"}
-                    {" "}no agents yet — so none of this workspace&apos;s {n(w.total)}
-                    {" "}is claimable elsewhere. Adding agents there changes that.
-                  </>
-                )}
-              </p>
-            )}
-          </div>
-        );
-      })}
+      {spaces.map((w) => (
+        <WorkspaceCard key={w.id} w={w}
+          accountVus={cap.rated_vus} widest={widest}
+          colour={bandColour.get(w.name)}
+          open={!fold.folded(w.id)} onToggle={() => fold.toggle(w.id)} />
+      ))}
+    </div>
+  );
+}
+
+/** One workspace: what it holds, folded or not.
+ *
+ *  Its own component because the fold made the map body longer than the view
+ *  around it, and because `open` and `onToggle` are the whole of what the card
+ *  needs to know about folding -- the set that decides it stays in the view, in
+ *  one place, where "collapse all" can reach it. */
+function WorkspaceCard(props: {
+  w: WorkspaceRollup;
+  /** The account total, for the percentage. */
+  accountVus: number;
+  /** The largest workspace on the account, which every bar is drawn against --
+   *  see the view: not the largest *match*, or filtering would rescale them. */
+  widest: number;
+  /** The colour it wears in the account bar, or undefined where it has no
+   *  segment up there to match. */
+  colour?: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { w, open } = props;
+  const locs = w.locs;
+  // Named so the header can point at what it folds, which is also how a
+  // test says "this is hidden" about something CSS is hiding.
+  const body = `workspace-${w.id}-detail`;
+  return (
+    <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      {/* The whole header line is the control. What stays visible when it
+          is folded is the summary it already carried -- name, share,
+          location count, total and percentage -- so a folded account
+          reads as an index rather than as a list of names. What folds is
+          the bar and the table, which are one thing (see the top of this
+          file) and are the detail behind that summary. */}
+      <button onClick={props.onToggle} aria-expanded={open} aria-controls={body}
+        className="w-full text-left px-3 pt-2.5 pb-2 hover:bg-slate-50
+                   transition-colors">
+        <div className="flex items-baseline gap-2">
+          {/* The colour this workspace has in the account bar above. A
+              workspace whose capacity is *all* shared has no segment up
+              there and so has no swatch here either, rather than being
+              given a colour that appears nowhere. */}
+          {props.colour && (
+            <Swatch className={"self-center " + props.colour} />
+          )}
+          <span className="text-sm font-semibold text-slate-800">{w.name}</span>
+          {w.shared.length > 0 && (
+            <span className="text-[10px] font-bold uppercase tracking-wide
+                             bg-amber-100 text-amber-800 rounded px-1.5 py-0.5">
+              {w.shared.length} shared
+            </span>
+          )}
+          <span className="text-xs text-slate-400">
+            {w.locs.length} location{w.locs.length === 1 ? "" : "s"}
+          </span>
+          <span className="grow" />
+          <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
+          <span className="text-[11px] text-slate-400">
+            {Math.round((w.total / (props.accountVus || 1)) * 100)}% of the account
+          </span>
+          <span className={"text-slate-400 text-xs self-center "
+            + "transition-transform duration-150 "
+            + (open ? "rotate-90" : "")}>›</span>
+        </div>
+      </button>
+
+      {/* The same 0fr -> 1fr grid every other fold on this page uses: a
+          card's height is not knowable in advance and `height: auto` does
+          not transition. */}
+      {/* `invisible` as well as clipped, like the capacity profile's own
+          disclosure: a folded card is out of the tab order and out of the
+          accessibility tree, rather than merely nought pixels tall. */}
+      <div id={body} aria-hidden={!open}
+        className={"grid transition-[grid-template-rows] duration-[180ms] "
+          + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
+      <div className="overflow-hidden">
+      <div className="px-3 pb-2">
+        <div className="flex h-5 rounded overflow-hidden bg-slate-100"
+             style={{ width: `${Math.max((w.total / props.widest) * 100, 2)}%` }}>
+          {locs.map((l, i) => (
+            <div key={l.id}
+              title={`${l.name} — ${n(l.rated_vus ?? 0)} rated VUs`
+                + (l.shared ? " (shared)" : "")}
+              className={BAND[i % BAND.length] + " h-full"}
+              style={{
+                width: `${((l.rated_vus ?? 0) / (w.total || 1)) * 100}%`,
+                backgroundImage: l.shared ? STRIPE : undefined,
+              }} />
+          ))}
+        </div>
+      </div>
+      <table className="w-full text-xs border-t border-slate-100">
+        <thead className="text-slate-500">
+          <tr className="border-b border-slate-100">
+            <th className="text-left font-medium px-3 py-1.5">location</th>
+            <th className="text-right font-medium px-2">agents</th>
+            <th className="text-right font-medium px-2">engines/agent</th>
+            <th className="text-right font-medium px-2">engines</th>
+            <th className="text-right font-medium px-2">VUs/engine</th>
+            <th className="text-right font-medium px-3">rated VUs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {locs.map((l, i) => <Row key={l.id} l={l} i={i} workspace={w.name} />)}
+        </tbody>
+      </table>
+      {/* A shared location with no agents yet has no segment to stripe,
+          and the sentence about the stripe then explains something that
+          is not on screen -- and says "0 of 2,650 is claimable", which
+          reads as a rounding error rather than as "nothing is deployed
+          there". Both are worth saying; they are not the same sentence. */}
+      {w.shared.length > 0 && (
+        <p className="px-3 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-200">
+          {w.sharedVus > 0 ? (
+            <>
+              Striped segments are shared — {n(w.sharedVus)} of this
+              workspace&apos;s {n(w.total)} is claimable from another
+              workspace too. Running it there leaves none of it here, and
+              the account total counts it once.
+            </>
+          ) : (
+            <>
+              {w.shared.length === 1 ? "One location here is" : `${w.shared.length} locations here are`}
+              {" "}shared with another workspace, but {w.shared.length === 1 ? "has" : "have"}
+              {" "}no agents yet — so none of this workspace&apos;s {n(w.total)}
+              {" "}is claimable elsewhere. Adding agents there changes that.
+            </>
+          )}
+        </p>
+      )}
+        </div>
+      </div>
     </div>
   );
 }
