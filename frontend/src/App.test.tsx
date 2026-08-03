@@ -668,24 +668,12 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
   });
 
-test("ticking the rotate box is what makes the request issue a credential",
-  async () => {
-    const sent: Sent[] = [];
-    render(<App api={perfAccount(transfers(sent))} />);
-    const download = await atDownloadStep();
-
-    // Offered because this agent has no token in the field, the page is
-    // connected, and an agent is selected -- minting is an API call.
-    fireEvent.click(screen.getByLabelText(/Issue a NEW AUTH_TOKEN/));
-    // What it kills, said while the box is being ticked, which is the only
-    // moment anyone can still decide not to.
-    expect(await screen.findByText(/kills the current one at once/)).toBeTruthy();
-
-    fireEvent.click(download);
-    await waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].credential).toEqual({ rotate_token: true });
-    expect(await screen.findByText(/a NEW AUTH_TOKEN was issued/)).toBeTruthy();
-  });
+// Rotating from this step is gone with its box. It was the second way to mint
+// a credential -- step 1 has the first, on the agent it belongs to and beside
+// the sentence saying what it kills -- and two ways to do one irreversible
+// thing is one more than the page can keep honest. What is left to assert is
+// that the download carries the plan, which the test above does, and that the
+// plan never rotates, which token.test.ts does over every branch.
 
 // Saving to a folder was the other route, and the pair had a test each for
 // reading one credential plan -- which is what stopped them disagreeing about

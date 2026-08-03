@@ -25,10 +25,10 @@
 import { useState } from "react";
 import {
   Api, AgentStatus, Facts, GeneratedFile, Options, SvCheckOut, SvMocksOut,
-  TokenReport, Suggestion,
+  Suggestion,
 } from "../api";
 import { Attempt, NO_ATTEMPT, downloadFailed, downloaded } from "../attempt";
-import { Button, Check, ErrorMsg, Switch } from "../components";
+import { Button, ErrorMsg, Switch } from "../components";
 import { isDocker } from "../formats";
 import { OptionGroup } from "../optionGroups";
 import {
@@ -79,23 +79,18 @@ export interface BundleHandover {
   unfinished: OptionGroup[];
 }
 
-/** What the next download or save will do about the agent's credential. */
+/** What the next download will do about the agent's credential. */
 export interface CredentialHandover {
-  /** The three answers that must agree -- the hint beside the button, the
-   *  warning over it, and the credential request both buttons send. From
-   *  token.ts, and `request` is sent rather than read: this panel is handed
-   *  what to send, so it has nothing to get wrong about it. */
+  /** The answers that must agree -- the hint beside the button, whether the
+   *  bundle can be applied at all, and the credential request the download
+   *  sends. From token.ts, and `request` is sent rather than read: this panel
+   *  is handed what to send, so it has nothing to get wrong about it.
+   *
+   *  Nothing here rotates any more. The box that did lived beside this button
+   *  and was the *second* way to mint one; step 1 has the first, on the agent
+   *  the credential belongs to, which is where the question is asked and where
+   *  what it kills is on screen. */
   plan: DownloadPlan;
-  /** What the preview's bundle currently carries, for the sentence naming where
-   *  a real token comes from. Null only before the first preview lands. */
-  preview: TokenReport | null;
-  rotate: boolean;
-  setRotate: (v: boolean) => void;
-  /** Whether the rotate box may be offered at all. Minting is an API call, so
-   *  it needs the account and an agent -- and a token already in the field wins
-   *  over it, so offering one there would promise an issue core will not
-   *  perform. */
-  mayRotate: boolean;
 }
 
 /** The cluster read somebody else collected, and what may be applied from it. */
@@ -171,7 +166,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
   // markup is the markup that was in App, and rewriting every reference to
   // prove it moved is how a move turns into a rewrite nobody diffed.
   const { facts, shipId, options, format, sv } = bundle;
-  const { plan, preview } = credential;
+  const { plan } = credential;
   const { read } = preflight;
   // One expression for both buttons rather than the same five terms twice. It
   // is a judgement this panel makes and keeps: two of the five are elsewhere on
@@ -197,51 +192,19 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   {" "}{plan.hint}
                 </span>
               </div>
-              {/* What the bundle does about the credential, before the click.
-                  Three states, and the one that used to be silent is the one that
-                  breaks a working install: a download that mints. `incomplete`
-                  carries core's own sentence -- where a real token comes from,
-                  kubectl included -- rather than a copy of it in TypeScript. */}
-              {plan.incomplete && preview && (
-                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs font-semibold text-amber-800">
-                    This bundle carries a placeholder AUTH_TOKEN — fill it in
-                    before applying it.
-                  </p>
-                  <p className="text-[11px] text-amber-700 whitespace-pre-line mt-1">
-                    {preview.message}
-                  </p>
-                </div>
-              )}
-              {/* Rotating is an action of its own, offered only where it is the
-                  only way forward: an agent nobody kept a token for. Not a
-                  by-product of downloading, which is what it used to be -- and
-                  hidden once a token is in the field, because core answers that
-                  contradiction by ignoring the rotation rather than performing
-                  it. Needs the account: minting is an API call. */}
-              {credential.mayRotate && (
-                <div className="space-y-1.5">
-                  <Check checked={credential.rotate} onChange={credential.setRotate}
-                    label="Issue a NEW AUTH_TOKEN with this bundle (rotates)"
-                    hint="For an agent whose token nobody kept — it replaces the credential; none can be read back." />
-                  {plan.warning && (
-                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-                      {plan.warning}
-                    </p>
-                  )}
-                </div>
-              )}
-              {/* Afterwards as well as before, and only for the branch that
-                  did something: once a rotation has happened the bundle just
-                  handed over is the only copy of that credential, and that has
-                  to be said where it happened.
-                  The other branches are core telling the page that nothing was
-                  issued -- true, and the answer to a question nobody asked. A
-                  line under every download saying the download was uneventful
-                  is what teaches people not to read the line. */}
-              {attempt.token?.branch === "rotated" && (
-                <p className="text-xs text-slate-600 whitespace-pre-line">
-                  {attempt.token.message}
+              {/* The bundle cannot be applied as it stands, said over the
+                  button rather than in a README nobody opens afterwards.
+                  One line, and it is the whole message. Core's own paragraph
+                  used to sit under it -- four ways to come by a token and a
+                  kubectl command to read one back out of a running cluster --
+                  which is a page of recovery instructions answering a question
+                  nobody has asked yet. Where the token comes from is step 1's;
+                  this says only that this bundle has not got one. */}
+              {plan.incomplete && (
+                <p className="rounded-md border border-amber-200 bg-amber-50
+                              px-3 py-2 text-xs font-semibold text-amber-800">
+                  This bundle carries a placeholder AUTH_TOKEN — fill it in
+                  before applying it.
                 </p>
               )}
               {/* Why the button is disabled, when the reason is a step back.

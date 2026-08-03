@@ -233,7 +233,6 @@ export default function App({ api }: { api: Api }) {
    *  further down can reach it. */
   const forgetToken = useCallback(() => {
     setOptions((o) => ({ ...o, auth_token: null }));
-    setRotate(false);
     // The whole attempt, not only its token report: what the last download or
     // save did was done for the agent being left behind, and a folder named
     // under a different agent's bundle is the same claim about the wrong thing.
@@ -302,7 +301,6 @@ export default function App({ api }: { api: Api }) {
   // Whether the next download/save should issue a new credential. Off, always,
   // until asked: it is the one action here that breaks a deployment that is
   // currently working, and it used to be what the download button did by itself.
-  const [rotate, setRotate] = useState(false);
   // What the last download or save actually did -- the credential report in
   // core's own words, where a save landed, and why either was refused. One
   // piece of state because it is one fact: the four it replaced were reset in
@@ -618,14 +616,13 @@ export default function App({ api }: { api: Api }) {
 
   /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
    *
-   *  The rotate flag goes off as it lands: core's rule is that a token in the
-   *  form wins over a rotation, so leaving it on would have the download step
-   *  promise an issue that will not happen. */
+   *  This is the one way to mint from the page now: the download step had a
+   *  rotate box beside its button, and it is gone. Minting belongs on the agent
+   *  the credential is for, where what it kills is on screen. */
   const regenerateToken = async () => {
     if (!harborId || !shipId) return;
     const r = await api.issueToken(harborId, shipId);
     setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-    setRotate(false);
   };
 
   // Creating the agent identity. A named function rather than the button's own
@@ -1003,20 +1000,12 @@ export default function App({ api }: { api: Api }) {
   // two that produces no bundle at all.
   const saOk = !applies("service_account_name") || serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
-  // What the download and save buttons will do about the credential: the hint
-  // beside them, the banner over them, and the request they send. One
-  // derivation because those three answer one question, and three of them could
-  // disagree -- see token.ts. Nothing here re-reads the rotate choice
-  // afterwards: `plan.request` goes to whichever button is pressed as it
-  // stands, so this line is the only place the choice is turned into anything.
-  const tokenPlan = downloadPlan(previewToken, rotate, shipId);
-  // Whether the rotate box is offered at all, which is a different question
-  // from what a rotation would do: minting is an API call, so it needs the
-  // account and an agent, and a token already in the field wins over the box --
-  // core ignores the rotation rather than performing it, so offering it there
-  // would promise an issue that will not happen.
-  const mayRotate =
-    !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
+  // What the download button will do about the credential: the hint beside it,
+  // whether the bundle can be applied at all, and the request it sends. One
+  // derivation because those answer one question and could otherwise disagree
+  // -- see token.ts. It no longer takes a rotate choice: the box that made one
+  // is gone, and minting is step 1's, on the agent the credential belongs to.
+  const tokenPlan = downloadPlan(previewToken);
   // -- what this location runs -----------------------------------------------
   // `locFeatures` and `enabled` are derived above, beside the record that reads
   // them. This is the funcIds the location carries that the tool has no options
@@ -1422,10 +1411,7 @@ export default function App({ api }: { api: Api }) {
                 sv, saOk, genErr,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
               }}
-              credential={{
-                plan: tokenPlan, preview: previewToken,
-                rotate, setRotate, mayRotate,
-              }}
+              credential={{ plan: tokenPlan }}
               attempt={attempt} report={setAttempt}
               preflight={{
                 read: preflight, busy: preflightBusy, header: evidence,

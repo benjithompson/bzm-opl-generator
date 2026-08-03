@@ -54,8 +54,7 @@ function panel(preflightOut: PreflightOut, format = "manifests") {
                       backends: {} }),
         saOk: true, genErr: null, unfinished: [], goToConfigure: () => {},
       }}
-      credential={{ plan: downloadPlan(null, false, "S1"), preview: null,
-                    rotate: false, setRotate: () => {}, mayRotate: false }}
+      credential={{ plan: downloadPlan(null) }}
       attempt={NO_ATTEMPT} report={() => {}}
       preflight={{ read, busy: false, header: evidenceHeader(preflightOut),
                    importFile: () => {}, applied: NOTHING_APPLIED,
