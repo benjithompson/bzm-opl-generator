@@ -691,6 +691,11 @@ def sv_constants():
     return core.sv_constants()
 
 
+@app.get("/api/docker-ignored", description=core.docker_ignored.__doc__)
+def docker_ignored():
+    return core.docker_ignored()
+
+
 # -- SPA ----------------------------------------------------------------------
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")

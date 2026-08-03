@@ -21,10 +21,15 @@ import { downloadPlan } from "./token";
 // plus a body per group. This file only wires them -- what a group *is*, and
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
+  allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
+  detectGroups, enginePreset,
   featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups,
   serviceAccountOk, startFeature, suggestNamespace, unclaimedFuncIds,
 } from "./optionGroups";
+// What the bundle is, and which options that leaves reaching something. The
+// table of what a docker bundle drops is the generator's and is fetched, never
+// restated here.
+import { isDocker, optionApplies, whyIgnored as why } from "./formats";
 // Service virtualization, as one record rather than a dozen values derived in
 // four places here. Whether the location demands it, whether that demand was
 // declined, whether what is configured is finished, the prerequisite context,
@@ -147,6 +152,10 @@ export default function App({ api }: { api: Api }) {
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
     { func_ids: [], ingress_types: [], backends: {} });
+  // What a docker bundle drops, from the generator (see formats.ts). Empty
+  // until it lands, and empty means every option applies -- the configure step
+  // shows a field too many rather than hiding a required one on a guess.
+  const [dockerIgnored, setDockerIgnored] = useState<Record<string, string>>({});
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The feature being configured, and the vocabulary it is chosen from. A view
   // over the options, never a scope: one crane is deployed for the selected
@@ -290,6 +299,7 @@ export default function App({ api }: { api: Api }) {
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
+    api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.features().then(setFeatures).catch(() => {});
 
@@ -882,11 +892,38 @@ export default function App({ api }: { api: Api }) {
     if (start) pickFeature(start, true);
   }, [facts?.harbor_id, features, pickFeature]);
 
-  const namespaceOk = !!txt("namespace");
+  // -- what the bundle is ----------------------------------------------------
+  // Flat YAML to kubectl apply, the chart with a values overlay, or one agent
+  // as one container. The first two render the same objects and differ only in
+  // how you install and upgrade; the third is a different platform, and around
+  // two dozen options reach nothing in it. So the choice is made at the top of
+  // the configure step and the form follows it -- asking for a namespace and a
+  // ServiceAccount and then handing over a bundle with neither is the silent
+  // failure this arrangement exists to stop. Which formats a location refuses
+  // is sv.blockedFormats, with the sentence each is refused in.
+  const format = String(options.output_format ?? "manifests");
+  /** Does this option reach anything in the bundle being generated? What the
+   *  configure step hides by, and what the two blockers below are judged
+   *  against. The table is the generator's; see formats.ts. */
+  const applies = useCallback(
+    (k: string) => optionApplies(k, format, dockerIgnored),
+    [format, dockerIgnored]);
+  /** ...and, where a field's absence needs explaining, the generator's own
+   *  sentence for it. Served with the keys for exactly this: the bundle's
+   *  README prints these, and the form hiding the field should not have to
+   *  write its own version. */
+  const whyIgnored = useCallback(
+    (k: string) => why(k, format, dockerIgnored), [format, dockerIgnored]);
+
+  // Both are answered against the format, not against the options alone: they
+  // are what blocks the download, and an option this bundle cannot carry must
+  // not block it -- the field for it is not on screen, so there would be
+  // nothing to fix. generate() agrees on both counts for a docker bundle.
+  const namespaceOk = !applies("namespace") || !!txt("namespace");
   // Empty is refused by generate(), so this blocks the download rather than
   // only colouring the field -- an unnamed account is the one state of these
   // two that produces no bundle at all.
-  const saOk = serviceAccountOk(options);
+  const saOk = !applies("service_account_name") || serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
   // What the download and save buttons will do about the credential: the hint
   // beside them, the banner over them, and the request they send. One
@@ -902,13 +939,6 @@ export default function App({ api }: { api: Api }) {
   // would promise an issue that will not happen.
   const mayRotate =
     !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
-  // What the bundle is: flat YAML to kubectl apply, or the chart with a values
-  // overlay. Both render the same objects -- the choice is how you install and
-  // upgrade -- except that the chart is performance-only, so an SV location is
-  // held to manifests and the segment says why instead of disappearing. That
-  // refusal is sv.helmBlocked, with the sentence it is refused in.
-  const format = String(options.output_format ?? "manifests");
-
   // -- what this location runs -----------------------------------------------
   // The features it carries, and the funcIds it carries that the tool has no
   // options for. Locations already run tdm/dataPublisher/delphix; naming them is
@@ -939,6 +969,9 @@ export default function App({ api }: { api: Api }) {
   // Which groups are in use but not finished. Each group declares its own rule,
   // so a feature gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
+  // ...and what that leaves the configure step still needing, named. Empty is
+  // "nothing", which is what ticks the step off -- see configureBlockedBy.
+  const configureBlocked = configureBlockedBy(options, applies, incomplete);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -1036,7 +1069,7 @@ export default function App({ api }: { api: Api }) {
   // may write is what its declaration says it owns.
   const groupBody: Record<GroupId, ReactNode> = {
     registry: (
-      <RegistryGroup
+      <RegistryGroup applies={applies} whyIgnored={whyIgnored}
         registry={raw("private_registry")}
         pullSecret={raw("pull_secret")}
         registryAuth={Boolean(options.registry_auth)}
@@ -1046,7 +1079,7 @@ export default function App({ api }: { api: Api }) {
     ),
     proxy: <ProxyGroup proxy={proxyOpt} onField={setProxy} />,
     ca: (
-      <CaGroup mode={caMode} onMode={setCaMode}
+      <CaGroup applies={applies} mode={caMode} onMode={setCaMode}
         configmap={raw("ca_existing_configmap")}
         configmapKey={raw("ca_configmap_key")}
         bundle={raw("ca_bundle")}
@@ -1070,7 +1103,8 @@ export default function App({ api }: { api: Api }) {
 />
     ),
     security: (
-      <SecurityGroup useSecret={Boolean(options.use_secret)}
+      <SecurityGroup applies={applies} cluster={!isDocker(format)}
+        useSecret={Boolean(options.use_secret)}
         clusterRbac={Boolean(options.cluster_rbac)}
         // Absent means the backend default, which is on -- so `!== false`
         // rather than Boolean(), which would show an untouched bundle as
@@ -1199,16 +1233,13 @@ export default function App({ api }: { api: Api }) {
               )}
             </div>
           ) : undefined}
-          done={[
-            !!facts && !!shipId,
-            namespaceOk && saOk && incomplete.length === 0,
-            false,
-          ]}
-          blockedBy={[
-            "fill in the agent details to continue",
-            "namespace, service account and any unfinished group first",
-            "",
-          ]}>
+          /* Step 2's tick and step 2's reason are one derivation, so the dot
+             and the sentence under it cannot disagree -- and the sentence
+             names what this bundle actually still needs rather than the three
+             things a Kubernetes one would. */
+          done={[!!facts && !!shipId, !configureBlocked, false]}
+          blockedBy={["fill in the agent details to continue",
+                      configureBlocked, ""]}>
           {/* 1 · How big the run is, and which agent it is generated for.
               The profile comes first because it decides everything after it and
               needs none of it -- no key, no account, no cluster -- and because
@@ -1291,6 +1322,8 @@ export default function App({ api }: { api: Api }) {
               locUnclaimed={locUnclaimed} notEnabled={notEnabled}
               enableFeature={enableFeature}
               options={options} set={set}
+              format={format} setFormat={(v) => set("output_format", v)}
+              blockedFormats={sv.blockedFormats} applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
@@ -1312,7 +1345,6 @@ export default function App({ api }: { api: Api }) {
               api={api}
               bundle={{
                 facts, shipId, options, format,
-                setFormat: (v) => set("output_format", v),
                 sv, saOk, genErr,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
                 saveDir, setSaveDir,

@@ -119,12 +119,15 @@ Objects that check the cluster rather than serve tests on it. They are not part 
 
 ## The service account
 
-`service_account_name` is required in both output formats, including with
-`service_account_create: false`, and an empty one is refused rather than
-resolved. The tempting fallback — and what most Helm charts scaffold — is the
-namespace's `default` ServiceAccount: that installs cleanly, runs, and binds
-crane's Role to the account every other pod in the namespace runs as. A blank
-field should not be able to decide that.
+`service_account_name` is required in both Kubernetes formats — manifests and
+the chart — including with `service_account_create: false`, and an empty one is
+refused rather than resolved. The tempting fallback — and what most Helm charts
+scaffold — is the namespace's `default` ServiceAccount: that installs cleanly,
+runs, and binds crane's Role to the account every other pod in the namespace
+runs as. A blank field should not be able to decide that.
+
+`--format docker` has no ServiceAccount at all, so it neither reads the option
+nor refuses an empty one: see [the docker bundle](docker.md).
 
 With `create` off nothing else changes: the Deployment's `serviceAccountName`
 and both binding subjects name the account you gave. If it is not there, nothing

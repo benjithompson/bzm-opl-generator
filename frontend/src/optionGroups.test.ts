@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
-  allGroupsOff, detectGroups, groupsOf, SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
+  allGroupsOff, configureBlockedBy, detectGroups, groupsOf, SHARED_GROUPS,
+  ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
   incompleteGroups, OPTION_GROUPS, OptionGroup, serviceAccountOk, startFeature,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
@@ -529,5 +530,60 @@ describe("serviceAccountOk", () => {
     const owned = OPTION_GROUPS.flatMap((g: OptionGroup) => g.keys);
     expect(owned).not.toContain("service_account_name");
     expect(owned).not.toContain("service_account_create");
+  });
+});
+
+// -- what the configure step still needs -------------------------------------
+// One derivation behind two things on screen: the tick beside step 2 and the
+// line saying why it has none. The line used to be a fixed string naming a
+// namespace, a service account and "any unfinished group" whatever the bundle
+// was, so a docker bundle -- which has neither of the first two, by design --
+// was told to fix two fields that are deliberately not on the page.
+
+describe("configureBlockedBy", () => {
+  /** Every option applies: a Kubernetes bundle. */
+  const k8s = () => true;
+  /** ...and one where the placement fields are not fields at all. */
+  const docker = (k: string) =>
+    !["namespace", "service_account_name", "service_account_create"].includes(k);
+  const filled = { namespace: "blazemeter", service_account_name: "crane" };
+
+  it("says nothing when nothing is outstanding", () => {
+    // Empty is what ticks the step off, so this is the same assertion twice.
+    expect(configureBlockedBy(filled, k8s, [])).toBe("");
+  });
+
+  it("names the placement fields a cluster bundle is missing", () => {
+    expect(configureBlockedBy({}, k8s, [])).toBe(
+      "a namespace and a service account first");
+    expect(configureBlockedBy({ namespace: "ns" }, k8s, []))
+      .toBe("a service account first");
+  });
+
+  it("never names a field this format does not have", () => {
+    // The bug: both were named for a docker bundle, which has no namespace and
+    // no ServiceAccount -- and the fields are not on screen to be corrected.
+    expect(configureBlockedBy({}, docker, [])).toBe("");
+    // ...and an unfinished group is still named, because that one is real.
+    expect(configureBlockedBy({}, docker, [GROUP_BY_ID.sv]))
+      .toBe("Service virtualization first");
+  });
+
+  it("asks the predicate rather than trusting a filled-in field", () => {
+    // A docker bundle carries a namespace in its options -- the value is kept,
+    // not wiped -- so "is it filled in" cannot answer "is it a field here".
+    expect(configureBlockedBy({ namespace: "" }, docker, [])).toBe("");
+  });
+
+  it("names the group by the title on its own row", () => {
+    // The sentence is a way back to a control, so it says what that control
+    // says. A second wording here would be a second name for one row.
+    expect(configureBlockedBy(filled, k8s, [GROUP_BY_ID.sv, GROUP_BY_ID.ca]))
+      .toBe(`${GROUP_BY_ID.sv.title} and ${GROUP_BY_ID.ca.title} first`);
+  });
+
+  it("joins three the way a sentence does", () => {
+    expect(configureBlockedBy({}, k8s, [GROUP_BY_ID.sv])).toBe(
+      "a namespace, a service account and Service virtualization first");
   });
 });

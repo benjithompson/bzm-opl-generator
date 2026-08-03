@@ -582,6 +582,61 @@ def test_sv_constants_are_served_from_the_generator():
     assert "ingress_types" not in client.get("/api/option-defaults").json()
 
 
+def test_docker_ignored_is_served_from_the_generator():
+    """What the configure step hides when the bundle is a docker one. Served
+    for the same reason the SV vocabulary is: the page would otherwise carry a
+    second copy of two dozen option keys, and a key added to the generator
+    would go on being offered for a format that drops it."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/docker-ignored").json()
+    assert body == gen_mod.DOCKER_IGNORED
+    # The four the page hides whole sections for.
+    for key in ("namespace", "service_account_name", "node_selector",
+                "engine_cpu_limit"):
+        assert body[key]
+    # Every key is a real option: a name that matched nothing would hide
+    # nothing, and would say so nowhere.
+    assert not set(body) - set(client.get("/api/option-defaults").json())
+
+
+def test_the_page_knows_the_same_three_formats_the_generator_does():
+    """Read out of the TypeScript for the same reason as SV_NONE above.
+
+    The ids are a closed set of three and the labels beside them are UI prose
+    with no counterpart here, so the list is declared there rather than fetched
+    -- but a fourth format added to the generator and not to that file is a
+    control nobody can reach, and one removed is a segment that generates an
+    error. Neither shows up in a type.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(r"export const OUTPUT_FORMATS: OutputFormat\[\] = \[(.*?)\n\];",
+                     (src / "formats.ts").read_text(), re.S)
+    assert body, "OUTPUT_FORMATS not found -- was it renamed or moved?"
+    assert tuple(re.findall(r'id: "([^"]+)"', body.group(1))) \
+        == gen_mod.OUTPUT_FORMATS
+
+
+def test_the_pages_copy_of_the_ignored_table_is_the_generators():
+    """The one copy of DOCKER_IGNORED in TypeScript, held equal to this one.
+
+    It cannot be derived -- the authority is Python and the page's tests run
+    without a server -- so it is a fixture, and a fixture of a table is a table
+    free to go stale. Two of them already had: formats.test.ts and App.test.tsx
+    carried slices that differed by five keys, so the page test asserted against
+    a table the unit test would have called incomplete. Now there is one, and
+    this is what keeps it honest.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const DOCKER_IGNORED: Record<string, string> = \{"
+                     r"(.*?)\n\};", text, re.S)
+    assert body, "DOCKER_IGNORED not found -- was it renamed or moved?"
+    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
+        == set(gen_mod.DOCKER_IGNORED)
+
+
 def test_sv_constants_carry_what_each_backend_publishes():
     """The UI tells the user which Role the bundle grants and what crane creates
     with it. That is SV_INGRESS_BACKENDS -- restating it in TypeScript is the
@@ -747,6 +802,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
     ("get", "/api/features"), ("get", "/api/sv-constants"),
+    ("get", "/api/docker-ignored"),
 ]
 
 

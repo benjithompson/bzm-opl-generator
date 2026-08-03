@@ -11,6 +11,10 @@
 // which is what makes optionGroups.test.ts possible without a DOM.
 
 import { Feature, Options } from "./api";
+// What the bundle is. Only two things here need it: the filter at the foot of
+// this file, and the one group whose recommended mode depends on the platform.
+// formats.ts imports nothing of ours, so this direction is the only one.
+import { Applies, isDocker, keysApply } from "./formats";
 
 export type GroupId =
   "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
@@ -235,8 +239,13 @@ export const OPTION_GROUPS: OptionGroup[] = [
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
     detect: (o) => caModeOf(o) !== "none",
     // On lands on the recommended mode rather than on no mode at all, which
-    // would show three radios and no fields.
-    enable: (o) => caModePatch(o, "existing"),
+    // would show three radios and no fields. Which one is recommended depends
+    // on the format, and this is the one place in this file that reads it: the
+    // other two modes name a ConfigMap, and a docker bundle has none -- so
+    // seeding "existing" there would write an option the bundle's README then
+    // reports as set-and-not-carried, off a switch nobody aimed at it.
+    enable: (o) => caModePatch(
+      o, isDocker(String(o.output_format ?? "")) ? "inline" : "existing"),
     disable: (o) => caModePatch(o, "none"),
   },
   {
@@ -277,7 +286,12 @@ export const OPTION_GROUPS: OptionGroup[] = [
   {
     id: "security",
     title: "Security & RBAC",
-    hint: "defaults: token in a Secret, CLUSTERIP, no cluster RBAC, no agent self-update",
+    // Says only what is true of every format. It used to enumerate the
+    // Kubernetes defaults -- "token in a Secret, CLUSTERIP, no cluster RBAC" --
+    // and a docker bundle has none of those three, so the row named settings
+    // its own body had just hidden. What each format's defaults actually are is
+    // in the fields, which is where they can be changed.
+    hint: "defaults: the credential kept apart from the configuration, no agent self-update",
     // Untagged deliberately: how the auth token is stored and whether the
     // bundle asks for cluster RBAC are questions every deployment answers.
     features: [],
@@ -379,6 +393,22 @@ export function groupsOf(featureId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.features.includes(featureId));
 }
 
+/** ...and of those, the ones this bundle's format can carry.
+ *
+ *  A third filter over the same list, so it lives with the other two rather
+ *  than beside the predicate it takes. A group whose every declared key is
+ *  ignored is not on screen at all -- Scheduling and Engine sizing, for docker.
+ *  One with some is on screen with the rest of its fields hidden by the
+ *  predicate itself: Private registry keeps the registry and loses the
+ *  imagePullSecret. Derived from `keys`, so a group gaining an option needs
+ *  nothing here.
+ *
+ *  Unlike the two above this is not a *view*: a feature hides nothing, and a
+ *  group dropped here is one the bundle has no such thing as. */
+export function groupsFor(gs: OptionGroup[], applies: Applies): OptionGroup[] {
+  return gs.filter((g) => keysApply(g.keys, applies));
+}
+
 /** Groups in use but not finished, so the download is blocked. Derived from the
  *  declarations rather than passed in: the caller knowing which groups can be
  *  incomplete is the coupling this exists to remove. */
@@ -386,6 +416,37 @@ export function incompleteGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
     backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
+}
+
+/** What is stopping the configure step being finished, as the sentence that
+ *  says so -- and "" when nothing is, which is what marks the step done.
+ *
+ *  One derivation for both, because they are one answer: a tick beside a step
+ *  and a line saying what it still needs cannot be allowed to disagree.
+ *
+ *  Named rather than listed. It used to be the fixed string "namespace, service
+ *  account and any unfinished group first", which named the same three things
+ *  whatever the bundle was -- and a docker bundle has no namespace and no
+ *  ServiceAccount, so two thirds of the only sentence telling somebody what to
+ *  fix pointed at fields that are deliberately not on the page. It asks
+ *  `applies` rather than taking the two booleans the page already has, because
+ *  those resolve "filled in" and "this format has no such field" to the same
+ *  `true` -- the collapse this codebase keeps refusing to make. A group's title
+ *  is what the row beside it says, so the sentence names the row to go back to.
+ */
+export function configureBlockedBy(
+    o: Options, applies: Applies, incomplete: OptionGroup[]): string {
+  const needs = [
+    applies("namespace") && !String(o.namespace ?? "").trim()
+      ? "a namespace" : "",
+    applies("service_account_name") && !serviceAccountOk(o)
+      ? "a service account" : "",
+    ...incomplete.map((g) => g.title),
+  ].filter(Boolean);
+  if (!needs.length) return "";
+  const list = needs.length === 1 ? needs[0]
+    : `${needs.slice(0, -1).join(", ")} and ${needs[needs.length - 1]}`;
+  return `${list} first`;
 }
 
 // -- the served vocabulary ---------------------------------------------------

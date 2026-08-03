@@ -1719,6 +1719,22 @@ def features():
     return FEATURES
 
 
+def docker_ignored():
+    """The options a docker bundle cannot carry, as {option: why}.
+
+    Served for the same reason as the SV vocabulary: a caller that hides what
+    this format drops must not keep its own list of it. The configure step does
+    exactly that -- a docker bundle has no namespace, no ServiceAccount and no
+    scheduling, so the fields for them are not on screen -- and the bundle's
+    README states the same table for whatever was set anyway.
+
+    An empty answer therefore means "every option applies", which is the only
+    safe way to be wrong about this: a reader that cannot see the table shows a
+    field too many rather than hiding one that matters.
+    """
+    return dict(gen_mod.DOCKER_IGNORED)
+
+
 def sv_constants():
     """The two service-virtualization enumerations a caller must not hardcode.
 

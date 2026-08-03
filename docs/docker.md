@@ -41,8 +41,8 @@ here can log in to — which is what `facts.manual()` exists for.
 
 ## Most options mean nothing here
 
-There is no namespace, no ServiceAccount, no toleration, no pod. Around twenty
-of this generator's options are Kubernetes vocabulary, and a docker agent has
+There is no namespace, no ServiceAccount, no toleration, no pod. Two dozen of
+this generator's options are Kubernetes vocabulary, and a docker agent has
 nowhere to put them.
 
 They are **named rather than refused**, per bundle: the README lists only the
@@ -51,10 +51,17 @@ did not get. A note that listed all of them every time would be read as
 boilerplate, and the one line that matters — "you asked for a node selector and
 it is not here" — would be buried in it.
 
-Four options do reach it:
+Named rather than refused cuts the other way too, and the generator holds to it:
+**a format never rejects a value it says it ignores.** An unnamed service
+account, a malformed engine limit or a second CA mode all refuse a Kubernetes
+bundle and none of them refuses this one — the web UI hides those fields here,
+so a refusal would be a block with nothing on screen to clear it.
 
-- **`auth_token`, `private_registry`, `registry_auth`** — identity and where
-  engine images come from (`DOCKER_REGISTRY`).
+Six options do reach it:
+
+- **`auth_token`, `private_registry`** — identity and where engine images come
+  from (`DOCKER_REGISTRY`). `registry_auth` does not: its stubs are ConfigMap
+  lines, and a docker host authenticates a pull with its own `docker login`.
 - **`proxy`** — `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, credentials embedded
   in the URL exactly as the Kubernetes path does. `NO_PROXY` defaults to
   `127.0.0.1,localhost` here rather than the cluster default, which names

@@ -33,6 +33,8 @@ import {
   SavedBundle, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
+// The served docker-ignored table, from the one copy of it.
+import { DOCKER_IGNORED } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
@@ -218,8 +220,8 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
     // ...and both formats that cannot publish a virtual service are refused
-    // with their own sentence, rather than disappearing.
-    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    // with their own sentence, rather than disappearing. On this step, because
+    // the format decides which of the questions above it are asked.
     const chart = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
@@ -246,22 +248,45 @@ test("the docker format is a third bundle, and it is what gets generated",
     // The row, not the path line under the flow: an offline lone agent is
     // auto-picked, so its name is already on screen twice.
     fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
     // Offered for an ordinary performance location -- the two Kubernetes
     // formats are not the only platform BlazeMeter runs a private location on.
     const docker = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Docker/ });
     expect(docker.disabled).toBe(false);
+    // Before: this is a Kubernetes bundle, so it has a namespace and an
+    // account to run as, and the form asks for both.
+    expect(screen.getByDisplayValue("blazemeter")).toBeTruthy();
+    expect(screen.getByDisplayValue("crane")).toBeTruthy();
     fireEvent.click(docker);
 
     // The choice reaches the request rather than only the control: the whole
     // bundle is decided server-side from this one option.
     await waitFor(() =>
       expect(asked[asked.length - 1]?.output_format).toBe("docker"));
-    // ...and the line beside the button says what it will hold, which is not
-    // a manifest.
-    expect(screen.getByText(/bzm-opl-agent\.sh/)).toBeTruthy();
+
+    // ...and the questions it makes no sense of are off this step. This is why
+    // the control moved here: choosing docker on the download step left the
+    // form above it asking for a namespace, a ServiceAccount and a node
+    // selector for a bundle that carries none of them, and the only place that
+    // said so was the generated README.
+    await waitFor(() => expect(screen.queryByDisplayValue("crane")).toBeNull());
+    expect(screen.queryByDisplayValue("blazemeter")).toBeNull();
+    expect(screen.queryByText(/Deployment placement/)).toBeNull();
+    expect(screen.queryByText(/^Scheduling$/)).toBeNull();
+    expect(screen.queryByText(/Engine sizing/)).toBeNull();
+    expect(screen.queryByText(/crane-hook/)).toBeNull();
+    // The two that a container genuinely has are still on screen, in the
+    // vocabulary that reaches it rather than the cluster's.
+    expect(screen.getByText(/Security & RBAC/)).toBeTruthy();
+    expect(screen.getByText(/HTTP\(S\) proxy/)).toBeTruthy();
+
+    // The download step names the format it did not choose, and says what the
+    // bundle holds -- which is not a manifest.
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    expect(await screen.findByText(/bzm-opl-agent\.sh/)).toBeTruthy();
+    expect(screen.getByText(/change it in Configure/)).toBeTruthy();
   });
 
 // -- the download step, through the page -------------------------------------
@@ -492,6 +517,11 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       func_ids: ["performance"],
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    // generate.DOCKER_IGNORED as the page receives it, from the one copy of
+    // that table (see fixtures.ts -- this used to be a second, shorter slice,
+    // which is how a page test comes to assert against a table the unit test
+    // would call incomplete).
+    dockerIgnored: async () => DOCKER_IGNORED,
     generate: async () => ({
       files: [], token: { branch: "placeholder" as const, ship_id: null,
                           message: "" },

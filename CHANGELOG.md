@@ -13,6 +13,46 @@ anything that breaks.
 
 ### Added
 
+- **`--format docker`: the agent as one container on a docker host.** A third
+  output format beside the manifests and the chart, and a different platform
+  rather than a third rendering of the same objects — the bundle is a
+  `docker run` script, an `.env` file and a README. Two dozen options are
+  Kubernetes vocabulary and reach nothing here; each is **named** in the
+  bundle's README where it was set away from its default, so a bundle handed
+  over cannot be believed to have applied a node selector it dropped. Service
+  virtualization is refused with the reason, not silently omitted. See
+  [docs/docker.md](docs/docker.md).
+
+- **The web UI asks for the output format first, and the form follows it.** The
+  three formats used to be picked on *Download & verify*, one step after a
+  Configure page that asked for a namespace, a service account, node selectors
+  and engine limits — none of which a docker bundle carries. The choice now
+  sits at the top of Configure and everything a container has no such thing as
+  goes off screen: placement is its own section and disappears whole, Scheduling
+  and Engine sizing go, and the fields inside Private registry, Custom CA trust
+  and Security thin out to the ones that reach something. Nothing is discarded —
+  a value set for Kubernetes survives the switch, is still in `profile.json`,
+  and is still named in the README.
+
+### Fixed
+
+- **The line saying why a step is not finished names only fields that are on
+  screen.** It was a fixed sentence — "namespace, service account and any
+  unfinished group first" — and a docker bundle has neither a namespace nor a
+  service account, so two thirds of the only prompt telling you what to fix
+  pointed at fields deliberately not on the page. It now names what is actually
+  outstanding, and the step's tick is the same derivation, so the two cannot
+  disagree.
+
+- **A docker bundle is no longer refused over a field it ignores.** An unnamed
+  service account, a malformed `engine_cpu_limit`/`engine_mem_limit` and a
+  leftover CA ConfigMap beside an inline PEM each blocked generation for
+  `--format docker`, over options the same format states it cannot carry — and
+  in the UI those fields are not on screen, so there was nothing to correct.
+  A docker bundle's README also no longer advertises an engine size it does not
+  set. `crane_hook` and `registry_auth` join the ignored list: both reached
+  nothing already and said so nowhere.
+
 - **`bzm-opl-gen plan --users N`: how much infrastructure a load target needs,
   before any of it exists.** Every other command here starts from something that
   already exists — a location, an agent, a cluster, an evidence file. This one

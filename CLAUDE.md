@@ -235,6 +235,31 @@ missing tools. The rest is what it cannot fix for you.
   Don't reintroduce one: a feature is a view over a location's options, never a
   scope on what gets generated.
 
+  **The format is step 2's first control, and the form follows it.** A feature
+  hides nothing; a *format* genuinely does, and the two must not be confused.
+  It used to be chosen on the download step, one step too late: Configure asked
+  for a namespace, a ServiceAccount, node selectors and engine limits, and a
+  docker bundle carries none of them — the generated README was the only thing
+  that said so. So the segmented control moved to the top of Configure, and what
+  is on screen is derived from `formats.optionApplies` over the generator's own
+  `DOCKER_IGNORED`, **served** as `/api/docker-ignored`. Never restate that
+  table in TypeScript — it is two dozen keys, and a key added to the generator
+  would go on being offered for a format that drops it. The one copy that has to
+  exist is `fixtures.ts`, for tests that run without a server, and a Python test
+  holds it equal to the generator's; there were briefly two of those, five keys
+  apart, which is `tests/evidence_fixtures.py`'s lesson one layer up.
+  `optionGroups.groupsFor` drops a group whose every declared key is ignored;
+  one with some keeps its row and hides the rest inside its own body, so each
+  group body takes the `Applies` predicate rather than a format string, and a
+  section that is not a group (placement, Advanced) uses `keysApply` over the
+  keys it owns rather than testing one by hand. An **empty** table means "not
+  read yet" and everything applies: showing a field too many beats hiding a
+  required one on a guess. Hiding is never a refusal — the value is kept, sent,
+  and named in the bundle's README, and `generate.ignored_options()` is the same
+  rule on that side. Where a hidden field needs explaining, render the served
+  *reason* (`whyIgnored`) rather than writing a second copy of the generator's
+  sentence.
+
   **The planner is step 1's first card, not a view of its own.** `steps/
   CapacityProfile` states the profile and one Edit expands it downward; picking
   a location opens what that profile would change about it, as before → after
@@ -375,10 +400,27 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   Unreadable is a note, not a refusal.
 - **`--format docker` is a different platform, not a third rendering.** One
   agent as one container; there is no namespace, no ServiceAccount, no pod, and
-  around twenty options reach nothing. They are *named* rather than refused --
-  `DOCKER_IGNORED`, listed in the bundle's README and only where set away from
-  their default, because the failure is silent otherwise (a bundle handed over
-  and believed to have applied a node selector). `helm_parity.py` does not cover
+  around two dozen options reach nothing. They are *named* rather than refused
+  -- `DOCKER_IGNORED`, listed in the bundle's README and only where set away
+  from their default, because the failure is silent otherwise (a bundle handed
+  over and believed to have applied a node selector). The web UI takes the same
+  table off `/api/docker-ignored` and does not *show* those controls; the two
+  halves found each other's gaps -- hiding the table's keys on the page turned
+  up `crane_hook` and `registry_auth` still on screen and reaching nothing here.
+
+  **A format may not refuse what it says it ignores**, and that half is
+  `ignored_options()` rather than a rule anybody remembers. Three validators had
+  broken it: `service_account_name` (empty was refused), the two engine limits,
+  and `_ca_cfg`'s "choose one CA mode" -- reachable by picking an existing
+  ConfigMap, switching to docker and pasting a PEM. Each refusal names a field
+  the page for that format does not show, so it is a blocker with nothing on
+  screen to clear: the off-screen blocker, again. `engine_size()` also *reads*
+  through it, so a docker README states the engine size it carries rather than
+  the one its own footer says was dropped. A new validator over an option in the
+  table asks `ignored_options(o)` first, and
+  `test_a_format_never_refuses_what_it_says_it_ignores` walks the whole table
+  rather than the three keys that happened to break.
+  `helm_parity.py` does not cover
   it and should not: there is nothing to render the same objects as. What holds
   it instead is `sh -n` over every branch of the generated script and the shape
   BlazeMeter's own Docker Command tab returns -- see `docs/docker.md`.

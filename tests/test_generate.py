@@ -1440,6 +1440,69 @@ def test_docker_readme_names_what_it_could_not_carry():
     assert "Set here, but not carried" not in gen.generate(FACTS, DOCKER)["README.md"]
 
 
+def test_docker_names_the_two_options_that_used_to_go_quiet():
+    """crane_hook renders a Pod and registry_auth writes ConfigMap lines, and
+    the docker branch returns before either. Both were set-able and silent --
+    found by hiding this table's keys on the configure page and noticing the
+    two controls still on screen."""
+    readme = gen.generate(FACTS, {**DOCKER, "crane_hook": True,
+                                  "private_registry": "reg.corp/bzm",
+                                  "registry_auth": True})["README.md"]
+    assert "`crane_hook`" in readme
+    assert "`registry_auth`" in readme
+    bundle = gen.generate(FACTS, {**DOCKER, "crane_hook": True})
+    assert not [f for f in bundle if "cranehook" in f]
+
+
+def test_a_format_never_refuses_what_it_says_it_ignores():
+    """The rule, over the whole table rather than the three keys that happened
+    to break it.
+
+    An ignored option has no control on the configure page for that format, so
+    a refusal over its value is a blocker with nothing on screen to clear it.
+    Three validators ran before anyone checked: `service_account_name` (empty
+    was refused), the two engine limits, and the CA modes -- picking an
+    existing ConfigMap, switching to docker and pasting a PEM gave "choose one
+    CA mode" naming a field that format had just taken away.
+
+    Junk in every one of them at once, because they are ignored: nothing reads
+    them, so nothing can object to the shape. The README still names them all,
+    which is the other half of the promise and the assertion below."""
+    junk = {k: "nonsense" for k in gen.DOCKER_IGNORED}
+    out = gen.generate(FACTS, {**DOCKER, **junk})
+    for key in gen.DOCKER_IGNORED:
+        assert f"`{key}`" in out["README.md"], f"{key} carried silently"
+    # ...and the CA pair that is reachable by clicking: the inline PEM wins and
+    # the ConfigMap it was switched away from is ignored, not a second mode.
+    both = gen.generate(FACTS, {**DOCKER, "ca_existing_configmap": "corp-trust",
+                                "ca_bundle": "-----BEGIN CERTIFICATE-----"})
+    assert both[gen.DOCKER_CA_FILE] == "-----BEGIN CERTIFICATE-----"
+
+
+def test_the_other_formats_still_refuse_all_of_it():
+    """The rule above is about a format that ignores an option, not a licence
+    to stop checking. Kubernetes has every one of these fields, so each is
+    still refused there -- otherwise the fix would have bought the off-screen
+    blocker back as a bad manifest."""
+    k8s = {"ship_id": "bbb222", "auth_token": "de" * 32}
+    for over in ({"service_account_name": ""},
+                 {"engine_cpu_limit": "not-a-cpu"},
+                 {"engine_mem_limit": "not-a-memory"},
+                 {"ca_existing_configmap": "cm", "ca_bundle": "PEM"}):
+        with pytest.raises(ValueError):
+            gen.generate(FACTS, {**k8s, **over})
+
+
+def test_docker_reports_the_engine_size_it_actually_carries():
+    """The limits are ignored, so the README must not advertise them: a page
+    that says "each engine needs 4 CPU" under a footer saying the option was
+    not carried is two answers to one question."""
+    readme = gen.generate(FACTS, {**DOCKER, "engine_cpu_limit": "4",
+                                  "engine_mem_limit": "16Gi"})["README.md"]
+    assert "4 CPU + 16GiB RAM" not in readme
+    assert "`engine_cpu_limit`" in readme      # named as not carried, though
+
+
 def test_docker_readme_does_not_advertise_kubernetes_answers():
     """The bundle table is shared with the other two formats, where namespace
     and platform are the answer. Here they are neither applied nor applicable,

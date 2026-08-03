@@ -1,23 +1,36 @@
 // Step 2: what goes in the bundle.
 //
+// It opens with the platform, because that is the question every other one on
+// this page depends on. It used to be asked on the download step instead, one
+// step too late: this form asks for a namespace, a ServiceAccount, node
+// selectors and engine limits, and a docker bundle -- one agent as one
+// container -- carries none of them. The generator names what it dropped in the
+// bundle's README, which is honest and arrives after the fact; a control that
+// is not on screen cannot be believed to have applied. So the format is chosen
+// first and the form follows it, from formats.optionApplies over the
+// generator's own DOCKER_IGNORED.
+//
 // The option groups split two ways and the page says which is which. Most of
 // them belong to no feature -- registry, proxy, CA trust, scheduling, security
 // -- and are here whatever the location runs; the rest belong to one, and live
 // in that feature's own card. There used to be a feature *selector* switching
 // between two views of the same six groups, so pressing it changed a single row
-// while reading as though it changed the step. Nothing is hidden now, so
-// nothing has to be recovered: no "also in this bundle", no "not in view".
+// while reading as though it changed the step. Nothing is hidden by a *view*
+// now, so nothing has to be recovered: no "also in this bundle", no "not in
+// view". What the format takes off screen is a different thing entirely -- not
+// a view over a bundle's options, but options that bundle has no such thing as.
 //
 // The rail is orientation, not navigation-with-a-dot: it names what is set, so
 // "what is in this bundle" is answered without scrolling the form.
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, RequiredMark, Switch,
+  Button, Check, Field, inputCls, RequiredMark, SegmentedControl, Switch,
 } from "../components";
+import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsOf, OptionGroup, SHARED_GROUPS,
+  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, SHARED_GROUPS,
 } from "../optionGroups";
 
 export interface ConfigurePanelProps {
@@ -38,6 +51,21 @@ export interface ConfigurePanelProps {
   enableFeature: (id: string) => Promise<void>;
   options: Options;
   set: (k: string, v: unknown) => void;
+  /** What the bundle is, and the one option this step writes as a write rather
+   *  than as a key. First on the page because it decides what the rest of it
+   *  asks: see the header. */
+  format: string;
+  setFormat: (v: string) => void;
+  /** Why a format is unavailable for this location, by format id -- from sv.ts,
+   *  and empty for a location that runs no virtual services. The segment says
+   *  so rather than disappearing: a format that vanishes leaves the page unable
+   *  to explain the error the server would have given. */
+  blockedFormats: Record<string, string>;
+  /** Does this option reach anything in a bundle of this format? Everything
+   *  below hides by it -- whole groups, the placement card, the crane-hook row,
+   *  Advanced, and the individual fields inside a group's own body. From
+   *  formats.ts, over the generator's DOCKER_IGNORED. */
+  applies: Applies;
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
   grpDeclined: Partial<GroupFlags>;
@@ -63,8 +91,13 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
 }
 
 /** Namespace and service account. Not behind a switch like everything else
- *  here: every deployment has both, and putting the required half of a pair
- *  behind a toggle makes it look optional. */
+ *  here: a deployment into a cluster has both, and putting the required half of
+ *  a pair behind a toggle makes it look optional.
+ *
+ *  Its own card rather than the first rows of the settings list, because it is
+ *  the part of this step a docker bundle does not have at all -- containers are
+ *  not namespaced and there is no ServiceAccount to run as. A section that
+ *  appears and disappears has to be a section. */
 function CoreFields(p: ConfigurePanelProps) {
   // The asterisk says the field is required; the input's border says whether it
   // has been filled in. Two jobs, and the badge that used to do both said
@@ -182,10 +215,10 @@ function AdvancedRow(p: ConfigurePanelProps) {
 }
 
 /** One feature: whether it is on, and the options it owns. */
-function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
-  const { feat } = p;
+function FeatureCard(
+    p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
+  const { feat, own } = p;
   const manual = p.sourceMode === "manual";
-  const own = groupsOf(feat.id);
   // Enabled means the location runs it -- or, in manual mode, that this is what
   // the typed identity was declared to be.
   const on = manual ? p.feature === feat.id : !p.notEnabled.includes(feat.id);
@@ -276,16 +309,49 @@ function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
   );
 }
 
+/** Every option the placement card owns, and every option Advanced owns.
+ *  Neither is a declared group, so neither can be filtered by `groupsFor`, and
+ *  both own more than one key -- Advanced tested only `platform` for a while,
+ *  which happened to be right and would have stopped being so the moment
+ *  `run_as_user` and it parted company. */
+const PLACEMENT_KEYS = ["namespace", "service_account_name",
+                        "service_account_create"];
+const ADVANCED_KEYS = ["platform", "run_as_user"];
+
 export function ConfigurePanel(p: ConfigurePanelProps) {
+  // Placement is a section of the form only where the bundle has one, and its
+  // groups are the format's rather than the feature's. Both are answered once
+  // and shared with the rail below: derived twice, the rail and the form are
+  // free to disagree about what is in this bundle, which is the one thing the
+  // rail is for.
+  const placed = keysApply(PLACEMENT_KEYS, p.applies);
   const secs = [
     ...p.features.map((f) => ({
-      id: "f-" + f.id, label: f.label, gs: groupsOf(f.id), anchor: "cfg-f-" + f.id,
+      id: "f-" + f.id, label: f.label, gs: groupsFor(groupsOf(f.id), p.applies),
+      anchor: "cfg-f-" + f.id,
     })),
-    { id: "core", label: "Placement", gs: [] as OptionGroup[], anchor: "cfg-core" },
-    { id: "shared", label: "Configure agent", gs: SHARED_GROUPS, anchor: "cfg-shared" },
+    ...(placed
+      ? [{ id: "core", label: "Placement", gs: [] as OptionGroup[],
+           anchor: "cfg-core" }]
+      : []),
+    { id: "shared", label: "Agent settings",
+      gs: groupsFor(SHARED_GROUPS, p.applies), anchor: "cfg-shared" },
   ];
+  /** A section's groups, as the rail worked them out. */
+  const groupsIn = (id: string) => secs.find((s) => s.id === id)?.gs ?? [];
   return (
     <div className="space-y-4">
+      {/* First on the page, and full width: it is the one choice here that
+          decides which of the others are asked at all. */}
+      <SegmentedControl
+        label="Output format"
+        value={p.format}
+        onChange={p.setFormat}
+        options={OUTPUT_FORMATS.map((f) => ({
+          value: f.id, label: f.label, hint: f.hint,
+          disabledReason: p.blockedFormats[f.id],
+        }))} />
+
       <div className="flex gap-2 items-center flex-wrap">
         <span className="flex-1" />
         <Button kind="ghost" onClick={p.exportProfile}>Export</Button>
@@ -341,8 +407,15 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             {/* Stacked, not side by side: a card holds group rows, and two
                 columns of those read as two cramped tables. */}
             <div className="space-y-3">
+              {/* The groups are the rail's own answer, handed over rather than
+                  worked out again here: the card and the rail listing different
+                  things is the rail failing at the only job it has. Empty is a
+                  real answer -- Engine sizing is KUBERNETES_RESOURCES_LIMITS_*,
+                  so a docker performance card says "nothing extra to
+                  configure" rather than offering limits nothing reads. */}
               {p.features.map((f) => (
-                <FeatureCard key={f.id} {...p} feat={f} />
+                <FeatureCard key={f.id} {...p} feat={f}
+                  own={groupsIn("f-" + f.id)} />
               ))}
             </div>
             {p.locUnclaimed.length > 0 && (
@@ -355,18 +428,36 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             )}
           </section>
 
+          {/* Where the agent goes in the cluster -- its own section, because a
+              docker bundle has no such place and the whole card goes with the
+              format. Titled as the rail titles it: two names for one section
+              is the rail disagreeing with the form in the smallest way it
+              can. */}
+          {placed && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                Placement
+              </h3>
+              <div id="cfg-core"
+                className="scroll-mt-4 rounded-xl border border-slate-200 p-3">
+                <CoreFields {...p} />
+              </div>
+            </section>
+          )}
+
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-              Deployment settings
+              Agent settings
             </h3>
-            <div className="rounded-xl border border-slate-200 p-3 space-y-3">
-              <div id="cfg-core" className="scroll-mt-4"><CoreFields {...p} /></div>
-              <div id="cfg-shared"
-                className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
-                {rows(p, SHARED_GROUPS)}
-                <CraneHookRow {...p} />
-                <AdvancedRow {...p} />
-              </div>
+            <div id="cfg-shared"
+              className="scroll-mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100">
+              {rows(p, groupsIn("shared"))}
+              {/* Both are Kubernetes objects rather than settings: crane-hook
+                  is a Pod, and Advanced is the SCC posture and the UID a pod
+                  runs as. Neither is a group, so neither is in `shared` --
+                  each asks the predicate for the keys it writes. */}
+              {p.applies("crane_hook") && <CraneHookRow {...p} />}
+              {keysApply(ADVANCED_KEYS, p.applies) && <AdvancedRow {...p} />}
             </div>
           </section>
         </div>

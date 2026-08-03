@@ -185,12 +185,14 @@ def engine_requests(facts):
             f"{mem}Mi" if mem else ENGINE_DEFAULT_REQUEST_MEM)
 
 
-def _quantity(o, key, default, parse):
+def _quantity(o, key, default, parse, ignored=False):
     """Parse an engine quantity option, naming the option in the error --
     quantity's own message only carries the bad value. `default` is returned
     as-is when the option is unset, so a caller with an already-parsed fallback
-    does not have to format it back into a string for re-parsing."""
-    value = o.get(key)
+    does not have to format it back into a string for re-parsing.
+
+    `ignored` is "this format has no such field", which reads as unset."""
+    value = None if ignored else o.get(key)
     if not value:
         return parse(default) if isinstance(default, str) else default
     try:
@@ -199,11 +201,41 @@ def _quantity(o, key, default, parse):
         raise ValueError(f"{key}: {e}") from None
 
 
+def ignored_options(o):
+    """The options this bundle's format cannot carry, as {option: why}.
+
+    `DOCKER_IGNORED` for a docker bundle and nothing for the other two. One
+    reader for a rule that has to hold in three places, because remembered it
+    does not: **a format may not refuse what it says it ignores.** An ignored
+    option has no control on the configure page for that format, so a refusal
+    over its value is a blocker with nothing on screen to clear -- an imported
+    profile carrying an engine limit blocked the download exactly that way.
+
+    Ignored is not discarded, and nothing here drops a value: it stays in the
+    options, reaches `profile.json`, and the bundle's README names it (see
+    `_docker_ignored`). What this decides is only what may be *read* -- and so
+    what may be complained about.
+
+    `o.get` rather than `o[...]`: doctor, plan and livetest all call the
+    validators below with option dicts of their own that were never merged over
+    the defaults, and for those "no format stated" means the Kubernetes one.
+    """
+    return DOCKER_IGNORED if o.get("output_format") == "docker" else {}
+
+
 def engine_size(o):
     """(cpu_millicores, mem_bytes) one engine actually claims. doctor.py imports
-    this to compare the claim against what a node can hold."""
-    return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu),
-            _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory))
+    this to compare the claim against what a node can hold.
+
+    A format that ignores the two limits gets the defaults, and never the
+    values: reading them would refuse a malformed one (see ignored_options),
+    and reporting them would have a docker bundle's README advertise an engine
+    size its own footer says is not carried."""
+    ignored = ignored_options(o)
+    return (_quantity(o, "engine_cpu_limit", ENGINE_DEFAULT_CPU, parse_cpu,
+                      "engine_cpu_limit" in ignored),
+            _quantity(o, "engine_mem_limit", ENGINE_DEFAULT_MEM, parse_memory,
+                      "engine_mem_limit" in ignored))
 
 
 def crane_scheduling(o):
@@ -452,7 +484,13 @@ def _ca_cfg(o):
                   config.openshift.io/inject-trusted-cabundle=true and the
                   cluster network operator injects ca-bundle.crt into it.
     """
-    active = [k for k in CA_MODES if o[k]]
+    # A format that carries no ConfigMap has only the inline PEM, and the two
+    # modes that name one are not competing modes there -- they are fields it
+    # does not have (see ignored_options). Counted, a bundle configured for
+    # Kubernetes and then switched to docker refuses "choose one CA mode" over
+    # a ConfigMap name the page for that format never showed.
+    ignored = ignored_options(o)
+    active = [k for k in CA_MODES if o[k] and k not in ignored]
     if len(active) > 1:
         raise ValueError("choose one CA mode: ca_bundle (inline PEM) | "
                          "ca_existing_configmap | ca_openshift_inject")
@@ -1469,9 +1507,17 @@ def service_account(o):
     what `helm create` scaffolds, is to fall back to the namespace's `default`
     account when nothing creates one: that deploys, works, and quietly binds
     crane's Role to the account every other pod in the namespace runs as. An
-    empty text field should not be able to decide that, so both output formats
-    refuse instead. doctor.py imports this to check the account is really there.
+    empty text field should not be able to decide that, so every format that
+    has an account refuses instead. doctor.py imports this to check the account
+    is really there.
+
+    `None` where the format has none -- a docker bundle runs a container, not a
+    pod. Refusing an empty name there would refuse a value the same file says
+    is ignored (see ignored_options), over a field that format's page does not
+    show.
     """
+    if "service_account_name" in ignored_options(o):
+        return None
     name = str(o.get("service_account_name") or "").strip()
     if not name:
         raise ValueError(
@@ -1967,6 +2013,11 @@ DOCKER_ENTRYPOINT = "python agent/agent.py"
 # Options whose value a docker bundle cannot carry, with what each one is for.
 # Every one of them is Kubernetes vocabulary; the docker agent's equivalents are
 # either the daemon's own configuration or nothing at all.
+#
+# Served, as core.docker_ignored(): the configure page hides what a docker
+# bundle cannot carry, and a second copy of this table in TypeScript is exactly
+# the drift the SV funcId list already cost once. So a key added here stops
+# being offered there, and nothing has to remember to remove it.
 DOCKER_IGNORED = {
     "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
     "namespace": "containers are not namespaced",
@@ -1991,6 +2042,11 @@ DOCKER_IGNORED = {
     "ca_configmap_key": "there is no ConfigMap; the bundle mounts a file",
     "ca_openshift_inject": "nothing injects a trust bundle into a container",
     "engines_per_node": "there is one host, and it is this one",
+    # The last two were found by hiding this table's keys on the configure
+    # page: both were still offered there, and both reach nothing here.
+    "crane_hook": "crane-hook is a Pod, and there is no cluster to run it in",
+    "registry_auth": "the stubs are ConfigMap lines; a docker host authenticates "
+                     "with its own docker login",
 }
 
 
@@ -2100,7 +2156,7 @@ def _docker_ignored(o):
     (name, why) pairs.
 
     Compared against the defaults rather than listed wholesale: a note that
-    named all twenty-two every time would be read as boilerplate, and the one
+    named every one of them every time would be read as boilerplate, and the one
     line that matters -- "you asked for a node selector and it is not here" --
     would be in the middle of it."""
     return [(k, why) for k, why in sorted(DOCKER_IGNORED.items())
@@ -2276,9 +2332,13 @@ def generate(facts, options):
         raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, "
                          f"got {o['output_format']!r}")
 
-    engine_size(o)  # a bad engine quantity should fail here, not at apply time
-    sa = service_account(o)  # ...and an unnamed service account, likewise
-    auto_update(o)  # ...and an auto_update that is neither a bool nor unset
+    # Each of these three refuses a bad value here rather than at apply time --
+    # a malformed engine quantity, an unnamed service account, an auto_update
+    # that is neither a bool nor unset. Each also asks ignored_options() first,
+    # so none of them refuses over a field this format has no such thing as.
+    engine_size(o)
+    sa = service_account(o)
+    auto_update(o)
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)

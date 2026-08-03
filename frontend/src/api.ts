@@ -305,6 +305,11 @@ export const api = {
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
+  /** {option: why} for the options a docker bundle drops — generate's own
+   *  DOCKER_IGNORED. Served rather than restated in TypeScript: the configure
+   *  step hides what it names, and a key added to the generator would
+   *  otherwise go on being offered for a format that ignores it. */
+  dockerIgnored: () => req<Record<string, string>>("GET", "/api/docker-ignored"),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
