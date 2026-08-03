@@ -334,6 +334,22 @@ missing tools. The rest is what it cannot fix for you.
   (`enabledFeatures`): runs, does not run, and nobody has said, which is null
   and shows everything.
 
+  **In manual entry the feature is not a view at all — it is the declaration**,
+  and #118 is what forgetting that cost. It names the funcId the typed identity
+  is gathered for, which names the images the bundle carries, and it was the one
+  input deciding the bundle that a refresh did not restore: a service
+  virtualization identity came back a performance one, the patch that clears a
+  not-run feature wiped its `sv_*` options on the way, and the namespace
+  suggestion rewrote a name generated into every manifest. So it is in the
+  snapshot (`session.declaredFeature`, null in connect mode structurally rather
+  than by convention), and it is **checked** where the served vocabulary lands
+  rather than trusted: a feature no longer offered names no funcId, so it is
+  dropped and the page lands where a fresh manual session lands, because sitting
+  on it means gathering facts for nothing with no radio on to say so. Manual mode
+  never reads a feature back off `facts.func_ids` for the same reason — those
+  funcIds *are* the declaration, so reading them can only restate it, or lose it
+  while `/api/func-ids` is still outstanding.
+
 - **`profile.json` is the bundle, and only the bundle.** It carries every
   resolved *option* — 35 of them — so `generate --profile` replays a bundle
   exactly, and `livetest` judges one. Three things are deliberately not in it,

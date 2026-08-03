@@ -376,7 +376,9 @@ test("a restored profile's SV options for a location without mockServices are cl
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" },
+      // Connect mode declared nothing, and cannot: what the location runs is
+      // its funcIds, which is what makes these options a state nobody chose.
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -440,7 +442,7 @@ test("an SV configuration no location demanded still takes away the formats that
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: {
         namespace: "blazemeter", output_format: "docker",
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
@@ -480,7 +482,7 @@ test("a feature this bundle's format cannot serve is stated, not offered",
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -965,7 +967,7 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
       sourceMode: "connect" as const, accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: { namespace: "ns" }, step: 0, view: "flow" as const,
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -996,7 +998,7 @@ test("nothing is written back over a saved session until the restore has resolve
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1039,6 +1041,10 @@ test("nothing is written back over a saved session until the restore has resolve
     await waitFor(() => expect(session.load()).toMatchObject({
       accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
       step: 1, options: { namespace: "typed-ns" },
+      // Connected, nothing is declared -- and nothing is written down that
+      // could pin the next load to a feature the account never said. The
+      // feature here is derived from the location's funcIds every time (#118).
+      declaredFeature: null,
     }));
   });
 
@@ -1048,7 +1054,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1107,7 +1113,7 @@ test("an id the account no longer has is written away once the account has said 
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-gone", shipId: "s-gone",
       confirmed: { loc: "h-gone", ship: "s-gone" },
-      manual: { harbor_id: "", ship_id: "" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1122,6 +1128,187 @@ test("an id the account no longer has is written away once the account has said 
     await waitFor(() => expect(session.load()).toMatchObject({
       accountId: 1, workspaceId: 10, harborId: null, shipId: null,
     }));
+  });
+
+// -- and the one input that decides the bundle and did not survive it (#118) --
+// In manual entry the feature radio is not a view over a location: it is the
+// declaration. It decides the funcId the typed identity is said to run, which
+// decides the facts, which decides the images the bundle carries. Everything
+// else the page needs to rebuild that identity already survived a refresh --
+// the typed harbor id, the typed ship id, the options -- and this did not, so a
+// reload fell back to the first served feature and a Service virtualization
+// identity came back a performance one.
+//
+// Driven through the page and asserted on the *request*, not on which radio
+// looks selected: what went wrong is the facts that were gathered, and a radio
+// agreeing with itself would have looked the same either way.
+
+/** A well-formed harbor id and ship id: manualComplete checks the shape, and
+ *  nothing is requested for values that are not one. */
+const TYPED = { harbor: "6a63a79dcc45dccca90bf440",
+                ship: "6a679d3445115b6651011715" };
+
+/** The manual-entry page: no key at all -- manual entry is for an account
+ *  nobody here can reach -- with both features and the two funcIds that pick
+ *  different images served. Records the funcIds of every facts request, which
+ *  is where the declaration ends up. */
+function manualPage(asked: string[][], generated: Options[] = [],
+                    extra: Partial<Api> = {}) {
+  return twoFeatureAccount(generated, {
+    keyStatus: async () => ({ connected: false }),
+    funcIdChoices: async () => [
+      { id: "performance", label: "Performance", changes_images: true },
+      { id: "mockServices", label: "Mock Services", changes_images: true },
+    ],
+    manualFacts: async (b) => {
+      asked.push(b.func_ids);
+      return {
+        facts: { harbor_id: b.harbor_id, func_ids: b.func_ids,
+                 ships: [{ id: b.ship_id, name: "agent-1" }], images: [] },
+        gui_images_incomplete: false,
+      };
+    },
+    ...extra,
+  });
+}
+
+/** Type the identity in, and open the step the declaration is made on. */
+async function declareManually() {
+  fireEvent.click(await screen.findByRole(
+    "radio", { name: /Enter values manually/ }));
+  fireEvent.change(screen.getByLabelText(/^Harbor ID/),
+                   { target: { value: TYPED.harbor } });
+  fireEvent.change(screen.getByLabelText(/^Ship ID/),
+                   { target: { value: TYPED.ship } });
+  fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+}
+
+test("a feature declared in manual entry is what the facts are gathered for after a refresh",
+  async () => {
+    const asked: string[][] = [];
+    const generated: Options[] = [];
+    render(<App api={manualPage(asked, generated)} />);
+    await declareManually();
+
+    // The declaration: this identity runs virtual services. In manual mode the
+    // radio is the control rather than a chip, because there is no account to
+    // read the answer off.
+    fireEvent.click(await within(document.getElementById("cfg-f-sv")!)
+      .findByLabelText("Enabled"));
+    // ...and it is configured as one, so the reload has something of the
+    // feature's own to lose as well.
+    fireEvent.click(within(document.getElementById("cfg-f-sv")!)
+      .getByRole("switch"));
+
+    // What the page asks the facts for, before the reload.
+    await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
+    await waitFor(() => expect(
+      generated[generated.length - 1]?.sv_ingress).toBe("nginx"));
+    const before = generated[generated.length - 1];
+
+    // The refresh. sessionStorage survives it, which is the whole mechanism.
+    const asBefore = asked.length;
+    cleanup();
+    render(<App api={manualPage(asked, generated)} />);
+
+    // A request of its own, rather than the one still on the list from before
+    // the reload -- and then long enough for a late one to land behind it. The
+    // facts effect is debounced and the vocabulary it needs is served, so a
+    // second request under a different declaration is exactly the shape of this
+    // failure.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(asBefore));
+    await new Promise((r) => setTimeout(r, 400));
+    // The acceptance criterion, as the assertion. It was ["performance"]: the
+    // declaration was not in the snapshot, so the page fell back to the first
+    // served feature and gathered another feature's images for an identity
+    // nobody had re-declared.
+    expect(asked.slice(asBefore)).toEqual([["mockServices"]]);
+
+    // The feature's own options came back with it. Restored without the
+    // declaration they were cleared, correctly, by the patch that empties a
+    // feature the location does not run -- the page had just been told it runs
+    // something else.
+    const after = generated[generated.length - 1];
+    expect(after.sv_ingress).toBe("nginx");
+    // ...and the namespace is the one that was saved. It is generated into
+    // every manifest, so a restore that suggests over it is a refresh changing
+    // the bundle by another route.
+    expect(after.namespace).toBe(before.namespace);
+  });
+
+test("a restored declaration is not lost to the facts it produced",
+  async () => {
+    // The same failure by the other route, and the one a fast localhost hides.
+    // A declaration stands for a funcId, and which funcIds are worth declaring
+    // is *served* (`changes_images`) -- so until that list lands the identity is
+    // gathered for no funcId at all. Read those funcIds back and the page
+    // concludes the location runs nothing it knows, falls to the first served
+    // feature, and the declaration is gone again -- with the namespace
+    // suggestion following it.
+    const choices = deferred<Awaited<ReturnType<Api["funcIdChoices"]>>>();
+    const asked: string[][] = [];
+    session.save({
+      sourceMode: "manual", accountId: null, workspaceId: null,
+      harborId: null, shipId: null, confirmed: { loc: null, ship: null },
+      manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
+      declaredFeature: "sv",
+      options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+    render(<App api={manualPage(asked, [], {
+      funcIdChoices: () => choices.promise,
+    })} />);
+
+    // The identity is gathered for nothing while that list is outstanding,
+    // which is fine -- and is exactly what must not be mistaken for an answer
+    // about what was declared.
+    await waitFor(() => expect(asked[asked.length - 1]).toEqual([]));
+    choices.settle([
+      { id: "performance", label: "Performance", changes_images: true },
+      { id: "mockServices", label: "Mock Services", changes_images: true },
+    ]);
+
+    await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked[asked.length - 1]).toEqual(["mockServices"]);
+    expect(screen.getByPlaceholderText("e.g. blazemeter"))
+      .toHaveProperty("value", "blazemeter-sv");
+  });
+
+test("a restored declaration the vocabulary no longer offers is dropped, not sat on",
+  async () => {
+    const asked: string[][] = [];
+    session.save({
+      sourceMode: "manual", accountId: null, workspaceId: null,
+      harborId: null, shipId: null, confirmed: { loc: null, ship: null },
+      manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
+      declaredFeature: "sv",
+      options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+    render(<App api={manualPage(asked, [], {
+      // The vocabulary this page is served no longer carries what the snapshot
+      // named -- a feature withdrawn, or a tab reloaded against a newer server.
+      features: async () => [
+        { id: "performance", label: "Performance & functional testing",
+          namespace: "blazemeter", func_ids: ["performance"] },
+      ],
+    })} />);
+
+    // Kept, it would name no funcId at all: the identity's facts would be
+    // gathered as though nothing had been declared, with no radio selected to
+    // say so or to change it with. So it is dropped, and the page lands where a
+    // fresh manual session lands.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked[asked.length - 1]).toEqual(["performance"]);
+    expect(card("performance").getByLabelText("Enabled"))
+      .toHaveProperty("checked", true);
+    // ...and the namespace read back is still the one read back. Dropping the
+    // declaration is a decision about the declaration; rewriting a namespace
+    // that is generated into every manifest is not part of it.
+    expect(screen.getByPlaceholderText("e.g. blazemeter"))
+      .toHaveProperty("value", "blazemeter-sv");
   });
 
 // -- the live preview, and the two things that decide when it is asked -------
