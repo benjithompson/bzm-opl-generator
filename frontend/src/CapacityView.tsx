@@ -11,6 +11,12 @@
 // That is why there is no separate legend: it would repeat the table a
 // centimetre higher while carrying four fewer figures.
 //
+// They part company in one place, and only one: a folded workspace keeps its
+// bar and loses its table. The bar is the total the header line states, drawn
+// against the widest workspace on the account, so a page of folded cards is a
+// ranking; the table is the only part that is per location, and it is what
+// makes the page several screens long.
+//
 // "Rated" is the load-bearing word, and it was measured rather than assumed --
 // see core.account_capacity. `agents x engines-per-agent` is the engine count
 // and BlazeMeter enforces it; multiplying by virtual users per engine gives
@@ -257,20 +263,12 @@ function WorkspaceCard(props: {
             + "transition-transform duration-150 "
             + (open ? "rotate-90" : "")}>›</span>
         </div>
-      </button>
 
-      {/* The same 0fr -> 1fr grid every other fold on this page uses: a
-          card's height is not knowable in advance and `height: auto` does
-          not transition. */}
-      {/* `invisible` as well as clipped, like the capacity profile's own
-          disclosure: a folded card is out of the tab order and out of the
-          accessibility tree, rather than merely nought pixels tall. */}
-      <div id={body} aria-hidden={!open}
-        className={"grid transition-[grid-template-rows] duration-[180ms] "
-          + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
-      <div className="overflow-hidden">
-      <div className="px-3 pb-2">
-        <div className="flex h-5 rounded overflow-hidden bg-slate-100"
+        {/* The bar stays out of the fold. It is the same total the line above
+            states, drawn -- against the largest workspace on the account, so
+            the folded page is a ranking rather than 54 unrelated numbers. The
+            table is what folds: it is the only part that is per location. */}
+        <div className="flex h-5 rounded overflow-hidden bg-slate-100 mt-1.5"
              style={{ width: `${Math.max((w.total / props.widest) * 100, 2)}%` }}>
           {locs.map((l, i) => (
             <div key={l.id}
@@ -283,7 +281,18 @@ function WorkspaceCard(props: {
               }} />
           ))}
         </div>
-      </div>
+      </button>
+
+      {/* The same 0fr -> 1fr grid every other fold on this page uses: a
+          card's height is not knowable in advance and `height: auto` does
+          not transition. `invisible` as well as clipped, like the capacity
+          profile's own disclosure: a folded table is out of the tab order and
+          out of the accessibility tree, rather than merely nought pixels
+          tall. */}
+      <div id={body} aria-hidden={!open}
+        className={"grid transition-[grid-template-rows] duration-[180ms] "
+          + "ease-out " + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
+      <div className="overflow-hidden">
       <table className="w-full text-xs border-t border-slate-100">
         <thead className="text-slate-500">
           <tr className="border-b border-slate-100">

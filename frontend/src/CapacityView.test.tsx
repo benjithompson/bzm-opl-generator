@@ -82,6 +82,11 @@ test("what stays on screen folded is the summary, not just the name", () => {
   expect(row.textContent).toMatch(/1 location/);
   expect(row.textContent).toMatch(/5,000/);
   expect(row.textContent).toMatch(/91% of the account/);
+  // Including the bar, which is that total drawn against the widest workspace
+  // on the account -- what makes the folded page a ranking rather than 54
+  // unrelated numbers. It is outside the fold, not merely inside and visible.
+  expect(within(row).getByTitle(/^Dublin/)).toBeTruthy();
+  expect(within(detail("Alpha")).queryByTitle(/^Dublin/)).toBeNull();
 });
 
 test("Collapse all reaches the workspaces the filter is hiding", () => {
