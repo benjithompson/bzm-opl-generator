@@ -203,6 +203,8 @@ DOC_SUMMARIES = {
     "preflight.md": "Cluster evidence files: what to ask the customer to "
                     "collect, and what each verdict means.",
     "helm.md": "The chart output format, and managing the release afterwards.",
+    "docker.md": "The docker output format: one agent as one container on a "
+                 "host, and which options reach it.",
     "service-virtualization.md": "Mock-service locations: the ingress backends, "
                                  "which combinations are refused, and how to "
                                  "generate such a location for performance alone.",
@@ -669,6 +671,15 @@ def _bundle(action, args):
 
 
 def _after_generate(out_dir, options):
+    if options.get("output_format") == "docker":
+        # No cluster and no namespace: the bundle is a script, and it runs on
+        # the host that is to be the private location. Same rule as the two
+        # below -- the session runs it, in a shell where the person watching
+        # sees what it does.
+        return [f"chmod +x {out_dir}/{gen_mod.DOCKER_RUN_FILE}",
+                f"{out_dir}/{gen_mod.DOCKER_RUN_FILE}   (YOU run this, on the "
+                f"docker host itself -- nothing here reaches it)",
+                "opl_agent status, to see whether the agent reported in"]
     if options.get("output_format") == "helm":
         return [f"helm install bzm-opl {out_dir}/helm "
                 f"-f {out_dir}/bzm-opl-values.yaml "

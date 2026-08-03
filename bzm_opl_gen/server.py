@@ -331,17 +331,6 @@ def ship_create(s: ShipIn):
     return {"ship": ship, "auth_token": token, "token_error": refused}
 
 
-class FuncIdIn(BaseModel):
-    harbor_id: str
-    func_id: str
-
-
-@app.post("/api/locations/func-id", description=core.add_func_id.__doc__)
-@_writes
-def location_add_func_id(f: FuncIdIn):
-    return _answer(core.add_func_id, _client(), f.harbor_id, f.func_id)
-
-
 class LocationSettingsIn(BaseModel):
     harbor_id: str
     # Every field optional and None-by-default: this is a partial update, and
@@ -358,10 +347,15 @@ class LocationSettingsIn(BaseModel):
 def location_update(s: LocationSettingsIn):
     """Change the selected location's concurrency settings.
 
-    The third and last write this page makes to a customer's account, and like
-    the other two it is a call of its own rather than a flag on something else:
-    a change here reaches every agent in the location and every test that
-    starts on it, so it has to be the thing that was clicked.
+    The second and last write this page makes to a customer's account, and like
+    the other it is a call of its own rather than a flag on something else: a
+    change here reaches every agent in the location and every test that starts
+    on it, so it has to be the thing that was clicked.
+
+    There used to be a third -- POST /api/locations/func-id, which turned a
+    feature on. It went with the affordance that was its only caller (#113):
+    what funcIds a location carries is what the location *is*, where these two
+    change an agent's credential and a location's concurrency.
     """
     # Over core's own closed set rather than four named kwargs: a fifth
     # setting is then one row in core.LOCATION_SETTINGS, not a row plus a field
@@ -689,6 +683,11 @@ def features():
 @app.get("/api/sv-constants", description=core.sv_constants.__doc__)
 def sv_constants():
     return core.sv_constants()
+
+
+@app.get("/api/docker-ignored", description=core.docker_ignored.__doc__)
+def docker_ignored():
+    return core.docker_ignored()
 
 
 # -- SPA ----------------------------------------------------------------------

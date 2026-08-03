@@ -13,6 +13,90 @@ anything that breaks.
 
 ### Added
 
+- **`--format docker`: the agent as one container on a docker host.** A third
+  output format beside the manifests and the chart, and a different platform
+  rather than a third rendering of the same objects — the bundle is a
+  `docker run` script, an `.env` file and a README. Two dozen options are
+  Kubernetes vocabulary and reach nothing here; each is **named** in the
+  bundle's README where it was set away from its default, so a bundle handed
+  over cannot be believed to have applied a node selector it dropped. Service
+  virtualization is refused with the reason, not silently omitted. See
+  [docs/docker.md](docs/docker.md).
+
+- **The web UI asks for the output format first, and the form follows it.** The
+  three formats used to be picked on *Download & verify*, one step after a
+  Configure page that asked for a namespace, a service account, node selectors
+  and engine limits — none of which a docker bundle carries. The choice now
+  sits at the top of Configure and everything a container has no such thing as
+  goes off screen: placement is its own section and disappears whole, Scheduling
+  and Engine sizing go, and the fields inside Private registry, Custom CA trust
+  and Security thin out to the ones that reach something. Nothing is discarded —
+  a value set for Kubernetes survives the switch, is still in `profile.json`,
+  and is still named in the README.
+
+### Removed
+
+- **The web UI no longer offers to turn a feature on for a location, and
+  `POST /api/locations/func-id` is gone with it.** Which funcIds a private
+  location carries is what the location *is*, and BlazeMeter's own UI (Settings
+  → Private Locations) is where it changes; the other two writes this page makes
+  change an agent's credential and a location's concurrency, which is what a
+  page for configuring a bundle is for. `core.add_func_id` and
+  `api.update_private_location`'s `func_ids` went too — with nothing adding them
+  additively, the parameter was only the wholesale-replace hazard it existed to
+  guard. `bzm-opl-gen create-location --func-ids` is unaffected.
+
+### Fixed
+
+- **A format that cannot serve service virtualization says so, instead of
+  offering it.** The Helm and Docker segments were taken away for a location
+  whose funcIds *demand* virtual services, but the generator refuses on what is
+  *configured* — it never looks at the funcIds first. Between the two sat a
+  location carrying only funcIds this tool models no feature for (`tdm`,
+  `dataPublisher`, `delphix`): nobody had said whether it runs mocks, so every
+  switch was offered, nothing cleared them, both segments stayed enabled, and a
+  complete SV configuration generated as a docker bundle the server then refused
+  outright — with nothing on screen having said so. The segments now follow the
+  configuration, and on a Helm or Docker bundle the **Service virtualization**
+  card states that this bundle cannot serve it and offers nothing to press —
+  which is a different answer from "not enabled on this location", and reads as
+  one. Switching to **Kubernetes manifests** brings the controls back.
+
+- **The output format is never replaced in silence.** Turning service
+  virtualization back on with Docker selected, or importing a profile that
+  pairs the two, moved the segment to *Kubernetes manifests* without a word.
+  The page now says which format was replaced and why, carrying the generator's
+  own sentence for the refusal, until a format is picked.
+
+- **A feature the location does not run is stated, and offers no controls.** It
+  used to be half-configurable, and reachable enough to block a bundle nobody
+  meant to change. Entering an identity by hand, declaring it performance and
+  then flipping the **Service virtualization** switch seeded an ingress behind
+  empty subdomain and TLS fields, and the step went red with *needs attention*
+  for something nothing on the page had asked for. Connect mode had the mirror:
+  the card body was inert, so a restored session or an imported profile carrying
+  `sv_ingress` opened the group and left a switch that could not be pressed
+  back. Such a card now names the feature, says where it is enabled, and shows
+  nothing to press — and the options it would have configured are cleared rather
+  than merely hidden, so nothing blocks a download from off screen.
+
+- **The line saying why a step is not finished names only fields that are on
+  screen.** It was a fixed sentence — "namespace, service account and any
+  unfinished group first" — and a docker bundle has neither a namespace nor a
+  service account, so two thirds of the only prompt telling you what to fix
+  pointed at fields deliberately not on the page. It now names what is actually
+  outstanding, and the step's tick is the same derivation, so the two cannot
+  disagree.
+
+- **A docker bundle is no longer refused over a field it ignores.** An unnamed
+  service account, a malformed `engine_cpu_limit`/`engine_mem_limit` and a
+  leftover CA ConfigMap beside an inline PEM each blocked generation for
+  `--format docker`, over options the same format states it cannot carry — and
+  in the UI those fields are not on screen, so there was nothing to correct.
+  A docker bundle's README also no longer advertises an engine size it does not
+  set. `crane_hook` and `registry_auth` join the ignored list: both reached
+  nothing already and said so nowhere.
+
 - **`bzm-opl-gen plan --users N`: how much infrastructure a load target needs,
   before any of it exists.** Every other command here starts from something that
   already exists — a location, an agent, a cluster, an evidence file. This one

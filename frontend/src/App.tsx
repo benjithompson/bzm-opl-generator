@@ -21,10 +21,16 @@ import { downloadPlan } from "./token";
 // plus a body per group. This file only wires them -- what a group *is*, and
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, caModeOf, caModePatch, CaMode, detectGroups, enginePreset,
-  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups,
-  serviceAccountOk, startFeature, suggestNamespace, unclaimedFuncIds,
+  allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
+  detectGroups, enabledFeatures, enginePreset,
+  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
+  runsFeature, serviceAccountOk, startFeature, suggestNamespace,
+  unclaimedFuncIds,
 } from "./optionGroups";
+// What the bundle is, and which options that leaves reaching something. The
+// table of what a docker bundle drops is the generator's and is fetched, never
+// restated here.
+import { isDocker, optionApplies, whyIgnored as why } from "./formats";
 // Service virtualization, as one record rather than a dozen values derived in
 // four places here. Whether the location demands it, whether that demand was
 // declined, whether what is configured is finished, the prerequisite context,
@@ -147,6 +153,10 @@ export default function App({ api }: { api: Api }) {
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
     { func_ids: [], ingress_types: [], backends: {} });
+  // What a docker bundle drops, from the generator (see formats.ts). Empty
+  // until it lands, and empty means every option applies -- the configure step
+  // shows a field too many rather than hiding a required one on a guess.
+  const [dockerIgnored, setDockerIgnored] = useState<Record<string, string>>({});
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The feature being configured, and the vocabulary it is chosen from. A view
   // over the options, never a scope: one crane is deployed for the selected
@@ -165,15 +175,40 @@ export default function App({ api }: { api: Api }) {
   // typing a space -- so the two are separate rather than one with a flag.
   const raw = useCallback(
     (k: string) => String(options[k] ?? ""), [options]);
+  // What this location runs, and the third state kept: manual entry declares,
+  // a location read off the account carries funcIds, and null is nobody having
+  // said yet. Up here because `sv` reads it -- which of the SV options are on
+  // their way out is what decides whether they may block an output format, and
+  // deriving that below the record that needs it was how the two got out of
+  // step. `locUnclaimed` and `notRun` stay where they are used.
+  const locFeatures = featuresOf(facts?.func_ids, features);
+  const enabled = enabledFeatures(sourceMode, feature, locFeatures);
   // Everything about service virtualization, answered once. Four blocks of this
   // file used to derive it -- what the location demands, whether that demand
   // was declined, whether what is set is finished, what the panels render
   // against -- and each read the options for itself, so one question had four
   // answers free to disagree. Declared up here because the status poll below
   // asks it too. See sv.ts; it is tested as plain data, with no page at all.
+  //
+  // The fourth input is whether this bundle still carries the feature at all:
+  // notRunPatch clears the SV options of a location known to run something
+  // else, and options on their way out must not take an output format with
+  // them. Unanswered reads as yes, which is the direction that over-blocks
+  // rather than letting a bundle the server refuses through.
+  const svRuns = runsFeature(enabled, "sv");
   const sv = useMemo(
-    () => svState(facts?.func_ids, options, svConst),
-    [facts?.func_ids, options, svConst]);
+    () => svState(facts?.func_ids, options, svConst, svRuns),
+    [facts?.func_ids, options, svConst, svRuns]);
+  // What the bundle is. Declared here rather than beside the two predicates it
+  // feeds, because the SV correction below reads it to say which format it is
+  // replacing -- see the effect that applies sv.patch.
+  const format = String(options.output_format ?? "manifests");
+  // ...and the last format the correction took away, or null. Not derived: once
+  // the patch is applied the options no longer hold what was replaced, so a
+  // derivation would state it for exactly the render it is already too late to
+  // read. Cleared by picking a format, which is the answer to it.
+  const [formatNotice, setFormatNotice] =
+    useState<{ was: string; why: string } | null>(null);
   /** Drop the credential and everything said about it.
    *
    *  One function because it is one fact -- the token, the rotate choice and the
@@ -290,6 +325,7 @@ export default function App({ api }: { api: Api }) {
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
+    api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.features().then(setFeatures).catch(() => {});
 
@@ -820,9 +856,25 @@ export default function App({ api }: { api: Api }) {
   // sv.ts as a value -- which is what makes it testable, and what stops this
   // being two effects writing what a third reads back. Applying the patch makes
   // the next one null, so this settles in one pass.
+  //
+  // Where the patch moves the output format, it is recorded rather than only
+  // applied. That correction is the one thing here that overrides a choice the
+  // user made on this page, and it used to happen in silence: pick Docker,
+  // switch service virtualization back on, and the segment moved to Kubernetes
+  // manifests with nothing said. The notice carries the generator's own
+  // sentence for the refusal, and `setFormat` clears it -- a format chosen
+  // after the fact is the answer, not something to keep explaining.
   useEffect(() => {
     const patch = sv.patch;
     if (!patch) return;
+    // Read off the same render that produced the patch -- `sv` is derived from
+    // `options`, so a new patch and the format it is correcting are always the
+    // one pair. The sentence is the generator's, taken from the table that
+    // disabled the segment, so the notice and the tooltip cannot drift.
+    const was = format;
+    if (patch.output_format && was && was !== patch.output_format) {
+      setFormatNotice({ was, why: sv.blockedFormats[was] ?? "" });
+    }
     setOptions((o) => ({ ...o, ...patch }));
   }, [sv.patch]);
   const flipGroup = (id: GroupId, on: boolean) => {
@@ -882,11 +934,39 @@ export default function App({ api }: { api: Api }) {
     if (start) pickFeature(start, true);
   }, [facts?.harbor_id, features, pickFeature]);
 
-  const namespaceOk = !!txt("namespace");
+  // -- what the bundle is ----------------------------------------------------
+  // Flat YAML to kubectl apply, the chart with a values overlay, or one agent
+  // as one container. The first two render the same objects and differ only in
+  // how you install and upgrade; the third is a different platform, and around
+  // two dozen options reach nothing in it. So the choice is made at the top of
+  // the configure step and the form follows it -- asking for a namespace and a
+  // ServiceAccount and then handing over a bundle with neither is the silent
+  // failure this arrangement exists to stop. Which formats this *configuration*
+  // refuses is sv.blockedFormats, with the sentence each is refused in, and the
+  // mirror of it -- which features this format refuses -- is sv.featureBlocked.
+  // `format` itself is declared with `sv`, which reads it.
+  /** Does this option reach anything in the bundle being generated? What the
+   *  configure step hides by, and what the two blockers below are judged
+   *  against. The table is the generator's; see formats.ts. */
+  const applies = useCallback(
+    (k: string) => optionApplies(k, format, dockerIgnored),
+    [format, dockerIgnored]);
+  /** ...and, where a field's absence needs explaining, the generator's own
+   *  sentence for it. Served with the keys for exactly this: the bundle's
+   *  README prints these, and the form hiding the field should not have to
+   *  write its own version. */
+  const whyIgnored = useCallback(
+    (k: string) => why(k, format, dockerIgnored), [format, dockerIgnored]);
+
+  // Both are answered against the format, not against the options alone: they
+  // are what blocks the download, and an option this bundle cannot carry must
+  // not block it -- the field for it is not on screen, so there would be
+  // nothing to fix. generate() agrees on both counts for a docker bundle.
+  const namespaceOk = !applies("namespace") || !!txt("namespace");
   // Empty is refused by generate(), so this blocks the download rather than
   // only colouring the field -- an unnamed account is the one state of these
   // two that produces no bundle at all.
-  const saOk = serviceAccountOk(options);
+  const saOk = !applies("service_account_name") || serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
   // What the download and save buttons will do about the credential: the hint
   // beside them, the banner over them, and the request they send. One
@@ -902,43 +982,30 @@ export default function App({ api }: { api: Api }) {
   // would promise an issue that will not happen.
   const mayRotate =
     !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
-  // What the bundle is: flat YAML to kubectl apply, or the chart with a values
-  // overlay. Both render the same objects -- the choice is how you install and
-  // upgrade -- except that the chart is performance-only, so an SV location is
-  // held to manifests and the segment says why instead of disappearing. That
-  // refusal is sv.helmBlocked, with the sentence it is refused in.
-  const format = String(options.output_format ?? "manifests");
-
   // -- what this location runs -----------------------------------------------
-  // The features it carries, and the funcIds it carries that the tool has no
-  // options for. Locations already run tdm/dataPublisher/delphix; naming them is
+  // `locFeatures` and `enabled` are derived above, beside the record that reads
+  // them. This is the funcIds the location carries that the tool has no options
+  // for: locations already run tdm/dataPublisher/delphix, and naming them is
   // the honest version of a page that quietly models five funcIds.
-  const locFeatures = featuresOf(facts?.func_ids, features);
   const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
-  // Features this location does not carry. Not "unavailable" any more: the card
-  // offers to turn one on, which is a real PATCH of the location's funcIds. The
-  // list is empty whenever the question has not been answered -- manual entry
-  // declares rather than reads, and before a location is chosen an empty
-  // locFeatures means "not asked yet", not "none".
-  const notEnabled = sourceMode === "connect" && !!facts && locFeatures.length
-    ? features.map((f) => f.id).filter((id) => !locFeatures.includes(id))
-    : [];
-  /** Turn a feature on for the selected location, then re-read the facts so the
-   *  card's state comes from the account rather than from local memory. */
-  const enableFeature = useCallback(async (id: string) => {
-    const funcId = features.find((f) => f.id === id)?.func_ids[0];
-    if (!harborId || !funcId) return;
-    await api.addFuncId(harborId, funcId);
-    const [ls, fresh] = await Promise.all([
-      workspaceId != null ? api.locations(workspaceId) : Promise.resolve(null),
-      api.facts(harborId),
-    ]);
-    if (ls) setLocations(ls);
-    setFacts(fresh);
-  }, [features, harborId, workspaceId]);
+  // The second and last place an option is written without anyone pressing
+  // anything, and the same shape as the SV correction above: what has to change
+  // is a value optionGroups decides, this only applies it. A profile, a
+  // restored session or a location picked after the form was filled in can all
+  // leave options set for a feature the location does not run -- and the switch
+  // that would clear them is deliberately not on screen, so nothing else can.
+  // Below `enabled` rather than beside the other effects because it reads it.
+  const notRun = notRunPatch(options, enabled);
+  useEffect(() => {
+    if (!notRun) return;
+    setOptions((o) => ({ ...o, ...notRun }));
+  }, [notRun]);
   // Which groups are in use but not finished. Each group declares its own rule,
   // so a feature gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
+  // ...and what that leaves the configure step still needing, named. Empty is
+  // "nothing", which is what ticks the step off -- see configureBlockedBy.
+  const configureBlocked = configureBlockedBy(options, applies, incomplete);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -1036,7 +1103,7 @@ export default function App({ api }: { api: Api }) {
   // may write is what its declaration says it owns.
   const groupBody: Record<GroupId, ReactNode> = {
     registry: (
-      <RegistryGroup
+      <RegistryGroup applies={applies} whyIgnored={whyIgnored}
         registry={raw("private_registry")}
         pullSecret={raw("pull_secret")}
         registryAuth={Boolean(options.registry_auth)}
@@ -1046,7 +1113,7 @@ export default function App({ api }: { api: Api }) {
     ),
     proxy: <ProxyGroup proxy={proxyOpt} onField={setProxy} />,
     ca: (
-      <CaGroup mode={caMode} onMode={setCaMode}
+      <CaGroup applies={applies} mode={caMode} onMode={setCaMode}
         configmap={raw("ca_existing_configmap")}
         configmapKey={raw("ca_configmap_key")}
         bundle={raw("ca_bundle")}
@@ -1070,7 +1137,8 @@ export default function App({ api }: { api: Api }) {
 />
     ),
     security: (
-      <SecurityGroup useSecret={Boolean(options.use_secret)}
+      <SecurityGroup applies={applies} cluster={!isDocker(format)}
+        useSecret={Boolean(options.use_secret)}
         clusterRbac={Boolean(options.cluster_rbac)}
         // Absent means the backend default, which is on -- so `!== false`
         // rather than Boolean(), which would show an untouched bundle as
@@ -1199,16 +1267,13 @@ export default function App({ api }: { api: Api }) {
               )}
             </div>
           ) : undefined}
-          done={[
-            !!facts && !!shipId,
-            namespaceOk && saOk && incomplete.length === 0,
-            false,
-          ]}
-          blockedBy={[
-            "fill in the agent details to continue",
-            "namespace, service account and any unfinished group first",
-            "",
-          ]}>
+          /* Step 2's tick and step 2's reason are one derivation, so the dot
+             and the sentence under it cannot disagree -- and the sentence
+             names what this bundle actually still needs rather than the three
+             things a Kubernetes one would. */
+          done={[!!facts && !!shipId, !configureBlocked, false]}
+          blockedBy={["fill in the agent details to continue",
+                      configureBlocked, ""]}>
           {/* 1 · How big the run is, and which agent it is generated for.
               The profile comes first because it decides everything after it and
               needs none of it -- no key, no account, no cluster -- and because
@@ -1287,10 +1352,14 @@ export default function App({ api }: { api: Api }) {
             hint="Everything re-renders the preview live.">
             <ConfigurePanel
               features={features} feature={feature} pickFeature={pickFeature}
-              sourceMode={sourceMode} locFeatures={locFeatures}
-              locUnclaimed={locUnclaimed} notEnabled={notEnabled}
-              enableFeature={enableFeature}
+              sourceMode={sourceMode} enabled={enabled}
+              locUnclaimed={locUnclaimed}
               options={options} set={set}
+              format={format}
+              setFormat={(v) => { setFormatNotice(null); set("output_format", v); }}
+              blockedFormats={sv.blockedFormats}
+              featureBlocked={sv.featureBlocked} formatNotice={formatNotice}
+              applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
@@ -1312,7 +1381,6 @@ export default function App({ api }: { api: Api }) {
               api={api}
               bundle={{
                 facts, shipId, options, format,
-                setFormat: (v) => set("output_format", v),
                 sv, saOk, genErr,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
                 saveDir, setSaveDir,

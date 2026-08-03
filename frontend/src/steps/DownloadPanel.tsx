@@ -29,9 +29,8 @@ import {
 import {
   Attempt, NO_ATTEMPT, downloadFailed, downloaded, saveFailed, savedTo,
 } from "../attempt";
-import {
-  Button, Check, ErrorMsg, inputCls, SegmentedControl, Switch,
-} from "../components";
+import { Button, Check, ErrorMsg, inputCls, Switch } from "../components";
+import { isDocker, OUTPUT_FORMATS } from "../formats";
 import { OptionGroup } from "../optionGroups";
 import {
   EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, worstStatus,
@@ -53,12 +52,15 @@ export interface BundleHandover {
    *  carries the mirror script, and the folder placeholder. The panel is handed
    *  the record rather than a reader per key: it sends the whole thing. */
   options: Options;
-  /** The one option this step writes, as the write rather than as a key. Three
-   *  readings of the options (the record, a text reader, a setter) used to
-   *  arrive for two keys; the other key was the AUTH_TOKEN, and what this panel
-   *  actually wanted to know about it is credential.mayRotate. */
+  /** What is being generated. Read, not written: the choice moved to the top of
+   *  the configure step, because it decides which questions that step asks --
+   *  a docker bundle has no namespace, no ServiceAccount and no scheduling, and
+   *  a form that asked for all three and then dropped them was the silent
+   *  failure. This step still names it, beside the command that installs it. */
   format: string;
-  setFormat: (v: string) => void;
+  /** Back to where it is chosen, for the row that names the format. The same
+   *  callback the unfinished-group blocks use. */
+  goToConfigure: () => void;
   /** Everything about service virtualization, from sv.ts. Four things are read
    *  off it here -- whether the settings are finished, whether the chart is
    *  refused and why, whether a mock watch is meaningful at all, and the scheme
@@ -74,7 +76,6 @@ export interface BundleHandover {
    *  definition not this one, so the block names them and offers the way back
    *  rather than pointing at a form nobody can see. */
   unfinished: OptionGroup[];
-  goToConfigure: () => void;
   /** Where a save writes. Typed here, read in App too: a folder already holding
    *  this ship's bundle changes what the preview says about the credential. */
   saveDir: string;
@@ -158,6 +159,25 @@ const checkTone = (r: SvCheckOut) =>
   r.status !== "ok" ? "text-red-600"
     : r.code != null && r.code < 400 ? "text-emerald-700" : "text-amber-700";
 
+/** What each format's bundle contains, for the line beside the download button.
+ *  A lookup rather than a chain of ternaries: there are three formats now, and
+ *  the next one should be a row here rather than another branch. */
+const BUNDLE_HOLDS: Record<string, string> = {
+  manifests: "manifests + README",
+  helm: "helm/ + bzm-opl-values.yaml + README",
+  docker: "bzm-opl-agent.sh + .env + README",
+};
+
+/** The command that installs what was just saved. Docker's runs on the host
+ *  rather than against a cluster, which is why it takes no namespace. */
+function runCommand(format: string, dir: string, namespace: string) {
+  if (format === "helm") {
+    return `helm install bzm-opl ${dir}/helm -f ${dir}/bzm-opl-values.yaml`;
+  }
+  if (format === "docker") return `sh ${dir}/bzm-opl-agent.sh`;
+  return `kubectl apply -f ${dir}/ -n ${namespace}`;
+}
+
 export function DownloadPanel(p: DownloadPanelProps) {
   const { api, bundle, credential, attempt, report, preflight, watch } = p;
   // The names the markup below already used, for the values it reads most: the
@@ -173,23 +193,24 @@ export function DownloadPanel(p: DownloadPanelProps) {
   const ready = !!facts && !!shipId && !bundle.genErr && sv.ok && bundle.saOk;
   return (
             <div className="space-y-3">
-              <SegmentedControl
-                label="Output format"
-                value={format}
-                onChange={bundle.setFormat}
-                options={[
-                  {
-                    value: "manifests",
-                    label: "Kubernetes manifests",
-                    hint: "Flat YAML you kubectl apply. Live-testable with bzm-opl-gen livetest.",
-                  },
-                  {
-                    value: "helm",
-                    label: "Helm chart",
-                    hint: "The chart plus a values overlay from this account. helm install / upgrade.",
-                    disabledReason: sv.helmBlocked,
-                  },
-                ]} />
+              {/* What is about to be generated, and the way back to change it.
+                  The control itself is at the top of Configure: it decides
+                  which questions that step asks, so choosing it here meant
+                  filling in a namespace and a ServiceAccount for a bundle that
+                  carries neither. Named rather than assumed -- everything
+                  below, from the file list to the install command, reads
+                  differently per format. */}
+              <p className="text-xs text-slate-500">
+                Format:{" "}
+                <b className="text-slate-700">
+                  {OUTPUT_FORMATS.find((f) => f.id === format)?.label ?? format}
+                </b>
+                {" — "}
+                <button type="button" onClick={bundle.goToConfigure}
+                  className="text-bzm hover:underline">
+                  change it in Configure
+                </button>
+              </p>
               <div className="flex gap-2 items-center">
                 <Button disabled={!ready}
                   onClick={() => {
@@ -202,9 +223,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   ⬇ Download bundle (.zip)
                 </Button>
                 <span className="text-xs text-slate-400">
-                  {format === "helm"
-                    ? "helm/ + bzm-opl-values.yaml + README"
-                    : "manifests + README"}
+                  {BUNDLE_HOLDS[format] ?? BUNDLE_HOLDS.manifests}
                   {options.private_registry ? " + bzm-opl-image-mirror.sh" : ""};
                   {" "}{plan.hint}
                 </span>
@@ -286,12 +305,13 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   Wrote {attempt.saved.files.length} files to{" "}
                   <code className="font-mono">{attempt.saved.out_dir}</code>. Apply with{" "}
                   <code className="font-mono">
-                    {format === "helm"
-                      ? `helm install bzm-opl ${attempt.saved.out_dir}/helm -f ${attempt.saved.out_dir}/bzm-opl-values.yaml`
-                      : `kubectl apply -f ${attempt.saved.out_dir}/ -n ${(options.namespace as string) || "blazemeter"}`}
+                    {runCommand(format, attempt.saved.out_dir,
+                                (options.namespace as string) || "blazemeter")}
                   </code>
-                  {" "}— or point <code className="font-mono">livetest</code> or
-                  an MCP session at the folder.
+                  {format === "docker"
+                    ? " — on the host that is to be the private location."
+                    : (<>{" "}— or point <code className="font-mono">livetest</code> or
+                      an MCP session at the folder.</>)}
                 </p>
               )}
               <ErrorMsg msg={attempt.saveError} />
@@ -317,7 +337,23 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   from a cluster, because the person configuring this usually
                   has access to neither the account nor the cluster -- so it
                   sits here beside the download, needing no key and no
-                  kubecontext of its own. */}
+                  kubecontext of its own.
+
+                  Every check in it is a cluster check -- node allocatable,
+                  LimitRanges, PodSecurity labels, the ServiceAccount -- and a
+                  docker bundle has no cluster to run them against. Named
+                  rather than dropped: a block that vanishes reads as a step
+                  somebody forgot, and the sentence is where "then what do I
+                  check" gets answered. */}
+              {isDocker(format) && (
+                <p className="mt-5 text-[11px] text-slate-400">
+                  No cluster preflight for a docker bundle — every check{" "}
+                  <code className="font-mono">bzm-opl-gen doctor</code> runs is
+                  about a cluster. What this bundle needs of its host is in the
+                  README it ships with.
+                </p>
+              )}
+              {!isDocker(format) && (
               <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                 <div className="flex items-start gap-2 flex-wrap">
                   <div className="grow min-w-[16rem]">
@@ -446,6 +482,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   </div>
                 )}
               </div>
+              )}
 
               <div className="border-t border-slate-100 pt-3">
                 {!watch.available ? (

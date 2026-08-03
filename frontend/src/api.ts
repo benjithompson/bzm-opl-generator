@@ -258,11 +258,11 @@ export const api = {
   updateLocation: (body: { harbor_id: string }
     & Partial<Record<keyof LocationSettings, string>>) =>
     req<LocationUpdate>("POST", "/api/locations/settings", body),
-  /** Turn a feature on for a location. Additive and idempotent server-side --
-   *  see core.add_func_id, which reads the location's own list first. */
-  addFuncId: (harborId: string, funcId: string) =>
-    req<Location>("POST", "/api/locations/func-id",
-                  { harbor_id: harborId, func_id: funcId }),
+  // There is no call here that turns a feature on for a location. Which funcIds
+  // a location carries is what the location *is*, and changing it is
+  // BlazeMeter's own UI's -- unlike the two writes above, which change an
+  // agent's credential and a location's concurrency. The page states the
+  // features a location does not run and points at where they are enabled.
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
   /** Facts from the three values BlazeMeter shows on the agent, with no API key.
    *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */
@@ -305,6 +305,11 @@ export const api = {
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
   features: () => req<Feature[]>("GET", "/api/features"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
+  /** {option: why} for the options a docker bundle drops — generate's own
+   *  DOCKER_IGNORED. Served rather than restated in TypeScript: the configure
+   *  step hides what it names, and a key added to the generator would
+   *  otherwise go on being offered for a format that ignores it. */
+  dockerIgnored: () => req<Record<string, string>>("GET", "/api/docker-ignored"),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),

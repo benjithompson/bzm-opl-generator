@@ -43,8 +43,10 @@ or bump `image.tag` and upgrade — and an agent far enough behind loses support
 Both behaviours were confirmed against a live cluster and a real agent.
 
 `autoUpdate` here is BlazeMeter's `AUTO_KUBERNETES_UPDATE`. Its `AUTO_UPDATE` is
-a different variable — the Docker-side switch, inert on a Kubernetes agent — and
-neither this chart nor the manifests emit it.
+a different variable — the Docker-side switch, inert on a Kubernetes agent — so
+neither this chart nor the manifests emit it. The [docker](docker.md) format
+does, off the same option, and leaves it unset unless it was answered: there is
+no Deployment there for a self-update to fight over.
 
 Two things differ, both deliberate:
 

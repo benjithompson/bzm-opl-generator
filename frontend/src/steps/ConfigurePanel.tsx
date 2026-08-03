@@ -1,23 +1,37 @@
 // Step 2: what goes in the bundle.
 //
+// It opens with the platform, because that is the question every other one on
+// this page depends on. It used to be asked on the download step instead, one
+// step too late: this form asks for a namespace, a ServiceAccount, node
+// selectors and engine limits, and a docker bundle -- one agent as one
+// container -- carries none of them. The generator names what it dropped in the
+// bundle's README, which is honest and arrives after the fact; a control that
+// is not on screen cannot be believed to have applied. So the format is chosen
+// first and the form follows it, from formats.optionApplies over the
+// generator's own DOCKER_IGNORED.
+//
 // The option groups split two ways and the page says which is which. Most of
 // them belong to no feature -- registry, proxy, CA trust, scheduling, security
 // -- and are here whatever the location runs; the rest belong to one, and live
 // in that feature's own card. There used to be a feature *selector* switching
 // between two views of the same six groups, so pressing it changed a single row
-// while reading as though it changed the step. Nothing is hidden now, so
-// nothing has to be recovered: no "also in this bundle", no "not in view".
+// while reading as though it changed the step. Nothing is hidden by a *view*
+// now, so nothing has to be recovered: no "also in this bundle", no "not in
+// view". What the format takes off screen is a different thing entirely -- not
+// a view over a bundle's options, but options that bundle has no such thing as.
 //
 // The rail is orientation, not navigation-with-a-dot: it names what is set, so
 // "what is in this bundle" is answered without scrolling the form.
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, RequiredMark, Switch,
+  Button, Check, Field, inputCls, RequiredMark, SegmentedControl, Switch,
 } from "../components";
+import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsOf, OptionGroup, SHARED_GROUPS,
+  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFeature,
+  SHARED_GROUPS,
 } from "../optionGroups";
 
 export interface ConfigurePanelProps {
@@ -27,17 +41,37 @@ export interface ConfigurePanelProps {
   feature: string | null;
   pickFeature: (id: string) => void;
   sourceMode: "connect" | "manual";
-  /** What the location's funcIds say it runs, and the funcIds no feature
-   *  claims. Empty in manual mode: there is no account to have read. */
-  locFeatures: string[];
+  /** The funcIds this location carries that no feature claims. */
   locUnclaimed: string[];
-  /** Features the location does not run. Not "unavailable": they can be
-   *  switched on here, which is what the card asks about. */
-  notEnabled: string[];
-  /** Turn a feature on for this location. Returns once the account has it. */
-  enableFeature: (id: string) => Promise<void>;
+  /** Which features this location runs, or null while nobody has answered --
+   *  see optionGroups.enabledFeatures. A feature not in it is stated by its
+   *  card and configured nowhere. */
+  enabled: string[] | null;
   options: Options;
   set: (k: string, v: unknown) => void;
+  /** What the bundle is, and the one option this step writes as a write rather
+   *  than as a key. First on the page because it decides what the rest of it
+   *  asks: see the header. */
+  format: string;
+  setFormat: (v: string) => void;
+  /** Why a format is unavailable for this bundle, by format id -- from sv.ts,
+   *  and empty where nothing configured needs an ingress. The segment says
+   *  so rather than disappearing: a format that vanishes leaves the page unable
+   *  to explain the error the server would have given. */
+  blockedFormats: Record<string, string>;
+  /** ...and the same refusal from the other end: why this format cannot serve
+   *  a feature at all, by feature id. The card renders it instead of its
+   *  switches, so a docker bundle stops offering an ingress, a subdomain and a
+   *  TLS secret that would make the whole bundle unbuildable. */
+  featureBlocked: Record<string, string>;
+  /** The format the SV correction replaced, and why -- or null. A format the
+   *  user picked is never swapped in silence; see the effect in App. */
+  formatNotice: { was: string; why: string } | null;
+  /** Does this option reach anything in a bundle of this format? Everything
+   *  below hides by it -- whole groups, the placement card, the crane-hook row,
+   *  Advanced, and the individual fields inside a group's own body. From
+   *  formats.ts, over the generator's DOCKER_IGNORED. */
+  applies: Applies;
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
   grpDeclined: Partial<GroupFlags>;
@@ -63,8 +97,13 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
 }
 
 /** Namespace and service account. Not behind a switch like everything else
- *  here: every deployment has both, and putting the required half of a pair
- *  behind a toggle makes it look optional. */
+ *  here: a deployment into a cluster has both, and putting the required half of
+ *  a pair behind a toggle makes it look optional.
+ *
+ *  Its own card rather than the first rows of the settings list, because it is
+ *  the part of this step a docker bundle does not have at all -- containers are
+ *  not namespaced and there is no ServiceAccount to run as. A section that
+ *  appears and disappears has to be a section. */
 function CoreFields(p: ConfigurePanelProps) {
   // The asterisk says the field is required; the input's border says whether it
   // has been filled in. Two jobs, and the badge that used to do both said
@@ -181,32 +220,39 @@ function AdvancedRow(p: ConfigurePanelProps) {
   );
 }
 
-/** One feature: whether it is on, and the options it owns. */
-function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
-  const { feat } = p;
+/** One feature: whether it is on, and -- only where it is -- the options it
+ *  owns.
+ *
+ *  A feature the location does not run is *stated* and nothing more (#113). It
+ *  used to be half-configurable: the card offered "Enable on this location…",
+ *  which PATCHed the location's funcIds, and its group rows sat under a div
+ *  carrying both `pointer-events-none` and the click handler that opened that
+ *  offer -- so the rows were simply dead, and a restored session that had
+ *  opened the SV group left a switch nobody could reach. In manual mode the
+ *  guard was `!on && !manual && known`, which is no guard at all: the switch
+ *  flipped, seeded an ingress with no domain behind it, and blocked the step.
+ *
+ *  Turning a funcId on changes what the location *is*, which is BlazeMeter's
+ *  own UI's to do -- unlike this page's other two writes, which change an
+ *  agent's credential and a location's concurrency. So the card says where. */
+function FeatureCard(
+    p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
+  const { feat, own } = p;
   const manual = p.sourceMode === "manual";
-  const own = groupsOf(feat.id);
   // Enabled means the location runs it -- or, in manual mode, that this is what
-  // the typed identity was declared to be.
-  const on = manual ? p.feature === feat.id : !p.notEnabled.includes(feat.id);
-  // Before the account has been read there is nothing to say: `notEnabled` is
-  // empty then, and claiming "enabled" from an unanswered question is the
-  // collapse this codebase keeps refusing to make.
-  const known = manual || p.locFeatures.length > 0;
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const enable = async () => {
-    setBusy(true);
-    try {
-      await p.enableFeature(feat.id);
-      setAsking(false);
-      // The pane is the group's own body, so turning the group on is what
-      // expands it -- and its enable() seeds whatever the group needs (SV lands
-      // on nginx rather than on no backend at all).
-      const first = own[0];
-      if (first && !p.grpOn[first.id]) p.flipGroup(first.id, true);
-    } finally { setBusy(false); }
-  };
+  // the typed identity was declared to be. Unanswered reads as on: see
+  // runsFeature for why that direction is the safe one.
+  const on = runsFeature(p.enabled, feat.id);
+  // Before the account has been read there is nothing to say: `enabled` is null
+  // then, and claiming "enabled" from an unanswered question is the collapse
+  // this codebase keeps refusing to make.
+  const known = p.enabled != null;
+  // ...and the third thing that can be true of a card, which is about the
+  // bundle rather than the location: this format cannot serve this feature at
+  // all. Only asked where the location does run it -- "not enabled here" and
+  // "not possible in this format" are different answers and the card may give
+  // only the one that is true.
+  const noFormat = on ? p.featureBlocked[feat.id] : undefined;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
@@ -233,59 +279,113 @@ function FeatureCard(p: ConfigurePanelProps & { feat: Feature }) {
         <p className="text-[11px] text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Off on this location, so its switches are inert until the question
-          under them is answered. The click still lands -- it is what asks --
-          but nothing is written by it. */}
-      {!on && !manual && known && (
-        asking ? (
-          <div className="px-3 py-2.5 border-b border-slate-100 bg-white">
-            <p className="text-xs text-slate-700">
-              <b>{feat.label}</b> is not enabled on this location. Enable it and
-              configure it here?
-            </p>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Adds <span className="font-mono">{feat.func_ids[0]}</span> to the
-              location in BlazeMeter — the agent is only asked to serve what the
-              location says it runs.
-            </p>
-            <div className="flex gap-2 mt-2">
-              <Button onClick={enable} busy={busy}>Enable</Button>
-              {!busy && (
-                <Button kind="ghost" onClick={() => setAsking(false)}>Cancel</Button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <button className="w-full text-left px-3 py-1.5 text-[11px] text-bzm hover:underline"
-            onClick={() => setAsking(true)}>
-            Enable on this location…
-          </button>
-        )
+      {/* Four answers, and they stay four. Not run: where to turn it on, and no
+          control. Run but not by a bundle of this format: which format would,
+          and no control either -- the switches would configure a bundle the
+          generator refuses outright. Run with nothing of its own: said so,
+          rather than left blank. Run: its rows. */}
+      {known && !on ? (
+        <p className="px-3 py-3 text-[11px] text-slate-500">
+          {manual ? (
+            <>Not what this identity was declared to run — pick <b>Enabled</b>{" "}
+              above to configure it.</>
+          ) : (
+            <>Not enabled on this location. Add{" "}
+              <span className="font-mono">{feat.func_ids[0]}</span> to it in
+              BlazeMeter (Settings → Private Locations), then pick the location
+              again — an agent is only asked to serve what its location says it
+              runs.</>
+          )}
+        </p>
+      ) : noFormat ? (
+        <p className="px-3 py-3 text-[11px] text-slate-500">
+          Not possible in this bundle — {noFormat}. Pick{" "}
+          <b>Kubernetes manifests</b> above to configure it.
+        </p>
+      ) : own.length ? (
+        <div className="divide-y divide-slate-100">{rows(p, own)}</div>
+      ) : (
+        <p className="px-3 py-3 text-[11px] text-slate-400">
+          nothing extra to configure — it uses the settings above
+        </p>
       )}
-
-      <div className={!on && !manual && known ? "opacity-60 pointer-events-none select-none" : ""}
-        onClickCapture={!on && !manual && known
-          ? (e) => { e.preventDefault(); setAsking(true); } : undefined}>
-        {own.length
-          ? <div className="divide-y divide-slate-100">{rows(p, own)}</div>
-          : <p className="px-3 py-3 text-[11px] text-slate-400">
-              nothing extra to configure — it uses the settings above
-            </p>}
-      </div>
     </div>
   );
 }
 
+/** Every option the placement card owns, and every option Advanced owns.
+ *  Neither is a declared group, so neither can be filtered by `groupsFor`, and
+ *  both own more than one key -- Advanced tested only `platform` for a while,
+ *  which happened to be right and would have stopped being so the moment
+ *  `run_as_user` and it parted company. */
+const PLACEMENT_KEYS = ["namespace", "service_account_name",
+                        "service_account_create"];
+const ADVANCED_KEYS = ["platform", "run_as_user"];
+
 export function ConfigurePanel(p: ConfigurePanelProps) {
+  // Placement is a section of the form only where the bundle has one, and its
+  // groups are the format's rather than the feature's. Both are answered once
+  // and shared with the rail below: derived twice, the rail and the form are
+  // free to disagree about what is in this bundle, which is the one thing the
+  // rail is for.
+  const placed = keysApply(PLACEMENT_KEYS, p.applies);
   const secs = [
     ...p.features.map((f) => ({
-      id: "f-" + f.id, label: f.label, gs: groupsOf(f.id), anchor: "cfg-f-" + f.id,
+      id: "f-" + f.id, label: f.label,
+      // A feature the location does not run owns nothing here, and neither does
+      // one this format cannot serve: the card states it either way and the
+      // rail agrees, rather than listing groups the card does not show. The
+      // options of a feature that is not run are cleared in App -- hiding a row
+      // does not empty it, and the group is what does. A format's refusal
+      // clears nothing, because the format is what gives way (see sv.patch).
+      gs: runsFeature(p.enabled, f.id) && !p.featureBlocked[f.id]
+        ? groupsFor(groupsOf(f.id), p.applies) : [],
+      // ...and the rail says which of the two "no groups set" is: a feature
+      // running on defaults, or one the location does not run at all.
+      off: p.enabled != null && !runsFeature(p.enabled, f.id),
+      anchor: "cfg-f-" + f.id,
     })),
-    { id: "core", label: "Placement", gs: [] as OptionGroup[], anchor: "cfg-core" },
-    { id: "shared", label: "Configure agent", gs: SHARED_GROUPS, anchor: "cfg-shared" },
+    ...(placed
+      ? [{ id: "core", label: "Placement", gs: [] as OptionGroup[],
+           off: false, anchor: "cfg-core" }]
+      : []),
+    { id: "shared", label: "Agent settings", off: false,
+      gs: groupsFor(SHARED_GROUPS, p.applies), anchor: "cfg-shared" },
   ];
+  /** A section's groups, as the rail worked them out. */
+  const groupsIn = (id: string) => secs.find((s) => s.id === id)?.gs ?? [];
   return (
     <div className="space-y-4">
+      {/* First on the page, and full width: it is the one choice here that
+          decides which of the others are asked at all. */}
+      <SegmentedControl
+        label="Output format"
+        value={p.format}
+        onChange={p.setFormat}
+        options={OUTPUT_FORMATS.map((f) => ({
+          value: f.id, label: f.label, hint: f.hint,
+          // The lead-in is this reader's; sv.ts hands over the clause. What
+          // takes a segment away is what is configured, never the location --
+          // a location that runs mockServices and was answered no generates
+          // any of the three.
+          disabledReason: p.blockedFormats[f.id]
+            && `Not for this configuration — ${p.blockedFormats[f.id]}.`,
+        }))} />
+
+      {/* A format the user picked is never replaced in silence. It is the one
+          correction on this page that overrides a choice made on it, and it
+          survives until a format is picked -- which is the answer to it. */}
+      {p.formatNotice && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          Switched to <b>Kubernetes manifests</b>: the{" "}
+          {OUTPUT_FORMATS.find((f) => f.id === p.formatNotice!.was)?.label
+            ?? p.formatNotice.was}{" "}
+          bundle you had chosen cannot serve service virtualization
+          {p.formatNotice.why ? ` — ${p.formatNotice.why}` : ""}. Switch it off
+          in <b>Service virtualization</b> below to pick that format again.
+        </p>
+      )}
+
       <div className="flex gap-2 items-center flex-wrap">
         <span className="flex-1" />
         <Button kind="ghost" onClick={p.exportProfile}>Export</Button>
@@ -310,6 +410,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               : s.gs.some((g) => p.incomplete.includes(g));
             const detail = todo ? "needs attention"
               : s.id === "core" ? String(p.options.namespace ?? "")
+              : s.off ? "not enabled"
               : set.length ? set.map((g) => g.title).join(", ")
               : "defaults";
             return (
@@ -341,8 +442,15 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             {/* Stacked, not side by side: a card holds group rows, and two
                 columns of those read as two cramped tables. */}
             <div className="space-y-3">
+              {/* The groups are the rail's own answer, handed over rather than
+                  worked out again here: the card and the rail listing different
+                  things is the rail failing at the only job it has. Empty is a
+                  real answer -- Engine sizing is KUBERNETES_RESOURCES_LIMITS_*,
+                  so a docker performance card says "nothing extra to
+                  configure" rather than offering limits nothing reads. */}
               {p.features.map((f) => (
-                <FeatureCard key={f.id} {...p} feat={f} />
+                <FeatureCard key={f.id} {...p} feat={f}
+                  own={groupsIn("f-" + f.id)} />
               ))}
             </div>
             {p.locUnclaimed.length > 0 && (
@@ -355,18 +463,36 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             )}
           </section>
 
+          {/* Where the agent goes in the cluster -- its own section, because a
+              docker bundle has no such place and the whole card goes with the
+              format. Titled as the rail titles it: two names for one section
+              is the rail disagreeing with the form in the smallest way it
+              can. */}
+          {placed && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                Placement
+              </h3>
+              <div id="cfg-core"
+                className="scroll-mt-4 rounded-xl border border-slate-200 p-3">
+                <CoreFields {...p} />
+              </div>
+            </section>
+          )}
+
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-              Deployment settings
+              Agent settings
             </h3>
-            <div className="rounded-xl border border-slate-200 p-3 space-y-3">
-              <div id="cfg-core" className="scroll-mt-4"><CoreFields {...p} /></div>
-              <div id="cfg-shared"
-                className="scroll-mt-4 border border-slate-200 rounded-lg divide-y divide-slate-100">
-                {rows(p, SHARED_GROUPS)}
-                <CraneHookRow {...p} />
-                <AdvancedRow {...p} />
-              </div>
+            <div id="cfg-shared"
+              className="scroll-mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100">
+              {rows(p, groupsIn("shared"))}
+              {/* Both are Kubernetes objects rather than settings: crane-hook
+                  is a Pod, and Advanced is the SCC posture and the UID a pod
+                  runs as. Neither is a group, so neither is in `shared` --
+                  each asks the predicate for the keys it writes. */}
+              {p.applies("crane_hook") && <CraneHookRow {...p} />}
+              {keysApply(ADVANCED_KEYS, p.applies) && <AdvancedRow {...p} />}
             </div>
           </section>
         </div>

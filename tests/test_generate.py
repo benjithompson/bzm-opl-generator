@@ -1306,3 +1306,230 @@ def test_generate_never_asks_how_the_facts_arrived():
         f"generate reads {sorted(read & banned)} -- the manifests are identical "
         f"however the facts arrived, and that is the property facts.manual() "
         f"exists to preserve. The marker is doctor's to read.")
+
+
+# -- the docker format --------------------------------------------------------
+#
+# One agent, one container. Every check below is about the two things a bundle
+# that "looks right" still gets wrong: a command that is not the shape
+# BlazeMeter's own documentation gives, and a Kubernetes option silently read as
+# applied when a docker host has nowhere to put it.
+
+DOCKER = {"output_format": "docker", "ship_id": "bbb222",
+          "auth_token": "de" * 32}
+
+
+def docker_sh(**opts):
+    return gen.generate(FACTS, {**DOCKER, **opts})["bzm-opl-agent.sh"]
+
+
+def test_docker_command_is_the_documented_shape():
+    """BlazeMeter's Docker Command tab and their installation page give this
+    command; api.parse_auth_token at the top of this file parses their version
+    of it. What this generator adds is the bundle's settings -- the shape has to
+    stay theirs, because their documentation is what a customer reads next."""
+    sh = docker_sh(use_secret=False)
+    assert "docker run -d" in sh
+    for flag in ("--restart on-failure",
+                 "-v /var/run/docker.sock:/var/run/docker.sock",
+                 "-v /tmp:/tmp", "-w /usr/src/app/", "--net=host",
+                 "python agent/agent.py"):
+        assert flag in sh, flag
+    # The identity, and the container named as BlazeMeter names it.
+    assert "--env HARBOR_ID=aaa111" in sh
+    assert "--env SHIP_ID=bbb222" in sh
+    assert "NAME=bzm-crane-bbb222" in sh
+    # Which manager this agent is for, stated rather than defaulted -- the
+    # Kubernetes ConfigMap states its own the same way.
+    assert "--env CONTAINER_MANAGER_TYPE=DOCKER" in sh
+    # And it is the crane image the account reports, not a guess.
+    assert FACTS["crane_image"] in sh
+
+
+def test_docker_scripts_are_valid_shell():
+    """Every combination of the four options that change the script's control
+    flow. It is a generated shell script: a quoting mistake in one branch is
+    invisible until somebody runs that branch on a customer's host."""
+    import itertools
+    import subprocess
+    for secret, ca, proxy, reg in itertools.product([True, False], repeat=4):
+        o = dict(DOCKER, use_secret=secret)
+        if ca:
+            o["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nx\n"
+        if proxy:
+            # An apostrophe and a space in the password: the case BlazeMeter's
+            # proxy page warns about, and the one that breaks a bare --env.
+            o["proxy"] = {"http": "http://p:1", "username": "o'brien",
+                          "password": "a b"}
+        if reg:
+            o["private_registry"] = "reg.example.com/bzm"
+        sh = gen.generate(FACTS, o)["bzm-opl-agent.sh"]
+        r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
+                           capture_output=True)
+        assert r.returncode == 0, (secret, ca, proxy, reg, r.stderr)
+
+
+def test_docker_use_secret_keeps_the_token_out_of_the_process_list():
+    """`use_secret` means the same thing here as for Kubernetes -- the
+    credential lives apart from the configuration -- and docker's mechanism for
+    it is --env-file. With it on, a value passed with --env would be in the
+    host's process list for anyone running `ps`."""
+    files = gen.generate(FACTS, DOCKER)
+    sh, env = files["bzm-opl-agent.sh"], files["bzm-opl-agent.env"]
+    # The value, not the name: the script names the variable in the sentence
+    # explaining what the missing file holds, which is not the same as carrying
+    # it.
+    assert "de" * 32 not in sh
+    assert '--env-file "$ENV_FILE"' in sh
+    assert "AUTH_TOKEN=" + "de" * 32 in env
+    # Off, it is inline and there is no second file -- BlazeMeter's own shape.
+    plain = gen.generate(FACTS, {**DOCKER, "use_secret": False})
+    assert "bzm-opl-agent.env" not in plain
+    assert "--env AUTH_TOKEN=" + "de" * 32 in plain["bzm-opl-agent.sh"]
+
+
+def test_docker_proxy_credentials_move_with_the_token():
+    """A proxy URL carries user:password (see proxy_url), so it is a credential
+    too -- the same rule the Kubernetes Secret follows."""
+    o = dict(DOCKER, proxy={"http": "http://p:1", "https": "http://p:1",
+                            "username": "u", "password": "pw"})
+    files = gen.generate(FACTS, o)
+    assert "HTTP_PROXY" not in files["bzm-opl-agent.sh"]
+    assert "HTTP_PROXY=http://u:pw@p:1" in files["bzm-opl-agent.env"]
+    # NO_PROXY is not a credential and stays in the command -- and it is the
+    # docker default, not the cluster one: `kubernetes.default` is the API
+    # service and resolves to nothing on a docker host.
+    assert "kubernetes.default" not in files["bzm-opl-agent.sh"]
+    assert "127.0.0.1,localhost" in files["bzm-opl-agent.sh"]
+
+
+def test_docker_ca_bundle_is_mounted_where_the_variables_point():
+    """BlazeMeter's CA page fixes the container path: the bundle replaces the
+    container's own store at /etc/ssl/certs/ca-certificates.crt, and both
+    REQUESTS_CA_BUNDLE and AWS_CA_BUNDLE have to name it."""
+    files = gen.generate(FACTS, {**DOCKER, "ca_bundle": "PEM\n"})
+    sh = files["bzm-opl-agent.sh"]
+    assert files["ca-bundle.crt"] == "PEM\n"
+    assert '-v "$CA_BUNDLE":/etc/ssl/certs/ca-certificates.crt:ro' in sh
+    assert "--env REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in sh
+    assert "--env AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in sh
+
+
+def test_docker_auto_update_is_the_docker_variable_and_only_when_answered():
+    """AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE -- a different variable for a
+    different mechanism. Unanswered it is left out: there is no Deployment here
+    for a self-update to fight over, which is the hazard the Kubernetes path
+    forces its own off for."""
+    assert "AUTO_UPDATE" not in docker_sh()
+    assert "--env AUTO_UPDATE=true" in docker_sh(auto_update=True)
+    assert "--env AUTO_UPDATE=false" in docker_sh(auto_update=False)
+    assert "AUTO_KUBERNETES_UPDATE" not in docker_sh(auto_update=True)
+
+
+def test_docker_readme_names_what_it_could_not_carry():
+    """The failure this exists to stop is silent: a bundle generated with a node
+    selector and a namespace, handed over, and believed to have applied them.
+    Only what was actually set away from its default -- a note listing all
+    twenty-two every time would be read as boilerplate."""
+    readme = gen.generate(FACTS, {**DOCKER, "namespace": "other",
+                                  "node_selector": {"a": "b"}})["README.md"]
+    assert "## Set here, but not carried" in readme
+    assert "`namespace`" in readme
+    assert "`node_selector`" in readme
+    # ...and a bundle that asked for none of them says nothing about them.
+    assert "Set here, but not carried" not in gen.generate(FACTS, DOCKER)["README.md"]
+
+
+def test_docker_names_the_two_options_that_used_to_go_quiet():
+    """crane_hook renders a Pod and registry_auth writes ConfigMap lines, and
+    the docker branch returns before either. Both were set-able and silent --
+    found by hiding this table's keys on the configure page and noticing the
+    two controls still on screen."""
+    readme = gen.generate(FACTS, {**DOCKER, "crane_hook": True,
+                                  "private_registry": "reg.corp/bzm",
+                                  "registry_auth": True})["README.md"]
+    assert "`crane_hook`" in readme
+    assert "`registry_auth`" in readme
+    bundle = gen.generate(FACTS, {**DOCKER, "crane_hook": True})
+    assert not [f for f in bundle if "cranehook" in f]
+
+
+def test_a_format_never_refuses_what_it_says_it_ignores():
+    """The rule, over the whole table rather than the three keys that happened
+    to break it.
+
+    An ignored option has no control on the configure page for that format, so
+    a refusal over its value is a blocker with nothing on screen to clear it.
+    Three validators ran before anyone checked: `service_account_name` (empty
+    was refused), the two engine limits, and the CA modes -- picking an
+    existing ConfigMap, switching to docker and pasting a PEM gave "choose one
+    CA mode" naming a field that format had just taken away.
+
+    Junk in every one of them at once, because they are ignored: nothing reads
+    them, so nothing can object to the shape. The README still names them all,
+    which is the other half of the promise and the assertion below."""
+    junk = {k: "nonsense" for k in gen.DOCKER_IGNORED}
+    out = gen.generate(FACTS, {**DOCKER, **junk})
+    for key in gen.DOCKER_IGNORED:
+        assert f"`{key}`" in out["README.md"], f"{key} carried silently"
+    # ...and the CA pair that is reachable by clicking: the inline PEM wins and
+    # the ConfigMap it was switched away from is ignored, not a second mode.
+    both = gen.generate(FACTS, {**DOCKER, "ca_existing_configmap": "corp-trust",
+                                "ca_bundle": "-----BEGIN CERTIFICATE-----"})
+    assert both[gen.DOCKER_CA_FILE] == "-----BEGIN CERTIFICATE-----"
+
+
+def test_the_other_formats_still_refuse_all_of_it():
+    """The rule above is about a format that ignores an option, not a licence
+    to stop checking. Kubernetes has every one of these fields, so each is
+    still refused there -- otherwise the fix would have bought the off-screen
+    blocker back as a bad manifest."""
+    k8s = {"ship_id": "bbb222", "auth_token": "de" * 32}
+    for over in ({"service_account_name": ""},
+                 {"engine_cpu_limit": "not-a-cpu"},
+                 {"engine_mem_limit": "not-a-memory"},
+                 {"ca_existing_configmap": "cm", "ca_bundle": "PEM"}):
+        with pytest.raises(ValueError):
+            gen.generate(FACTS, {**k8s, **over})
+
+
+def test_docker_reports_the_engine_size_it_actually_carries():
+    """The limits are ignored, so the README must not advertise them: a page
+    that says "each engine needs 4 CPU" under a footer saying the option was
+    not carried is two answers to one question."""
+    readme = gen.generate(FACTS, {**DOCKER, "engine_cpu_limit": "4",
+                                  "engine_mem_limit": "16Gi"})["README.md"]
+    assert "4 CPU + 16GiB RAM" not in readme
+    assert "`engine_cpu_limit`" in readme      # named as not carried, though
+
+
+def test_docker_readme_does_not_advertise_kubernetes_answers():
+    """The bundle table is shared with the other two formats, where namespace
+    and platform are the answer. Here they are neither applied nor applicable,
+    and a page that opens by stating them contradicts its own footer."""
+    readme = gen.generate(FACTS, {**DOCKER, "namespace": "other"})["README.md"]
+    head = readme.split("## Run it")[0]
+    assert "Namespace" not in head
+    assert "Platform" not in head
+    assert "bzm-crane-bbb222" in head
+
+
+def test_docker_refuses_a_service_virtualization_location():
+    """The same refusal as helm's, for the same reason: a docker agent can serve
+    virtual services, but it publishes them with HOSTNAME_OVERRIDE and a TLS
+    pair, and every sv_* option here is a KUBERNETES_WEB_EXPOSE_* one."""
+    sv_facts = {**FACTS, "func_ids": ["performance", "mockServices"]}
+    with pytest.raises(ValueError) as e:
+        gen.generate(sv_facts, {**DOCKER, "sv_ingress": "nginx",
+                                "sv_subdomain": "apps.example.com",
+                                "sv_tls_secret": "wild"})
+    assert "HOSTNAME_OVERRIDE" in str(e.value)
+
+
+def test_docker_profile_replays_and_carries_no_token():
+    """The same contract every format has: profile.json is every resolved option
+    and no credential."""
+    files = gen.generate(FACTS, DOCKER)
+    profile = json.loads(files["profile.json"])
+    assert profile["output_format"] == "docker"
+    assert "auth_token" not in profile

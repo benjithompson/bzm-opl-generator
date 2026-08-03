@@ -22,7 +22,7 @@ of these options that cluster decides and which it only narrows —
 | Option | Default | Meaning |
 |---|---|---|
 | `platform` | `openshift` | `openshift` = SCC-friendly (no `runAsUser`, engines inherit the SCC-assigned UID); `k8s` = pinned `runAsUser` 1337. The difference is which side chooses the UID: OpenShift's SCC assigns one from the namespace's range and rejects a pod that pins its own, while plain Kubernetes assigns nothing and a restricted PodSecurity namespace then refuses the pod for running as root. So neither setting is a superset of the other, and the wrong one fails at admission rather than at generate time. It is a posture, not a product: the OpenShift default installs on vanilla Kubernetes too wherever the namespace assigns UIDs. |
-| `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay -- see [Helm](helm.md). The same deployment expressed twice rather than two codebases, which `tests/helm_parity.py` is what holds it to. Refused for a service-virtualization location, whose ingress the chart does not carry. |
+| `output_format` | `manifests` | `manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus a values overlay -- see [Helm](helm.md). The same deployment expressed twice rather than two codebases, which `tests/helm_parity.py` is what holds it to. `docker` is the other platform entirely: one agent as one container on a host with a docker daemon, emitted as a `docker run` script in BlazeMeter's own documented shape -- see [Docker](docker.md). Most options here are Kubernetes vocabulary and reach nothing in it, and its README names the ones this bundle set. All three refuse a service-virtualization location except `manifests`, whose ingress is the only one carried. |
 | `namespace` | `blazemeter` | The namespace every generated object carries, and the one crane's Role and RoleBinding are scoped to. Crane creates engine pods here, so it is also where the tests run. The bundle does **not** create the namespace -- `kubectl create namespace` first, or `helm install --create-namespace`. `doctor -n` overrides it for a check without re-generating. |
 
 ### Credentials
@@ -119,12 +119,15 @@ Objects that check the cluster rather than serve tests on it. They are not part 
 
 ## The service account
 
-`service_account_name` is required in both output formats, including with
-`service_account_create: false`, and an empty one is refused rather than
-resolved. The tempting fallback — and what most Helm charts scaffold — is the
-namespace's `default` ServiceAccount: that installs cleanly, runs, and binds
-crane's Role to the account every other pod in the namespace runs as. A blank
-field should not be able to decide that.
+`service_account_name` is required in both Kubernetes formats — manifests and
+the chart — including with `service_account_create: false`, and an empty one is
+refused rather than resolved. The tempting fallback — and what most Helm charts
+scaffold — is the namespace's `default` ServiceAccount: that installs cleanly,
+runs, and binds crane's Role to the account every other pod in the namespace
+runs as. A blank field should not be able to decide that.
+
+`--format docker` has no ServiceAccount at all, so it neither reads the option
+nor refuses an empty one: see [the docker bundle](docker.md).
 
 With `create` off nothing else changes: the Deployment's `serviceAccountName`
 and both binding subjects name the account you gave. If it is not there, nothing

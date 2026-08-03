@@ -33,6 +33,8 @@ import {
   SavedBundle, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
+// The served docker-ignored table, from the one copy of it.
+import { DOCKER_IGNORED } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
@@ -217,12 +219,312 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
-    // ...and the chart is refused with the sentence, rather than disappearing.
-    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    // ...and both formats that cannot publish a virtual service are refused
+    // with their own sentence, rather than disappearing. On this step, because
+    // the format decides which of the questions above it are asked.
     const chart = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
-    expect(screen.getByText(/which this chart does not carry/)).toBeTruthy();
+    const docker = screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(true);
+    expect(screen.getByText(/HOSTNAME_OVERRIDE/)).toBeTruthy();
+
+    // #115: the profile arrived asking for a chart and is being generated as
+    // manifests instead, so the page says so. It used to happen in silence,
+    // which is the one correction here that overrides a choice rather than
+    // completing one. The chart's own sentence is therefore on screen twice --
+    // under the disabled segment, and in the notice naming what was replaced.
+    expect(screen.getAllByText(/which this chart does not carry/).length)
+      .toBe(2);
+    expect(screen.getByText(/Switched to/)).toBeTruthy();
+  });
+
+// -- a feature the location does not run -------------------------------------
+// #113. It was half-configurable, in both source modes and differently in each.
+// Manual mode had no guard at all: flipping Service virtualization on for an
+// identity declared as performance seeded `sv_ingress: nginx` behind empty
+// subdomain and TLS fields, and the rail went red for something nothing on the
+// page had asked for. Connect mode had the mirror -- the card body carried
+// `pointer-events-none` AND the click handler meant to intercept it, on the
+// same element, so a group opened by a restored profile had a switch that could
+// not be pressed and a download blocked by a row nobody could reach.
+//
+// Both need a page: what a *card* offers, and what the options end up as after
+// the page has settled, is exactly what optionGroups.test.ts cannot see.
+
+/** An account whose vocabulary carries both features and whose one location
+ *  runs only the first -- which is the state the card has to state. */
+function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }],
+    workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
+    locations: async () => [{
+      id: "h-perf", name: "Perf", funcIds: ["performance"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-perf", func_ids: ["performance"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+    optionDefaults: async () => ({
+      namespace: "blazemeter", service_account_name: "crane",
+      output_format: "manifests",
+    }),
+    funcIdChoices: async () => [],
+    features: async () => [
+      { id: "performance", label: "Performance & functional testing",
+        namespace: "blazemeter", func_ids: ["performance"] },
+      { id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
+        func_ids: ["mockServices"] },
+    ],
+    svConstants: async () => ({
+      func_ids: ["mockServices"], ingress_types: ["nginx"],
+      backends: { nginx: { group: "networking.k8s.io",
+                           resources: ["ingresses"], creates: "Ingress",
+                           nodeport_ok: true } },
+    }),
+    generate: async (_facts: unknown, options: Options) => {
+      record.push(options);
+      return { files: [], token: { branch: "placeholder" as const,
+                                   ship_id: "s-1", message: "" } };
+    },
+    ...extra,
+  });
+}
+
+/** One feature's card, by the anchor the rail already links to. Found by id
+ *  rather than by its label, which is on screen twice -- the card and the rail
+ *  entry pointing at it. */
+const card = (featureId: string) =>
+  within(document.getElementById("cfg-f-" + featureId)!);
+
+test("a feature a manually entered identity was not declared to run has no switches",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={twoFeatureAccount(asked)} />);
+
+    // Manual entry, which is where there was no guard: nothing is read, so the
+    // declaration below is the only thing that says what this location runs.
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+    fireEvent.change(screen.getByLabelText(/^Harbor ID/),
+                     { target: { value: "6a63a79dcc45dccca90bf440" } });
+    fireEvent.change(screen.getByLabelText(/^Ship ID/),
+                     { target: { value: "6a679d3445115b6651011715" } });
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // Declared performance -- the first served feature, which is what a manual
+    // identity opens on.
+    await waitFor(() => expect(
+      card("performance").getByLabelText("Enabled")).toHaveProperty("checked", true));
+
+    // The card for the other one states it and offers nothing. A switch here
+    // was pressable, seeded an ingress with no domain behind it, and turned the
+    // step red for a feature nobody had asked for.
+    expect(card("sv").queryByRole("switch")).toBeNull();
+    expect(card("sv").getByText(/pick/)).toBeTruthy();
+    // ...and this is not passing because no card rendered anything: the
+    // declared feature keeps its own group.
+    expect(card("performance").getAllByRole("switch").length).toBeGreaterThan(0);
+
+    // ...and nothing was seeded, so the rail has nothing to complain about.
+    // The switch used to write `sv_ingress: nginx` over empty subdomain and TLS
+    // fields, which is what turned this step red.
+    expect(screen.queryByText(/needs attention/)).toBeNull();
+  });
+
+test("a restored profile's SV options for a location without mockServices are cleared, not left blocking",
+  async () => {
+    // The state the page cannot be clicked out of: nothing here pressed the SV
+    // switch, so nothing on screen could press it back.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-perf", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "blazemeter", sv_ingress: "nginx" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={twoFeatureAccount(asked)} />);
+
+    // The download is not blocked. This is the failure: the option opens the SV
+    // group through detectGroups, `svIncomplete` sees an ingress with no
+    // subdomain, and the rail reds -- for a row that was inert (connect mode
+    // put `pointer-events-none` on the body) and is now not there at all.
+    const next = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Next/ });
+    await waitFor(() => expect(next.disabled).toBe(false));
+    expect(screen.queryByText(/needs attention/)).toBeNull();
+    expect(screen.queryByText(/Service virtualization first/)).toBeNull();
+    // ...and the option itself is gone from the bundle, not merely off screen:
+    // generate() refuses an ingress with no subdomain whatever the location
+    // runs, so hiding the row alone moves the blocker to the server.
+    await waitFor(() => expect(
+      asked[asked.length - 1]?.sv_ingress).toBeFalsy());
+
+    // The card states the feature and names where it is turned on -- with the
+    // funcId, because that is what the customer has to add and this page will
+    // not. No switch: nothing here can put the options back.
+    expect(card("sv").getByText(/Not enabled on this location/)).toBeTruthy();
+    expect(card("sv").getByText("mockServices")).toBeTruthy();
+    expect(card("sv").getByText(/Settings → Private Locations/)).toBeTruthy();
+    expect(card("sv").queryByRole("switch")).toBeNull();
+  });
+
+// -- a format that cannot serve a feature ------------------------------------
+// #115, and what #113 left reachable. The blocked formats were read off the
+// location's *demand*, and generate() refuses on the *configuration*: _sv_cfg
+// returns a config without ever looking at the funcIds. The gap between the two
+// is a location whose funcIds carry no served feature -- `enabled` is null,
+// nobody has said, so notRunPatch clears nothing and every switch is offered.
+// Real accounts have them: tdm, dataPublisher and delphix are all funcIds this
+// tool models no feature for.
+
+/** ...that account, with such a location. */
+const unclaimedAccount = (record: Options[]) =>
+  twoFeatureAccount(record, {
+    locations: async () => [{
+      id: "h-tdm", name: "Tdm", funcIds: ["tdm"], slots: 1,
+      ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+    }],
+    facts: async () => ({
+      harbor_id: "h-tdm", func_ids: ["tdm"],
+      ships: [{ id: "s-1", name: "agent-1" }], images: [],
+    }),
+  });
+
+test("an SV configuration no location demanded still takes away the formats that refuse it",
+  async () => {
+    // A restored session is one of the three ways these options arrive without
+    // anyone pressing anything, and the only one that needs no account to
+    // reproduce. Docker plus a complete SV configuration: generate() refuses
+    // the pair outright, and nothing on the page used to say so -- the segment
+    // was enabled, the rail was green and the download was not blocked.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-tdm", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: {
+        namespace: "blazemeter", output_format: "docker",
+        sv_ingress: "nginx", sv_subdomain: "apps.example.com",
+        sv_tls_secret: "wildcard",
+      },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={unclaimedAccount(asked)} />);
+
+    // The acceptance criterion, as the assertion: no request carries the pair
+    // the server refuses. Not "the error is nicer" -- the combination never
+    // reaches generate() at all.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked.filter((o) => o.output_format === "docker" && o.sv_ingress
+      && o.sv_ingress !== "none")).toEqual([]);
+    // The SV options are what survive; the format is what gives way. Nothing
+    // here wipes a configuration somebody wrote in order to keep a format.
+    expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx");
+    expect(asked[asked.length - 1]?.output_format).toBe("manifests");
+
+    // ...and the page said so rather than swapping the segment in silence.
+    expect(await screen.findByText(/Switched to/)).toBeTruthy();
+    const docker = screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(true);
+  });
+
+test("a feature this bundle's format cannot serve is stated, not offered",
+  async () => {
+    // The same card as #113's, for the other reason it can carry no switches --
+    // and the two must not be confused. This location's funcIds say nothing, so
+    // "not enabled here" is false; what is true is that no docker bundle can
+    // publish a virtual service whatever the location runs.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-tdm", shipId: "s-1",
+      manual: { harbor_id: "", ship_id: "" },
+      options: { namespace: "blazemeter", output_format: "docker" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={unclaimedAccount(asked)} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
+
+    // No switch: pressing one would configure a bundle the generator refuses,
+    // and the format would then be yanked out from under the choice just made.
+    await waitFor(() => expect(card("sv").queryByRole("switch")).toBeNull());
+    // It says which of the two answers this is, and names the format that can.
+    expect(card("sv").getByText(/Not possible in this bundle/)).toBeTruthy();
+    expect(card("sv").queryByText(/Not enabled on this location/)).toBeNull();
+
+    // ...and it comes back on a format that can serve it, rather than being
+    // gone for good: the card is a view over the bundle, not a decision.
+    fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
+    await waitFor(() =>
+      expect(card("sv").queryByRole("switch")).not.toBeNull());
+  });
+
+test("the docker format is a third bundle, and it is what gets generated",
+  async () => {
+    const asked: Options[] = [];
+    render(<App api={accountOf([loc("h-0", "Dublin",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      generate: async (_facts: unknown, options: Options) => {
+        asked.push(options);
+        return { files: [], token: { branch: "placeholder" as const,
+                                     ship_id: "s-1", message: "" } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    // The row, not the path line under the flow: an offline lone agent is
+    // auto-picked, so its name is already on screen twice.
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // Offered for an ordinary performance location -- the two Kubernetes
+    // formats are not the only platform BlazeMeter runs a private location on.
+    const docker = await screen.findByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ });
+    expect(docker.disabled).toBe(false);
+    // Before: this is a Kubernetes bundle, so it has a namespace and an
+    // account to run as, and the form asks for both.
+    expect(screen.getByDisplayValue("blazemeter")).toBeTruthy();
+    expect(screen.getByDisplayValue("crane")).toBeTruthy();
+    fireEvent.click(docker);
+
+    // The choice reaches the request rather than only the control: the whole
+    // bundle is decided server-side from this one option.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.output_format).toBe("docker"));
+
+    // ...and the questions it makes no sense of are off this step. This is why
+    // the control moved here: choosing docker on the download step left the
+    // form above it asking for a namespace, a ServiceAccount and a node
+    // selector for a bundle that carries none of them, and the only place that
+    // said so was the generated README.
+    await waitFor(() => expect(screen.queryByDisplayValue("crane")).toBeNull());
+    expect(screen.queryByDisplayValue("blazemeter")).toBeNull();
+    expect(screen.queryByText(/Deployment placement/)).toBeNull();
+    expect(screen.queryByText(/^Scheduling$/)).toBeNull();
+    expect(screen.queryByText(/Engine sizing/)).toBeNull();
+    expect(screen.queryByText(/crane-hook/)).toBeNull();
+    // The two that a container genuinely has are still on screen, in the
+    // vocabulary that reaches it rather than the cluster's.
+    expect(screen.getByText(/Security & RBAC/)).toBeTruthy();
+    expect(screen.getByText(/HTTP\(S\) proxy/)).toBeTruthy();
+
+    // The download step names the format it did not choose, and says what the
+    // bundle holds -- which is not a manifest.
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    expect(await screen.findByText(/bzm-opl-agent\.sh/)).toBeTruthy();
+    expect(screen.getByText(/change it in Configure/)).toBeTruthy();
   });
 
 // -- the download step, through the page -------------------------------------
@@ -453,6 +755,11 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       func_ids: ["performance"],
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    // generate.DOCKER_IGNORED as the page receives it, from the one copy of
+    // that table (see fixtures.ts -- this used to be a second, shorter slice,
+    // which is how a page test comes to assert against a table the unit test
+    // would call incomplete).
+    dockerIgnored: async () => DOCKER_IGNORED,
     generate: async () => ({
       files: [], token: { branch: "placeholder" as const, ship_id: null,
                           message: "" },

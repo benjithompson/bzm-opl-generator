@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
-  allGroupsOff, detectGroups, groupsOf, SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
-  incompleteGroups, OPTION_GROUPS, OptionGroup, serviceAccountOk, startFeature,
+  allGroupsOff, configureBlockedBy, detectGroups, enabledFeatures, groupsOf,
+  SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
+  incompleteGroups, notRunPatch, OPTION_GROUPS, OptionGroup, runsFeature,
+  serviceAccountOk, startFeature,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
 
@@ -364,6 +366,77 @@ describe("which feature a location starts on", () => {
   });
 });
 
+// -- a feature the location does not run --------------------------------------
+// #113. Stated on the page, configured nowhere. The three answers below have to
+// stay three: run, not run, and nobody has said -- collapse the third into
+// either and the page either takes the switches off a location that does run
+// the feature, or claims an enablement no account has confirmed.
+
+describe("which features a location runs", () => {
+  it("takes manual mode's declaration, and nothing else", () => {
+    // No account to read, so the declaration is the whole answer -- and it is
+    // an answer, which is why this is never null.
+    expect(enabledFeatures("manual", "performance", [])).toEqual(["performance"]);
+    expect(enabledFeatures("manual", "sv", ["performance"])).toEqual(["sv"]);
+    expect(enabledFeatures("manual", null, [])).toEqual([]);
+  });
+
+  it("keeps unanswered distinct from answered-none", () => {
+    expect(enabledFeatures("connect", "performance", [])).toBe(null);
+    expect(enabledFeatures("connect", "performance", ["sv"])).toEqual(["sv"]);
+  });
+
+  it("treats unanswered as running everything", () => {
+    // The safe direction: a switch shown for a feature that turns out not to
+    // apply is corrected the moment the account answers, where one hidden on a
+    // guess leaves a location with nowhere to configure what it does run.
+    expect(runsFeature(null, "sv")).toBe(true);
+    expect(runsFeature(["performance"], "sv")).toBe(false);
+    expect(runsFeature(["performance", "sv"], "sv")).toBe(true);
+    expect(runsFeature([], "sv")).toBe(false);
+  });
+});
+
+describe("options set for a feature the location does not run", () => {
+  const perfOnly = ["performance"];
+
+  it("clears them, through the group's own disable", () => {
+    // The state a profile, a restored session or a location picked after the
+    // form was filled in can all reach, and which no control on the page can
+    // undo -- there is no SV switch on a location that does not run mocks.
+    expect(notRunPatch({ sv_ingress: "nginx" }, perfOnly))
+      .toEqual({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
+                 sv_istio_gateway: null });
+  });
+
+  it("settles in one pass", () => {
+    // Applying the patch has to make its own condition false, or the page's
+    // effect writes forever -- the property sv.correction is held to as well.
+    const o: Options = { sv_ingress: "nginx", sv_subdomain: "apps.x.com" };
+    const once = { ...o, ...notRunPatch(o, perfOnly) };
+    expect(notRunPatch(once, perfOnly)).toBe(null);
+  });
+
+  it("leaves the shared groups and the features that are run alone", () => {
+    // Registry belongs to no feature, so no location is without it; sizing
+    // belongs to performance, which this one runs.
+    expect(notRunPatch({ private_registry: "reg.corp/bzm",
+                         engine_cpu_limit: "2" }, perfOnly)).toBe(null);
+  });
+
+  it("clears nothing while nobody has answered", () => {
+    // An account still being read must not have its options wiped on the way.
+    expect(notRunPatch({ sv_ingress: "nginx" }, null)).toBe(null);
+  });
+
+  it("declines rather than clears where the location demands the feature", () => {
+    // SV_NONE is the recorded decline of a location that runs mockServices --
+    // an answer, not a configuration -- so `detect` is false and there is
+    // nothing here to do even when the feature is not in `enabled`.
+    expect(notRunPatch({ sv_ingress: SV_NONE }, perfOnly)).toBe(null);
+  });
+});
+
 describe("the suggested namespace", () => {
   it("suggests the feature's namespace when the field is empty", () => {
     expect(suggestNamespace("", SV, FEATURES)).toBe("blazemeter-sv");
@@ -529,5 +602,60 @@ describe("serviceAccountOk", () => {
     const owned = OPTION_GROUPS.flatMap((g: OptionGroup) => g.keys);
     expect(owned).not.toContain("service_account_name");
     expect(owned).not.toContain("service_account_create");
+  });
+});
+
+// -- what the configure step still needs -------------------------------------
+// One derivation behind two things on screen: the tick beside step 2 and the
+// line saying why it has none. The line used to be a fixed string naming a
+// namespace, a service account and "any unfinished group" whatever the bundle
+// was, so a docker bundle -- which has neither of the first two, by design --
+// was told to fix two fields that are deliberately not on the page.
+
+describe("configureBlockedBy", () => {
+  /** Every option applies: a Kubernetes bundle. */
+  const k8s = () => true;
+  /** ...and one where the placement fields are not fields at all. */
+  const docker = (k: string) =>
+    !["namespace", "service_account_name", "service_account_create"].includes(k);
+  const filled = { namespace: "blazemeter", service_account_name: "crane" };
+
+  it("says nothing when nothing is outstanding", () => {
+    // Empty is what ticks the step off, so this is the same assertion twice.
+    expect(configureBlockedBy(filled, k8s, [])).toBe("");
+  });
+
+  it("names the placement fields a cluster bundle is missing", () => {
+    expect(configureBlockedBy({}, k8s, [])).toBe(
+      "a namespace and a service account first");
+    expect(configureBlockedBy({ namespace: "ns" }, k8s, []))
+      .toBe("a service account first");
+  });
+
+  it("never names a field this format does not have", () => {
+    // The bug: both were named for a docker bundle, which has no namespace and
+    // no ServiceAccount -- and the fields are not on screen to be corrected.
+    expect(configureBlockedBy({}, docker, [])).toBe("");
+    // ...and an unfinished group is still named, because that one is real.
+    expect(configureBlockedBy({}, docker, [GROUP_BY_ID.sv]))
+      .toBe("Service virtualization first");
+  });
+
+  it("asks the predicate rather than trusting a filled-in field", () => {
+    // A docker bundle carries a namespace in its options -- the value is kept,
+    // not wiped -- so "is it filled in" cannot answer "is it a field here".
+    expect(configureBlockedBy({ namespace: "" }, docker, [])).toBe("");
+  });
+
+  it("names the group by the title on its own row", () => {
+    // The sentence is a way back to a control, so it says what that control
+    // says. A second wording here would be a second name for one row.
+    expect(configureBlockedBy(filled, k8s, [GROUP_BY_ID.sv, GROUP_BY_ID.ca]))
+      .toBe(`${GROUP_BY_ID.sv.title} and ${GROUP_BY_ID.ca.title} first`);
+  });
+
+  it("joins three the way a sentence does", () => {
+    expect(configureBlockedBy({}, k8s, [GROUP_BY_ID.sv])).toBe(
+      "a namespace, a service account and Service virtualization first");
   });
 });

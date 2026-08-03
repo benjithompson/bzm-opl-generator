@@ -235,6 +235,31 @@ missing tools. The rest is what it cannot fix for you.
   Don't reintroduce one: a feature is a view over a location's options, never a
   scope on what gets generated.
 
+  **The format is step 2's first control, and the form follows it.** A feature
+  hides nothing; a *format* genuinely does, and the two must not be confused.
+  It used to be chosen on the download step, one step too late: Configure asked
+  for a namespace, a ServiceAccount, node selectors and engine limits, and a
+  docker bundle carries none of them — the generated README was the only thing
+  that said so. So the segmented control moved to the top of Configure, and what
+  is on screen is derived from `formats.optionApplies` over the generator's own
+  `DOCKER_IGNORED`, **served** as `/api/docker-ignored`. Never restate that
+  table in TypeScript — it is two dozen keys, and a key added to the generator
+  would go on being offered for a format that drops it. The one copy that has to
+  exist is `fixtures.ts`, for tests that run without a server, and a Python test
+  holds it equal to the generator's; there were briefly two of those, five keys
+  apart, which is `tests/evidence_fixtures.py`'s lesson one layer up.
+  `optionGroups.groupsFor` drops a group whose every declared key is ignored;
+  one with some keeps its row and hides the rest inside its own body, so each
+  group body takes the `Applies` predicate rather than a format string, and a
+  section that is not a group (placement, Advanced) uses `keysApply` over the
+  keys it owns rather than testing one by hand. An **empty** table means "not
+  read yet" and everything applies: showing a field too many beats hiding a
+  required one on a guess. Hiding is never a refusal — the value is kept, sent,
+  and named in the bundle's README, and `generate.ignored_options()` is the same
+  rule on that side. Where a hidden field needs explaining, render the served
+  *reason* (`whyIgnored`) rather than writing a second copy of the generator's
+  sentence.
+
   **The planner is step 1's first card, not a view of its own.** `steps/
   CapacityProfile` states the profile and one Edit expands it downward; picking
   a location opens what that profile would change about it, as before → after
@@ -249,19 +274,65 @@ missing tools. The rest is what it cannot fix for you.
   and the largest is one agent at 50 slots. Where the count is a *fact* -- a
   location that exists -- it is read off that location.
 
-  **Three writes to the account come from this page and nowhere else** —
-  `POST /api/ships/token` (regenerate), `POST /api/locations/func-id` (enable a
-  feature) and `POST /api/locations/settings` — and each says what it costs
-  before it is pressed. The third re-reads the location afterwards and reports
-  *that*, not the request: BlazeMeter's own POST accepts `threadsPerEngine` and
-  does not store it, so a form echoing back what was typed would show a value
-  the account never took. Verified live against a real location: the panel
-  reported `1 → 4, 500 → 400, not set → 2, not set → 8192` and the account held
-  exactly that. `core.LOCATION_SETTINGS` is a closed set for the same reason
-  `add_func_id` exists — a general passthrough would let `funcIds` be replaced
-  wholesale by a caller that meant to add one. Every route that writes carries
-  `server._writes`, which drops the cache after it; a test asserts that over the
-  app's own routes, because the one that had to remember had forgotten.
+  **Two writes to the account come from this page and nowhere else** —
+  `POST /api/ships/token` (regenerate) and `POST /api/locations/settings` — and
+  each says what it costs before it is pressed. The second re-reads the location
+  afterwards and reports *that*, not the request: BlazeMeter's own POST accepts
+  `threadsPerEngine` and does not store it, so a form echoing back what was
+  typed would show a value the account never took. Verified live against a real
+  location: the panel reported `1 → 4, 500 → 400, not set → 2, not set → 8192`
+  and the account held exactly that. `core.LOCATION_SETTINGS` is a closed set
+  because BlazeMeter's PATCH replaces `funcIds` wholesale, so a general
+  passthrough would drop every feature a caller did not name. Every route that
+  writes carries `server._writes`, which drops the cache after it; a test
+  asserts that over the app's own routes, because the one that had to remember
+  had forgotten.
+
+  There was a third — `POST /api/locations/func-id`, behind "Enable on this
+  location…" on the configure step — and #113 removed it, along with
+  `core.add_func_id` and `api.update_private_location`'s `func_ids`. The other
+  two change an agent's credential and a location's concurrency; turning a
+  funcId on changes what the location *is*, which is BlazeMeter's own UI's.
+  **A feature is judged twice, and the two are different questions.** The
+  location decides whether it is *run*; the format decides whether this bundle
+  can *serve* it, and a card can be silent for either reason without them being
+  the same reason. `sv.featureBlocked` is the second, keyed by feature id, and
+  it says so in its own sentence — "not possible in this bundle" and "not
+  enabled on this location" are separate answers and the card gives only the
+  true one. Don't generalise it into a served "which features does a format
+  refuse" table: helm and docker refuse *one* feature and nothing else refuses
+  any, and `DOCKER_IGNORED` is docker-only precisely because helm ignores
+  nothing — it refuses. **A format's refusal clears no options**; the *format*
+  gives way (`sv.correction`), because a configuration somebody wrote outranks
+  a segment, and only `notRunPatch` — the location's answer — wipes anything.
+
+  **`blockedFormats` follows what is configured, never what is demanded** (#115).
+  `generate()` refuses a helm or docker bundle on `_sv_cfg` returning a config,
+  and `_sv_cfg` never reads the funcIds before it does. Read off the demand, the
+  gap was a location whose funcIds carry no served feature — `enabledFeatures`
+  answers null, `runsFeature` reads null as yes, so every switch is offered and
+  `notRunPatch` clears nothing — and a full SV configuration generated as docker
+  and was refused by the server with the segment still enabled. Real accounts
+  have such locations (tdm, dataPublisher, delphix). `svState` therefore takes
+  `runs` as a fourth input: options on their way out must not take a format with
+  them, or a docker choice valid all along is lost on the way past. The
+  formats the page blocks are held to the ones `generate()` actually raises on,
+  by `test_server.py`, because the two refusals are far apart and easy to grow a
+  third of.
+
+  **A format the user picked is never replaced in silence.** The correction is
+  the one write on this page that overrides a choice made on it rather than
+  completing one, so App records what it replaced and the panel says so until a
+  format is picked.
+
+  **A feature the location does not run is stated, never configured**: its card
+  names it and says where it is enabled, and `optionGroups.runsFeature` takes
+  its groups off the page. Hiding a row is only half — `notRunPatch` clears the
+  options too, through each group's own `disable`, because `generate()` refuses
+  an `sv_ingress` with no subdomain whatever the location runs and a hidden row
+  would just move the blocker to the server. The three states stay three
+  (`enabledFeatures`): runs, does not run, and nobody has said, which is null
+  and shows everything.
 
 - **`profile.json` is the bundle, and only the bundle.** It carries every
   resolved *option* — 35 of them — so `generate --profile` replays a bundle
@@ -373,6 +444,33 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   `cmd_livetest` before the token mint and again at the top of `livetest.run`
   before the try block — outside it, because that `finally` tears down a cluster.
   Unreadable is a note, not a refusal.
+- **`--format docker` is a different platform, not a third rendering.** One
+  agent as one container; there is no namespace, no ServiceAccount, no pod, and
+  around two dozen options reach nothing. They are *named* rather than refused
+  -- `DOCKER_IGNORED`, listed in the bundle's README and only where set away
+  from their default, because the failure is silent otherwise (a bundle handed
+  over and believed to have applied a node selector). The web UI takes the same
+  table off `/api/docker-ignored` and does not *show* those controls; the two
+  halves found each other's gaps -- hiding the table's keys on the page turned
+  up `crane_hook` and `registry_auth` still on screen and reaching nothing here.
+
+  **A format may not refuse what it says it ignores**, and that half is
+  `ignored_options()` rather than a rule anybody remembers. Three validators had
+  broken it: `service_account_name` (empty was refused), the two engine limits,
+  and `_ca_cfg`'s "choose one CA mode" -- reachable by picking an existing
+  ConfigMap, switching to docker and pasting a PEM. Each refusal names a field
+  the page for that format does not show, so it is a blocker with nothing on
+  screen to clear: the off-screen blocker, again. `engine_size()` also *reads*
+  through it, so a docker README states the engine size it carries rather than
+  the one its own footer says was dropped. A new validator over an option in the
+  table asks `ignored_options(o)` first, and
+  `test_a_format_never_refuses_what_it_says_it_ignores` walks the whole table
+  rather than the three keys that happened to break.
+  `helm_parity.py` does not cover
+  it and should not: there is nothing to render the same objects as. What holds
+  it instead is `sh -n` over every branch of the generated script and the shape
+  BlazeMeter's own Docker Command tab returns -- see `docs/docker.md`.
+
 - **The chart is copied, never re-rendered.** `--format helm` walks
   `templates/helm/` and emits it verbatim, so anything added there ships in every
   bundle — including files `package-data` would drop. Its globs do not recurse
@@ -380,10 +478,10 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   directory are named explicitly in `pyproject.toml`; the release workflow
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
-- `--format helm` refuses a service-virtualization location, `livetest` refuses
-  a chart directory, a profile with `service_account_create: false`, a
-  placeholder `AUTH_TOKEN` it will not re-render over, and a bundle whose
-  identity is not the agent under test. Guards over silent failures: a chart
+- `--format helm` and `--format docker` refuse a service-virtualization
+  location; `livetest` refuses a chart directory, a docker bundle, a profile
+  with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
+  re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart
   without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob
   comes back empty, and a namespace the rig was told already exists never gets
   created, so every object applies, no pod is created, and the run waits out its

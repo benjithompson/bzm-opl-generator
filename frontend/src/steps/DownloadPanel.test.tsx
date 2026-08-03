@@ -42,13 +42,13 @@ const out = (over: Partial<PreflightOut> = {}): PreflightOut => ({
   ...over,
 });
 
-function panel(preflightOut: PreflightOut) {
+function panel(preflightOut: PreflightOut, format = "manifests") {
   const read = imported("cluster-evidence.json", { schema: "x" }, preflightOut);
   return render(
     <DownloadPanel api={fakeApi()}
       bundle={{
         facts: FACTS, shipId: "S1", options: OPTIONS,
-        format: "manifests", setFormat: () => {},
+        format,
         sv: svState([], OPTIONS,
                     { func_ids: ["mockServices"], ingress_types: [],
                       backends: {} }),
@@ -64,6 +64,23 @@ function panel(preflightOut: PreflightOut) {
       watch={{ available: false, on: false, setOn: () => {}, agent: null,
                status: null, mocks: null, checks: {}, check: () => {} }} />);
 }
+
+test("names the format, and offers no cluster preflight for a docker bundle", () => {
+  // The control is on the configure step now, because it decides what that
+  // step asks. What is left here is the name of what will be generated and the
+  // way back -- and, for docker, the absence of a check that is entirely about
+  // a cluster. Absent *and said so*: a block that just vanishes reads as a step
+  // somebody forgot rather than one that does not apply.
+  panel(out(), "docker");
+  expect(screen.getByText(/Docker/)).toBeTruthy();
+  expect(screen.getByText(/change it in Configure/)).toBeTruthy();
+  expect(screen.queryByText(/Preflight the target cluster/)).toBeNull();
+  expect(screen.getByText(/No cluster preflight for a docker bundle/)).toBeTruthy();
+  // ...and it is offered for the two formats that have one.
+  cleanup();
+  panel(out());
+  expect(screen.getByText(/Preflight the target cluster/)).toBeTruthy();
+});
 
 test("summarises the verdict list in the words it was served", () => {
   // Nothing about "9 passed" follows from the one check below. That is the

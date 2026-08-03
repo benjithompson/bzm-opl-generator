@@ -321,6 +321,30 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     assert m.group(1) == gen_mod.SV_INGRESS_NONE
 
 
+def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
+    """Read out of the TypeScript for the same reason again, and load-bearing
+    since #113.
+
+    A group tags itself with the feature ids it belongs to; the ids themselves
+    are served from core.FEATURES and enumerated nowhere in the frontend. A tag
+    naming something not in that list was always a group on no card -- and now
+    it is worse than invisible: `notRunPatch` clears the groups of a feature the
+    location does not run, and a feature nothing serves is never run, so the
+    group's options would be wiped by a rule nobody could see applying.
+    """
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(r"export const OPTION_GROUPS: OptionGroup\[\] = \[(.*?)\n\];",
+                     (src / "optionGroups.ts").read_text(), re.S)
+    assert body, "OPTION_GROUPS not found -- was it renamed or moved?"
+    tagged = set(re.findall(r'"([^"]+)"',
+                            " ".join(re.findall(r"^\s*features: \[(.*?)\],$",
+                                                body.group(1), re.M))))
+    # Not empty: every group being untagged would pass a subset check silently,
+    # and that is the shape a bad regex leaves behind.
+    assert tagged, "no feature tags found -- did the field move or get renamed?"
+    assert tagged <= {f["id"] for f in core.FEATURES}
+
+
 # -- the connection outlives the page -----------------------------------------
 
 def test_key_status_reports_the_connection_the_process_still_holds(connected):
@@ -497,16 +521,21 @@ def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
     assert "could not be issued" in r.json()["detail"]
 
 
-def test_enabling_a_feature_adds_to_the_location_s_func_ids(monkeypatch):
-    """A bundle for mock services against a location that does not carry
-    mockServices deploys cleanly and is never asked to serve one. This is the
-    call that fixes that, and it must not drop what the location already had."""
+def test_no_route_here_turns_a_feature_on_for_a_location(monkeypatch):
+    """POST /api/locations/func-id went with the affordance that was its only
+    caller (#113). What funcIds a location carries is what the location *is*,
+    and BlazeMeter's own UI is where that changes -- so a page that offered it
+    made a bundle's configuration a reason to edit the account. 404 rather than
+    a passthrough that has quietly stopped being reachable."""
+    assert "/api/locations/func-id" not in {r.path for r in app_routes()}
     fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
     connect(monkeypatch, fake)
     r = client.post("/api/locations/func-id",
                     json={"harbor_id": "aaa111", "func_id": "mockServices"})
-    assert r.status_code == 200
-    assert r.json()["funcIds"] == ["performance", "mockServices"]
+    # 405, not 404: the SPA catch-all claims every unmatched path for GET. What
+    # matters is the same either way -- refused, and nothing reached the account.
+    assert r.status_code >= 400
+    assert not [c for c in fake.calls if c[0] == "update_private_location"]
 
 
 def test_func_ids_mark_which_ones_change_the_images():
@@ -580,6 +609,102 @@ def test_sv_constants_are_served_from_the_generator():
     # Kept out of option-defaults: that response is spread into the options the
     # UI submits, and these are not options.
     assert "ingress_types" not in client.get("/api/option-defaults").json()
+
+
+def test_docker_ignored_is_served_from_the_generator():
+    """What the configure step hides when the bundle is a docker one. Served
+    for the same reason the SV vocabulary is: the page would otherwise carry a
+    second copy of two dozen option keys, and a key added to the generator
+    would go on being offered for a format that drops it."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/docker-ignored").json()
+    assert body == gen_mod.DOCKER_IGNORED
+    # The four the page hides whole sections for.
+    for key in ("namespace", "service_account_name", "node_selector",
+                "engine_cpu_limit"):
+        assert body[key]
+    # Every key is a real option: a name that matched nothing would hide
+    # nothing, and would say so nowhere.
+    assert not set(body) - set(client.get("/api/option-defaults").json())
+
+
+def test_the_page_knows_the_same_three_formats_the_generator_does():
+    """Read out of the TypeScript for the same reason as SV_NONE above.
+
+    The ids are a closed set of three and the labels beside them are UI prose
+    with no counterpart here, so the list is declared there rather than fetched
+    -- but a fourth format added to the generator and not to that file is a
+    control nobody can reach, and one removed is a segment that generates an
+    error. Neither shows up in a type.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(r"export const OUTPUT_FORMATS: OutputFormat\[\] = \[(.*?)\n\];",
+                     (src / "formats.ts").read_text(), re.S)
+    assert body, "OUTPUT_FORMATS not found -- was it renamed or moved?"
+    assert tuple(re.findall(r'id: "([^"]+)"', body.group(1))) \
+        == gen_mod.OUTPUT_FORMATS
+
+
+def test_the_page_blocks_exactly_the_formats_that_refuse_a_virtual_service():
+    """sv.ts takes an output format away from a bundle that carries a virtual
+    service, and the refusal it is mirroring is generate()'s.
+
+    Derived by asking the generator rather than by reading it: the refusals are
+    two separate raises a long way apart, and this is the one thing about them
+    the page restates. A third format growing one would leave a segment offered
+    that cannot generate -- an off-screen blocker -- and helm losing its would
+    leave a working segment disabled with a sentence about a chart that now
+    carries an ingress.
+
+    #115 was this same mismatch one level up and is why it is pinned: the page
+    disabled these segments off the *location's demand*, while `_sv_cfg`
+    refuses on the *configuration* and never looks at the funcIds. A location
+    demanding nothing could therefore be configured for service virtualization
+    and generated as docker, which the server refused with nothing on screen
+    having said so.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    facts = {"harbor_id": "aaa111", "func_ids": ["mockServices"],
+             "crane_image": "example.invalid/blazemeter/crane:3.7.55",
+             "images": [], "ships": []}
+    sv_opts = {"ship_id": "bbb222", "auth_token": "de" * 32,
+               "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
+               "sv_tls_secret": "wildcard-credential"}
+    refused = set()
+    for fmt in gen_mod.OUTPUT_FORMATS:
+        try:
+            gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
+        except ValueError as exc:
+            assert "service virtualization" in str(exc)
+            refused.add(fmt)
+    assert refused, "no format refuses a virtual service -- did the check move?"
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    body = re.search(
+        r"const BLOCKED_FORMATS: Record<string, string> = \{(.*?)\n\};",
+        (src / "sv.ts").read_text(), re.S)
+    assert body, "BLOCKED_FORMATS not found -- was it renamed or moved?"
+    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) == refused
+
+
+def test_the_pages_copy_of_the_ignored_table_is_the_generators():
+    """The one copy of DOCKER_IGNORED in TypeScript, held equal to this one.
+
+    It cannot be derived -- the authority is Python and the page's tests run
+    without a server -- so it is a fixture, and a fixture of a table is a table
+    free to go stale. Two of them already had: formats.test.ts and App.test.tsx
+    carried slices that differed by five keys, so the page test asserted against
+    a table the unit test would have called incomplete. Now there is one, and
+    this is what keeps it honest.
+    """
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const DOCKER_IGNORED: Record<string, string> = \{"
+                     r"(.*?)\n\};", text, re.S)
+    assert body, "DOCKER_IGNORED not found -- was it renamed or moved?"
+    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
+        == set(gen_mod.DOCKER_IGNORED)
 
 
 def test_sv_constants_carry_what_each_backend_publishes():
@@ -747,6 +872,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
     ("get", "/api/features"), ("get", "/api/sv-constants"),
+    ("get", "/api/docker-ignored"),
 ]
 
 
@@ -1132,6 +1258,15 @@ def test_group_tags_name_features_the_server_actually_serves():
         f"{sorted(tagged - served)}. Either the id was renamed in "
         f"server.FEATURES, or the tag is a typo -- the group's options would "
         f"never appear.")
+    # sv.ts keys one answer by feature id rather than by group id -- which
+    # format cannot serve the feature at all -- so that literal is the same
+    # join and fails the same way: the card would render its switches on a
+    # bundle that cannot carry them, and nothing would say so.
+    sv_src = os.path.join(os.path.dirname(src), "sv.ts")
+    with open(sv_src) as fh:
+        feature = re.search(r'const SV_FEATURE = "([^"]+)"', fh.read())
+    assert feature, "SV_FEATURE not found -- was it renamed or moved?"
+    assert feature.group(1) in served
 
 
 # -- preflight from an evidence file -------------------------------------------
@@ -1610,7 +1745,8 @@ def test_location_settings_leaves_out_what_the_form_did_not_send(monkeypatch):
 
 
 def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
-    """`funcIds` is add_func_id's, and that call is additive by construction."""
+    """`funcIds` is nobody's here: what a location runs changes in BlazeMeter's
+    own UI, and this PATCH would replace the list wholesale."""
     connect(monkeypatch, FakeClient(harbor={"id": "h1"}))
     r = client.post("/api/locations/settings",
                     json={"harbor_id": "h1", "funcIds": ["mockServices"]})
@@ -1716,9 +1852,9 @@ def test_every_write_route_drops_the_cache():
     """
     writes = [r for r in app_routes()
               if "POST" in r.methods and r.path in {
-                  "/api/locations", "/api/ships", "/api/locations/func-id",
+                  "/api/locations", "/api/ships",
                   "/api/locations/settings", "/api/ships/token"}]
-    assert len(writes) == 5, "a write route was renamed; name it here too"
+    assert len(writes) == 4, "a write route was renamed; name it here too"
     missing = [r.path for r in writes
                if getattr(r.endpoint, "__wrapped__", None) is None]
     assert not missing, (

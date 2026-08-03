@@ -11,6 +11,10 @@
 // which is what makes optionGroups.test.ts possible without a DOM.
 
 import { Feature, Options } from "./api";
+// What the bundle is. Only two things here need it: the filter at the foot of
+// this file, and the one group whose recommended mode depends on the platform.
+// formats.ts imports nothing of ours, so this direction is the only one.
+import { Applies, isDocker, keysApply } from "./formats";
 
 export type GroupId =
   "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
@@ -46,7 +50,13 @@ export interface OptionGroup {
    *  configured -- registry, proxy, CA trust, scheduling -- and such a group is
    *  never hidden, so it can never be the reason a download is blocked off
    *  screen. This tag is the whole frontend half of adding a feature: the list
-   *  of features itself is served, never enumerated here. */
+   *  of features itself is served, never enumerated here.
+   *
+   *  A tag must name a feature the server serves. It always had to -- a group
+   *  tagged with anything else is on no card and reachable from nowhere -- but
+   *  since notRunPatch clears the groups of a feature the location does not
+   *  run, an unserved tag would clear itself silently as well. Held to
+   *  core.FEATURES by test_server.py, which reads the tags out of this file. */
   features: string[];
   /** Does this config already mean the group is on? Runs on every option
    *  change, including the ones a preset or an imported profile brings in. */
@@ -235,8 +245,13 @@ export const OPTION_GROUPS: OptionGroup[] = [
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
     detect: (o) => caModeOf(o) !== "none",
     // On lands on the recommended mode rather than on no mode at all, which
-    // would show three radios and no fields.
-    enable: (o) => caModePatch(o, "existing"),
+    // would show three radios and no fields. Which one is recommended depends
+    // on the format, and this is the one place in this file that reads it: the
+    // other two modes name a ConfigMap, and a docker bundle has none -- so
+    // seeding "existing" there would write an option the bundle's README then
+    // reports as set-and-not-carried, off a switch nobody aimed at it.
+    enable: (o) => caModePatch(
+      o, isDocker(String(o.output_format ?? "")) ? "inline" : "existing"),
     disable: (o) => caModePatch(o, "none"),
   },
   {
@@ -277,7 +292,12 @@ export const OPTION_GROUPS: OptionGroup[] = [
   {
     id: "security",
     title: "Security & RBAC",
-    hint: "defaults: token in a Secret, CLUSTERIP, no cluster RBAC, no agent self-update",
+    // Says only what is true of every format. It used to enumerate the
+    // Kubernetes defaults -- "token in a Secret, CLUSTERIP, no cluster RBAC" --
+    // and a docker bundle has none of those three, so the row named settings
+    // its own body had just hidden. What each format's defaults actually are is
+    // in the fields, which is where they can be changed.
+    hint: "defaults: the credential kept apart from the configuration, no agent self-update",
     // Untagged deliberately: how the auth token is stored and whether the
     // bundle asks for cluster RBAC are questions every deployment answers.
     features: [],
@@ -379,6 +399,87 @@ export function groupsOf(featureId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.features.includes(featureId));
 }
 
+// -- a feature the location does not run -------------------------------------
+// Stated, and configured nowhere. The card names it and says where it is turned
+// on; it offers no switch, seeds no option, and can never be the reason a
+// download is blocked. Half-configurable was the state before (#113): manual
+// mode had no guard at all, so flipping Service virtualization on for an
+// identity declared as performance seeded `sv_ingress: nginx` over empty
+// subdomain and TLS fields, and the step went red for something nothing on the
+// page had asked for.
+
+/** Which features this location runs, or null while nobody has answered.
+ *
+ *  Three states in one value, and the third is why it is not a plain array.
+ *  Manual entry *declares* a feature; a location read off the account carries
+ *  the funcIds its features come from; before either has happened the question
+ *  is simply unanswered. Answering the unanswered case with `[]` takes every
+ *  card's switches off the page while the account is still being read, and
+ *  answering it with the whole list claims an enablement nobody has confirmed
+ *  -- the same collapse from either end. */
+export function enabledFeatures(
+    mode: "connect" | "manual", declared: string | null,
+    locFeatures: string[]): string[] | null {
+  // Manual declares rather than reads, so there is nothing outstanding: the
+  // answer is the declaration, and no declaration yet is an empty one.
+  if (mode === "manual") return declared ? [declared] : [];
+  // An account that has not been read and a location whose funcIds carry no
+  // served feature both arrive as an empty list, and "nothing has said" is the
+  // honest answer to both.
+  return locFeatures.length ? locFeatures : null;
+}
+
+/** Does this location run the feature? Unanswered counts as yes, deliberately:
+ *  a switch shown for a feature that turns out not to apply is corrected the
+ *  moment the account answers, where one hidden on a guess leaves a location
+ *  that does run the feature with nowhere to configure it. */
+export function runsFeature(
+    enabled: string[] | null, featureId: string): boolean {
+  return enabled == null || enabled.includes(featureId);
+}
+
+/** What must be cleared because it configures a feature the location does not
+ *  run, or null when nothing must.
+ *
+ *  The options can reach that state without anyone choosing it -- an imported
+ *  profile, a restored session, or a location picked after the form was filled
+ *  in -- and the switch that would clear it is deliberately not on screen. Left
+ *  set they are an off-screen blocker twice over: `incompleteGroups` counts the
+ *  group, and generate() refuses outright (an `sv_ingress` with no subdomain is
+ *  a hard error whatever the location runs).
+ *
+ *  Each group's own `disable()`, never a wipe list written here -- the drift
+ *  between the two is what this file exists to stop. `required` is false by
+ *  construction: a demand comes from the location's funcIds, and these are the
+ *  features those funcIds do not carry. Applying the patch makes every `detect`
+ *  it fired on false, so the next answer is null and the page settles in one
+ *  pass -- the property sv.correction is written to hold too. */
+export function notRunPatch(
+    o: Options, enabled: string[] | null): OptionPatch | null {
+  const patch: OptionPatch = {};
+  for (const g of OPTION_GROUPS) {
+    if (g.features.length && !g.features.some((f) => runsFeature(enabled, f))
+        && g.detect(o)) Object.assign(patch, g.disable(o, false));
+  }
+  return Object.keys(patch).length ? patch : null;
+}
+
+/** ...and of those, the ones this bundle's format can carry.
+ *
+ *  A third filter over the same list, so it lives with the other two rather
+ *  than beside the predicate it takes. A group whose every declared key is
+ *  ignored is not on screen at all -- Scheduling and Engine sizing, for docker.
+ *  One with some is on screen with the rest of its fields hidden by the
+ *  predicate itself: Private registry keeps the registry and loses the
+ *  imagePullSecret. Derived from `keys`, so a group gaining an option needs
+ *  nothing here.
+ *
+ *  Unlike the two above this is not a *view*: a feature hides nothing, and a
+ *  group dropped here is one the bundle has no such thing as. */
+export function groupsFor(gs: OptionGroup[], applies: Applies): OptionGroup[] {
+  return gs.filter((g) => keysApply(g.keys, applies));
+}
+
 /** Groups in use but not finished, so the download is blocked. Derived from the
  *  declarations rather than passed in: the caller knowing which groups can be
  *  incomplete is the coupling this exists to remove. */
@@ -386,6 +487,37 @@ export function incompleteGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
     backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
+}
+
+/** What is stopping the configure step being finished, as the sentence that
+ *  says so -- and "" when nothing is, which is what marks the step done.
+ *
+ *  One derivation for both, because they are one answer: a tick beside a step
+ *  and a line saying what it still needs cannot be allowed to disagree.
+ *
+ *  Named rather than listed. It used to be the fixed string "namespace, service
+ *  account and any unfinished group first", which named the same three things
+ *  whatever the bundle was -- and a docker bundle has no namespace and no
+ *  ServiceAccount, so two thirds of the only sentence telling somebody what to
+ *  fix pointed at fields that are deliberately not on the page. It asks
+ *  `applies` rather than taking the two booleans the page already has, because
+ *  those resolve "filled in" and "this format has no such field" to the same
+ *  `true` -- the collapse this codebase keeps refusing to make. A group's title
+ *  is what the row beside it says, so the sentence names the row to go back to.
+ */
+export function configureBlockedBy(
+    o: Options, applies: Applies, incomplete: OptionGroup[]): string {
+  const needs = [
+    applies("namespace") && !String(o.namespace ?? "").trim()
+      ? "a namespace" : "",
+    applies("service_account_name") && !serviceAccountOk(o)
+      ? "a service account" : "",
+    ...incomplete.map((g) => g.title),
+  ].filter(Boolean);
+  if (!needs.length) return "";
+  const list = needs.length === 1 ? needs[0]
+    : `${needs.slice(0, -1).join(", ")} and ${needs[needs.length - 1]}`;
+  return `${list} first`;
 }
 
 // -- the served vocabulary ---------------------------------------------------

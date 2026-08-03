@@ -417,34 +417,17 @@ def create_ship(client, harbor_id, name):
     return _upstream(client.create_ship, harbor_id, name)
 
 
-def add_func_id(client, harbor_id, func_id):
-    """Turn a feature on for a location, and hand the location back.
-
-    An agent serves what its location says it runs, so a bundle configured for
-    mock services against a location that does not carry mockServices deploys
-    cleanly and is never asked to serve one. This is the one call that changes
-    that, and it is additive by construction: the PATCH replaces `funcIds`
-    wholesale, so it is built from what the location already has. Sending the
-    single funcId the caller asked for is how a location that ran performance
-    and mocks comes back running only mocks.
-
-    Idempotent -- already present is not an error, it is the answer -- and it
-    reads the location first for that reason rather than trusting a caller's
-    copy, which may be a list a browser has been holding for an hour.
-    """
-    loc = _upstream(client.private_location, harbor_id)
-    have = list(loc.get("funcIds") or [])
-    if func_id in have:
-        return loc
-    return _upstream(client.update_private_location, harbor_id,
-                     func_ids=have + [func_id])
-
-
 # The location settings this tool will change, as {name: the field BlazeMeter
-# calls it}. A closed set on purpose: `funcIds` is add_func_id's, which is
-# additive by construction, and a general "PATCH whatever you send" would let a
-# caller replace it wholesale by accident -- the exact failure that function
-# exists to prevent.
+# calls it}. A closed set on purpose: BlazeMeter's PATCH replaces `funcIds`
+# wholesale, so a general "PATCH whatever you send" would let a caller that
+# meant to add a feature drop every other one the location runs.
+#
+# `funcIds` is not in the set and there is no other call here that writes it
+# (#113). There was -- add_func_id, additive by construction, behind an "Enable
+# on this location…" affordance on the configure page. What funcIds a location
+# carries is what the location *is*, which is BlazeMeter's own UI's to change;
+# `api.update_private_location` no longer accepts them either, so the rule is
+# structural rather than a closed set anybody has to remember.
 LOCATION_SETTINGS = {
     "slots": "slots",
     "threads_per_engine": "threadsPerEngine",
@@ -485,9 +468,8 @@ def update_location(client, harbor_id, **settings):
     if unknown:
         raise BadRequest(
             f"not a location setting: {', '.join(unknown)} -- this changes "
-            f"{', '.join(sorted(LOCATION_SETTINGS))}. Features are "
-            f"add_func_id's, which is additive; anything else is BlazeMeter's "
-            f"own UI")
+            f"{', '.join(sorted(LOCATION_SETTINGS))}. Features (funcIds) and "
+            f"anything else are BlazeMeter's own UI")
     wanted = {k: v for k, v in settings.items() if v is not None}
     before = _upstream(client.private_location, harbor_id)
     # Snapshotted here, not after the write. Reading the four values out of
@@ -1717,6 +1699,22 @@ FEATURES = [
 def features():
     """The features the configure step can be pointed at, in selector order."""
     return FEATURES
+
+
+def docker_ignored():
+    """The options a docker bundle cannot carry, as {option: why}.
+
+    Served for the same reason as the SV vocabulary: a caller that hides what
+    this format drops must not keep its own list of it. The configure step does
+    exactly that -- a docker bundle has no namespace, no ServiceAccount and no
+    scheduling, so the fields for them are not on screen -- and the bundle's
+    README states the same table for whatever was set anyway.
+
+    An empty answer therefore means "every option applies", which is the only
+    safe way to be wrong about this: a reader that cannot see the table shows a
+    field too many rather than hiding one that matters.
+    """
+    return dict(gen_mod.DOCKER_IGNORED)
 
 
 def sv_constants():
