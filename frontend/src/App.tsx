@@ -233,7 +233,6 @@ export default function App({ api }: { api: Api }) {
    *  further down can reach it. */
   const forgetToken = useCallback(() => {
     setOptions((o) => ({ ...o, auth_token: null }));
-    setRotate(false);
     // The whole attempt, not only its token report: what the last download or
     // save did was done for the agent being left behind, and a folder named
     // under a different agent's bundle is the same claim about the wrong thing.
@@ -302,7 +301,6 @@ export default function App({ api }: { api: Api }) {
   // Whether the next download/save should issue a new credential. Off, always,
   // until asked: it is the one action here that breaks a deployment that is
   // currently working, and it used to be what the download button did by itself.
-  const [rotate, setRotate] = useState(false);
   // What the last download or save actually did -- the credential report in
   // core's own words, where a save landed, and why either was refused. One
   // piece of state because it is one fact: the four it replaced were reset in
@@ -313,7 +311,6 @@ export default function App({ api }: { api: Api }) {
   // Where a save writes. Not part of the attempt: it is what was typed rather
   // than what happened, and the preview reads it too -- a folder already
   // holding this ship's bundle supplies the token the save would reuse.
-  const [saveDir, setSaveDir] = useState("");
   // The imported cluster evidence, its verdicts, and whatever the last import
   // was refused for. The document itself is kept, not just its verdicts: the
   // preflight re-runs against it on every option change, because verdicts that
@@ -619,14 +616,13 @@ export default function App({ api }: { api: Api }) {
 
   /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
    *
-   *  The rotate flag goes off as it lands: core's rule is that a token in the
-   *  form wins over a rotation, so leaving it on would have the download step
-   *  promise an issue that will not happen. */
+   *  This is the one way to mint from the page now: the download step had a
+   *  rotate box beside its button, and it is gone. Minting belongs on the agent
+   *  the credential is for, where what it kills is on screen. */
   const regenerateToken = async () => {
     if (!harborId || !shipId) return;
     const r = await api.issueToken(harborId, shipId);
     setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-    setRotate(false);
   };
 
   // Creating the agent identity. A named function rather than the button's own
@@ -674,10 +670,7 @@ export default function App({ api }: { api: Api }) {
     previewTimer.current = window.setTimeout(async () => {
       try {
         const opts = { ...options, ship_id: shipId ?? undefined };
-        // The typed save folder goes with it: if it already holds this ship's
-        // bundle, the save will keep that token, and the preview should say so
-        // rather than announcing a placeholder over a bundle that has one.
-        const r = await api.generate(facts, opts, saveDir.trim() || undefined);
+        const r = await api.generate(facts, opts);
         setFiles(r.files);
         setPreviewToken(r.token);
         setGenErr(null);
@@ -688,10 +681,12 @@ export default function App({ api }: { api: Api }) {
           ? a : r.files[0]?.name ?? null));
       } catch (e) { setGenErr(String((e as Error).message)); }
     }, 250);
-    // saveDir is a dependency because it changes the answer: point the folder at
-    // a bundle this ship already has and the token branch becomes `reused`. The
-    // 250ms debounce above is what keeps that from being a request per keystroke.
-  }, [facts, options, shipId, saveDir]);
+    // No save folder in the dependencies any more: the page used to send one, so
+    // that a directory already holding this ship's bundle made the token branch
+    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
+    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
+    // the branch is unreachable and there is nothing to debounce it against.
+  }, [facts, options, shipId]);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
@@ -1005,20 +1000,12 @@ export default function App({ api }: { api: Api }) {
   // two that produces no bundle at all.
   const saOk = !applies("service_account_name") || serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
-  // What the download and save buttons will do about the credential: the hint
-  // beside them, the banner over them, and the request they send. One
-  // derivation because those three answer one question, and three of them could
-  // disagree -- see token.ts. Nothing here re-reads the rotate choice
-  // afterwards: `plan.request` goes to whichever button is pressed as it
-  // stands, so this line is the only place the choice is turned into anything.
-  const tokenPlan = downloadPlan(previewToken, rotate, shipId);
-  // Whether the rotate box is offered at all, which is a different question
-  // from what a rotation would do: minting is an API call, so it needs the
-  // account and an agent, and a token already in the field wins over the box --
-  // core ignores the rotation rather than performing it, so offering it there
-  // would promise an issue that will not happen.
-  const mayRotate =
-    !!who && sourceMode === "connect" && !!shipId && !raw("auth_token");
+  // What the download button will do about the credential: the hint beside it,
+  // whether the bundle can be applied at all, and the request it sends. One
+  // derivation because those answer one question and could otherwise disagree
+  // -- see token.ts. It no longer takes a rotate choice: the box that made one
+  // is gone, and minting is step 1's, on the agent the credential belongs to.
+  const tokenPlan = downloadPlan(previewToken);
   // -- what this location runs -----------------------------------------------
   // `locFeatures` and `enabled` are derived above, beside the record that reads
   // them. This is the funcIds the location carries that the tool has no options
@@ -1423,12 +1410,8 @@ export default function App({ api }: { api: Api }) {
                 facts, shipId, options, format,
                 sv, saOk, genErr,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
-                saveDir, setSaveDir,
               }}
-              credential={{
-                plan: tokenPlan, preview: previewToken,
-                rotate, setRotate, mayRotate,
-              }}
+              credential={{ plan: tokenPlan }}
               attempt={attempt} report={setAttempt}
               preflight={{
                 read: preflight, busy: preflightBusy, header: evidence,

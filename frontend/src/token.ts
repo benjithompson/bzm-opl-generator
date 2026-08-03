@@ -1,15 +1,21 @@
 // What the download button is about to do to the agent's credential.
 //
 // Which of four ways a bundle's token arrived is core's rule and arrives on the
-// answer (TokenReport) -- nothing here re-decides one. What is left is the
-// question core cannot answer, because it is about a click that has not happened
-// yet: this page holds a rotate choice, and the two of them together decide what
-// to say *before* the request. A rotation announced afterwards is a post-mortem;
-// the credential is already dead and the pod is already broken (#64).
+// answer (TokenReport) -- nothing here re-decides one. What is left is what to
+// say about it *before* the click, which is the only moment that helps: a
+// credential problem announced afterwards is a post-mortem, and the pod is
+// already broken (#64).
 //
-// Plain data in, data out, and tested, because the three places this used to be
-// decided -- the hint beside the button, the banner over it, and whether the
-// request rotates at all -- are exactly the three that can disagree.
+// It took a rotate choice too, because the download step had a box that minted
+// one. That box is gone -- minting is step 1's, on the agent the credential
+// belongs to, where what it kills is on screen -- so the page never asks for a
+// rotation and this never describes one. `rotate_token: false` is still *sent*
+// rather than assumed: it is the request, and #104 is about that being one
+// value rather than a flag each caller converts.
+//
+// Plain data in, data out, and tested, because the places this used to be
+// decided -- the hint beside the button and whether the request rotates at all
+// -- are exactly the ones that can disagree.
 //
 // What it hands back for the third of those is the *request*, not a flag (#104).
 // A boolean is advice: the two buttons each turned it into a `rotate_token`
@@ -31,13 +37,11 @@ export const rotateHazard = (shipId: string | null) =>
 
 export interface DownloadPlan {
   /** What the next bundle request carries about the credential. Handed to
-   *  api.downloadZip / api.saveBundle whole -- it is the request, so neither
-   *  button decides anything about it. */
+   *  api.downloadZip whole -- it is the request, so the button decides nothing
+   *  about it. */
   request: TokenRequest;
   /** Beside the button: what the bundle will carry. */
   hint: string;
-  /** Amber, before the click. Null when nothing is at stake. */
-  warning: string | null;
   /** The bundle cannot be applied as it stands, so say so over the button
    *  rather than in a README nobody opens after the download. */
   incomplete: boolean;
@@ -50,39 +54,19 @@ const CARRIES: Record<TokenBranch, string> = {
   placeholder: "AUTH_TOKEN left as a placeholder — fill it in before applying",
 };
 
-/** What the next download or save will do, from the preview's own report plus the
- *  rotate choice on screen.
+/** What the next download will do, from the preview's own report.
  *
- *  `report` is null only before the first preview lands. The branch it carries is
- *  the one a download would take *without* rotating, which is what makes it the
- *  right input here: the preview never rotates, so it is a free look at the
- *  answer.
+ *  `report` is null only before the first preview lands, and reads as the
+ *  placeholder: a bundle claimed to carry a token it may not have is the
+ *  failure worth avoiding.
  *
- *  A token in the form wins over the rotate box, and says so. That is core's
- *  first branch -- rotating would revoke the very token that was pasted, so it is
- *  answered rather than obeyed -- and a page that promised a rotation core will
- *  not perform would be describing a different bundle from the one it hands over.
+ *  Every branch sends the same request now. That is not the same as sending
+ *  nothing -- `reused` and `given` are still distinct answers about what this
+ *  bundle carries, and the hint says which -- and it is why the report is still
+ *  read rather than the branch being assumed.
  */
-export function downloadPlan(
-  report: TokenReport | null, rotate: boolean, shipId: string | null,
-): DownloadPlan {
+export function downloadPlan(report: TokenReport | null): DownloadPlan {
   const branch = report?.branch ?? "placeholder";
-  // Written out per branch rather than derived from `rotate` once: the "given"
-  // branch is exactly the case where the choice on screen is not what is sent,
-  // and a shared default would be one expression having to remember that.
-  if (branch === "given") {
-    return {
-      request: { rotate_token: false },
-      hint: CARRIES.given + (rotate
-        ? " — the token in hand wins, so nothing will be issued" : ""),
-      warning: null,
-      incomplete: false,
-    };
-  }
-  if (rotate) {
-    return { request: { rotate_token: true }, hint: CARRIES.rotated,
-             warning: rotateHazard(shipId), incomplete: false };
-  }
   return { request: { rotate_token: false }, hint: CARRIES[branch],
-           warning: null, incomplete: branch === "placeholder" };
+           incomplete: branch === "placeholder" };
 }

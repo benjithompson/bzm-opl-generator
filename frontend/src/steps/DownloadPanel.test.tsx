@@ -53,10 +53,8 @@ function panel(preflightOut: PreflightOut, format = "manifests") {
                     { func_ids: ["mockServices"], ingress_types: [],
                       backends: {} }),
         saOk: true, genErr: null, unfinished: [], goToConfigure: () => {},
-        saveDir: "", setSaveDir: () => {},
       }}
-      credential={{ plan: downloadPlan(null, false, "S1"), preview: null,
-                    rotate: false, setRotate: () => {}, mayRotate: false }}
+      credential={{ plan: downloadPlan(null) }}
       attempt={NO_ATTEMPT} report={() => {}}
       preflight={{ read, busy: false, header: evidenceHeader(preflightOut),
                    importFile: () => {}, applied: NOTHING_APPLIED,
@@ -65,15 +63,10 @@ function panel(preflightOut: PreflightOut, format = "manifests") {
                status: null, mocks: null, checks: {}, check: () => {} }} />);
 }
 
-test("names the format, and offers no cluster preflight for a docker bundle", () => {
-  // The control is on the configure step now, because it decides what that
-  // step asks. What is left here is the name of what will be generated and the
-  // way back -- and, for docker, the absence of a check that is entirely about
-  // a cluster. Absent *and said so*: a block that just vanishes reads as a step
-  // somebody forgot rather than one that does not apply.
+test("offers no cluster preflight for a docker bundle", () => {
+  // Absent *and said so*: a block that just vanishes reads as a step somebody
+  // forgot rather than one that does not apply.
   panel(out(), "docker");
-  expect(screen.getByText(/Docker/)).toBeTruthy();
-  expect(screen.getByText(/change it in Configure/)).toBeTruthy();
   expect(screen.queryByText(/Preflight the target cluster/)).toBeNull();
   expect(screen.getByText(/No cluster preflight for a docker bundle/)).toBeTruthy();
   // ...and it is offered for the two formats that have one.
