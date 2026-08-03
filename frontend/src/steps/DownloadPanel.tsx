@@ -318,6 +318,33 @@ export function DownloadPanel(p: DownloadPanelProps) {
                         {read.out.summary}
                       </span>
                     </p>
+                    {/* A restored answer is older than it looks, and says so.
+                        The header above already dates the *collection*, which
+                        is staleness about the cluster and is on screen either
+                        way. This is the other one, and only a restore has it:
+                        the verdicts were judged against a configuration, they
+                        follow it on every option change while the page holds
+                        the file, and a snapshot does not carry the file -- so
+                        after a refresh they stop following and nothing else on
+                        screen would say so. Left unsaid, the failure is a
+                        verdict list that looks live and quietly describes the
+                        namespace, engine size and ingress class of an earlier
+                        page load.
+
+                        Said rather than withheld: the alternative is to drop
+                        the verdicts at the first option change, and that takes
+                        the undo history's only rendering with it -- the button
+                        is a row of this list -- which is the state #119 exists
+                        to remove. */}
+                    {read.restored && (
+                      <p className="text-[11px] text-amber-700">
+                        Read back from an earlier page load — this page no
+                        longer holds{" "}
+                        <code className="font-mono">{read.file}</code>, so these
+                        verdicts are not being re-judged and any option changed
+                        since is not in them. Pick the file again to re-judge.
+                      </p>
+                    )}
                     {/* The namespaced verdicts -- LimitRanges, quotas,
                         ServiceAccounts, the PSA labels -- are all about the
                         namespace the file describes, whichever one is being

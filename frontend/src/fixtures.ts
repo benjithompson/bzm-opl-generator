@@ -10,6 +10,7 @@
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
+import { PreflightOut, Suggestion } from "./api";
 
 /** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.
  *
@@ -45,3 +46,44 @@ export const DOCKER_IGNORED: Record<string, string> = {
   registry_auth: "the stubs are ConfigMap lines; a docker host authenticates "
     + "with its own docker login",
 };
+
+/** One implication of an imported file, as suggest.py serves it: the cluster
+ *  says this is plain Kubernetes and the configuration says OpenShift.
+ *
+ *  `platform` rather than an SV option deliberately -- it belongs to no feature,
+ *  so no location's funcIds can clear it on the way past (notRunPatch), which is
+ *  what a page-level test of applying and undoing would otherwise be fighting
+ *  rather than testing. One click to apply, and a previous value worth putting
+ *  back, which is what an undo is about. */
+export const PLATFORM_SUGGESTION: Suggestion = {
+  option: "platform", strength: "DECISIVE", value: "k8s",
+  candidates: ["k8s"], ruled_out: [],
+  evidence: ["api_groups.openshift_security"],
+  detail: "security.openshift.io is not served, so this is plain Kubernetes",
+  state: "CONFLICT", current: "openshift",
+  current_shown: "openshift", value_shown: "k8s", candidates_shown: ["k8s"],
+  ruled_out_shown: [], blocked: null,
+};
+
+/** A served preflight answer: one file judged against one configuration.
+ *
+ *  Here rather than in each test that wants one, for the reason at the top of
+ *  this file: three files now need this shape -- the panel that renders it, the
+ *  snapshot that stores it and the page that restores it -- and three builders
+ *  with three sets of defaults for one schema is the divergence
+ *  tests/evidence_fixtures.py was written to end. Every judgement in it is
+ *  doctor's and suggest.py's, and is asserted against the command in
+ *  tests/test_doctor.py and tests/test_suggest.py; what a test overrides here is
+ *  what it needs the *page* to be told. */
+export function preflightOut(over: Partial<PreflightOut> = {}): PreflightOut {
+  return {
+    namespace: "blazemeter",
+    summary: "3 passed, 1 warning, no failures",
+    evidence: { collected_at: "2026-07-28T02:51:50Z", namespace: "some-ns",
+                elsewhere: false, unreadable: [] },
+    checks: [{ name: "location slots", status: "PASS",
+               detail: "2 concurrent engine(s)" }],
+    suggestions: [], why_nothing: null,
+    ...over,
+  };
+}

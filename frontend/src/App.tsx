@@ -41,7 +41,7 @@ import { svState } from "./sv";
 // picked file has to be, what a refused import leaves behind. No verdict is
 // reached there either: they are doctor's, and arrive in doctor's order.
 import {
-  evidenceHeader, imported, NO_PREFLIGHT, PreflightState,
+  evidenceHeader, fromSnapshot, imported, NO_PREFLIGHT, PreflightState,
   readEvidence, rechecked, refused,
 } from "./preflight";
 // Acting on the same file: what each suggestion offers, what applying writes,
@@ -369,6 +369,21 @@ export default function App({ api }: { api: Api }) {
         setFeature(saved.declaredFeature);
         restoredFeature.current = saved.declaredFeature;
       }
+      // The imported cluster read, and the undo for whatever was applied from
+      // it -- put back together or not at all, which is why they are one field.
+      // Restored through preflight.ts's own transition rather than assembled
+      // here: what comes back is verdicts with no document behind them, and
+      // that is a state the panel has to be able to recognise, not a shape this
+      // effect gets to build (#119).
+      //
+      // Absent, nothing happens: both pieces of state already start where a
+      // page nobody has imported anything into starts, and writing NO_PREFLIGHT
+      // over NO_PREFLIGHT is how "there is nothing there" starts looking like a
+      // decision somebody made.
+      if (saved.preflight) {
+        setPreflight(fromSnapshot(saved.preflight.file, saved.preflight.out));
+        setApplied(saved.preflight.applied);
+      }
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
       setHeld({ accountId: saved.accountId, workspaceId: saved.workspaceId,
@@ -470,10 +485,21 @@ export default function App({ api }: { api: Api }) {
                    // itself from them, so writing it down could only pin the
                    // next page load to a feature the account never said.
                    declaredFeature: sourceMode === "manual" ? feature : null,
+                   // The verdicts and the undo history, together or not at all.
+                   // `out` decides: it is what the panel renders, and the undo
+                   // is a button on one of its rows -- so a history written
+                   // without it could only come back as an undo with nothing to
+                   // press. The document is deliberately not here (see
+                   // session.SavedPreflight), which is why a restored panel says
+                   // it is no longer being re-judged.
+                   preflight: preflight.file && preflight.out
+                     ? { file: preflight.file, out: preflight.out, applied }
+                     : null,
                    manual, options, step, view, plan: planInputs,
                    confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      feature, manual, options, step, view, planInputs, confirmed]);
+      feature, manual, options, step, view, planInputs, confirmed,
+      preflight, applied]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -1134,6 +1160,13 @@ export default function App({ api }: { api: Api }) {
   // keystroke in the namespace field. Held to `facts` for the same reason the
   // picker is -- the checks measure the cluster against a location's slots and
   // engine size, and none of it means anything without them.
+  //
+  // No document, no re-judging, and that is now two situations rather than one:
+  // nothing has been imported, or a snapshot brought the verdicts back without
+  // the file behind them. Both are "there is nothing to send", which is why the
+  // gate reads the same for both -- and the difference, which is whether there
+  // are verdicts on screen going stale, is carried by `preflight.restored` and
+  // stated by the panel rather than inferred here.
   const preflightTimer = useRef<number>();
   useEffect(() => {
     if (preflight.doc == null || !facts) return;

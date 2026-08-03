@@ -350,6 +350,22 @@ missing tools. The rest is what it cannot fix for you.
   funcIds *are* the declaration, so reading them can only restate it, or lose it
   while `/api/func-ids` is still outstanding.
 
+  **The imported preflight is in the snapshot; the file it came from is not**
+  (#119). What a refresh used to keep was only the damage: the values applied
+  from a suggestion are options and options are remembered, while the verdicts
+  explaining them and the history reversing them were not — and re-picking the
+  file is not always possible, because whoever ran the collector may not be
+  whoever is at the browser. So the verdicts, the suggestions, the file name and
+  the undo history travel as **one** field (`session.SavedPreflight`): the undo
+  is a button on a suggestion row, so half of that pair is an undo nothing can
+  reach. The evidence *document* stays out, and that is the size argument — it
+  grows with the cluster (32KB at 3 nodes, 615KB at 60) while the answer is flat
+  at 4.2KB, being bounded by the check list rather than by the cluster, and a
+  quota refusal costs the whole snapshot rather than the part that grew. The
+  cost is that a restored answer cannot be re-judged, so it is a state of its own
+  (`preflight.fromSnapshot`, carried as `restored`) and the panel says so —
+  never `doc === null`, which "nothing was imported" already means.
+
 - **`profile.json` is the bundle, and only the bundle.** It carries every
   resolved *option* — 35 of them — so `generate --profile` replays a bundle
   exactly, and `livetest` judges one. Three things are deliberately not in it,
