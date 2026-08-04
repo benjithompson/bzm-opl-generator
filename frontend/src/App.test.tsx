@@ -676,6 +676,41 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
   });
 
+test("the scheduling radio prescribes a dedicated engine pool, and the choice reaches the bundle",
+  async () => {
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent))} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // The group row's switch, reached from its title the way a reader reaches
+    // it: the radio is behind the row, not a page of its own.
+    const title = await screen.findByText(/^Scheduling$/);
+    fireEvent.click(within(title.closest("div.flex") as HTMLElement)
+      .getByRole("switch"));
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Separate nodes/ }));
+    // The choice states its cost beside it: a dedicated pool without the
+    // location's engine override packs every engine onto the first node.
+    expect(await screen.findByText(/Location settings/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+
+    // The prescription is real options on the request -- the matched
+    // label/taint pair on one vocabulary -- not a UI state that dies here.
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].options).toMatchObject({
+      engine_node_selector: { pool: "bzm-engines" },
+      engine_tolerations: [{ key: "pool", operator: "Equal",
+                             value: "bzm-engines", effect: "NoSchedule" }],
+    });
+  });
+
 // Rotating from this step is gone with its box. It was the second way to mint
 // a credential -- step 1 has the first, on the agent it belongs to and beside
 // the sentence saying what it kills -- and two ways to do one irreversible

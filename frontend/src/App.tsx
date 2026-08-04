@@ -1323,8 +1323,9 @@ export default function App({ api }: { api: Api }) {
     sched: (
       <SchedGroup
         tolerations={options.tolerations} nodeSelector={options.node_selector}
-        onTolerations={(v) => set("tolerations", v)}
-        onNodeSelector={(v) => set("node_selector", v)} />
+        engineTolerations={options.engine_tolerations}
+        engineNodeSelector={options.engine_node_selector}
+        onPatch={(p) => setOptions((o) => ({ ...o, ...p }))} />
     ),
     sizing: (
       <SizingGroup preset={enginePreset(options)}
