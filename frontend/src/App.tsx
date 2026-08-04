@@ -31,6 +31,9 @@ import {
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
 import { isDocker, optionApplies, whyIgnored as why } from "./formats";
+// The engine size beside the location's requests: one figure, two writers
+// (#132). The comparison and its prose live there; the write is this file's.
+import { MatchPatch, sizeState } from "./engineSize";
 // Service virtualization, as one record rather than a dozen values derived in
 // four places here. Whether the location demands it, whether that demand was
 // declined, whether what is configured is finished, the prerequisite context,
@@ -641,8 +644,22 @@ export default function App({ api }: { api: Api }) {
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
 
+  // The engine size's other writer (#132): what the location's overrideCPU /
+  // overrideMemory requests say beside the bundle's limits. Read off the
+  // page's own list rather than facts, because locationUpdated keeps the list
+  // fresh after a settings write and facts are fetched once; manual mode has
+  // no location and the state carries that structurally (noLocation), never
+  // as "the location sets nothing".
+  const engineMatch = useMemo(
+    () => sizeState(raw("engine_cpu_limit"), raw("engine_mem_limit"), location),
+    [raw, location]);
+  const [engineApplyBusy, setEngineApplyBusy] = useState(false);
+  const [engineApplyErr, setEngineApplyErr] = useState<string | null>(null);
+
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
+    // A refusal is about one location's write; the next location starts clean.
+    setEngineApplyErr(null);
     // A token belongs to one agent. Carried into another location's bundle it
     // applies cleanly and leaves that agent at 0/1 with a credential that was
     // never its own -- so changing location empties the field, and so does
@@ -1297,6 +1314,35 @@ export default function App({ api }: { api: Api }) {
   // leading verdict's prose.
   const evidence = preflight.out ? evidenceHeader(preflight.out) : null;
 
+  /** Write the location overrides that match the bundle's engine limits --
+   *  the Apply beside the sizing group's warning (#132).
+   *
+   *  The same settings route as the panel's Save, and the same report-the-
+   *  account discipline: the answer's re-read location goes back into the
+   *  list (locationUpdated, declared below -- run at click time, after this
+   *  render), and the group's own state line is what says whether the figures
+   *  now match, so a write BlazeMeter dropped stays a divergence on screen
+   *  rather than becoming a green tick. A null override_cpu is "cannot be
+   *  written" (whole cores only), so that field is left out, never sent as
+   *  zero. */
+  const applyEngineRequests = async (patch: MatchPatch) => {
+    if (!harborId) return;
+    setEngineApplyBusy(true); setEngineApplyErr(null);
+    try {
+      const out = await api.updateLocation({
+        harbor_id: harborId,
+        ...(patch.override_cpu === null
+          ? {} : { override_cpu: String(patch.override_cpu) }),
+        override_memory: String(patch.override_memory),
+      });
+      locationUpdated(out.location);
+    } catch (e) {
+      setEngineApplyErr(String((e as Error).message));
+    } finally {
+      setEngineApplyBusy(false);
+    }
+  };
+
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
   // may write is what its declaration says it owns.
@@ -1334,7 +1380,8 @@ export default function App({ api }: { api: Api }) {
           ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
         onCpuLimit={(v) => set("engine_cpu_limit", v)}
         onMemLimit={(v) => set("engine_mem_limit", v)}
-/>
+        size={engineMatch} onApply={applyEngineRequests}
+        applyBusy={engineApplyBusy} applyErr={engineApplyErr} />
     ),
     security: (
       <SecurityGroup applies={applies} cluster={!isDocker(format)}
@@ -1572,6 +1619,15 @@ export default function App({ api }: { api: Api }) {
               applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}
+              // The sizing group's row warns while it is off: off now means
+              // "the documented default limits", so a location whose requests
+              // do not match them is a real gap the fold must not hide --
+              // #132's incident was exactly this state.
+              grpWarn={{
+                sizing: engineMatch.kind === "unset"
+                  || engineMatch.kind === "diverge"
+                  ? engineMatch.warning : null,
+              }}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
               namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
               exportProfile={exportProfile} importProfile={importProfile} />

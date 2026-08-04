@@ -74,6 +74,10 @@ export interface ConfigurePanelProps {
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
   grpDeclined: Partial<GroupFlags>;
+  /** A warning a row must show while its group is off -- a group that is off
+   *  still generates its defaults, so a gap between them and the account is
+   *  real whether or not the body is open (#132). */
+  grpWarn: Partial<Record<GroupId, string | null>>;
   flipGroup: (id: GroupId, on: boolean) => void;
   groupBody: Record<GroupId, ReactNode>;
   /** Groups in use but unfinished, so the download is blocked. */
@@ -89,6 +93,7 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
   return gs.map((g) => (
     <GroupRow key={g.id} group={g} on={p.grpOn[g.id]}
       required={!!p.grpRequired[g.id]} declined={!!p.grpDeclined[g.id]}
+      warn={p.grpWarn[g.id]}
       applies="" onFlip={(v) => p.flipGroup(g.id, v)}>
       {p.groupBody[g.id]}
     </GroupRow>

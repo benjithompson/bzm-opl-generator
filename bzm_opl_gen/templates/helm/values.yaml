@@ -209,17 +209,19 @@ probes:
 # -- Engines ------------------------------------------------------------------
 
 # The *limits* crane stamps on the taurus engine pods it spawns. Empty ->
-# BlazeMeter's documented default of 2 CPU / 8Gi. Each concurrent engine also
-# wants ~60GB disk (40GB of it /tmp). Check a cluster against that with
-# `bzm-opl-gen doctor`.
+# BlazeMeter's documented default of 2 CPU / 8Gi, which the chart renders into
+# the ConfigMap rather than leaving the env out: an engine with no limits env
+# is OOMKilled at whatever the node tolerates, not "unlimited" (#132). Each
+# concurrent engine also wants ~60GB disk (40GB of it /tmp). Check a cluster
+# against that with `bzm-opl-gen doctor`.
 #
-# Engine *requests* are not settable, from here or anywhere: crane stamps them
-# at 250m/256Mi itself, and the scheduler packs nodes on those. This chart used
-# to ship a LimitRange in the hope of changing that; a LimitRange's
-# defaultRequest only fills fields a pod leaves unset, so it never could -- and
-# what it did reach was crane's own helper pods, handing an engine's worth of
-# CPU and memory to jobs that need neither. Give the location nodes it does not
-# share, or a mutating admission policy, if the gap matters.
+# Engine *requests* are not settable from here: they come from the location's
+# overrideCPU/overrideMemory (Settings -> Private Locations), defaulting to
+# 250m/256Mi, and the scheduler packs nodes on those -- so set the overrides to
+# match these limits. This chart used to ship a LimitRange in the hope of
+# changing them; a LimitRange's defaultRequest only fills fields a pod leaves
+# unset, so it never could -- and what it did reach was crane's own helper
+# pods, handing an engine's worth of CPU and memory to jobs that need neither.
 engine:
   cpuLimit: ""
   memoryLimit: ""

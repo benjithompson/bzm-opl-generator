@@ -1,4 +1,5 @@
-import { Field, inputCls, TextInput } from "../components";
+import { Button, ErrorMsg, Field, inputCls, TextInput } from "../components";
+import { applyCost, MatchPatch, SizeState } from "../engineSize";
 import { ENGINE_SIZES } from "../optionGroups";
 
 /** The engine-size picker, wherever a size is chosen.
@@ -46,7 +47,17 @@ export function SizingGroup(props: {
   onLimits: (cpu: string | null, mem: string | null) => void;
   onCpuLimit: (v: string | null) => void;
   onMemLimit: (v: string | null) => void;
+  /** What the location's requests say beside these limits -- the size is one
+   *  figure with two writers (#132), and this is the second one, read off the
+   *  selected location. See engineSize.ts for the states. */
+  size: SizeState;
+  /** The one write here: the location overrides matching the limits, through
+   *  the same settings route as the location panel's Save. App owns it. */
+  onApply: (patch: MatchPatch) => void;
+  applyBusy: boolean;
+  applyErr: string | null;
 }) {
+  const s = props.size;
   return (
     <>
       <EngineSizeSelect preset={props.preset} custom
@@ -68,20 +79,39 @@ export function SizingGroup(props: {
         Each concurrent engine also needs ~60GB disk (40GB of it on /tmp).
         Size worker nodes for slots × engine size.
       </p>
-      {/* This said engine requests were unsettable -- "crane stamps them at
-          250m/256Mi and nothing can move them" -- which a live GKE run
-          disproved: the bundle sets the engine's *limits*, the location's
-          overrideCPU/overrideMemory set its *requests*, and 250m/256Mi is only
-          the default for a location that sets neither. The correction landed in
-          the generator, the recipe and doctor, and this hint was missed. */}
-      <p className="text-[11px] text-slate-400">
-        These are the engine's <i>limits</i>. Its <i>requests</i> — what the
-        scheduler and the autoscaler actually place on — come from the
-        location's <code>overrideCPU</code> / <code>overrideMemory</code> in
-        BlazeMeter, and default to 250m/256Mi. Left at that default an engine
-        asks for a fraction of what it uses, so a whole run packs onto one node
-        and the engines contend. Set them to match the limits above.
-      </p>
+      {/* The other writer of this figure: the location's overrideCPU /
+          overrideMemory are the engine's *requests*, which the scheduler and
+          the autoscaler place on. The states are engineSize.ts's, and "no
+          location to read" (manual entry) is not "the location sets nothing"
+          -- only the second may warn. */}
+      {s.kind === "noLocation" && (
+        <p className="text-[11px] text-slate-400">
+          These are the engine's <i>limits</i>. Its <i>requests</i> — what the
+          scheduler and the autoscaler actually place on — come from the
+          location's <code>overrideCPU</code> / <code>overrideMemory</code> in
+          BlazeMeter, and default to 250m/256Mi. Nothing here can read the
+          location, so set them there to match the limits above.
+        </p>
+      )}
+      {s.kind === "match" && (
+        <p className="text-[11px] text-emerald-700">{s.note}</p>
+      )}
+      {(s.kind === "unset" || s.kind === "diverge") && (
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-amber-700">{s.warning}</p>
+          {/* The cost before the control, like every other account write on
+              this page -- and the divergence may stand: Apply offers the
+              match, it never enforces one. */}
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500">{applyCost(s)}</span>
+            <span className="grow" />
+            <Button busy={props.applyBusy} onClick={() => props.onApply(s.patch)}>
+              Apply
+            </Button>
+          </div>
+          <ErrorMsg msg={props.applyErr} />
+        </div>
+      )}
     </>
   );
 }

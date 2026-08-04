@@ -606,7 +606,24 @@ def test_engine_resource_limits():
     assert cm["KUBERNETES_LIMITS_EPHEMERAL_STORAGE"] == "40960"
 
 
+def test_limits_env_is_always_carried_defaults_included():
+    """A bundle with no sizing options still carries the default limits env.
 
+    doctor and the planner certify engine_size(), which falls back to
+    ENGINE_DEFAULT_CPU/MEM -- so a ConfigMap that omitted the env when the two
+    options were unset shipped engines with no limits at all, while the
+    preflight had judged the cluster against 2/8Gi. Observed live as an engine
+    OOMKilled 4s after start (#132). Unset means "documented default", never
+    "whatever crane does with no env"."""
+    cm = {}
+    for platform in ("k8s", "openshift"):
+        files = gen.generate(FACTS, {"namespace": "ns1", "platform": platform})
+        cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+        assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == gen.ENGINE_DEFAULT_CPU
+        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == gen.ENGINE_DEFAULT_MEM
+    # The ephemeral pair stays opt-in: engine_size() vouches for CPU and
+    # memory only, and there is no documented ephemeral default to state.
+    assert "KUBERNETES_LIMITS_EPHEMERAL_STORAGE" not in cm
 
 
 

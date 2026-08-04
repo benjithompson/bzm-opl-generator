@@ -44,9 +44,9 @@ Python buffers stdout when redirected, so the log stays empty until exit;
 
 **Frontend — `cd frontend && npx vitest run && npx tsc --noEmit`.** Logic lives
 in plain modules, each with its own `.test.ts` — `api`, `attempt`, `capacity`,
-`foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`, `optionGroups`,
-`preflight`, `session`, `suggestions`, `sv`, `text`, `token` — and components
-wire them. Four suites do render (`App`, `CapacityView`, `SuggestionList`,
+`engineSize`, `foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`,
+`optionGroups`, `preflight`, `sched`, `session`, `suggestions`, `sv`, `text`,
+`token` — and components wire them. Four suites do render (`App`, `CapacityView`, `SuggestionList`,
 `steps/DownloadPanel`), for the flows only an effect reaches. `noUnusedLocals`
 is on, so a binding left behind by a refactor fails the typecheck rather than
 accumulating.

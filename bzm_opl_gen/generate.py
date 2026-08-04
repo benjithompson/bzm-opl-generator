@@ -688,10 +688,16 @@ def _configmap(facts, o):
         if split:
             lines.append("  # Engines are pinned to their own node pool, separate from crane's.")
         lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(eng_sel)}'")
-    if o["engine_cpu_limit"]:
-        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: \"{o['engine_cpu_limit']}\"")
-    if o["engine_mem_limit"]:
-        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: \"{o['engine_mem_limit']}\"")
+    # Always emitted, defaults included. doctor and the planner certify
+    # engine_size(), which falls back to ENGINE_DEFAULT_CPU/MEM -- a ConfigMap
+    # that omitted these when the options were unset shipped engines with no
+    # limits at all while the preflight vouched for 2/8Gi, and a live run had
+    # one OOMKilled 4s after start (#132). Unset means the documented default,
+    # never "whatever crane does with no env".
+    lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: "
+                 f"\"{o['engine_cpu_limit'] or ENGINE_DEFAULT_CPU}\"")
+    lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: "
+                 f"\"{o['engine_mem_limit'] or ENGINE_DEFAULT_MEM}\"")
     if o["engine_ephemeral_request_mb"]:
         lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_request_mb']}\"")
     if o["engine_ephemeral_limit_mb"]:

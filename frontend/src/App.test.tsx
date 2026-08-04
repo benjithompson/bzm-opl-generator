@@ -711,6 +711,72 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
     });
   });
 
+test("the sizing group reads the location's requests and offers the matching write",
+  async () => {
+    // One figure, two writers (#132): the bundle's limits are options, the
+    // location's overrideCPU/overrideMemory are an account write through the
+    // settings route. The group states what the location holds, warns when it
+    // holds nothing, and Apply is the write -- with its cost said beside it.
+    const sent: Record<string, string>[] = [];
+    let held = loc("h-perf", "Perf",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }]);
+    const settings = () => ({
+      slots: held.slots ?? null, threads_per_engine: null,
+      override_cpu: held.overrideCPU ?? null,
+      override_memory: held.overrideMemory ?? null,
+    });
+    render(<App api={accountOf([held], {
+      locations: async () => [held],
+      // The real feature id: accountOf's "perf" claims the funcId but owns no
+      // groups, and the sizing group is declared under "performance".
+      features: async () => [{
+        id: "performance", label: "Performance", namespace: "blazemeter",
+        func_ids: ["performance"],
+      }],
+      updateLocation: async (body) => {
+        const { harbor_id: _h, ...fields } = body;
+        sent.push(fields as Record<string, string>);
+        const before = settings();
+        held = { ...held, overrideCPU: Number(fields.override_cpu),
+                 overrideMemory: Number(fields.override_memory) };
+        const after = settings();
+        return { location: held, ignored: [], before, after,
+                 changed: { override_cpu: after.override_cpu,
+                            override_memory: after.override_memory } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // The row warns with the group still off -- the incident's own state was
+    // "group off + overrides unset", and the bundle now carries the default
+    // limits either way, so the fold must not be what hides the gap.
+    expect(await screen.findByText(/sets no engine requests/)).toBeTruthy();
+
+    const title = screen.getByText(/^Engine sizing$/);
+    fireEvent.click(within(title.closest("div.flex") as HTMLElement)
+      .getByRole("switch"));
+
+    // Open, the warning moves into the body -- not doubled -- and the write
+    // is offered beside it with what it costs. "Sets nothing" is a warning
+    // because the location was read; "no location to read" stays silent.
+    expect(await screen.findByText(/sets no engine requests/)).toBeTruthy();
+    expect(screen.getByText(/every agent in it/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    // The write goes through the same settings route as the panel's Save,
+    // matching the seeded standard size.
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0]).toEqual({ override_cpu: "2", override_memory: "8192" });
+
+    // The answer is the re-read location, not the request: the group now says
+    // the two figures match, and the write is no longer offered.
+    expect(await screen.findByText(/requests match/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
 // Rotating from this step is gone with its box. It was the second way to mint
 // a credential -- step 1 has the first, on the agent it belongs to and beside
 // the sentence saying what it kills -- and two ways to do one irreversible

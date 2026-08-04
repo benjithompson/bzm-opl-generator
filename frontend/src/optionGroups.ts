@@ -117,6 +117,11 @@ export const ENGINE_SIZES = [
   { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
 ];
 
+/** BlazeMeter's documented default — what the generator emits when the two
+ *  limits are unset (ENGINE_DEFAULT_CPU/MEM on that side), so the one TS copy
+ *  of the 2/8Gi figure. Shared with engineSize.ts and the enable seed below. */
+export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
+
 /** Which preset the two limits are, derived rather than stored, so an imported
  *  or preset config lands on the right entry and anything unrecognised shows
  *  as Custom. */
@@ -284,8 +289,8 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // the group must not overwrite a size a preset or profile just brought in.
     enable: (o) => {
       if (enginePreset(o) !== "custom") return {};
-      const d = ENGINE_SIZES.find((s) => s.id === "standard")!;
-      return { engine_cpu_limit: d.cpu, engine_mem_limit: d.mem };
+      return { engine_cpu_limit: STANDARD_SIZE.cpu,
+               engine_mem_limit: STANDARD_SIZE.mem };
     },
     disable: () => ({ engine_cpu_limit: null, engine_mem_limit: null }),
   },
