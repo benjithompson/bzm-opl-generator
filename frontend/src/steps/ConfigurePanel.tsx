@@ -31,7 +31,7 @@ import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
   GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFeature,
-  SHARED_GROUPS,
+  SHARED_GROUPS, SIZING_FEATURE,
 } from "../optionGroups";
 
 export interface ConfigurePanelProps {
@@ -74,10 +74,13 @@ export interface ConfigurePanelProps {
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
   grpDeclined: Partial<GroupFlags>;
-  /** A warning a row must show while its group is off -- a group that is off
-   *  still generates its defaults, so a gap between them and the account is
-   *  real whether or not the body is open (#132). */
-  grpWarn: Partial<Record<GroupId, string | null>>;
+  /** The engine size this bundle will carry, as prose -- a statement, not an
+   *  editor (#132): the size derives from the location's engine requests and
+   *  is set there (Location settings), so there is nothing here to toggle,
+   *  fill in or leave blank. Null where the format has no such env (docker),
+   *  and the performance card is where it renders, in the slot the sizing
+   *  group used to hold. */
+  engineNote: string | null;
   flipGroup: (id: GroupId, on: boolean) => void;
   groupBody: Record<GroupId, ReactNode>;
   /** Groups in use but unfinished, so the download is blocked. */
@@ -93,7 +96,6 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
   return gs.map((g) => (
     <GroupRow key={g.id} group={g} on={p.grpOn[g.id]}
       required={!!p.grpRequired[g.id]} declined={!!p.grpDeclined[g.id]}
-      warn={p.grpWarn[g.id]}
       applies="" onFlip={(v) => p.flipGroup(g.id, v)}>
       {p.groupBody[g.id]}
     </GroupRow>
@@ -242,6 +244,10 @@ function AdvancedRow(p: ConfigurePanelProps) {
 function FeatureCard(
     p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
   const { feat, own } = p;
+  // The engine-size statement renders where the sizing group used to sit:
+  // under the feature whose bundles start engines. Read-only by design --
+  // the size is the location's, and this card only states it.
+  const note = feat.id === SIZING_FEATURE ? p.engineNote : null;
   const manual = p.sourceMode === "manual";
   // Enabled means the location runs it -- or, in manual mode, that this is what
   // the typed identity was declared to be. Unanswered reads as on: see
@@ -314,8 +320,16 @@ function FeatureCard(
           Not possible in this bundle — {noFormat}. Pick{" "}
           <b>Kubernetes manifests</b> above to configure it.
         </p>
-      ) : own.length ? (
-        <div className="divide-y divide-slate-100">{rows(p, own)}</div>
+      ) : own.length || note ? (
+        <div className="divide-y divide-slate-100">
+          {rows(p, own)}
+          {note && (
+            <p className="px-3 py-3 text-[11px] text-slate-500">
+              <span className="font-medium text-slate-700">Engine size.</span>{" "}
+              {note}
+            </p>
+          )}
+        </div>
       ) : (
         <p className="px-3 py-3 text-[11px] text-slate-400">
           nothing extra to configure — it uses the settings above
@@ -457,9 +471,10 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               {/* The groups are the rail's own answer, handed over rather than
                   worked out again here: the card and the rail listing different
                   things is the rail failing at the only job it has. Empty is a
-                  real answer -- Engine sizing is KUBERNETES_RESOURCES_LIMITS_*,
-                  so a docker performance card says "nothing extra to
-                  configure" rather than offering limits nothing reads. */}
+                  real answer -- the engine-size statement is
+                  KUBERNETES_RESOURCES_LIMITS_*, so a docker performance card
+                  says "nothing extra to configure" rather than stating a size
+                  nothing reads. */}
               {p.features.map((f) => (
                 <FeatureCard key={f.id} {...p} feat={f}
                   own={groupsIn("f-" + f.id)} />

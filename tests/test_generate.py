@@ -626,6 +626,63 @@ def test_limits_env_is_always_carried_defaults_included():
     assert "KUBERNETES_LIMITS_EPHEMERAL_STORAGE" not in cm
 
 
+def test_engine_limits_derive_from_the_location():
+    """Requests and limits are one figure, and the location is where it is set
+    (#132): a location carrying overrideCPU/overrideMemory -- the engine pod's
+    requests -- gets the same figure as the bundle's limits, so the two agree
+    by construction. overrideMemory is MB, read as Mi, formatted the way every
+    other manifest quantity is (4096 -> 4Gi, 8196 -> 8196Mi)."""
+    facts = {**FACTS, "override_cpu": 1, "override_memory": 4096}
+    files = gen.generate(facts, {"namespace": "ns1"})
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "1"
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "4Gi"
+    # An odd MB value stays in Mi rather than being rounded to a lie.
+    odd = gen.generate({**FACTS, "override_memory": 8196},
+                       {"namespace": "ns1"})
+    cm = yaml.safe_load(odd["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "8196Mi"
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == gen.ENGINE_DEFAULT_CPU
+    # An explicit option outranks the location: the CLI, a livetest overlay
+    # and a replayed profile all speak through options.
+    explicit = gen.generate(facts, {"namespace": "ns1",
+                                    "engine_cpu_limit": "2",
+                                    "engine_mem_limit": "8Gi"})
+    cm = yaml.safe_load(explicit["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "2"
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "8Gi"
+
+
+def test_derived_engine_limits_land_in_the_profile_and_replay_stably():
+    """The profile records *resolved* options, so the derivation resolves into
+    it: a replay against different facts -- the location was resized since the
+    bundle was cut -- must reproduce the bundle byte-for-byte, not re-derive."""
+    facts = {**FACTS, "override_cpu": 1, "override_memory": 4096}
+    files = gen.generate(facts, {"namespace": "ns1"})
+    prof = json.loads(files["profile.json"])
+    assert prof["engine_cpu_limit"] == "1"
+    assert prof["engine_mem_limit"] == "4Gi"
+    resized = {**FACTS, "override_cpu": 4, "override_memory": 16384}
+    replay = gen.generate(resized, prof)
+    cm = yaml.safe_load(replay["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "1"
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "4Gi"
+
+
+def test_docker_derives_no_engine_limits():
+    """The two keys are DOCKER_IGNORED, so deriving them would only add a
+    README line about an option nobody set: the derivation asks
+    ignored_options() like every other reader of the pair, and a docker
+    bundle's README states the size it actually carries (the default, via
+    engine_size)."""
+    facts = {**FACTS, "override_cpu": 1, "override_memory": 4096}
+    files = gen.generate(facts, DOCKER)
+    prof = json.loads(files["profile.json"])
+    assert prof["engine_cpu_limit"] is None
+    assert prof["engine_mem_limit"] is None
+    assert "`engine_cpu_limit`" not in files["README.md"]
+
+
 
 
 

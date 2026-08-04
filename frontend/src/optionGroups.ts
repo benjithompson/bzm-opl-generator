@@ -17,7 +17,7 @@ import { Feature, Options } from "./api";
 import { Applies, isDocker, keysApply } from "./formats";
 
 export type GroupId =
-  "registry" | "proxy" | "ca" | "sched" | "sizing" | "security" | "sv";
+  "registry" | "proxy" | "ca" | "sched" | "security" | "sv";
 
 /** Merged over the current options. `null` clears a key that has a default --
  *  A key with no default must be REMOVED rather than nulled -- generate()
@@ -111,24 +111,29 @@ export function caModePatch(o: Options, mode: CaMode): OptionPatch {
 // -- engine sizing -----------------------------------------------------------
 // Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
 // to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
+//
+// NOT a group any more (#132): the size is never optional -- generate always
+// emits the limits, deriving them from the location's overrideCPU /
+// overrideMemory when no option names them -- so a switch that could be off,
+// and fields that could be blank, misdescribed it. The configure step renders
+// engineSize.sizeStatement instead; the presets below serve the capacity
+// profile on step 1, which still writes the two options as a prescription.
 export const ENGINE_SIZES = [
   { id: "small", cpu: "1", mem: "4Gi", label: "Small — 1 CPU / 4Gi (dev clusters, light tests)" },
   { id: "standard", cpu: "2", mem: "8Gi", label: "Standard — 2 CPU / 8Gi (BlazeMeter default)" },
   { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
 ];
 
-/** BlazeMeter's documented default — what the generator emits when the two
- *  limits are unset (ENGINE_DEFAULT_CPU/MEM on that side), so the one TS copy
- *  of the 2/8Gi figure. Shared with engineSize.ts and the enable seed below. */
+/** BlazeMeter's documented default — what the generator emits when nothing
+ *  else names a size (ENGINE_DEFAULT_CPU/MEM on that side), so the one TS
+ *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** Which preset the two limits are, derived rather than stored, so an imported
- *  or preset config lands on the right entry and anything unrecognised shows
- *  as Custom. */
-export function enginePreset(o: Options): string {
-  return ENGINE_SIZES.find(
-    (s) => s.cpu === o.engine_cpu_limit && s.mem === o.engine_mem_limit)?.id ?? "custom";
-}
+/** The keys the size travels in, and the feature whose bundles start engines
+ *  -- what the old group declared, kept for the statement's format gate and
+ *  the not-run clearing below. */
+export const SIZING_KEYS = ["engine_cpu_limit", "engine_mem_limit"];
+export const SIZING_FEATURE = "performance";
 
 // -- service account ---------------------------------------------------------
 // Deliberately not a group. A group is a switch that hides its fields when it is
@@ -275,24 +280,6 @@ export const OPTION_GROUPS: OptionGroup[] = [
     enable: () => ({}),
     disable: () => ({ tolerations: null, node_selector: null,
                       engine_tolerations: null, engine_node_selector: null }),
-  },
-  {
-    id: "sizing",
-    title: "Engine sizing",
-    hint: "CPU / memory limits for load engines (default 2 CPU / 8Gi)",
-    // The only group that is about engines: a location running mocks alone
-    // never starts one, so this is off screen while service virtualization is.
-    features: ["performance"],
-    keys: ["engine_cpu_limit", "engine_mem_limit"],
-    detect: (o) => !!(o.engine_cpu_limit || o.engine_mem_limit),
-    // Seeded only when the two limits are not already a known shape: opening
-    // the group must not overwrite a size a preset or profile just brought in.
-    enable: (o) => {
-      if (enginePreset(o) !== "custom") return {};
-      return { engine_cpu_limit: STANDARD_SIZE.cpu,
-               engine_mem_limit: STANDARD_SIZE.mem };
-    },
-    disable: () => ({ engine_cpu_limit: null, engine_mem_limit: null }),
   },
   {
     id: "security",
@@ -466,6 +453,16 @@ export function notRunPatch(
     if (g.features.length && !g.features.some((f) => runsFeature(enabled, f))
         && g.detect(o)) Object.assign(patch, g.disable(o, false));
   }
+  // The engine size is a section's statement rather than a group (#132), so
+  // its clearing is spelled here instead of through a disable(): the options
+  // still travel (the capacity profile and an imported profile write them),
+  // and a location that starts no engines must not carry them out in the
+  // bundle -- generate would emit an explicit option over anything.
+  if (!runsFeature(enabled, SIZING_FEATURE)
+      && (o.engine_cpu_limit != null || o.engine_mem_limit != null)) {
+    patch.engine_cpu_limit = null;
+    patch.engine_mem_limit = null;
+  }
   return Object.keys(patch).length ? patch : null;
 }
 
@@ -473,7 +470,7 @@ export function notRunPatch(
  *
  *  A third filter over the same list, so it lives with the other two rather
  *  than beside the predicate it takes. A group whose every declared key is
- *  ignored is not on screen at all -- Scheduling and Engine sizing, for docker.
+ *  ignored is not on screen at all -- Scheduling, for docker.
  *  One with some is on screen with the rest of its fields hidden by the
  *  predicate itself: Private registry keeps the registry and loses the
  *  imagePullSecret. Derived from `keys`, so a group gaining an option needs

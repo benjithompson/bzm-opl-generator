@@ -44,8 +44,7 @@ describe("docker", () => {
 
   it("takes a group off screen only when none of it applies", () => {
     // Every key ignored: the row would be a switch over an empty body.
-    expect(groupsFor([GROUP_BY_ID.sched, GROUP_BY_ID.sizing], applies))
-      .toEqual([]);
+    expect(groupsFor([GROUP_BY_ID.sched], applies)).toEqual([]);
     // Some ignored: the group stays and its own body hides the rest. Losing
     // Private registry with docker would take the mirror script's own setting
     // with it, and a docker agent is exactly where an air-gapped host needs it.

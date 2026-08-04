@@ -1395,6 +1395,27 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
             assert key in carried or key == "probes", check.__name__
 
 
+def test_evaluate_derives_engine_limits_from_the_location(monkeypatch):
+    """The preflight certifies the size the bundle will carry (#132): generate
+    derives unset limits from the location's overrideCPU/overrideMemory, and
+    evaluate applies the same resolution before any check reads engine_size --
+    otherwise doctor would judge the 2/8Gi default against a bundle carrying
+    the location's figure."""
+    seen = {}
+    monkeypatch.setattr(doctor, "run_check",
+                        lambda check, facts, opts, cluster: seen.update(opts) or [])
+    facts = {**FACTS, "override_cpu": 1, "override_memory": 4096}
+    doctor.evaluate(facts, {}, "blazemeter", cluster_data=UNREAD_ALL, probes={})
+    assert seen["engine_cpu_limit"] == "1"
+    assert seen["engine_mem_limit"] == "4Gi"
+    # An explicit option still wins -- a replayed profile speaks through opts.
+    seen.clear()
+    doctor.evaluate(facts, {"engine_cpu_limit": "2", "engine_mem_limit": "8Gi"},
+                    "blazemeter", cluster_data=UNREAD_ALL, probes={})
+    assert seen["engine_cpu_limit"] == "2"
+    assert seen["engine_mem_limit"] == "8Gi"
+
+
 def test_evaluate_carries_every_section_every_check_declares(monkeypatch):
     """The one caller that assembles the mapping, against the declarations --
     a check reading a section evaluate() does not merge in would raise on every

@@ -1,12 +1,14 @@
 import { describe, expect, test } from "vitest";
 
-import { applyCost, cpuCores, memMb, sizeState } from "./engineSize";
+import { cpuCores, memMb, sizeStatement } from "./engineSize";
 
-// One figure, two writers (#132): the bundle's limits and the location's
-// overrideCPU/overrideMemory requests. This module is the comparison and the
-// prose; App owns the write. The states matter more than the arithmetic --
-// "no location to read" and "the location sets nothing" must never share a
-// representation, because only the second deserves a warning.
+// The engine size is one figure and the location is where it is set (#132):
+// generate derives the bundle's limits from the location's overrideCPU /
+// overrideMemory when no explicit option names them. The configure step no
+// longer edits the size -- this module is the read-only statement it renders
+// instead: what the bundle will carry, where that came from, and where to
+// change it. The states matter more than the arithmetic: "no location to
+// read" and "the location sets nothing" must never share a representation.
 
 describe("cpuCores", () => {
   test("whole cores and millicores", () => {
@@ -36,88 +38,84 @@ describe("memMb", () => {
   });
 });
 
-describe("sizeState", () => {
-  test("no location is its own state, not a warning", () => {
-    // Manual entry, or the list still loading: nothing can be read, so
-    // nothing may be said about what the location holds.
-    expect(sizeState(null, null, null).kind).toBe("noLocation");
+describe("sizeStatement", () => {
+  test("a location's requests become the bundle's size", () => {
+    // The derivation the generator applies, restated for the screen: 4096 MB
+    // reads as Mi and lands on the Gi form, the same as format_memory.
+    const s = sizeStatement(null, null, { overrideCPU: 1, overrideMemory: 4096 });
+    expect(s.kind).toBe("location");
+    expect(s.cpu).toBe("1");
+    expect(s.mem).toBe("4Gi");
+    expect(s.text).toContain("1 CPU / 4Gi");
+    expect(s.text).toContain("Location settings");
+    // Plain prose: no backticks, no double dash.
+    expect(s.text).not.toContain("`");
+    expect(s.text).not.toContain("--");
   });
 
-  test("limits mid-edit are unjudged, not diverging", () => {
-    expect(sizeState("2x", "8Gi", { overrideCPU: 2, overrideMemory: 8192 })
-      .kind).toBe("unjudged");
+  test("an odd MB value stays in Mi rather than being rounded", () => {
+    const s = sizeStatement(null, null,
+      { overrideCPU: null, overrideMemory: 8196 });
+    expect(s.mem).toBe("8196Mi");
+    // The unset half falls to its own default.
+    expect(s.cpu).toBe("2");
+    expect(s.kind).toBe("location");
   });
 
-  test("a location holding nothing is unset, with the matching patch", () => {
-    const s = sizeState(null, null,
+  test("a location read and holding nothing is the default, said so", () => {
+    const s = sizeStatement(null, null,
       { overrideCPU: null, overrideMemory: null });
-    if (s.kind !== "unset") throw new Error(s.kind);
-    // Unset limits mean the documented default, which is what the bundle now
-    // always carries.
-    expect(s.patch).toEqual({ override_cpu: 2, override_memory: 8192 });
-    expect(s.warning).toContain("250m");
-    expect(s.warning).toContain("requests");
-    // Plain prose: it renders as text in the panel and Markdown elsewhere.
-    expect(s.warning).not.toContain("`");
-    expect(s.warning).not.toContain("--");
+    expect(s.kind).toBe("default");
+    expect(s.text).toContain("2 CPU / 8Gi");
+    expect(s.text).toContain("default");
+    // ...and it names where to change it, because that is the whole point of
+    // stating it: the location is the one place the size is set.
+    expect(s.text).toContain("Location settings");
+    expect(s.text).not.toContain("--");
   });
 
-  test("matching requests are said to match", () => {
-    const s = sizeState("2", "8Gi", { overrideCPU: 2, overrideMemory: 8192 });
-    if (s.kind !== "match") throw new Error(s.kind);
-    expect(s.note).toContain("2 CPU");
-    expect(s.note).toContain("8192 MB");
+  test("no location to read is its own state, not the default's wording", () => {
+    // Manual entry, or the list still loading: nothing may claim the
+    // location sets nothing, because nobody could read it.
+    const s = sizeStatement(null, null, null);
+    expect(s.kind).toBe("noLocation");
+    expect(s.cpu).toBe("2");
+    expect(s.text).not.toContain("sets no engine requests");
   });
 
-  test("divergence names both sides and allows itself", () => {
-    const s = sizeState("2", "8Gi", { overrideCPU: 1, overrideMemory: 4096 });
-    if (s.kind !== "diverge") throw new Error(s.kind);
-    expect(s.warning).toContain("1 CPU");
-    expect(s.warning).toContain("4096 MB");
-    expect(s.warning).toContain("2 CPU");
-    expect(s.warning).toContain("8Gi");
-    // Match is the default, never an invariant: the sentence must leave the
-    // divergence standing as a legitimate choice.
-    expect(s.warning).toMatch(/legitimate/);
-    expect(s.patch).toEqual({ override_cpu: 2, override_memory: 8192 });
-    expect(s.warning).not.toContain("`");
-    expect(s.warning).not.toContain("--");
+  test("explicit options are the bundle's own size and outrank the location",
+    () => {
+      const s = sizeStatement("2", "8Gi",
+        { overrideCPU: 1, overrideMemory: 4096 });
+      expect(s.kind).toBe("override");
+      expect(s.cpu).toBe("2");
+      expect(s.mem).toBe("8Gi");
+      // Both sides named: what the bundle carries and what the location asks.
+      expect(s.text).toContain("2 CPU / 8Gi");
+      expect(s.text).toContain("1 CPU / 4Gi");
+      expect(s.text).toContain("overrides");
+      expect(s.text).not.toContain("--");
+    });
+
+  test("options matching the location are not an override", () => {
+    const s = sizeStatement("1", "4Gi",
+      { overrideCPU: 1, overrideMemory: 4096 });
+    expect(s.kind).toBe("bundle");
+    expect(s.text).toContain("match");
   });
 
-  test("half-set requests diverge against the defaulted half", () => {
-    const s = sizeState("2", "8Gi", { overrideCPU: 2, overrideMemory: null });
-    if (s.kind !== "diverge") throw new Error(s.kind);
-    expect(s.warning).toContain("256Mi");
-  });
-
-  test("a fractional CPU limit has no expressible CPU request", () => {
-    // overrideCPU takes whole cores only; null is "cannot be written",
-    // never "write zero".
-    const s = sizeState("500m", "1Gi",
+  test("options against a location holding nothing say what that costs", () => {
+    const s = sizeStatement("4", "16Gi",
       { overrideCPU: null, overrideMemory: null });
-    if (s.kind !== "unset") throw new Error(s.kind);
-    expect(s.patch).toEqual({ override_cpu: null, override_memory: 1024 });
-  });
-});
-
-describe("applyCost", () => {
-  test("says what is written and that it is an account write", () => {
-    const s = sizeState("2", "8Gi", { overrideCPU: null, overrideMemory: null });
-    if (s.kind !== "unset") throw new Error(s.kind);
-    const cost = applyCost(s);
-    expect(cost).toContain("2");
-    expect(cost).toContain("8192 MB");
-    expect(cost).toMatch(/every agent/);
-    expect(cost).toMatch(/every test/);
+    expect(s.kind).toBe("bundle");
+    expect(s.text).toContain("4 CPU / 16Gi");
+    // The packing gap: requests stay at their default while limits are set.
+    expect(s.text).toContain("no engine requests");
   });
 
-  test("an unwritable CPU request is named, not skipped in silence", () => {
-    const s = sizeState("500m", "1Gi",
-      { overrideCPU: null, overrideMemory: null });
-    if (s.kind !== "unset") throw new Error(s.kind);
-    const cost = applyCost(s);
-    expect(cost).toContain("1024 MB");
-    expect(cost).toContain("whole cores");
-    expect(cost).toContain("500m");
+  test("options with nothing to read stay a plain statement", () => {
+    const s = sizeStatement("4", "16Gi", null);
+    expect(s.kind).toBe("bundle");
+    expect(s.text).not.toContain("no engine requests");
   });
 });

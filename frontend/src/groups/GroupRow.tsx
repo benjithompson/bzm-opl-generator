@@ -26,12 +26,6 @@ export function GroupRow(props: {
   /** Which features this group belongs to, always shown -- every row is
    *  attributed, so no option is on screen without saying why. */
   applies: string;
-  /** A warning that must survive the fold: rendered on the row while the
-   *  group is OFF, because off is a real configuration (its defaults still
-   *  generate) and a warning only the open body carries is one the state it
-   *  warns about never shows -- #132's incident was exactly the sizing group
-   *  off. The open body owns the full story, so the row half yields to it. */
-  warn?: string | null;
   onFlip: (on: boolean) => void;
   children: ReactNode;
 }) {
@@ -67,9 +61,6 @@ export function GroupRow(props: {
           </p>
         </div>
       </div>
-      {!on && props.warn && (
-        <p className="mt-1.5 pl-12 text-[11px] text-amber-700">{props.warn}</p>
-      )}
       {/* OFF hides the fields; the group's disable is what wipes their
           options, so nothing hidden ever reaches the manifests. */}
       {on && <div className="mt-3 pl-12 space-y-2">{props.children}</div>}

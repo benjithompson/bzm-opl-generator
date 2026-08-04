@@ -238,6 +238,42 @@ def engine_size(o):
                       "engine_mem_limit" in ignored))
 
 
+def resolve_engine_limits(facts, o):
+    """The engine limits this location implies, as an options patch -- empty
+    where there is nothing to derive.
+
+    Requests and limits are one figure with two writers (#132), and the
+    location is where it is set: overrideCPU/overrideMemory are the engine
+    pod's *requests*, so a bundle that carried a different size than the
+    location requests is the packing gap all over again. Resolution: an
+    explicit option wins (the CLI, the livetest overlay, a replayed profile --
+    all speak through options); then the location's overrides; then the
+    documented default, which the emitters fall back to on their own.
+
+    generate() merges the patch into the resolved options, so profile.json
+    records the derived value and a replay against different facts -- the
+    location was resized after the bundle was cut -- reproduces the bundle
+    rather than re-deriving. doctor.evaluate applies the same patch, so the
+    preflight certifies the size the bundle will actually carry.
+
+    overrideMemory is MB read as Mi -- the planner's own equivalence
+    (plan.capacity_plan emits 8192 for an 8Gi engine) -- and formatted the way
+    every other manifest quantity is, so 4096 arrives as 4Gi and an odd 8196
+    stays 8196Mi rather than being rounded to a lie. A format that ignores the
+    two keys derives nothing: the value would reach no manifest and only add a
+    README line about an option nobody set (see ignored_options)."""
+    patch = {}
+    if "engine_cpu_limit" in ignored_options(o):
+        return patch
+    cpu = facts.get("override_cpu")
+    mem = facts.get("override_memory")
+    if not o.get("engine_cpu_limit") and cpu:
+        patch["engine_cpu_limit"] = format_cpu(int(round(float(cpu) * 1000)))
+    if not o.get("engine_mem_limit") and mem:
+        patch["engine_mem_limit"] = format_memory(int(mem) * 1024 * 1024)
+    return patch
+
+
 def crane_scheduling(o):
     """(nodeSelector, tolerations) for the crane pod itself."""
     return o.get("node_selector") or {}, o.get("tolerations") or []
@@ -2349,6 +2385,10 @@ def generate(facts, options):
     creates the parent directories.
     """
     o = {**DEFAULT_OPTIONS, **options}
+    # Into o itself, not read at emit time: everything downstream -- the
+    # ConfigMap, the helm overlay, the READMEs, profile.json -- then speaks
+    # one value, and the profile records it as the resolved option it is.
+    o.update(resolve_engine_limits(facts, o))
     if "ship_id" not in o:
         ships = facts.get("ships") or []
         if len(ships) == 1:

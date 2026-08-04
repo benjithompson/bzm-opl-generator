@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
   allGroupsOff, configureBlockedBy, detectGroups, enabledFeatures, groupsOf,
-  SHARED_GROUPS, ENGINE_SIZES, featuresOf, GROUP_BY_ID, GroupId,
+  SHARED_GROUPS, featuresOf, GROUP_BY_ID, GroupId,
   incompleteGroups, notRunPatch, OPTION_GROUPS, OptionGroup, runsFeature,
   serviceAccountOk, startFeature,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
@@ -34,8 +34,6 @@ const DETECTS: [GroupId, string, unknown][] = [
   // so a truthy detect would collapse the group on a bundle that has them.
   ["sched", "engine_tolerations", []],
   ["sched", "engine_node_selector", {}],
-  ["sizing", "engine_cpu_limit", "2"],
-  ["sizing", "engine_mem_limit", "8Gi"],
   ["security", "use_secret", false],
   ["security", "cluster_rbac", true],
   ["security", "service_type", "NODEPORT"],
@@ -184,7 +182,6 @@ describe("switching a group off", () => {
       },
       sched: { tolerations: null, node_selector: null,
                engine_tolerations: null, engine_node_selector: null },
-      sizing: { engine_cpu_limit: null, engine_mem_limit: null },
       security: { use_secret: true, cluster_rbac: false,
                   service_type: "CLUSTERIP", restrict_engines: true,
                   // Back to unset, not to a boolean: the generator's default
@@ -221,18 +218,6 @@ describe("switching a group on", () => {
       expect(GROUP_BY_ID[id].enable(FULL)).toEqual({});
       expect(GROUP_BY_ID[id].enable({})).toEqual({});
     }
-  });
-
-  it("seeds the standard engine size when no size is recognised", () => {
-    const standard = ENGINE_SIZES.find((s) => s.id === "standard")!;
-    expect(GROUP_BY_ID.sizing.enable({}))
-      .toEqual({ engine_cpu_limit: standard.cpu, engine_mem_limit: standard.mem });
-  });
-
-  it("keeps a size that is already one of the presets", () => {
-    const small = ENGINE_SIZES.find((s) => s.id === "small")!;
-    expect(GROUP_BY_ID.sizing.enable(
-      { engine_cpu_limit: small.cpu, engine_mem_limit: small.mem })).toEqual({});
   });
 
   it("seeds an ingress and keeps the chosen service type", () => {
@@ -305,7 +290,9 @@ describe("the split the configure step is built on", () => {
 
   it("gives a feature the groups tagged with it, and only those", () => {
     expect(groupsOf("sv").map((g) => g.id)).toEqual(["sv"]);
-    expect(groupsOf("performance").map((g) => g.id)).toEqual(["sizing"]);
+    // Performance owns no group any more: the engine size stopped being one
+    // (#132) -- it derives from the location, and the card states it.
+    expect(groupsOf("performance")).toEqual([]);
   });
 
   it("answers a feature nothing is tagged with, rather than throwing", () => {
@@ -418,10 +405,25 @@ describe("options set for a feature the location does not run", () => {
   });
 
   it("leaves the shared groups and the features that are run alone", () => {
-    // Registry belongs to no feature, so no location is without it; sizing
-    // belongs to performance, which this one runs.
+    // Registry belongs to no feature, so no location is without it; the
+    // engine size belongs to performance, which this one runs.
     expect(notRunPatch({ private_registry: "reg.corp/bzm",
                          engine_cpu_limit: "2" }, perfOnly)).toBe(null);
+  });
+
+  it("clears an engine size bound for a location that starts no engines", () => {
+    // The size is not a group any more (#132), so its clearing is notRunPatch's
+    // own clause: the options still travel (the capacity profile, an imported
+    // profile), generate() emits an explicit option over anything, and a
+    // mocks-only location has no engine for it to describe.
+    expect(notRunPatch({ engine_cpu_limit: "2", engine_mem_limit: "8Gi" },
+                       ["sv"]))
+      .toEqual({ engine_cpu_limit: null, engine_mem_limit: null });
+    // ...settling in one pass, like the group path.
+    expect(notRunPatch({ engine_cpu_limit: null, engine_mem_limit: null },
+                       ["sv"])).toBe(null);
+    // ...and never while nobody has answered.
+    expect(notRunPatch({ engine_cpu_limit: "2" }, null)).toBe(null);
   });
 
   it("clears nothing while nobody has answered", () => {
