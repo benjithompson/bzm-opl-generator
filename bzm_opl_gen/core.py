@@ -1719,6 +1719,25 @@ def docker_ignored():
     return dict(gen_mod.DOCKER_IGNORED)
 
 
+def reserved_env():
+    """The environment variable names a bundle writes for itself, and the
+    option that writes each one where there is one, as {NAME: option | null}.
+
+    Served for the same reason as docker_ignored(): `extra_env` is refused for
+    every one of these at generate time, and a form that let somebody type one
+    and only learned it was taken when the download failed would be an
+    off-screen blocker with the field right there on screen. A caller that
+    checks a name must not keep its own copy of the list -- a variable added to
+    a template would go on being offered.
+
+    `null` for a name no single option owns (the identity, the fixed posture):
+    the refusal is real either way, and inventing an option to name would be
+    worse than saying there is not one.
+    """
+    return {name: gen_mod.ENV_OWNER.get(name)
+            for name in sorted(gen_mod.RESERVED_ENV)}
+
+
 def sv_constants():
     """The two service-virtualization enumerations a caller must not hardcode.
 

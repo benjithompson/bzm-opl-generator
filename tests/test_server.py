@@ -877,6 +877,57 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
         == set(gen_mod.DOCKER_IGNORED)
 
 
+def test_reserved_env_is_served_with_the_option_that_owns_each_name():
+    """The env area on the configure step refuses a name the bundle already
+    writes, and it must not keep its own list of them -- a variable added to a
+    template would go on being offered, and the collision would surface as a
+    ConfigMap with a duplicate key rather than as a message on the row.
+
+    The owner is served beside the name because it is the answer: "set it with
+    the proxy option" beats "that one is taken"."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/reserved-env").json()
+    assert set(body) == set(gen_mod.RESERVED_ENV)
+    assert body["KUBERNETES_SERVICE_USE_TYPE"] == "service_type"
+    # Null is a real answer: the identity variables belong to no option, and
+    # naming one would be worse than saying there is not one.
+    assert body["SHIP_ID"] is None
+    # Every owner named is a real option, or the message sends someone to a
+    # field that does not exist. The CA trio names a one-of pair, which is what
+    # the option table itself calls them.
+    defaults = client.get("/api/option-defaults").json()
+    for owner in filter(None, body.values()):
+        for name in owner.split(" | "):
+            assert name in defaults, f"{owner} names no option"
+
+
+def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
+    """The *names* are served; what a name may look like is not, and could not
+    usefully be -- it is a regex, and a page that had to compile a served one
+    could not typecheck it. So it is a second copy, and this is the only thing
+    that can hold it equal: a page accepting a name the generator refuses is a
+    row that goes green and a download that fails."""
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    pattern = re.search(r"^const NAME_RE = /(.+)/;$",
+                        (src / "env.ts").read_text(), re.M)
+    assert pattern, "NAME_RE not found -- was it renamed or moved?"
+    assert pattern.group(1) == gen_mod.ENV_NAME_RE.pattern
+
+
+def test_the_pages_copy_of_the_reserved_env_names_is_the_generators():
+    """As with DOCKER_IGNORED above: the page's tests run without a server, so
+    the fixture is a second copy, and this is what keeps it from drifting."""
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const RESERVED_ENV: Record<string, string \| null> = \{"
+                     r"(.*?)\n\};", text, re.S)
+    assert body, "RESERVED_ENV not found -- was it renamed or moved?"
+    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
+        == set(gen_mod.RESERVED_ENV)
+
+
 def test_sv_constants_carry_what_each_backend_publishes():
     """The UI tells the user which Role the bundle grants and what crane creates
     with it. That is SV_INGRESS_BACKENDS -- restating it in TypeScript is the
@@ -1042,7 +1093,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
     ("get", "/api/features"), ("get", "/api/sv-constants"),
-    ("get", "/api/docker-ignored"),
+    ("get", "/api/docker-ignored"), ("get", "/api/reserved-env"),
 ]
 
 

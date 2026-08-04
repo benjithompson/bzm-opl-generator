@@ -120,6 +120,14 @@ Objects that check the cluster rather than serve tests on it. They are not part 
 |---|---|---|
 | `crane_hook` | `false` | Adds [crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle -- a one-shot Pod, plus its own read-only Role and RoleBinding, that checks node capacity, egress to BlazeMeter and the registries, the RBAC the agent needs, and (for service virtualization) the ingress and its TLS secret. It exits 0 or 1 and stops; `kubectl logs cranehook` is the report, and it is yours to delete when you have read it. Off by default because it is a check rather than part of the agent. Under `--format helm` it becomes the chart's `helm test` hook, so `helm test <release>` runs it and nothing runs at install time. With `private_registry` its image is added to the mirror script -- it is not in the location's inventory, so an air-gapped bundle would otherwise carry the one object that cannot pull. |
 
+### Agent environment
+
+The escape hatch. BlazeMeter's agent-environment reference is much wider than the options above, and this is how the rest is reached without hand-editing a generated file that the next `generate` overwrites.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `extra_env` | -- | Agent environment variables this generator has no option of its own for -- `{"PREFERRED_INTERFACE": "eth1"}`. BlazeMeter's agent-environment reference is far wider than the options above, and the alternative was editing the generated ConfigMap by hand, which the next `generate` silently reverts. Carried by all three formats: ConfigMap entries for `manifests`, `extraEnv` in the values overlay for `helm`, `--env` flags in the `docker` script. It reaches the **agent**: crane's pod reads it, and the engines crane spawns do not, because crane builds their environment from the `KUBERNETES_*` variables rather than passing its own down. Every name the generator writes for itself is **refused**, naming the option that owns it -- two values for one key is a duplicate ConfigMap entry, and which one wins is not the one the form that set it shows. The refused set is the union across formats, so a Kubernetes variable is refused in a docker bundle too: it reaches nothing there either, and accepting it would read as a setting that had been made. |
+
 <!-- END GENERATED OPTIONS TABLE -->
 
 ## The service account

@@ -20,9 +20,16 @@ chart untouched. `helm show values ./out/helm` documents every key.
 
 Both formats render **the same objects** — same ConfigMap data, RBAC rules,
 container spec — so the choice is about how you install and upgrade,
-not about what ends up in the cluster. `tests/helm_parity.py` renders 28 option
+not about what ends up in the cluster. `tests/helm_parity.py` renders 29 option
 combinations both ways and requires them to agree; it runs as its own CI job
 because it is the one check that needs the `helm` binary.
+
+`extraEnv` in the overlay is the one place a value crosses it as arbitrary text
+— agent variables this generator has no setting of its own for. It is rendered
+into the ConfigMap last and can shadow nothing above it, because `extra_env`
+refuses every name the chart writes before the overlay is written. A values file
+written by hand has no such guard, and naming one there renders a ConfigMap with
+a duplicate key.
 
 ## Managing the release with Helm
 

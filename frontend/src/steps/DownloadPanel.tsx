@@ -93,8 +93,27 @@ export interface CredentialHandover {
   plan: DownloadPlan;
 }
 
+/** An option this step both reads and writes, as one value. Named because the
+ *  pair was spelled out three times over -- the field, the component's param
+ *  and App's literal -- and a two-field type written out at each end is two
+ *  ends free to disagree about which of them owns the write. */
+export interface Toggle {
+  on: boolean;
+  set: (v: boolean) => void;
+}
+
 /** The cluster read somebody else collected, and what may be applied from it. */
 export interface PreflightHandover {
+  /** crane-hook: whether the bundle carries it, and the write that decides
+   *  (#130). It is a generate option, so it shapes the bundle -- but what it
+   *  is *about* is the cluster the bundle is going to, which is this step's
+   *  question and not the configure step's, where it used to sit among options
+   *  that shape the agent.
+   *
+   *  Null where the format cannot carry it: App asks the served ignored table
+   *  rather than this file re-deriving it from `format`. It blocks nothing, so
+   *  its absence takes no blocker off screen with it. */
+  craneHook: Toggle | null;
   /** The imported file, its verdicts and whatever the last import was refused
    *  for -- preflight.ts's own state, unchanged. */
   read: PreflightState;
@@ -400,6 +419,16 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       onUndo={preflight.undoSuggestion} />
                   </div>
                 )}
+                {/* The third way to run the same check, and the one that is
+                    part of the bundle. Last of the three because it is last in
+                    time: Test deploy runs it now, the evidence file judges a
+                    read of the cluster, and this ships it for whoever applies
+                    the bundle. Below the file's verdicts rather than between
+                    the picker and them -- the import's own error and answer
+                    belong next to the control that produced them. */}
+                {preflight.craneHook && (
+                  <CraneHookRow hook={preflight.craneHook} />
+                )}
               </div>
               )}
 
@@ -423,7 +452,8 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     other identities on it says less than it looks like it
                     does. */}
                 <div className="rounded-xl border border-slate-200 px-3 py-2.5 flex items-center gap-3">
-                  <Switch on={watch.on} onChange={watch.setOn} />
+                  <Switch on={watch.on} onChange={watch.setOn}
+                    label="Watch agent status" />
                   <div className="min-w-0 grow">
                     <p className="text-sm font-medium text-slate-700">
                       Watch agent status
@@ -515,6 +545,52 @@ export function DownloadPanel(p: DownloadPanelProps) {
                 )}
               </div>
             </div>
+  );
+}
+
+/** crane-hook in the bundle, rather than as a manifest handed over now (#130).
+ *
+ *  github.com/Blazemeter/crane-hook: BlazeMeter's own cluster-readiness
+ *  checker, a one-shot Pod plus its own Role and RoleBinding. Every variable it
+ *  takes -- the namespace, the RBAC names, the expose type and its TLS secret,
+ *  the registry, the proxy -- is something the configure step already decided,
+ *  which is why it is a switch rather than a page in a doc.
+ *
+ *  It lived on that step until #130, among the options that shape the agent,
+ *  and it shapes none of it: the same agent is deployed either way, and what
+ *  the switch adds is a check that runs beside it. So it is here, with the
+ *  other two ways of asking whether this cluster will take the bundle.
+ *
+ *  Writing the option from this step is what keeps the move honest -- the
+ *  download has to carry it, so the control has to be somewhere the download
+ *  can see. It is a boolean and blocks nothing, so nothing came with it. */
+function CraneHookRow({ hook }: { hook: Toggle }) {
+  const { on } = hook;
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+      <div className="flex items-center gap-3">
+        <Switch on={on} onChange={hook.set}
+          label="Ship the check with the bundle" />
+        <div className="min-w-0 grow">
+          <p className={`text-sm font-medium ${on ? "text-slate-900" : "text-slate-500"}`}>
+            Ship the check with the bundle
+          </p>
+          <p className="text-[11px] text-slate-400">
+            crane-hook, for whoever applies it — the same checks Test deploy
+            runs, run on their cluster rather than on a file
+          </p>
+        </div>
+      </div>
+      {on && (
+        <p className="mt-2 pl-12 text-[11px] text-slate-500">
+          Adds <span className="font-mono">bzm_cranehook.yaml</span> — a Pod, a
+          Role and a RoleBinding, configured from this bundle&apos;s own
+          settings. It runs once and exits 0 or 1; delete it when it has. Under
+          Helm it is the chart&apos;s own{" "}
+          <span className="font-mono">helm test</span> hook.
+        </p>
+      )}
+    </div>
   );
 }
 

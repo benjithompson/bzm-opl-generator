@@ -801,6 +801,11 @@ def docker_ignored():
     return core.docker_ignored()
 
 
+@app.get("/api/reserved-env", description=core.reserved_env.__doc__)
+def reserved_env():
+    return core.reserved_env()
+
+
 # -- SPA ----------------------------------------------------------------------
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")

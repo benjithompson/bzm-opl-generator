@@ -114,3 +114,13 @@ data:
   AWS_CA_BUNDLE: {{ $path }}
   KUBERNETES_CA_BUNDLE_MOUNT: {{ printf "REQUESTS_CA_BUNDLE=%s=%s:AWS_CA_BUNDLE=%s=%s" $cm $key $cm $key | quote }}
   {{- end }}
+  {{- /*
+    Agent variables with no value of their own in this chart. Last, so it reads
+    as the addition it is -- and it can shadow nothing above, because
+    bzm-opl-gen refuses every name written here before it writes the overlay
+    (generate.RESERVED_ENV). Quoted: a ConfigMap value is a string, and an
+    unquoted `8080` or `true` renders as one Helm then refuses to marshal.
+  */}}
+  {{- range $name, $value := .Values.extraEnv }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}

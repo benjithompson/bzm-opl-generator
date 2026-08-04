@@ -47,6 +47,49 @@ export const DOCKER_IGNORED: Record<string, string> = {
     + "with its own docker login",
 };
 
+
+/** generate.RESERVED_ENV with the option that owns each name, as the page
+ *  receives it from /api/reserved-env -- the environment variables a bundle
+ *  writes for itself, which `extra_env` refuses.
+ *
+ *  A copy, and the only one, held equal to the generator's by
+ *  `tests/test_server.py::test_the_pages_copy_of_the_reserved_env_names_is_the_generators`.
+ *  `null` is a name no single option owns. */
+export const RESERVED_ENV: Record<string, string | null> = {
+  AUTH_TOKEN: "auth_token",
+  AUTO_KUBERNETES_UPDATE: "auto_update",
+  AUTO_UPDATE: "auto_update",
+  AWS_CA_BUNDLE: "ca_bundle | ca_existing_configmap",
+  CONTAINER_MANAGER_TYPE: null,
+  DOCKER_PORT_RANGE: null,
+  DOCKER_REGISTRY: "private_registry",
+  DOCKER_REGISTRY_EMAIL: "registry_auth",
+  DOCKER_REGISTRY_PASSWORD: "registry_auth",
+  DOCKER_REGISTRY_USERNAME: "registry_auth",
+  HARBOR_ID: null,
+  HTTPS_PROXY: "proxy",
+  HTTP_PROXY: "proxy",
+  IMAGE_OVERRIDES: "private_registry",
+  INHERIT_RUNNING_USER_AND_GROUP: "restrict_engines",
+  KUBERNETES_CA_BUNDLE_MOUNT: "ca_bundle | ca_existing_configmap",
+  KUBERNETES_ISTIO_GATEWAY_NAME: "sv_istio_gateway",
+  KUBERNETES_LIMITS_EPHEMERAL_STORAGE: "engine_ephemeral_limit_mb",
+  KUBERNETES_NODE_SELECTOR_JSON: "engine_node_selector",
+  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: "engine_ephemeral_request_mb",
+  KUBERNETES_RESOURCES_LIMITS_CPU: "engine_cpu_limit",
+  KUBERNETES_RESOURCES_LIMITS_MEMORY: "engine_mem_limit",
+  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: "restrict_engines",
+  KUBERNETES_SERVICE_USE_TYPE: "service_type",
+  KUBERNETES_TOLERATIONS_JSON: "engine_tolerations",
+  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: "sv_subdomain",
+  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: "sv_tls_secret",
+  KUBERNETES_WEB_EXPOSE_TYPE: "sv_ingress",
+  NO_PROXY: "proxy",
+  REQUESTS_CA_BUNDLE: "ca_bundle | ca_existing_configmap",
+  RUN_HEALTH_WEB_SERVICE: null,
+  SHIP_ID: null,
+};
+
 /** One implication of an imported file, as suggest.py serves it: the cluster
  *  says this is plain Kubernetes and the configuration says OpenShift.
  *

@@ -125,6 +125,13 @@ CASES = {
     "crane-hook-private-registry": {"platform": "k8s", "crane_hook": True,
                                     "private_registry": "reg.example.com/bzm",
                                     "service_account_name": "bzm-agent"},
+    # Free-form agent env. The one place a *value* crosses the overlay as
+    # arbitrary text, so the quoting is the thing at risk: an unquoted `8080` or
+    # `true` is a ConfigMap value Kubernetes refuses, and the two sides quote in
+    # different languages.
+    "extra-env": {"platform": "k8s", "extra_env": {
+        "PREFERRED_INTERFACE": "eth1", "DODUO_PORT": 8080,
+        "KUBERNETES_USE_PRE_PULLING": True}},
 }
 
 JSON_ENVS = ("IMAGE_OVERRIDES", "KUBERNETES_TOLERATIONS_JSON",

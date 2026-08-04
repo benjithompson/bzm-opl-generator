@@ -16,7 +16,7 @@ Two description fields, because the consumers want different lengths and one
 field would have to fail one of them:
 
   `summary`  one line, at most 20 words. This is what goes in an MCP tool's
-             JSON schema, where all thirty-four land in every session's context
+             JSON schema, where all thirty-six land in every session's context
              whether or not the option is used, and in the UI's field help.
   `doc`      the full argued paragraph, cross-links and all. This is the
              `docs/options.md` cell, read one at a time by someone who has
@@ -104,6 +104,10 @@ GROUPS = [
      "Objects that check the cluster rather than serve tests on it. They are "
      "not part of the agent: applying the bundle without them deploys exactly "
      "the same agent."),
+    ("Agent environment",
+     "The escape hatch. BlazeMeter's agent-environment reference is much wider "
+     "than the options above, and this is how the rest is reached without "
+     "hand-editing a generated file that the next `generate` overwrites."),
 ]
 
 
@@ -480,6 +484,27 @@ OPTIONS = [
             "`private_registry` its image is added to the mirror script -- it is not "
             "in the location's inventory, so an air-gapped bundle would otherwise "
             "carry the one object that cannot pull."),
+    # ---- Agent environment ---------------------------------------------
+    Option(
+        "extra_env", "object", "Agent environment",
+        summary="Extra agent environment variables, as NAME: value. Refuses any name the bundle already writes.",
+        doc="Agent environment variables this generator has no option of its "
+            "own for -- `{\"PREFERRED_INTERFACE\": \"eth1\"}`. BlazeMeter's "
+            "agent-environment reference is far wider than the options above, "
+            "and the alternative was editing the generated ConfigMap by hand, "
+            "which the next `generate` silently reverts. Carried by all three "
+            "formats: ConfigMap entries for `manifests`, `extraEnv` in the "
+            "values overlay for `helm`, `--env` flags in the `docker` script. "
+            "It reaches the **agent**: crane's pod reads it, and the engines "
+            "crane spawns do not, because crane builds their environment from "
+            "the `KUBERNETES_*` variables rather than passing its own down. "
+            "Every name the generator writes for itself is **refused**, "
+            "naming the option that owns it -- two values for one key is a "
+            "duplicate ConfigMap entry, and which one wins is not the one the "
+            "form that set it shows. The refused set is the union across "
+            "formats, so a Kubernetes variable is refused in a docker bundle "
+            "too: it reaches nothing there either, and accepting it would read "
+            "as a setting that had been made."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
         default_note=gen.CRANE_EPHEMERAL_STORAGE,
@@ -494,7 +519,7 @@ OPTIONS = [
 BY_NAME = {o.name: o for o in OPTIONS}
 
 # The words the summary limit is enforced at. Long enough for a real sentence,
-# short enough that all thirty-five together stay a small fraction of an MCP
+# short enough that all thirty-six together stay a small fraction of an MCP
 # session's context -- which is the only reason the limit exists.
 SUMMARY_MAX_WORDS = 20
 
