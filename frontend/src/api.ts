@@ -348,6 +348,13 @@ export const api = {
    *  and a variable added to a template would otherwise go on being offered
    *  until the collision surfaced as a duplicate ConfigMap key. */
   reservedEnv: () => req<Record<string, string | null>>("GET", "/api/reserved-env"),
+  /** ...and the other half of the same question: the variables `extra_env` can
+   *  usefully carry, which is BlazeMeter's documented reference minus every
+   *  name a control on this page already writes (core.agent_env). Served, so
+   *  the page offers exactly what is left over: an option removed from the
+   *  generator hands its variable back to this list, and one added takes it
+   *  away, without a second table here agreeing to it. */
+  agentEnv: () => req<AgentEnvVar[]>("GET", "/api/agent-env"),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
@@ -580,6 +587,28 @@ export interface Feature {
   /** The location funcIds that mean a location has this feature. A location's
    *  funcIds may include ones no feature claims -- that is not an error. */
   func_ids: string[];
+}
+
+/** One agent variable the environment area offers, from /api/agent-env --
+ *  BlazeMeter's own reference minus the names this generator writes, which is
+ *  why the area lists what it lists and nothing has to be typed from memory.
+ *
+ *  `type` is what a control is chosen from, and a type this page does not know
+ *  falls back to a text box rather than taking the row off screen: the same
+ *  direction an empty docker-ignored table goes, for the same reason. `default`
+ *  is the *agent's* default, stated on the row, because a variable left unset
+ *  is not a variable with no value. */
+export interface AgentEnvVar {
+  name: string;
+  type: string;
+  /** Which of BlazeMeter's two tables document it: "kubernetes", "docker", or
+   *  both. A manifests bundle is offered the first, a docker bundle the second
+   *  -- a variable the agent under this bundle has no reader for is a setting
+   *  that would go quietly nowhere. */
+  platforms: string[];
+  summary: string;
+  default: string | null;
+  example: string | null;
 }
 
 /** A deployed virtual service and the host it answers at. `host` is null until

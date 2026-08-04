@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Api, Account, AgentStatus, Capacity, Facts, Feature,
+  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Feature,
   GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdChoice, Location, Options, Ship, Suggestion, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
@@ -75,7 +75,7 @@ import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
 import { ProxyGroup } from "./groups/ProxyGroup";
 import { RegistryGroup } from "./groups/RegistryGroup";
-import { EnvGroup } from "./groups/EnvGroup";
+import { EnvVars } from "./groups/EnvVars";
 import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
 import { SvGroup } from "./groups/SvGroup";
@@ -180,6 +180,11 @@ export default function App({ api }: { api: Api }) {
   // authoritatively either way and a name rejected on a guess is the worse
   // half of being wrong.
   const [reservedEnv, setReservedEnv] = useState<Record<string, string | null>>({});
+  // ...and the other half of it: the documented variables that are left, which
+  // the env area offers as a list. Empty again means "not read yet" -- the area
+  // falls back to naming a variable by hand, which is a field too many rather
+  // than an option nobody can reach.
+  const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The feature being configured, and the vocabulary it is chosen from. A view
   // over the options, never a scope: one crane is deployed for the selected
@@ -354,6 +359,7 @@ export default function App({ api }: { api: Api }) {
     api.svConstants().then(setSvConst).catch(() => {});
     api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
+    api.agentEnv().then(setAgentEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.features().then(setFeatures).catch(() => {});
 
@@ -1319,6 +1325,24 @@ export default function App({ api }: { api: Api }) {
   // leading verdict's prose.
   const evidence = preflight.out ? evidenceHeader(preflight.out) : null;
 
+  // The environment variables, which are no longer a group.
+  //
+  // #131 made them one, and a switch was the wrong control for them: what the
+  // switch turned on was an empty name box, so the area asked somebody to
+  // supply the vocabulary as well as the value. It is a list now -- everything
+  // BlazeMeter documents that no group here already writes -- and a list has
+  // nothing to be off. It sits beside Advanced for that reason: closed, not
+  // outside the form.
+  const envArea = (
+    <EnvVars env={options.extra_env} vars={agentEnv} reserved={reservedEnv}
+      cluster={!isDocker(format)}
+      // Written whole and already normalised: env.ts emits `null` for "nothing
+      // set", so what comes out of the area is exactly what comes back as
+      // `env`, which is how its editors tell their own writes from an imported
+      // profile's.
+      onChange={(v) => set("extra_env", v)} />
+  );
+
   // Each group's body, wired with the props that group actually needs -- no
   // shared bag of options handed round, so a group reads on its own and what it
   // may write is what its declaration says it owns.
@@ -1341,15 +1365,6 @@ export default function App({ api }: { api: Api }) {
         onConfigmap={(v) => set("ca_existing_configmap", v)}
         onConfigmapKey={(v) => set("ca_configmap_key", v)}
         onBundle={(v) => set("ca_bundle", v)} />
-    ),
-    env: (
-      <EnvGroup env={options.extra_env} reserved={reservedEnv}
-        cluster={!isDocker(format)}
-        // Written whole and already normalised: the group emits `null` for
-        // "nothing set", so what it hands over is exactly what comes back as
-        // `env`, which is how it tells its own writes from an imported
-        // profile's.
-        onChange={(v) => set("extra_env", v)} />
     ),
     sched: (
       <SchedGroup
@@ -1598,7 +1613,8 @@ export default function App({ api }: { api: Api }) {
               // keys in its ignored table), so the card does not state a size
               // nothing reads.
               engineNote={applies("engine_cpu_limit") ? engineSize.text : null}
-              flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
+              flipGroup={flipGroup} groupBody={groupBody} envArea={envArea}
+              incomplete={incomplete}
               namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
               exportProfile={exportProfile} importProfile={importProfile} />
           </Section>

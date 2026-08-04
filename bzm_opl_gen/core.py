@@ -46,7 +46,8 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from . import (api, doctor, evidence as evidence_mod, facts as facts_mod,
+from . import (agent_env as agent_env_mod, api, doctor,
+               evidence as evidence_mod, facts as facts_mod,
                generate as gen_mod, livetest, options as options_mod, plan,
                suggest as suggest_mod, workstation)
 
@@ -1736,6 +1737,29 @@ def reserved_env():
     """
     return {name: gen_mod.ENV_OWNER.get(name)
             for name in sorted(gen_mod.RESERVED_ENV)}
+
+
+def agent_env():
+    """The agent variables `extra_env` can usefully carry: BlazeMeter's own
+    documented reference, minus every name this generator already writes.
+
+    The subtraction is the point, and it happens here rather than in the table.
+    `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN, the proxy trio,
+    the engine limits and the rest of RESERVED_ENV included -- because each of
+    those already has a control of its own on the configure step, and this list
+    is what is *left*: the variables with no setting here, which is the only
+    reason `extra_env` exists. Declaring only the leftovers would be the same
+    table kept twice, and an option removed later would take its variable out of
+    the reference instead of handing it back.
+
+    Each record carries the name, the type a control is chosen from, which
+    platforms document it, the agent's own default and an example. Types are
+    `agent_env.TYPES`; a caller that meets one it does not know should fall back
+    to a text box rather than hide the row, for the reason an empty
+    docker_ignored() means "everything applies".
+    """
+    return [dict(v) for v in agent_env_mod.AGENT_ENV
+            if v["name"] not in gen_mod.RESERVED_ENV]
 
 
 def sv_constants():

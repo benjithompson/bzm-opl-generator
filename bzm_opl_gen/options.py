@@ -504,7 +504,11 @@ OPTIONS = [
             "form that set it shows. The refused set is the union across "
             "formats, so a Kubernetes variable is refused in a docker bundle "
             "too: it reaches nothing there either, and accepting it would read "
-            "as a setting that had been made."),
+            "as a setting that had been made. What is left to set is served as "
+            "`/api/agent-env` -- BlazeMeter's documented reference minus every "
+            "name an option above writes -- so the web UI offers the variables "
+            "as a list with a control per type rather than asking for a name "
+            "typed from memory."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
         default_note=gen.CRANE_EPHEMERAL_STORAGE,

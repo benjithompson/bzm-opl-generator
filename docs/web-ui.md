@@ -249,20 +249,46 @@ endpoint host to check once it is applied — the same facts as
 [Service virtualization](service-virtualization.md), against the namespace and
 domain actually configured.
 
-**Environment variables**, under *Agent settings*, is the escape hatch.
-BlazeMeter's agent-environment reference is much wider than the settings on this
-page — `PREFERRED_INTERFACE`, `KUBERNETES_USE_PRE_PULLING`, `DODUO_PORT` and the
-rest — and the only way to reach the others used to be editing the generated
-ConfigMap by hand, which the next generate silently reverts. Name and value per
-row, no JSON, and it is an option (`extra_env`), so it travels in `profile.json`
-and a regenerate replays it. All three formats carry it: ConfigMap entries for
-manifests, `extraEnv` in the values overlay for Helm, `--env` flags in the docker
-script. It reaches the **agent** — crane's pod — and not the engines crane
-spawns, whose environment crane builds from the `KUBERNETES_*` variables rather
-than passing its own down. A variable the bundle already writes is **refused**,
-on the row, naming the option that owns it: two values for one key is a
+**Environment variables**, a fold under *Agent settings* beside *Advanced*, is
+the escape hatch — and it is a **list**, not a blank box. BlazeMeter's
+agent-environment reference is much wider than the settings on this page, and
+the only way to reach the rest used to be editing the generated ConfigMap by
+hand, which the next generate silently reverts. Open the fold and every
+documented variable that no control above it already writes is there, with the
+agent's own default beside it: `PREFERRED_INTERFACE`, `KUBERNETES_USE_PRE_PULLING`,
+`DODUO_PORT`, `VERIFY_SSL`, `KUBERNETES_LABELS` and the others. Nothing is typed
+from memory.
+
+Each row carries the control its type deserves. A string is a text box; an
+integer refuses what is not a whole number; a certificate gets a box a
+certificate fits in; `KUBERNETES_LABELS` and `KUBERNETES_CUSTOM_ANNOTATIONS_JSON`
+are key/value tables, so nobody hand-encodes JSON. A boolean has **three**
+positions — *Default*, *On*, *Off* — because leaving it alone is a real answer
+and writes nothing: `VERIFY_SSL` defaults on and `KUBERNETES_USE_PRE_PULLING`
+defaults off, so *Off* is a departure for one and the default for the other.
+
+The list is what is *left over*: the proxy, the registry, the CA bundle, engine
+sizing and the SV ingress have their own groups on this page, so their variables
+are not offered here — the page reads the same reserved table the generator
+refuses them by, and a variable stops being offered the moment an option starts
+writing it. Under the list, **Another variable by name** keeps the old name/value
+rows for anything the list does not carry: a variable documented for the other
+platform, or one newer than this tool. A name the bundle already writes is
+**refused** there, naming the option that owns it — two values for one key is a
 ConfigMap with a duplicate entry, and whichever wins is not the one the form
 showed.
+
+Which half of the reference is on screen follows the format: a Kubernetes bundle
+is offered crane's variables, a docker bundle the container agent's. Nothing is
+lost either way — a variable already set that this platform does not document
+keeps its value and appears in the rows underneath.
+
+It is an option (`extra_env`), so it travels in `profile.json` and a regenerate
+replays it. All three formats carry it: ConfigMap entries for manifests,
+`extraEnv` in the values overlay for Helm, `--env` flags in the docker script. It
+reaches the **agent** — crane's pod — and not the engines crane spawns, whose
+environment crane builds from the `KUBERNETES_*` variables rather than passing
+its own down.
 
 Profile JSON **Export** / **Import**, at the top of this step, round-trips with
 `generate --profile`.

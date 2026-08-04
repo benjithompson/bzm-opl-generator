@@ -11,17 +11,18 @@
 // which is what makes optionGroups.test.ts possible without a DOM.
 
 import { Feature, Options } from "./api";
-// The free-form env area's own rules, stated where the row that explains them
-// is -- the group only declares that it has them. Same arrangement as
-// svIncomplete, one file over.
-import { envIncomplete, envToRows } from "./env";
+// The environment area's own rule about what blocks the step. The area is not
+// a group -- it is a list of the variables no group here writes, with a
+// name/value editor under it (see EnvVars) -- so the only thing this file wants
+// from it is that one answer, in configureBlockedBy.
+import { envIncomplete } from "./env";
 // What the bundle is. Only two things here need it: the filter at the foot of
 // this file, and the one group whose recommended mode depends on the platform.
 // formats.ts imports nothing of ours, so this direction is the only one.
 import { Applies, isDocker, keysApply } from "./formats";
 
 export type GroupId =
-  "registry" | "proxy" | "ca" | "sched" | "security" | "env" | "sv";
+  "registry" | "proxy" | "ca" | "sched" | "security" | "sv";
 
 /** Merged over the current options. `null` clears a key that has a default --
  *  A key with no default must be REMOVED rather than nulled -- generate()
@@ -316,26 +317,6 @@ export const OPTION_GROUPS: OptionGroup[] = [
                       auto_update: null }),
   },
   {
-    id: "env",
-    title: "Environment variables",
-    hint: "agent variables with no setting of their own here",
-    // Belongs to no feature and applies to every format: the ConfigMap for
-    // manifests, `extraEnv` in the overlay for helm, `--env` flags for docker.
-    // So it is in DOCKER_IGNORED nowhere, and is the one group on this page
-    // that survives every format whole.
-    features: [],
-    keys: ["extra_env"],
-    // An empty object is not "on": it is what the group leaves behind when the
-    // last row is removed, and re-opening on it would make the switch
-    // unclosable.
-    detect: (o) => envToRows(o.extra_env).length > 0,
-    enable: () => ({}),
-    disable: () => ({ extra_env: null }),
-    // The half the options can answer alone -- see envIncomplete. A reserved
-    // name is refused by generate() and stated on its own row.
-    incomplete: (o) => envIncomplete(o),
-  },
-  {
     id: "sv",
     title: "Service virtualization",
     hint: "only for locations with the mockServices feature",
@@ -537,6 +518,13 @@ export function configureBlockedBy(
     applies("service_account_name") && !serviceAccountOk(o)
       ? "a service account" : "",
     ...incomplete.map((g) => g.title),
+    // The environment area, which is not a group and so is not in `incomplete`
+    // -- it is a list of variables with a name/value editor under it, and only
+    // that editor can produce a name no process could read. Named here rather
+    // than left to the server's refusal for the same reason every other blocker
+    // is: the field is on screen (#114), and the row beside it already says
+    // what is wrong with it.
+    envIncomplete(o) ? "the environment variables" : "",
   ].filter(Boolean);
   if (!needs.length) return "";
   const list = needs.length === 1 ? needs[0]

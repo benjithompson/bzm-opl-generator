@@ -27,6 +27,7 @@ import { Feature, Options } from "../api";
 import {
   Button, Check, Field, inputCls, RequiredMark, SegmentedControl,
 } from "../components";
+import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
@@ -83,6 +84,11 @@ export interface ConfigurePanelProps {
   engineNote: string | null;
   flipGroup: (id: GroupId, on: boolean) => void;
   groupBody: Record<GroupId, ReactNode>;
+  /** The environment variables, which are not a group: a list of everything
+   *  BlazeMeter documents that no group here already writes, closed by default
+   *  like Advanced. Assembled in App with the rest of the domain state; this
+   *  panel decides only where it sits. */
+  envArea: ReactNode;
   /** Groups in use but unfinished, so the download is blocked. */
   incomplete: OptionGroup[];
   namespaceOk: boolean;
@@ -150,44 +156,70 @@ function CoreFields(p: ConfigurePanelProps) {
   );
 }
 
+/** A row in the settings list that has no switch: a title, a hint, and a body
+ *  that is closed until it is opened.
+ *
+ *  Advanced was the only one, and the environment variables became the second
+ *  when they stopped being a group (#131 made them one). A switch belongs on a
+ *  group because OFF is an answer -- it wipes the options behind it -- and
+ *  neither of these has one to give: the security posture is always set to
+ *  something, and a list of variables is not on or off, its rows are.
+ */
+function FoldRow(props: {
+  title: string; hint: string; children: ReactNode;
+  /** A word or two visible while closed. A fold that says nothing is one you
+   *  have to open to find out whether you needed to. */
+  summary?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="px-3 py-2.5">
+      <button className="w-full flex items-center gap-3 text-left"
+        aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="text-slate-400 text-xs w-3">{open ? "▾" : "▸"}</span>
+        <span className="min-w-0 grow">
+          <span className="block text-sm font-medium text-slate-500">
+            {props.title}
+            {props.summary && (
+              <span className="ml-2 text-[11px] font-normal text-bzm">
+                {props.summary}
+              </span>
+            )}
+          </span>
+          <span className="block text-[11px] text-slate-400">{props.hint}</span>
+        </span>
+      </button>
+      {open && <div className="mt-3 pl-6">{props.children}</div>}
+    </div>
+  );
+}
+
 /** Advanced, as a row in the settings list rather than a dashed box under it.
  *  It is two fields with the same weight as any other pair here; what makes it
  *  advanced is that it is closed, not that it sits outside the form. */
 function AdvancedRow(p: ConfigurePanelProps) {
-  const [open, setOpen] = useState(false);
   const openshift = p.options.platform === "openshift";
   return (
-    <div className="px-3 py-2.5">
-      <button className="w-full flex items-center gap-3 text-left"
-        onClick={() => setOpen(!open)}>
-        <span className="text-slate-400 text-xs w-3">{open ? "▾" : "▸"}</span>
-        <span className="min-w-0 grow">
-          <span className="block text-sm font-medium text-slate-500">Advanced</span>
-          <span className="block text-[11px] text-slate-400">
-            security posture and UID — you should not need these
-          </span>
-        </span>
-      </button>
-      {open && (
-        <div className="mt-3 pl-6 grid grid-cols-2 gap-3">
-          <Field label="Security posture"
-            hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
-            <select className={inputCls} value={String(p.options.platform)}
-              onChange={(e) => p.set("platform", e.target.value)}>
-              <option value="openshift">Unified SCC-friendly (recommended)</option>
-              <option value="k8s">Legacy pinned-UID k8s</option>
-            </select>
+    <FoldRow title="Advanced"
+      hint="security posture and UID — you should not need these">
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Security posture"
+          hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
+          <select className={inputCls} value={String(p.options.platform)}
+            onChange={(e) => p.set("platform", e.target.value)}>
+            <option value="openshift">Unified SCC-friendly (recommended)</option>
+            <option value="k8s">Legacy pinned-UID k8s</option>
+          </select>
+        </Field>
+        {!openshift && (
+          <Field label="runAsUser / runAsGroup">
+            <input type="number" className={inputCls}
+              value={Number(p.options.run_as_user ?? 1337)}
+              onChange={(e) => p.set("run_as_user", Number(e.target.value))} />
           </Field>
-          {!openshift && (
-            <Field label="runAsUser / runAsGroup">
-              <input type="number" className={inputCls}
-                value={Number(p.options.run_as_user ?? 1337)}
-                onChange={(e) => p.set("run_as_user", Number(e.target.value))} />
-            </Field>
-          )}
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </FoldRow>
   );
 }
 
@@ -312,6 +344,10 @@ function FeatureCard(
 const PLACEMENT_KEYS = ["namespace", "service_account_name",
                         "service_account_create"];
 const ADVANCED_KEYS = ["platform", "run_as_user"];
+// One key, and it applies to every format -- the ConfigMap for manifests,
+// `extraEnv` in the overlay for helm, `--env` flags for docker. Asked anyway:
+// a section that reads the table is one that keeps agreeing with it.
+const ENV_KEYS = ["extra_env"];
 
 export function ConfigurePanel(p: ConfigurePanelProps) {
   // Placement is a section of the form only where the bundle has one, and its
@@ -320,6 +356,11 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   // free to disagree about what is in this bundle, which is the one thing the
   // rail is for.
   const placed = keysApply(PLACEMENT_KEYS, p.applies);
+  // How many variables are set, for the fold's own summary and for the rail:
+  // the environment area is not a group, so `grpOn` says nothing about it and
+  // the two would otherwise disagree about what is in this bundle -- the one
+  // job the rail has.
+  const envCount = envToRows(p.options.extra_env).length;
   const secs = [
     ...p.features.map((f) => ({
       id: "f-" + f.id, label: f.label,
@@ -396,20 +437,29 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             // The switches, not detect(): a group turned on and not yet filled
             // in has to appear here or the rail contradicts the form beside it.
             const set = s.gs.filter((g) => p.grpOn[g.id]);
+            // ...and the one thing in this section that is not a group. It has
+            // no switch to read, so what counts is what is set -- the same
+            // question, asked of the option instead of a flag.
+            const names = [
+              ...set.map((g) => g.title),
+              ...(s.id === "shared" && envCount
+                ? [`${envCount} environment variable${envCount === 1 ? "" : "s"}`]
+                : []),
+            ];
             const todo = s.id === "core"
               ? !(p.namespaceOk && p.saOk)
               : s.gs.some((g) => p.incomplete.includes(g));
             const detail = todo ? "needs attention"
               : s.id === "core" ? String(p.options.namespace ?? "")
               : s.off ? "not enabled"
-              : set.length ? set.map((g) => g.title).join(", ")
+              : names.length ? names.join(", ")
               : "defaults";
             return (
               <a key={s.id} href={"#" + s.anchor}
                 className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
                 <span className={"mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full "
                   + (todo ? "bg-red-500"
-                    : set.length || s.id === "core" ? "bg-emerald-500"
+                    : names.length || s.id === "core" ? "bg-emerald-500"
                     : "bg-slate-300")} />
                 <span className="min-w-0">
                   <span className="block text-xs font-medium text-slate-700">
@@ -479,6 +529,18 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             <div id="cfg-shared"
               className="scroll-mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100">
               {rows(p, groupsIn("shared"))}
+              {/* The environment variables: every documented agent variable
+                  the groups above do not already write, offered as a list. Not
+                  a group and not behind a switch -- see FoldRow -- and carried
+                  by every format, so it asks for its key like the rest rather
+                  than assuming so. */}
+              {keysApply(ENV_KEYS, p.applies) && (
+                <FoldRow title="Environment variables"
+                  hint="agent variables with no setting of their own above"
+                  summary={envCount ? `${envCount} set` : undefined}>
+                  {p.envArea}
+                </FoldRow>
+              )}
               {/* Advanced is not a group either -- it is the SCC posture and
                   the UID a pod runs as -- so it asks the predicate for the
                   keys it writes rather than appearing in `shared`.

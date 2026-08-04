@@ -901,6 +901,29 @@ def test_reserved_env_is_served_with_the_option_that_owns_each_name():
             assert name in defaults, f"{owner} names no option"
 
 
+def test_agent_env_is_served_as_what_is_left_after_the_options():
+    """The other half of the env area: the variables it offers.
+
+    Served rather than listed in TypeScript for the reason the reserved names
+    are -- but the direction is the opposite one, and that is the point. The
+    reserved table says what may not be typed; this says what there is to
+    choose from, and it is BlazeMeter's own reference minus everything a
+    control on the configure step already writes. The two must not overlap, or
+    the page offers a row the generator refuses.
+    """
+    from bzm_opl_gen import agent_env as env_mod, generate as gen_mod
+    body = client.get("/api/agent-env").json()
+    names = {v["name"] for v in body}
+    assert names == {v["name"] for v in env_mod.AGENT_ENV} - gen_mod.RESERVED_ENV
+    assert not names & set(client.get("/api/reserved-env").json())
+    # A row the page can render: a control is chosen from `type`, and the two
+    # tables decide which bundles are offered it.
+    for v in body:
+        assert v["type"] in env_mod.TYPES
+        assert set(v["platforms"]) <= {"kubernetes", "docker"}
+        assert v["summary"]
+
+
 def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
     """The *names* are served; what a name may look like is not, and could not
     usefully be -- it is a regex, and a page that had to compile a served one

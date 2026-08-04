@@ -10,7 +10,7 @@
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
-import { PreflightOut, Suggestion } from "./api";
+import { AgentEnvVar, PreflightOut, Suggestion } from "./api";
 
 /** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.
  *
@@ -89,6 +89,38 @@ export const RESERVED_ENV: Record<string, string | null> = {
   RUN_HEALTH_WEB_SERVICE: null,
   SHIP_ID: null,
 };
+
+/** A few of the variables /api/agent-env offers, one per control the area can
+ *  render.
+ *
+ *  A **sample**, and deliberately not a copy: unlike RESERVED_ENV and
+ *  DOCKER_IGNORED above, nothing on the page has to agree with this list. The
+ *  area renders what it is served and offers a name box for whatever is not in
+ *  it, so a table here held equal to the catalogue would be forty records kept
+ *  in step to prove something no rendering depends on. What the tests need is
+ *  one variable of each type, which is what this is.
+ *
+ *  The names are real ones, so a record that stopped being offered -- an option
+ *  added to the generator claims it into RESERVED_ENV -- shows up as a test
+ *  about a variable the server would no longer serve. */
+export const AGENT_ENV: AgentEnvVar[] = [
+  { name: "PREFERRED_INTERFACE", type: "string",
+    platforms: ["kubernetes", "docker"],
+    summary: "Network interface to read the machine's IP address from",
+    default: "the first interface that is not docker0 or lo", example: "eth0" },
+  { name: "VERIFY_SSL", type: "bool", platforms: ["kubernetes", "docker"],
+    summary: "Verify certificates on outbound HTTPS", default: "true",
+    example: null },
+  { name: "DODUO_PORT", type: "int", platforms: ["kubernetes", "docker"],
+    summary: "Port the BlazeMeter Grid proxy listens on", default: "8000",
+    example: null },
+  { name: "KUBERNETES_LABELS", type: "json_object", platforms: ["kubernetes"],
+    summary: "Labels added to every object the agent creates",
+    default: null, example: '{"team": "perf"}' },
+  { name: "HOSTNAME_OVERRIDE", type: "string", platforms: ["docker"],
+    summary: "Hostname for transactional virtual services on this agent",
+    default: null, example: null },
+];
 
 /** One implication of an imported file, as suggest.py serves it: the cluster
  *  says this is plain Kubernetes and the configuration says OpenShift.
