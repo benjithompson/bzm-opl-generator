@@ -105,16 +105,12 @@ def test_secret_options_are_the_ones_profile_json_omits():
         assert f'"{name}"' not in written
 
 
-def test_json_schema_admits_the_default_every_option_has():
+def test_a_nullable_option_is_the_one_whose_default_is_none():
+    """`nullable` is what every served shape spends -- core.option_docs carries
+    it to the UI and to an MCP session, and a client that cannot send `None`
+    back cannot send the value it was given."""
     for o in opt.OPTIONS:
-        schema = o.json_schema()
-        assert schema["description"] == o.summary
-        if o.default is None:
-            assert "null" in schema["type"], (
-                f"{o.name} defaults to None but its schema forbids null, so a "
-                f"client could not send the value it was given")
-        if o.choices:
-            assert o.default in schema["enum"]
+        assert o.nullable == (o.default is None), o.name
 
 
 def test_generated_table_is_what_the_doc_carries():

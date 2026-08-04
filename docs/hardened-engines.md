@@ -27,6 +27,14 @@ spec:
       readOnlyRootFilesystem: false
 ```
 
+**This is a Kubernetes posture, and `--format docker` has none.** `restrict_engines`
+is in the generator's `DOCKER_IGNORED` table: a docker bundle has no pod spec to
+stamp, so neither key is emitted and nothing on this page applies to it. The
+bundle's README names the option as ignored when it was set away from its
+default. A docker agent's engines are containers on the host, run by the agent
+through the docker socket — the container that opens that socket runs as root
+(`-u 0`), which is the opposite trade and is argued in [docker.md](docker.md).
+
 ## Why this is verified per image, not per cluster
 
 The posture is a property of the pod spec, not of the cluster. A cluster that

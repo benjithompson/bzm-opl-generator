@@ -1,9 +1,14 @@
 # Options and profiles
 
-Every option below is a `generate` flag (`--private-registry`, `--sv-ingress`, …)
-or a key in a `--profile` JSON file. `bzm_opl_gen/profiles/` holds three scenario
-presets — `standard`, `private-registry`, `proxy-ca` — which are *postures*, not
-platforms: the default works on OpenShift and vanilla Kubernetes alike.
+Every option below is a key in a `--profile` JSON file, and most are also a
+`generate` flag (`--private-registry`, `--sv-ingress`, …). Four have no flag:
+`registry_auth` and `run_as_user`, which the web UI writes, and
+`engine_ephemeral_request_mb` / `engine_ephemeral_limit_mb`, which are set from
+what a real run used and so belong in a profile that is kept rather than in a
+command line that is retyped. A profile is the way to reach any of them from the
+CLI. `bzm_opl_gen/profiles/` holds three scenario presets — `standard`,
+`private-registry`, `proxy-ca` — which are *postures*, not platforms: the default
+works on OpenShift and vanilla Kubernetes alike.
 
 If someone has sent you a [cluster evidence
 file](preflight.md#a-cluster-you-cannot-reach), `bzm-opl-gen suggest` says which

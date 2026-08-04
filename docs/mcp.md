@@ -15,8 +15,13 @@ those three does not exist as far as it is concerned.
 ## Install and configure
 
 ```
-pipx install 'bzm-opl-gen[mcp]'
+gh release download --repo benjithompson/bzm-opl-generator --pattern '*.whl'
+pipx install './bzm_opl_gen-*.whl[mcp]'
 ```
+
+The repo is private and there is no PyPI package, so the wheel comes from a
+GitHub Release and `gh` is what authenticates for it — see the
+[README](../README.md#install), which has the rest of that story.
 
 Then add it to your client. The API key goes in the server's environment — never
 in a tool argument, and never in chat.
@@ -118,11 +123,19 @@ The reference pages under `docs/` are served as resources at
 `bzm-opl://docs/<name>.md`, so a session can read [options.md](options.md) or
 [preflight.md](preflight.md) rather than guessing at an option name.
 
-A bundle directory is also how work arrives from elsewhere: the web UI's
-**Save to folder** writes exactly the shape `opl_bundle generate` produces,
-profile.json included, so a session pointed at that folder reads what was
-configured (`opl_bundle read` with `name=profile.json`) and carries on rather
-than starting over.
+A bundle directory is also how work arrives from elsewhere: `bzm-opl-gen
+generate -o <dir>` writes exactly the shape `opl_bundle generate` produces,
+profile.json included, so a session pointed at a folder somebody else rendered
+reads what was configured (`opl_bundle read` with `name=profile.json`) and
+carries on rather than starting over. The filesystem is the shared state, which
+is also why `livetest` consumes the same directory.
+
+`options.output_format` takes `docker` as well as `manifests` and `helm`. That
+one is not a cluster deployment at all — one agent as one container on a host,
+emitted as a `docker run` script — so the two dozen Kubernetes options are
+ignored rather than refused, and the `next` steps a generate comes back with are
+the script rather than a `kubectl apply`. See [docker.md](docker.md) before
+offering it.
 
 ## `generate` issues no credential unless you say `rotate_token`
 

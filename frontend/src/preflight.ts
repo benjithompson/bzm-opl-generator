@@ -69,12 +69,6 @@ export const STATUS_STYLE: Record<
 /** Worst first -- the order the panel's own tone is picked in. */
 const SEVERITY: CheckStatus[] = ["FAIL", "WARN", "PASS"];
 
-export function countByStatus(checks: PreflightCheck[]): Record<CheckStatus, number> {
-  const counts: Record<CheckStatus, number> = { PASS: 0, WARN: 0, FAIL: 0 };
-  for (const c of checks) counts[c.status] += 1;
-  return counts;
-}
-
 /** The tone for the panel as a whole, or null when nothing has been imported --
  *  which is not a pass. */
 export function worstStatus(checks: PreflightCheck[]): CheckStatus | null {
@@ -82,8 +76,9 @@ export function worstStatus(checks: PreflightCheck[]): CheckStatus | null {
 }
 
 // The one-line summary of the same list is doctor's, and arrives as
-// `PreflightOut.summary`. It used to be composed here from these counts --
-// including the rule that the consequence is stated only against a FAIL, since
+// `PreflightOut.summary`. It used to be composed here, from a per-status count
+// this module kept for the purpose -- including the rule that the consequence
+// is stated only against a FAIL, since
 // a file whose collector was refused half the cluster is all warnings and
 // ending that with "a test would not start" turns a thin read into a rejection
 // of a cluster nobody judged. That rule now has one statement, in doctor.

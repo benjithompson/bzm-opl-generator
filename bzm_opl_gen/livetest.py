@@ -504,7 +504,6 @@ def assert_engine_did_work(client, master_id):
     return []
 
 
-TAURUS_CLEAN_EXIT = "Taurus completed (Exit: 0)"
 _TAURUS_EXIT = re.compile(r"Taurus completed \(Exit: (\d+)\)")
 
 

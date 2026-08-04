@@ -20,7 +20,7 @@ chart untouched. `helm show values ./out/helm` documents every key.
 
 Both formats render **the same objects** — same ConfigMap data, RBAC rules,
 container spec — so the choice is about how you install and upgrade,
-not about what ends up in the cluster. `tests/helm_parity.py` renders 23 option
+not about what ends up in the cluster. `tests/helm_parity.py` renders 28 option
 combinations both ways and requires them to agree; it runs as its own CI job
 because it is the one check that needs the `helm` binary.
 
@@ -52,8 +52,13 @@ Two things differ, both deliberate:
 
 - **Service virtualization is not supported.** Publishing a virtual service
   needs an ingress backend, the RBAC for whichever one it is, and a wildcard TLS
-  secret. `--format helm` refuses an SV location rather than emitting a chart
-  that would deploy, report idle, and stall at `WAITING_FOR_DOMAIN`. Use
+  secret. `--format helm` refuses a bundle *configured* for service
+  virtualization — an `sv_ingress` other than none — rather than emitting a chart
+  that would deploy, report idle, and stall at `WAITING_FOR_DOMAIN`. The test is
+  the configuration, not the location: a location that offers mocks but is being
+  generated for performance alone ([declining the
+  feature](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
+  carries no `sv_*` options and the chart is available again. Use
   `--format manifests`, or the upstream
   [Blazemeter/helm-crane](https://github.com/Blazemeter/helm-crane) chart.
 - **`livetest` does not take a chart directory.** The rig applies YAML with

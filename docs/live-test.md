@@ -61,6 +61,17 @@ bundle still carries the `<YOUR_AUTH_TOKEN>` placeholder the command refuses up
 front, rather than deploying an agent that cannot authenticate and reporting,
 twelve to twenty minutes later, only that it never came online.
 
+**The bundle's identity is checked, not re-rendered.** `--manifests` defaults to
+`out/`, and `out/` is whatever the last `generate` left there — so a run given
+`--ship-id`/`--auth-token` could deploy an old bundle built for a *different*
+agent. Re-rendering would not have caught it either: the re-render merges onto
+`profile.json` and prefers *its* `ship_id` over the command line, so the stale
+identity survives. Instead the rig refuses, before the cluster exists, a
+`HARBOR_ID`/`SHIP_ID` (in the ConfigMap or in `profile.json`) that is not the one
+the run was told to test, naming both values — and refuses any `*.yaml` the
+generator does not emit, which is how a leftover from an older version is
+caught. An identity it cannot *read* is a note, not a refusal.
+
 ## What a pass actually proves
 
 "Agent online" is a weak claim on its own — plenty of wrong configurations still
@@ -135,14 +146,20 @@ Checked: the engine image comes from the private registry (a *different*
 `IMAGE_OVERRIDES` key than crane's own, so crane being right proves nothing
 about it), the CA bundle propagated via `KUBERNETES_CA_BUNDLE_MOUNT`,
 `HTTPS_PROXY` reached the engine env, the engine's own traffic appears in the
-proxy log under its pod IP, and the run reached `ENDED` rather than dying.
+proxy log, and the run reached `ENDED` rather than dying. Engine flows are
+identified by the hosts only an engine talks to (`api.ENGINE_UPLOAD_HOSTS`),
+**not** by pod IP: pod traffic is SNAT'd to the node address before it reaches
+the proxy, so every flow in the log has the same source.
 
 The test's `executions[].locations` are repointed at `harbor-<id>` and restored
 in a `finally`; the original is printed so it can be put back by hand if the
 process is killed. Engines are sized down with `--engine-cpu` / `--engine-mem`
 (default 1 / 4Gi) — the documented 2 CPU / 8Gi will not schedule on a laptop.
-Note crane sets its own resource *requests* (250m / 256Mi) and only the limits
-come from the generated envs.
+Note crane sets the engine's resource *requests* itself, from the location's
+`overrideCPU`/`overrideMemory` — 250m / 256Mi only when the location says
+nothing. A location at 1 / 4096 produces requests {1, 4Gi} against limits
+{2, 8Gi}. Only the limits come from the generated envs; `--run-test` prints the
+live gap as `ENGINE SIZING:`.
 
 Engines mount the bundle as a file (`/var/cm/ca-bundle.crt`, subPath) where
 crane mounts the directory — the check accepts both.
@@ -177,10 +194,18 @@ Notes: the CA bundle is mitm CA + public roots, because replacing the trust
 store outright is not what a corporate bundle does. Image pulls come from the
 kubelet, which ignores the pod's proxy env — that's why the registry rig is
 reachable directly. mitmproxy is pinned to `11.1.3`; 12+ dies with SIGILL on
-arm64 VMs. The CA ConfigMap is applied `--server-side`: a real bundle
-overruns the 256KB cap on kubectl's last-applied-configuration annotation.
+arm64 VMs. Any manifest over 200KB is applied `--server-side`
+(`--force-conflicts` with it) — the CA ConfigMap is the one that gets there,
+because a real bundle overruns the 256KB cap on kubectl's
+last-applied-configuration annotation.
 
-Not covered by either rig: proof that egress *cannot* leave except through the
-proxy (needs `--cni=calico` + a default-deny egress NetworkPolicy), and CA
-propagation into engine pods, which only a real test run on the location
-exercises.
+Not covered by any rig: engine→SUT egress through the proxy. JMeter ignores
+`HTTP(S)_PROXY` for sampler traffic, so that hop goes direct and never appears
+in the proxy log — see *Engines do not proxy their sampler traffic* above. It is
+a property of the test, not of the manifests, so the proxy goes in the test
+rather than in the generator.
+
+(Two things that *are* covered, in case you are looking for them here: proof
+that egress cannot leave except through the proxy is `--contain-egress`, and CA
+propagation into engine pods is checked by `--run-test`, which reads
+`KUBERNETES_CA_BUNDLE_MOUNT` out of a real engine.)

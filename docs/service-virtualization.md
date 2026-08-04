@@ -29,6 +29,18 @@ crane's istio backend reads it — setting it elsewhere would silently do nothin
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
 already exist (the generator names it, it does not create it).
 
+**Only `--format manifests` can carry this.** Configuring service
+virtualization takes `--format helm` and `--format docker` off the table: helm
+would emit a chart with no ingress, no SV RBAC and no TLS secret, which deploys,
+reports idle and stalls at `WAITING_FOR_DOMAIN`; a docker agent publishes mocks
+with `HOSTNAME_OVERRIDE` and a `TLS_CERT`/`TLS_KEY` pair, and every `sv_*`
+option here is a `KUBERNETES_WEB_EXPOSE_*` one. Both refusals follow what is
+**configured**, never the location's funcIds — so a `mockServices` location
+generated `--sv-ingress none` is a performance bundle and both formats are
+available for it ([below](#not-using-it-on-a-location-that-offers-it)). Ask for
+either alongside an `sv_ingress` and `generate` refuses by name rather than
+quietly dropping the half it cannot express.
+
 ## Not using it on a location that offers it
 
 Accounts routinely have locations carrying `mockServices` alongside
@@ -41,8 +53,11 @@ bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
 ```
 
 The bundle is then the performance one — no ingress, no SV RBAC, no TLS secret,
-and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and `--format helm` is
-available again, since there is nothing left for the chart to be missing. What
+and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and **`--format helm` and
+`--format docker` are both available again**, since there is nothing left for
+either to be missing. Both refusals are keyed on the *configuration* (an
+`sv_ingress` other than none), never on the location's funcIds, which is exactly
+why declining the feature clears them. What
 you give up is what the refusal was protecting: deploy a virtual service to
 this location and it will stall at `WAITING_FOR_DOMAIN`, exactly as described
 above. Nothing else changes, including the images — which image set the agent
@@ -275,10 +290,12 @@ bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-defaul
 kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
 
-`sv_ingress_class` is read from the bundle's `profile.json`, so a profile
-carrying it lets a later `sv-expose --manifests out/` pick the class up without
-repeating the flag. It is not a `generate` option — nothing about it reaches the
-agent, and a bundle generated without it is byte-identical to before.
+`sv_ingress_class` is **not** a `generate` option — nothing about it reaches the
+agent, there is no `--sv-ingress-class` on `generate`, and no bundle this tool
+writes carries it. `sv-expose` loads `profile.json` for the rest of its
+settings (`sv_subdomain`, `sv_tls_secret`, `namespace`) and would honour an
+`sv_ingress_class` found there, but only a hand-edited profile has one — so in
+practice pass `--ingress-class` on each `sv-expose` run.
 
 It reads the deployed mocks off their pods rather than from the API — the
 virtual-service API is on a separate host (`mock.blazemeter.com/api/v1`, not

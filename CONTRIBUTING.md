@@ -22,6 +22,10 @@ Editing `examples/facts.example.json` is the fastest way to see how account
 facts drive the output — `func_ids` decides which images are dead weight and
 drop out of `IMAGE_OVERRIDES`.
 
+The web UI ships prebuilt in `bzm_opl_gen/ui_dist/`, so nothing above needs npm.
+Changing it does: `cd frontend && npm install`, and `npm run build` is what
+refreshes what the wheel carries ([docs/web-ui.md](docs/web-ui.md)).
+
 ## Layout
 
 ```
@@ -36,28 +40,42 @@ bzm_opl_gen/
   plan.py        a load target -> engines, nodes, and a request document (reaches nothing)
   livetest.py    deploy, poll-until-online, teardown
   options.py     what each generate option is for (docs/options.md renders it)
+  evidence.py    the cluster-evidence document's section names, stated once
+  service.py     the macOS LaunchAgent `ui --install-service` writes
   core.py        orchestration, transport-free -- no fastapi, no request objects
   server.py      HTTP over core.py: routes, request models, the web UI's bind
   mcp_server.py  MCP over core.py: six action-dispatch tools, docs as resources
   cli.py         subcommands: plan | facts | generate | doctor | suggest | toolcheck
-                              | images | livetest | ui | sv-expose | locations
-                              | create-location | create-ship
+                              | images | livetest | ui | mcp | sv-expose | locations
+                              | create-location | create-ship | delete-location
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
   profiles/      scenario presets (standard | private-registry | proxy-ca)
   ui_dist/       prebuilt web UI, shipped in the wheel
 frontend/        web UI source (React); `npm run build` refreshes ui_dist/
-tests/           offline unit tests (fixture facts)
+tests/           offline unit tests (fixture facts), plus helm_parity.py
 docs/            user-facing reference split out of README.md
 examples/        sample facts + api-key placeholder (the no-account path)
 ```
 
-## The two test layers
+## The test layers
 
-**Offline** (`pytest tests -q`) — stdlib + fixtures, no cluster, ~1s. Every
+**Offline** (`pytest tests -q`) — stdlib + fixtures, no cluster, ~3s. Every
 check the live rig performs has an offline counterpart that fakes the cluster
 or API response, so failure modes are covered without burning 15 minutes.
 **Add one whenever you add a live check.** This is the rule that keeps the
 suite worth running.
+
+**Helm parity** (`python tests/helm_parity.py`) — renders 28 option combinations
+as both `--format manifests` and `--format helm` and requires the same objects
+out of each. Deliberately not pytest, and its own CI job: it shells out
+to `helm`, and a test that skips when a binary is missing is the `fastapi`
+problem above. Every judgement in `templates/*.yaml` is restated in Go templates
+and nothing else notices one drifting, so **touch either and run this**.
+
+**Frontend** (`cd frontend && npm test && npm run typecheck`) — the third CI
+job. Logic lives in plain modules with their own suites and the components wire
+them; `noUnusedLocals` is on, so a binding left behind by a refactor fails the
+typecheck rather than accumulating.
 
 **Live rig** (`bzm-opl-gen livetest`) — deploys generated manifests to a local
 cluster and waits for the agent to report online in a real BlazeMeter account.
@@ -104,8 +122,10 @@ seatbelt, not a lock.
 
 - Comments explain **why**, especially where a non-obvious environment fact
   drove the code. Match the surrounding density; don't narrate the obvious.
-- CI runs the offline suite on Python 3.10 (the declared floor) and 3.13, and
-  generates from the sample facts. Both must be green.
+- CI is three jobs and all of them must be green: the offline suite on Python
+  3.10 (the declared floor) and 3.13, which also generates the manifests and the
+  chart from the sample facts; helm parity, which lints the chart first; and the
+  frontend's tests and typecheck.
 - If you change what a live check proves, update its offline counterpart and
   the relevant page under `docs/` in the same PR.
 - Add your entry to `## [Unreleased]` in `CHANGELOG.md` — that section is what
@@ -127,8 +147,10 @@ git tag v0.1.1 && git push origin v0.1.1
 ```
 
 `.github/workflows/release.yml` runs the offline suite, builds the wheel,
-checks it carries the templates/profiles/UI bundle, and publishes it. It
-refuses to release if:
+checks it carries the templates, the profiles, the UI bundle and every page
+under `docs/` — the MCP server serves those as resources, so a missing one is a
+reference an installed copy does not have — and publishes it. It refuses to
+release if:
 
 - the tag disagrees with `pyproject.toml`'s version — the tag is what users
   pin to, so the two disagreeing is worse than no release;

@@ -56,6 +56,11 @@ export interface DownloadPlan {
 const CARRIES: Record<TokenBranch, string> = {
   given: "the generated AUTH_TOKEN",
   rotated: "a NEW AUTH_TOKEN, issued now",
+  // No request from this page produces `reused` any more -- Save to folder went
+  // to the CLI, so `out_dir` is a constant null. The sentence stays because the
+  // branch is the server's to send and the header it arrives in is cast without
+  // validation: dropping it here would not stop it arriving, only leave the
+  // line beside the button blank when it did.
   reused: "the AUTH_TOKEN already in that folder",
   placeholder: "AUTH_TOKEN left as a placeholder — fill it in before applying",
 };
@@ -67,7 +72,7 @@ const CARRIES: Record<TokenBranch, string> = {
  *  failure worth avoiding.
  *
  *  Every branch sends the same request now. That is not the same as sending
- *  nothing -- `reused` and `given` are still distinct answers about what this
+ *  nothing -- `given` and `placeholder` are still distinct answers about what this
  *  bundle carries, and the hint says which -- and it is why the report is still
  *  read rather than the branch being assumed.
  */

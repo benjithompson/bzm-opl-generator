@@ -7,7 +7,7 @@ const report = (branch: TokenReport["branch"]): TokenReport =>
 
 describe("downloadPlan", () => {
   it("never rotates, which is the whole of #64", () => {
-    for (const b of ["given", "reused", "placeholder"] as const) {
+    for (const b of ["given", "rotated", "placeholder"] as const) {
       // The request itself, whole: what a caller sends is what this returned,
       // so there is no boolean left anywhere for a button to re-apply.
       expect(downloadPlan(report(b)).request).toEqual({ rotate_token: false });
@@ -39,6 +39,8 @@ describe("downloadPlan", () => {
   // The branches still differ, which is why the report is read rather than the
   // answer assumed: `reused` is a bundle that carries a real token, and saying
   // "placeholder" over it would send somebody looking for one it already has.
+  // No request from this page produces it now, but it is the server's to send
+  // and arrives through an unvalidated cast -- so the sentence has to exist.
   it("keeps the branches apart even though they send the same request", () => {
     expect(downloadPlan(report("reused")).hint).toMatch(/already in that folder/);
     expect(downloadPlan(report("reused")).incomplete).toBe(false);
