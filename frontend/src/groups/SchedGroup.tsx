@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, NoticeMsg, SegmentedControl, SubSection, inputCls } from "../components";
+import { Check, NoticeMsg, SegmentedControl, SubSection } from "../components";
 import { OptionPatch } from "../optionGroups";
 import {
   customSeed, placementOf, placementPatch, rowsToSelector, rowsToTolerations,
@@ -122,7 +122,15 @@ export function SchedGroup(props: {
   );
 }
 
-const rowInputCls = inputCls + " text-xs";
+// Not inputCls: that carries w-full, which is right for a field on its own
+// line and wrong inside a flex row -- a w-full select refuses to shrink, the
+// key input beside it collapses to nothing, and the rest of the row walks off
+// the panel. Text inputs share what the fixed-width selects leave.
+const rowFieldCls =
+  "mt-0.5 rounded-md border border-slate-300 px-2 py-1.5 text-xs bg-white " +
+  "focus:outline-none focus:ring-2 focus:ring-bzm/40 focus:border-bzm";
+const rowInputCls = rowFieldCls + " flex-1 min-w-0";
+const rowSelectCls = rowFieldCls + " shrink-0";
 const addBtnCls = "text-xs text-bzm hover:underline";
 const removeBtnCls = "text-slate-400 hover:text-red-600 text-sm px-1 shrink-0";
 
@@ -196,7 +204,7 @@ function TolRows(props: {
               value={tolerationField(r, "key")}
               aria-label={`${props.label} key ${i + 1}`}
               onChange={(e) => edit(i, "key", e.target.value)} />
-            <select className={rowInputCls + " w-24 shrink-0"}
+            <select className={rowSelectCls + " w-24"}
               value={tolerationField(r, "operator") || "Equal"}
               aria-label={`${props.label} operator ${i + 1}`}
               onChange={(e) => edit(i, "operator", e.target.value)}>
@@ -210,7 +218,7 @@ function TolRows(props: {
                 aria-label={`${props.label} value ${i + 1}`}
                 onChange={(e) => edit(i, "value", e.target.value)} />
             )}
-            <select className={rowInputCls + " w-36 shrink-0"}
+            <select className={rowSelectCls + " w-36"}
               value={tolerationField(r, "effect")}
               aria-label={`${props.label} effect ${i + 1}`}
               onChange={(e) => edit(i, "effect", e.target.value)}>
