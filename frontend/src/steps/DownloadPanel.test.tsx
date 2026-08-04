@@ -12,7 +12,7 @@
 //
 // The panel is driven through its own props rather than through App: what is
 // under test is the rendering, and App's own effects are pinned in App.test.tsx.
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { Facts, Options, PreflightOut } from "../api";
@@ -34,9 +34,14 @@ afterEach(cleanup);
 const FACTS: Facts = { harbor_id: "H1", ships: [{ id: "S1" }], images: [] };
 const OPTIONS: Options = { namespace: "blazemeter" };
 
+/** What the last crane-hook switch wrote, so a test can assert the panel writes
+ *  the option rather than only rendering a row. */
+let hookWrote: boolean | null = null;
+
 function panel(preflightOut: PreflightOut, format = "manifests",
                read: PreflightState =
                  imported("cluster-evidence.json", { schema: "x" }, preflightOut)) {
+  hookWrote = null;
   return render(
     <DownloadPanel api={fakeApi()}
       bundle={{
@@ -51,7 +56,11 @@ function panel(preflightOut: PreflightOut, format = "manifests",
       attempt={NO_ATTEMPT} report={() => {}}
       preflight={{ read, busy: false, header: evidenceHeader(preflightOut),
                    importFile: () => {}, applied: NOTHING_APPLIED,
-                   applySuggestion: () => {}, undoSuggestion: () => {} }}
+                   applySuggestion: () => {}, undoSuggestion: () => {},
+                   // Null for docker, as App works out from the served ignored
+                   // table -- crane-hook is a Pod, and there is no cluster.
+                   craneHook: format === "docker" ? null
+                     : { on: false, set: (v) => { hookWrote = v; } } }}
       watch={{ available: false, on: false, setOn: () => {}, agent: null,
                status: null, mocks: null, checks: {}, check: () => {} }} />);
 }
@@ -116,4 +125,22 @@ test("says nothing about a mismatch it was not told about", () => {
   // The header still says which namespace the file describes -- that is a fact
   // about the file, and it is on screen whatever the mismatch says.
   expect(screen.getByText("their-ns")).toBeTruthy();
+});
+
+test("ships the cluster check with the bundle, from this step", () => {
+  // #130: the switch was on the configure step, among the options that shape
+  // the agent. It shapes none of it -- the same agent is deployed either way --
+  // and what it is about is the cluster this bundle is going to, which is the
+  // question this step asks. It has to write the option from here, because the
+  // download that carries it is here.
+  panel(out());
+  fireEvent.click(screen.getByRole("switch", { name: /Ship the check/ }));
+  expect(hookWrote).toBe(true);
+});
+
+test("offers no cluster check where the bundle cannot carry one", () => {
+  // A docker bundle has no cluster to run a Pod in, and App answers that off
+  // the served ignored table rather than this panel re-deriving it.
+  panel(out(), "docker");
+  expect(screen.queryByRole("switch", { name: /Ship the check/ })).toBeNull();
 });

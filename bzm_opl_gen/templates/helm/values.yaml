@@ -229,6 +229,26 @@ engine:
   ephemeralRequestMb: ""
   ephemeralLimitMb: ""
 
+# -- Free-form agent environment ----------------------------------------------
+
+# Agent variables this chart has no value of its own for. BlazeMeter's
+# agent-environment reference is much wider than the settings above, and
+# hand-editing the rendered ConfigMap is undone by the next upgrade.
+#
+#   extraEnv:
+#     PREFERRED_INTERFACE: eth1
+#     KUBERNETES_USE_PRE_PULLING: "true"
+#
+# These reach the crane pod, which reads this ConfigMap via envFrom. They do NOT
+# reach the engines crane spawns -- crane builds an engine's environment from
+# the KUBERNETES_* values above rather than passing its own down.
+#
+# Anything this chart writes itself belongs to the setting that writes it, and
+# naming one here renders a ConfigMap with a duplicate key. bzm-opl-gen refuses
+# those before writing the overlay (generate.RESERVED_ENV); a values file
+# written by hand is on its author.
+extraEnv: {}
+
 # -- Proxy --------------------------------------------------------------------
 
 # BlazeMeter has no separate proxy-auth env vars: credentials go in the URL as

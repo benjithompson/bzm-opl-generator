@@ -96,6 +96,13 @@ DEFAULT_OPTIONS = {
     # and a bundle that quietly carried an extra Pod would surprise whoever
     # applies it.
     "crane_hook": False,
+    # {NAME: value} for agent variables this generator has no option of its own
+    # for. BlazeMeter's agent-environment reference is far wider than the
+    # options here, and without this the only way to reach the rest was to hand
+    # edit the generated ConfigMap -- which the next regenerate silently
+    # reverts. Every name the generator itself writes is refused rather than
+    # overwritten; see extra_env().
+    "extra_env": None,
 }
 
 # BlazeMeter's documented engine footprint -- the fallback when the customer
@@ -591,6 +598,152 @@ def _proxy_has_creds(o):
     return bool(o["proxy"] and o["proxy"].get("username"))
 
 
+# -- free-form agent environment ----------------------------------------------
+#
+# BlazeMeter's agent-environment reference is much wider than the options this
+# generator models, and the variables nobody here has an option for were only
+# reachable by hand-editing the generated ConfigMap -- which the next
+# `generate` overwrites without saying so. `extra_env` is the supported way to
+# reach the rest: it is an option, so it travels in profile.json and a
+# regenerate replays it.
+#
+# It is the *agent's* environment. Crane's own pod reads it (the Deployment's
+# envFrom names this ConfigMap, and the docker command passes it with --env);
+# the engines crane spawns do not, because their environment is built by crane
+# from the KUBERNETES_* variables below rather than inherited.
+#
+# Every name the generator writes for itself is REFUSED here rather than
+# overwritten. Two values for one key in a ConfigMap is not a merge, it is a
+# YAML document with a duplicate key, and whichever one wins is not the one the
+# form that set it shows. Refusing names the option that already owns the
+# variable, so the answer is "set it there" rather than "it did not take".
+#
+# The set is the union across all three formats, so a Kubernetes variable is
+# refused in a docker bundle too. That is deliberate rather than sloppy: those
+# names reach nothing on a docker host either, and a bundle that accepted
+# KUBERNETES_SERVICE_USE_TYPE as free-form env would carry a variable the agent
+# ignores while reading as though the setting had been made.
+# tests/test_generate.py walks generated bundles and holds the set equal to
+# what they actually write, so a new variable added to a template fails there
+# rather than becoming quietly overridable.
+RESERVED_ENV = frozenset({
+    # identity and the credential
+    "HARBOR_ID", "SHIP_ID", "AUTH_TOKEN",
+    # what kind of agent this is, and where its images come from
+    "CONTAINER_MANAGER_TYPE", "DOCKER_REGISTRY", "IMAGE_OVERRIDES",
+    "DOCKER_PORT_RANGE",
+    # the registry_auth stubs. Commented out in the ConfigMap, so nothing
+    # collides at apply time -- but the option owns the names, and free-form
+    # copies of them a few lines below the stubs is the confusion the stubs
+    # exist to prevent.
+    "DOCKER_REGISTRY_USERNAME", "DOCKER_REGISTRY_PASSWORD",
+    "DOCKER_REGISTRY_EMAIL",
+    # self-update: one variable per platform, off the one option
+    "AUTO_KUBERNETES_UPDATE", "AUTO_UPDATE",
+    # the engine security posture (restrict_engines)
+    "INHERIT_RUNNING_USER_AND_GROUP", "KUBERNETES_SECURITY_CONTEXT_CAP_JSON",
+    "KUBERNETES_SERVICE_USE_TYPE", "RUN_HEALTH_WEB_SERVICE",
+    # service virtualization
+    "KUBERNETES_WEB_EXPOSE_TYPE", "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN",
+    "KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME", "KUBERNETES_ISTIO_GATEWAY_NAME",
+    # proxy
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    # engine placement and sizing
+    "KUBERNETES_TOLERATIONS_JSON", "KUBERNETES_NODE_SELECTOR_JSON",
+    "KUBERNETES_RESOURCES_LIMITS_CPU", "KUBERNETES_RESOURCES_LIMITS_MEMORY",
+    "KUBERNETES_REQUESTS_EPHEMERAL_STORAGE",
+    "KUBERNETES_LIMITS_EPHEMERAL_STORAGE",
+    # CA trust
+    "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "KUBERNETES_CA_BUNDLE_MOUNT",
+})
+
+# What a container environment variable may be called. C identifier rules, which
+# is what both `kubectl create configmap` and docker's --env accept: a
+# ConfigMap key may hold more (dots and dashes are legal there), but a variable
+# named with one is not reachable from the process that reads it, so a bundle
+# carrying it would apply cleanly and change nothing.
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def extra_env(o):
+    """The free-form agent variables this bundle carries, as {NAME: value}.
+
+    Refuses at generate time rather than at apply time: a malformed name, a
+    value that is not a scalar, or a name the generator writes for itself. The
+    message names the option that owns a reserved variable where there is one,
+    because "set it there" is the whole of the answer.
+
+    Ordered as given -- a dict preserves insertion order, and the form that
+    wrote it is a list of rows somebody arranged.
+    """
+    raw = o.get("extra_env") or {}
+    if not isinstance(raw, dict):
+        raise ValueError("extra_env: expected an object of NAME: value pairs, "
+                         f"got {type(raw).__name__}")
+    out = {}
+    for name, value in raw.items():
+        if not isinstance(name, str) or not ENV_NAME_RE.match(name):
+            raise ValueError(
+                f"extra_env: {name!r} is not a usable environment variable "
+                f"name -- letters, digits and underscore only, and not "
+                f"starting with a digit")
+        if name in RESERVED_ENV:
+            owner = ENV_OWNER.get(name)
+            raise ValueError(
+                f"extra_env: {name} is written by this generator"
+                + (f" -- set it with the {owner} option instead"
+                   if owner else " and cannot be overridden here"))
+        if isinstance(value, (dict, list)):
+            raise ValueError(
+                f"extra_env: {name} must be a string, number or boolean -- an "
+                f"environment variable is text, so encode it yourself")
+        out[name] = "" if value is None else _env_value(value)
+    return out
+
+
+def _env_value(value):
+    """A scalar as the string the container will see. `True` is written `true`
+    rather than Python's `True`: every boolean the agent reads is the lower-case
+    form (AUTO_KUBERNETES_UPDATE, RUN_HEALTH_WEB_SERVICE), and a bundle where
+    the one variable somebody typed by hand is the odd one out is a bundle that
+    reads as a typo."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+# Which option already writes a reserved variable, for the refusal message.
+# Only the ones a person plausibly reaches for: the rest are identity or fixed
+# posture and are refused without a redirection.
+ENV_OWNER = {
+    "AUTH_TOKEN": "auth_token",
+    "DOCKER_REGISTRY": "private_registry",
+    "IMAGE_OVERRIDES": "private_registry",
+    "DOCKER_REGISTRY_USERNAME": "registry_auth",
+    "DOCKER_REGISTRY_PASSWORD": "registry_auth",
+    "DOCKER_REGISTRY_EMAIL": "registry_auth",
+    "AUTO_KUBERNETES_UPDATE": "auto_update",
+    "AUTO_UPDATE": "auto_update",
+    "INHERIT_RUNNING_USER_AND_GROUP": "restrict_engines",
+    "KUBERNETES_SECURITY_CONTEXT_CAP_JSON": "restrict_engines",
+    "KUBERNETES_SERVICE_USE_TYPE": "service_type",
+    "KUBERNETES_WEB_EXPOSE_TYPE": "sv_ingress",
+    "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN": "sv_subdomain",
+    "KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME": "sv_tls_secret",
+    "KUBERNETES_ISTIO_GATEWAY_NAME": "sv_istio_gateway",
+    "HTTP_PROXY": "proxy", "HTTPS_PROXY": "proxy", "NO_PROXY": "proxy",
+    "KUBERNETES_TOLERATIONS_JSON": "engine_tolerations",
+    "KUBERNETES_NODE_SELECTOR_JSON": "engine_node_selector",
+    "KUBERNETES_RESOURCES_LIMITS_CPU": "engine_cpu_limit",
+    "KUBERNETES_RESOURCES_LIMITS_MEMORY": "engine_mem_limit",
+    "KUBERNETES_REQUESTS_EPHEMERAL_STORAGE": "engine_ephemeral_request_mb",
+    "KUBERNETES_LIMITS_EPHEMERAL_STORAGE": "engine_ephemeral_limit_mb",
+    "REQUESTS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
+    "AWS_CA_BUNDLE": "ca_bundle | ca_existing_configmap",
+    "KUBERNETES_CA_BUNDLE_MOUNT": "ca_bundle | ca_existing_configmap",
+}
+
+
 def _tpl(name):
     with open(os.path.join(TEMPLATE_DIR, name)) as f:
         return Template(f.read())
@@ -768,6 +921,17 @@ def _configmap(facts, o):
             f"  AWS_CA_BUNDLE: {path}",
             f"  KUBERNETES_CA_BUNDLE_MOUNT: \"REQUESTS_CA_BUNDLE={ca['cm']}={ca['key']}:AWS_CA_BUNDLE={ca['cm']}={ca['key']}\"",
         ]
+    env = extra_env(o)
+    if env:
+        # Last, and named as what it is: everything above is a variable this
+        # generator decides, and these are the ones it was told. Nothing here
+        # can shadow a line above -- extra_env refuses every name written by
+        # this function.
+        lines.append("  # Set for this bundle (extra_env). Read by the crane pod"
+                     " via envFrom;")
+        lines.append("  # the engines crane spawns get their environment from"
+                     " crane, not from here.")
+        lines += [f"  {k}: {json.dumps(v)}" for k, v in env.items()]
     return "\n".join(lines) + "\n"
 
 
@@ -1976,6 +2140,17 @@ def _helm_values(facts, o):
         f"  key: {_yq(ca['key'] if ca else CA_FILENAME)}",
         f"  mountPath: {_yq(CA_MOUNT_PATH)}",
     ]
+    env = extra_env(o)
+    if env:
+        # Resolved here rather than left for the chart: the values are already
+        # strings by the time extra_env has read them, and a chart quoting them
+        # itself would be a second copy of that rule.
+        lines += [
+            "",
+            "# Agent variables with no option of their own, set for this bundle.",
+            "# Refused for anything the chart writes itself -- see extra_env.",
+            "extraEnv:",
+        ] + [f"  {json.dumps(k)}: {_yq(v)}" for k, v in env.items()]
     return "\n".join(lines) + "\n"
 
 
@@ -2155,6 +2330,11 @@ def docker_env(facts, o):
         # other fails in whichever half was missed.
         env["REQUESTS_CA_BUNDLE"] = DOCKER_CA_PATH
         env["AWS_CA_BUNDLE"] = DOCKER_CA_PATH
+    # Last, as in the ConfigMap, and by the same rule: nothing here can shadow a
+    # variable above, because extra_env refuses every name this function writes.
+    # They travel with the command rather than the env file -- the split is
+    # about the credential, and a free-form variable is configuration.
+    env.update(extra_env(o))
     return env
 
 
@@ -2415,13 +2595,16 @@ def generate(facts, options):
         raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, "
                          f"got {o['output_format']!r}")
 
-    # Each of these three refuses a bad value here rather than at apply time --
-    # a malformed engine quantity, an unnamed service account, an auto_update
-    # that is neither a bool nor unset. Each also asks ignored_options() first,
-    # so none of them refuses over a field this format has no such thing as.
+    # Each of these refuses a bad value here rather than at apply time -- a
+    # malformed engine quantity, an unnamed service account, an auto_update
+    # that is neither a bool nor unset, an environment variable this generator
+    # already writes. The first three ask ignored_options() first, so none of
+    # them refuses over a field this format has no such thing as; extra_env
+    # does not, because every format carries it.
     engine_size(o)
     sa = service_account(o)
     auto_update(o)
+    extra_env(o)
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)

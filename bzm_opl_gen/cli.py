@@ -230,6 +230,18 @@ def cmd_generate(a):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
+    if a.env:
+        # Merged over a profile's rather than replacing it, so `--profile x
+        # --env A=1` adds one variable to the bundle x describes. Everything
+        # about the *names* -- what is legal, what is already taken -- is
+        # generate.extra_env's, and it is asked once, at generate time.
+        env = dict(opts.get("extra_env") or {})
+        for item in a.env:
+            name, sep, value = item.partition("=")
+            if not sep:
+                sys.exit(f"--env {item}: expected NAME=VALUE")
+            env[name] = value
+        opts["extra_env"] = env
     # Where the token comes from is core.resolve_auth_token's, all four
     # branches of it. What is left here is the flags: a client is built only
     # for the one that mints, so a bad key file is not read on a run that was
@@ -854,6 +866,12 @@ def main():
                         "something. docs/hardened-engines.md records which "
                         "images have run under it and what they were observed "
                         "to be given")
+    g.add_argument("--env", action="append", metavar="NAME=VALUE",
+                   help="an agent environment variable this tool has no option "
+                        "for, e.g. --env PREFERRED_INTERFACE=eth1. Repeatable. "
+                        "Reaches the crane pod, not the engines it spawns; a "
+                        "name the bundle already writes is refused, naming the "
+                        "option that owns it")
     g.add_argument("--cluster-rbac", action="store_true", help="include optional ClusterRole")
     g.add_argument("--crane-hook", action="store_true",
                    help="add crane-hook: a one-shot Pod (plus its own read-only "

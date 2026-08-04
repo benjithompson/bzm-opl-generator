@@ -19,7 +19,7 @@ clean pass having tested none of the HTTP layer. Install
 `.venv/bin/pip install -e ".[dev]"`; CI asserts the optional deps import rather
 than trusting a green run.
 
-**Helm parity — `python tests/helm_parity.py`.** Renders 28 option combinations
+**Helm parity — `python tests/helm_parity.py`.** Renders 29 option combinations
 as both `--format manifests` and `--format helm` and requires the same objects
 out of each. Deliberately *not* pytest: it shells out to `helm`, and a test that
 skips when a binary is missing is the fastapi problem again. Its own CI job.
@@ -44,7 +44,7 @@ Python buffers stdout when redirected, so the log stays empty until exit;
 
 **Frontend — `cd frontend && npx vitest run && npx tsc --noEmit`.** Logic lives
 in plain modules, each with its own `.test.ts` — `api`, `attempt`, `capacity`,
-`engineSize`, `foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`,
+`engineSize`, `env`, `foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`,
 `optionGroups`, `preflight`, `sched`, `session`, `suggestions`, `sv`, `text`,
 `token` — and components wire them. Four suites do render (`App`, `CapacityView`, `SuggestionList`,
 `steps/DownloadPanel`), for the flows only an effect reaches. `noUnusedLocals`
@@ -224,6 +224,27 @@ missing tools. The rest is what it cannot fix for you.
   **`frontend/src/optionGroups.ts` is out of scope for it** — it holds
   `detect`/`enable`/`disable` *functions*, which a Python registry cannot carry.
 
+- **`extra_env` is the escape hatch, and the reserved set is what keeps it
+  honest.** BlazeMeter's agent-environment reference is much wider than the
+  options here, and the only way to the rest was hand-editing the generated
+  ConfigMap — which the next `generate` reverts without saying so. All three
+  formats carry it (ConfigMap entries, `extraEnv` in the overlay, `--env`
+  flags), and it reaches the **agent**: crane reads it, and the engines crane
+  spawns do not, because crane builds their environment from the `KUBERNETES_*`
+  variables rather than passing its own down. Every name the generator writes is
+  **refused** rather than merged — two values for one key is a ConfigMap with a
+  duplicate entry, and whichever wins is not the one the form showed — and the
+  refusal names the owning option, because "set it there" is the whole answer.
+  `RESERVED_ENV` is the union across formats, so a `KUBERNETES_*` variable is
+  refused in a docker bundle too: it reaches nothing there either, and accepting
+  it would read as a setting that had been made. The set is *emitted from real
+  bundles* by `tests/test_generate.py::test_reserved_env_is_what_the_bundles_actually_write`
+  rather than restated, so a variable added to a template fails there instead of
+  becoming quietly overridable. It is served (`/api/reserved-env`) with the
+  owner per name, and the page never keeps its own copy — same rule as
+  `DOCKER_IGNORED`, with the same `fixtures.ts` single copy held equal by
+  `test_server.py`.
+
 - **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
   picks the view (Generate / Account capacity) and holds the key at its foot;
   `layout/AccountMenu` is that key plus the account and workspace, because all
@@ -260,6 +281,18 @@ missing tools. The rest is what it cannot fix for you.
   bundle's README, which is `generate.ignored_options()` on that side. Where a
   hidden field needs explaining, render the served reason (`whyIgnored`) rather
   than writing a second copy of the generator's sentence.
+
+  **The cluster check is step 3's, not step 2's** (#130). `crane_hook` is a
+  generate option and shapes the bundle, so a naive reading puts its switch with
+  the other options — but it shapes nothing about the *agent*: the same
+  Deployment is applied either way, and what the switch adds is a check that
+  runs beside it. What it is about is the cluster the bundle is going to, which
+  is the question step 3 asks, so it sits with the other two ways of asking it
+  (Test deploy, the evidence file). The write is the download step's own, which
+  is what keeps the move honest — the download has to carry the option, so the
+  control has to be somewhere the download can see. Whether the format can carry
+  it is still `applies("crane_hook")` in App, never `isDocker` re-derived in the
+  panel. It blocks nothing, so nothing went off screen with it.
 
   **The planner is step 1's first card, not a view of its own.**
   `steps/CapacityProfile` states the profile and one Edit expands it downward;
@@ -388,7 +421,7 @@ missing tools. The rest is what it cannot fix for you.
   wearing "there is nothing there", about exactly the agents this app created.
 
 - **`profile.json` is the bundle, and only the bundle.** It carries every
-  resolved *option* — 34 of the 35, all but the token — plus `ship_id`, which is
+  resolved *option* — 35 of the 36, all but the token — plus `ship_id`, which is
   not an option and is the one identity it records, so `generate --profile`
   replays a bundle exactly and `livetest` judges one. Three things are
   deliberately not in it, and each absence is load-bearing:

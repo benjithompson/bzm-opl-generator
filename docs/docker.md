@@ -78,7 +78,7 @@ account, a malformed engine limit or a second CA mode all refuse a Kubernetes
 bundle and none of them refuses this one — the web UI hides those fields here,
 so a refusal would be a block with nothing on screen to clear it.
 
-Six options do reach it:
+Seven options do reach it:
 
 - **`auth_token`, `private_registry`** — identity and where engine images come
   from (`DOCKER_REGISTRY`). `registry_auth` does not: its stubs are ConfigMap
@@ -95,6 +95,13 @@ Six options do reach it:
   adding to it, so it must be a full bundle — your CA and the public roots — or
   the agent stops trusting BlazeMeter. The other two CA modes name a ConfigMap
   and have nothing to read here.
+- **`extra_env`** — the free-form agent variables, as `--env NAME=value` flags
+  on the command. Not Kubernetes vocabulary, so it is not in the ignored table
+  and the web UI keeps the area for this format. The reserved names it refuses
+  are the union across formats, though, so a `KUBERNETES_*` variable is refused
+  here too: it would reach nothing on a docker host either, and accepting it
+  would read as a setting that had been made. See
+  [Options](options.md#agent-environment).
 - **`use_secret`** — see below.
 - **`auto_update`** — `AUTO_UPDATE`, which is the Docker variable;
   `AUTO_KUBERNETES_UPDATE` is a different one and inert here. Left unset unless

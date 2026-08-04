@@ -25,7 +25,7 @@
 import { ReactNode, useState } from "react";
 import { Feature, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, RequiredMark, SegmentedControl, Switch,
+  Button, Check, Field, inputCls, RequiredMark, SegmentedControl,
 } from "../components";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
@@ -67,9 +67,9 @@ export interface ConfigurePanelProps {
    *  user picked is never swapped in silence; see the effect in App. */
   formatNotice: { was: string; why: string } | null;
   /** Does this option reach anything in a bundle of this format? Everything
-   *  below hides by it -- whole groups, the placement card, the crane-hook row,
-   *  Advanced, and the individual fields inside a group's own body. From
-   *  formats.ts, over the generator's DOCKER_IGNORED. */
+   *  below hides by it -- whole groups, the placement card, Advanced, and the
+   *  individual fields inside a group's own body. From formats.ts, over the
+   *  generator's DOCKER_IGNORED. */
   applies: Applies;
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
@@ -146,41 +146,6 @@ function CoreFields(p: ConfigurePanelProps) {
             onChange={(v) => p.set("service_account_create", v)} />
         </div>
       </div>
-    </div>
-  );
-}
-
-// -- crane-hook --------------------------------------------------------------
-// github.com/Blazemeter/crane-hook: BlazeMeter's own cluster-readiness checker,
-// a one-shot Pod plus its own Role and RoleBinding. Every variable it takes --
-// namespace, the RBAC names, the expose type and its TLS secret, the registry,
-// the proxy -- is something this page already decides, which is why it is a
-// switch here rather than a page in a doc. It is not a group: groups are
-// declared in optionGroups.ts and own option keys that shape the agent, and
-// this shapes nothing about the agent -- it adds a check that runs beside it.
-function CraneHookRow(p: ConfigurePanelProps) {
-  const on = !!p.options.crane_hook;
-  return (
-    <div className="px-3 py-2.5">
-      <div className="flex items-center gap-3">
-        <Switch on={on} onChange={(v) => p.set("crane_hook", v || null)} />
-        <div className="min-w-0 grow">
-          <p className={`text-sm font-medium ${on ? "text-slate-900" : "text-slate-500"}`}>
-            Cluster check (crane-hook)
-          </p>
-          <p className="text-[11px] text-slate-400 truncate">
-            a one-shot Pod that checks capacity, egress, RBAC and ingress before the agent runs
-          </p>
-        </div>
-      </div>
-      {on && (
-        <p className="mt-2 pl-12 text-[11px] text-slate-500">
-          Adds <span className="font-mono">bzm_cranehook.yaml</span> — a Pod, a
-          Role and a RoleBinding, configured from the settings above. It runs
-          once and exits 0 or 1; delete it when it has. Under Helm it is the
-          chart&apos;s own <span className="font-mono">helm test</span> hook.
-        </p>
-      )}
     </div>
   );
 }
@@ -514,11 +479,13 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             <div id="cfg-shared"
               className="scroll-mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100">
               {rows(p, groupsIn("shared"))}
-              {/* Both are Kubernetes objects rather than settings: crane-hook
-                  is a Pod, and Advanced is the SCC posture and the UID a pod
-                  runs as. Neither is a group, so neither is in `shared` --
-                  each asks the predicate for the keys it writes. */}
-              {p.applies("crane_hook") && <CraneHookRow {...p} />}
+              {/* Advanced is not a group either -- it is the SCC posture and
+                  the UID a pod runs as -- so it asks the predicate for the
+                  keys it writes rather than appearing in `shared`.
+                  crane-hook used to sit beside it and is on the download step
+                  now (#130): it shapes nothing about the agent, and what it
+                  is about is the cluster the bundle is going to, which is the
+                  question that step asks. */}
               {keysApply(ADVANCED_KEYS, p.applies) && <AdvancedRow {...p} />}
             </div>
           </section>

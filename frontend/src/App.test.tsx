@@ -35,7 +35,9 @@ import {
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table and the served preflight answer, from the one
 // copy of each.
-import { DOCKER_IGNORED, PLATFORM_SUGGESTION, preflightOut } from "./fixtures";
+import {
+  DOCKER_IGNORED, PLATFORM_SUGGESTION, preflightOut, RESERVED_ENV,
+} from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
@@ -710,6 +712,52 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
       engine_tolerations: [{ key: "pool", operator: "Equal",
                              value: "bzm-engines", effect: "NoSchedule" }],
     });
+  });
+
+test("a typed environment variable reaches the bundle, and a reserved name is refused",
+  async () => {
+    // #131: the escape hatch for BlazeMeter's much wider agent-environment
+    // reference. The point of driving it from here rather than from env.test.ts
+    // is the last mile -- rows are local state and the option is what they add
+    // up to, so "the row was typed" and "the bundle carries it" are two claims.
+    const sent: Sent[] = [];
+    render(<App api={perfAccount({
+      ...transfers(sent),
+      // The served table. Unstubbed it rejects, which is the honest "not read
+      // yet" -- and that state refuses nothing, so the refusal below would not
+      // be under test at all.
+      reservedEnv: async () => RESERVED_ENV,
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    const title = await screen.findByText(/^Environment variables$/);
+    fireEvent.click(within(title.closest("div.flex") as HTMLElement)
+      .getByRole("switch"));
+    fireEvent.click(await screen.findByText(/\+ Add variable/));
+    fireEvent.change(screen.getByLabelText("Variable name 1"),
+                     { target: { value: "PREFERRED_INTERFACE" } });
+    fireEvent.change(screen.getByLabelText("Variable value 1"),
+                     { target: { value: "eth1" } });
+
+    // A second row naming a variable the bundle already writes. Refused on the
+    // row, in the sentence that names the option owning it -- "set it there" is
+    // the whole answer, and a bare "that one is taken" is not.
+    fireEvent.click(screen.getByText(/\+ Add variable/));
+    fireEvent.change(screen.getByLabelText("Variable name 2"),
+                     { target: { value: "KUBERNETES_SERVICE_USE_TYPE" } });
+    expect(await screen.findByText(/set it with service_type instead/)).toBeTruthy();
+
+    // ...and the good one is on the request, which is the claim.
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect((sent[0].options as { extra_env?: Record<string, string> }).extra_env)
+      .toMatchObject({ PREFERRED_INTERFACE: "eth1" });
   });
 
 test("the configure step states the engine size the location implies, and edits nothing",
@@ -1667,7 +1715,7 @@ test("the status poll moves with the agent, and leaves no interval behind",
     // that was chosen, which is what makes changing it a change of target.
     fireEvent.click(await screen.findByText("agent-1"));
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
-    const watch = await screen.findByRole("switch");
+    const watch = await screen.findByRole("switch", { name: /Watch agent status/ });
 
     // Installed before the click, because the click is what creates the
     // interval -- afterwards it would be a real one, and vi would advance a
@@ -1715,7 +1763,7 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     await waitFor(() =>
       expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx"));
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
-    const watch = await screen.findByRole("switch");
+    const watch = await screen.findByRole("switch", { name: /Watch agent status/ });
 
     vi.useFakeTimers();
     fireEvent.click(watch);

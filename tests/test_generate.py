@@ -1667,3 +1667,160 @@ def test_docker_profile_replays_and_carries_no_token():
     profile = json.loads(files["profile.json"])
     assert profile["output_format"] == "docker"
     assert "auth_token" not in profile
+
+
+# -- free-form agent environment ---------------------------------------------
+#
+# The escape hatch for BlazeMeter's much wider agent-environment reference. The
+# risk it introduces is a variable set twice -- once by an option and once by
+# hand -- so most of what is checked here is the refusal.
+
+SV_FACTS = {**FACTS, "func_ids": ["performance", "mockServices"]}
+
+# One bundle per branch that writes a variable, so the union below is the whole
+# vocabulary rather than the common case's share of it.
+ENV_COVERAGE = [
+    (FACTS, {"ship_id": "bbb222", "auth_token": "de" * 32,
+             "private_registry": "reg.example.com/bzm", "registry_auth": True,
+             "auto_update": True, "use_secret": False,
+             "proxy": {"http": "http://px:3128", "https": "http://px:3128"},
+             "ca_bundle": "-----BEGIN CERTIFICATE-----",
+             "engine_ephemeral_request_mb": 1024,
+             "engine_ephemeral_limit_mb": 61440,
+             "engine_node_selector": {"pool": "bzm-engines"},
+             "engine_tolerations": [{"key": "pool", "operator": "Exists"}]}),
+    (SV_FACTS, {"ship_id": "bbb222", "auth_token": "de" * 32,
+                "sv_ingress": "istio", "sv_subdomain": "apps.example.com",
+                "sv_tls_secret": "wild", "sv_istio_gateway": "gw"}),
+    (FACTS, {**DOCKER, "auto_update": False,
+             "proxy": {"http": "http://px:3128"},
+             "ca_bundle": "-----BEGIN CERTIFICATE-----"}),
+]
+
+
+def _env_names(facts, opts):
+    """Every environment variable name a bundle writes, commented stubs
+    included: the registry-auth pair is emitted as commented ConfigMap lines
+    for somebody to fill in, so the name is taken even though nothing reads it
+    yet."""
+    files = gen.generate(facts, opts)
+    names = set()
+    for name, content in files.items():
+        if name.endswith(".yaml"):
+            for doc in yaml.safe_load_all(content):
+                if not isinstance(doc, dict):
+                    continue
+                # The agent's two only. The CA ConfigMap is keyed by *file*
+                # name (ca-bundle.crt) and is mounted rather than read as env,
+                # so its key is not a variable name and reserving it would
+                # refuse a variable nothing writes.
+                if doc["metadata"]["name"] in ("blazemeter-configmap",
+                                               "blazemeter-secret"):
+                    names |= set(doc.get("data") or {})
+                    names |= set(doc.get("stringData") or {})
+                    names |= set(re.findall(r"^\s*# ([A-Z][A-Z0-9_]*): <",
+                                            content, re.M))
+    if opts.get("output_format") == "docker":
+        names |= set(gen.docker_env(facts, {**gen.DEFAULT_OPTIONS, **opts}))
+    return names
+
+
+def test_reserved_env_is_what_the_bundles_actually_write():
+    """`extra_env` refuses this set, so it has to be the real one from both
+    ends. A name a template writes and this set does not carry is silently
+    overridable -- two entries for one key in one ConfigMap; a name in the set
+    that nothing writes refuses a variable the customer could have had.
+
+    Emitted from the bundles rather than restated, because a set restated is a
+    set that drifts -- which is the whole of what this file's DOCKER_IGNORED
+    tests are about one layer up."""
+    written = set()
+    for facts, opts in ENV_COVERAGE:
+        written |= _env_names(facts, opts)
+    assert written == set(gen.RESERVED_ENV)
+
+
+def test_extra_env_reaches_every_format():
+    env = {"PREFERRED_INTERFACE": "eth1", "KUBERNETES_USE_PRE_PULLING": "true"}
+    base = {"ship_id": "bbb222", "auth_token": "de" * 32, "extra_env": env}
+
+    cm = yaml.safe_load(
+        gen.generate(FACTS, base)["bzm_configmap.yaml"])
+    assert cm["data"]["PREFERRED_INTERFACE"] == "eth1"
+    assert cm["data"]["KUBERNETES_USE_PRE_PULLING"] == "true"
+
+    values = yaml.safe_load(
+        gen.generate(FACTS, {**base, "output_format": "helm"})["bzm-opl-values.yaml"])
+    assert values["extraEnv"] == env
+
+    sh = gen.generate(FACTS, {**base, "output_format": "docker"})["bzm-opl-agent.sh"]
+    assert "--env PREFERRED_INTERFACE=eth1" in sh
+    # Configuration, not a credential: it stays in the command even where the
+    # token has moved into the env file.
+    assert "PREFERRED_INTERFACE" not in (
+        gen.generate(FACTS, {**base, "output_format": "docker"})
+        .get(gen.DOCKER_ENV_FILE, ""))
+
+
+def test_extra_env_refuses_a_variable_the_bundle_already_writes():
+    """The collision rule. Refused rather than merged: two values for one key
+    is a ConfigMap with a duplicate entry, and whichever wins is not the one
+    the form that set it shows. The message names the option that owns it,
+    because "set it there" is the whole answer."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {"ship_id": "bbb222",
+                             "extra_env": {"KUBERNETES_SERVICE_USE_TYPE": "NODEPORT"}})
+    assert "service_type" in str(e.value)
+    # ...and one no option owns is still refused, without inventing a
+    # redirection for it.
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {"ship_id": "bbb222", "extra_env": {"SHIP_ID": "x"}})
+    assert "SHIP_ID" in str(e.value)
+
+
+def test_extra_env_refuses_a_kubernetes_variable_in_a_docker_bundle():
+    """The reserved set is the union across formats, deliberately. A
+    KUBERNETES_* variable reaches nothing on a docker host either, so accepting
+    it as free-form env would carry a variable the agent ignores while reading
+    as a setting that had been made."""
+    with pytest.raises(ValueError):
+        gen.generate(FACTS, {**DOCKER,
+                             "extra_env": {"KUBERNETES_NODE_SELECTOR_JSON": "{}"}})
+
+
+def test_extra_env_refuses_a_name_no_process_could_read():
+    """A ConfigMap key may hold dots and dashes; an environment variable named
+    with one is not reachable from the process that reads it, so a bundle
+    carrying it applies cleanly and changes nothing."""
+    for bad in ("my-var", "9LIVES", "a.b", ""):
+        with pytest.raises(ValueError) as e:
+            gen.generate(FACTS, {"ship_id": "bbb222", "extra_env": {bad: "x"}})
+        assert "environment variable name" in str(e.value)
+
+
+def test_extra_env_values_are_written_as_the_container_will_see_them():
+    """A boolean typed as one arrives as `true`, not Python's `True`: every
+    boolean the agent reads is the lower-case form, and one odd variable in a
+    ConfigMap reads as a typo."""
+    cm = yaml.safe_load(gen.generate(FACTS, {
+        "ship_id": "bbb222",
+        "extra_env": {"A": True, "B": 8080, "C": None},
+    })["bzm_configmap.yaml"])
+    assert cm["data"]["A"] == "true"
+    assert cm["data"]["B"] == "8080"
+    assert cm["data"]["C"] == ""
+    # A structure is refused rather than JSON-encoded on the customer's behalf:
+    # an environment variable is text, and guessing the encoding is how a
+    # bundle comes to carry one crane cannot parse.
+    with pytest.raises(ValueError):
+        gen.generate(FACTS, {"ship_id": "bbb222", "extra_env": {"A": {"b": 1}}})
+
+
+def test_extra_env_travels_in_the_profile():
+    """It is an option, so a regenerate replays it -- which is the whole point:
+    the alternative it replaces is editing the ConfigMap by hand, and that is
+    what the next generate silently reverts."""
+    profile = json.loads(gen.generate(FACTS, {
+        "ship_id": "bbb222", "extra_env": {"PREFERRED_INTERFACE": "eth1"},
+    })["profile.json"])
+    assert profile["extra_env"] == {"PREFERRED_INTERFACE": "eth1"}

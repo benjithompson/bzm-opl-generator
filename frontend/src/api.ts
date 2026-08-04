@@ -342,6 +342,12 @@ export const api = {
    *  step hides what it names, and a key added to the generator would
    *  otherwise go on being offered for a format that ignores it. */
   dockerIgnored: () => req<Record<string, string>>("GET", "/api/docker-ignored"),
+  /** {NAME: owning option | null} for the environment variables a bundle writes
+   *  for itself — generate's RESERVED_ENV, which `extra_env` refuses. Served
+   *  for the same reason as the table above: the env area names what is taken,
+   *  and a variable added to a template would otherwise go on being offered
+   *  until the collision surfaced as a duplicate ConfigMap key. */
+  reservedEnv: () => req<Record<string, string | null>>("GET", "/api/reserved-env"),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),

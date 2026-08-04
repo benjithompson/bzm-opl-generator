@@ -249,15 +249,20 @@ endpoint host to check once it is applied — the same facts as
 [Service virtualization](service-virtualization.md), against the namespace and
 domain actually configured.
 
-**Cluster check (crane-hook)** under *Agent settings* adds
-[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
-Pod, plus its own read-only Role and RoleBinding, that checks capacity, egress,
-RBAC and — for service virtualization — the ingress and its TLS secret, then
-exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
-report, and deleting it changes nothing. In a Helm bundle it is the chart's
-`helm test` hook. This is a different thing from *Preflight the target cluster*
-on the next step, which needs no cluster access at all — see
-[Preflight](preflight.md).
+**Environment variables**, under *Agent settings*, is the escape hatch.
+BlazeMeter's agent-environment reference is much wider than the settings on this
+page — `PREFERRED_INTERFACE`, `KUBERNETES_USE_PRE_PULLING`, `DODUO_PORT` and the
+rest — and the only way to reach the others used to be editing the generated
+ConfigMap by hand, which the next generate silently reverts. Name and value per
+row, no JSON, and it is an option (`extra_env`), so it travels in `profile.json`
+and a regenerate replays it. All three formats carry it: ConfigMap entries for
+manifests, `extraEnv` in the values overlay for Helm, `--env` flags in the docker
+script. It reaches the **agent** — crane's pod — and not the engines crane
+spawns, whose environment crane builds from the `KUBERNETES_*` variables rather
+than passing its own down. A variable the bundle already writes is **refused**,
+on the row, naming the option that owns it: two values for one key is a
+ConfigMap with a duplicate entry, and whichever wins is not the one the form
+showed.
 
 Profile JSON **Export** / **Import**, at the top of this step, round-trips with
 `generate --profile`.
@@ -269,6 +274,13 @@ unfinished blocks the download, is named here, and gets a button back to it — 
 disabled button whose cause is a step away is the failure that is here to be
 removed. A bundle carrying the placeholder AUTH_TOKEN says so over the button.
 
+Three things on this step ask whether the cluster will take the bundle, and they
+are the same check reached three ways: **Test deploy** runs it now, the evidence
+file judges a read of the cluster, and **Ship the check with the bundle** hands
+it to whoever applies the bundle. The last of those was on step 2 until #130,
+among the options that shape the agent — it shapes none of it, and what it is
+*about* is the cluster this bundle is going to.
+
 **Test deploy**, above the evidence-file picker under *Preflight the target
 cluster*, hands over crane-hook as a manifest to apply to the cluster under test:
 the same Pod, Role and RoleBinding the bundle would carry, rendered for the
@@ -276,7 +288,15 @@ namespace and registry currently configured. Above rather than beside it, becaus
 it comes first in time — this is what you run *on* the cluster, and the evidence
 file is what comes back from it. It does not turn the option on: applying the
 check and shipping it inside the agent's bundle are different decisions, and this
-is the one you make before deploying anything. There is no chart to fetch —
+is the one you make before deploying anything, and **Ship the check with the
+bundle** below it is the other. That switch adds
+[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
+Pod, plus its own read-only Role and RoleBinding, that checks capacity, egress,
+RBAC and — for service virtualization — the ingress and its TLS secret, then
+exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
+report, and deleting it changes nothing. In a Helm bundle it is the chart's
+`helm test` hook. A docker bundle offers neither: crane-hook is a Pod, and there
+is no cluster to run it in. There is no chart to fetch —
 crane-hook publishes an image, packaged as a `helm test` hook inside the separate
 [helm-crane](https://github.com/Blazemeter/helm-crane/releases) chart, and
 documents a manifest as the standalone way to run it.

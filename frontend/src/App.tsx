@@ -75,6 +75,7 @@ import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
 import { ProxyGroup } from "./groups/ProxyGroup";
 import { RegistryGroup } from "./groups/RegistryGroup";
+import { EnvGroup } from "./groups/EnvGroup";
 import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
 import { SvGroup } from "./groups/SvGroup";
@@ -173,6 +174,12 @@ export default function App({ api }: { api: Api }) {
   // until it lands, and empty means every option applies -- the configure step
   // shows a field too many rather than hiding a required one on a guess.
   const [dockerIgnored, setDockerIgnored] = useState<Record<string, string>>({});
+  // ...and which environment variables the bundle writes for itself, which the
+  // env area refuses. Empty the same way, and meaning the same thing: nothing
+  // is refused until the table lands, because generate() refuses
+  // authoritatively either way and a name rejected on a guess is the worse
+  // half of being wrong.
+  const [reservedEnv, setReservedEnv] = useState<Record<string, string | null>>({});
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The feature being configured, and the vocabulary it is chosen from. A view
   // over the options, never a scope: one crane is deployed for the selected
@@ -346,6 +353,7 @@ export default function App({ api }: { api: Api }) {
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
     api.dockerIgnored().then(setDockerIgnored).catch(() => {});
+    api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.features().then(setFeatures).catch(() => {});
 
@@ -1334,6 +1342,11 @@ export default function App({ api }: { api: Api }) {
         onConfigmapKey={(v) => set("ca_configmap_key", v)}
         onBundle={(v) => set("ca_bundle", v)} />
     ),
+    env: (
+      <EnvGroup env={options.extra_env} reserved={reservedEnv}
+        cluster={!isDocker(format)}
+        onChange={(v) => set("extra_env", Object.keys(v).length ? v : null)} />
+    ),
     sched: (
       <SchedGroup
         tolerations={options.tolerations} nodeSelector={options.node_selector}
@@ -1609,6 +1622,13 @@ export default function App({ api }: { api: Api }) {
                 read: preflight, busy: preflightBusy, header: evidence,
                 importFile: importEvidence,
                 applied, applySuggestion, undoSuggestion,
+                // Asked of the served table rather than of `format`: the panel
+                // would otherwise re-derive what a docker bundle drops, which
+                // is the one copy formats.ts exists to keep.
+                craneHook: applies("crane_hook")
+                  ? { on: !!options.crane_hook,
+                      set: (v: boolean) => set("crane_hook", v || null) }
+                  : null,
               }}
               watch={{
                 available: sourceMode === "connect",
