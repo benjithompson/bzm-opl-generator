@@ -1317,7 +1317,9 @@ def preflight(facts, options, evidence):
     # every option change, and two round trips is two answers that can end up
     # describing different configurations in the same panel. Nothing is applied
     # -- `state` says what applying would mean, and the choice is the caller's.
-    suggestions = suggest_mod.from_evidence(evidence)
+    # It is reached through `suggestions_from_evidence` rather than called
+    # here: that is where a malformed file becomes a BadRequest, and a second
+    # call at this level answered the same question outside that guard.
     return {"namespace": namespace,
             **_verdicts(checks),
             # The list in one sentence, in doctor's words -- the line the

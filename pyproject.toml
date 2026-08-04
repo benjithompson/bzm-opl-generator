@@ -1,6 +1,6 @@
 [project]
 name = "bzm-opl-gen"
-version = "0.2.0"
+version = "0.3.0"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
 # 3.10 because the `mcp` SDK requires it. 3.9 has been end-of-life since
 # October 2025, and the generator itself still uses nothing newer -- the floor
@@ -31,13 +31,14 @@ build-backend = "setuptools.build_meta"
 # be added here by hand -- there are none today, and templates/ profiles/
 # ui_dist/ are data rather than packages.
 [tool.setuptools]
-packages = ["bzm_opl_gen", "bzm_opl_gen.docs"]
+packages = ["bzm_opl_gen", "bzm_opl_gen.docs", "bzm_opl_gen.docs.repro"]
 
 # The MCP server serves these as resources, so a session with no checkout of
 # this repo can still read them. Mapped rather than copied: one set of files on
 # disk, and the wheel builds its copy from the same ones.
 [tool.setuptools.package-dir]
 "bzm_opl_gen.docs" = "docs"
+"bzm_opl_gen.docs.repro" = "docs/repro"
 
 [tool.setuptools.package-data]
 # templates/helm is the Helm packaging of the same manifests, and `generate
@@ -49,3 +50,9 @@ bzm_opl_gen = ["templates/*.yaml", "templates/helm/*", "templates/helm/.helmigno
                "templates/helm/templates/*", "templates/helm/templates/tests/*",
                "profiles/*.json", "ui_dist/**/*"]
 "bzm_opl_gen.docs" = ["*.md"]
+# The reproductions three shipped pages tell the reader to `kubectl apply -f`.
+# The MCP server's audience has no checkout, so a page served from the wheel
+# naming a file the wheel does not carry is an instruction that cannot be
+# followed. Its own entry because the glob above neither recurses nor matches
+# `.yaml`.
+"bzm_opl_gen.docs.repro" = ["*.yaml"]

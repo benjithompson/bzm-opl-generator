@@ -7,10 +7,10 @@ doc; this file is what a session needs before touching the code or the tests.
 Every rule below cost something to learn. Where the reason is short it is here;
 where it is long it is a comment at the site, and the site is named.
 
-## Three test layers
+## Four test layers
 
 **Offline — `.venv/bin/python -m pytest tests -q`.** Stdlib + fixtures, no
-cluster, ~2s. Every live-rig check has an offline counterpart that fakes the
+cluster, ~3s. Every live-rig check has an offline counterpart that fakes the
 cluster/API response; add one whenever you add a live check.
 
 The run must end **`N passed` with nothing skipped.** `tests/test_server.py`
@@ -43,10 +43,13 @@ Python buffers stdout when redirected, so the log stays empty until exit;
 `kubectl get pods` is the live view.
 
 **Frontend — `cd frontend && npx vitest run && npx tsc --noEmit`.** Logic lives
-in plain modules with tests (`capacity.ts`, `manualIds.ts`, `preflight.ts`,
-`suggestions.ts`, `session.ts`, `text.ts`, `token.ts`, `optionGroups.ts`);
-components wire them. `noUnusedLocals` is on, so a binding left behind by a
-refactor fails the typecheck rather than accumulating.
+in plain modules, each with its own `.test.ts` — `api`, `attempt`, `capacity`,
+`foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`, `optionGroups`,
+`preflight`, `session`, `suggestions`, `sv`, `text`, `token` — and components
+wire them. Four suites do render (`App`, `CapacityView`, `SuggestionList`,
+`steps/DownloadPanel`), for the flows only an effect reaches. `noUnusedLocals`
+is on, so a binding left behind by a refactor fails the typecheck rather than
+accumulating.
 
 ## Account facts
 
@@ -204,7 +207,9 @@ missing tools. The rest is what it cannot fix for you.
   is never in a response** (`reveal_token` is a whole action, so it cannot
   happen as a side effect); **a secret is never an argument** (a path may be);
   **nothing writes to a cluster** (the session runs `kubectl apply` in its own
-  shell, where the person watching sees it). `docs/*.md` reach the wheel through
+  shell, where the person watching sees it) — the one exception is
+  `opl_agent livetest`, which deploys because deploying is all it is, and is off
+  unless `BZM_OPL_ENABLE_LIVETEST` says otherwise. `docs/*.md` reach the wheel through
   the `bzm_opl_gen.docs` **package-dir mapping** — they stay at the repo root
   where they are edited and where their links resolve, and `docs_dir()` looks in
   both places. The release workflow asserts every page made it in.
@@ -222,62 +227,59 @@ missing tools. The rest is what it cannot fix for you.
 - **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
   picks the view (Generate / Account capacity) and holds the key at its foot;
   `layout/AccountMenu` is that key plus the account and workspace, because all
-  three last the session while an agent is chosen per bundle, and three separate
-  things read the account. `layout/StepFlow` shows one step at a time (controlled
-  from App, because the download step sends you back to Configure);
-  `layout/PreviewDrawer` pushes the manifests in from the right rather than
-  covering the form. The steps are `steps/AgentPanel`, `steps/ConfigurePanel`,
-  `steps/DownloadPanel` — **App keeps every piece of state and every effect and
-  hands them down as typed props**, so `core`-style ownership holds here too. A
-  group belongs to no feature (`SHARED_GROUPS`) or to one (`groupsOf`), and both
-  are on screen at once — there is no `visibleGroups`/`setButHidden`/
-  `hiddenBlockers` any more, and nothing that hands back what a view was hiding.
-  Don't reintroduce one: a feature is a view over a location's options, never a
-  scope on what gets generated.
+  three last the session while an agent is chosen per bundle. `layout/StepFlow`
+  shows one step at a time, controlled from App because the download step sends
+  you back to Configure; `layout/PreviewDrawer` pushes the manifests in from the
+  right rather than covering the form. The steps are `steps/AgentPanel`,
+  `steps/ConfigurePanel`, `steps/DownloadPanel` — **App owns every piece of
+  domain state and every effect that reaches the server**, handed down as typed
+  props, so `core`-style ownership holds here too; a panel keeps only what is
+  local to its own view (folds, busy flags, copied). A group belongs to no
+  feature (`SHARED_GROUPS`) or to one (`groupsOf`), and both are on screen at
+  once — there is no `visibleGroups`/`setButHidden`/`hiddenBlockers` any more,
+  and nothing that hands back what a view was hiding. Don't reintroduce one: a
+  feature is a view over a location's options, never a scope on what gets
+  generated.
 
   **The format is step 2's first control, and the form follows it.** A feature
-  hides nothing; a *format* genuinely does, and the two must not be confused.
-  It used to be chosen on the download step, one step too late: Configure asked
-  for a namespace, a ServiceAccount, node selectors and engine limits, and a
-  docker bundle carries none of them — the generated README was the only thing
-  that said so. So the segmented control moved to the top of Configure, and what
-  is on screen is derived from `formats.optionApplies` over the generator's own
-  `DOCKER_IGNORED`, **served** as `/api/docker-ignored`. Never restate that
-  table in TypeScript — it is two dozen keys, and a key added to the generator
-  would go on being offered for a format that drops it. The one copy that has to
-  exist is `fixtures.ts`, for tests that run without a server, and a Python test
-  holds it equal to the generator's; there were briefly two of those, five keys
-  apart, which is `tests/evidence_fixtures.py`'s lesson one layer up.
-  `optionGroups.groupsFor` drops a group whose every declared key is ignored;
-  one with some keeps its row and hides the rest inside its own body, so each
-  group body takes the `Applies` predicate rather than a format string, and a
-  section that is not a group (placement, Advanced) uses `keysApply` over the
-  keys it owns rather than testing one by hand. An **empty** table means "not
-  read yet" and everything applies: showing a field too many beats hiding a
-  required one on a guess. Hiding is never a refusal — the value is kept, sent,
-  and named in the bundle's README, and `generate.ignored_options()` is the same
-  rule on that side. Where a hidden field needs explaining, render the served
-  *reason* (`whyIgnored`) rather than writing a second copy of the generator's
-  sentence.
+  hides nothing; a *format* genuinely does, and the two must not be confused. It
+  used to be chosen on the download step, one step too late — Configure asked
+  for a namespace, a ServiceAccount, node selectors and engine limits, none of
+  which a docker bundle carries. What is on screen now derives from
+  `formats.optionApplies` over the generator's own `DOCKER_IGNORED`, **served**
+  as `/api/docker-ignored`. Never restate that table in TypeScript, or a key
+  added to the generator goes on being offered for a format that drops it; the
+  one copy that has to exist is `fixtures.ts`, for tests that run without a
+  server, held equal by a Python test. `optionGroups.groupsFor` drops a group
+  whose every declared key is ignored; one with some keeps its row and hides the
+  rest inside its body, so a group body takes the `Applies` predicate rather
+  than a format string, and a section that is not a group (placement, Advanced)
+  uses `keysApply` over the keys it owns. An **empty** table means "not read
+  yet" and everything applies: a field too many beats hiding a required one on a
+  guess. Hiding is never a refusal — the value is kept, sent and named in the
+  bundle's README, which is `generate.ignored_options()` on that side. Where a
+  hidden field needs explaining, render the served reason (`whyIgnored`) rather
+  than writing a second copy of the generator's sentence.
 
-  **The planner is step 1's first card, not a view of its own.** `steps/
-  CapacityProfile` states the profile and one Edit expands it downward; picking
-  a location opens what that profile would change about it, as before → after
-  against what the account holds. That fold is only legitimate because step 1
-  needs no account -- the planner sizing a cluster for somebody who has none is
-  the whole reason it exists, and `App.test.tsx` drives the page with no key and
-  sizes a profile, which is what keeps it true. The profile *fills* the location
-  draft and the fields stay editable; a hand edit outranks later profile changes
-  until Reset. It has no `agents` field on purpose (see `usePlan.ts`): on
-  Kubernetes an agent is a cluster, so you scale `slots` and let the node pool
-  autoscale -- 78% of the locations in one real account have exactly one agent,
-  and the largest is one agent at 50 slots. Where the count is a *fact* -- a
+  **The planner is step 1's first card, not a view of its own.**
+  `steps/CapacityProfile` states the profile and one Edit expands it downward;
+  picking a location opens what that profile would change about it, before →
+  after against what the account holds. The fold is legitimate only because step
+  1 needs no account -- sizing a cluster for somebody who has none is why the
+  planner exists, and `App.test.tsx` drives the page with no key, which is what
+  keeps it true. The profile *fills* the location draft and the fields stay
+  editable; a hand edit outranks later profile changes until Reset. It has no
+  `agents` field on purpose (see `usePlan.ts`): on Kubernetes an agent is a
+  cluster, so you scale `slots` and let the node pool autoscale -- 78% of the
+  locations in one real account have exactly one agent, and the largest is one
+  agent at 50 slots. Where the count is a *fact* -- a
   location that exists -- it is read off that location.
 
-  **Two writes to the account come from this page and nowhere else** —
-  `POST /api/ships/token` (regenerate) and `POST /api/locations/settings` — and
-  each says what it costs before it is pressed. The second re-reads the location
-  afterwards and reports *that*, not the request: BlazeMeter's own POST accepts
+  **Four routes write to the account, and each says what it costs before it is
+  pressed.** Two *create* — `POST /api/locations`, `POST /api/ships` — and two
+  change what the account already holds: `POST /api/ships/token` (regenerate)
+  and `POST /api/locations/settings`. The last re-reads the location afterwards
+  and reports *that*, not the request: BlazeMeter's own POST accepts
   `threadsPerEngine` and does not store it, so a form echoing back what was
   typed would show a value the account never took. Verified live against a real
   location: the panel reported `1 → 4, 500 → 400, not set → 2, not set → 8192`
@@ -288,11 +290,13 @@ missing tools. The rest is what it cannot fix for you.
   asserts that over the app's own routes, because the one that had to remember
   had forgotten.
 
-  There was a third — `POST /api/locations/func-id`, behind "Enable on this
+  There was a fifth — `POST /api/locations/func-id`, behind "Enable on this
   location…" on the configure step — and #113 removed it, along with
-  `core.add_func_id` and `api.update_private_location`'s `func_ids`. The other
-  two change an agent's credential and a location's concurrency; turning a
-  funcId on changes what the location *is*, which is BlazeMeter's own UI's.
+  `core.add_func_id` and `api.update_private_location`'s `func_ids`. The others
+  change an agent's credential and a location's concurrency, or make one;
+  turning a funcId on changes what the location *is*, which is BlazeMeter's own
+  UI's.
+
   **A feature is judged twice, and the two are different questions.** The
   location decides whether it is *run*; the format decides whether this bundle
   can *serve* it, and a card can be silent for either reason without them being
@@ -303,27 +307,25 @@ missing tools. The rest is what it cannot fix for you.
   refuse" table: helm and docker refuse *one* feature and nothing else refuses
   any, and `DOCKER_IGNORED` is docker-only precisely because helm ignores
   nothing — it refuses. **A format's refusal clears no options**; the *format*
-  gives way (`sv.correction`), because a configuration somebody wrote outranks
-  a segment, and only `notRunPatch` — the location's answer — wipes anything.
+  gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
+  configuration somebody wrote outranks a segment, and only `notRunPatch` — the
+  location's answer — wipes anything. That correction is the one write on this
+  page overriding a choice made on it rather than completing one, so it is never
+  silent: App records what it replaced (`formatNotice`) and the panel says so
+  until a format is picked.
 
   **`blockedFormats` follows what is configured, never what is demanded** (#115).
   `generate()` refuses a helm or docker bundle on `_sv_cfg` returning a config,
-  and `_sv_cfg` never reads the funcIds before it does. Read off the demand, the
-  gap was a location whose funcIds carry no served feature — `enabledFeatures`
-  answers null, `runsFeature` reads null as yes, so every switch is offered and
-  `notRunPatch` clears nothing — and a full SV configuration generated as docker
-  and was refused by the server with the segment still enabled. Real accounts
-  have such locations (tdm, dataPublisher, delphix). `svState` therefore takes
-  `runs` as a fourth input: options on their way out must not take a format with
-  them, or a docker choice valid all along is lost on the way past. The
-  formats the page blocks are held to the ones `generate()` actually raises on,
-  by `test_server.py`, because the two refusals are far apart and easy to grow a
-  third of.
-
-  **A format the user picked is never replaced in silence.** The correction is
-  the one write on this page that overrides a choice made on it rather than
-  completing one, so App records what it replaced and the panel says so until a
-  format is picked.
+  and never reads the funcIds first. Read off the demand instead, the gap was a
+  location whose funcIds carry no served feature (real accounts have them: tdm,
+  dataPublisher, delphix) — `enabledFeatures` answers null, `runsFeature` reads
+  null as yes, every switch is offered, `notRunPatch` clears nothing, and a full
+  SV configuration generated as docker and was refused by the server with the
+  segment still enabled. `svState` therefore takes `runs` as a fourth input:
+  options on their way out must not take a format with them, or a docker choice
+  valid all along is lost on the way past. The formats the page blocks are held
+  to the ones `generate()` actually raises on, by `test_server.py`, because the
+  two refusals are far apart and easy to grow a third of.
 
   **A feature the location does not run is stated, never configured**: its card
   names it and says where it is enabled, and `optionGroups.runsFeature` takes
@@ -334,65 +336,62 @@ missing tools. The rest is what it cannot fix for you.
   (`enabledFeatures`): runs, does not run, and nobody has said, which is null
   and shows everything.
 
-  **In manual entry the feature is not a view at all — it is the declaration**,
-  and #118 is what forgetting that cost. It names the funcId the typed identity
-  is gathered for, which names the images the bundle carries, and it was the one
-  input deciding the bundle that a refresh did not restore: a service
-  virtualization identity came back a performance one, the patch that clears a
-  not-run feature wiped its `sv_*` options on the way, and the namespace
+  **In manual entry the feature is not a view at all — it is the declaration**
+  (#118). It names the funcId the typed identity is gathered for, which names
+  the images the bundle carries, and it was the one bundle-deciding input a
+  refresh did not restore: an SV identity came back a performance one,
+  `notRunPatch` wiped its `sv_*` options on the way, and the namespace
   suggestion rewrote a name generated into every manifest. So it is in the
   snapshot (`session.declaredFeature`, null in connect mode structurally rather
-  than by convention), and it is **checked** where the served vocabulary lands
-  rather than trusted: a feature no longer offered names no funcId, so it is
-  dropped and the page lands where a fresh manual session lands, because sitting
-  on it means gathering facts for nothing with no radio on to say so. Manual mode
-  never reads a feature back off `facts.func_ids` for the same reason — those
-  funcIds *are* the declaration, so reading them can only restate it, or lose it
-  while `/api/func-ids` is still outstanding.
+  than by convention), and **checked** against the served vocabulary rather than
+  trusted: a feature no longer offered names no funcId, so it is dropped and the
+  page lands where a fresh manual session lands, rather than gathering facts for
+  nothing with no radio on to say so. Manual mode never reads a feature back off
+  `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
+  reading them can only restate it, or lose it while `/api/func-ids` is still
+  outstanding.
 
   **The imported preflight is in the snapshot; the file it came from is not**
-  (#119). What a refresh used to keep was only the damage: the values applied
-  from a suggestion are options and options are remembered, while the verdicts
+  (#119). What a refresh used to keep was only the damage: values applied from a
+  suggestion are options and options are remembered, while the verdicts
   explaining them and the history reversing them were not — and re-picking the
   file is not always possible, because whoever ran the collector may not be
-  whoever is at the browser. So the verdicts, the suggestions, the file name and
-  the undo history travel as **one** field (`session.SavedPreflight`): the undo
-  is a button on a suggestion row, so half of that pair is an undo nothing can
-  reach. The evidence *document* stays out, and that is the size argument — it
-  grows with the cluster (32KB at 3 nodes, 615KB at 60) while the answer is flat
-  at 4.2KB, being bounded by the check list rather than by the cluster, and a
-  quota refusal costs the whole snapshot rather than the part that grew. The
-  cost is that a restored answer cannot be re-judged, so it is a state of its own
-  (`preflight.fromSnapshot`, carried as `restored`) and the panel says so —
-  never `doc === null`, which "nothing was imported" already means.
+  whoever is at the browser. So verdicts, suggestions, file name and undo history
+  travel as **one** field (`session.SavedPreflight`): the undo is a button on a
+  suggestion row, so half that pair is an undo nothing can reach. The evidence
+  *document* stays out, on size — it grows with the cluster (32KB at 3 nodes,
+  615KB at 60) while the answer is flat at 4.2KB, bounded by the check list
+  rather than the cluster, and a quota refusal would cost the whole snapshot
+  rather than the part that grew. The cost is that a restored answer cannot be
+  re-judged, so it is a state of its own (`preflight.fromSnapshot`, carried as
+  `restored`) and the panel says so — never `doc === null`, which "nothing was
+  imported" already means.
 
   **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
   not** (#123). It is seen at exactly two moments, both this page's own writes —
-  creating an agent, and Regenerate — and the browser held the only copy, so a
-  reload lost it for good: no API reads a token back, and the next bundle fell to
-  a placeholder for an agent created a minute earlier. The backup is
-  `server._minted_tokens`, keyed by ship id, and it is **transport rather than
-  core** because it exists only where a *browser* forgets — the CLI and the MCP
-  server mint and write the bundle in one process, so a store there would be a
-  lifetime nothing needed. It is named at `_state`, with the client and the
-  cache, which together are the single-user seam. `session.strip()` is untouched,
-  and that is also why a *pasted* token **evicts** the remembered one
-  (`DELETE /api/ships/minted-token`) rather than out-ranking it: the page cannot
-  keep what was typed, so a copy left in the store comes back on the next load
-  and silently replaces it. Keying by ship is the rest of the safety — the page
-  used to hold one token and clear it whenever the target moved, which is the
-  same guarantee resting on every caller remembering to let go. **The lookup's
-  answers are three and stay three**: a token; `null` for "this process holds
-  none", which is honestly what a restart says too and so is never worded as
-  "nothing was ever minted"; and a request that failed, which is not a body at
-  all. `token.Recall` carries that on the page, and only `none` may say a
+  creating an agent, and Regenerate — and no API reads a token back, so the
+  browser held the only copy and a reload lost it for good. The backup is
+  `server._minted_tokens`, keyed by ship id: **transport rather than core**,
+  because it exists only where a *browser* forgets, while the CLI and the MCP
+  server mint and write the bundle in one process. It is named at `_state` with
+  the client and the cache, which together are the single-user seam.
+  `session.strip()` is untouched, which is also why a *pasted* token **evicts**
+  the remembered one (`DELETE /api/ships/minted-token`) rather than out-ranking
+  it: the page cannot keep what was typed, so a copy left in the store comes
+  back on the next load and silently replaces it. Keying by ship makes mixing
+  two up impossible by construction, rather than by every caller remembering to
+  let go. **The lookup's answers are three and stay three**: a token; `null` for
+  "this process holds none", which is honestly what a restart says too and so is
+  never worded as "nothing was ever minted"; and a request that failed, which is
+  not a body at all. `token.Recall` carries that, and only `none` may say a
   credential cannot be read back — `unread` saying it would be "could not read"
   wearing "there is nothing there", about exactly the agents this app created.
 
 - **`profile.json` is the bundle, and only the bundle.** It carries every
-  resolved *option* — 35 of them — so `generate --profile` replays a bundle
-  exactly, and `livetest` judges one. Three things are deliberately not in it,
-  and each absence is load-bearing:
+  resolved *option* — 34 of the 35, all but the token — plus `ship_id`, which is
+  not an option and is the one identity it records, so `generate --profile`
+  replays a bundle exactly and `livetest` judges one. Three things are
+  deliberately not in it, and each absence is load-bearing:
   **the AUTH_TOKEN** (`SECRET_OPTIONS`), because a profile is the file people
   commit, diff and paste into tickets, and the bundle beside it is where a
   regenerate reads the token back from;
@@ -410,25 +409,29 @@ missing tools. The rest is what it cannot fix for you.
 
 ## "Could not read" and "there is nothing there" must never share a representation
 
-The same bug six times, three of them in one session. `null` vs `[]` in the
-evidence collector; the identical collapse latent in `gather_cluster()`, where a
-denied `list nodes` produced the same FAIL as an empty cluster; `auth can-i` and
-`api-resources` reporting failure as *no*, so a file collected with no
-kubeconfig read as a locked-down cluster; `raw.namespace: null` becoming `{}`,
-which had `check_admission` announce a namespace "does not exist yet" when it
-had merely been refused. The fourth landed *inside* the change written to fix
-the first two — which is the point: **the distinction survives only where it is
-structural, never where it is remembered.**
+The same bug six times, three of them in one session: `null` vs `[]` in the
+evidence collector; a denied `list nodes` giving `gather_cluster()` the same
+FAIL as an empty cluster; `auth can-i` and `api-resources` reporting failure as
+*no*, so a file collected with no kubeconfig read as a locked-down cluster; and
+`raw.namespace: null` becoming `{}`, which had `check_admission` announce a
+namespace "does not exist yet" when it had merely been refused. The fourth
+landed *inside* the change written to fix the first two — which is the point:
+**the distinction survives only where it is structural, never where it is
+remembered.**
 
 Two named helpers carry it, and a new reader should go through one:
 
-- `suggest._read(doc, path, kind=...)` — `path` is one of the dotted paths built
+- `suggest._read(doc, path, kind)` — `path` is one of the dotted paths built
   from `evidence` at the top of the module, and the same string the suggestion
   cites. Absent, null and wrong-typed all give `None`; `kind=bool` coerces only a
   value that is *present*, so a refused probe never arrives as `false`. A path
   the *document* does not define raises instead: no file will ever carry it.
-- `doctor._unread_section(cluster, key, name, detail)` — the unread branch for
-  six checks.
+- `doctor.reads(key, name, unread)` — the decorator a check wears to declare
+  the section it reads. Ten checks carry one and nine of those give it an unread
+  branch, reached through `_unread_section`, which the declaration is now the
+  only caller of. A cluster mapping *missing* the key raises `MissingSection`
+  rather than reading as unread: a section nobody declared is a bug here, not a
+  read somebody was refused.
 
 **Neither is the only route, and do not read the pair as an invariant.**
 `check_service_account` and `check_egress` branch on falsiness;
@@ -457,9 +460,11 @@ unread, indistinguishable from an honest one, and nothing fails. A shell script
 cannot import a Python table, so `tests/test_cluster_evidence.py` parses the
 script's emitting half (everything below its `# -- the document` marker, one key
 per line at an indent that is its depth) and compares the keys it writes with
-`evidence.DOCUMENT`. Rename a section in either place and that test names it;
-the same table holds the three fixture files and the dotted paths
-`docs/preflight.md` quotes. Add a section in both, or in neither.
+`evidence.DOCUMENT`. Rename a section in either place and that test names it.
+Two more readers resolve against the same vocabulary from their own tests:
+`tests/evidence_fixtures.py` holds the three collected fixture files, and
+`tests/test_suggest.py` holds the dotted paths `docs/preflight.md` quotes. Add a
+section in both the collector and `DOCUMENT`, or in neither.
 
 Beside it, `tests/evidence_fixtures.py` is the one builder for the document —
 there were two, with different defaults for the same schema, and `test_server`
@@ -481,18 +486,18 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   `generate` writes `out/profile.json` (resolved options minus `auth_token`), and
   the rig re-renders from it only where it has something to inject: the proxy's
   CA (`--local-proxy`) or the engine sizing (`--run-test`). A lean run has no
-  regenerate callback at all and applies `<dir>/*.yaml` exactly as it sits —
-  which this file used to describe as "manifests under test stay generator
-  output". They do not, and #107 is what that cost: `--manifests` defaults to
-  `out/`, `out/` is whatever the last `generate` left there, and a run given
-  `--ship-id` and `--auth-token` deployed a nine-day-old bundle for a *different*
-  agent, plus a `bzm_limitrange.yaml` from a version that no longer emits one.
-  Re-rendering everywhere would not have caught it either — `_regenerator` merges
-  onto the profile and prefers *its* `ship_id` over the command line, so the
-  stale identity survives a re-render — and on the lean path it would have to
-  either mint a token (revoking the one the bundle is running on, which is why
-  the mint sits inside the re-render branch) or silently rewrite a directory the
-  operator built deliberately. So the identity is **checked**, not re-rendered:
+  regenerate callback at all and applies `<dir>/*.yaml` exactly as it sits — so
+  "the manifests under test are generator output" is false, and #107 is what
+  that cost: `--manifests` defaults to `out/`, which is whatever the last
+  `generate` left there, and a run given `--ship-id` and `--auth-token` deployed
+  a nine-day-old bundle for a *different* agent, plus a `bzm_limitrange.yaml`
+  from a version that no longer emits one. Re-rendering everywhere would not
+  have caught it — `_regenerator` merges onto the profile and prefers *its*
+  `ship_id` over the command line, so a stale identity survives a re-render —
+  and on the lean path it would have to either mint a token (revoking the one
+  the bundle is running on, which is why the mint sits inside the re-render
+  branch) or silently rewrite a directory the operator built deliberately. So
+  the identity is **checked**, not re-rendered:
   `livetest.bundle_check` refuses a `HARBOR_ID`/`SHIP_ID` (in the ConfigMap or in
   `profile.json`) that is not the one the run was told to test, naming both
   values, and refuses any `*.yaml` outside `emitted_yaml_files()`. It runs in
@@ -504,10 +509,10 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   around two dozen options reach nothing. They are *named* rather than refused
   -- `DOCKER_IGNORED`, listed in the bundle's README and only where set away
   from their default, because the failure is silent otherwise (a bundle handed
-  over and believed to have applied a node selector). The web UI takes the same
-  table off `/api/docker-ignored` and does not *show* those controls; the two
-  halves found each other's gaps -- hiding the table's keys on the page turned
-  up `crane_hook` and `registry_auth` still on screen and reaching nothing here.
+  over and believed to have applied a node selector). The page hides the same
+  keys, off the same served table (see the UI bullet above); the two halves
+  found each other's gaps -- hiding them on screen turned up `crane_hook` and
+  `registry_auth` still offered and reaching nothing here.
 
   **A format may not refuse what it says it ignores**, and that half is
   `ignored_options()` rather than a rule anybody remembers. Three validators had
@@ -538,8 +543,10 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   directory are named explicitly in `pyproject.toml`; the release workflow
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
-- `--format helm` and `--format docker` refuse a service-virtualization
-  location; `livetest` refuses a chart directory, a docker bundle, a profile
+- `--format helm` and `--format docker` refuse a bundle *configured* for service
+  virtualization — never a location for carrying the funcId, which is #115's
+  whole point, and a location generated `--sv-ingress none` has the chart.
+  `livetest` refuses a chart directory, a docker bundle, a profile
   with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
   re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart
   without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob

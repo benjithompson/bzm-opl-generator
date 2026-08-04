@@ -630,6 +630,13 @@ def generate_zip(g: GenerateIn):
 def generate_save(g: SaveIn):
     """Write the bundle to a directory on this machine, not down to the browser.
 
+    **No caller in this repo since #120**, and deliberately kept: the web UI's
+    Save to folder button went to the CLI (`generate -o`) and the MCP server
+    (`opl_bundle`), both of which are where somebody wanting a directory already
+    is, and this step hands over a zip. What is left is a served HTTP capability
+    with its own tests, for a client that is not this page -- not a control
+    anything on screen reaches. Delete it only with that in mind.
+
     The zip is for handing a bundle to somebody; this is for continuing with it
     here -- the directory it writes (profile.json included) is the same shape
     `opl_bundle generate` produces and `livetest` consumes, so an MCP session

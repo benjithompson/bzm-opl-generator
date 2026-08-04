@@ -36,9 +36,6 @@ import {
 
 export interface ConfigurePanelProps {
   features: Feature[];
-  /** Manual mode's declaration of what the location runs. Connected it is read
-   *  off the account and this is only which card is highlighted. */
-  feature: string | null;
   /** `suggestNs` is passed only where picking is a declaration rather than a
    *  view -- manual entry's radio. See its call site. */
   pickFeature: (id: string, suggestNs?: boolean) => void;

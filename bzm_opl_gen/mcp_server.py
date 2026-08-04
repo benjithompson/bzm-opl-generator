@@ -110,9 +110,11 @@ you have not got one, say so -- do not report a preflight you did not run.
 
 Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
-checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md,
-service-virtualization.md, hardened-engines.md, live-test.md. Read the one that covers the question rather than guessing at an
-option name -- `opl_bundle options` lists them all with a one-line summary each.
+checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md
+and docker.md (the two non-manifest output formats), service-virtualization.md,
+hardened-engines.md, live-test.md. Read the one that covers the question rather
+than guessing at an option name -- `opl_bundle options` lists them all with a
+one-line summary each, and every page this server serves is in `docs`.
 
 OTHER BLAZEMETER MCP SERVERS, IF THIS SESSION HAS THEM
 This server covers the *deployment*: locations, agents, manifests, preflight.
@@ -152,7 +154,7 @@ those happened as `token_source`; read it before you deploy.
 DESCRIPTIONS = {}
 
 # Kept together, unlike the descriptions: what a client is told about
-# side effects is a property of the whole surface, and the five want
+# side effects is a property of the whole surface, and the six want
 # reading against each other rather than one at a time.
 _ANNOTATIONS = {
     "opl_location": ToolAnnotations(read_only_hint=False, destructive_hint=True,
@@ -202,6 +204,8 @@ DOC_SUMMARIES = {
                   "and what breaks if it is wrong.",
     "preflight.md": "Cluster evidence files: what to ask the customer to "
                     "collect, and what each verdict means.",
+    "capacity-planning.md": "Sizing a cluster for a load target, before there "
+                            "is a cluster or an account to ask.",
     "helm.md": "The chart output format, and managing the release afterwards.",
     "docker.md": "The docker output format: one agent as one container on a "
                  "host, and which options reach it.",
@@ -212,8 +216,13 @@ DOC_SUMMARIES = {
                            "have run under it.",
     "live-test.md": "The live rig: what it proves and what it costs.",
     "web-ui.md": "The local web UI, for a human doing this by hand.",
-    "crane-nginx-ingress-port.md": "Why a published mock endpoint 503s, and "
-                                   "the command that fixes it.",
+    # No command on that page fixes anything -- its "Fix" is a patch to crane's
+    # own source, which this audience cannot apply. The workarounds a customer
+    # can actually run are in service-virtualization.md, and the summary has to
+    # say so, or a session reads the wrong page looking for a command.
+    "crane-nginx-ingress-port.md": "The upstream crane defect behind a mock "
+                                   "endpoint that 503s; the workarounds are in "
+                                   "service-virtualization.md.",
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
 }
 

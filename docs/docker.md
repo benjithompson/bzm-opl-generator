@@ -9,7 +9,6 @@ same host, through the socket it is given.
 bzm-opl-gen generate --format docker --auth-token <AUTH_TOKEN> -o out/
 
 # on the host that is to be the private location
-chmod +x out/bzm-opl-agent.sh
 ./out/bzm-opl-agent.sh
 ```
 
@@ -50,7 +49,9 @@ alone missed both.
   not open it nor the flag that would have. Starting engines through that socket
   is the only thing the agent does.
 - **`DOCKER_PORT_RANGE`.** `--net=host` makes an engine's ports the host's
-  ports, and their command always names the range.
+  ports, and their command always names the range. This bundle emits
+  `6000-7000` — 1000 host ports, which must be free on the host and reachable
+  by anything the engines serve.
 
 So when checking this format against BlazeMeter, check it against the **command
 their API returns**, not against the pages describing it.
@@ -134,8 +135,13 @@ Two things differ from the Kubernetes formats, both deliberate:
 - **Service virtualization is not supported.** A docker agent can serve virtual
   services, but it publishes them with `HOSTNAME_OVERRIDE` and a
   `TLS_CERT`/`TLS_KEY` pair, and every `sv_*` option here is a
-  `KUBERNETES_WEB_EXPOSE_*` one. `--format docker` refuses an SV location rather
-  than emitting a command that would install, report idle, and publish nothing.
+  `KUBERNETES_WEB_EXPOSE_*` one. `--format docker` refuses a bundle *configured*
+  for service virtualization — an `sv_ingress` other than none — rather than
+  emitting a command that would install, report idle, and publish nothing. The
+  test is the configuration, not the location: a location that offers mocks but
+  is being generated for performance alone ([declining the
+  feature](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
+  carries no `sv_*` options and docker is available again.
 - **`livetest` does not take a docker bundle.** The rig applies YAML to a
   cluster; this bundle is a shell script and no cluster is involved. It exits
   with that message rather than globbing an empty directory and waiting out its

@@ -73,18 +73,6 @@ class Option:
         needs to be able to send it back."""
         return gen.DEFAULT_OPTIONS[self.name] is None
 
-    def json_schema(self):
-        """The property entry for an MCP tool's input schema.
-
-        `summary`, not `doc`, on purpose -- see the module docstring.
-        """
-        types = [self.type] + (["null"] if self.nullable else [])
-        prop = {"type": types if len(types) > 1 else self.type,
-                "description": self.summary}
-        if self.choices:
-            prop["enum"] = list(self.choices) + ([None] if self.nullable else [])
-        return prop
-
 
 # Section headings for the generated table, in the order they are emitted. The
 # intro is prose the table cannot carry -- a constraint *between* options, which
@@ -500,7 +488,7 @@ OPTIONS = [
 BY_NAME = {o.name: o for o in OPTIONS}
 
 # The words the summary limit is enforced at. Long enough for a real sentence,
-# short enough that all thirty-four together stay a small fraction of an MCP
+# short enough that all thirty-five together stay a small fraction of an MCP
 # session's context -- which is the only reason the limit exists.
 SUMMARY_MAX_WORDS = 20
 

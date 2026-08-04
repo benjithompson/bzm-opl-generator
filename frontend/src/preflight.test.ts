@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CheckStatus, EvidenceSummary, PreflightCheck, PreflightOut } from "./api";
 import {
-  countByStatus, evidenceHeader, imported, NO_PREFLIGHT, readEvidence,
+  evidenceHeader, imported, NO_PREFLIGHT, readEvidence,
   rechecked, refused, STATUS_STYLE, worstStatus,
 } from "./preflight";
 
@@ -38,11 +38,6 @@ const out = (checks: PreflightCheck[],
      summary: "doctor's sentence, served", evidence });
 
 describe("reading the verdict list", () => {
-  it("counts every status, including the ones nothing has", () => {
-    expect(countByStatus(THIN)).toEqual({ PASS: 1, WARN: 3, FAIL: 0 });
-    expect(countByStatus([])).toEqual({ PASS: 0, WARN: 0, FAIL: 0 });
-  });
-
   // The list in one sentence is not here any more: doctor already writes it
   // under its own report, and a second one composed from the same counts is a
   // second place the "a test would not start" rule can be got wrong. It arrives

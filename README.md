@@ -38,8 +38,12 @@ pipx install './bzm_opl_gen-*.whl[ui]'
 bzm-opl-gen ui                              # opens the web UI
 ```
 
+`[ui]` is the web page; `[mcp]` is the MCP server for an AI session
+([docs/mcp.md](docs/mcp.md)), and `[ui,mcp]` installs both. Neither extra changes
+what the CLI does.
+
 `gh release download` with no tag takes the newest release; pass a tag like
-`v0.2.0` to pin an older one. `gh` is what handles the authentication — this
+`v0.1.1` to pin an older one. `gh` is what handles the authentication — this
 repo is private, so a plain `pip install git+https://…` fails for anyone whose
 git credentials aren't already set up for GitHub. No `gh`? Download the `.whl`
 from the Releases page in a browser and `pipx install` it the same way.
@@ -65,8 +69,9 @@ cp examples/api-key.example.json api-key.json   # then fill in id + secret
 ```
 
 `api-key*.json` is gitignored. The key needs read access to the account whose
-location you're generating for, and write access only for the commands that
-create things (`create-location`, `create-ship`, `livetest`).
+location you're generating for, and write access only where something is created
+or changed: `create-location`, `create-ship`, `delete-location`, `livetest`, and
+`generate --rotate-token`, which mints a credential and kills the previous one.
 
 ## Quick start
 
@@ -171,7 +176,7 @@ behind it and whether it settles the option or only narrows it
 | [docs/capacity-planning.md](docs/capacity-planning.md) | `plan` — how much infrastructure a load target needs, and the request document to ask for it with |
 | [docs/mcp.md](docs/mcp.md) | `bzm-opl-gen mcp` — the MCP server, for an AI session with no checkout of this repo |
 | [docs/options.md](docs/options.md) | every `generate` option and profile key |
-| [docs/web-ui.md](docs/web-ui.md) | what each step of `bzm-opl-gen ui` does, and why it binds locally |
+| [docs/web-ui.md](docs/web-ui.md) | `bzm-opl-gen ui`: its two views, what each step does, and why it binds locally |
 | [docs/helm.md](docs/helm.md) | `--format helm`, and managing the release with `helm upgrade` |
 | [docs/docker.md](docs/docker.md) | `--format docker`: one agent as one container, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, which to pick, and `sv-expose` |
@@ -180,14 +185,14 @@ behind it and whether it settles the option or only narrows it
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns, and which images have been observed running under it |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
 | [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor` and `suggest` then read with `--cluster-evidence` |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the two test layers, PR flow, cutting a release |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the test layers, PR flow, cutting a release |
 | [CLAUDE.md](CLAUDE.md) | live-rig internals and the environment trap behind each flag |
 
 ## Contributing
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests -q          # ~1s, no cluster, must end "N passed"
+.venv/bin/pytest tests -q          # ~3s, no cluster, must end "N passed"
 ```
 
 You need no BlazeMeter account to work on the generator — `examples/facts.example.json`

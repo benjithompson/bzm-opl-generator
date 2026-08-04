@@ -667,7 +667,6 @@ def _configmap(facts, o):
             "  AUTO_KUBERNETES_UPDATE: 'false'",
         ]
     if o["proxy"]:
-        p = o["proxy"]
         if _proxy_has_creds(o) and o["use_secret"]:
             lines.append("  # HTTP(S)_PROXY embed credentials -> kept in blazemeter-secret.")
         else:
@@ -1382,8 +1381,9 @@ def _mirror_script(facts, o):
     reg = o["private_registry"].rstrip("/")
     host = reg.split("/")[0]
     # The registry is free-form input from a CLI flag or a text field, and this
-    # is a script somebody runs. Quote every interpolation.
-    q_reg, q_host = shlex.quote(reg), shlex.quote(host)
+    # is a script somebody runs, so every interpolation reaching a *command*
+    # is quoted at the point it is built -- the `mirror` calls below. The rest
+    # of the uses here are comments and `echo` text, which run nothing.
     lines = [
         "#!/usr/bin/env bash",
         f"# Mirror the images this BlazeMeter private location needs into {reg}.",
@@ -2288,7 +2288,6 @@ are where they mean something.
 ## Run it
 {token}
 ```
-chmod +x {DOCKER_RUN_FILE}
 ./{DOCKER_RUN_FILE}
 ```
 

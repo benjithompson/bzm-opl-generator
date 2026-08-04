@@ -147,6 +147,15 @@ export interface Capacity {
  *  one is dead. REUSED: the one already in the folder being saved to. PLACEHOLDER:
  *  none, so the bundle cannot be applied as it stands.
  *
+ *  All four, though no request this page currently sends can produce `reused`:
+ *  `out_dir` is a constant null since Save to folder went to the CLI
+ *  (`generate -o`) and the MCP server. The union tracks what the *server* can
+ *  answer, not what this page happens to ask -- `tokenFromHeaders` casts a raw
+ *  header into it without validating, so a branch dropped here does not stop
+ *  arriving, it only stops having a sentence, and `CARRIES[branch]` renders
+ *  blank beside the button. tests/test_server.py holds the set equal to core's
+ *  for that reason, across two languages neither compiler can see the other of.
+ *
  *  Declared rather than served, for the reason Strength gives below: this set is
  *  closed. A fifth branch is not a list entry, it is a case the page has to grow
  *  a sentence for, and a union is what makes the compiler point at it. */
@@ -298,15 +307,15 @@ export const api = {
    *  looking at manifests may touch the account. `token` says what the bundle
    *  currently carries, which is how the page knows a download would be a
    *  placeholder before anyone clicks it. */
-  /** `outDir` is the folder a save would land in, when one has been typed. It is
-   *  read, never written: a folder already holding this ship's bundle supplies
-   *  its own token, so sending it is what lets the preview say `reused` instead
-   *  of `placeholder`. Without it the page warned "fill it in before applying"
-   *  over a folder whose token the save was about to keep -- which invites a
-   *  rotation nothing needed. */
-  generate: (facts: Facts, options: Options, outDir?: string) =>
+  /** `out_dir` is always null from here, and is sent rather than omitted because
+   *  the server's request model still declares it. It is the folder a save would
+   *  land in, read for the token its predecessor holds -- but this page no
+   *  longer has one to name, the Save to folder button having gone to the CLI
+   *  (`generate -o`) and the MCP server. Writing a bundle into a directory is
+   *  theirs; this page hands over a zip. */
+  generate: (facts: Facts, options: Options) =>
     req<{ files: GeneratedFile[]; token: TokenReport }>("POST", "/api/generate",
-      { facts, options, rotate_token: false, out_dir: outDir ?? null }),
+      { facts, options, rotate_token: false, out_dir: null }),
   /** Size a load target. Reaches no account and no cluster, which is why the
    *  planner panel works with nothing connected -- see core.capacity_plan.
    *  Blank fields are sent as typed; the server reads "" as "not given". */

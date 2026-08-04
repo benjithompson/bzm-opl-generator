@@ -1560,7 +1560,7 @@ export default function App({ api }: { api: Api }) {
           <Section n={2} title="Configure"
             hint="Everything re-renders the preview live.">
             <ConfigurePanel
-              features={features} feature={feature} pickFeature={pickFeature}
+              features={features} pickFeature={pickFeature}
               sourceMode={sourceMode} enabled={enabled}
               locUnclaimed={locUnclaimed}
               options={options} set={set}

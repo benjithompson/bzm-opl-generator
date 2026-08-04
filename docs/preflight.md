@@ -19,22 +19,29 @@ bzm-opl-gen doctor --api-key api-key.json --harbor-id <HARBOR_ID> -n my-project
 It measures against `out/profile.json` — engine size, nodeSelector/tolerations,
 registry, proxy/CA — so it checks the deployment you actually generated.
 
+Every check below is named exactly as `doctor` prints it.
+
 | check | FAIL when | WARN when |
 |---|---|---|
-| location | `slots` or `threadsPerEngine` unset (every start 403s "Not enough available resources") | facts entered by hand: neither is readable without the account, so both are reported unknown rather than failed |
+| cluster evidence *(evidence files only)* | – | some section of the file could not be read; the verdict says when it was collected, for which namespace, and what the script was refused |
+| location slots | `slots` unset (every start 403s "Not enough available resources") | facts entered by hand: not readable without the account, so reported unknown rather than failed |
+| location threadsPerEngine | `threadsPerEngine` unset (same 403) | facts entered by hand, as above |
 | threadsPerEngine vs engine size | – | more threads than the size supports (500 threads is BlazeMeter's own pairing with 2 CPU / 8Gi) |
 | engine heap | `engineXmx` at or above the container limit (OOMKill mid-run, reported as a test that stopped), or a heap too small for `threadsPerEngine` to fill the ramp | a heap far larger than the threads need — every engine pod reserves memory the JVM cannot address; or `engineXmx`/`threadsPerEngine` unknown, so the comparison could not be made |
 | crane pool | split pools and no Ready node matches crane's own selector — the agent has nowhere to run | no crane-pool node holds crane's full 1 CPU / 2Gi, so it schedules on its 250m request and throttles when busy |
 | engine packing | – | a node would accept more engines than it can run at their limits — engines sharing a node throttle against each other and the run reports the load generator's latency |
+| capacity: eligible nodes | no Ready, schedulable node matches the engines' node selector — engines have nowhere to run | none matches *and* a dedicated engine pool is configured: expected between runs (a pool at min-nodes 0 has none until a test asks), but indistinguishable from a pool that was never created |
 | capacity: per-node fit | no eligible node holds **one** engine — a pod cannot be split across nodes | – |
 | capacity: aggregate | eligible nodes can't hold `slots ×` engine | the nodes could not be read at all; or a dedicated engine pool currently has no nodes, which is expected between runs and indistinguishable from a pool that was never created |
 | node disk | – | short of the documented 60GB (40GB `/tmp`) per engine — an engine that fills it is evicted mid-run |
 | limitrange | an existing `max` below the engine size (LimitRanger rejects the pod at admission) | existing defaults conflict with the engine size; none exists and none is emitted; or they could not be read |
-| resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | a cpu/memory quota is in force with nothing supplying pod defaults, or the quotas could not be read |
-| admission | `pod-security…/enforce=restricted` on `platform: k8s` — crane passes, but the engine pods it spawns get the security-context envs only on the openshift path | no PSA label; OpenShift namespace with no `sa.scc.uid-range` |
+| resourcequota | `hard − used` can't fit `slots ×` engine, or `pods` can't fit slots + crane | the quotas could not be read |
+| quota defaults | – | a cpu/memory ResourceQuota is in force and there is no LimitRange: every pod must then declare requests and limits, and crane sets none on the job pods it spawns |
+| admission (PodSecurity) | `pod-security…/enforce=restricted` **with `restrict_engines` off** — crane passes, but the engine pods it spawns keep crane's privileged default and are rejected after the agent is already online, so runs hang rather than fail | no PSA label at all (nothing is enforced, so nothing was proved) |
+| admission (SCC) | – | OpenShift namespace with no `sa.scc.uid-range` |
 | service account | `service_account_create: false` and no ServiceAccount of that name in the namespace — the Deployment applies and no pod is ever created, the reason being an event on the ReplicaSet | the namespace's ServiceAccounts could not be read, so the name is unverified |
 | sv ingress class | `sv_ingress: nginx` with no IngressClass named `nginx` — crane hardcodes that name, so nothing claims the Ingress and the published endpoint 503s while the virtual service is healthy ([details](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)) | the IngressClasses could not be read |
-| egress | `a.blazemeter.com` (or the private registry) unreachable from the namespace | it could not be probed at all |
+| egress *(one check per target)* | any of `a.blazemeter.com`, `data.blazemeter.com`, `storage.blazemeter.com` — plus the private registry when one is set — unreachable from the namespace | that target could not be probed with the profile's proxy/CA honoured; or nothing was probed at all (an evidence file cannot carry a probe: it takes a pod in the namespace, and a collector must not create one) |
 
 Exit status is non-zero on any FAIL. Egress is probed from the crane pod when
 it is deployed — the only place the profile's proxy env and CA bundle are

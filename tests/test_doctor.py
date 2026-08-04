@@ -7,7 +7,6 @@ file runs with no cluster and no network: the fixtures below are what
 
 import ast
 import inspect
-import json
 import os
 import sys
 import textwrap
@@ -299,8 +298,8 @@ def test_the_model_reproduces_the_documented_point_exactly():
     It proves nothing about those numbers being right: 2 CPU / 8Gi is a floor
     chosen so things work consistently everywhere, not a measurement, so this
     pins a safety margin of unknown size rather than a requirement. Getting
-    below it needs observed usage (#89), and until then every value the model
-    produces is a defensible upper bound."""
+    below it needs observed usage nobody has collected (#125), and until then every
+    value the model produces is a defensible upper bound."""
     assert doctor.engine_heap_mb(500) == 4096
     assert doctor.engine_container_mb(4096) == 8192
 

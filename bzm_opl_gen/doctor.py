@@ -621,9 +621,9 @@ MB = 1024 ** 2
 # -- which is the right *default* to ship, because it cannot be less safe than
 # what the vendor already tells people to run. It is also why the numbers here
 # cannot deliver an optimised cluster on their own. Getting below the vendor's
-# margin needs observed usage, which is what the calibration loop in #89 is for;
-# until that exists, treat every value this produces as an upper bound that
-# happens to be defensible, not as a measured requirement.
+# margin needs observed usage from a calibration loop, which does not exist (#125);
+# until it does, treat every value this produces as an upper bound that happens
+# to be defensible, not as a measured requirement.
 #
 # Anyone revising these should record what they measured, on what, right here.
 HEAP_MB_PER_THREAD = 8.192
@@ -653,7 +653,7 @@ CONTAINER_HEAP_RATIO = 2.0
 # threads. So `threads * HEAP_MB_PER_THREAD` has the wrong shape -- it is a
 # large constant with a small per-thread term, and this "floor" is doing nearly
 # all the work across the range anyone runs. Restructuring it needs more than
-# two thread counts on one script against one target; see #89.
+# two thread counts on one script against one target; see #125.
 #
 # **Above the floor, more memory buys nothing.** 3072 and 4096 are
 # indistinguishable (61,348 vs 61,139 samples). It is a knee, not a slope, so
@@ -764,7 +764,7 @@ def check_engine_heap(facts, opts, cluster):
                       f"Treat the figure as indicative: it comes from a "
                       f"per-thread model that measured *flat* between 50 and 300 "
                       f"threads, so what this load actually needs above that "
-                      f"range is unverified (#89)")]
+                      f"range is unverified")]
     if xmx > want_heap * 1.5:
         return [Check("engine heap", WARN,
                       f"{pair}: that load needs only about {want_heap}MB of heap, "

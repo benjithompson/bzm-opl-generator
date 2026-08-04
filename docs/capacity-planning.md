@@ -11,10 +11,11 @@ bzm-opl-gen plan --users 5000
 ```
 5,000 virtual users at 500 per engine  (assumed -- what an engine this size is rated for)
   10 engines of 2 CPU / 8Gi / 60GB disk
-  10 node(s) of 3 vCPU / 10Gi capacity, at 1 engine(s) each
-  peak 30 vCPU / 100Gi across the pool; 0 between runs
+  10 engines per agent across 1 agent(s) -- the location's slots
+  10 node(s) per agent of 3 vCPU / 10Gi capacity, at 1 engine(s) each
+  peak 30 vCPU / 100Gi per agent's cluster; 0 between runs
   agent: 1 small always-on node (1 CPU / 2Gi)
-  location: slots=10 (concurrent engines), threadsPerEngine=500 (virtual users per engine),
+  location: slots=10 (engines per agent), threadsPerEngine=500 (virtual users per engine),
             overrideCPU=2, overrideMemory=8192
 ```
 
@@ -122,19 +123,21 @@ a measured run ends there — the engine count and virtual users per engine
 change, and neither is in a manifest. This page's own view is for the location
 that does not exist yet.
 
-In the web UI, **Plan capacity** in the header is the same calculator, and
-*Use this plan* fills in the location's slots and threads per engine and the
-bundle's engine size. It writes nothing to BlazeMeter: `overrideCPU` and
-`overrideMemory` are fields of the account, and this tool does not set them for
-you.
+In the web UI the same calculator is the **first card of step 1** (*Capacity
+profile*), not a view of its own: it needs no account, and that is a reason to be
+first rather than elsewhere. Edit expands it, and the profile *fills* the
+location draft — the fields stay editable, and a hand edit outranks later profile
+changes until Reset. Sizing a profile writes nothing to BlazeMeter by itself.
+Applying those numbers to a real location is a separate, explicit write (the
+location settings panel), and it does cover `overrideCPU` and `overrideMemory`.
 
 ## Where else it is
 
-- **Web UI** — the *Plan capacity* view, reachable before connecting anything
-  ([web-ui.md](web-ui.md)).
+- **Web UI** — the *Capacity profile* card at the top of step 1, usable before
+  connecting anything ([web-ui.md](web-ui.md)).
 - **MCP** — `opl_plan capacity {users, vus_per_engine?, engine_cpu?,
-  engine_mem?, engines_per_node?}`, which returns the numbers and the document
-  together ([mcp.md](mcp.md)).
+  engine_mem?, engines_per_node?, agents?}`, which returns the numbers and the
+  document together ([mcp.md](mcp.md)).
 
 ## What it deliberately does not do
 

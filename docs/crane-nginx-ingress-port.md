@@ -58,7 +58,7 @@ wrong in an Ingress.
 ## Repro — 5 minutes, no BlazeMeter account
 
 ```
-kubectl apply -f nginx-ingress-port.yaml
+kubectl apply -f docs/repro/nginx-ingress-port.yaml
 kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller 18080:80 &
 for h in crane fixed bogus; do
   printf '%-6s %s\n' "$h" "$(curl -s -o /dev/null -w '%{http_code}' \

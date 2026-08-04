@@ -81,10 +81,19 @@ jobs:
           expected = {f for f in os.listdir("docs") if f.endswith(".md")}
           if expected - shipped:
               sys.exit(f"{whl} is missing docs: {sorted(expected - shipped)}")
+          # docs/repro/ is its own package for the same reason and needs its
+          # own assertion: three shipped pages tell the reader to `kubectl
+          # apply -f` one of these, and the audience that reads them from a
+          # wheel is the one with no checkout to fall back on.
+          repro = {n.split("/")[-1] for n in names
+                   if n.startswith("bzm_opl_gen/docs/repro/") and n.endswith(".yaml")}
+          want = {f for f in os.listdir("docs/repro") if f.endswith(".yaml")}
+          if want - repro:
+              sys.exit(f"{whl} is missing repro files: {sorted(want - repro)}")
           if missing:
               sys.exit(f"{whl} is missing: {missing}")
           print(f"{whl}: {len(names)} entries, {len(shipped)} docs, "
-                f"package data present")
+                f"{len(repro)} repro files, package data present")
           PY
 
       # Notes come from CHANGELOG.md, not from commit subjects: they are for

@@ -582,7 +582,6 @@ interface Sent {
   facts: Facts;
   options: Options;
   credential: TokenRequest;
-  outDir?: string;
 }
 
 /** The bundle route, recording what left and answering as the server would --

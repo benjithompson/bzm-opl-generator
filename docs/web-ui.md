@@ -7,106 +7,99 @@ bzm-opl-gen ui          # opens http://127.0.0.1:8765
 Installed from the release wheel with the `[ui]` extra (see the
 [README](../README.md#install)); from a checkout, `pip install -e ".[ui]"`.
 
-Two views, chosen in the header. **Plan capacity** sizes a load target — how
-many engines a number of virtual users needs, how many nodes those engines need,
-the machine size, and a request document to send to whoever provisions the
-cluster — and reaches nothing at all, so it works with no key, no account and no
-cluster ([capacity-planning.md](capacity-planning.md)). It is not a step for
-that reason: everything the first step asks for is what somebody sizing a
-cluster has not got yet. *Use this plan* carries its numbers into **Generate** —
-the location's concurrent engines and virtual users per engine, and the bundle's
-engine size — and writes nothing to BlazeMeter.
+Two views, in a drawer down the left that collapses to a rail: **Generate**, the
+three steps below, and **Account capacity**, the account's rated virtual users
+rolled up by workspace, which is out of reach without a key and says which
+control fixes that.
 
-**Generate** is the three steps, one on screen at a time, with the stepper and Back/Next in one bar
-at the top: **Agent details** — either connect (key stays local) and pick or
-create a location & agent, or enter the harbor id, ship id and token by hand →
-**Configure** → **Download & verify**, which is also where you watch the agent
-flip online. The manifests are a **Preview** tab beside Configure rather than a
-column, so the form has the page's full width; the count on the tab says how
-many files the current options produce. Profile JSON import/export round-trips
-with `generate --profile`.
+The key, the account and the workspace live together at the foot of that drawer.
+All three last the session while a location and an agent are chosen per bundle,
+and three separate things read the account — connecting used to be the first
+section of step 1, which put "which API key am I using" inside "which agent am I
+generating for".
 
-Next is greyed until the step is finished, and says what is missing rather than
-leaving you to find it: a step that is complete only because everything has a
-default, and that you have not opened, reads *ready — nothing required* rather
-than showing a tick.
+**Generate** is three steps, one on screen at a time, with the stepper and
+Back/Next in one bar at the top: **Capacity & agent** → **Configure** →
+**Download & verify**. The step scrolls inside itself and the page does not
+scroll at all, so what is unfinished and what is next cannot be pushed off the
+bottom by a long step. Next is greyed until the step is finished and says what is
+missing rather than leaving you to find it; a step is ticked only once you have
+opened it, because everything on step 2 has a default and a tick on a step nobody
+has looked at claims something that did not happen.
 
-**Save to folder** writes the same bundle (profile.json included) to a
-directory on the machine running the server, instead of a browser download.
-That directory is the shape `bzm-opl-gen livetest` re-renders from and an MCP
-session's `opl_bundle` reads, so it is the handoff between the UI and both:
-configure here, then `kubectl apply` / livetest / ask an AI session to carry
-on from the same folder. Saving into a folder that already holds this ship's
-bundle reuses the token already there, so a re-render with one option changed is
-the same bytes and leaves the deployed agent alone.
-
-**Test deploy**, beside the evidence-file picker under *Preflight the target
-cluster*, hands over crane-hook as a manifest to apply to the cluster under
-test: the same Pod, Role and RoleBinding the bundle would carry, rendered for
-the namespace and registry currently configured. It does not turn the option on
-— applying the check and shipping it inside the agent's bundle are different
-decisions, and this is the one you make before deploying anything. There is no
-chart to fetch: crane-hook publishes an image, packaged as a `helm test` hook
-inside the separate [helm-crane](https://github.com/Blazemeter/helm-crane/releases)
-chart, and documents a manifest as the standalone way to run it.
-
-**Cluster check (crane-hook)** under *Deployment settings* adds
-[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
-Pod, plus its own read-only Role and RoleBinding, that checks node capacity,
-egress, RBAC and — for service virtualization — the ingress and its TLS secret,
-then exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
-report, and deleting it changes nothing. In a Helm bundle it is the chart's
-`helm test` hook instead. This is a different thing from **Preflight the target
-cluster** below the download button, which needs no cluster access at all — see
-[Preflight](preflight.md).
+The manifests are in a second drawer, on the right, which pushes the form over
+rather than covering it — a sticky column cost the form half its width for the
+whole session, tabs made it one thing at a time, and a slide-over that closed on
+any click outside meant re-opening it for every field you checked. Closed it is a
+rail carrying the file count, which is what says a bundle exists while it is out
+of sight.
 
 Under the step, and outside its scroller so it does not move, is the summary
-line: which location and which agent everything is being generated for, and
-"none yet" in amber where one is missing. It stays as the steps change, because
-that is a question you have in step 2 and step 3 as much as in step 1.
+line: account › workspace › location › agent, with "none yet" in amber where one
+is missing. It stays as the steps change, because that is a question you have in
+step 2 and step 3 as much as in step 1.
 
-Step 1's three sections — **Connect**, **Private location**, **Agent (ship)** —
-are bordered panels that fold. The header is the control: a chevron on its left
-points right when closed and down when open, and the bar tints under the
-pointer. They open on whichever section the step has reached until you pin a
-different one, and a folded one carries its state on the header (who you are
-connected as, which location, which agent), so nothing has to be opened to find
-out whether it needed opening.
+## Step 1 — Capacity & agent
+
+**The capacity profile is the first card**, above the locations the run might go
+to. It sizes the load — a virtual user target, virtual users per engine, the
+engine size, how many engines a node holds — and answers in engines, nodes and
+peak vCPU, with the request document to raise the infrastructure ticket with, to
+download, copy or read here ([capacity-planning.md](capacity-planning.md)).
+*Edit* opens it downward; the summary line stays put.
+
+It reaches nothing — no key, no account, no cluster — which is why it renders on
+a page nobody has connected, and why it is *first* rather than a view of its own:
+the planner asks the first question and the generator the last, and side by side
+in the drawer the first read as an alternative to the second, with its answer to
+be carried across by hand. It has no *agents* field on purpose: on Kubernetes an
+agent is a cluster, so you raise `slots` and let the node pool scale. The engine
+size it plans against is the bundle's own option rather than a copy of one, so
+the profile and the manifests cannot drift apart.
+
+Under it, where the harbor id, ship id and token come from: **Connect to
+BlazeMeter**, or **Enter values manually** for an account nobody here can reach.
+Connected, the two sections — **Private location** and **Agent (ship)** — are
+bordered panels that fold, opening on whichever the step has reached until you
+pin a different one. A folded one carries its state on the header, so nothing has
+to be opened to find out whether it needed opening. Each ends in a **Confirm**,
+because a lone agent is auto-picked and without one the step could complete
+itself — leaving the one screen that names what the bundle is for never seen.
+
+A location with no agents says so on its row and again in the panel: an empty
+location is not broken, it just has nothing deployed to it, and the first agent
+has to be created. Choosing an agent expands its row to hold that agent's
+credential and the regenerate control; only one row is open at a time. Reusing an
+identity that is already running somewhere conflicts with that install, and the
+row says so.
 
 The account tree — accounts, workspaces, locations and an agent's facts — is
 **remembered for 60 seconds** by the server, so reloading the page costs one
 local round trip rather than four to BlazeMeter (2.5s on a small account; the
 location list alone is 1.3s on one holding 171). Anything this server writes —
-creating a location or an agent, changing a location's settings, enabling a
-feature, or connecting a different key — drops the cache immediately, so your
-own changes are never the stale ones. An agent's heartbeat is never cached: the
+creating a location or an agent, changing a location's settings, regenerating a
+token, or connecting a different key — drops the cache immediately, so your own
+changes are never the stale ones. An agent's heartbeat is never cached: the
 status poll is what says an agent came online.
 
 ### Changing a location after it exists
 
-Selecting a location expands it, the way an agent row does, and its settings are
-inside: **concurrent engines** (`slots`), **virtual users per engine**
-(`threadsPerEngine`) and the engine's CPU and memory **requests**
-(`overrideCPU` / `overrideMemory`). They open out of the location rather than
-sitting under the list, because they belong to the one that is selected and to
-nothing else. The case is the correction rather than the setup — a location
-built for 500 virtual users an engine that a real run says should be 1,000.
+Selecting a location expands it, and what the capacity profile would change about
+it is inside, as a before → after against what the account holds: **engines per
+agent** (`slots`), **virtual users per engine** (`threadsPerEngine`) and the
+engine's CPU and memory **requests** (`overrideCPU` / `overrideMemory`). They
+open out of the location rather than sitting under the list, because they belong
+to the one that is selected and to nothing else. The case is the correction
+rather than the setup — a location built for 500 virtual users an engine that a
+real run says should be 1,000.
 
-**Calculate**, beside the settings heading, sizes that location from a virtual
-user target. It starts from what the location already says — its virtual users
-per engine, its engine size — so the first thing it shows is what the location
-as it stands would cost: 5,000 virtual users at 50 an engine is 100 engines and
-100 nodes, which is the argument for raising the figure rather than the pool.
-It answers in engines, **nodes** and peak vCPU, flags the users-per-engine
-figure as an assumption when nothing supplied one, and *Apply* fills the fields
-above. It also asks how many **agents** will serve the location, defaulting to
-the number it has: `slots` is engines per *agent*, so the run divides across
-them and each agent's cluster only has to hold its share. Applying is not saving: the location is untouched until **Save**, which
-is still the only control that writes.
-
-The standalone **Plan capacity** view remains, and is the one for a location
-that does not exist yet — no account, no cluster, and a request document to
-raise the infrastructure ticket with ([capacity-planning.md](capacity-planning.md)).
+There is no calculator in here and no *Apply*: the profile above fills these
+fields and they stay editable. A calculator of its own was a third place the same
+four numbers were worked out, and filling a field applies nothing, so a button to
+do it sat between the profile and the only control here that costs anything.
+**Save** is that control, and nothing in this panel reaches the account without
+it. `slots` is engines per *agent*, so a location's concurrency is agents ×
+slots, and the row divides the profile by the number of agents this location has.
 
 None of those four values is in a manifest, so changing one needs no
 regenerate, no re-apply and no restart; it applies to the next test that
@@ -122,37 +115,37 @@ offered: blank means "leave this one alone", and the two are different intents.
 
 ### The AUTH_TOKEN, and where it comes from
 
-**Nothing on this page issues a credential except creating an agent.** Asking
-BlazeMeter for a token *mints* one and the previous one dies with the request, so
-the download button used to break the install it was being downloaded for: crane
-answers a dead token with `404`, logs `Sleeping for 300`, never starts its health
-service, and the pod sits `0/1 Running` looking like a slow boot. Downloading and
-saving now mint nothing, and each says which of four ways its bundle got a token
-(as entered · newly issued · reused from that folder · placeholder).
+**The two controls that issue a credential are the two that say so**: creating an
+agent, and *Regenerate token* in that agent's row. Asking BlazeMeter for a token
+*mints* one and the previous one dies with the request, so the download button
+used to break the install it was being downloaded for: crane answers a dead token
+with `404`, logs `Sleeping for 300`, never starts its health service, and the pod
+sits `0/1 Running` looking like a slow boot. Downloading now mints nothing, and
+says which of two ways its bundle got its token — as entered, or the placeholder.
 
 - **Creating an agent captures its token**, in a masked field with a *Show*
   toggle. That is the one moment issuing one is free — a new ship has no previous
   credential to invalidate — and the bundle you download is the copy to keep, as
   you would what `create-ship` prints.
 - **A token this app minted comes back after a refresh**, silently and with
-  nothing typed. The two moments it is ever shown one — creating an agent, and
-  Regenerate — are its own writes, so the server keeps what it handed over: in
-  memory, for that agent, until you disconnect or the server restarts. Nothing
-  is written to disk and nothing to browser storage. A token you **paste**
-  yourself wins for that agent and drops the remembered one, so it is not
-  quietly replaced on the next load — and it is gone with the page, because a
+  nothing typed: both moments it is ever shown one are its own writes, so the
+  server keeps what it handed over, in memory, for that agent, until you
+  disconnect or it restarts. Nothing is written to disk or to browser storage. A
+  token you **paste** wins for that agent and drops the remembered one, so it is
+  not quietly replaced on the next load — and it is gone with the page, because a
   pasted value is not one this app can offer back.
 - **Pointing at an agent this app did not create leaves the field empty**,
-  because no API reads an existing token back, and it says so. Paste what you
-  kept — or press **Regenerate token** in that agent's own row, which arms to
-  *I'm sure* (beside a *Cancel*) and names, before it issues anything, the agent
-  whose credential it kills and what that looks like when it happens. The new
-  token lands in the field above the button, and the download then carries it
-  rather than issuing a second one.
+  because no API reads an existing token back — and it says which of the two that
+  is: an agent this app minted nothing for, or one its store could not be asked
+  about. Paste what you kept, or press **Regenerate token** in that agent's own
+  row, which arms to *I'm sure* (beside a *Cancel*) and names, before it issues
+  anything, the agent whose credential it kills. The new token lands in the field
+  above the button, and the download carries it rather than issuing a second one.
 - **A download with neither is a placeholder bundle**, which is a fine thing to
-  read and an unusable thing to apply, so the page says so over the button and
-  names both places a real token comes from — including the `kubectl … get secret`
-  for an agent already deployed. That command is printed, never run.
+  read and an unusable thing to apply. The download step says exactly that over
+  the button, in one line: where a token comes from is step 1's question, and a
+  page of recovery instructions under a download button answers one nobody has
+  asked yet.
 
 The field is masked because this is the one place the change makes a token *more*
 visible: it now sits on a page rather than streaming into a zip. Masking is not
@@ -162,78 +155,83 @@ namespace can read the Secret — it is about a screen share and a screenshot.
 **A refresh does not disconnect you.** The API key lives in the server process,
 not in the browser, so reloading the page never actually dropped the
 connection — the page simply forgot. It now asks on load, and puts back the
-account, workspace, location, agent, step and options it was pointed at. Each
-selection is re-applied only once the account has confirmed it still exists, so
-a location deleted since the last load comes back as nothing rather than as an
-id the page believes. **The AUTH_TOKEN is never written to browser storage** —
-see `session.strip` — because browser storage is a file in the browser's
-profile. What comes back instead is what the *server* minted, from its own
-memory, for the agent it minted it for; a restart forgets it, and so does
+account, workspace, location, agent, step and options it was pointed at, plus
+what a manual session declared its identity to be and the preflight it had
+imported. Each selection is re-applied only once the account has confirmed it
+still exists, so a location deleted since the last load comes back as nothing
+rather than as an id the page believes. **The AUTH_TOKEN is never written to
+browser storage** — see `session.strip` — because browser storage is a file in
+the browser's profile. What comes back instead is what the *server* minted, from
+its own memory, for the agent it minted it for; a restart forgets it, and so does
 disconnecting.
 
-**The Connect button becomes the Disconnect button.** The key form stays where
-it is — the paste fields, the `api-key.json` path, Browse, *Remember this key* —
-and shows, greyed, the key that is in use; connecting and disconnecting change
-what the controls say, never where they are. One Connect for both ways in: a
-pasted id and secret if there is one, the file otherwise — the pasted pair is
-the deliberate act, so it wins. The path is prefilled from a key detected on
-this machine, which is why the paste fields fold away above it. Disconnect makes the server forget
-the key and clears everything read with it; a key you asked to save stays on
-disk, so reconnecting is one click. Without it, a key pasted by mistake — or the
-wrong account — cost a server restart.
+**The key is a menu at the foot of the drawer**: it states the key in use, holds
+the account and workspace pickers, and offers *Connect…* — *Use a different key…*
+once there is one — and *Disconnect*. The form itself is a modal, because
+connecting is a question being asked rather than a panel to work in. One Connect
+for both ways in: a pasted id and secret if there is one, the file otherwise, the
+pasted pair being the deliberate act. The path is prefilled from a key detected
+on this machine, which is why the paste fields fold away above it. Disconnect
+makes the server forget the key and clears everything read with it; a key you
+asked to save stays on disk, so reconnecting is one click. Without it, a key
+pasted by mistake — or the wrong account — cost a server restart.
 
-**Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
-writes a LaunchAgent that serves the UI from login onward with whatever
-`--port`/`--host`/`--api-key` you gave it, restarts it if it dies, and logs to
-`~/Library/Logs/bzm-opl-gen-ui.log`. `--uninstall-service` removes it. The
-agent runs the python that installed it, so rebuilding or moving the venv
-means reinstalling the service. Not docker, deliberately: the point of saving
-bundles is that `kubectl` on this machine can apply them, and a container
-puts a filesystem boundary exactly there.
+## Step 2 — Configure
 
-Frontend dev:
-`cd frontend && npm install && npm run dev` (proxies /api to :8765); `npm run
-build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`, and `npm test`
-runs the logic suites CI runs as its own job — the option groups and the
-preflight panel, both plain data in and data out, neither rendering anything.
+**The format is the first control, and the form follows it.** A docker bundle is
+one agent as one container on a host: no namespace, no ServiceAccount, no node
+selectors, no engine limits — around two dozen options reach nothing in it. The
+choice used to be made on the download step, one step too late, with the
+generated README the only thing that said so. What is on screen is derived from
+the generator's own table, served as `/api/docker-ignored` and never restated
+here: a key added to the generator would otherwise go on being offered for a
+format that drops it. Hiding is not refusing — the value is kept, sent, and named
+in the bundle's README — and where a hidden field needs explaining, the page
+renders the generator's reason rather than a second copy of it.
 
-**Namespace and service account are always on screen**, under *Deployment
-settings*: every deployment has both, and both are always sent.
+A format the configuration rules out is disabled with the reason on it: helm and
+docker carry no ingress, so neither can serve service virtualization. And a
+format you picked is never replaced in silence — where a configuration forces
+Kubernetes manifests, the panel says which format it replaced, and how to get
+back to it, until you pick one again. A configuration somebody wrote outranks a
+segment.
+
+**Two kinds of option — a feature's own, and every deployment's — and nothing is
+hidden between them.** *Deployment features* is one card per feature, each marked
+`Enabled` or `Not enabled` from the location's own funcIds, holding the options
+only that feature has. *Placement* is the
+namespace and the service account — its own section because it is the part a
+docker bundle does not have at all, and a section that comes and goes has to be
+one. *Agent settings* is everything every deployment gets: registry, proxy, CA
+trust, scheduling, security, the cluster check, and Advanced. A rail down the
+left names what is set in each, off the same groups the cards show, so what the
+bundle contains is answerable without scrolling the form.
+
 The service account's **Create it** checkbox is the only thing that decides
 whether the bundle carries the ServiceAccount object — the name is what the
 Deployment runs as and what the RoleBinding grants to either way, so a customer
 who must run under an account their platform team owns unchecks it and types
 that name. The name itself is required, and an empty one blocks the download.
 
-**Everything is on screen at once, in two sections.** *Deployment features* is
-one card per feature — each marked `Enabled` or `Not enabled` from the
-location's own funcIds — holding the options only that feature has. *Deployment
-settings* is everything every deployment gets: namespace, service account,
-registry, proxy, CA trust, scheduling, security, the cluster check, and
-Advanced. A rail down the left names what is set in each, so what the bundle
-contains is answerable without scrolling the form.
+**A feature the location does not run is stated, never configured.** The card
+says so and names the funcId to add in BlazeMeter (Settings → Private Locations),
+and that feature's options leave the page — cleared, not just hidden, because
+`generate` refuses an `sv_ingress` with no subdomain whatever the location runs,
+so a hidden row would only move the blocker to the server. Turning a funcId on
+was offered here once and is not any more: it changes what the location *is*,
+which is BlazeMeter's own UI's to do, unlike this page's two writes to an agent's
+credential and a location's concurrency. A card can be silent for the other
+reason too — this *format* cannot serve that feature — and the two answers are
+kept apart, because they have different remedies.
 
-There used to be a feature *selector* switching between two views of the same
-groups. Nothing is hidden now, so nothing has to be handed back: no "also in
-this bundle", no "not in view". A group that is unfinished blocks the download
-and the download step offers the way back to it.
-
-A feature the location does **not** run has its options greyed, and touching one
-asks *Enable it and configure it here?* — answering yes adds that feature's
-funcId to the location in BlazeMeter, because an agent is only ever asked to
-serve what its location says it runs. The feature list is served, so it grows
-without a UI release, and a location carrying funcIds no feature claims says so
-rather than hiding them.
-
-**A location holds agents**, and step 1 is built around that: a path line naming
-both (`LOCATION x › AGENT y`), the two lists styled alike because they are the
-same kind of choice, and *New location* / *New agent identity* above their lists
-rather than under them. A location with no agents says so on its row and again
-in the panel — an empty location is not broken, it just has nothing deployed to
-it, and the first agent has to be created. Choosing an agent expands its row to
-hold that agent's credential and the regenerate control; only one row is open at
-a time. Reusing an identity that is already running somewhere conflicts with
-that install, and the row says so.
+**In manual entry the feature is not a view of the options, it is the
+declaration.** With no account to read funcIds off, that card's radio is what
+says whether the typed identity is a performance agent or a
+service-virtualization one, which decides the funcId, the images the bundle
+carries and the namespace suggested for it. It is in the session snapshot for
+that reason: a refresh used to bring an SV identity back as a performance one,
+clearing its options on the way and rewriting the namespace generated into every
+manifest.
 
 A location carrying `mockServices` shows **Service virtualization** enabled with
 its group marked *required*, because a bundle without an ingress stalls at
@@ -251,25 +249,49 @@ endpoint host to check once it is applied — the same facts as
 [Service virtualization](service-virtualization.md), against the namespace and
 domain actually configured.
 
-While watching the agent, an SV deployment lists the virtual services deployed
-in the namespace, the endpoint host each publishes, and a check for whether that
-host actually answers. That is the part the heartbeat cannot tell you: the agent
-reports idle whether or not any of them became reachable, so a deploy stalled at
-`WAITING_FOR_DOMAIN` reads as healthy until you look at the hosts. A **503**
-there is the diagnosis, not a failed check — it is this cluster refusing crane's
-port reference, and [`sv-expose`](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)
-is the fix. A probe that gets no status line says which kind it was: the host did
-not resolve, nothing accepted the connection, the TLS handshake failed, or
-nothing replied in time.
+**Cluster check (crane-hook)** under *Agent settings* adds
+[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
+Pod, plus its own read-only Role and RoleBinding, that checks capacity, egress,
+RBAC and — for service virtualization — the ingress and its TLS secret, then
+exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
+report, and deleting it changes nothing. In a Helm bundle it is the chart's
+`helm test` hook. This is a different thing from *Preflight the target cluster*
+on the next step, which needs no cluster access at all — see
+[Preflight](preflight.md).
 
-**Preflight a cluster from a file.** Under Download & verify, pick the JSON
+Profile JSON **Export** / **Import**, at the top of this step, round-trips with
+`generate --profile`.
+
+## Step 3 — Download & verify
+
+**Download bundle (.zip)**, and beside it what this bundle holds. A group left
+unfinished blocks the download, is named here, and gets a button back to it — a
+disabled button whose cause is a step away is the failure that is here to be
+removed. A bundle carrying the placeholder AUTH_TOKEN says so over the button.
+
+**Test deploy**, above the evidence-file picker under *Preflight the target
+cluster*, hands over crane-hook as a manifest to apply to the cluster under test:
+the same Pod, Role and RoleBinding the bundle would carry, rendered for the
+namespace and registry currently configured. Above rather than beside it, because
+it comes first in time — this is what you run *on* the cluster, and the evidence
+file is what comes back from it. It does not turn the option on: applying the
+check and shipping it inside the agent's bundle are different decisions, and this
+is the one you make before deploying anything. There is no chart to fetch —
+crane-hook publishes an image, packaged as a `helm test` hook inside the separate
+[helm-crane](https://github.com/Blazemeter/helm-crane/releases) chart, and
+documents a manifest as the standalone way to run it.
+
+**Preflight a cluster from a file.** Pick the JSON
 [`scripts/bzm-cluster-evidence.sh`](preflight.md#a-cluster-you-cannot-reach)
 wrote on a machine with cluster access, and the page shows the verdicts
 `bzm-opl-gen doctor` reaches — PASS, WARN or FAIL each on its own row — against
 the configuration currently on screen. Editing an option re-runs them, so the
 list always describes what is configured rather than what was when the file was
 picked. It needs no API key and no kubecontext, which is the point: the same
-person who cannot reach the account usually cannot reach the cluster either.
+person who cannot reach the account usually cannot reach the cluster either. A
+docker bundle gets none of this and says so rather than dropping the block —
+every check `doctor` runs is about a cluster, and what that bundle needs of its
+host is in the README it ships with.
 
 The panel header states what was imported before any of it: the file name, when
 it was collected, the namespace the file *describes*, the namespace being
@@ -281,6 +303,13 @@ its first row, because every verdict under it is only as good as they are. A
 thin file is a page of warnings with a reason attached, never a clean bill of
 health. A file that is not evidence, or carries a schema this version does not
 know, is refused by name and leaves the verdicts already on screen standing.
+
+**A restored answer says that it is one.** The verdicts and the suggestions
+survive a refresh; the evidence document itself does not, because it grows with
+the cluster — 615KB at 60 nodes — where the answer stays flat. So after a reload
+they have stopped following the configuration, and the header says so and asks
+for the file again. Left unsaid, the failure is a verdict list that looks live
+while quietly describing the namespace and engine size of an earlier page load.
 
 ### Applying what the cluster implies
 
@@ -298,7 +327,9 @@ router's wildcard domain by hand.
   disagrees with it the row turns amber and shows both values, and the button
   says *Replace* rather than *Apply*.
 - **Applying is reversible for the session.** Each applied row grows an *Undo*
-  that puts the previous value back without you re-entering it.
+  that puts the previous value back without you re-entering it — which is half
+  the reason a restored answer is kept at all: the undo is a button on a
+  suggestion row, so verdicts dropped on reload would take it with them.
 - An option no row names is not in this file. It is left exactly as you set it,
   and nothing here has checked it.
 
@@ -306,12 +337,47 @@ An applied value is an ordinary option from there on: the preview, the bundle
 and `profile.json` are identical to what you get typing it in the form, and
 nothing downstream can tell the difference.
 
+**Watch agent status** polls every ten seconds and goes green once the applied
+deployment heartbeats. It needs an API key, so a manual session says so — and
+points at Settings → Private Locations in BlazeMeter — rather than showing a dead
+switch.
+
+While watching, an SV deployment lists the virtual services deployed in the
+namespace, the endpoint host each publishes, and a check for whether that host
+actually answers. That is the part the heartbeat cannot tell you: the agent
+reports idle whether or not any of them became reachable, so a deploy stalled at
+`WAITING_FOR_DOMAIN` reads as healthy until you look at the hosts. A **503**
+there is the diagnosis, not a failed check — it is this cluster refusing crane's
+port reference, and [`sv-expose`](service-virtualization.md#reaching-a-virtual-service-from-outside-sv-expose)
+is the fix. A probe that gets no status line says which kind it was: the host did
+not resolve, nothing accepted the connection, the TLS handshake failed, or
+nothing replied in time.
+
 Reading the namespace is the one thing the UI does that needs a cluster, and it
 needs one only for that: it uses whatever `kubectl`/`oc` context the machine
 running `bzm-opl-gen ui` has. There is often none, so an unreadable cluster is a
 normal answer rather than an error — it says which of *no CLI*, *no context*,
 *denied* or *no virtual services in that namespace* applied, and the heartbeat
 keeps working either way. Nothing else in the UI needs a cluster at all.
+
+## Account capacity
+
+The second view answers one number: how many virtual users this account can run
+at once. Everything else on it exists to make that number checkable — which
+workspace holds it, which location, and out of how many agents and engines —
+because a total nobody can take apart is a total nobody believes.
+
+"Rated" is the load-bearing word, and it was measured rather than assumed:
+`agents × slots` is the engine count and BlazeMeter enforces it, while
+multiplying by virtual users per engine gives what those engines are *sized* for,
+which a run may exceed and be packed onto them instead. A location nobody has
+sized has no rating at all, and those are **counted separately** rather than
+drawn as capacity of zero — "not sized" and "sized at nothing" are different
+facts, and a page that renders neither shows the first as the second. A location
+shared between workspaces is striped and counted once in the account total, which
+is why that total is not the sum of the workspace figures.
+
+## Running it
 
 **It binds this machine only, on purpose.** The server holds your API key in
 process memory, so reaching the page is equivalent to holding the key: whoever
@@ -327,3 +393,18 @@ ssh -L 8765:127.0.0.1:8765 you@that-machine     # then open http://127.0.0.1:876
 `--host` widens the bind when you really do want the server itself listening
 elsewhere (`--host 0.0.0.0`, or a specific interface address). It warns at
 startup, and it is the wrong tool on any network you do not control.
+
+**Run it without a terminal** (macOS): `bzm-opl-gen ui --install-service`
+writes a LaunchAgent that serves the UI from login onward with whatever
+`--port`/`--host`/`--api-key` you gave it, restarts it if it dies, and logs to
+`~/Library/Logs/bzm-opl-gen-ui.log`. `--uninstall-service` removes it. The
+agent runs the python that installed it, so rebuilding or moving the venv
+means reinstalling the service. Not docker, deliberately: the point of a bundle
+is that `kubectl` on this machine can apply it, and a container puts a
+filesystem boundary exactly there.
+
+Frontend dev: `cd frontend && npm install && npm run dev` (proxies /api to
+:8765); `npm run build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.
+CI runs `npm test` and `npm run typecheck` as its own job — the logic modules
+(option groups, formats, the session snapshot, the preflight panel) with no DOM
+between them, and the panels that decide something with one.
