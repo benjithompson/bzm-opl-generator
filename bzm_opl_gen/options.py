@@ -429,9 +429,13 @@ OPTIONS = [
         default_note="BlazeMeter documents 2",
         summary="KUBERNETES_RESOURCES_LIMITS_CPU -- the CPU limit crane stamps on every engine.",
         doc="`KUBERNETES_RESOURCES_LIMITS_CPU` -- the CPU limit crane stamps on "
-            "every engine it spawns. Unset leaves crane's own default, which "
-            "BlazeMeter documents as 2. Worth lowering on an emulated arm64 runtime, "
-            "where a 2-CPU engine stays Pending. This generator emits no LimitRange "
+            "every engine it spawns. Unset, it derives from the location's "
+            "`overrideCPU` (the engine's *request*, so the two halves of one "
+            "figure agree by construction), else BlazeMeter's documented default "
+            "of 2 -- the env is always carried, because doctor certifies that "
+            "figure and a ConfigMap without it ran engines with no limits at "
+            "all. Worth lowering on an emulated arm64 runtime, where a 2-CPU "
+            "engine stays Pending. This generator emits no LimitRange "
             "and will not: crane sets engine requests explicitly, so a "
             "`defaultRequest` never reaches them."),
     Option(
@@ -439,8 +443,10 @@ OPTIONS = [
         default_note="BlazeMeter documents 8Gi",
         summary="KUBERNETES_RESOURCES_LIMITS_MEMORY -- the memory limit crane stamps on every engine.",
         doc="`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- the memory limit crane stamps "
-            "on every engine it spawns. Unset leaves crane's own default, documented "
-            "as 8Gi. `livetest --run-test` prints what an engine actually used as "
+            "on every engine it spawns. Unset, it derives from the location's "
+            "`overrideMemory` (MB, read as Mi), else the documented default of "
+            "8Gi -- always carried, for the same reason as the CPU limit. "
+            "`livetest --run-test` prints what an engine actually used as "
             "`ENGINE SIZING:`, which is the number to size from."),
     Option(
         "engine_ephemeral_request_mb", "integer", "Engine and agent sizing",

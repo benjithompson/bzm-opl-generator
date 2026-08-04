@@ -81,12 +81,15 @@ data:
   {{- with .Values.engineNodeSelector }}
   KUBERNETES_NODE_SELECTOR_JSON: {{ toJson . | squote }}
   {{- end }}
-  {{- with .Values.engine.cpuLimit }}
-  KUBERNETES_RESOURCES_LIMITS_CPU: {{ . | quote }}
-  {{- end }}
-  {{- with .Values.engine.memoryLimit }}
-  KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ . | quote }}
-  {{- end }}
+  {{- /*
+    Always emitted, defaults included: doctor and the planner certify the
+    2 CPU / 8Gi fallback, and a ConfigMap that omitted these on an empty value
+    ran engines with no limits at all (OOMKilled 4s in, live -- #132). The
+    literals restate generate.ENGINE_DEFAULT_CPU/MEM; tests/test_helm.py holds
+    them equal.
+  */}}
+  KUBERNETES_RESOURCES_LIMITS_CPU: {{ .Values.engine.cpuLimit | default "2" | quote }}
+  KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ .Values.engine.memoryLimit | default "8Gi" | quote }}
   {{- with .Values.engine.ephemeralRequestMb }}
   KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {{ . | quote }}
   {{- end }}

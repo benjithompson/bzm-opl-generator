@@ -188,15 +188,17 @@ def gather(client, harbor_id):
         # API (POST ignores it) -- and then every test start 403s, so the
         # doctor treats it as a hard failure rather than a detail.
         "threads_per_engine": harbor.get("threadsPerEngine"),
-        # The location's own engine sizing, which is a *second* source of truth
-        # for the same pod fields the bundle sets through
-        # KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY. Recorded rather than acted
-        # on: which of the two crane honours is not settled here, and a
-        # generator that quietly picked one would be wrong half the time.
+        # The location's own engine sizing: the engine pod's *requests*, and
+        # since #132 the source generate.resolve_engine_limits derives the
+        # bundle's KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY from when no
+        # explicit option names them -- the two are one figure, and deriving
+        # is what makes them agree by construction. (They set different pod
+        # fields, settled on a live run: overrides -> requests, the bundle's
+        # env -> limits.)
         # Read off a real account: overrideCPU is whole cores; the heaps are MB
         # (4096 on 160 of 171 locations). overrideMemory's unit is *not*
         # reliable -- the same account holds 32, 4000 and 8196 -- so it is
-        # carried verbatim and interpreted nowhere.
+        # carried verbatim here and read as Mi where it is derived.
         "override_cpu": harbor.get("overrideCPU"),
         "override_memory": harbor.get("overrideMemory"),
         # The JVM heap inside that container. A limit the heap never reaches is

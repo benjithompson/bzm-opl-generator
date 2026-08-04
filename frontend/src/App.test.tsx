@@ -360,8 +360,9 @@ test("a feature a manually entered identity was not declared to run has no switc
     expect(card("sv").queryByRole("switch")).toBeNull();
     expect(card("sv").getByText(/pick/)).toBeTruthy();
     // ...and this is not passing because no card rendered anything: the
-    // declared feature keeps its own group.
-    expect(card("performance").getAllByRole("switch").length).toBeGreaterThan(0);
+    // declared feature states the engine size its bundle will carry -- the
+    // documented default, since manual mode has no location to read.
+    expect(card("performance").getByText(/2 CPU \/ 8Gi/)).toBeTruthy();
 
     // ...and nothing was seeded, so the rail has nothing to complain about.
     // The switch used to write `sv_ingress: nginx` over empty subdomain and TLS
@@ -709,6 +710,62 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
       engine_tolerations: [{ key: "pool", operator: "Equal",
                              value: "bzm-engines", effect: "NoSchedule" }],
     });
+  });
+
+test("the configure step states the engine size the location implies, and edits nothing",
+  async () => {
+    // The engine size is one figure and the location is where it is set
+    // (#132): generate derives the bundle's limits from the location's
+    // overrideCPU/overrideMemory, so the configure step carries a read-only
+    // statement -- no group, no switch, no fields -- naming the size, its
+    // source, and where to change it.
+    const held = { ...loc("h-perf", "Perf",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+      overrideCPU: 1, overrideMemory: 4096 };
+    render(<App api={accountOf([held], {
+      locations: async () => [held],
+      // The real feature id: accountOf's "perf" claims the funcId, and the
+      // statement renders on the card of the feature that starts engines.
+      features: async () => [{
+        id: "performance", label: "Performance", namespace: "blazemeter",
+        func_ids: ["performance"],
+      }],
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // The statement, from the location's own requests -- 4096 MB read as Mi
+    // lands on the Gi form -- and it names the place to change it.
+    const note = await screen.findByText(/1 CPU \/ 4Gi/);
+    expect(note.textContent).toContain("Location settings");
+
+    // No editor: the size is not optional and not configurable here, so
+    // there is no sizing switch and no Apply.
+    expect(screen.queryByText(/^Engine sizing$/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
+test("a location holding no engine requests is stated as the default, never blank",
+  async () => {
+    render(<App api={accountOf([loc("h-perf", "Perf",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      features: async () => [{
+        id: "performance", label: "Performance", namespace: "blazemeter",
+        func_ids: ["performance"],
+      }],
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // Always an effective size on screen -- the documented default here --
+    // with the location named as the place that changes it.
+    const note = await screen.findByText(/2 CPU \/ 8Gi/);
+    expect(note.textContent).toContain("default");
+    expect(note.textContent).toContain("Location settings");
   });
 
 // Rotating from this step is gone with its box. It was the second way to mint

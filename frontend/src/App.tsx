@@ -22,7 +22,7 @@ import { downloadPlan, Recall, recalled, recallNote } from "./token";
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
   allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
-  detectGroups, enabledFeatures, enginePreset,
+  detectGroups, enabledFeatures,
   featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
   runsFeature, serviceAccountOk, startFeature, suggestNamespace,
   unclaimedFuncIds,
@@ -31,6 +31,10 @@ import {
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
 import { isDocker, optionApplies, whyIgnored as why } from "./formats";
+// The engine size the bundle will carry, and where the figure came from
+// (#132): generate derives it from the location's engine requests, so the
+// configure step states it rather than editing it.
+import { sizeStatement } from "./engineSize";
 // Service virtualization, as one record rather than a dozen values derived in
 // four places here. Whether the location demands it, whether that demand was
 // declined, whether what is configured is finished, the prerequisite context,
@@ -73,7 +77,6 @@ import { ProxyGroup } from "./groups/ProxyGroup";
 import { RegistryGroup } from "./groups/RegistryGroup";
 import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
-import { SizingGroup } from "./groups/SizingGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
@@ -640,6 +643,17 @@ export default function App({ api }: { api: Api }) {
   const location = useMemo(
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
+
+  // The engine size this bundle will carry, and where the figure came from
+  // (#132): the location's overrideCPU/overrideMemory unless an option
+  // outranks them. Read off the page's own list rather than facts, because
+  // locationUpdated keeps the list fresh after a settings save and facts are
+  // fetched once; manual mode has no location and the statement carries that
+  // structurally (noLocation), never as "the location sets nothing".
+  const engineSize = useMemo(
+    () => sizeStatement(raw("engine_cpu_limit"), raw("engine_mem_limit"),
+                        location),
+    [raw, location]);
 
   useEffect(() => {
     setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
@@ -1327,15 +1341,6 @@ export default function App({ api }: { api: Api }) {
         engineNodeSelector={options.engine_node_selector}
         onPatch={(p) => setOptions((o) => ({ ...o, ...p }))} />
     ),
-    sizing: (
-      <SizingGroup preset={enginePreset(options)}
-        cpuLimit={raw("engine_cpu_limit")} memLimit={raw("engine_mem_limit")}
-        onLimits={(cpu, mem) => setOptions((o) => ({
-          ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
-        onCpuLimit={(v) => set("engine_cpu_limit", v)}
-        onMemLimit={(v) => set("engine_mem_limit", v)}
-/>
-    ),
     security: (
       <SecurityGroup applies={applies} cluster={!isDocker(format)}
         useSecret={Boolean(options.use_secret)}
@@ -1572,6 +1577,10 @@ export default function App({ api }: { api: Api }) {
               applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}
+              // Null where the format has no limits env (docker names the two
+              // keys in its ignored table), so the card does not state a size
+              // nothing reads.
+              engineNote={applies("engine_cpu_limit") ? engineSize.text : null}
               flipGroup={flipGroup} groupBody={groupBody} incomplete={incomplete}
               namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
               exportProfile={exportProfile} importProfile={importProfile} />

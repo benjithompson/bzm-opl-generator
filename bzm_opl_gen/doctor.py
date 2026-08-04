@@ -45,6 +45,7 @@ from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
                        TYPICAL_SYSTEM_PODS, crane_scheduling, engine_requests,
                        engines_per_node,
                        engine_scheduling, engine_size, proxy_env,
+                       resolve_engine_limits,
                        separate_pools, service_account)
 from .quantity import (format_cpu, format_memory, human_memory, parse_cpu,
                        parse_memory)
@@ -1730,6 +1731,11 @@ def evaluate(facts, opts, namespace, cluster_data=None, probes=None, cli=None,
                             "(cluster_data, probes, extra_checks), not both")
         cluster_data, probes, extra_checks = evidence
     opts = dict(opts or {})
+    # The same resolution generate() applies (#132): unset engine limits
+    # derive from the location's overrideCPU/overrideMemory, so every check
+    # that reads engine_size judges the size the bundle will actually carry
+    # rather than the documented default it would fall back to.
+    opts.update(resolve_engine_limits(facts, opts))
     namespace = resolve_namespace(namespace, opts)
     if cluster_data is None or probes is None:
         cli = cli or livetest.cli_tool()

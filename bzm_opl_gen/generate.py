@@ -238,6 +238,54 @@ def engine_size(o):
                       "engine_mem_limit" in ignored))
 
 
+# The smallest overrideMemory (MB) the derivation will read as an engine size.
+# The field's unit is unreliable -- one real account holds 32, 4000 and 8196 --
+# and a *derived* limit of 4Mi or 32Mi is an engine OOMKilled at startup: the
+# incident #132 exists to fix, reintroduced by its own fix. Below this the
+# memory half is left underived (the default applies, and the page says the
+# value was disregarded); an explicit engine_mem_limit option is the user's
+# own and is never floored. 1Gi: the smallest size anything here offers is the
+# 1 CPU / 4Gi dev preset, and no taurus engine starts a test in less than 1Gi.
+ENGINE_MIN_DERIVED_MEM_MB = 1024
+
+
+def resolve_engine_limits(facts, o):
+    """The engine limits this location implies, as an options patch -- empty
+    where there is nothing to derive.
+
+    Requests and limits are one figure with two writers (#132), and the
+    location is where it is set: overrideCPU/overrideMemory are the engine
+    pod's *requests*, so a bundle that carried a different size than the
+    location requests is the packing gap all over again. Resolution: an
+    explicit option wins (the CLI, the livetest overlay, a replayed profile --
+    all speak through options); then the location's overrides; then the
+    documented default, which the emitters fall back to on their own.
+
+    generate() merges the patch into the resolved options, so profile.json
+    records the derived value and a replay against different facts -- the
+    location was resized after the bundle was cut -- reproduces the bundle
+    rather than re-deriving. doctor.evaluate applies the same patch, so the
+    preflight certifies the size the bundle will actually carry.
+
+    overrideMemory is MB read as Mi -- the planner's own equivalence
+    (plan.capacity_plan emits 8192 for an 8Gi engine) -- and formatted the way
+    every other manifest quantity is, so 4096 arrives as 4Gi and an odd 8196
+    stays 8196Mi rather than being rounded to a lie. A format that ignores the
+    two keys derives nothing: the value would reach no manifest and only add a
+    README line about an option nobody set (see ignored_options)."""
+    patch = {}
+    if "engine_cpu_limit" in ignored_options(o):
+        return patch
+    cpu = facts.get("override_cpu")
+    mem = facts.get("override_memory")
+    if not o.get("engine_cpu_limit") and cpu:
+        patch["engine_cpu_limit"] = format_cpu(int(round(float(cpu) * 1000)))
+    if (not o.get("engine_mem_limit") and mem
+            and int(mem) >= ENGINE_MIN_DERIVED_MEM_MB):
+        patch["engine_mem_limit"] = format_memory(int(mem) * 1024 * 1024)
+    return patch
+
+
 def crane_scheduling(o):
     """(nodeSelector, tolerations) for the crane pod itself."""
     return o.get("node_selector") or {}, o.get("tolerations") or []
@@ -688,10 +736,16 @@ def _configmap(facts, o):
         if split:
             lines.append("  # Engines are pinned to their own node pool, separate from crane's.")
         lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: '{json.dumps(eng_sel)}'")
-    if o["engine_cpu_limit"]:
-        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: \"{o['engine_cpu_limit']}\"")
-    if o["engine_mem_limit"]:
-        lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: \"{o['engine_mem_limit']}\"")
+    # Always emitted, defaults included. doctor and the planner certify
+    # engine_size(), which falls back to ENGINE_DEFAULT_CPU/MEM -- a ConfigMap
+    # that omitted these when the options were unset shipped engines with no
+    # limits at all while the preflight vouched for 2/8Gi, and a live run had
+    # one OOMKilled 4s after start (#132). Unset means the documented default,
+    # never "whatever crane does with no env".
+    lines.append(f"  KUBERNETES_RESOURCES_LIMITS_CPU: "
+                 f"\"{o['engine_cpu_limit'] or ENGINE_DEFAULT_CPU}\"")
+    lines.append(f"  KUBERNETES_RESOURCES_LIMITS_MEMORY: "
+                 f"\"{o['engine_mem_limit'] or ENGINE_DEFAULT_MEM}\"")
     if o["engine_ephemeral_request_mb"]:
         lines.append(f"  KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: \"{o['engine_ephemeral_request_mb']}\"")
     if o["engine_ephemeral_limit_mb"]:
@@ -2343,6 +2397,10 @@ def generate(facts, options):
     creates the parent directories.
     """
     o = {**DEFAULT_OPTIONS, **options}
+    # Into o itself, not read at emit time: everything downstream -- the
+    # ConfigMap, the helm overlay, the READMEs, profile.json -- then speaks
+    # one value, and the profile records it as the resolved option it is.
+    o.update(resolve_engine_limits(facts, o))
     if "ship_id" not in o:
         ships = facts.get("ships") or []
         if len(ships) == 1:
