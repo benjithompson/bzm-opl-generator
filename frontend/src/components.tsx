@@ -684,28 +684,3 @@ export function NoticeMsg({ msg }: { msg: string | null }) {
                        rounded-md px-2 py-1.5 mt-1.5 break-words">{msg}</p>;
 }
 
-export function JsonArea(props: {
-  label: string; value: unknown; placeholder: string;
-  onValid: (v: unknown) => void; rows?: number;
-}) {
-  const [text, setText] = useState(props.value ? JSON.stringify(props.value, null, 1) : "");
-  const [err, setErr] = useState<string | null>(null);
-  return (
-    <Field label={props.label}>
-      <textarea
-        className={inputCls + " font-mono text-xs"}
-        rows={props.rows ?? 3}
-        value={text}
-        placeholder={props.placeholder}
-        onChange={(e) => {
-          const t = e.target.value;
-          setText(t);
-          if (!t.trim()) { setErr(null); props.onValid(null); return; }
-          try { props.onValid(JSON.parse(t)); setErr(null); }
-          catch { setErr("invalid JSON"); }
-        }}
-      />
-      <ErrorMsg msg={err} />
-    </Field>
-  );
-}
