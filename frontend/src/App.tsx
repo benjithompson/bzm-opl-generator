@@ -1345,7 +1345,11 @@ export default function App({ api }: { api: Api }) {
     env: (
       <EnvGroup env={options.extra_env} reserved={reservedEnv}
         cluster={!isDocker(format)}
-        onChange={(v) => set("extra_env", Object.keys(v).length ? v : null)} />
+        // Written whole and already normalised: the group emits `null` for
+        // "nothing set", so what it hands over is exactly what comes back as
+        // `env`, which is how it tells its own writes from an imported
+        // profile's.
+        onChange={(v) => set("extra_env", v)} />
     ),
     sched: (
       <SchedGroup

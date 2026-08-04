@@ -93,6 +93,15 @@ export interface CredentialHandover {
   plan: DownloadPlan;
 }
 
+/** An option this step both reads and writes, as one value. Named because the
+ *  pair was spelled out three times over -- the field, the component's param
+ *  and App's literal -- and a two-field type written out at each end is two
+ *  ends free to disagree about which of them owns the write. */
+export interface Toggle {
+  on: boolean;
+  set: (v: boolean) => void;
+}
+
 /** The cluster read somebody else collected, and what may be applied from it. */
 export interface PreflightHandover {
   /** crane-hook: whether the bundle carries it, and the write that decides
@@ -104,7 +113,7 @@ export interface PreflightHandover {
    *  Null where the format cannot carry it: App asks the served ignored table
    *  rather than this file re-deriving it from `format`. It blocks nothing, so
    *  its absence takes no blocker off screen with it. */
-  craneHook: { on: boolean; set: (v: boolean) => void } | null;
+  craneHook: Toggle | null;
   /** The imported file, its verdicts and whatever the last import was refused
    *  for -- preflight.ts's own state, unchanged. */
   read: PreflightState;
@@ -302,14 +311,6 @@ export function DownloadPanel(p: DownloadPanelProps) {
                     against this location's slots, engine size and namespace.
                   </p>
                 )}
-                {/* The third way to run the same check, and the one that is
-                    part of the bundle. Under the two above because it is the
-                    last of the three in time: Test deploy runs it now, the
-                    evidence file judges a read of the cluster, and this ships
-                    it so whoever applies the bundle runs it themselves. */}
-                {preflight.craneHook && (
-                  <CraneHookRow hook={preflight.craneHook} />
-                )}
                 <ErrorMsg msg={read.error} />
                 {read.out && preflight.header && (
                   <div className="mt-2">
@@ -417,6 +418,16 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       onApply={preflight.applySuggestion}
                       onUndo={preflight.undoSuggestion} />
                   </div>
+                )}
+                {/* The third way to run the same check, and the one that is
+                    part of the bundle. Last of the three because it is last in
+                    time: Test deploy runs it now, the evidence file judges a
+                    read of the cluster, and this ships it for whoever applies
+                    the bundle. Below the file's verdicts rather than between
+                    the picker and them -- the import's own error and answer
+                    belong next to the control that produced them. */}
+                {preflight.craneHook && (
+                  <CraneHookRow hook={preflight.craneHook} />
                 )}
               </div>
               )}
@@ -553,9 +564,7 @@ export function DownloadPanel(p: DownloadPanelProps) {
  *  Writing the option from this step is what keeps the move honest -- the
  *  download has to carry it, so the control has to be somewhere the download
  *  can see. It is a boolean and blocks nothing, so nothing came with it. */
-function CraneHookRow(
-  { hook }: { hook: { on: boolean; set: (v: boolean) => void } },
-) {
+function CraneHookRow({ hook }: { hook: Toggle }) {
   const { on } = hook;
   return (
     <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5">

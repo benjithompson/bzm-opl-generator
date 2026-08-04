@@ -901,6 +901,20 @@ def test_reserved_env_is_served_with_the_option_that_owns_each_name():
             assert name in defaults, f"{owner} names no option"
 
 
+def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
+    """The *names* are served; what a name may look like is not, and could not
+    usefully be -- it is a regex, and a page that had to compile a served one
+    could not typecheck it. So it is a second copy, and this is the only thing
+    that can hold it equal: a page accepting a name the generator refuses is a
+    row that goes green and a download that fails."""
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    pattern = re.search(r"^const NAME_RE = /(.+)/;$",
+                        (src / "env.ts").read_text(), re.M)
+    assert pattern, "NAME_RE not found -- was it renamed or moved?"
+    assert pattern.group(1) == gen_mod.ENV_NAME_RE.pattern
+
+
 def test_the_pages_copy_of_the_reserved_env_names_is_the_generators():
     """As with DOCKER_IGNORED above: the page's tests run without a server, so
     the fixture is a second copy, and this is what keeps it from drifting."""

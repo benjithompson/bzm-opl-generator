@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { EnvRow, envRowError, envToRows, rowsToEnv, Reserved } from "../env";
 
 /** Environment variables the agent takes and this tool has no setting for
@@ -28,12 +28,39 @@ export function EnvGroup(props: {
   /** Whether this bundle is a set of manifests rather than a docker script.
    *  Only the sentence changes -- the option is carried by every format. */
   cluster: boolean;
-  onChange: (v: Record<string, string>) => void;
+  /** The option, written whole -- `null` for "nothing set", which is its
+   *  default. Normalised here rather than by the caller so that what this
+   *  component emits is exactly what comes back as `env`, which is what the
+   *  identity check below rests on. */
+  onChange: (v: Record<string, string> | null) => void;
 }) {
   const [rows, setRows] = useState<EnvRow[]>(() => envToRows(props.env));
+  // ...and re-read them when somebody *else* writes the option: profile Import
+  // is on this same step, and a restored session or a Reset can rewrite it too.
+  // Without this the rows go on showing the variables that were replaced while
+  // the bundle carries the new ones -- a form showing a variable no bundle
+  // carries, which is the failure this area's rules are otherwise about.
+  //
+  // By identity rather than by value, and that is what makes it exact: the
+  // option IS the object this component last emitted (App stores what
+  // `onChange` handed it), so a difference here can only be a write from
+  // somewhere else. Comparing values would resync on our own writes and take
+  // the half-typed row with it -- SchedGroup's `epoch` remount is the same
+  // guard from the other end, and it covers only that component's own writes.
+  const emitted = useRef<unknown>(props.env);
+  if (props.env !== emitted.current) {
+    emitted.current = props.env;
+    setRows(envToRows(props.env));
+  }
   const update = (next: EnvRow[]) => {
     setRows(next);
-    props.onChange(rowsToEnv(next));
+    // `null` where nothing has a name yet -- a row mid-typing is not a variable,
+    // and `{}` is not the option's default, so it would show up in profile.json
+    // as a key a bundle generated without this area never had.
+    const kv = rowsToEnv(next);
+    const env = Object.keys(kv).length ? kv : null;
+    emitted.current = env;
+    props.onChange(env);
   };
   return (
     <div className="space-y-2">

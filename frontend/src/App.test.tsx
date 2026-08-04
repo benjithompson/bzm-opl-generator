@@ -732,20 +732,19 @@ test("a typed environment variable reaches the bundle, and a reserved name is re
     fireEvent.click(await screen.findByText("Perf"));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
-    const title = await screen.findByText(/^Environment variables$/);
-    fireEvent.click(within(title.closest("div.flex") as HTMLElement)
-      .getByRole("switch"));
+    fireEvent.click(await screen.findByRole(
+      "switch", { name: "Environment variables" }));
     fireEvent.click(await screen.findByText(/\+ Add variable/));
-    fireEvent.change(screen.getByLabelText("Variable name 1"),
+    fireEvent.change(await screen.findByLabelText("Variable name 1"),
                      { target: { value: "PREFERRED_INTERFACE" } });
-    fireEvent.change(screen.getByLabelText("Variable value 1"),
+    fireEvent.change(await screen.findByLabelText("Variable value 1"),
                      { target: { value: "eth1" } });
 
     // A second row naming a variable the bundle already writes. Refused on the
     // row, in the sentence that names the option owning it -- "set it there" is
     // the whole answer, and a bare "that one is taken" is not.
     fireEvent.click(screen.getByText(/\+ Add variable/));
-    fireEvent.change(screen.getByLabelText("Variable name 2"),
+    fireEvent.change(await screen.findByLabelText("Variable name 2"),
                      { target: { value: "KUBERNETES_SERVICE_USE_TYPE" } });
     expect(await screen.findByText(/set it with service_type instead/)).toBeTruthy();
 
@@ -758,6 +757,45 @@ test("a typed environment variable reaches the bundle, and a reserved name is re
     await waitFor(() => expect(sent.length).toBe(1));
     expect((sent[0].options as { extra_env?: Record<string, string> }).extra_env)
       .toMatchObject({ PREFERRED_INTERFACE: "eth1" });
+  });
+
+test("an imported profile rewrites the environment rows rather than sitting under them",
+  async () => {
+    // The rows are local state and the option is what they add up to, which is
+    // what stops a half-typed name flickering out of existence. Import is on
+    // the same step and writes the option from outside, so without a resync the
+    // rows go on showing variables the bundle no longer carries -- a form
+    // showing a variable no bundle has, which is the failure this area's own
+    // rules are otherwise about. See EnvGroup's `emitted` ref.
+    render(<App api={perfAccount()} />);
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    fireEvent.click(await screen.findByRole(
+      "switch", { name: "Environment variables" }));
+    fireEvent.click(await screen.findByText(/\+ Add variable/));
+    fireEvent.change(await screen.findByLabelText("Variable name 1"),
+                     { target: { value: "TYPED_BY_HAND" } });
+
+    // `text()` is supplied rather than inherited, as importEvidence below does
+    // it: this jsdom's Blob has no Blob.prototype.text, and the page reads the
+    // picked file with it.
+    const body = JSON.stringify({ namespace: "blazemeter",
+                                  extra_env: { FROM_THE_PROFILE: "eth9" } });
+    const file = Object.assign(
+      new File([body], "profile.json", { type: "application/json" }),
+      { text: async () => body });
+    await act(async () => {
+      fireEvent.change(document.querySelector(
+        'input[type="file"][accept=".json"]') as HTMLInputElement,
+        { target: { files: [file] } });
+    });
+
+    await waitFor(() => expect(
+      (screen.getByLabelText("Variable name 1") as HTMLInputElement).value)
+      .toBe("FROM_THE_PROFILE"));
+    expect((screen.getByLabelText("Variable value 1") as HTMLInputElement).value)
+      .toBe("eth9");
   });
 
 test("the configure step states the engine size the location implies, and edits nothing",

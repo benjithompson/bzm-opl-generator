@@ -36,7 +36,10 @@ export function GroupRow(props: {
   return (
     <div className="px-3 py-2.5">
       <div className="flex items-center gap-3">
-        <Switch on={on} onChange={props.onFlip} />
+        {/* Named by the group, because the title beside it is a sibling rather
+            than a <label>: without this the only way to reach a particular
+            row's switch is to navigate the markup around its title. */}
+        <Switch on={on} onChange={props.onFlip} label={group.title} />
         <div className="min-w-0 grow">
           <p className={`text-sm font-medium ${on ? "text-slate-900" : "text-slate-500"}`}>
             {group.title}

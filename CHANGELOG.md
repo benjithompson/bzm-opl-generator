@@ -11,6 +11,40 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **Environment variables the bundle has no setting for.** BlazeMeter's agent
+  environment reference is much wider than the options this tool exposes —
+  `PREFERRED_INTERFACE`, `KUBERNETES_USE_PRE_PULLING`, `DODUO_PORT` and the
+  rest — and the only way to reach the others was to edit the generated
+  ConfigMap by hand, which the next `generate` silently overwrote. A new
+  `extra_env` option carries them: an *Environment variables* area on the
+  configure step (name and value per row, no JSON), `--env NAME=VALUE` on the
+  command line, repeatable. All three formats carry it — ConfigMap entries for
+  `manifests`, `extraEnv` in the values overlay for `helm`, `--env` flags for
+  `docker` — and it is in `profile.json`, so a regenerate replays it.
+
+  It reaches the **agent**: crane's pod reads it, and the engines crane spawns
+  do not, because crane builds their environment from the `KUBERNETES_*`
+  variables rather than passing its own down.
+
+  A variable the bundle already writes is **refused**, naming the option that
+  sets it, rather than being silently duplicated: two values for one key is a
+  ConfigMap with a duplicate entry, and whichever wins is not the one you typed.
+  Kubernetes variables are refused in a docker bundle too — they reach nothing
+  there either, and accepting one would read as a setting that had been made.
+
+### Changed
+
+- **The cluster check moved to the download step.** *Cluster check
+  (crane-hook)* was among the configure step's agent settings; it is now **Ship
+  the check with the bundle**, under *Preflight the target cluster* on
+  **Download & verify**, beside the other two ways of asking the same question
+  (*Test deploy*, and the evidence file). It shapes nothing about the agent —
+  the same deployment is applied either way — and what it is about is the
+  cluster the bundle is going to. The option, the manifest it emits and the
+  Helm `helm test` hook are unchanged; only where you switch it on has moved.
+
 ## [0.3.0] — 2026-08-03
 
 The docker output format, a capacity planner that needs no account, and a web UI
