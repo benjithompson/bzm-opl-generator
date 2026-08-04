@@ -238,6 +238,17 @@ def engine_size(o):
                       "engine_mem_limit" in ignored))
 
 
+# The smallest overrideMemory (MB) the derivation will read as an engine size.
+# The field's unit is unreliable -- one real account holds 32, 4000 and 8196 --
+# and a *derived* limit of 4Mi or 32Mi is an engine OOMKilled at startup: the
+# incident #132 exists to fix, reintroduced by its own fix. Below this the
+# memory half is left underived (the default applies, and the page says the
+# value was disregarded); an explicit engine_mem_limit option is the user's
+# own and is never floored. 1Gi: the smallest size anything here offers is the
+# 1 CPU / 4Gi dev preset, and no taurus engine starts a test in less than 1Gi.
+ENGINE_MIN_DERIVED_MEM_MB = 1024
+
+
 def resolve_engine_limits(facts, o):
     """The engine limits this location implies, as an options patch -- empty
     where there is nothing to derive.
@@ -269,7 +280,8 @@ def resolve_engine_limits(facts, o):
     mem = facts.get("override_memory")
     if not o.get("engine_cpu_limit") and cpu:
         patch["engine_cpu_limit"] = format_cpu(int(round(float(cpu) * 1000)))
-    if not o.get("engine_mem_limit") and mem:
+    if (not o.get("engine_mem_limit") and mem
+            and int(mem) >= ENGINE_MIN_DERIVED_MEM_MB):
         patch["engine_mem_limit"] = format_memory(int(mem) * 1024 * 1024)
     return patch
 

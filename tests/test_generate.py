@@ -653,6 +653,29 @@ def test_engine_limits_derive_from_the_location():
     assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "8Gi"
 
 
+def test_an_override_memory_below_an_engines_floor_is_not_derived():
+    """overrideMemory's unit is unreliable -- one real account holds 32, 4000
+    and 8196 -- and a derived limit of 4Mi is an OOMKill this derivation would
+    be introducing: the incident it exists to fix, upside down. Below the
+    floor the memory half falls back to the default; the CPU half still
+    derives; and an *explicit* option is the user's own and is never floored."""
+    for mb in (4, 32, 512):
+        files = gen.generate(
+            {**FACTS, "override_cpu": 1, "override_memory": mb},
+            {"namespace": "ns1"})
+        cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+        assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == gen.ENGINE_DEFAULT_MEM, mb
+        assert cm["KUBERNETES_RESOURCES_LIMITS_CPU"] == "1"
+    at_floor = gen.generate({**FACTS, "override_memory": 1024},
+                            {"namespace": "ns1"})
+    cm = yaml.safe_load(at_floor["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "1Gi"
+    explicit = gen.generate(FACTS, {"namespace": "ns1",
+                                    "engine_mem_limit": "512Mi"})
+    cm = yaml.safe_load(explicit["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_LIMITS_MEMORY"] == "512Mi"
+
+
 def test_derived_engine_limits_land_in_the_profile_and_replay_stably():
     """The profile records *resolved* options, so the derivation resolves into
     it: a replay against different facts -- the location was resized since the

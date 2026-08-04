@@ -64,6 +64,13 @@ export interface SizeStatement {
   text: string;
 }
 
+// The smallest overrideMemory (MB) read as an engine size, mirroring
+// generate.ENGINE_MIN_DERIVED_MEM_MB: the field's unit is unreliable (one
+// real account holds 32, 4000 and 8196), and a derived 4Mi limit is an engine
+// OOMKilled at startup. Below it the memory half is disregarded -- and said
+// to be, never silently.
+const MIN_DERIVED_MEM_MB = 1024;
+
 export function sizeStatement(
   cpuOpt: string | null | undefined,
   memOpt: string | null | undefined,
@@ -74,7 +81,14 @@ export function sizeStatement(
   const optCpu = typeof cpuOpt === "string" && cpuOpt.trim() ? cpuOpt : null;
   const optMem = typeof memOpt === "string" && memOpt.trim() ? memOpt : null;
   const locCpu = location?.overrideCPU ?? null;
-  const locMem = location?.overrideMemory ?? null;
+  const rawLocMem = location?.overrideMemory ?? null;
+  const locMem = rawLocMem !== null && rawLocMem >= MIN_DERIVED_MEM_MB
+    ? rawLocMem : null;
+  const disregard = rawLocMem !== null && rawLocMem < MIN_DERIVED_MEM_MB
+    ? ` The location's engine memory request of ${rawLocMem} MB is below `
+      + "what an engine can start in and was not used for the size; check "
+      + "its unit in Location settings."
+    : "";
   const locSet = locCpu !== null || locMem !== null;
   // What the location implies, each half falling to the default -- the same
   // resolution generate.resolve_engine_limits applies.
@@ -88,7 +102,8 @@ export function sizeStatement(
 
   if (optCpu || optMem) {
     const base = `Engines run at ${size} per engine, set in this bundle's `
-      + "options (an imported profile, or the capacity profile above).";
+      + "options (an imported profile, or the capacity profile on the first "
+      + "step).";
     if (!location) return { kind: "bundle", cpu, mem, text: base };
     if (!locSet) {
       return {
@@ -134,15 +149,17 @@ export function sizeStatement(
       text: `Engines run at ${size} per engine, from this location's engine `
         + "requests. The bundle carries the same figure as limits, so "
         + "requests and limits match. Change it in Location settings on the "
-        + "agent step; the bundle follows the location.",
+        + `agent step; the bundle follows the location.${disregard}`,
     };
   }
   return {
     kind: "default", cpu, mem,
-    text: `Engines run at ${size} per engine, the documented default. This `
-      + "location sets no engine requests, so engines are placed at the "
-      + "250m/256Mi default and can pack onto one node. Set the location's "
-      + "engine CPU and memory requests in Location settings; the bundle "
-      + "then carries the location's figure as limits.",
+    text: `Engines run at ${size} per engine, the documented default. `
+      + (disregard
+        ? disregard.trim()
+        : "This location sets no engine requests, so engines are placed at "
+          + "the 250m/256Mi default and can pack onto one node. Set the "
+          + "location's engine CPU and memory requests in Location settings; "
+          + "the bundle then carries the location's figure as limits."),
   };
 }

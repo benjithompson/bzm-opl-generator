@@ -129,10 +129,8 @@ export const ENGINE_SIZES = [
  *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The keys the size travels in, and the feature whose bundles start engines
- *  -- what the old group declared, kept for the statement's format gate and
- *  the not-run clearing below. */
-export const SIZING_KEYS = ["engine_cpu_limit", "engine_mem_limit"];
+/** The feature whose bundles start engines -- the old group's tag, kept for
+ *  the statement's card and the not-run clearing below. */
 export const SIZING_FEATURE = "performance";
 
 // -- service account ---------------------------------------------------------

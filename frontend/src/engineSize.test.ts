@@ -62,6 +62,32 @@ describe("sizeStatement", () => {
     expect(s.kind).toBe("location");
   });
 
+  test("an absurd overrideMemory is disregarded, and the disregard is said",
+    () => {
+      // override_memory=4, typed live: the unit of the field is unreliable,
+      // and a derived 4Mi limit is an OOMKill the derivation would be
+      // introducing. The generator floors it (ENGINE_MIN_DERIVED_MEM_MB);
+      // this mirrors it, and says so rather than silently showing 8Gi.
+      const s = sizeStatement(null, null,
+        { overrideCPU: 1, overrideMemory: 4 });
+      expect(s.kind).toBe("location");
+      expect(s.cpu).toBe("1");
+      expect(s.mem).toBe("8Gi");
+      expect(s.text).toContain("4 MB");
+      expect(s.text).toContain("not used");
+      expect(s.text).not.toContain("--");
+    });
+
+  test("an absurd overrideMemory alone reads as the default, disregard named",
+    () => {
+      const s = sizeStatement(null, null,
+        { overrideCPU: null, overrideMemory: 32 });
+      expect(s.kind).toBe("default");
+      expect(s.mem).toBe("8Gi");
+      expect(s.text).toContain("32 MB");
+      expect(s.text).toContain("not used");
+    });
+
   test("a location read and holding nothing is the default, said so", () => {
     const s = sizeStatement(null, null,
       { overrideCPU: null, overrideMemory: null });
