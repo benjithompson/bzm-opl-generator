@@ -688,7 +688,7 @@ def capacity_plan(p: PlanIn):
     """Size a load target, for a browser that has connected to nothing.
 
     Not behind _client() and not behind facts, which is the same exemption
-    /api/facts/manual and /api/preflight take and for a stronger reason: this
+    /api/facts/manual takes and for a stronger reason: this
     is what somebody opens the UI for *before* they have an account to connect
     it to or a cluster to point it at.
     """
@@ -696,32 +696,6 @@ def capacity_plan(p: PlanIn):
                    vus_per_engine=p.vus_per_engine,
                    engine_cpu=p.engine_cpu, engine_mem=p.engine_mem,
                    engines_per_node=p.engines_per_node, agents=p.agents)
-
-
-# -- preflight ----------------------------------------------------------------
-
-class PreflightIn(BaseModel):
-    facts: dict
-    options: dict = {}
-    # `Any`, not `dict`: a file that is not an object at all -- a JSON array, a
-    # number -- has to reach doctor's own refusal, which names what it found and
-    # what it wanted. Typed as dict here it would come back as a 422 naming a
-    # field of this model, which tells the person who picked the wrong file
-    # nothing about the file.
-    evidence: Any
-
-
-@app.post("/api/preflight", description=core.preflight.__doc__)
-def preflight(p: PreflightIn):
-    """The verdicts `doctor --cluster-evidence` prints, for the configuration
-    the browser currently holds.
-
-    Deliberately not behind _client(), for the same reason /api/facts/manual is
-    not: reading an evidence file needs no BlazeMeter account and no cluster,
-    and requiring a key would put a preflight behind the one thing this case
-    does not have. See core.preflight for the rest.
-    """
-    return _answer(core.preflight, p.facts, p.options, p.evidence)
 
 
 # -- reading the cluster ------------------------------------------------------

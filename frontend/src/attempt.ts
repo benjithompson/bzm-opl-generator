@@ -9,8 +9,8 @@
 // two different clicks, and no reader can tell which one is being reported.
 //
 // So: one record, built by one of the constructors below and never assembled
-// field by field, in preflight.ts's shape (a state plus the named transitions
-// that reach it). The page owns it; the download step reports the next one.
+// field by field: a state plus the named transitions that reach it. The page
+// owns it; the download step reports the next one.
 // That is what keeps the call beside the button that says what it costs, which
 // is where CLAUDE.md wants every request that can touch the account.
 //

@@ -62,7 +62,7 @@ export interface Options { [k: string]: unknown }
  *
  *  The arithmetic is all on the server, not because it is hard -- it is a
  *  division and two multiplications -- but because doctor judges a cluster
- *  against the same constants and the planner and the preflight disagreeing is
+ *  against the same constants and the planner and doctor disagreeing is
  *  the one failure this feature can have. A second copy in TypeScript would be
  *  a second engine footprint to keep in step.
  *
@@ -156,9 +156,9 @@ export interface Capacity {
  *  blank beside the button. tests/test_server.py holds the set equal to core's
  *  for that reason, across two languages neither compiler can see the other of.
  *
- *  Declared rather than served, for the reason Strength gives below: this set is
- *  closed. A fifth branch is not a list entry, it is a case the page has to grow
- *  a sentence for, and a union is what makes the compiler point at it. */
+ *  Declared rather than served, because this set is closed. A fifth branch is
+ *  not a list entry, it is a case the page has to grow a sentence for, and a
+ *  union is what makes the compiler point at it. */
 export type TokenBranch = "given" | "rotated" | "reused" | "placeholder";
 
 /** What happened to the credential, carried on every answer that generates a
@@ -360,13 +360,6 @@ export const api = {
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
   svCheck: (host: string, scheme: SvScheme) =>
     req<SvCheckOut>("GET", "/api/sv-check?" + new URLSearchParams({ host, scheme })),
-  /** The preflight verdicts for a cluster nobody here can reach, from the file
-   *  its collector script produced. Needs no API key and no cluster, like
-   *  manualFacts -- `evidence` is the parsed file, sent whole and judged
-   *  server-side, because what counts as evidence is doctor's to say. */
-  preflight: (facts: Facts | null, options: Options, evidence: unknown) =>
-    req<PreflightOut>("POST", "/api/preflight",
-      { facts: facts ?? {}, options, evidence }),
   /** Download the bundle, and report what that did to the credential.
    *
    *  Here rather than beside `saveBlob` below, which is where it used to be: it
@@ -416,126 +409,10 @@ export const api = {
  *  which is the one place the real one is chosen. */
 export type Api = typeof api;
 
-/** One verdict, exactly as `doctor` reaches it. FAIL = a test would not start;
- *  WARN = the numbers are wrong or it will bite later, but a test still starts.
- *  Nothing in the browser re-decides one. */
-export type CheckStatus = "PASS" | "WARN" | "FAIL";
-export interface PreflightCheck {
-  name: string;
-  status: CheckStatus;
-  detail: string;
-}
-/** The verdicts, in doctor's order — which puts where the answers came from
- *  first, because it qualifies every one after it. `namespace` is the one they
- *  were judged against: the configured one, which the evidence file may not be
- *  the one collected for (the leading check says so when it is not). */
-export interface PreflightOut {
-  namespace: string;
-  /** The list in one sentence, as `doctor` prints it under its own report: the
-   *  counts, and -- only where something FAILed -- what that costs. Served
-   *  rather than composed here, because when to state the consequence is a
-   *  judgement about the verdicts and doctor is the one that makes it. */
-  summary: string;
-  /** What the file says about itself. Distinct from `namespace` above on
-   *  purpose: that is the namespace being preflighted, this is the one the
-   *  file describes, and a file collected for another namespace says little
-   *  about this one. */
-  evidence: EvidenceSummary;
-  checks: PreflightCheck[];
-  /** What the same file implies about the options, in suggest.py's reporting
-   *  order. Carried here rather than fetched separately because both halves are
-   *  judged against the configuration that was sent, and two round trips is two
-   *  answers that can end up describing different configurations in one panel. */
-  suggestions: Suggestion[];
-  /** Why there are none, when there are none -- a file that never reached a
-   *  cluster and a cluster that constrains nothing produce the same empty list,
-   *  and only the first is worth re-collecting for. Null once there is anything
-   *  to show. */
-  why_nothing: string | null;
-}
-
-/** What an imported evidence file says about itself, read off the document by
- *  doctor.evidence_summary. The verdicts are only ever as good as these three:
- *  how stale the read is, which namespace it describes, and which sections the
- *  collector was refused — a null section is "we did not look", never "there
- *  are none". Nulls where the file recorded neither. */
-export interface EvidenceSummary {
-  collected_at: string | null;
-  namespace: string | null;
-  /** Whether that namespace is a different one from the namespace being
-   *  preflighted, so every namespaced verdict below describes the other one.
-   *  The comparison is doctor's -- it is what the leading verdict says in
-   *  prose -- and false is "nothing to report", which is why `namespace` is
-   *  still here beside it: a file that named none is not a mismatch. */
-  elsewhere: boolean;
-  /** Section names, in the order the collector wrote them; empty when it read
-   *  everything it asked for. */
-  unreadable: string[];
-}
-
-/** How strongly a suggestion holds. DECISIVE: the evidence settles it and
- *  `value` is the answer. SUGGESTIVE: it narrows the choice without making it,
- *  `value` is always null, and `candidates` is the shortlist a person still has
- *  to pick from. The invariant is suggest.py's and is asserted over every
- *  fixture there — `strength` alone is enough to decide what may be offered.
- *
- *  Declared here rather than served, unlike the vocabularies further down, and
- *  the difference is that this set is closed. A backend list grows: one is
- *  added to generate.py and every consumer should get it for free, so a copy
- *  here is a picker quietly missing an entry. A strength is not added — it is a
- *  branch the UI has to grow, in `offer()` and in STRENGTH_STYLE, and a union is
- *  what makes the compiler point at both. Served, a third strength would arrive
- *  as an undefined style and a row offering nothing, at runtime, on a customer's
- *  screen. Same reasoning for MergeState below. */
-export type Strength = "DECISIVE" | "SUGGESTIVE";
-
-/** How the suggestion stands against the options that were sent, from
- *  suggest.merge(). SETTLED: already configured this way. FILL: the option
- *  still holds what the generator would have used anyway. CHOOSE: suggestive,
- *  nothing picked yet. CONFLICT: the configuration says something else, which
- *  is a disagreement to show rather than a write to make. Declared rather than
- *  served for the reason Strength gives: every state is a branch in `offer()`,
- *  and the four are what suggest.merge() can return, not a list it extends. */
-export type MergeState = "SETTLED" | "FILL" | "CHOOSE" | "CONFLICT";
-
-/** One implication of the evidence, and where it stands. `option` is a generate
- *  option (asserted against DEFAULT_OPTIONS in tests/test_suggest.py), `detail`
- *  is why in the reader's terms, and `evidence` are dotted paths into the file
- *  so a reader can go and disagree with it. */
-export interface Suggestion {
-  option: string;
-  strength: Strength;
-  /** The settled value — always null for a suggestive one. */
-  value: unknown;
-  candidates: unknown[];
-  ruled_out: unknown[];
-  evidence: string[];
-  detail: string;
-  state: MergeState;
-  /** What the configuration holds for this option right now. Shown whatever the
-   *  state: applying is always a value replacing a value. */
-  current: unknown;
-  /** The four values above as a reader sees them, from suggest.shown: JSON the
-   *  way profile.json would carry it (`false`, not `False`), and unset said in
-   *  words. Served rather than formatted here -- the same rule was written
-   *  twice, in two languages, and `JSON.stringify` and `json.dumps` do not
-   *  even agree about the space after a colon. The raw values stay beside
-   *  them: they are what applying writes. */
-  current_shown: string;
-  value_shown: string;
-  candidates_shown: string[];
-  ruled_out_shown: string[];
-  /** Why this row cannot be offered, or null. generate() takes one CA mode of
-   *  three, so writing one over another produces a bundle that does not
-   *  generate -- the refusal belongs where that rule is, and arrives already
-   *  written. */
-  blocked: string | null;
-}
-
 /** Served rather than declared here: generate.py owns both lists, and a copy in
  *  TypeScript is how a new expose backend goes missing from the picker. The
- *  rule is about vocabularies that grow — see Strength above for why the two
- *  closed sets are deliberately the other way round. */
+ *  rule is about vocabularies that grow — a closed set like TokenBranch is
+ *  deliberately the other way round. */
 export interface SvBackend {
   group: string;
   resources: string[];

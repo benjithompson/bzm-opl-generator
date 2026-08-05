@@ -12,27 +12,12 @@
 // BlazeMeter again, so persisting it trades the only real secret on the page
 // for saving one paste. `strip` is where that decision lives, and it is tested.
 //
-// **The imported evidence document is not written here either**, and `strip`
-// does not grow a second clause for it: the snapshot has no field it could
-// arrive in (see SavedPreflight). That is deliberate and it is the stronger
-// version of the same argument -- a value that cannot be expressed cannot be
-// forgotten on the way out, where a value stripped in one function is one
-// refactor away from being kept. The document is somebody else's cluster,
-// collected by somebody else, and it is the one thing on this page that is
-// neither an id nor a value typed into a form. What *is* written is the
-// answer doctor gave about it -- the verdicts and the suggestions, which is
-// what the panel is already showing to whoever is at this browser.
-//
 // Plain data in, data out: no React here, which is what makes session.test.ts
 // possible without a DOM.
-import { Options, PreflightOut } from "./api";
+import { Options } from "./api";
 // The planner's form, as the planner declares it. A second copy of the
 // shape here is a field that gets added to one and not the other.
 import type { PlanInputs } from "./usePlan";
-// What the preflight panel wrote into the options and what each of them held
-// first -- suggestions.ts's own record, stored as it stands for the same reason
-// PlanInputs is: the shape belongs to the module that reads it back.
-import type { Applied } from "./suggestions";
 
 /** Bumped when the shape changes. A snapshot from an older build is dropped
  *  rather than half-read: the fields are ids and options that other code
@@ -62,43 +47,12 @@ import type { Applied } from "./suggestions";
 // explain or take them back (#119). Read half, it would put an undo history
 // back against verdicts that are not there, which is the state the issue calls
 // worse than restoring neither.
-export const VERSION = 8;
+// 9: the preflight left the page, and its field with it. A v8 snapshot holds
+// options that were written from a suggestion beside verdicts nothing renders
+// any more -- the same half-a-pair #119 is about, arrived at from the other
+// side, so it is dropped rather than part-read.
+export const VERSION = 9;
 const KEY = "bzm-opl-gen.session";
-
-/** An imported cluster read, as much of it as is worth writing down.
- *
- *  **One field rather than two.** The verdicts and the undo history are one
- *  piece of work: the undo is only ever offered on a suggestion row, so a
- *  history restored without the list it is rendered in is an undo nothing can
- *  reach, and verdicts restored without the history are a panel that explains a
- *  change it can no longer reverse. Stored together they cannot come apart.
- *
- *  **What is not here is the evidence document**, and that is the size
- *  decision. The document grows with the cluster and the answer does not: a
- *  synthetic file of 3 realistic nodes is 32KB, the same file at 20 nodes is
- *  206KB and at 60 nodes 615KB, while the preflight answer stays at 4.2KB
- *  throughout -- it is bounded by doctor's check list (13) and suggest.py's
- *  rules (9, a dozen suggestions at the most), neither of which is a property
- *  of the cluster. Against a 5MB sessionStorage budget the answer is
- *  comfortable and the document is the one field that could exhaust it, and a
- *  quota refusal costs the *whole* snapshot -- `save` swallows it, so the ids,
- *  the options and this would all silently stop being written, not just the
- *  part that grew. That is why the unbounded half is left out rather than left
- *  in and guarded: there is nothing to guard it with that does not have to
- *  guess what will fit.
- *
- *  The cost is that a restored preflight cannot be re-judged -- re-running it
- *  needs the document -- so the verdicts stop following the configuration.
- *  `preflight.restored` is where that is carried and the panel is where it is
- *  said. */
-export interface SavedPreflight {
-  /** The file the verdicts came from. Named on screen, so a restored answer
-   *  can still be traced back to the file that produced it -- and re-picked,
-   *  where whoever is at the browser still has it. */
-  file: string;
-  out: PreflightOut;
-  applied: Applied;
-}
 
 export interface Session {
   v: number;
@@ -137,17 +91,6 @@ export interface Session {
    *  served vocabulary first -- the same rule the confirmations keep by being
    *  stored as the ids they were made against. */
   declaredFeature: string | null;
-  /** The imported cluster read, or null where no file has been imported.
-   *
-   *  Null is "nobody imported anything", and it is the only thing null says
-   *  here -- the two situations this codebase keeps apart everywhere else are
-   *  kept apart by there being no second way to arrive at it. A file that was
-   *  imported is either written down whole (the file name, the verdicts and the
-   *  history together) or the write failed and the previous snapshot stands; no
-   *  path produces a half of one. What a *restore* then makes of it is
-   *  preflight.ts's, through `fromSnapshot()`, because the page holds no
-   *  document afterwards and the panel has to say so. */
-  preflight: SavedPreflight | null;
   options: Options;
   step: number;
   /** Which of the two views is open. The account rollup is not a step, so the
