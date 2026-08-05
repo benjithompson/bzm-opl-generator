@@ -7,6 +7,12 @@ doc; this file is what a session needs before touching the code or the tests.
 Every rule below cost something to learn. Where the reason is short it is here;
 where it is long it is a comment at the site, and the site is named.
 
+`CONTEXT.md` is the glossary, and it settles which word wins where two were
+doing one job: **functionality** (never feature) for what a private location is
+enabled to do, **agent** (never ship, outside `ship_id`), **profile** for a JSON
+file of options and **sizing** for a statement of the capacity a run needs.
+Read it before naming anything new.
+
 ## Four test layers
 
 **Offline — `.venv/bin/python -m pytest tests -q`.** Stdlib + fixtures, no
@@ -62,7 +68,7 @@ bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
 | what | where it comes from |
 |---|---|
 | account / workspace / project | `locations`, or the account owner |
-| scratch private location + ship | create your own (`create-location`, `create-ship`) |
+| scratch private location + agent | create your own (`create-location`, `create-agent`) |
 | smoke test for `--run-test` | an existing Taurus test that makes **real HTTP requests** |
 | API key | `api-key.json` in the repo root (gitignored) |
 
@@ -171,8 +177,8 @@ missing tools. The rest is what it cannot fix for you.
   server keeps what is genuinely its own: routes, request models, the zip's
   headers, where a pasted key lives for a browser session, the TTL cache, and
   how the process is bound. **Do not re-export core's vocabulary from `server`**
-  — `FEATURES` was aliased there, an alias does not follow a monkeypatch, and a
-  test patched one list while asserting against the other.
+  — `FUNCTIONALITIES` was aliased there, an alias does not follow a
+  monkeypatch, and a test patched one list while asserting against the other.
 
 - **`plan.py` reaches nothing, and that is the requirement.** It sizes a load
   target (users → engines → nodes → machine size) for somebody with no cluster
@@ -312,15 +318,16 @@ missing tools. The rest is what it cannot fix for you.
   domain state and every effect that reaches the server**, handed down as typed
   props, so `core`-style ownership holds here too; a panel keeps only what is
   local to its own view (folds, busy flags, copied). A group belongs to no
-  feature (`SHARED_GROUPS`) or to one (`groupsOf`), and both are on screen at
-  once — there is no `visibleGroups`/`setButHidden`/`hiddenBlockers` any more,
+  functionality (`SHARED_GROUPS`) or to one (`groupsOf`), and both are on screen
+  at once — there is no `visibleGroups`/`setButHidden`/`hiddenBlockers` any more,
   and nothing that hands back what a view was hiding. Don't reintroduce one: a
-  feature is a view over a location's options, never a scope on what gets
+  functionality is a view over a location's options, never a scope on what gets
   generated.
 
-  **The format is step 2's first control, and the form follows it.** A feature
-  hides nothing; a *format* genuinely does, and the two must not be confused. It
-  used to be chosen on the download step, one step too late — Configure asked
+  **The format is step 2's first control, and the form follows it.** A
+  functionality hides nothing; a *format* genuinely does, and the two must not
+  be confused. It used to be chosen on the download step, one step too late —
+  Configure asked
   for a namespace, a ServiceAccount, node selectors and engine limits, none of
   which a docker bundle carries. What is on screen now derives from
   `formats.optionApplies` over the generator's own `DOCKER_IGNORED`, **served**
@@ -357,13 +364,15 @@ missing tools. The rest is what it cannot fix for you.
   without an image we publish: that was the grilling, and the answer was no.
 
   **The planner is step 1's first card, not a view of its own.**
-  `steps/CapacityProfile` states the profile and one Edit expands it downward;
-  picking a location opens what that profile would change about it, before →
-  after against what the account holds. The fold is legitimate only because step
+  `steps/Sizing` states the sizing and one Edit expands it downward;
+  picking a location opens what that sizing would change about it, before →
+  after against what the account holds. A **sizing**, never a profile: a
+  profile here is a JSON file of generator options, and CONTEXT.md keeps the
+  two apart. The fold is legitimate only because step
   1 needs no account -- sizing a cluster for somebody who has none is why the
   planner exists, and `App.test.tsx` drives the page with no key, which is what
-  keeps it true. The profile *fills* the location draft and the fields stay
-  editable; a hand edit outranks later profile changes until Reset. It has no
+  keeps it true. The sizing *fills* the location draft and the fields stay
+  editable; a hand edit outranks later sizing changes until Reset. It has no
   `agents` field on purpose (see `usePlan.ts`): on Kubernetes an agent is a
   cluster, so you scale `slots` and let the node pool autoscale -- 78% of the
   locations in one real account have exactly one agent, and the largest is one
@@ -380,8 +389,8 @@ missing tools. The rest is what it cannot fix for you.
   location: the panel reported `1 → 4, 500 → 400, not set → 2, not set → 8192`
   and the account held exactly that. `core.LOCATION_SETTINGS` is a closed set
   because BlazeMeter's PATCH replaces `funcIds` wholesale, so a general
-  passthrough would drop every feature a caller did not name. Every route that
-  writes carries `server._writes`, which drops the cache after it; a test
+  passthrough would drop every functionality a caller did not name. Every route
+  that writes carries `server._writes`, which drops the cache after it; a test
   asserts that over the app's own routes, because the one that had to remember
   had forgotten.
 
@@ -392,16 +401,17 @@ missing tools. The rest is what it cannot fix for you.
   turning a funcId on changes what the location *is*, which is BlazeMeter's own
   UI's.
 
-  **A feature is judged twice, and the two are different questions.** The
+  **A functionality is judged twice, and the two are different questions.** The
   location decides whether it is *run*; the format decides whether this bundle
   can *serve* it, and a card can be silent for either reason without them being
-  the same reason. `sv.featureBlocked` is the second, keyed by feature id, and
-  it says so in its own sentence — "not possible in this bundle" and "not
-  enabled on this location" are separate answers and the card gives only the
-  true one. Don't generalise it into a served "which features does a format
-  refuse" table: helm and docker refuse *one* feature and nothing else refuses
-  any, and `DOCKER_IGNORED` is docker-only precisely because helm ignores
-  nothing — it refuses. **A format's refusal clears no options**; the *format*
+  the same reason. `sv.functionalityBlocked` is the second, keyed by
+  functionality id, and it says so in its own sentence — "not possible in this
+  bundle" and "not enabled on this location" are separate answers and the card
+  gives only the true one. Don't generalise it into a served "which
+  functionalities does a format refuse" table: helm and docker refuse *one* and
+  nothing else refuses any, and `DOCKER_IGNORED` is docker-only precisely
+  because helm ignores nothing — it refuses. **A format's refusal clears no
+  options**; the *format*
   gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
   configuration somebody wrote outranks a segment, and only `notRunPatch` — the
   location's answer — wipes anything. That correction is the one write on this
@@ -412,9 +422,10 @@ missing tools. The rest is what it cannot fix for you.
   **`blockedFormats` follows what is configured, never what is demanded** (#115).
   `generate()` refuses a helm or docker bundle on `_sv_cfg` returning a config,
   and never reads the funcIds first. Read off the demand instead, the gap was a
-  location whose funcIds carry no served feature (real accounts have them: tdm,
-  dataPublisher, delphix) — `enabledFeatures` answers null, `runsFeature` reads
-  null as yes, every switch is offered, `notRunPatch` clears nothing, and a full
+  location whose funcIds carry no served functionality (real accounts have them:
+  tdm, dataPublisher, delphix) — `enabledFunctionalities` answers null,
+  `runsFunctionality` reads null as yes, every switch is offered, `notRunPatch`
+  clears nothing, and a full
   SV configuration generated as docker and was refused by the server with the
   segment still enabled. `svState` therefore takes `runs` as a fourth input:
   options on their way out must not take a format with them, or a docker choice
@@ -422,32 +433,35 @@ missing tools. The rest is what it cannot fix for you.
   to the ones `generate()` actually raises on, by `test_server.py`, because the
   two refusals are far apart and easy to grow a third of.
 
-  **A feature the location does not run is not on the configure step at all.**
-  It was *stated* for a while (#113) — a card naming the funcId to add — which
-  is a true sentence about the location and nothing that step's reader can act
-  on, and on a performance location (most of them) it was half the section. So
-  `ConfigurePanel` filters `p.features` by `optionGroups.runsFeature` and the
-  card, its groups and its rail entry go together. **Manual entry is exempt, and
-  structurally**: there the card *is* the declaration (see below), so filtering
-  by the answer would take away the control that gives it — which is why
-  `FeatureCard`'s not-run branch has one sentence and not two. Hiding is still
+  **A functionality the location does not run is not on the configure step at
+  all.** It was *stated* for a while (#113) — a card naming the funcId to add —
+  which is a true sentence about the location and nothing that step's reader can
+  act on, and on a performance location (most of them) it was half the section.
+  So `ConfigurePanel` filters `p.functionalities` by
+  `optionGroups.runsFunctionality` and the card, its groups and its rail entry
+  go together. **Manual entry is exempt, and structurally**: there the card *is*
+  the declaration (see below), so filtering by the answer would take away the
+  control that gives it — which is why `FunctionalityCard`'s not-run branch has
+  one sentence and not two. Hiding is still
   only half — `notRunPatch` clears the options too, through each group's own
   `disable`, because `generate()` refuses an `sv_ingress` with no subdomain
   whatever the location runs and a hidden row would just move the blocker to the
-  server. The three states stay three (`enabledFeatures`): runs, does not run,
-  and nobody has said, which is null and shows everything.
+  server. The three states stay three (`enabledFunctionalities`): runs, does not
+  run, and nobody has said, which is null and shows everything.
 
-  **In manual entry the feature is not a view at all — it is the declaration**
+  **In manual entry the functionality is not a view at all — it is the
+  declaration**
   (#118). It names the funcId the typed identity is gathered for, which names
   the images the bundle carries, and it was the one bundle-deciding input a
   refresh did not restore: an SV identity came back a performance one,
   `notRunPatch` wiped its `sv_*` options on the way, and the namespace
   suggestion rewrote a name generated into every manifest. So it is in the
-  snapshot (`session.declaredFeature`, null in connect mode structurally rather
-  than by convention), and **checked** against the served vocabulary rather than
-  trusted: a feature no longer offered names no funcId, so it is dropped and the
-  page lands where a fresh manual session lands, rather than gathering facts for
-  nothing with no radio on to say so. Manual mode never reads a feature back off
+  snapshot (`session.declaredFunctionality`, null in connect mode structurally
+  rather than by convention), and **checked** against the served vocabulary
+  rather than trusted: a functionality no longer offered names no funcId, so it
+  is dropped and the page lands where a fresh manual session lands, rather than
+  gathering facts for nothing with no radio on to say so. Manual mode never
+  reads a functionality back off
   `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
   reading them can only restate it, or lose it while `/api/func-ids` is still
   outstanding.

@@ -196,7 +196,8 @@ class BzmClient:
         """PATCH the location's settings. Only what is passed is sent.
 
         No `funcIds`. This PATCH replaces the list wholesale, so a caller that
-        meant to add a feature drops every other one the location runs; it used
+        meant to add a functionality drops every other one the location runs; it
+        used
         to take them, additively, for core.add_func_id, and that went with the
         page affordance that was its only caller (#113). What a location runs is
         what it *is*, and BlazeMeter's own UI is where it changes. Leaving the

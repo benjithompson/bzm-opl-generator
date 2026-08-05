@@ -1,4 +1,10 @@
-// The capacity profile: what the run needs, above the locations it might run on.
+// The sizing: what the run needs, above the locations it might run on.
+//
+// A *sizing*, never a profile (#155). A profile in this repo is a JSON file
+// of generator options -- `profiles/*.json`, `out/profile.json`, `--profile`
+// -- and this is a different kind of thing entirely: a statement of the
+// capacity one functionality needs, which the planner turns into engines,
+// nodes and a machine size.
 //
 // It was a view of its own -- "Plan capacity", beside Generate in the drawer --
 // and being beside it was the problem. The planner is the *first* question ("how
@@ -13,7 +19,7 @@
 // which is why this card renders and computes on a page nobody has connected.
 // Any dependency added here puts the first step behind a later one.
 //
-// Nothing in it applies anything. The fields *are* the profile: there is no
+// Nothing in it applies anything. The fields *are* the sizing: there is no
 // Apply, because there is nothing to apply it to that is not already reading
 // them -- the location panels below take their `after` column straight from
 // this, and the engine size is the bundle's own option rather than a copy of
@@ -27,7 +33,7 @@ import { EngineSizeSelect } from "../groups/SizingGroup";
 import { ENGINE_SIZES } from "../optionGroups";
 import { PlanAsk, PlanInputs, useCapacityPlan, useEngineRating } from "../usePlan";
 
-export function CapacityProfile(props: {
+export function Sizing(props: {
   /** The caller of the local routes, handed down like every other route on this
    *  page. /api/plan reaches nothing outside this process, which is the whole
    *  reason this card works unconnected -- but it is still a request, and a
@@ -116,7 +122,7 @@ export function CapacityProfile(props: {
                       border-b border-slate-200">
         <div className="grow min-w-0">
           <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">
-            Capacity profile
+            Sizing
           </p>
           <p className={"text-sm mt-0.5 " + (busy ? "opacity-50" : "")}>
             {plan ? (

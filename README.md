@@ -7,7 +7,7 @@ actual BlazeMeter account** instead of hand-edited templates.
 ```
         BlazeMeter API                customer parameters
    (harbor, ships, funcIds,        (namespace, registry, platform,
-    live image inventory)           features, secret policy, ...)
+    live image inventory)           functionality, secret policy, ...)
               \                        /
                v                      v
           facts.json  ---->  bzm-opl-gen generate  ---->  out/*.yaml + README
@@ -88,7 +88,7 @@ cp examples/api-key.example.json api-key.json   # then fill in id + secret
 
 `api-key*.json` is gitignored. The key needs read access to the account whose
 location you're generating for, and write access only where something is created
-or changed: `create-location`, `create-ship`, `delete-location`, `livetest`, and
+or changed: `create-location`, `create-agent`, `delete-location`, `livetest`, and
 `generate --rotate-token`, which mints a credential and kills the previous one.
 
 ## Quick start
@@ -101,7 +101,7 @@ bzm-opl-gen plan --users 5000 -o ./plan     # writes capacity-request.md
 
 # 1. find (or create) the location and agent
 bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
-bzm-opl-gen create-ship --api-key api-key.json --harbor-id <HARBOR_ID> \
+bzm-opl-gen create-agent --api-key api-key.json --harbor-id <HARBOR_ID> \
     --name my-k8s-agent        # prints ship_id + AUTH_TOKEN -- keep the token
 
 # 2. gather the location's facts from the account

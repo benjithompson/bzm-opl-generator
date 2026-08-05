@@ -2,7 +2,7 @@
 
 Facts = everything the generator needs that comes from the BlazeMeter account
 rather than from the customer's cluster team:
-  - harbor (location) id/name, funcIds (which features are enabled)
+  - harbor (location) id/name, funcIds (which functionalities are enabled)
   - ships (agents): id, name, installed crane version
   - actual image inventory reported by running agents (ground truth for
     private-registry mirroring), classified performance vs other

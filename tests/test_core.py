@@ -101,16 +101,16 @@ class FakeClient:
         return dict(self._harbor)
 
 
-# -- nothing here turns a feature on for a location ---------------------------
+# -- nothing here turns a functionality on for a location ---------------------
 #
 # core.add_func_id was here, additive by construction, behind the configure
 # page's "Enable on this location…". Both went in #113: what funcIds a location
 # carries is what the location *is*, and BlazeMeter's own UI is where that
 # changes. The client cannot send them any more either -- see
-# test_the_client_cannot_replace_a_location_s_features.
+# test_the_client_cannot_replace_a_location_s_functionalities.
 
 
-def test_the_client_cannot_replace_a_location_s_features():
+def test_the_client_cannot_replace_a_location_s_functionalities():
     """BlazeMeter's PATCH replaces `funcIds` wholesale, so a caller meaning to
     add one drops the rest. With nothing left that adds them additively, the
     parameter would be that hazard with nothing guarding it."""
@@ -463,11 +463,11 @@ def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
 
 def test_one_sentence_names_every_place_a_token_can_be_got_from():
     """There were two of these -- one naming the BlazeMeter UI's install command,
-    one naming create-ship and a deployed Secret -- and `resolve_auth_token` used
+    one naming create-agent and a deployed Secret -- and `resolve_auth_token` used
     each in a different branch. Three real sources, so one sentence carries all
-    three; a caller who never ran create-ship still has somewhere to go."""
+    three; a caller who never ran create-agent still has somewhere to go."""
     msg = core.token_recovery_hint({"namespace": "ns1"})
-    assert "create-ship" in msg, "what was printed when the agent was made"
+    assert "create-agent" in msg, "what was printed when the agent was made"
     assert "Private Locations" in msg, "the BlazeMeter UI's install command"
     assert "kubectl -n ns1 get secret" in msg, "an agent already deployed"
 
@@ -1304,15 +1304,16 @@ def test_option_docs_cover_every_option():
     assert set(core.option_docs()) == set(gen_mod.DEFAULT_OPTIONS)
 
 
-def test_every_modelled_func_id_belongs_to_a_feature():
-    """A funcId the facts layer models but no feature claims would leave a
-    location carrying only that one with no feature to start on. The reverse is
-    deliberately allowed: a feature may claim a funcId that needs no images of
+def test_every_modelled_func_id_belongs_to_a_functionality():
+    """A funcId the facts layer models but no functionality claims would leave
+    a location carrying only that one with nothing to start on. The reverse is
+    deliberately allowed: a functionality may claim a funcId that needs no
+    images of
     its own (tdm and delphix are already in that position), and the funcIds the
     tool does not model at all stay unclaimed -- the selector reads those as no
     signal rather than as an error."""
     from bzm_opl_gen import facts as facts_mod
-    claimed = {f for feat in core.FEATURES for f in feat["func_ids"]}
+    claimed = {f for fn in core.FUNCTIONALITIES for f in fn["func_ids"]}
     assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
     assert "tdm" not in claimed
 
@@ -1434,7 +1435,7 @@ def test_update_location_with_nothing_to_change_writes_nothing():
 
 def test_update_location_refuses_a_setting_it_does_not_own():
     """`funcIds` in particular: the PATCH replaces the list wholesale, so a
-    general passthrough would drop every feature the caller did not name."""
+    general passthrough would drop every functionality the caller did not name."""
     client = FakeClient(harbor=_loc())
     with pytest.raises(core.BadRequest, match="funcIds"):
         core.update_location(client, "h1", funcIds=["mockServices"])

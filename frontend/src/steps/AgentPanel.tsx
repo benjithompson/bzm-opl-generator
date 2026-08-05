@@ -181,7 +181,7 @@ export interface AgentPanelProps {
   locations: LocationHandover;
   agents: AgentHandover;
   credential: CredentialHandover;
-  /** What the capacity profile above this panel is sizing. Passed through to
+  /** What the sizing above this panel states. Passed through to
    *  the open location's settings, which is where a profile turns into four
    *  numbers about one location -- and where the only control that writes them
    *  to the account lives. Sizing needs no account, so this is not a record
@@ -434,7 +434,7 @@ export function AgentPanel({
                       className={on ? "bg-bzm/10 border-l-4 border-bzm"
                         : i % 2 ? "bg-slate-50/70" : "bg-white"}>
                       {/* Pinned open by the click that selects: the row opens
-                          onto what the capacity profile would change about this
+                          onto what the sizing would change about this
                           location and the one control that saves it, and a
                           section that folds itself the moment you act on it
                           takes that decision off screen. It was worse than it
@@ -699,7 +699,7 @@ export function AgentPanel({
               <NoticeMsg msg={agents.tokenNotice} />
               {agents.facts && (
                 <p className="text-xs text-slate-500">
-                  image inventory: {agents.facts.images_source} · features:{" "}
+                  image inventory: {agents.facts.images_source} · functionalities:{" "}
                   {agents.facts.func_ids?.join(", ")}
                 </p>
               )}

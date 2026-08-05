@@ -90,7 +90,7 @@ test("a slow capacity answer for the previous account never lands under the new 
       workspaces: async () => [],
       optionDefaults: async () => ({}),
       funcIdChoices: async () => [],
-      features: async () => [],
+      functionalities: async () => [],
       svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
       capacity: (accountId: number) =>
         (accountId === 1 ? alpha : bravo).promise,
@@ -199,7 +199,7 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
       platform: "openshift", output_format: "helm",
     }),
     funcIdChoices: async () => [],
-    features: async () => [{
+    functionalities: async () => [{
       id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
       func_ids: ["mock-services"],
     }],
@@ -271,7 +271,7 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     expect(screen.getByText(/Switched to/)).toBeTruthy();
   });
 
-// -- a feature the location does not run -------------------------------------
+// -- a functionality the location does not run --------------------------------
 // It is not on the configure step at all now. #113 made it a card that stated
 // it and named the funcId to add, which is a true sentence about the location
 // and nothing this step's reader can act on -- and on a performance location,
@@ -297,9 +297,9 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
 // Both need a page: what a *card* offers, and what the options end up as after
 // the page has settled, is exactly what optionGroups.test.ts cannot see.
 
-/** An account whose vocabulary carries both features and whose one location
+/** An account whose vocabulary carries both functionalities and whose one location
  *  runs only the first -- which is the state the card has to state. */
-function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
+function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
     keyStatus: async () => ({
@@ -321,7 +321,7 @@ function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
       output_format: "manifests",
     }),
     funcIdChoices: async () => [],
-    features: async () => [
+    functionalities: async () => [
       { id: "performance", label: "Performance & functional testing",
         namespace: "blazemeter", func_ids: ["performance"] },
       { id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
@@ -342,22 +342,23 @@ function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
   });
 }
 
-/** One feature's card, by the anchor the rail already links to. Found by id
+/** One functionality's card, by the anchor the rail already links to. Found by id
  *  rather than by its label, which is on screen twice -- the card and the rail
  *  entry pointing at it. */
-const card = (featureId: string) =>
-  within(document.getElementById("cfg-f-" + featureId)!);
+const card = (functionalityId: string) =>
+  within(document.getElementById("cfg-f-" + functionalityId)!);
 
 /** ...and whether there is one at all, which is now an answer in its own right:
- *  a feature the location does not run has no card, no rail entry and no
+ *  a functionality the location does not run has no card, no rail entry and no
  *  sentence. `card()` throws on a missing one, so the two reads are separate. */
-const hasCard = (featureId: string) =>
-  document.getElementById("cfg-f-" + featureId) != null;
+const hasCard = (functionalityId: string) =>
+  document.getElementById("cfg-f-" + functionalityId) != null;
 
-test("a feature a manually entered identity was not declared to run has no switches",
+test("a functionality a manually entered identity was not declared to run has "
+     + "no switches",
   async () => {
     const asked: Options[] = [];
-    render(<App api={twoFeatureAccount(asked)} />);
+    render(<App api={twoFunctionalityAccount(asked)} />);
 
     // Manual entry, which is where there was no guard: nothing is read, so the
     // declaration below is the only thing that says what this location runs.
@@ -369,18 +370,18 @@ test("a feature a manually entered identity was not declared to run has no switc
                      { target: { value: "6a679d3445115b6651011715" } });
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
-    // Declared performance -- the first served feature, which is what a manual
+    // Declared performance -- the first served functionality, which is what a manual
     // identity opens on.
     await waitFor(() => expect(
       card("performance").getByLabelText("Enabled")).toHaveProperty("checked", true));
 
     // The card for the other one states it and offers nothing. A switch here
     // was pressable, seeded an ingress with no domain behind it, and turned the
-    // step red for a feature nobody had asked for.
+    // step red for a functionality nobody had asked for.
     expect(card("sv").queryByRole("switch")).toBeNull();
     expect(card("sv").getByText(/pick/)).toBeTruthy();
     // ...and this is not passing because no card rendered anything: the
-    // declared feature states the engine size its bundle will carry -- the
+    // declared functionality states the engine size its bundle will carry -- the
     // documented default, since manual mode has no location to read.
     expect(card("performance").getByText(/2 CPU \/ 8Gi/)).toBeTruthy();
 
@@ -400,12 +401,12 @@ test("a restored profile's SV options for a location without mockServices are cl
       confirmed: { loc: "h-perf", ship: "s-1" },
       // Connect mode declared nothing, and cannot: what the location runs is
       // its funcIds, which is what makes these options a state nobody chose.
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
     const asked: Options[] = [];
-    render(<App api={twoFeatureAccount(asked)} />);
+    render(<App api={twoFunctionalityAccount(asked)} />);
 
     // The download is not blocked. This is the failure: the option opens the SV
     // group through detectGroups, `svIncomplete` sees an ingress with no
@@ -422,7 +423,7 @@ test("a restored profile's SV options for a location without mockServices are cl
     await waitFor(() => expect(
       asked[asked.length - 1]?.sv_ingress).toBeFalsy());
 
-    // ...and the feature is not on the step at all. It used to be a card
+    // ...and the functionality is not on the step at all. It used to be a card
     // stating it and naming the funcId to add, which is a true sentence about
     // the location and nothing this step's reader can act on. Not the card, not
     // the rail entry: both are the same list.
@@ -433,23 +434,23 @@ test("a restored profile's SV options for a location without mockServices are cl
     expect(hasCard("performance")).toBe(true);
   });
 
-test("a location that runs one feature shows one card, with nothing configured",
+test("a location that runs one functionality shows one card, with nothing configured",
   async () => {
     // The same rule with no configuration behind it: the test above reaches it
     // through options somebody's profile left set, and this one through a
     // location and an agent alone. The card used to be on screen stating
-    // itself; the step now opens on the one feature this bundle has anything to
+    // itself; the step now opens on the one functionality this bundle has anything to
     // say about.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "blazemeter" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
     const asked: Options[] = [];
-    render(<App api={twoFeatureAccount(asked)} />);
+    render(<App api={twoFunctionalityAccount(asked)} />);
 
     await waitFor(() => expect(hasCard("performance")).toBe(true));
     expect(hasCard("sv")).toBe(false);
@@ -458,18 +459,18 @@ test("a location that runs one feature shows one card, with nothing configured",
     expect(screen.queryByText(/Service virtualization/)).toBeNull();
   });
 
-// -- a format that cannot serve a feature ------------------------------------
+// -- a format that cannot serve a functionality -------------------------------
 // #115, and what #113 left reachable. The blocked formats were read off the
 // location's *demand*, and generate() refuses on the *configuration*: _sv_cfg
 // returns a config without ever looking at the funcIds. The gap between the two
-// is a location whose funcIds carry no served feature -- `enabled` is null,
+// is a location whose funcIds carry no served functionality -- `enabled` is null,
 // nobody has said, so notRunPatch clears nothing and every switch is offered.
 // Real accounts have them: tdm, dataPublisher and delphix are all funcIds this
-// tool models no feature for.
+// tool models no functionality for.
 
 /** ...that account, with such a location. */
 const unclaimedAccount = (record: Options[]) =>
-  twoFeatureAccount(record, {
+  twoFunctionalityAccount(record, {
     locations: async () => [{
       id: "h-tdm", name: "Tdm", funcIds: ["tdm"], slots: 1,
       ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
@@ -491,7 +492,7 @@ test("an SV configuration no location demanded still takes away the formats that
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: {
         namespace: "blazemeter", output_format: "docker",
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
@@ -521,7 +522,7 @@ test("an SV configuration no location demanded still takes away the formats that
     expect(docker.disabled).toBe(true);
   });
 
-test("a feature this bundle's format cannot serve is stated, not offered",
+test("a functionality this bundle's format cannot serve is stated, not offered",
   async () => {
     // The same card as #113's, for the other reason it can carry no switches --
     // and the two must not be confused. This location's funcIds say nothing, so
@@ -531,7 +532,7 @@ test("a feature this bundle's format cannot serve is stated, not offered",
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -544,7 +545,7 @@ test("a feature this bundle's format cannot serve is stated, not offered",
     await waitFor(() => expect(card("sv").queryByRole("switch")).toBeNull());
     // It says which of the two answers this is, and names the format that can.
     // The card is on screen at all because nobody has said what this location
-    // runs (`tdm` is a funcId no feature claims), which is the state the two
+    // runs (`tdm` is a funcId no functionality claims), which is the state the two
     // answers are easiest to confuse in.
     expect(card("sv").getByText(/Not possible in this bundle/)).toBeTruthy();
     expect(card("sv").queryByText(/was declared to run/)).toBeNull();
@@ -726,7 +727,7 @@ function perfAccount(extra: Partial<Api> = {}) {
       output_format: "manifests",
     }),
     funcIdChoices: async () => [],
-    features: async () => [{
+    functionalities: async () => [{
       id: "perf", label: "Performance", namespace: "blazemeter",
       func_ids: ["performance"],
     }],
@@ -922,9 +923,9 @@ test("the configure step states the engine size the location implies, and edits 
       overrideCPU: 1, overrideMemory: 4096 };
     render(<App api={accountOf([held], {
       locations: async () => [held],
-      // The real feature id: accountOf's "perf" claims the funcId, and the
-      // statement renders on the card of the feature that starts engines.
-      features: async () => [{
+      // The real functionality id: accountOf's "perf" claims the funcId, and the
+      // statement renders on the card of the functionality that starts engines.
+      functionalities: async () => [{
         id: "performance", label: "Performance", namespace: "blazemeter",
         func_ids: ["performance"],
       }],
@@ -949,7 +950,7 @@ test("a location holding no engine requests is stated as the default, never blan
   async () => {
     render(<App api={accountOf([loc("h-perf", "Perf",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
-      features: async () => [{
+      functionalities: async () => [{
         id: "performance", label: "Performance", namespace: "blazemeter",
         func_ids: ["performance"],
       }],
@@ -1015,7 +1016,7 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
     funcIdChoices: async () => [
       { id: "performance", label: "Performance", changes_images: true },
     ],
-    features: async () => [{
+    functionalities: async () => [{
       id: "perf", label: "Performance", namespace: "blazemeter",
       func_ids: ["performance"],
     }],
@@ -1459,7 +1460,7 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
       sourceMode: "connect" as const, accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "ns" }, step: 0, view: "flow" as const,
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1490,7 +1491,7 @@ test("nothing is written back over a saved session until the restore has resolve
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1534,9 +1535,9 @@ test("nothing is written back over a saved session until the restore has resolve
       accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
       step: 1, options: { namespace: "typed-ns" },
       // Connected, nothing is declared -- and nothing is written down that
-      // could pin the next load to a feature the account never said. The
-      // feature here is derived from the location's funcIds every time (#118).
-      declaredFeature: null,
+      // could pin the next load to a functionality the account never said. The
+      // functionality here is derived from the location's funcIds every time (#118).
+      declaredFunctionality: null,
     }));
   });
 
@@ -1546,7 +1547,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1605,7 +1606,7 @@ test("an id the account no longer has is written away once the account has said 
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-gone", shipId: "s-gone",
       confirmed: { loc: "h-gone", ship: "s-gone" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1623,12 +1624,12 @@ test("an id the account no longer has is written away once the account has said 
   });
 
 // -- and the one input that decides the bundle and did not survive it (#118) --
-// In manual entry the feature radio is not a view over a location: it is the
+// In manual entry the functionality radio is not a view over a location: it is the
 // declaration. It decides the funcId the typed identity is said to run, which
 // decides the facts, which decides the images the bundle carries. Everything
 // else the page needs to rebuild that identity already survived a refresh --
 // the typed harbor id, the typed ship id, the options -- and this did not, so a
-// reload fell back to the first served feature and a Service virtualization
+// reload fell back to the first served functionality and a Service virtualization
 // identity came back a performance one.
 //
 // Driven through the page and asserted on the *request*, not on which radio
@@ -1641,12 +1642,12 @@ const TYPED = { harbor: "6a63a79dcc45dccca90bf440",
                 ship: "6a679d3445115b6651011715" };
 
 /** The manual-entry page: no key at all -- manual entry is for an account
- *  nobody here can reach -- with both features and the two funcIds that pick
+ *  nobody here can reach -- with both functionalities and the two funcIds that pick
  *  different images served. Records the funcIds of every facts request, which
  *  is where the declaration ends up. */
 function manualPage(asked: string[][], generated: Options[] = [],
                     extra: Partial<Api> = {}) {
-  return twoFeatureAccount(generated, {
+  return twoFunctionalityAccount(generated, {
     keyStatus: async () => ({ connected: false }),
     funcIdChoices: async () => [
       { id: "performance", label: "Performance", changes_images: true },
@@ -1675,7 +1676,7 @@ async function declareManually() {
   fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 }
 
-test("declaring a feature in manual entry suggests that feature's namespace",
+test("declaring a functionality in manual entry suggests its namespace",
   async () => {
     // Connected, picking a *location* that runs virtual services suggests
     // blazemeter-sv. Manually there is no location to read it off -- the radio
@@ -1694,7 +1695,8 @@ test("declaring a feature in manual entry suggests that feature's namespace",
       expect(generated[generated.length - 1].namespace).toBe("blazemeter-sv"));
   });
 
-test("a feature declared in manual entry is what the facts are gathered for after a refresh",
+test("a functionality declared in manual entry is what the facts are gathered "
+     + "for after a refresh",
   async () => {
     const asked: string[][] = [];
     const generated: Options[] = [];
@@ -1707,7 +1709,7 @@ test("a feature declared in manual entry is what the facts are gathered for afte
     fireEvent.click(await within(document.getElementById("cfg-f-sv")!)
       .findByLabelText("Enabled"));
     // ...and it is configured as one, so the reload has something of the
-    // feature's own to lose as well.
+    // functionality's own to lose as well.
     fireEvent.click(within(document.getElementById("cfg-f-sv")!)
       .getByRole("switch"));
 
@@ -1731,13 +1733,13 @@ test("a feature declared in manual entry is what the facts are gathered for afte
     await new Promise((r) => setTimeout(r, 400));
     // The acceptance criterion, as the assertion. It was ["performance"]: the
     // declaration was not in the snapshot, so the page fell back to the first
-    // served feature and gathered another feature's images for an identity
+    // served functionality and gathered another functionality's images for an identity
     // nobody had re-declared.
     expect(asked.slice(asBefore)).toEqual([["mockServices"]]);
 
-    // The feature's own options came back with it. Restored without the
+    // The functionality's own options came back with it. Restored without the
     // declaration they were cleared, correctly, by the patch that empties a
-    // feature the location does not run -- the page had just been told it runs
+    // functionality the location does not run -- the page had just been told it runs
     // something else.
     const after = generated[generated.length - 1];
     expect(after.sv_ingress).toBe("nginx");
@@ -1754,7 +1756,7 @@ test("a restored declaration is not lost to the facts it produced",
     // is *served* (`changes_images`) -- so until that list lands the identity is
     // gathered for no funcId at all. Read those funcIds back and the page
     // concludes the location runs nothing it knows, falls to the first served
-    // feature, and the declaration is gone again -- with the namespace
+    // functionality, and the declaration is gone again -- with the namespace
     // suggestion following it.
     const choices = deferred<Awaited<ReturnType<Api["funcIdChoices"]>>>();
     const asked: string[][] = [];
@@ -1762,7 +1764,7 @@ test("a restored declaration is not lost to the facts it produced",
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFeature: "sv",
+      declaredFunctionality: "sv",
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1793,14 +1795,14 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFeature: "sv",
+      declaredFunctionality: "sv",
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
     render(<App api={manualPage(asked, [], {
       // The vocabulary this page is served no longer carries what the snapshot
-      // named -- a feature withdrawn, or a tab reloaded against a newer server.
-      features: async () => [
+      // named -- a functionality withdrawn, or a tab reloaded against a newer server.
+      functionalities: async () => [
         { id: "performance", label: "Performance & functional testing",
           namespace: "blazemeter", func_ids: ["performance"] },
       ],
@@ -1843,7 +1845,7 @@ test("the preview waits for the typing to stop", async () => {
     await atDownloadStep();
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     const ns = await screen.findByLabelText(/^Namespace/);
-    // Settled: the location's facts, the feature it opens on and the option
+    // Settled: the location's facts, the functionality it opens on and the option
     // defaults all move the configuration, and each moves it once.
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 400));
@@ -1965,7 +1967,7 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     expect(read).toEqual(["blazemeter", "mocks-ns"]);
   });
 
-// -- the capacity profile, and the location it lands on ----------------------
+// -- the sizing, and the location it lands on -------------------------------
 // The planner reaches nothing -- no key, no account, no cluster -- and that is
 // the requirement rather than a property: it is the question somebody asks
 // *before* they have any of it, which is why it is the first card of step 1
@@ -2006,7 +2008,7 @@ function planFor(body: {
   };
 }
 
-test("with no key connected, step 1 still sizes a capacity profile", async () => {
+test("with no key connected, step 1 still makes a sizing", async () => {
   const asked: { users: string; agents?: string }[] = [];
   // Not connected, and nothing account-shaped is stubbed: every route but the
   // four the page reads at mount rejects by naming itself, so a profile that
@@ -2016,7 +2018,7 @@ test("with no key connected, step 1 still sizes a capacity profile", async () =>
     keyStatus: async () => ({ connected: false }),
     optionDefaults: async () => ({ namespace: "blazemeter" }),
     funcIdChoices: async () => [],
-    features: async () => [],
+    functionalities: async () => [],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
     engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
     plan: async (body) => { asked.push(body); return planFor(body); },

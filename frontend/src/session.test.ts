@@ -21,17 +21,17 @@ const BASE = {
   harborId: "h1",
   shipId: "s1",
   manual: { harbor_id: "", ship_id: "" },
-  // Connected, so nothing was declared: the feature is derived from the
+  // Connected, so nothing was declared: the functionality is derived from the
   // location's funcIds, and a value here would pin a restored page to one the
   // account never said. Manual entry is the case that carries one.
-  declaredFeature: null,
+  declaredFunctionality: null,
   // Confirmed, and of *these* ids: step 1 is finished when somebody has said
   // so, and a refresh is not a reason to ask again.
   confirmed: { loc: "h1", ship: "s1" },
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
-  // The two figures the capacity profile owns. Its engine size is a bundle
+  // The two figures the sizing owns. Its engine size is a bundle
   // option and is remembered with the rest of them.
   plan: { users: "5000", vusPerEngine: "750" },
 };
@@ -55,11 +55,11 @@ describe("what is remembered", () => {
   it("round-trips what manual entry declared the identity runs", () => {
     // The one input deciding the bundle that a refresh used to lose: it names
     // the funcId the facts are gathered for, which names the images. Stored as
-    // the feature it declared, so the page can check it against the served
+    // the functionality it declared, so the page can check it against the served
     // vocabulary rather than trust it -- the same reason the confirmations are
     // stored as the ids they were made against.
-    save({ ...BASE, sourceMode: "manual", declaredFeature: "sv" });
-    expect(load()?.declaredFeature).toBe("sv");
+    save({ ...BASE, sourceMode: "manual", declaredFunctionality: "sv" });
+    expect(load()?.declaredFunctionality).toBe("sv");
   });
 
   it("returns null when nothing was stored", () => {

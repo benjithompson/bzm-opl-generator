@@ -231,7 +231,7 @@ def test_a_bundle_with_no_token_says_so_rather_than_looking_finished(connected):
     body = client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"}}).json()
     assert body["token"]["branch"] == core.TOKEN_PLACEHOLDER
-    assert "create-ship" in body["token"]["message"]
+    assert "create-agent" in body["token"]["message"]
 
 
 def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
@@ -246,7 +246,7 @@ def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
         "X-Bzm-Token-Branch", "X-Bzm-Token-Message")
     assert r.headers[server.TOKEN_BRANCH_HEADER] == core.TOKEN_PLACEHOLDER
     message = r.headers[server.TOKEN_MESSAGE_HEADER]
-    assert "create-ship" in message
+    assert "create-agent" in message
     # One line, because a header is one line -- the recovery hint is three.
     assert "\n" not in message
     assert "bzm-opl-ns1/bzm_secret.yaml" in zipfile.ZipFile(
@@ -337,28 +337,30 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     assert m.group(1) == gen_mod.SV_INGRESS_NONE
 
 
-def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
+def test_every_group_s_tag_is_a_functionality_this_server_serves():
     """Read out of the TypeScript for the same reason again, and load-bearing
     since #113.
 
-    A group tags itself with the feature ids it belongs to; the ids themselves
-    are served from core.FEATURES and enumerated nowhere in the frontend. A tag
-    naming something not in that list was always a group on no card -- and now
-    it is worse than invisible: `notRunPatch` clears the groups of a feature the
-    location does not run, and a feature nothing serves is never run, so the
-    group's options would be wiped by a rule nobody could see applying.
+    A group tags itself with the functionality ids it belongs to; the ids
+    themselves are served from core.FUNCTIONALITIES and enumerated nowhere in
+    the frontend. A tag naming something not in that list was always a group on
+    no card -- and now it is worse than invisible: `notRunPatch` clears the
+    groups of a functionality the location does not run, and a functionality
+    nothing serves is never run, so the group's options would be wiped by a rule
+    nobody could see applying.
     """
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     body = re.search(r"export const OPTION_GROUPS: OptionGroup\[\] = \[(.*?)\n\];",
                      (src / "optionGroups.ts").read_text(), re.S)
     assert body, "OPTION_GROUPS not found -- was it renamed or moved?"
     tagged = set(re.findall(r'"([^"]+)"',
-                            " ".join(re.findall(r"^\s*features: \[(.*?)\],$",
-                                                body.group(1), re.M))))
+                            " ".join(re.findall(
+                                r"^\s*functionalities: \[(.*?)\],$",
+                                body.group(1), re.M))))
     # Not empty: every group being untagged would pass a subset check silently,
     # and that is the shape a bad regex leaves behind.
-    assert tagged, "no feature tags found -- did the field move or get renamed?"
-    assert tagged <= {f["id"] for f in core.FEATURES}
+    assert tagged, "no tags found -- did the field move or get renamed?"
+    assert tagged <= {f["id"] for f in core.FUNCTIONALITIES}
 
 
 # -- the connection outlives the page -----------------------------------------
@@ -492,7 +494,7 @@ def test_creating_an_agent_issues_its_credential_with_it(connected):
     is captured at the one moment it costs nothing, when the ship is new and has
     no previous credential to invalidate. core.create_ship does not fetch,
     because for an *existing* ship it would rotate one on an action whose name
-    says nothing about credentials; `bzm-opl-gen create-ship` fetches for exactly
+    says nothing about credentials; `bzm-opl-gen create-agent` fetches for exactly
     this reason, and this is the same command with a browser in front of it."""
     body = client.post("/api/ships", json={
         "harbor_id": "aaa111", "name": "agent1"}).json()
@@ -705,7 +707,7 @@ def test_a_remembered_credential_never_reaches_a_log_line(connected, caplog):
     assert "TOKEN-FROM-API" not in missing.text and "ship_id" in missing.text
 
 
-def test_no_route_here_turns_a_feature_on_for_a_location(monkeypatch):
+def test_no_route_here_turns_a_functionality_on_for_a_location(monkeypatch):
     """POST /api/locations/func-id went with the affordance that was its only
     caller (#113). What funcIds a location carries is what the location *is*,
     and BlazeMeter's own UI is where that changes -- so a page that offered it
@@ -1020,7 +1022,8 @@ def test_func_id_choices_cover_the_whole_generator_vocabulary():
 def test_unlabelled_func_id_is_still_offered(monkeypatch):
     """The label map is presentation only, so a funcId added to the facts layer
     without one must still appear under its raw name -- the same deliberate
-    failure mode as the SV ingress picker. Dropping it would hide the feature
+    failure mode as the SV ingress picker. Dropping it would hide the
+    functionality
     exactly like the hardcoded list did."""
     from bzm_opl_gen import facts as facts_mod
     monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
@@ -1032,14 +1035,15 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
         {"id": r["id"], "label": r["label"]} for r in body]
 
 
-def test_features_are_served_with_a_label_and_a_suggested_namespace():
-    """The configure step shows one feature's options at a time and offers this
-    list. Served rather than written in TypeScript for the same reason as the
-    funcId choices: functional testing, secrets and API monitoring are expected
-    to follow, and a feature has to become selectable by being added here."""
+def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
+    """The configure step shows one functionality's options at a time and offers
+    this list. Served rather than written in TypeScript for the same reason as
+    the funcId choices: functional testing, secrets and API monitoring are
+    expected to follow, and a functionality has to become selectable by being
+    added here."""
     from bzm_opl_gen import generate as gen_mod
-    body = client.get("/api/features").json()
-    assert [f["id"] for f in body] == [f["id"] for f in core.FEATURES]
+    body = client.get("/api/functionalities").json()
+    assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
         assert f["label"] and f["namespace"] and f["func_ids"]
@@ -1047,19 +1051,20 @@ def test_features_are_served_with_a_label_and_a_suggested_namespace():
     # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
     # second list -- the same reason /api/sv-constants exists.
     assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
-    # Distinct namespaces are the point of suggesting one per feature: sharing a
-    # namespace is what makes redeploying one agent take the other's pods down.
+    # Distinct namespaces are the point of suggesting one per functionality:
+    # sharing a namespace is what makes redeploying one agent take the other's
+    # pods down.
     assert len({f["namespace"] for f in body}) == len(body)
 
 
-def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
-    """The end-to-end shape of adding a feature: one entry here, plus a tag on
-    whichever option groups it owns. Nothing in the frontend enumerates
-    features, so this is the whole of the backend half."""
-    monkeypatch.setattr(core, "FEATURES", core.FEATURES + [
+def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
+    """The end-to-end shape of adding a functionality: one entry here, plus a
+    tag on whichever option groups it owns. Nothing in the frontend enumerates
+    functionalities, so this is the whole of the backend half."""
+    monkeypatch.setattr(core, "FUNCTIONALITIES", core.FUNCTIONALITIES + [
         {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
          "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
-    body = client.get("/api/features").json()
+    body = client.get("/api/functionalities").json()
     assert body[-1] == {"id": "secrets", "label": "Private vault",
                         "hint": "secrets from a vault",
                         "namespace": "blazemeter-vault",
@@ -1144,7 +1149,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-mocks"),
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
-    ("get", "/api/features"), ("get", "/api/sv-constants"),
+    ("get", "/api/functionalities"), ("get", "/api/sv-constants"),
     ("get", "/api/docker-ignored"), ("get", "/api/reserved-env"),
 ]
 
@@ -1512,34 +1517,34 @@ def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
     assert body["status"] == "ok" and body["code"] == 200
 
 
-def test_group_tags_name_features_the_server_actually_serves():
-    """The frontend tags each option group with the feature ids it belongs to,
-    and those ids are the join between the two halves. Nothing else checks it:
-    the vitest suite tags against its own fixture, so renaming a served id
-    passes both suites green and silently empties a feature's options in the
-    browser. Read the tags out of the source rather than duplicating them."""
+def test_group_tags_name_functionalities_the_server_actually_serves():
+    """The frontend tags each option group with the functionality ids it belongs
+    to, and those ids are the join between the two halves. Nothing else checks
+    it: the vitest suite tags against its own fixture, so renaming a served id
+    passes both suites green and silently empties a functionality's options in
+    the browser. Read the tags out of the source rather than duplicating them."""
     src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "frontend", "src", "optionGroups.ts")
     with open(src) as fh:
         text = fh.read()
-    tagged = {i for line in text.splitlines() if "features:" in line
+    tagged = {i for line in text.splitlines() if "functionalities:" in line
               for i in re.findall(r'"([^"]+)"', line)}
-    served = {f["id"] for f in client.get("/api/features").json()}
+    served = {f["id"] for f in client.get("/api/functionalities").json()}
     assert tagged, "no group tags found -- has the declaration shape changed?"
     assert tagged <= served, (
-        f"option groups tag features the server does not serve: "
+        f"option groups tag functionalities the server does not serve: "
         f"{sorted(tagged - served)}. Either the id was renamed in "
-        f"server.FEATURES, or the tag is a typo -- the group's options would "
+        f"core.FUNCTIONALITIES, or the tag is a typo -- the group's options would "
         f"never appear.")
-    # sv.ts keys one answer by feature id rather than by group id -- which
-    # format cannot serve the feature at all -- so that literal is the same
-    # join and fails the same way: the card would render its switches on a
+    # sv.ts keys one answer by functionality id rather than by group id -- which
+    # format cannot serve the functionality at all -- so that literal is the
+    # same join and fails the same way: the card would render its switches on a
     # bundle that cannot carry them, and nothing would say so.
     sv_src = os.path.join(os.path.dirname(src), "sv.ts")
     with open(sv_src) as fh:
-        feature = re.search(r'const SV_FEATURE = "([^"]+)"', fh.read())
-    assert feature, "SV_FEATURE not found -- was it renamed or moved?"
-    assert feature.group(1) in served
+        found = re.search(r'const SV_FUNCTIONALITY = "([^"]+)"', fh.read())
+    assert found, "SV_FUNCTIONALITY not found -- was it renamed or moved?"
+    assert found.group(1) in served
 
 
 # -- saving a bundle to disk ---------------------------------------------------
@@ -1826,6 +1831,52 @@ def test_every_write_route_drops_the_cache():
 
 def app_routes():
     return [r for r in server.app.routes if hasattr(r, "methods")]
+
+
+def _keys(body):
+    """Every key anywhere in a decoded response body."""
+    if isinstance(body, dict):
+        return set(body) | {k for v in body.values() for k in _keys(v)}
+    if isinstance(body, list):
+        return {k for v in body for k in _keys(v)}
+    return set()
+
+
+def test_this_api_never_says_feature():
+    """The word on the wire is `functionality`, which is BlazeMeter's own.
+
+    Asserted over the app's own routes and their own answers rather than over a
+    list written here, for the reason `test_every_write_route_drops_the_cache`
+    gives: the surface a customer's browser and an MCP session read is the one
+    that has to hold to it, and a route added later is exactly the one nobody
+    would think to add to a list. Scoped to the API and nothing else -- comments
+    and docs say `feature` about plenty of things that are not this one, and
+    a rule that reached prose would be a rule about English.
+
+    Every parameterless GET is called for its body; the rest answer 422 or 401,
+    which is a body too and is checked the same way. `/api/docs` is the same
+    vocabulary once more, from FastAPI's side.
+    """
+    paths = [r.path for r in app_routes()]
+    assert not [p for p in paths if "feature" in p.lower()]
+
+    served, seen = set(), []
+    for r in app_routes():
+        if "GET" not in r.methods or "{" in r.path or not r.path.startswith("/api/"):
+            continue
+        body = client.get(r.path)
+        seen.append(r.path)
+        try:
+            served |= _keys(body.json())
+        except ValueError:                    # the SPA's HTML, not an answer
+            pass
+    # Not empty: a walk that reached nothing would pass this silently, which is
+    # the shape a changed route registry leaves behind.
+    assert len(seen) > 5, f"only reached {seen} -- did the routes move?"
+    assert not [k for k in served if "feature" in k.lower()], sorted(served)
+
+    spec = server.app.openapi()
+    assert not [p for p in spec["paths"] if "feature" in p.lower()]
 
 
 def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):

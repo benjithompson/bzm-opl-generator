@@ -421,7 +421,7 @@ def create_ship(client, harbor_id, name):
 # The location settings this tool will change, as {name: the field BlazeMeter
 # calls it}. A closed set on purpose: BlazeMeter's PATCH replaces `funcIds`
 # wholesale, so a general "PATCH whatever you send" would let a caller that
-# meant to add a feature drop every other one the location runs.
+# meant to add a functionality drop every other one the location runs.
 #
 # `funcIds` is not in the set and there is no other call here that writes it
 # (#113). There was -- add_func_id, additive by construction, behind an "Enable
@@ -469,7 +469,8 @@ def update_location(client, harbor_id, **settings):
     if unknown:
         raise BadRequest(
             f"not a location setting: {', '.join(unknown)} -- this changes "
-            f"{', '.join(sorted(LOCATION_SETTINGS))}. Features (funcIds) and "
+            f"{', '.join(sorted(LOCATION_SETTINGS))}. Functionalities (funcIds) "
+            f"and "
             f"anything else are BlazeMeter's own UI")
     wanted = {k: v for k, v in settings.items() if v is not None}
     before = _upstream(client.private_location, harbor_id)
@@ -739,7 +740,7 @@ def token_recovery_hint(options=None):
     """Where a real AUTH_TOKEN comes from, for a bundle that has no token.
 
     Two sources, and neither of them is this tool going and getting one: what
-    `create-ship` printed when the agent was made -- the durable copy, and the
+    `create-agent` printed when the agent was made -- the durable copy, and the
     reason that command prints it -- or the Secret of an agent already running.
     The kubectl for the second is *named*, never run: nothing in this package
     reads a cluster to build a bundle, and the person at the terminal is the one
@@ -754,7 +755,7 @@ def token_recovery_hint(options=None):
     # of it follows in brackets.
     return (
         f"A real one comes from what was shown when the agent was created "
-        f"(`create-ship` prints it; the web page puts it in the field) -- keep "
+        f"(`create-agent` prints it; the web page puts it in the field) -- keep "
         f"it, nothing here stores it -- or from the agent's install command in "
         f"the BlazeMeter UI (Settings -> Private Locations -> the location -> "
         f"the agent), or out of an agent already deployed:\n"
@@ -1676,22 +1677,24 @@ def func_ids():
             for f in facts_mod.CATEGORY_BY_FUNC]
 
 
-# The features a bundle can be configured for. The UI shows one feature's
-# options at a time and builds its selector from this list, so a feature becomes
-# offered by being added here -- the frontend enumerates nothing. The other half
-# of adding one is tagging whichever option groups it owns with its `id`; a
-# feature no group is tagged with is still selectable and shows the groups that
-# apply to any deployment (registry, proxy, CA trust, scheduling).
+# The functionalities a bundle can be configured for -- BlazeMeter's own word
+# for what a private location is enabled to do. The UI shows one functionality's
+# options at a time and builds its selector from this list, so a functionality
+# becomes offered by being added here -- the frontend enumerates nothing. The
+# other half of adding one is tagging whichever option groups it owns with its
+# `id`; a functionality no group is tagged with is still selectable and shows
+# the groups that apply to any deployment (registry, proxy, CA trust,
+# scheduling).
 #
-# `func_ids` is how a location's funcIds pick the feature to start on. Locations
-# carry funcIds no feature claims (tdm, dataPublisher, delphix,
+# `func_ids` is how a location's funcIds pick the functionality to start on.
+# Locations carry funcIds no functionality claims (tdm, dataPublisher, delphix,
 # secretsPrivateVault); those are no signal rather than an error, which is what
 # lets this list model less than the account does.
 #
 # `namespace` is a suggestion, applied only while the field still holds one --
-# a namespace per feature is what keeps redeploying one agent from taking the
-# other's pods down with it, and typing over it has to win.
-FEATURES = [
+# a namespace per functionality is what keeps redeploying one agent from taking
+# the other's pods down with it, and typing over it has to win.
+FUNCTIONALITIES = [
     {
         "id": "performance",
         "label": "Performance & functional testing",
@@ -1714,9 +1717,10 @@ FEATURES = [
 ]
 
 
-def features():
-    """The features the configure step can be pointed at, in selector order."""
-    return FEATURES
+def functionalities():
+    """The functionalities the configure step can be pointed at, in selector
+    order."""
+    return FUNCTIONALITIES
 
 
 def docker_ignored():

@@ -52,7 +52,7 @@ deployed from an earlier render was left holding a revoked credential, sitting
 an intermittent rig failure from before this changed, that is a candidate.
 
 `--auth-token <token>` skips the mint for a caller already holding one — what
-`create-ship` printed, say. Use it when a run must not disturb the agent that is
+`create-agent` printed, say. Use it when a run must not disturb the agent that is
 already deployed there.
 
 A run that re-renders nothing (no `--local-proxy`, no `--run-test`) deploys the

@@ -6,7 +6,7 @@ Every option below is a key in a `--profile` JSON file, and most are also a
 `engine_ephemeral_request_mb` / `engine_ephemeral_limit_mb`, which are set from
 what a real run used and so belong in a profile that is kept rather than in a
 command line that is retyped. A profile is the way to reach any of them from the
-CLI. `bzm_opl_gen/profiles/` holds three scenario presets — `standard`,
+CLI. `bzm_opl_gen/profiles/` holds three profiles — `standard`,
 `private-registry`, `proxy-ca` — which are *postures*, not platforms: the default
 works on OpenShift and vanilla Kubernetes alike.
 
@@ -191,7 +191,8 @@ reason being an event on the ReplicaSet. `bzm-opl-gen doctor` checks for it.
 Images are selected automatically from the location's enabled funcIds:
 performance engines always ship; browser/grid (functionalGui), mock-service
 (mockServices), and recorder (proxyRecorder) images only
-when that feature is enabled on the location. `images --all` lists everything.
+when that functionality is enabled on the location. `images --all` lists
+everything.
 
 `generate` also writes `out/profile.json` — the fully resolved options, minus
 `auth_token`, which is left out so the file can be committed, diffed and handed
@@ -222,7 +223,7 @@ steps, says which one it took, and only the second reaches BlazeMeter:
    `--auth-token`, or `--rotate-token` for a fresh one — and neither reads the
    directory at all, so replacing it stays available to anyone who means to.
 4. **The placeholder**, `<PLACEHOLDER>` — with a message naming the two
-   places a real one comes from: what `create-ship` printed, or an agent already
+   places a real one comes from: what `create-agent` printed, or an agent already
    deployed, `kubectl -n <ns> get secret blazemeter-secret -o
    jsonpath='{.data.AUTH_TOKEN}' | base64 -d`. That command is printed for you
    to run; nothing here reads your cluster.

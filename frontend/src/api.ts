@@ -63,7 +63,7 @@ export interface Options { [k: string]: unknown }
  *  The arithmetic is all on the server, not because it is hard -- it is a
  *  division and two multiplications -- but because doctor judges a cluster
  *  against the same constants and the planner and doctor disagreeing is
- *  the one failure this feature can have. A second copy in TypeScript would be
+ *  the one failure this pairing can have. A second copy in TypeScript would be
  *  a second engine footprint to keep in step.
  *
  *  `vus_per_engine_assumed` is the field the panel must never drop: the whole
@@ -197,7 +197,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     // answers 405 to any POST. In practice that means one thing: the page is
     // newer than the process serving it. The UI bundle is read from disk on
     // every request, so a long-running server hands out a build whose calls it
-    // has never heard of, and the feature looks broken rather than stale.
+    // has never heard of, and the page looks broken rather than stale.
     // Twice now that has cost a debugging session, so it says so itself.
     if (detail === null && (r.status === 404 || r.status === 405)) {
       throw new Error(
@@ -290,11 +290,11 @@ export const api = {
   updateLocation: (body: { harbor_id: string }
     & Partial<Record<keyof LocationSettings, string>>) =>
     req<LocationUpdate>("POST", "/api/locations/settings", body),
-  // There is no call here that turns a feature on for a location. Which funcIds
+  // There is no call here that turns a functionality on for a location. Which funcIds
   // a location carries is what the location *is*, and changing it is
   // BlazeMeter's own UI's -- unlike the two writes above, which change an
   // agent's credential and a location's concurrency. The page states the
-  // features a location does not run and points at where they are enabled.
+  // functionalities a location does not run and points at where they are enabled.
   facts: (harborId: string) => req<Facts>("GET", `/api/facts?harbor_id=${harborId}`),
   /** Facts from the three values BlazeMeter shows on the agent, with no API key.
    *  Nothing is validated and nothing is looked up -- see /api/facts/manual. */
@@ -335,7 +335,7 @@ export const api = {
     req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
-  features: () => req<Feature[]>("GET", "/api/features"),
+  functionalities: () => req<Functionality[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   /** {option: why} for the options a docker bundle drops — generate's own
    *  DOCKER_IGNORED. Served rather than restated in TypeScript: the configure
@@ -451,22 +451,23 @@ export type FuncIdChoice = { id: string; label: string; changes_images: boolean 
  *  string. */
 export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks";
 
-/** One feature the configure step can be pointed at, from /api/features. The
- *  list is served for the same reason as the two above -- functional testing,
- *  secrets and API monitoring are expected to follow, and a feature has to
+/** One functionality the configure step can be pointed at, from
+ *  /api/functionalities. The list is served for the same reason as the two
+ *  above -- functional testing,
+ *  secrets and API monitoring are expected to follow, and a functionality has to
  *  become selectable by being added to the vocabulary, not by an edit here.
  *  Option groups tag themselves with `id` (see optionGroups.ts); nothing in the
- *  frontend enumerates the features themselves. */
-export interface Feature {
+ *  frontend enumerates the functionalities themselves. */
+export interface Functionality {
   id: string;
   label: string;
   hint?: string;
   /** Suggested, never forced: applied only while the namespace field still
-   *  holds a namespace some feature suggested. Served with the label so the
+   *  holds a namespace some functionality suggested. Served with the label so the
    *  suggestion extends with the vocabulary. */
   namespace: string;
-  /** The location funcIds that mean a location has this feature. A location's
-   *  funcIds may include ones no feature claims -- that is not an error. */
+  /** The location funcIds that mean a location has this functionality. A location's
+   *  funcIds may include ones no functionality claims -- that is not an error. */
   func_ids: string[];
 }
 

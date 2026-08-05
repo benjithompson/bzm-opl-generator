@@ -1,6 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Feature,
+  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Functionality,
   GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdChoice, Location, Options, Ship, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
@@ -17,15 +17,15 @@ import { Section } from "./components";
 // rotation can still be reconsidered (#64).
 import { downloadPlan, Recall, recalled, recallNote } from "./token";
 // The option groups of the Configure step: one declaration each (title, hint, the option
-// keys it owns, the features it belongs to, and its detect/enable/disable),
+// keys it owns, the functionalities it belongs to, and its detect/enable/disable),
 // plus a body per group. This file only wires them -- what a group *is*, and
-// which of them a feature puts on screen, lives in optionGroups.ts.
+// which of them a functionality puts on screen, lives in optionGroups.ts.
 import {
   allGroupsOff, blockingGroups, caModeOf, caModePatch, CaMode,
-  configureBlockedBy, detectGroups, enabledFeatures,
-  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
+  configureBlockedBy, detectGroups, enabledFunctionalities,
+  functionalitiesOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
   notRunPatch,
-  runsFeature, serviceAccountOk, startFeature, suggestNamespace,
+  runsFunctionality, serviceAccountOk, startFunctionality, suggestNamespace,
   unclaimedFuncIds,
 } from "./optionGroups";
 // Required fields nobody filled in: what they resolve to on the way out, and
@@ -60,9 +60,9 @@ import { CapacityView } from "./CapacityView";
 // profile asks for, assembled once here and read by two panels.
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 import { AgentPanel } from "./steps/AgentPanel";
-// The capacity profile: step 1's first card, and the planner that used to be a
-// view of its own. See CapacityProfile for why it moved.
-import { CapacityProfile } from "./steps/CapacityProfile";
+// The sizing: step 1's first card, and the planner that used to be a view of
+// its own. See Sizing for why it moved.
+import { Sizing } from "./steps/Sizing";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
@@ -154,9 +154,9 @@ export default function App({ api }: { api: Api }) {
   // which way they arrived -- that is the whole point of manual facts being the
   // same shape gather() returns.
   const [sourceMode, setSourceMode] = useState<"connect" | "manual">("connect");
-  // Identity only. What the location runs is derived from the selected feature
+  // Identity only. What the location runs is derived from the selected functionality
   // (manualFuncIds below) rather than stored: it was state with two writers that
-  // disagreed on the miss case, and it is a pure function of `feature`.
+  // disagreed on the miss case, and it is a pure function of `functionality`.
   const [manual, setManual] = useState({ harbor_id: "", ship_id: "" });
 
   // -- options / preview -----------------------------------------------------
@@ -179,14 +179,14 @@ export default function App({ api }: { api: Api }) {
   // than an option nobody can reach.
   const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
-  // The feature being configured, and the vocabulary it is chosen from. A view
+  // The functionality being configured, and the vocabulary it is chosen from. A view
   // over the options, never a scope: one crane is deployed for the selected
   // location and that location's funcIds decide what the manifests contain, so
-  // this only decides what is on screen. The list is served (/api/features) so
-  // that adding a feature is a backend entry plus a tag on the groups it owns;
+  // this only decides what is on screen. The list is served (/api/functionalities) so
+  // that adding a functionality is a backend entry plus a tag on the groups it owns;
   // null until it lands, which hides nothing.
-  const [features, setFeatures] = useState<Feature[]>([]);
-  const [feature, setFeature] = useState<string | null>(null);
+  const [functionalities, setFunctionalities] = useState<Functionality[]>([]);
+  const [functionality, setFunctionality] = useState<string | null>(null);
   // One way to read a text option. Written out per-site, the `.trim()` was
   // getting forgotten -- an ingress name pasted with a trailing space missed
   // the SV_PREREQS lookup and the panel silently lost its prose.
@@ -202,8 +202,8 @@ export default function App({ api }: { api: Api }) {
   // their way out is what decides whether they may block an output format, and
   // deriving that below the record that needs it was how the two got out of
   // step. `locUnclaimed` and `notRun` stay where they are used.
-  const locFeatures = featuresOf(facts?.func_ids, features);
-  const enabled = enabledFeatures(sourceMode, feature, locFeatures);
+  const locFunctionalities = functionalitiesOf(facts?.func_ids, functionalities);
+  const enabled = enabledFunctionalities(sourceMode, functionality, locFunctionalities);
   // Everything about service virtualization, answered once. Four blocks of this
   // file used to derive it -- what the location demands, whether that demand
   // was declined, whether what is set is finished, what the panels render
@@ -211,12 +211,12 @@ export default function App({ api }: { api: Api }) {
   // answers free to disagree. Declared up here because the status poll below
   // asks it too. See sv.ts; it is tested as plain data, with no page at all.
   //
-  // The fourth input is whether this bundle still carries the feature at all:
+  // The fourth input is whether this bundle still carries the functionality at all:
   // notRunPatch clears the SV options of a location known to run something
   // else, and options on their way out must not take an output format with
   // them. Unanswered reads as yes, which is the direction that over-blocks
   // rather than letting a bundle the server refuses through.
-  const svRuns = runsFeature(enabled, "sv");
+  const svRuns = runsFunctionality(enabled, "sv");
   const sv = useMemo(
     () => svState(facts?.func_ids, options, svConst, svRuns),
     [facts?.func_ids, options, svConst, svRuns]);
@@ -279,7 +279,7 @@ export default function App({ api }: { api: Api }) {
   // rollup is one read of a whole account and belongs to nothing in the flow.
   // The planner is no longer among them -- it is step 1's first card, because
   // reaching nothing is what makes it the first question rather than a separate
-  // page (see CapacityProfile).
+  // page (see Sizing).
   const [view, setView] = useState<ViewId>("flow");
   // The two drawers. The nav starts open because the views are the first thing
   // to understand; the preview starts shut because there is nothing in it until
@@ -342,7 +342,7 @@ export default function App({ api }: { api: Api }) {
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.agentEnv().then(setAgentEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
-    api.features().then(setFeatures).catch(() => {});
+    api.functionalities().then(setFunctionalities).catch(() => {});
 
     // The key lives in the server process, so a refresh never disconnected
     // anything -- the page just forgot. Ask, and put back what it was pointed
@@ -360,19 +360,19 @@ export default function App({ api }: { api: Api }) {
       setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
       // Manual entry's declaration, and only manual entry's: connected, the
-      // feature is derived from the location's funcIds, and putting one back
+      // functionality is derived from the location's funcIds, and putting one back
       // would pin the page to a stale one (#118).
       //
       // Selected now rather than held until the vocabulary confirms it, unlike
-      // the ids above -- because `feature` cannot carry the wait. Null here does
+      // the ids above -- because `functionality` cannot carry the wait. Null here does
       // not mean "not answered yet", it means "declared nothing", and
       // notRunPatch reads it on the very first render and clears every SV option
       // the snapshot has just restored. So it is applied, and the effect that
       // watches the vocabulary land is what drops it if it turns out not to be
       // offered any more.
-      if (saved.sourceMode === "manual" && saved.declaredFeature) {
-        setFeature(saved.declaredFeature);
-        restoredFeature.current = saved.declaredFeature;
+      if (saved.sourceMode === "manual" && saved.declaredFunctionality) {
+        setFunctionality(saved.declaredFunctionality);
+        restoredFunctionality.current = saved.declaredFunctionality;
       }
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
@@ -418,7 +418,7 @@ export default function App({ api }: { api: Api }) {
   // where this is already selected (it has to be -- see the restore) and waiting
   // to be *checked*. What could refute it is the served vocabulary, and the
   // effect below is where that arrives.
-  const restoredFeature = useRef<string | null>(null);
+  const restoredFunctionality = useRef<string | null>(null);
 
   // The four ids the restored snapshot named, for as long as nothing has
   // answered for them -- and what the page writes back in their place while
@@ -473,12 +473,12 @@ export default function App({ api }: { api: Api }) {
                    // Only manual entry has declared anything. Connected, this
                    // is a view over the location's funcIds and re-derives
                    // itself from them, so writing it down could only pin the
-                   // next page load to a feature the account never said.
-                   declaredFeature: sourceMode === "manual" ? feature : null,
+                   // next page load to a functionality the account never said.
+                   declaredFunctionality: sourceMode === "manual" ? functionality : null,
                    manual, options, step, view, plan: planInputs,
                    confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      feature, manual, options, step, view, planInputs, confirmed]);
+      functionality, manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -503,7 +503,7 @@ export default function App({ api }: { api: Api }) {
     // Land somewhere that still works. Account capacity has nothing to roll up
     // without a key, and Generate's "Connect to BlazeMeter" source has no
     // account to read a location from -- so the page goes to the flow's first
-    // step in manual entry, where the capacity profile at the top of it needs
+    // step in manual entry, where the sizing at the top of it needs
     // no account at all. That card is what "Plan capacity" used to be, and it
     // is still the one thing here that works with nothing connected.
     setView("flow");
@@ -811,7 +811,7 @@ export default function App({ api }: { api: Api }) {
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
 
-  /** What the capacity profile is sizing.
+  /** What the sizing card states.
    *
    *  Assembled once, read twice: by the profile card at the top of step 1, and
    *  by whichever location is open below it -- which re-asks with its own agent
@@ -842,25 +842,25 @@ export default function App({ api }: { api: Api }) {
   // with it. `sourceOpen` stays because the summary is still the right thing to
   // show in the one case that sets it -- see switchMode.
 
-  // Manual mode declares the location's funcIds through the feature buttons, so
-  // it needs to know which funcIds a feature stands for. Only the ones that
+  // Manual mode declares the location's funcIds through the functionality buttons, so
+  // it needs to know which funcIds a functionality stands for. Only the ones that
   // change the images are offered -- the rest generate the same bundle.
   const imageFuncs = useMemo(
     () => new Set(funcIdChoices.filter((c) => c.changes_images).map((c) => c.id)),
     [funcIdChoices]);
-  /** The funcId a feature declares when it is the manual-mode declaration: the
+  /** The funcId a functionality declares when it is the manual-mode declaration: the
    *  first of the ones it claims that changes the images. */
   const primaryFuncOf = useCallback(
-    (id: string | null) => (features.find((f) => f.id === id)?.func_ids ?? [])
+    (id: string | null) => (functionalities.find((f) => f.id === id)?.func_ids ?? [])
       .find((x) => imageFuncs.has(x)),
-    [features, imageFuncs]);
-  // What manual mode declares the location runs: the selected feature's primary
+    [functionalities, imageFuncs]);
+  // What manual mode declares the location runs: the selected functionality's primary
   // funcId. No literal funcId in TypeScript -- it comes from the served
   // vocabulary via primaryFuncOf.
   const manualFuncIds = useMemo(() => {
-    const primary = primaryFuncOf(feature);
+    const primary = primaryFuncOf(functionality);
     return primary ? [primary] : [];
-  }, [primaryFuncOf, feature]);
+  }, [primaryFuncOf, functionality]);
 
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
@@ -989,50 +989,50 @@ export default function App({ api }: { api: Api }) {
     });
   };
   // Moving the view. The only option it may write is the namespace, and only
-  // while that still holds one a feature suggested -- everything else stays
+  // while that still holds one a functionality suggested -- everything else stays
   // exactly as it is, because narrowing a view must not change what the bundle
   // generates. No group is flipped on or off here for the same reason.
   //
-  // A function rather than an effect on `feature`: an effect would also fire
+  // A function rather than an effect on `functionality`: an effect would also fire
   // when the vocabulary lands mid-session and rewrite a namespace already typed.
   // `suggestNs` is opt-in and only the location effect passes it. Switching the
   // view by hand must not touch the namespace: the namespace is generated into
   // every manifest, so suggesting on a manual switch would make looking at a
-  // feature change the bundle -- the one thing a view is not allowed to do. It
+  // functionality change the bundle -- the one thing a view is not allowed to do. It
   // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
 
-  const pickFeature = useCallback((id: string, suggestNs = false) => {
-    setFeature(id);
-    // In manual mode the feature buttons are the declaration rather than a
+  const pickFunctionality = useCallback((id: string, suggestNs = false) => {
+    setFunctionality(id);
+    // In manual mode the functionality buttons are the declaration rather than a
     // view -- but nothing is written here: manualFuncIds derives it from
-    // `feature`, so selecting one is the whole action.
-    const f = features.find((x) => x.id === id);
+    // `functionality`, so selecting one is the whole action.
+    const f = functionalities.find((x) => x.id === id);
     if (!f || !suggestNs) return;
     setOptions((o) => {
-      const ns = suggestNamespace(String(o.namespace ?? ""), f, features);
+      const ns = suggestNamespace(String(o.namespace ?? ""), f, functionalities);
       // Same object when there is nothing to suggest: a fresh identity re-POSTs
       // /api/generate for options that did not change.
       return ns == null ? o : { ...o, namespace: ns };
     });
-  }, [features]);
+  }, [functionalities]);
 
-  // Which feature a location opens on, from its funcIds. Keyed on the harbor
+  // Which functionality a location opens on, from its funcIds. Keyed on the harbor
   // rather than on `facts`, which is refetched after creating an agent: that
-  // must not yank the view back from wherever the user moved it. `feature` is
+  // must not yank the view back from wherever the user moved it. `functionality` is
   // read but deliberately not a dependency -- depending on it would re-force
-  // the starting feature every time the user chose a different one.
+  // the starting functionality every time the user chose a different one.
   useEffect(() => {
-    if (!features.length) return;
+    if (!functionalities.length) return;
     // ...and where a restored declaration is checked, because this is where the
-    // thing that could refute it arrives: it names a feature from the served
+    // thing that could refute it arrives: it names a functionality from the served
     // vocabulary, and until that has landed there is nothing to check it
     // against. Still offered means it stands, and nothing below may touch it --
     // hence the return rather than a fall-through.
-    const declared = restoredFeature.current;
+    const declared = restoredFunctionality.current;
     if (declared) {
-      restoredFeature.current = null;
-      if (features.some((f) => f.id === declared)) return;
-      // Not offered any more: dropped rather than kept. A feature this build
+      restoredFunctionality.current = null;
+      if (functionalities.some((f) => f.id === declared)) return;
+      // Not offered any more: dropped rather than kept. A functionality this build
       // does not serve names no funcId, so the identity's facts would be
       // gathered as though nothing had been declared, and no radio would be
       // selected to say so or to change it with -- which is what being stuck on
@@ -1040,13 +1040,13 @@ export default function App({ api }: { api: Api }) {
       // Without the namespace suggestion, though: a restore is not a hand
       // switch and not a location being picked, and what it read back is
       // generated into every manifest.
-      pickFeature(features[0].id);
+      pickFunctionality(functionalities[0].id);
       return;
     }
     // Manual entry declares rather than reads, so the facts have nothing to say
     // here: their funcIds *are* the declaration (manualFuncIds), and reading
-    // them back can only restate it -- or lose it, where the declared feature
-    // has no image-changing funcId and startFeature falls back to the first
+    // them back can only restate it -- or lose it, where the declared functionality
+    // has no image-changing funcId and startFunctionality falls back to the first
     // served one. What went with it is a namespace suggestion that fired when
     // the ship id was finished being typed, which is not a location being picked
     // either.
@@ -1054,12 +1054,12 @@ export default function App({ api }: { api: Api }) {
       // facts is cleared while the next location's are fetched. Falling back to
       // the default in that gap would flip the view (and the suggested
       // namespace) to performance and back for every SV location picked.
-      if (!feature) pickFeature(features[0].id, true);
+      if (!functionality) pickFunctionality(functionalities[0].id, true);
       return;
     }
-    const start = startFeature(facts.func_ids, features);
-    if (start) pickFeature(start, true);
-  }, [facts?.harbor_id, features, pickFeature, sourceMode]);
+    const start = startFunctionality(facts.func_ids, functionalities);
+    if (start) pickFunctionality(start, true);
+  }, [facts?.harbor_id, functionalities, pickFunctionality, sourceMode]);
 
   // -- has the choice been made, or only landed on? ---------------------------
   // Both lists auto-pick: a lone agent is chosen for you, and a session restore
@@ -1092,7 +1092,8 @@ export default function App({ api }: { api: Api }) {
   // ServiceAccount and then handing over a bundle with neither is the silent
   // failure this arrangement exists to stop. Which formats this *configuration*
   // refuses is sv.blockedFormats, with the sentence each is refused in, and the
-  // mirror of it -- which features this format refuses -- is sv.featureBlocked.
+  // mirror of it -- which functionalities this format refuses -- is
+  // sv.functionalityBlocked.
   // `format` itself is declared with `sv`, which reads it.
   /** Does this option reach anything in the bundle being generated? What the
    *  configure step hides by, and what the two blockers below are judged
@@ -1124,16 +1125,16 @@ export default function App({ api }: { api: Api }) {
   // is gone, and minting is step 1's, on the agent the credential belongs to.
   const tokenPlan = downloadPlan(previewToken);
   // -- what this location runs -----------------------------------------------
-  // `locFeatures` and `enabled` are derived above, beside the record that reads
+  // `locFunctionalities` and `enabled` are derived above, beside the record that reads
   // them. This is the funcIds the location carries that the tool has no options
   // for: locations already run tdm/dataPublisher/delphix, and naming them is
   // the honest version of a page that quietly models five funcIds.
-  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, features);
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities);
   // The second and last place an option is written without anyone pressing
   // anything, and the same shape as the SV correction above: what has to change
   // is a value optionGroups decides, this only applies it. A profile, a
   // restored session or a location picked after the form was filled in can all
-  // leave options set for a feature the location does not run -- and the switch
+  // leave options set for a functionality the location does not run -- and the switch
   // that would clear them is deliberately not on screen, so nothing else can.
   // Below `enabled` rather than beside the other effects because it reads it.
   const notRun = notRunPatch(options, enabled);
@@ -1142,7 +1143,7 @@ export default function App({ api }: { api: Api }) {
     setOptions((o) => ({ ...o, ...notRun }));
   }, [notRun]);
   // Which groups are in use but not finished. Each group declares its own rule,
-  // so a feature gaining required options later needs nothing here.
+  // so a functionality gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
   // ...and what that leaves the configure step still needing, named. Empty is
   // "nothing", which is what ticks the step off -- see configureBlockedBy. The
@@ -1418,7 +1419,7 @@ export default function App({ api }: { api: Api }) {
           <Section n={1} title="Capacity & agent" done={!agentBlocked}
             hint="Size the run, then the location and agent it is generated for.">
             <div className="space-y-3">
-            <CapacityProfile
+            <Sizing
               api={api} ask={profileAsk} setInputs={setPlanInputs}
               /* The engine size and the engines per node are the bundle's own
                  options, edited here as well as in the Configure step's Sizing
@@ -1495,14 +1496,14 @@ export default function App({ api }: { api: Api }) {
           <Section n={2} title="Configure"
             hint="Everything re-renders the preview live.">
             <ConfigurePanel
-              features={features} pickFeature={pickFeature}
+              functionalities={functionalities} pickFunctionality={pickFunctionality}
               sourceMode={sourceMode} enabled={enabled}
               locUnclaimed={locUnclaimed}
               options={options} set={set}
               format={format}
               setFormat={(v) => { setFormatNotice(null); set("output_format", v); }}
               blockedFormats={sv.blockedFormats}
-              featureBlocked={sv.featureBlocked} formatNotice={formatNotice}
+              functionalityBlocked={sv.functionalityBlocked} formatNotice={formatNotice}
               applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}

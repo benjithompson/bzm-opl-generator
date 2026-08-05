@@ -2,16 +2,17 @@
 from a customer's actual BlazeMeter account.
 
 Subcommands:
-  plan        how much infrastructure a load target needs -- no account, no cluster
-  locations   list private locations (harbors) across the account
-  create-ship create an agent (ship) in a location, print id + AUTH_TOKEN
-  facts       query the account, write facts.json (harbor, ships, images, features)
-  generate    render manifests from facts + customer parameters
-  doctor      preflight a cluster: can it schedule the location's concurrency?
-  suggest     what a cluster's evidence implies about the generate options
-  sv-expose   emit a working Service+Ingress per deployed virtual service
-  images      list / pull / mirror the images the location actually needs
-  livetest    apply manifests to a cluster and verify the agent comes online
+  plan         how much infrastructure a load target needs -- no account, no cluster
+  locations    list private locations (harbors) across the account
+  create-agent create an agent in a location, print id + AUTH_TOKEN
+  facts        query the account, write facts.json (harbor, agents, images,
+               functionalities)
+  generate     render manifests from facts + customer parameters
+  doctor       preflight a cluster: can it schedule the location's concurrency?
+  suggest      what a cluster's evidence implies about the generate options
+  sv-expose    emit a working Service+Ingress per deployed virtual service
+  images       list / pull / mirror the images the location actually needs
+  livetest     apply manifests to a cluster and verify the agent comes online
 """
 
 import argparse
@@ -96,7 +97,7 @@ def cmd_create_location(a):
     # session had no warning at all while this one did.
     if made["warning"]:
         print(made["warning"], file=sys.stderr)
-    print(f"next: bzm-opl-gen create-ship --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
+    print(f"next: bzm-opl-gen create-agent --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
 
 
 def cmd_delete_location(a):
@@ -105,7 +106,7 @@ def cmd_delete_location(a):
           f"{len(gone['ships_deleted'])} ship(s)")
 
 
-def cmd_create_ship(a):
+def cmd_create_agent(a):
     client = _client(a)
     ship = core.create_ship(client, a.harbor_id, a.name)
     # The ids first, then the token: the agent exists whatever the token endpoint
@@ -726,11 +727,16 @@ def main():
     dl.add_argument("--harbor-id", required=True)
     dl.set_defaults(fn=cmd_delete_location)
 
-    cs = sub.add_parser("create-ship", help="create an agent (ship), print id + AUTH_TOKEN")
+    # `create-ship` kept as an alias: it is in the README, in docs/live-test.md,
+    # and in whatever a customer copied out of them. `ship` is the account's
+    # field name (ship_id) and nothing more -- one deployment inside a private
+    # location is an agent, which is what this creates.
+    cs = sub.add_parser("create-agent", aliases=["create-ship"],
+                        help="create an agent, print id + AUTH_TOKEN")
     cs.add_argument("--api-key", required=True)
     cs.add_argument("--harbor-id", required=True)
     cs.add_argument("--name", required=True)
-    cs.set_defaults(fn=cmd_create_ship)
+    cs.set_defaults(fn=cmd_create_agent)
 
     f = sub.add_parser("facts", help="gather account facts -> facts.json")
     f.add_argument("--api-key")
@@ -741,7 +747,8 @@ def main():
                         "Images come from the built-in catalogue")
     f.add_argument("--ship-id", dest="ship_id", help="required with --manual")
     f.add_argument("--func-ids", dest="func_ids", nargs="+", default=["performance"],
-                   help="with --manual: the location's features, which decide "
+                   help="with --manual: the location's functionalities, which "
+                        "decide "
                         "which images the bundle names (default: performance)")
     f.add_argument("-o", "--output", default="facts.json")
     f.set_defaults(fn=cmd_facts)
@@ -782,7 +789,7 @@ def main():
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")
     g.add_argument("--auth-token", dest="auth_token",
-                   help="the agent's AUTH_TOKEN, as create-ship printed it or "
+                   help="the agent's AUTH_TOKEN, as create-agent printed it or "
                         "as the BlazeMeter UI shows it on the agent. Wins over "
                         "every other source and issues nothing, so an agent "
                         "already running on it keeps working")
@@ -969,7 +976,7 @@ def main():
     t.add_argument("--ship-id", dest="ship_id")
     t.add_argument("--auth-token", dest="auth_token",
                    help="the agent's AUTH_TOKEN, if you are holding the one "
-                        "create-ship printed. Without it the run issues exactly "
+                        "create-agent printed. Without it the run issues exactly "
                         "one, once, and every render it makes uses that -- "
                         "which revokes the credential of anything already "
                         "deployed against this agent")
@@ -1046,7 +1053,7 @@ def main():
         # HTTPException: a CoreError is already a sentence written for whoever
         # ran the command, and a traceback around it only buries it. Commands
         # that need to print something *before* exiting still catch it
-        # themselves -- `create-ship` does, so the agent it just made is
+        # themselves -- `create-agent` does, so the agent it just made is
         # reported whatever the token endpoint answers.
         sys.exit(str(e))
 
