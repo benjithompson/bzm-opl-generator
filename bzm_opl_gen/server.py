@@ -806,6 +806,11 @@ def reserved_env():
     return core.reserved_env()
 
 
+@app.get("/api/agent-env", description=core.agent_env.__doc__)
+def agent_env():
+    return core.agent_env()
+
+
 # -- SPA ----------------------------------------------------------------------
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")

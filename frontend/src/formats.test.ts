@@ -66,11 +66,13 @@ describe("docker", () => {
 
   it("leaves the shared rows in their declared order", () => {
     const kept = groupsFor(SHARED_GROUPS, applies);
-    // Scheduling is the only shared group a docker bundle loses whole. The env
-    // area survives: it is `--env` flags there, so it is in DOCKER_IGNORED
-    // nowhere.
+    // Scheduling is the only shared group a docker bundle loses whole. The
+    // environment area survives too and is not in this list: it stopped being
+    // a group when it stopped being a switch, and the panel asks `keysApply`
+    // over extra_env for it -- which is in DOCKER_IGNORED nowhere, because
+    // there it is `--env` flags.
     expect(kept.map((g) => g.id))
-      .toEqual(["registry", "proxy", "ca", "security", "env"]);
+      .toEqual(["registry", "proxy", "ca", "security"]);
   });
 
   it("shows everything while the table has not been read", () => {

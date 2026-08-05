@@ -245,6 +245,29 @@ missing tools. The rest is what it cannot fix for you.
   `DOCKER_IGNORED`, with the same `fixtures.ts` single copy held equal by
   `test_server.py`.
 
+- **...and the *offered* set is the same table read the other way.**
+  `agent_env.AGENT_ENV` is BlazeMeter's documented reference transcribed whole —
+  the identity, the proxy trio, the engine limits included — and
+  `core.agent_env()` subtracts `RESERVED_ENV` at the point it is **served**
+  (`/api/agent-env`). So the env area offers exactly what is left over, and an
+  option removed later hands its variable back with no edit on either side;
+  declaring only the leftovers would be that table kept twice. The area is a
+  **list**, not a name box: it was a switch over two empty inputs, which asked
+  somebody to supply the vocabulary as well as the value, so it is no longer a
+  group at all — no switch (a list has nothing to be off), a fold beside
+  Advanced (`ConfigurePanel.FoldRow`), and its one blocking rule reads from
+  `configureBlockedBy` instead of a group's `incomplete`. `type` picks the
+  control and a **boolean gets three positions**, because "the agent's default"
+  is a third answer a switch cannot give and the defaults run both ways
+  (`VERIFY_SSL` on, `KUBERNETES_USE_PRE_PULLING` off). `platforms` picks which of
+  BlazeMeter's two tables is on screen. Nothing is ever hidden by any of it: a
+  variable with no row above it — the other platform's, one the vocabulary has
+  since lost, a JSON value no table can round-trip — keeps the name/value editor
+  underneath (`env.otherRows`), because a form showing nothing for a variable the
+  bundle carries is the failure this area's rules are about. `fixtures.ts` holds
+  a **sample** rather than a copy here, and says so: nothing on the page has to
+  agree with the catalogue.
+
 - **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
   picks the view (Generate / Account capacity) and holds the key at its foot;
   `layout/AccountMenu` is that key plus the account and workspace, because all

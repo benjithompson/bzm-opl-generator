@@ -36,7 +36,7 @@ import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table and the served preflight answer, from the one
 // copy of each.
 import {
-  DOCKER_IGNORED, PLATFORM_SUGGESTION, preflightOut, RESERVED_ENV,
+  AGENT_ENV, DOCKER_IGNORED, PLATFORM_SUGGESTION, preflightOut, RESERVED_ENV,
 } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
@@ -714,41 +714,35 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
     });
   });
 
-test("a typed environment variable reaches the bundle, and a reserved name is refused",
+test("the offered variables reach the bundle, each through the control its type has",
   async () => {
-    // #131: the escape hatch for BlazeMeter's much wider agent-environment
-    // reference. The point of driving it from here rather than from env.test.ts
-    // is the last mile -- rows are local state and the option is what they add
-    // up to, so "the row was typed" and "the bundle carries it" are two claims.
+    // #131's escape hatch, as a list rather than a name box. The point of
+    // driving it from here rather than from env.test.ts is the last mile: a
+    // boolean's third position writes nothing, a key/value table writes JSON,
+    // and "the control was pressed" and "the bundle carries it" are two claims.
     const sent: Sent[] = [];
     render(<App api={perfAccount({
       ...transfers(sent),
-      // The served table. Unstubbed it rejects, which is the honest "not read
-      // yet" -- and that state refuses nothing, so the refusal below would not
-      // be under test at all.
+      // Both served tables. Unstubbed they reject, which is the honest "not
+      // read yet" -- and that state offers nothing and refuses nothing, so
+      // neither half below would be under test at all.
       reservedEnv: async () => RESERVED_ENV,
+      agentEnv: async () => AGENT_ENV,
     })} />);
 
     fireEvent.click(await screen.findByText("Perf"));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
-    fireEvent.click(await screen.findByRole(
-      "switch", { name: "Environment variables" }));
-    fireEvent.click(await screen.findByText(/\+ Add variable/));
-    fireEvent.change(await screen.findByLabelText("Variable name 1"),
-                     { target: { value: "PREFERRED_INTERFACE" } });
-    fireEvent.change(await screen.findByLabelText("Variable value 1"),
+    fireEvent.click(await screen.findByText("Environment variables"));
+    // A string, off the served record -- the name is the row's, so this is the
+    // one thing here nobody can mistype.
+    fireEvent.change(await screen.findByLabelText("PREFERRED_INTERFACE"),
                      { target: { value: "eth1" } });
+    // ...and a boolean, whose three positions are the whole reason it is not a
+    // switch: this one defaults on, so Off is a departure worth writing.
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "VERIFY_SSL" }))
+      .getByRole("radio", { name: "Off" }));
 
-    // A second row naming a variable the bundle already writes. Refused on the
-    // row, in the sentence that names the option owning it -- "set it there" is
-    // the whole answer, and a bare "that one is taken" is not.
-    fireEvent.click(screen.getByText(/\+ Add variable/));
-    fireEvent.change(await screen.findByLabelText("Variable name 2"),
-                     { target: { value: "KUBERNETES_SERVICE_USE_TYPE" } });
-    expect(await screen.findByText(/set it with service_type instead/)).toBeTruthy();
-
-    // ...and the good one is on the request, which is the claim.
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     const button = await screen.findByRole<HTMLButtonElement>(
       "button", { name: /Download bundle/ });
@@ -756,7 +750,29 @@ test("a typed environment variable reaches the bundle, and a reserved name is re
     fireEvent.click(button);
     await waitFor(() => expect(sent.length).toBe(1));
     expect((sent[0].options as { extra_env?: Record<string, string> }).extra_env)
-      .toMatchObject({ PREFERRED_INTERFACE: "eth1" });
+      .toEqual({ PREFERRED_INTERFACE: "eth1", VERIFY_SSL: "false" });
+  });
+
+test("a name typed by hand is still refused with the option that owns it",
+  async () => {
+    // The editor underneath the list, which is what stops a variable the
+    // catalogue does not carry being unreachable. Its one judgement is the same
+    // as before: a name the bundle already writes is refused on the row, in the
+    // sentence naming the option that owns it -- "set it there" is the whole
+    // answer, and a bare "that one is taken" is not.
+    render(<App api={perfAccount({
+      reservedEnv: async () => RESERVED_ENV,
+      agentEnv: async () => AGENT_ENV,
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(await screen.findByText("Environment variables"));
+    fireEvent.click(await screen.findByText(/Another variable by name/));
+    fireEvent.click(await screen.findByText(/\+ Add variable/));
+    fireEvent.change(await screen.findByLabelText("Variable name 1"),
+                     { target: { value: "KUBERNETES_SERVICE_USE_TYPE" } });
+    expect(await screen.findByText(/set it with service_type instead/)).toBeTruthy();
   });
 
 test("an imported profile rewrites the environment rows rather than sitting under them",
@@ -766,13 +782,13 @@ test("an imported profile rewrites the environment rows rather than sitting unde
     // the same step and writes the option from outside, so without a resync the
     // rows go on showing variables the bundle no longer carries -- a form
     // showing a variable no bundle has, which is the failure this area's own
-    // rules are otherwise about. See EnvGroup's `emitted` ref.
+    // rules are otherwise about. See the `emitted` ref in EnvVars.
     render(<App api={perfAccount()} />);
     fireEvent.click(await screen.findByText("Perf"));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
-    fireEvent.click(await screen.findByRole(
-      "switch", { name: "Environment variables" }));
+    fireEvent.click(await screen.findByText("Environment variables"));
+    fireEvent.click(await screen.findByText(/Another variable by name/));
     fireEvent.click(await screen.findByText(/\+ Add variable/));
     fireEvent.change(await screen.findByLabelText("Variable name 1"),
                      { target: { value: "TYPED_BY_HAND" } });

@@ -47,7 +47,6 @@ const DETECTS: [GroupId, string, unknown][] = [
   // written as "only false matters" would leave a bundle that asks for
   // auto-update alongside a mirror showing a closed group.
   ["security", "auto_update", true],
-  ["env", "extra_env", { PREFERRED_INTERFACE: "eth1" }],
   ["sv", "sv_ingress", "nginx"],
 ];
 
@@ -184,7 +183,6 @@ describe("switching a group off", () => {
       },
       sched: { tolerations: null, node_selector: null,
                engine_tolerations: null, engine_node_selector: null },
-      env: { extra_env: null },
       security: { use_secret: true, cluster_rbac: false,
                   service_type: "CLUSTERIP", restrict_engines: true,
                   // Back to unset, not to a boolean: the generator's default
@@ -307,7 +305,7 @@ describe("the split the configure step is built on", () => {
 
   it("keeps the shared groups shared", () => {
     expect(SHARED_GROUPS.map((g) => g.id))
-      .toEqual(["registry", "proxy", "ca", "sched", "security", "env"]);
+      .toEqual(["registry", "proxy", "ca", "sched", "security"]);
   });
 });
 
@@ -562,23 +560,13 @@ describe("a group declares whether its own configuration is finished", () => {
   });
 
   it("groups with no completeness rule never block", () => {
-    // Two have one: SV's required backend and domain, and the env area's rule
-    // that a name has to be one a process could read. Everything else is a
-    // switch over fields that are legal empty.
-    for (const g of OPTION_GROUPS.filter((x) => x.id !== "sv" && x.id !== "env")) {
+    // One has one: SV's required backend and domain. Everything else is a
+    // switch over fields that are legal empty -- the environment variables had
+    // the other, and stopped being a group when they stopped being a switch
+    // (see configureBlockedBy, which is where that rule reads from now).
+    for (const g of OPTION_GROUPS.filter((x) => x.id !== "sv")) {
       expect(g.incomplete).toBeUndefined();
     }
-  });
-
-  it("blocks on a variable name no process could read", () => {
-    // The one arm of extra_env's rules the options can answer alone: a
-    // reserved name is refused by generate() and stated on its own row, but a
-    // malformed one would otherwise reach the bundle with nothing on the page
-    // saying it had. See env.envIncomplete.
-    const env = GROUP_BY_ID.env;
-    expect(env.incomplete?.({ extra_env: { "my-var": "x" } }, false)).toBe(true);
-    expect(env.incomplete?.({ extra_env: { MY_VAR: "x" } }, false)).toBe(false);
-    expect(env.incomplete?.({}, false)).toBe(false);
   });
 
   it("incompleteGroups derives the list rather than being handed one", () => {

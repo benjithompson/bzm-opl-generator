@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { envIncomplete, envRowError, envToRows, rowsToEnv } from "./env";
-// The served table, from the one copy of it -- held equal to
-// generate.RESERVED_ENV by tests/test_server.py.
-import { RESERVED_ENV } from "./fixtures";
+import {
+  boolChoice, boolWrite, envIncomplete, envRowError, envToRows, jsonToKv,
+  kvToJson, offeredVars, otherRows, rowsToEnv, setVar, varError, varSet,
+  varValue,
+} from "./env";
+// The served tables, from the one copy of each -- RESERVED_ENV held equal to
+// generate.RESERVED_ENV by tests/test_server.py, AGENT_ENV a sample rather than
+// a copy (see fixtures.ts: nothing on the page has to agree with it).
+import { AGENT_ENV, RESERVED_ENV } from "./fixtures";
 
 describe("rows and the option", () => {
   it("round-trips what a bundle carries", () => {
@@ -97,5 +102,115 @@ describe("what blocks the download", () => {
     // options and nothing else, so it cannot see the served table -- and the
     // refusal arrives anyway, in the sentence naming the owning option.
     expect(envIncomplete({ extra_env: { SHIP_ID: "x" } })).toBe(false);
+  });
+});
+
+describe("the offered variables", () => {
+  it("shows one side of BlazeMeter's two tables", () => {
+    // Two tables, not one: TLS_CERT and HOSTNAME_OVERRIDE are the container
+    // agent's and the KUBERNETES_* half is crane's, so offering all of them
+    // would offer a setting the agent under this bundle has no reader for.
+    expect(offeredVars(AGENT_ENV, true).map((v) => v.name))
+      .toEqual(["PREFERRED_INTERFACE", "VERIFY_SSL", "DODUO_PORT",
+                "KUBERNETES_LABELS"]);
+    expect(offeredVars(AGENT_ENV, false).map((v) => v.name))
+      .toEqual(["PREFERRED_INTERFACE", "VERIFY_SSL", "DODUO_PORT",
+                "HOSTNAME_OVERRIDE"]);
+  });
+
+  it("offers nothing before the list has landed", () => {
+    // Which is not a claim that there is nothing: the area falls back to naming
+    // a variable by hand, so an unread list costs a control, never a value.
+    expect(offeredVars([], true)).toEqual([]);
+  });
+});
+
+describe("writing one variable", () => {
+  const env = { A: "1", B: "2" };
+
+  it("keeps the others, and its own place", () => {
+    // A variable that jumped to the end of the ConfigMap every time it was
+    // edited would make the preview churn for a value that had not changed.
+    expect(setVar(env, "A", "9")).toEqual({ A: "9", B: "2" });
+    expect(setVar(env, "C", "3")).toEqual({ A: "1", B: "2", C: "3" });
+  });
+
+  it("clears with null, and gives back the option's own default when empty", () => {
+    expect(setVar(env, "A", null)).toEqual({ B: "2" });
+    // `null`, not `{}`: an empty object would show up in profile.json as a key
+    // a bundle generated without this area never had.
+    expect(setVar({ A: "1" }, "A", null)).toBe(null);
+  });
+
+  it("says whether a variable is set apart from what it is set to", () => {
+    expect(varSet({ A: "" }, "A")).toBe(true);
+    expect(varValue({ A: "" }, "A")).toBe("");
+    expect(varSet({}, "A")).toBe(false);
+  });
+});
+
+describe("a boolean's three answers", () => {
+  it("reads unset as the agent's default rather than as off", () => {
+    // The distinction this whole codebase keeps: "nobody said" is not "no".
+    expect(boolChoice({}, "VERIFY_SSL")).toBe("default");
+    expect(boolChoice({ VERIFY_SSL: "true" }, "VERIFY_SSL")).toBe("true");
+    expect(boolChoice({ VERIFY_SSL: "false" }, "VERIFY_SSL")).toBe("false");
+  });
+
+  it("reads a value it did not write as off rather than as unset", () => {
+    // An imported profile can carry `1`, `yes` or a typo. It is set -- saying
+    // otherwise would hide a variable the bundle carries -- and it is not the
+    // word the agent reads as true.
+    expect(boolChoice({ VERIFY_SSL: "yes" }, "VERIFY_SSL")).toBe("false");
+    expect(boolChoice({ VERIFY_SSL: "TRUE" }, "VERIFY_SSL")).toBe("true");
+  });
+
+  it("writes the lower-case word, or nothing at all", () => {
+    expect(boolWrite("default")).toBe(null);
+    expect(boolWrite("true")).toBe("true");
+    expect(boolWrite("false")).toBe("false");
+  });
+});
+
+describe("a JSON-object variable as a table", () => {
+  it("round-trips an object of strings", () => {
+    expect(jsonToKv('{"team":"perf"}')).toEqual([{ key: "team", value: "perf" }]);
+    expect(kvToJson([{ key: "team", value: "perf" }])).toBe('{"team":"perf"}');
+  });
+
+  it("tells an empty value from one it could not read", () => {
+    // The rule this codebase is built on, in the one place a table could
+    // quietly offer to save `{}` over a value it had merely failed to parse.
+    expect(jsonToKv("")).toEqual([]);
+    expect(jsonToKv("   ")).toEqual([]);
+    for (const bad of ["not json", "[1,2]", '{"a":{"b":1}}', '"a"']) {
+      expect(jsonToKv(bad)).toBe(null);
+    }
+  });
+
+  it("clears the variable rather than writing an empty object", () => {
+    expect(kvToJson([])).toBe(null);
+    expect(kvToJson([{ key: "", value: "x" }])).toBe(null);
+  });
+});
+
+describe("what has no control above it", () => {
+  it("keeps a variable the list does not carry", () => {
+    // The half that makes the catalogue a list rather than a filter: the served
+    // vocabulary can lose a name, and a form showing nothing for a variable the
+    // bundle is about to write is the failure these rules are about.
+    expect(otherRows({ A: "1", VERIFY_SSL: "false" }, ["VERIFY_SSL"]))
+      .toEqual([{ name: "A", value: "1" }]);
+    expect(otherRows({ VERIFY_SSL: "false" }, ["VERIFY_SSL"])).toEqual([]);
+  });
+});
+
+describe("what a typed value refuses", () => {
+  const int = AGENT_ENV.find((v) => v.type === "int")!;
+
+  it("refuses what a whole number is not, and keeps it on screen", () => {
+    expect(varError(int, "8O00")).toMatch(/whole number/);
+    expect(varError(int, "8080")).toBe("");
+    expect(varError(int, "")).toBe("");
   });
 });

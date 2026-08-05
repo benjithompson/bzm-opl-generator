@@ -18,11 +18,23 @@ anything that breaks.
   `PREFERRED_INTERFACE`, `KUBERNETES_USE_PRE_PULLING`, `DODUO_PORT` and the
   rest — and the only way to reach the others was to edit the generated
   ConfigMap by hand, which the next `generate` silently overwrote. A new
-  `extra_env` option carries them: an *Environment variables* area on the
-  configure step (name and value per row, no JSON), `--env NAME=VALUE` on the
-  command line, repeatable. All three formats carry it — ConfigMap entries for
-  `manifests`, `extraEnv` in the values overlay for `helm`, `--env` flags for
-  `docker` — and it is in `profile.json`, so a regenerate replays it.
+  `extra_env` option carries them: an *Environment variables* fold on the
+  configure step, `--env NAME=VALUE` on the command line, repeatable. All three
+  formats carry it — ConfigMap entries for `manifests`, `extraEnv` in the values
+  overlay for `helm`, `--env` flags for `docker` — and it is in `profile.json`,
+  so a regenerate replays it.
+
+  In the web UI it is a **list, not a blank box**: open the fold and every
+  variable BlazeMeter documents that no setting above it already writes is
+  there, with the agent's own default beside it, so nothing has to be spelled
+  from memory. Each row carries the control its type deserves — a key/value
+  table for `KUBERNETES_LABELS` and `KUBERNETES_CUSTOM_ANNOTATIONS_JSON` so
+  nobody hand-encodes JSON, a box a certificate fits in for the TLS pair, and
+  three positions for a boolean (*Default*, *On*, *Off*), because leaving it
+  alone writes nothing and is a different answer from switching it off. Which
+  half of the reference is shown follows the format: crane's variables for a
+  Kubernetes bundle, the container agent's for a docker one. Under the list,
+  *Another variable by name* still takes anything the list does not carry.
 
   It reaches the **agent**: crane's pod reads it, and the engines crane spawns
   do not, because crane builds their environment from the `KUBERNETES_*`
