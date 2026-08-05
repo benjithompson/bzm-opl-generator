@@ -16,7 +16,7 @@ those three does not exist as far as it is concerned.
 
 ```
 gh auth login && gh auth setup-git          # once, if gh isn't set up
-pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.0"
+pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
 ```
 
 The repo is private and there is no PyPI package, so `pip` clones it over https

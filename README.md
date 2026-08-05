@@ -33,7 +33,7 @@ there's no npm step whichever way you install.
 brew install pipx gh && pipx ensurepath     # once, if you don't have them
 gh auth login && gh auth setup-git          # once, if gh isn't set up
 
-pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.0"
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
 bzm-opl-gen ui                              # opens the web UI
 ```
 
@@ -46,7 +46,7 @@ that command is what teaches plain `git` (and so `pip`) to use the token `gh
 auth login` just stored. Without it the install fails on authentication, not on
 anything about the spec.
 
-`@v0.3.0` pins a release; drop it to track `main`. Upgrade with the same line
+`@v0.3.1` pins a release; drop it to track `main`. Upgrade with the same line
 plus `--force`. Drop `[ui]` if you only want the CLI — it has no dependencies at
 all. `uv tool install "<the same spec>"` works identically if you have `uv`.
 
@@ -57,7 +57,7 @@ a typo in the command.
 Prefer a release artifact? Every release attaches the built wheel. Download it
 from the Releases page (or `gh release download --repo
 benjithompson/bzm-opl-generator --pattern '*.whl'`) and install the file by its
-real name — `pipx install './bzm_opl_gen-0.3.0-py3-none-any.whl[ui]'`. Don't
+real name — `pipx install './bzm_opl_gen-0.3.1-py3-none-any.whl[ui]'`. Don't
 paste a `*` into that: neither the shell (inside quotes) nor pipx expands it,
 and the error is `Unable to parse package spec`.
 

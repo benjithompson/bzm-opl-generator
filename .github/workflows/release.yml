@@ -1,6 +1,6 @@
 name: release
 
-# Cut a release by pushing a version tag:  git tag v0.3.0 && git push --tags
+# Cut a release by pushing a version tag:  git tag v0.3.1 && git push --tags
 # The tag is what users install -- `pipx install "bzm-opl-gen[ui] @
 # git+https://...@vX.Y.Z"` resolves it out of the repo, so pushing the tag is
 # the release. This job builds the wheel and attaches it as the alternative
@@ -123,10 +123,41 @@ jobs:
               .github/release-footer.md >> notes.md
           echo "--- notes.md ---"; cat notes.md
 
+      # Through the API rather than `gh`, because the self-hosted runners do not
+      # carry it -- v0.3.0 built, tested and assembled its notes and then died
+      # here on `gh: command not found`, which is a whole release's worth of
+      # work thrown away at the last step. GitHub's own images have `gh`, ours
+      # do not, and this job was the only thing in the repo that had ever needed
+      # it. `github-script` runs on the node the runner already uses for
+      # checkout and setup-python, so it needs nothing installed.
       - name: publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-              --title "$GITHUB_REF_NAME" \
-              --notes-file notes.md
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const tag = process.env.GITHUB_REF_NAME;
+            const { owner, repo } = context.repo;
+            const { data: release } = await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: tag,
+              name: tag,
+              body: fs.readFileSync('notes.md', 'utf8'),
+            });
+            // Every file `python -m build` produced -- the wheel and the sdist.
+            // Uploaded one at a time so a failure names which asset, rather
+            // than leaving a release whose contents nobody can account for.
+            for (const name of fs.readdirSync('dist')) {
+              const data = fs.readFileSync(`dist/${name}`);
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo,
+                release_id: release.id,
+                name,
+                data,
+                headers: {
+                  'content-type': 'application/octet-stream',
+                  'content-length': data.length,
+                },
+              });
+              core.info(`uploaded ${name} (${data.length} bytes)`);
+            }
+            core.info(`published ${release.html_url}`);
