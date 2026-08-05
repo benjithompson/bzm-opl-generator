@@ -57,7 +57,7 @@ and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and **`--format helm` and
 `--format docker` are both available again**, since there is nothing left for
 either to be missing. Both refusals are keyed on the *configuration* (an
 `sv_ingress` other than none), never on the location's funcIds, which is exactly
-why declining the feature clears them. What
+why declining the functionality clears them. What
 you give up is what the refusal was protecting: deploy a virtual service to
 this location and it will stall at `WAITING_FOR_DOMAIN`, exactly as described
 above. Nothing else changes, including the images — which image set the agent

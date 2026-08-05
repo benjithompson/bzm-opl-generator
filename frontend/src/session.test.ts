@@ -31,7 +31,7 @@ const BASE = {
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
-  // The two figures the capacity profile owns. Its engine size is a bundle
+  // The two figures the sizing owns. Its engine size is a bundle
   // option and is remembered with the rest of them.
   plan: { users: "5000", vusPerEngine: "750" },
 };

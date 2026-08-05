@@ -1967,7 +1967,7 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     expect(read).toEqual(["blazemeter", "mocks-ns"]);
   });
 
-// -- the capacity profile, and the location it lands on ----------------------
+// -- the sizing, and the location it lands on -------------------------------
 // The planner reaches nothing -- no key, no account, no cluster -- and that is
 // the requirement rather than a property: it is the question somebody asks
 // *before* they have any of it, which is why it is the first card of step 1
@@ -2008,7 +2008,7 @@ function planFor(body: {
   };
 }
 
-test("with no key connected, step 1 still sizes a capacity profile", async () => {
+test("with no key connected, step 1 still makes a sizing", async () => {
   const asked: { users: string; agents?: string }[] = [];
   // Not connected, and nothing account-shaped is stubbed: every route but the
   // four the page reads at mount rejects by naming itself, so a profile that

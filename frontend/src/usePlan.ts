@@ -1,6 +1,6 @@
 // Asking the server to size something, from either of the two places that do.
 //
-// The capacity profile card and each location's own panel are different views
+// The sizing card and each location's own panel are different views
 // of one question, and they had two copies of how to ask it: the same 250ms
 // debounce, the same three pieces of state, the same "a blank target is not an
 // error, it is the state the panel opens in". A copy each is how they come to

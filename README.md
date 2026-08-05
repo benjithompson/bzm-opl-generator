@@ -7,7 +7,7 @@ actual BlazeMeter account** instead of hand-edited templates.
 ```
         BlazeMeter API                customer parameters
    (harbor, ships, funcIds,        (namespace, registry, platform,
-    live image inventory)           features, secret policy, ...)
+    live image inventory)           functionality, secret policy, ...)
               \                        /
                v                      v
           facts.json  ---->  bzm-opl-gen generate  ---->  out/*.yaml + README

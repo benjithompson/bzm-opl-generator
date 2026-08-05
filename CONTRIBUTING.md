@@ -49,7 +49,7 @@ bzm_opl_gen/
                               | images | livetest | ui | mcp | sv-expose | locations
                               | create-location | create-agent | delete-location
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
-  profiles/      scenario presets (standard | private-registry | proxy-ca)
+  profiles/      option profiles (standard | private-registry | proxy-ca)
   ui_dist/       prebuilt web UI, shipped in the wheel
 frontend/        web UI source (React); `npm run build` refreshes ui_dist/
 tests/           offline unit tests (fixture facts), plus helm_parity.py

@@ -147,7 +147,7 @@ Two things differ from the Kubernetes formats, both deliberate:
   emitting a command that would install, report idle, and publish nothing. The
   test is the configuration, not the location: a location that offers mocks but
   is being generated for performance alone ([declining the
-  feature](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
+  functionality](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
   carries no `sv_*` options and docker is available again.
 - **`livetest` does not take a docker bundle.** The rig applies YAML to a
   cluster; this bundle is a shell script and no cluster is involved. It exits

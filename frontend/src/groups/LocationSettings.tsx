@@ -1,4 +1,4 @@
-// What the capacity profile would change about this location, and the one
+// What the sizing would change about this location, and the one
 // control that writes it.
 //
 // The case this is for is not setup, it is the correction that follows one. A
@@ -333,7 +333,7 @@ function ProfileLine({ plan, agents, busy, touched }: {
   if (!plan) {
     return (
       <p className="text-[11px] text-amber-700">
-        No capacity profile yet — size one above and these fields open on what
+        No sizing yet — make one above and these fields open on what
         it would change here. They can be typed in either way.
       </p>
     );

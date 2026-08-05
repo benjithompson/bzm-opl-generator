@@ -441,7 +441,7 @@ describe("options set for a functionality the location does not run", () => {
 
   it("clears an engine size bound for a location that starts no engines", () => {
     // The size is not a group any more (#132), so its clearing is notRunPatch's
-    // own clause: the options still travel (the capacity profile, an imported
+    // own clause: the options still travel (the sizing, an imported
     // profile), generate() emits an explicit option over anything, and a
     // mocks-only location has no engine for it to describe.
     expect(notRunPatch({ engine_cpu_limit: "2", engine_mem_limit: "8Gi" },

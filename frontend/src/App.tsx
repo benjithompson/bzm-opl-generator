@@ -60,9 +60,9 @@ import { CapacityView } from "./CapacityView";
 // profile asks for, assembled once here and read by two panels.
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 import { AgentPanel } from "./steps/AgentPanel";
-// The capacity profile: step 1's first card, and the planner that used to be a
-// view of its own. See CapacityProfile for why it moved.
-import { CapacityProfile } from "./steps/CapacityProfile";
+// The sizing: step 1's first card, and the planner that used to be a view of
+// its own. See Sizing for why it moved.
+import { Sizing } from "./steps/Sizing";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
 import { CaGroup } from "./groups/CaGroup";
@@ -279,7 +279,7 @@ export default function App({ api }: { api: Api }) {
   // rollup is one read of a whole account and belongs to nothing in the flow.
   // The planner is no longer among them -- it is step 1's first card, because
   // reaching nothing is what makes it the first question rather than a separate
-  // page (see CapacityProfile).
+  // page (see Sizing).
   const [view, setView] = useState<ViewId>("flow");
   // The two drawers. The nav starts open because the views are the first thing
   // to understand; the preview starts shut because there is nothing in it until
@@ -503,7 +503,7 @@ export default function App({ api }: { api: Api }) {
     // Land somewhere that still works. Account capacity has nothing to roll up
     // without a key, and Generate's "Connect to BlazeMeter" source has no
     // account to read a location from -- so the page goes to the flow's first
-    // step in manual entry, where the capacity profile at the top of it needs
+    // step in manual entry, where the sizing at the top of it needs
     // no account at all. That card is what "Plan capacity" used to be, and it
     // is still the one thing here that works with nothing connected.
     setView("flow");
@@ -811,7 +811,7 @@ export default function App({ api }: { api: Api }) {
   const set = useCallback((k: string, v: unknown) =>
     setOptions((o) => ({ ...o, [k]: v })), []);
 
-  /** What the capacity profile is sizing.
+  /** What the sizing card states.
    *
    *  Assembled once, read twice: by the profile card at the top of step 1, and
    *  by whichever location is open below it -- which re-asks with its own agent
@@ -1419,7 +1419,7 @@ export default function App({ api }: { api: Api }) {
           <Section n={1} title="Capacity & agent" done={!agentBlocked}
             hint="Size the run, then the location and agent it is generated for.">
             <div className="space-y-3">
-            <CapacityProfile
+            <Sizing
               api={api} ask={profileAsk} setInputs={setPlanInputs}
               /* The engine size and the engines per node are the bundle's own
                  options, edited here as well as in the Configure step's Sizing
