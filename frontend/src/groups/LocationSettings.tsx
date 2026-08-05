@@ -49,6 +49,25 @@ const KEYS = Object.keys(EMPTY) as (keyof Draft)[];
 const shown = (v: number | null | undefined) =>
   v === null || v === undefined ? "" : String(v);
 
+/** Whether a typed field says the same thing the location already holds.
+ *
+ *  Compared as a *number*, not as text. Both sides are whole numbers by the
+ *  time they get here, but the two sides are written by different hands -- the
+ *  profile stringifies an int, a `type=number` input hands back whatever was
+ *  typed -- so `4`, `4.0` and ` 4` are the same setting arriving three ways.
+ *  Textual comparison called each of them a change, which put the panel in the
+ *  state this rule is about: a Save offering to write the value already there,
+ *  and a Reset live with nothing to give back.
+ *
+ *  Blank is not zero and not "same as anything": it means "leave this one
+ *  alone", so blank matches only blank. */
+export function same(a: string, b: string): boolean {
+  const [x, y] = [a.trim(), b.trim()];
+  if (x === y) return true;
+  if (x === "" || y === "") return false;
+  return Number(x) === Number(y) && !Number.isNaN(Number(x));
+}
+
 /** What the location currently says, as a draft. */
 function draftOf(loc: Location): Draft {
   return {
@@ -161,7 +180,7 @@ export function LocationSettings(props: {
       fill?.override_memory]);
 
   const current = draftOf(location);
-  const edited = KEYS.filter((k) => draft[k].trim() !== current[k]);
+  const edited = KEYS.filter((k) => !same(draft[k], current[k]));
   const set = (k: keyof Draft, v: string) => {
     setTouched(true);
     setDraft({ ...draft, [k]: v });
@@ -227,7 +246,7 @@ export function LocationSettings(props: {
             </span>
             <span aria-hidden="true"
               className={"text-xs shrink-0 "
-                + (draft[k].trim() !== current[k] ? "text-bzm" : "text-slate-300")}>
+                + (same(draft[k], current[k]) ? "text-slate-300" : "text-bzm")}>
               →
             </span>
             <span className="w-28 shrink-0">
