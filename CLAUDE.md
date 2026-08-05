@@ -224,6 +224,31 @@ missing tools. The rest is what it cannot fix for you.
   **`frontend/src/optionGroups.ts` is out of scope for it** — it holds
   `detect`/`enable`/`disable` *functions*, which a Python registry cannot carry.
 
+- **A required field left blank is a `<PLACEHOLDER>`, not an empty string and
+  not a refusal.** Every one of these had a plausible-looking failure when
+  empty: an unnamed service account becomes the namespace's `default` (binding
+  crane's Role to every pod there), an empty AUTH_TOKEN is a pod that reads as a
+  slow boot, a blank `sv_subdomain` stalls at `WAITING_FOR_DOMAIN`. The marker
+  makes all of them one loud, early failure. **The angle brackets are the
+  guard**: no Kubernetes name may contain them, so `kubectl apply` rejects the
+  object and names the field — which is why a blank field may resolve to a value
+  at all. The chart's `bzm-opl.validate` refuses one for the values the API
+  server never sees as names, and `livetest.bundle_check` refuses one before it
+  builds a cluster. Two halves decide what is required, and they are not the
+  same question: `generate.REQUIRED_TEXT` fills what the *options* show is
+  needed, and `optionGroups`' per-group `requires` fills what only a **switch on
+  the page** shows — a registry, a proxy and a CA are configured by having a
+  value, so blank and "not using one" are the same options dict on the server.
+  `placeholder_options()` reads the marker rather than either table, so both
+  halves report identically. Two exemptions, both "answered elsewhere" rather
+  than "unanswered": docker has no namespace or ServiceAccount, and a chart
+  leaves `authToken` empty because `--set-string` at install time is what its
+  README asks for. The page **warns, never blocks** — `configureBlockedBy` kept
+  only what a marker cannot stand in for (a question nobody answered, two
+  answers that contradict, an env name no process could read), and the marker
+  never enters `options`, only `withPlaceholders(options)` on the way out, or it
+  lands in the session snapshot looking like something somebody typed.
+
 - **`extra_env` is the escape hatch, and the reserved set is what keeps it
   honest.** BlazeMeter's agent-environment reference is much wider than the
   options here, and the only way to the rest was hand-editing the generated

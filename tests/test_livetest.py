@@ -587,6 +587,18 @@ def test_bundle_check_catches_a_stale_ship_in_the_profile(tmp_path):
     assert "ddd444" in r and "bbb222" in r and gen.PROFILE_FILE in r
 
 
+def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
+    """The API server would refuse `<PLACEHOLDER>` as a name anyway -- but only
+    after this rig has built a cluster, which is 12-20 minutes and a teardown to
+    learn something profile.json says on disk. Same shape as the identity
+    guards above, and the same reason for being one."""
+    d = _bundle(tmp_path, service_account_name="")
+    prof = gen.load_profile(d)
+    assert prof["service_account_name"] == gen.PLACEHOLDER
+    r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals)
+    assert "service_account_name" in r and gen.PLACEHOLDER in r
+
+
 def test_bundle_check_refuses_a_yaml_this_generator_does_not_emit(tmp_path):
     """bzm_limitrange.yaml is the file that happened: emitted by a version that
     is gone, left behind in out/, and applied by the rig as part of the run."""

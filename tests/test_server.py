@@ -877,6 +877,21 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
         == set(gen_mod.DOCKER_IGNORED)
 
 
+def test_the_placeholder_marker_is_one_string_in_both_languages():
+    """The page writes it into what it sends and the generator recognises it
+    coming back, so a marker that differed by a character would be carried into
+    the bundle as a value somebody meant -- silently, and in the one field
+    nobody filled in. Not served like DOCKER_IGNORED, because the page has to
+    write it before any response has arrived; held equal here instead, which is
+    what every other constant these two share does."""
+    from bzm_opl_gen import generate as gen_mod
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "placeholder.ts").read_text()
+    m = re.search(r'export const PLACEHOLDER = "([^"]+)";', text)
+    assert m, "PLACEHOLDER not found -- was it renamed or moved?"
+    assert m.group(1) == gen_mod.PLACEHOLDER
+
+
 def test_reserved_env_is_served_with_the_option_that_owns_each_name():
     """The env area on the configure step refuses a name the bundle already
     writes, and it must not keep its own list of them -- a variable added to a
