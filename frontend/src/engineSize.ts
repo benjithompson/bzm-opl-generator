@@ -54,7 +54,7 @@ function memQuantity(mb: number): string {
  *  - "noLocation": there is no location to read (manual entry, or the list
  *    still loading), which must not be worded as "the location sets nothing".
  *  - "bundle" / "override": explicit options (an imported profile, or the
- *    capacity profile on step 1) -- they outrank the location, and where the
+ *    sizing on step 1) -- they outrank the location, and where the
  *    location asks for something else that is said, never silent. */
 export interface SizeStatement {
   kind: "location" | "default" | "noLocation" | "bundle" | "override";
@@ -102,7 +102,7 @@ export function sizeStatement(
 
   if (optCpu || optMem) {
     const base = `Engines run at ${size} per engine, set in this bundle's `
-      + "options (an imported profile, or the capacity profile on the first "
+      + "options (an imported profile, or the sizing on the first "
       + "step).";
     if (!location) return { kind: "bundle", cpu, mem, text: base };
     if (!locSet) {
@@ -129,7 +129,7 @@ export function sizeStatement(
         + `the bundle against ${fromLoc.cpu} CPU / ${fromLoc.mem} from the `
         + "location's requests. The scheduler places engines on the "
         + "location's requests, so they will not match what engines run at. "
-        + "Re-size the capacity profile, or change the location in Location "
+        + "Re-size, or change the location in Location "
         + "settings, to bring them together.",
     };
   }

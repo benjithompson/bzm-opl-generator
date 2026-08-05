@@ -42,7 +42,7 @@ step 2 and step 3 as much as in step 1.
 
 ## Step 1 — Capacity & agent
 
-**The capacity profile is the first card**, above the locations the run might go
+**The sizing is the first card**, above the locations the run might go
 to. It sizes the load — a virtual user target, virtual users per engine, the
 engine size, how many engines a node holds — and answers in engines, nodes and
 peak vCPU, with the request document to raise the infrastructure ticket with, to
@@ -85,7 +85,7 @@ status poll is what says an agent came online.
 
 ### Changing a location after it exists
 
-Selecting a location expands it, and what the capacity profile would change about
+Selecting a location expands it, and what the sizing would change about
 it is inside, as a before → after against what the account holds: **engines per
 agent** (`slots`), **virtual users per engine** (`threadsPerEngine`) and the
 engine's CPU and memory **requests** (`overrideCPU` / `overrideMemory`). They
@@ -196,10 +196,10 @@ Kubernetes manifests, the panel says which format it replaced, and how to get
 back to it, until you pick one again. A configuration somebody wrote outranks a
 segment.
 
-**Two kinds of option — a feature's own, and every deployment's — and nothing is
-hidden between them.** *Deployment features* is one card per feature, each marked
-`Enabled` or `Not enabled` from the location's own funcIds, holding the options
-only that feature has. *Placement* is the
+**Two kinds of option — a functionality's own, and every deployment's — and
+nothing is hidden between them.** *Deployment functionalities* is one card each,
+marked `Enabled` or `Not enabled` from the location's own funcIds, holding the
+options only that functionality has. *Placement* is the
 namespace and the service account — its own section because it is the part a
 docker bundle does not have at all, and a section that comes and goes has to be
 one. *Agent settings* is everything every deployment gets: registry, proxy, CA
@@ -226,18 +226,19 @@ filling a labeled ConfigMap, and anywhere else it emits an empty one nothing
 ever fills, leaving a bundle that reads as configured while the agent trusts
 nothing extra.
 
-**A feature the location does not run is stated, never configured.** The card
-says so and names the funcId to add in BlazeMeter (Settings → Private Locations),
-and that feature's options leave the page — cleared, not just hidden, because
+**A functionality the location does not run is stated, never configured.** The
+card says so and names the funcId to add in BlazeMeter (Settings → Private
+Locations), and that functionality's options leave the page — cleared, not just hidden, because
 `generate` refuses an `sv_ingress` with no subdomain whatever the location runs,
 so a hidden row would only move the blocker to the server. Turning a funcId on
 was offered here once and is not any more: it changes what the location *is*,
 which is BlazeMeter's own UI's to do, unlike this page's two writes to an agent's
 credential and a location's concurrency. A card can be silent for the other
-reason too — this *format* cannot serve that feature — and the two answers are
+reason too — this *format* cannot serve that functionality — and the two answers
+are
 kept apart, because they have different remedies.
 
-**In manual entry the feature is not a view of the options, it is the
+**In manual entry the functionality is not a view of the options, it is the
 declaration.** With no account to read funcIds off, that card's radio is what
 says whether the typed identity is a performance agent or a
 service-virtualization one, which decides the funcId, the images the bundle

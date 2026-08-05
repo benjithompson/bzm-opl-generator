@@ -64,7 +64,7 @@ Two things differ, both deliberate:
   that would deploy, report idle, and stall at `WAITING_FOR_DOMAIN`. The test is
   the configuration, not the location: a location that offers mocks but is being
   generated for performance alone ([declining the
-  feature](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
+  functionality](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
   carries no `sv_*` options and the chart is available again. Use
   `--format manifests`, or the upstream
   [Blazemeter/helm-crane](https://github.com/Blazemeter/helm-crane) chart.

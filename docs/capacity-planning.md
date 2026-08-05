@@ -123,17 +123,17 @@ a measured run ends there — the engine count and virtual users per engine
 change, and neither is in a manifest. This page's own view is for the location
 that does not exist yet.
 
-In the web UI the same calculator is the **first card of step 1** (*Capacity
-profile*), not a view of its own: it needs no account, and that is a reason to be
-first rather than elsewhere. Edit expands it, and the profile *fills* the
-location draft — the fields stay editable, and a hand edit outranks later profile
-changes until Reset. Sizing a profile writes nothing to BlazeMeter by itself.
+In the web UI the same calculator is the **first card of step 1** (*Sizing*),
+not a view of its own: it needs no account, and that is a reason to be first
+rather than elsewhere. Edit expands it, and the sizing *fills* the location
+draft — the fields stay editable, and a hand edit outranks later sizing changes
+until Reset. Making a sizing writes nothing to BlazeMeter by itself.
 Applying those numbers to a real location is a separate, explicit write (the
 location settings panel), and it does cover `overrideCPU` and `overrideMemory`.
 
 ## Where else it is
 
-- **Web UI** — the *Capacity profile* card at the top of step 1, usable before
+- **Web UI** — the *Sizing* card at the top of step 1, usable before
   connecting anything ([web-ui.md](web-ui.md)).
 - **MCP** — `opl_plan capacity {users, vus_per_engine?, engine_cpu?,
   engine_mem?, engines_per_node?, agents?}`, which returns the numbers and the

@@ -6,7 +6,7 @@ import { ENGINE_SIZES } from "../optionGroups";
  *  Three copies before this: here, the standalone planner and the location's
  *  Calculate pane -- and they had already diverged, since only this one offered
  *  Custom. A fourth size, or a relabelled one, was three edits. One consumer
- *  now: step 1's capacity profile, which writes the two options as a
+ *  now: step 1's sizing, which writes the two options as a
  *  prescription. The configure step no longer edits the size at all (#132) --
  *  it derives from the location's engine requests, set in Location settings,
  *  and the step renders engineSize.sizeStatement instead. */

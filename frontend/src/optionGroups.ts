@@ -547,7 +547,7 @@ export function notRunPatch(
   }
   // The engine size is a section's statement rather than a group (#132), so
   // its clearing is spelled here instead of through a disable(): the options
-  // still travel (the capacity profile and an imported profile write them),
+  // still travel (the sizing and an imported profile write them),
   // and a location that starts no engines must not carry them out in the
   // bundle -- generate would emit an explicit option over anything.
   if (!runsFunctionality(enabled, SIZING_FUNCTIONALITY)
