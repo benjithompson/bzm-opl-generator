@@ -11,6 +11,16 @@ anything that breaks.
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-08-05
+
+Environment variables the options do not cover, a marker in every field left
+blank, and an install command that works.
+
+**0.3.0 was tagged but never published** — its release build died at the last
+step on a runner with no `gh`, which is fixed below. Nothing installed it, so if
+you are coming from 0.2.0, the 0.3.0 section further down is part of this
+upgrade too.
+
 ### Added
 
 - **Environment variables the bundle has no setting for.** BlazeMeter's agent
@@ -85,6 +95,14 @@ anything that breaks.
 - **The README says how to run it from a checkout.** It described the release
   wheel and, under *Contributing*, an editable install with the test extras —
   nothing that read as "you have cloned this and want the page".
+
+- **Releases publish again.** The release job ended in `gh release create`, and
+  the self-hosted runners this repo moved to do not carry `gh` — so v0.3.0 built
+  the wheel, passed the suite, verified the wheel's contents and assembled its
+  notes, then died on `gh: command not found` with nothing published. It now
+  creates the release and uploads the wheel and sdist through the API, on the
+  node the runner already runs every other action with, so there is no binary to
+  be missing.
 
 ## [0.3.0] — 2026-08-03
 

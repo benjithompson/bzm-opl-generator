@@ -1,6 +1,6 @@
 [project]
 name = "bzm-opl-gen"
-version = "0.3.0"
+version = "0.3.1"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
 # 3.10 because the `mcp` SDK requires it. 3.9 has been end-of-life since
 # October 2025, and the generator itself still uses nothing newer -- the floor

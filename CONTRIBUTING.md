@@ -147,7 +147,7 @@ entries from `## [Unreleased]` into a new `## [x.y.z] — YYYY-MM-DD` section of
 `CHANGELOG.md`. Then tag:
 
 ```
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.3.1 && git push origin v0.3.1
 ```
 
 `.github/workflows/release.yml` runs the offline suite, builds the wheel,
