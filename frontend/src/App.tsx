@@ -23,7 +23,8 @@ import { downloadPlan, Recall, recalled, recallNote } from "./token";
 import {
   allGroupsOff, blockingGroups, caModeOf, caModePatch, CaMode,
   configureBlockedBy, detectGroups, enabledFeatures,
-  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
+  featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
+  notRunPatch,
   runsFeature, serviceAccountOk, startFeature, suggestNamespace,
   unclaimedFuncIds,
 } from "./optionGroups";
@@ -1253,7 +1254,8 @@ export default function App({ api }: { api: Api }) {
     ),
     proxy: <ProxyGroup proxy={proxyOpt} onField={setProxy} />,
     ca: (
-      <CaGroup applies={applies} mode={caMode} onMode={setCaMode}
+      <CaGroup applies={applies} openshift={isOpenshift(options)}
+        mode={caMode} onMode={setCaMode}
         configmap={raw("ca_existing_configmap")}
         configmapKey={raw("ca_configmap_key")}
         bundle={raw("ca_bundle")}

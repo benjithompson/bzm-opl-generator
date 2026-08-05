@@ -173,7 +173,8 @@ def cmd_generate(a):
     if a.profile:
         with open(a.profile) as fh:
             opts.update(json.load(fh))
-    for key in ("platform", "namespace", "ship_id", "auth_token", "output_format",
+    for key in ("platform", "openshift_cluster",
+                "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
                 # Tri-state, and `is not None` is what carries it: --no-auto-update
                 # sets False, which must override a profile's true rather than
@@ -769,6 +770,15 @@ def main():
                         "daemon, where most of the options below mean nothing. "
                         "helm and docker cover performance testing only")
     g.add_argument("--platform", choices=["openshift", "k8s"])
+    # The posture above is not the product: it installs on vanilla Kubernetes
+    # too. Only the negative has a flag, because the default posture is
+    # OpenShift's and so is the default cluster.
+    g.add_argument("--not-openshift", dest="openshift_cluster",
+                   action="store_false", default=None,
+                   help="the SCC-friendly posture on a cluster that is not "
+                        "OpenShift: every command the bundle prints is written "
+                        "with kubectl, sv_ingress=openshift is refused, and no "
+                        "inject-trusted-cabundle ConfigMap is offered")
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")
     g.add_argument("--auth-token", dest="auth_token",

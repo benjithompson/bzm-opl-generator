@@ -111,6 +111,22 @@ export interface OptionGroup {
   requires?: (o: Options) => string[];
 }
 
+// -- the cluster, which the posture is not ------------------------------------
+
+/** Is the target cluster OpenShift itself? `generate.is_openshift`, and the one
+ *  copy of that reading on this side.
+ *
+ *  `platform` is a *posture* -- who assigns the pod's UID -- and the
+ *  SCC-friendly one is recommended on vanilla Kubernetes too, so it can never
+ *  answer which binary the person deploying types. Two readers here need the
+ *  product rather than the posture: the SV backends (only OpenShift serves a
+ *  route.openshift.io Route) and CA trust (only OpenShift fills a labeled
+ *  ConfigMap in). `!== false` because absent means the default, which is on --
+ *  Boolean() would read an untouched bundle as plain Kubernetes and hide two
+ *  controls that were being offered a moment ago. */
+export const isOpenshift = (o: Options) =>
+  o.platform === "openshift" && o.openshift_cluster !== false;
+
 // -- CA trust ----------------------------------------------------------------
 // One-of: existing ConfigMap | inline PEM | OpenShift injection.
 export type CaMode = "none" | "existing" | "inline" | "inject";

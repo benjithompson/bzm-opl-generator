@@ -126,7 +126,21 @@ OPTIONS = [
             "the pod for running as root. So neither setting is a superset of the "
             "other, and the wrong one fails at admission rather than at generate "
             "time. It is a posture, not a product: the OpenShift default installs "
-            "on vanilla Kubernetes too wherever the namespace assigns UIDs."),
+            "on vanilla Kubernetes too wherever the namespace assigns UIDs -- "
+            "which is what `openshift_cluster` is for."),
+    Option(
+        "openshift_cluster", "boolean", "Platform and output",
+        summary="Is the target cluster OpenShift? Decides oc vs kubectl, Routes and trust injection.",
+        doc="The product, where `platform` is only the posture. Default `true`, "
+            "matching the default posture. Set it `false` for the SCC-friendly "
+            "posture on a cluster that is not OpenShift, and three things follow: "
+            "every command the bundle tells you to run is written with `kubectl` "
+            "rather than `oc`; `sv_ingress: openshift` is refused, because a plain "
+            "API server serves no `route.openshift.io` Route and the agent would "
+            "deploy cleanly and then stall with nothing to create; and "
+            "`ca_openshift_inject` is not offered, because nothing outside "
+            "OpenShift fills a labeled ConfigMap in. Ignored with `platform: k8s`, "
+            "which is the pinned-UID posture and names its own cluster."),
     Option(
         "output_format", "string", "Platform and output",
         choices=["manifests", "helm", "docker"],

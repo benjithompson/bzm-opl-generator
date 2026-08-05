@@ -213,6 +213,19 @@ Deployment runs as and what the RoleBinding grants to either way, so a customer
 who must run under an account their platform team owns unchecks it and types
 that name. The name itself is required, and an empty one blocks the download.
 
+**Advanced asks two questions, not one.** *Security posture* is who assigns the
+pod's UID — the SCC-friendly default leaves it to the cluster, and it is
+recommended on vanilla Kubernetes as much as on OpenShift. *Cluster*, beside it,
+is which of the two this actually is, and it is asked only under that posture
+because the other one is named `k8s` and answers for itself. The cluster decides
+what a human is told to type: every command in the bundle's README, its verify
+block and its node-pool recipe is written in `oc` or in `kubectl` off this one
+control. It also takes **OpenShift cluster trust injection** off *Custom CA
+trust*, and clears it if it was chosen — that mode is OpenShift's own operator
+filling a labeled ConfigMap, and anywhere else it emits an empty one nothing
+ever fills, leaving a bundle that reads as configured while the agent trusts
+nothing extra.
+
 **A feature the location does not run is stated, never configured.** The card
 says so and names the funcId to add in BlazeMeter (Settings → Private Locations),
 and that feature's options leave the page — cleared, not just hidden, because
