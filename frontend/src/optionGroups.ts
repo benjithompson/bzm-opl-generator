@@ -478,9 +478,12 @@ export function groupsOf(featureId: string): OptionGroup[] {
 }
 
 // -- a feature the location does not run -------------------------------------
-// Stated, and configured nowhere. The card names it and says where it is turned
-// on; it offers no switch, seeds no option, and can never be the reason a
-// download is blocked. Half-configurable was the state before (#113): manual
+// Not on the configure step at all, and configured nowhere. It was stated there
+// for a while (#113) -- a card naming the funcId to add -- which is true and
+// nothing the reader of that step can act on, so the panel now filters it out;
+// only manual entry, where the card is the declaration, still renders one.
+// Everything below is unchanged by that: hiding a row does not empty it, and
+// notRunPatch is what empties it. Half-configurable was the state before: manual
 // mode had no guard at all, so flipping Service virtualization on for an
 // identity declared as performance seeded `sv_ingress: nginx` over empty
 // subdomain and TLS fields, and the step went red for something nothing on the

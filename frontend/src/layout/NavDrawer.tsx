@@ -20,12 +20,15 @@ import { ReactNode } from "react";
 
 export type ViewId = "flow" | "capacity";
 
+// Neither item carries a hint any more, and the rail renders none. Generate
+// lost its first ("The Generate rail says nothing step 1 does not"), and
+// Account capacity's -- "what this account can generate" -- said in the chrome
+// what the view says at the top of itself, one line above a total the same
+// sentence describes. A label a whole view is named after does not need a
+// second sentence in the furniture beside it.
 export interface NavItem {
   id: ViewId;
   label: string;
-  /** Optional: the Generate view carries none. Step 1 states what it is for on
-   *  the page itself, and a second sentence in the rail said it again. */
-  hint?: string;
   icon: ReactNode;
 }
 
@@ -45,7 +48,7 @@ const Icon = ({ d }: { d: string }) => (
 export const NAV: NavItem[] = [
   { id: "flow", label: "Generate",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
-  { id: "capacity", label: "Account capacity", hint: "what this account can generate",
+  { id: "capacity", label: "Account capacity",
     icon: <Icon d="M3 16.5h14M6 16.5v-5M10 16.5v-9M14 16.5v-3" /> },
 ];
 
@@ -109,7 +112,7 @@ export function NavDrawer(props: {
               // The label is the tooltip while collapsed, so the rail is
               // usable without opening it first.
               title={off ? "connect an account first — the key at the foot of this menu"
-                : open ? item.hint ?? item.label : item.label}
+                : item.label}
               className={"w-full flex items-center gap-2.5 rounded-md text-left "
                 + "transition-colors h-9 "
                 + (open ? "px-2.5 " : "justify-center px-0 ")
@@ -125,14 +128,9 @@ export function NavDrawer(props: {
         })}
       </div>
 
-      {open && NAV.find((x) => x.id === props.view)?.hint && (
-        <p className="mt-auto px-3 pt-3 pb-2 text-[11px] text-slate-400 leading-snug">
-          {NAV.find((x) => x.id === props.view)?.hint}
-        </p>
-      )}
-
-      {/* Pinned to the bottom whether or not the hint above it is there, so the
-          key does not move when the drawer collapses. */}
+      {/* Pinned to the bottom, so the key does not move when the drawer
+          collapses or when the view changes. It used to share that job with a
+          per-view hint above it, both on `mt-auto`. */}
       {props.footer && (
         <div className={"mt-auto border-t border-slate-200 space-y-1.5 "
           + (open ? "p-2" : "p-1.5")}>

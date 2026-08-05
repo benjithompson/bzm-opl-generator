@@ -298,7 +298,16 @@ missing tools. The rest is what it cannot fix for you.
   three last the session while an agent is chosen per bundle. `layout/StepFlow`
   shows one step at a time, controlled from App because the download step sends
   you back to Configure; `layout/PreviewDrawer` pushes the manifests in from the
-  right rather than covering the form. The steps are `steps/AgentPanel`,
+  right rather than covering the form. **The shell is `h-screen` and the pane
+  beside the drawer is what scrolls** — it was `min-h-screen`, so the *document*
+  grew to whatever the view rendered and that `overflow-y-auto` never had a
+  bounded parent: on a real account (166 workspaces) Account capacity is
+  11,000px tall, the drawer stretched to match, and the account menu at its foot
+  sat that far below the fold — unreachable on the one view whose whole subject
+  is the account. Generate never showed it because `StepFlow` pins itself to
+  `100vh - 6.75rem` and scrolls its own step. No `overflow-hidden` beside the
+  height: the account menu is absolutely positioned inside the drawer and has to
+  be able to leave it. The steps are `steps/AgentPanel`,
   `steps/ConfigurePanel`, `steps/DownloadPanel` — **App owns every piece of
   domain state and every effect that reaches the server**, handed down as typed
   props, so `core`-style ownership holds here too; a panel keeps only what is
@@ -413,14 +422,20 @@ missing tools. The rest is what it cannot fix for you.
   to the ones `generate()` actually raises on, by `test_server.py`, because the
   two refusals are far apart and easy to grow a third of.
 
-  **A feature the location does not run is stated, never configured**: its card
-  names it and says where it is enabled, and `optionGroups.runsFeature` takes
-  its groups off the page. Hiding a row is only half — `notRunPatch` clears the
-  options too, through each group's own `disable`, because `generate()` refuses
-  an `sv_ingress` with no subdomain whatever the location runs and a hidden row
-  would just move the blocker to the server. The three states stay three
-  (`enabledFeatures`): runs, does not run, and nobody has said, which is null
-  and shows everything.
+  **A feature the location does not run is not on the configure step at all.**
+  It was *stated* for a while (#113) — a card naming the funcId to add — which
+  is a true sentence about the location and nothing that step's reader can act
+  on, and on a performance location (most of them) it was half the section. So
+  `ConfigurePanel` filters `p.features` by `optionGroups.runsFeature` and the
+  card, its groups and its rail entry go together. **Manual entry is exempt, and
+  structurally**: there the card *is* the declaration (see below), so filtering
+  by the answer would take away the control that gives it — which is why
+  `FeatureCard`'s not-run branch has one sentence and not two. Hiding is still
+  only half — `notRunPatch` clears the options too, through each group's own
+  `disable`, because `generate()` refuses an `sv_ingress` with no subdomain
+  whatever the location runs and a hidden row would just move the blocker to the
+  server. The three states stay three (`enabledFeatures`): runs, does not run,
+  and nobody has said, which is null and shows everything.
 
   **In manual entry the feature is not a view at all — it is the declaration**
   (#118). It names the funcId the typed identity is gathered for, which names

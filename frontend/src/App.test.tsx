@@ -272,7 +272,20 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
   });
 
 // -- a feature the location does not run -------------------------------------
-// #113. It was half-configurable, in both source modes and differently in each.
+// It is not on the configure step at all now. #113 made it a card that stated
+// it and named the funcId to add, which is a true sentence about the location
+// and nothing this step's reader can act on -- and on a performance location,
+// which is most of them, it was half the section. Only manual entry still
+// renders one, because there the card is the declaration rather than a report
+// of one (#118), and filtering by the answer would take away the control that
+// gives it.
+//
+// Everything #113 established still holds and is still asserted below: the
+// options are cleared rather than merely hidden, and nothing is left blocking a
+// download that nothing on screen can unblock. That is the half a filter cannot
+// do -- hiding a row does not empty it.
+//
+// It was half-configurable before #113, in both source modes and differently in each.
 // Manual mode had no guard at all: flipping Service virtualization on for an
 // identity declared as performance seeded `sv_ingress: nginx` behind empty
 // subdomain and TLS fields, and the rail went red for something nothing on the
@@ -334,6 +347,12 @@ function twoFeatureAccount(record: Options[], extra: Partial<Api> = {}) {
  *  entry pointing at it. */
 const card = (featureId: string) =>
   within(document.getElementById("cfg-f-" + featureId)!);
+
+/** ...and whether there is one at all, which is now an answer in its own right:
+ *  a feature the location does not run has no card, no rail entry and no
+ *  sentence. `card()` throws on a missing one, so the two reads are separate. */
+const hasCard = (featureId: string) =>
+  document.getElementById("cfg-f-" + featureId) != null;
 
 test("a feature a manually entered identity was not declared to run has no switches",
   async () => {
@@ -403,13 +422,40 @@ test("a restored profile's SV options for a location without mockServices are cl
     await waitFor(() => expect(
       asked[asked.length - 1]?.sv_ingress).toBeFalsy());
 
-    // The card states the feature and names where it is turned on -- with the
-    // funcId, because that is what the customer has to add and this page will
-    // not. No switch: nothing here can put the options back.
-    expect(card("sv").getByText(/Not enabled on this location/)).toBeTruthy();
-    expect(card("sv").getByText("mockServices")).toBeTruthy();
-    expect(card("sv").getByText(/Settings → Private Locations/)).toBeTruthy();
-    expect(card("sv").queryByRole("switch")).toBeNull();
+    // ...and the feature is not on the step at all. It used to be a card
+    // stating it and naming the funcId to add, which is a true sentence about
+    // the location and nothing this step's reader can act on. Not the card, not
+    // the rail entry: both are the same list.
+    expect(hasCard("sv")).toBe(false);
+    expect(screen.queryByText(/Service virtualization/)).toBeNull();
+    // The one that is run is still there, so this is not passing on an empty
+    // section.
+    expect(hasCard("performance")).toBe(true);
+  });
+
+test("a location that runs one feature shows one card, with nothing configured",
+  async () => {
+    // The same rule with no configuration behind it: the test above reaches it
+    // through options somebody's profile left set, and this one through a
+    // location and an agent alone. The card used to be on screen stating
+    // itself; the step now opens on the one feature this bundle has anything to
+    // say about.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-perf", shipId: "s-1",
+      confirmed: { loc: "h-perf", ship: "s-1" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
+      options: { namespace: "blazemeter" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={twoFeatureAccount(asked)} />);
+
+    await waitFor(() => expect(hasCard("performance")).toBe(true));
+    expect(hasCard("sv")).toBe(false);
+    // The rail is the same list read the other way, so a card missing from one
+    // and present in the other is the rail failing at its only job.
+    expect(screen.queryByText(/Service virtualization/)).toBeNull();
   });
 
 // -- a format that cannot serve a feature ------------------------------------
@@ -497,8 +543,11 @@ test("a feature this bundle's format cannot serve is stated, not offered",
     // and the format would then be yanked out from under the choice just made.
     await waitFor(() => expect(card("sv").queryByRole("switch")).toBeNull());
     // It says which of the two answers this is, and names the format that can.
+    // The card is on screen at all because nobody has said what this location
+    // runs (`tdm` is a funcId no feature claims), which is the state the two
+    // answers are easiest to confuse in.
     expect(card("sv").getByText(/Not possible in this bundle/)).toBeTruthy();
-    expect(card("sv").queryByText(/Not enabled on this location/)).toBeNull();
+    expect(card("sv").queryByText(/was declared to run/)).toBeNull();
 
     // ...and it comes back on a format that can serve it, rather than being
     // gone for good: the card is a view over the bundle, not a decision.
@@ -1335,6 +1384,38 @@ test("the path under the flow starts at the account, not at the location",
     const bar = screen.getByText("account").parentElement!.parentElement!;
     await waitFor(() => expect(bar.textContent).toMatch(
       /account.*Alpha.*workspace.*Alpha workspace.*location.*Dublin.*agent.*agent-live/));
+  });
+
+test("the account menu is reachable on the view whose subject is the account",
+  async () => {
+    // Layout, so the assertion is on the classes that do it -- jsdom lays
+    // nothing out, exactly as the clipping test below.
+    //
+    // The shell was `min-h-screen`, so the *document* grew to whatever the view
+    // rendered and the `overflow-y-auto` pane never had a bounded parent to
+    // scroll inside. On a real account (166 workspaces) Account capacity is
+    // 11,000px tall; the drawer stretched to match and the account menu at its
+    // foot went that far below the fold -- the control that switches account,
+    // out of reach on the account rollup. Generate hid it because StepFlow pins
+    // itself to `100vh - 6.75rem` and scrolls its own step.
+    render(<App api={accountOf([loc("h-0", "Dublin")])} />);
+
+    const capacityTab = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Account capacity/ });
+    await waitFor(() => expect(capacityTab.disabled).toBe(false));
+    fireEvent.click(capacityTab);
+
+    // The control is in the drawer on this view -- it always was -- and the
+    // shell is the window's height, which is what keeps it on screen.
+    const acct = screen.getByTitle(/the key everything is read with/);
+    const shell = document.querySelector("div.h-screen")!;
+    expect(shell).not.toBeNull();
+    expect(shell.contains(acct)).toBe(true);
+    // ...and the scrolling belongs to the pane beside the drawer, not to the
+    // page. A second `h-screen` would not save it if this were static.
+    const pane = document.querySelector("div.overflow-y-auto")!;
+    expect(pane.contains(acct)).toBe(false);
+    expect(shell.contains(pane)).toBe(true);
   });
 
 test("the workspace picker is not clipped by the row it grows into", async () => {
