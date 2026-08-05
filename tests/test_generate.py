@@ -158,7 +158,7 @@ def test_images_follow_location_funcids():
     gui_facts = dict(FACTS, func_ids=["performance", "functionalGui", "chrome:default"])
     files = gen.generate(gui_facts, {"namespace": "ns1", "private_registry": "reg.local"})
     ov = json.loads(yaml.safe_load(files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
-    assert "blazemeter/doduo:latest" in ov          # gui feature -> gui images
+    assert "blazemeter/doduo:latest" in ov          # gui funcId -> gui images
     assert "taurus-cloud:latest" in ov              # gui tests still need engines
     assert "blazemeter/service-mock:latest" not in ov  # mocks not enabled
 
@@ -1132,7 +1132,8 @@ def test_declining_an_ingress_on_a_location_that_never_asked_is_accepted():
 def test_retired_sv_bridge_funcid_demands_nothing():
     """sv-bridge is retired. Locations in real accounts still carry it, and they
     must generate like any other performance location -- not stall on ingress
-    options for a feature that no longer exists, and not pull an image for it."""
+    options for a functionality that no longer exists, and not pull an image
+    for it."""
     retired = dict(FACTS, func_ids=["performance", "sv-bridge"])
     files = gen.generate(retired, {"namespace": "ns1"})          # no ingress needed
     assert "KUBERNETES_WEB_EXPOSE_TYPE" not in yaml.safe_load(
