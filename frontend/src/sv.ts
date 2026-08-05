@@ -17,7 +17,7 @@
 // what keeps "adding a feature needs no frontend change" true.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
 import {
-  GroupFlags, OptionPatch, SV_NONE, svConfigured, svIncomplete,
+  GroupFlags, isOpenshift, OptionPatch, SV_NONE, svConfigured, svIncomplete,
   svNodePortConflict,
 } from "./optionGroups";
 import { SvCtx } from "./SvPrereqs";
@@ -204,7 +204,7 @@ export function svState(
   // against a state that was never on screen. The correction is one render
   // away, and one render is what it has always been.
   const ingress = txt(o, "sv_ingress");
-  const openshift = o.platform === "openshift";
+  const openshift = isOpenshift(o);
   return {
     location,
     declined,
@@ -257,7 +257,7 @@ function correction(
   // now refuses -- and the option itself disappears from the select, leaving
   // nothing on screen to explain the error. Fall back to nginx, which works
   // anywhere.
-  const stranded = o.sv_ingress === "openshift" && o.platform !== "openshift";
+  const stranded = o.sv_ingress === "openshift" && !isOpenshift(o);
   // An imported profile sets the SV options without ever calling the group's
   // enable(), and a row opened by `required` goes through detectGroups, so
   // neither path would otherwise seed sv_ingress -- leaving the select showing

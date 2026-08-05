@@ -203,12 +203,25 @@ function FoldRow(props: {
 
 /** Advanced, as a row in the settings list rather than a dashed box under it.
  *  It is two fields with the same weight as any other pair here; what makes it
- *  advanced is that it is closed, not that it sits outside the form. */
+ *  advanced is that it is closed, not that it sits outside the form.
+ *
+ *  The posture and the cluster are two questions, and the recommended posture is
+ *  exactly where they come apart: SCC-friendly means the cluster assigns the
+ *  UID, which vanilla Kubernetes does too, so `platform: openshift` was
+ *  answering "is this OpenShift?" for every bundle that took the default -- and
+ *  answering it yes. What that reached is everything the bundle tells somebody
+ *  to *run*: a plain Kubernetes customer was handed a README, a verify block and
+ *  a node-pool recipe written in `oc`. The pinned-UID posture is named `k8s` and
+ *  says so, which is why the second question is asked under one of the two. */
 function AdvancedRow(p: ConfigurePanelProps) {
-  const openshift = p.options.platform === "openshift";
+  const posture = p.options.platform === "openshift";
+  // Absent is the default, which is on -- the same reading as the generator's,
+  // and the reason the control is a select rather than a checkbox reading
+  // Boolean(): an untouched bundle is an OpenShift one and has to show as one.
+  const openshift = p.options.openshift_cluster !== false;
   return (
     <FoldRow title="Advanced"
-      hint="security posture and UID — you should not need these">
+      hint="security posture, cluster and UID — you should not need these">
       <div className="grid grid-cols-2 gap-3">
         <Field label="Security posture"
           hint="SCC-friendly works on OpenShift and vanilla k8s; the pinned-UID variant is only for clusters that reject it">
@@ -218,7 +231,26 @@ function AdvancedRow(p: ConfigurePanelProps) {
             <option value="k8s">Legacy pinned-UID k8s</option>
           </select>
         </Field>
-        {!openshift && (
+        {posture && p.applies("openshift_cluster") && (
+          <Field label="Cluster"
+            hint="which commands the bundle's instructions are written in, and whether OpenShift-only options are offered">
+            <select className={inputCls} value={openshift ? "openshift" : "k8s"}
+              onChange={(e) => {
+                const on = e.target.value === "openshift";
+                p.set("openshift_cluster", on);
+                // Hiding the radio is only half of it: OpenShift injection off
+                // OpenShift emits a labeled ConfigMap nothing ever fills, so the
+                // agent trusts nothing extra and the bundle looks configured.
+                // Same rule as notRunPatch -- clear what the control that
+                // wrote it can no longer show.
+                if (!on) p.set("ca_openshift_inject", false);
+              }}>
+              <option value="openshift">OpenShift — oc</option>
+              <option value="k8s">Plain Kubernetes — kubectl</option>
+            </select>
+          </Field>
+        )}
+        {!posture && (
           <Field label="runAsUser / runAsGroup">
             <input type="number" className={inputCls}
               value={Number(p.options.run_as_user ?? 1337)}
@@ -350,7 +382,7 @@ function FeatureCard(
  *  `run_as_user` and it parted company. */
 const PLACEMENT_KEYS = ["namespace", "service_account_name",
                         "service_account_create"];
-const ADVANCED_KEYS = ["platform", "run_as_user"];
+const ADVANCED_KEYS = ["platform", "openshift_cluster", "run_as_user"];
 // One key, and it applies to every format -- the ConfigMap for manifests,
 // `extraEnv` in the overlay for helm, `--env` flags for docker. Asked anyway:
 // a section that reads the table is one that keeps agreeing with it.

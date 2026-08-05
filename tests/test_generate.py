@@ -882,6 +882,37 @@ def test_readme_is_short_and_actionable():
     assert "bzm_limitrange.yaml" not in readme
 
 
+def _commands(files):
+    """Every line of every emitted document that tells somebody to run a cluster
+    command, as one blob -- the bundle is read as one document and a README that
+    applies with `oc` beside a recipe that labels with `kubectl` is one of the
+    two being wrong."""
+    return "\n".join(v for k, v in files.items()
+                     if k.endswith(".md") or k.endswith(".sh"))
+
+
+def test_the_cluster_decides_oc_or_kubectl_not_the_posture():
+    """`platform` says who assigns the UID, which is a posture that installs on
+    vanilla Kubernetes too -- so it cannot also answer which binary the person
+    deploying has. Before `openshift_cluster` it was answering both, and the
+    default posture printed `oc` at a plain Kubernetes customer.
+
+    The two-pool bundle is used because the node-pool recipe is where most of
+    the emitted commands are; the README carries the rest."""
+    opts = {"namespace": "ns1", "auth_token": "de" * 32,
+            "node_selector": CRANE_POOL, "engine_node_selector": ENGINE_POOL,
+            "engine_tolerations": ENGINE_TOL}
+    oc = _commands(gen.generate(FACTS, opts))
+    assert "oc -n ns1 rollout status" in oc and "oc label node" in oc
+    assert "kubectl " not in oc
+
+    plain = _commands(gen.generate(FACTS, dict(opts, openshift_cluster=False)))
+    assert "kubectl -n ns1 rollout status" in plain and "kubectl label node" in plain
+    assert "oc " not in plain
+    # ...and the pinned-UID posture names its own cluster, so it answers alone.
+    assert "oc " not in _commands(gen.generate(FACTS, dict(opts, platform="k8s")))
+
+
 # -- blank required fields ----------------------------------------------------
 #
 # A field somebody left empty resolves to gen.PLACEHOLDER rather than to an
@@ -1245,9 +1276,17 @@ def test_sv_openshift_route_rbac_includes_custom_host():
 
 def test_sv_openshift_ingress_requires_the_openshift_platform():
     """A Route only exists on OpenShift; asking for one on plain k8s would
-    deploy cleanly and then stall with nothing to create."""
-    with pytest.raises(ValueError, match="platform=openshift"):
+    deploy cleanly and then stall with nothing to create.
+
+    Both ways of saying "not OpenShift" are refused, because they are two
+    answers and only one of them used to be asked: the pinned-UID posture, and
+    the SCC-friendly posture on a cluster that is not OpenShift -- which is the
+    combination the default posture makes easy to reach."""
+    with pytest.raises(ValueError, match="requires an OpenShift cluster"):
         gen.generate(SV_FACTS, dict(SV_OPTS, platform="k8s",
+                                    sv_ingress="openshift"))
+    with pytest.raises(ValueError, match="requires an OpenShift cluster"):
+        gen.generate(SV_FACTS, dict(SV_OPTS, openshift_cluster=False,
                                     sv_ingress="openshift"))
 
 

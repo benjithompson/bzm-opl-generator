@@ -44,6 +44,15 @@ def is_placeholder(v):
 
 DEFAULT_OPTIONS = {
     "platform": "openshift",        # openshift | k8s
+    # ...and the product, which `platform` deliberately is not: the SCC-friendly
+    # posture installs on vanilla Kubernetes too, so "the UID is the cluster's to
+    # assign" and "this cluster is OpenShift" are two answers and one of them was
+    # being read off the other. What it decides is the command a human types --
+    # `oc` against `kubectl` -- plus the two things only OpenShift serves: a
+    # route.openshift.io Route and an inject-trusted-cabundle ConfigMap.
+    # True by default because `platform: openshift` is, and every bundle
+    # generated before this option existed was written for `oc`.
+    "openshift_cluster": True,
     # manifests -> flat YAML to kubectl apply. helm -> the chart in
     # templates/helm, plus a values overlay built from these same options -- the
     # same deployment expressed twice, not two codebases. tests/helm_parity.py
@@ -448,6 +457,35 @@ def separate_pools(o):
             or o.get("engine_tolerations") is not None)
 
 
+def is_openshift(o):
+    """Is the cluster this bundle is aimed at OpenShift itself?
+
+    The *product*, which the security posture is not: `platform: openshift`
+    means the UID is the cluster's to assign, and that installs on vanilla
+    Kubernetes too -- so it can never answer which binary the person deploying
+    has. Read together because the pinned-UID posture is named `k8s` and says so
+    on both surfaces that offer it: what the toggle asks is which kind of
+    SCC-friendly cluster this is, and there is nothing to ask under the other.
+
+    Three things read it, and every one of them is a fact about the API server
+    or the shell rather than about a pod's securityContext: `oc` against
+    `kubectl` in everything this bundle tells somebody to run, the
+    route.openshift.io Route the SV ingress publishes, and the labeled ConfigMap
+    only OpenShift's network operator fills in."""
+    return o["platform"] == "openshift" and bool(o.get("openshift_cluster", True))
+
+
+def cli(o):
+    """The command line the bundle's own instructions are written in.
+
+    One helper because the bundle is read as one document: a README that applies
+    with `oc` and a node-pool recipe that labels with `kubectl` says the two came
+    from different places, and one of them is wrong wherever the other is right.
+    (`oc` accepts every kubectl verb, so this is about whose cluster it reads as
+    -- not about a command that would fail.)"""
+    return "oc" if is_openshift(o) else "kubectl"
+
+
 # BlazeMeter's own registry: the default DOCKER_REGISTRY, and what the
 # bundle READMEs name when no private registry is configured.
 PUBLIC_REGISTRY = "gcr.io/verdant-bulwark-278"
@@ -614,12 +652,14 @@ def _sv_cfg(facts, o):
             "openshift do work on NODEPORT -- they write a constant port -- but "
             "switching backend to get there means switching ingress controller, "
             "which is the bigger change of the two.)")
-    if ingress == "openshift" and o["platform"] != "openshift":
+    if ingress == "openshift" and not is_openshift(o):
         raise ValueError(
-            f"sv_ingress=openshift requires platform=openshift, got "
-            f"{o['platform']}. That backend publishes a route.openshift.io "
-            "Route, which a plain Kubernetes API server does not serve -- the "
-            "agent would deploy cleanly and then stall with nothing to create."
+            f"sv_ingress=openshift requires an OpenShift cluster, got "
+            f"platform={o['platform']} openshift_cluster="
+            f"{bool(o.get('openshift_cluster', True))}. That backend publishes a "
+            "route.openshift.io Route, which a plain Kubernetes API server does "
+            "not serve -- the agent would deploy cleanly and then stall with "
+            "nothing to create."
         )
     if o["sv_istio_gateway"] and ingress != "istio":
         raise ValueError(
@@ -1294,10 +1334,10 @@ def _nodepools_md(facts, o):
         "taints, or on any node if you have neither:",
         "",
         "```",
-        "kubectl get pods -A --field-selector spec.nodeName=<NODE> --no-headers | wc -l",
+        f"{cli(o)} get pods -A --field-selector spec.nodeName=<NODE> --no-headers | wc -l",
         "```",
         "",
-        "**Do not count DaemonSet objects for this.** `kubectl get ds -A | wc -l`",
+        f"**Do not count DaemonSet objects for this.** `{cli(o)} get ds -A | wc -l`",
         "reports 32 on a stock GKE cluster where 4 DaemonSet pods actually land:",
         "most are variants gated by nodeAffinity -- GPU plugins, Windows builds,",
         "metrics agents chosen by machine size -- and counting them sizes the pool",
@@ -1319,7 +1359,7 @@ def _nodepools_md(facts, o):
         "*allocatable*, and allocatable is what is left after the kubelet's",
         f"reservations -- roughly {format_cpu(NODE_OVERHEAD_CPU)} CPU and {format_memory(NODE_OVERHEAD_MEM)} on a managed node. So pick a",
         f"machine with at least **{node_cpu} vCPU and {node_mem}** of capacity, and confirm with",
-        "`kubectl get node <name> -o jsonpath='{.status.allocatable}'` once one exists.",
+        f"`{cli(o)} get node <name> -o jsonpath='{{.status.allocatable}}'` once one exists.",
         "",
     ]
     if slots:
@@ -1343,8 +1383,8 @@ def _nodepools_md(facts, o):
         "engine pool and is the size you configured:",
         "",
         "```",
-        f"kubectl -n {o['namespace']} get pods -o wide",
-        f"kubectl -n {o['namespace']} get pod <engine-pod> \\",
+        f"{cli(o)} -n {o['namespace']} get pods -o wide",
+        f"{cli(o)} -n {o['namespace']} get pod <engine-pod> \\",
         "  -o jsonpath='{.spec.nodeName}{\"\\n\"}{.spec.containers[*].resources}{\"\\n\"}'",
         "```",
         "",
@@ -1526,9 +1566,9 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
         "",
         "```",
     ]
-    out += ([f"kubectl label node <NODE> {labels.replace(',', ' ')}"] if labels
+    out += ([f"{cli(o)} label node <NODE> {labels.replace(',', ' ')}"] if labels
             else ["# no engine labels configured"])
-    out += [f"kubectl taint node <NODE> {t}" for t in taints]
+    out += [f"{cli(o)} taint node <NODE> {t}" for t in taints]
     out += [
         "```",
         "",
@@ -1576,8 +1616,16 @@ def _bundle_table(facts, o, extra=()):
     # at the top of its README would advertise two settings the same page then
     # says are not applied.
     if o["output_format"] != "docker":
+        # The cluster in words, not the option value: `platform` is the UID
+        # posture, and the SCC-friendly one is the default on vanilla Kubernetes
+        # too -- so a row reading `openshift` on a plain cluster is a row this
+        # bundle's own reader has to already know the vocabulary to discount.
+        # What they need is which cluster it is and which binary that means; the
+        # posture is in profile.json and visible as a securityContext. One row
+        # because the README is held to a length (see its test).
         rows += [("Namespace", f"`{o['namespace']}`"),
-                 ("Platform", o["platform"])]
+                 ("Platform", f"{'OpenShift' if is_openshift(o) else 'Kubernetes'}"
+                              f" -- deploy with `{cli(o)}`")]
     else:
         rows.append(("Container", f"`{docker_container_name(o['ship_id'])}`"))
     rows.append(("Images from",
@@ -1675,12 +1723,12 @@ def _placeholder_block(o, where=()):
 
 
 def _verify_block(o):
-    cli = "oc" if o["platform"] == "openshift" else "kubectl"
+    kc = cli(o)
     return f"""## Check it worked
 
 ```
-{cli} -n {o['namespace']} rollout status deploy/crane
-{cli} -n {o['namespace']} logs -l role=role-crane -f
+{kc} -n {o['namespace']} rollout status deploy/crane
+{kc} -n {o['namespace']} logs -l role=role-crane -f
 ```
 
 The agent should show **online** in BlazeMeter under Settings -> Private
@@ -2458,6 +2506,7 @@ DOCKER_ENTRYPOINT = "python agent/agent.py"
 # being offered there, and nothing has to remember to remove it.
 DOCKER_IGNORED = {
     "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
+    "openshift_cluster": "there is no cluster, so no oc and no Route",
     "namespace": "containers are not namespaced",
     "service_account_name": "there is no ServiceAccount to run as",
     "service_account_create": "there is no ServiceAccount to create",
@@ -3113,9 +3162,9 @@ APPLY_ORDER = [
 def _readme(facts, o, files):
     """Same brief as _helm_readme. The engine request gap and the LimitRange
     history are real but belong in the project README, not in a handover."""
-    ns, cli = o["namespace"], "oc" if o["platform"] == "openshift" else "kubectl"
+    ns, kc = o["namespace"], cli(o)
     apply_lines = "\n".join(
-        f"{cli} -n {ns} apply -f {f}" for f in APPLY_ORDER if f in files)
+        f"{kc} -n {ns} apply -f {f}" for f in APPLY_ORDER if f in files)
     # Client-side apply copies the object into the last-applied-configuration
     # annotation, which the API server caps at 256KB.
     big_ca = ""

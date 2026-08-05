@@ -260,6 +260,11 @@ describe("the prerequisite context", () => {
       .toEqual(["nginx", "istio", "contour"]);
     expect(sv(SV_LOC, { platform: "openshift" }).ingressTypes)
       .toEqual(CONST.ingress_types);
+    // ...and the SCC-friendly posture is not the same answer: it is recommended
+    // on vanilla Kubernetes too, which is where a Route would have been offered
+    // for every bundle that took the default.
+    expect(sv(SV_LOC, { platform: "openshift", openshift_cluster: false })
+      .ingressTypes).toEqual(["nginx", "istio", "contour"]);
   });
 });
 
@@ -304,6 +309,11 @@ describe("the option patch", () => {
       .toEqual({ sv_ingress: "nginx" });
     expect(sv(SV_LOC, { sv_ingress: "openshift", platform: "openshift" }).patch)
       .toBeNull();
+    // The other way to stop being OpenShift, which the cluster toggle is: same
+    // stranding, and the same rescue.
+    expect(sv(PERF_LOC, { sv_ingress: "openshift", platform: "openshift",
+                          openshift_cluster: false }).patch)
+      .toEqual({ sv_ingress: "nginx" });
   });
 
   it("drops a gateway no backend will read", () => {

@@ -563,6 +563,61 @@ test("the docker format is a third bundle, and it is what gets generated",
     expect(await screen.findByText(/bzm-opl-agent\.sh/)).toBeTruthy();
   });
 
+test("the cluster is asked under the posture, and takes the OpenShift-only mode with it",
+  async () => {
+    // `platform: openshift` is a *posture* -- the cluster assigns the UID --
+    // and it is recommended on vanilla Kubernetes too, so it was answering a
+    // second question nobody had asked: which cluster this is. Everything the
+    // bundle tells somebody to run came out in `oc`, and OpenShift's own trust
+    // injection was offered to customers whose cluster has nothing to inject
+    // with.
+    const asked: Options[] = [];
+    render(<App api={accountOf([loc("h-0", "Dublin",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      // The generator's own defaults, which is where the posture arrives from:
+      // both questions start where DEFAULT_OPTIONS leaves them.
+      optionDefaults: async () => ({
+        namespace: "blazemeter", service_account_name: "crane",
+        output_format: "manifests", platform: "openshift",
+        openshift_cluster: true,
+      }),
+      generate: async (_facts: unknown, options: Options) => {
+        asked.push(options);
+        return { files: [], token: { branch: "placeholder" as const,
+                                     ship_id: "s-1", message: "" } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // The OpenShift-only CA mode, picked while the bundle is an OpenShift one.
+    fireEvent.click(await screen.findByRole("switch", { name: "Custom CA trust" }));
+    fireEvent.click(await screen.findByLabelText(/OpenShift cluster trust injection/));
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.ca_openshift_inject).toBe(true));
+
+    // Advanced is closed, and the cluster is asked inside it -- one fold below
+    // the posture it belongs to.
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.change(screen.getByLabelText(/^Cluster/),
+                     { target: { value: "k8s" } });
+
+    // It reaches the bundle, which is where `oc` against `kubectl` is decided.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.openshift_cluster).toBe(false));
+    // ...and the mode goes with it. Hiding the radio alone would leave the
+    // option set: an inject ConfigMap off OpenShift is emitted empty, nothing
+    // ever fills it, and the agent trusts nothing extra while the bundle reads
+    // as configured.
+    expect(asked[asked.length - 1]?.ca_openshift_inject).toBe(false);
+    expect(screen.queryByLabelText(/OpenShift cluster trust injection/)).toBeNull();
+    // The posture is untouched: it is the other question, and the one this
+    // customer still wants answered the recommended way.
+    expect(asked[asked.length - 1]?.platform).toBe("openshift");
+  });
+
 // -- the download step, through the page -------------------------------------
 // The two requests this step exists to make now go through the same seam as
 // every other route (#104), so what is asserted here is what the page handed

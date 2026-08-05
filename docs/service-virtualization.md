@@ -94,7 +94,7 @@ below is the CLUSTERIP picture.
 | needs an `IngressClass` | yes, named `nginx` | no — none of these controllers registers one at all | no | no |
 | `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
 | Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
-| requires | – | – | – | `--platform openshift` |
+| requires | – | – | – | an OpenShift cluster: `--platform openshift` and not `--not-openshift` |
 
 **Why nginx's row is a "depends".** Crane's Ingress backend says
 `port.number: 8080` while the Service crane created publishes `port: 80`

@@ -4,7 +4,8 @@ import {
   allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
   enabledFeatures, groupsOf,
   SHARED_GROUPS, featuresOf, GROUP_BY_ID, GroupId,
-  incompleteGroups, notRunPatch, OPTION_GROUPS, OptionGroup, runsFeature,
+  incompleteGroups, isOpenshift, notRunPatch, OPTION_GROUPS, OptionGroup,
+  runsFeature,
   serviceAccountOk, startFeature,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
@@ -111,6 +112,27 @@ describe("the declarations", () => {
     // is per-backend now and lives in `incomplete`, not in a second writer.
     const owners = OPTION_GROUPS.filter((g) => g.keys.includes("service_type"));
     expect(owners.map((g) => g.id)).toEqual(["security"]);
+  });
+});
+
+describe("the cluster, which the posture is not", () => {
+  it("reads the product rather than the UID posture", () => {
+    // The SCC-friendly posture is recommended on vanilla Kubernetes too, so it
+    // was answering "is this OpenShift?" yes for every bundle that took the
+    // default -- which is what put `oc` in a plain Kubernetes customer's README
+    // and offered them a trust-injection ConfigMap nothing would ever fill.
+    expect(isOpenshift({ platform: "openshift", openshift_cluster: false }))
+      .toBe(false);
+    expect(isOpenshift({ platform: "k8s" })).toBe(false);
+    expect(isOpenshift({ platform: "openshift", openshift_cluster: true }))
+      .toBe(true);
+  });
+
+  it("reads absent as the default, which is on", () => {
+    // Boolean() here would read every bundle generated before the option
+    // existed -- and every one still being typed -- as plain Kubernetes, taking
+    // two controls off screen that were being offered a moment earlier.
+    expect(isOpenshift({ platform: "openshift" })).toBe(true);
   });
 });
 

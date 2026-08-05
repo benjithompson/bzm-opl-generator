@@ -20,6 +20,7 @@ import { AgentEnvVar } from "./api";
  *  the half no Python test can see: what a page does with such a table. */
 export const DOCKER_IGNORED: Record<string, string> = {
   platform: "there is no OpenShift/Kubernetes distinction on a docker host",
+  openshift_cluster: "there is no cluster, so no oc and no Route",
   namespace: "containers are not namespaced",
   service_account_name: "there is no ServiceAccount to run as",
   service_account_create: "there is no ServiceAccount to create",

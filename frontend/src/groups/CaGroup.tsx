@@ -40,6 +40,15 @@ const CA_MODES: { mode: CaMode; label: string; hint: string; key: string }[] = [
  *  ConfigMap name it still carries. */
 export function CaGroup(props: {
   applies: Applies;
+  /** Is the target cluster OpenShift? The injection mode is the cluster's own
+   *  operator filling a labeled ConfigMap, so off OpenShift it is a mode that
+   *  emits an empty ConfigMap and trusts nothing extra -- a silent failure, and
+   *  the one thing this group's radios must not offer. It is the *cluster* and
+   *  not the SCC posture: the posture is the recommended one on vanilla
+   *  Kubernetes too, and reading the mode off it was how this got offered there.
+   *  Turning the cluster toggle off clears the option as well as hiding the
+   *  radio (see AdvancedRow), so the mode cannot survive off screen. */
+  openshift: boolean;
   mode: CaMode;
   onMode: (m: CaMode) => void;
   configmap: string;
@@ -49,7 +58,8 @@ export function CaGroup(props: {
   onConfigmapKey: (v: string | null) => void;
   onBundle: (v: string) => void;
 }) {
-  const modes = CA_MODES.filter((m) => props.applies(m.key));
+  const modes = CA_MODES.filter(
+    (m) => props.applies(m.key) && (props.openshift || m.mode !== "inject"));
   // Nothing to choose: the mode is the only one this format has, whatever the
   // options say. `caModeOf` can only have read one the format does not carry
   // (Kubernetes, then switched), and that value is kept -- the generator names
