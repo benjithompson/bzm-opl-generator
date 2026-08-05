@@ -10,7 +10,7 @@
 // Nothing in this file imports React: it is plain data in, plain data out,
 // which is what makes optionGroups.test.ts possible without a DOM.
 
-import { Functionality, Options } from "./api";
+import { FuncIdChoice, Functionality, Options } from "./api";
 // The environment area's own rule about what blocks the step. The area is not
 // a group -- it is a list of the variables no group here writes, with a
 // name/value editor under it (see EnvVars) -- so the only thing this file wants
@@ -662,14 +662,27 @@ export function functionalitiesOf(
     .map((f) => f.id);
 }
 
-/** The funcIds a location has that no served functionality claims. Named on screen
- *  rather than dropped: the tool models five funcIds and accounts already carry
- *  more, and "this location also runs X, which there are no options for" is a
- *  truthful thing to say where silence reads as coverage. */
+/** What to call the funcIds a location has that no served functionality claims.
+ *
+ *  Named on screen rather than dropped: this tool covers three funcIds, accounts
+ *  serve nine, and "this location also runs X, which there are no options for"
+ *  is a truthful thing to say where silence reads as coverage.
+ *
+ *  Names, not ids, and that is what `choices` is for (#148). /api/func-ids is
+ *  the account's own vocabulary once one has been read, so an unclaimed funcId
+ *  gets BlazeMeter's display name -- "TDM Integration", the words the customer
+ *  sees in their own UI. Where no account has been read the served list is the
+ *  covered baseline and holds none of these, so the answer is the raw funcId:
+ *  what the location literally carries, which is worse than a display name and
+ *  much better than a guess. `functionalApi` is the same case *with* an
+ *  account -- BlazeMeter retired it and locations still have it -- so the
+ *  fallback is not only a startup state. */
 export function unclaimedFuncIds(
-    funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
-  return (funcIds ?? []).filter(
-    (id) => !functionalities.some((f) => f.func_ids.includes(id)));
+    funcIds: string[] | undefined, functionalities: Functionality[],
+    choices: FuncIdChoice[]): string[] {
+  return (funcIds ?? [])
+    .filter((id) => !functionalities.some((f) => f.func_ids.includes(id)))
+    .map((id) => choices.find((c) => c.id === id)?.label ?? id);
 }
 
 /** Which functionality to open a location on: the first served one its funcIds

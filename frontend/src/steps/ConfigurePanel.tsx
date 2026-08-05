@@ -571,10 +571,15 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   own={groupsIn("f-" + f.id)} />
               ))}
             </div>
+            {/* Names, not ids: the account's own display names where one has
+                been read, and the raw funcId only where none has -- so this
+                sentence reads as BlazeMeter's UI reads. Not mono for that
+                reason; "Data Orchestration" set in a code face reads as
+                something to type. */}
             {p.locUnclaimed.length > 0 && (
               <p className="text-[11px] text-slate-500 mt-1.5">
                 Also runs{" "}
-                <span className="font-mono">{p.locUnclaimed.join(", ")}</span> —
+                <span className="text-slate-600">{p.locUnclaimed.join(", ")}</span> —
                 no options here for those; nothing about them is generated or
                 removed.
               </p>

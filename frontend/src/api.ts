@@ -334,7 +334,11 @@ export const api = {
   capacity: (accountId: number) =>
     req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
-  funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
+  /** The funcId vocabulary. `accountId` is optional and the page uses both
+   *  answers: the covered baseline on mount, when there is no key to ask with,
+   *  and the account's own list the moment one is chosen. */
+  funcIdChoices: (accountId?: number) => req<FuncIdChoice[]>(
+    "GET", accountId ? `/api/func-ids?account_id=${accountId}` : "/api/func-ids"),
   functionalities: () => req<Functionality[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   /** {option: why} for the options a docker bundle drops — generate's own
@@ -432,17 +436,28 @@ export type SvConstants = {
   backends: Record<string, SvBackend>;
 };
 
-/** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
- *  that used to live here is how sv-bridge went missing from the create form.
- *  `label` falls back to the raw id server-side, so an unlabelled funcId is
- *  offered rather than dropped.
+/** Likewise served, and the account's rather than anybody's table: `label` is
+ *  BlazeMeter's own display name, so the words on this page are the words in the
+ *  customer's own UI. It falls back to the raw funcId server-side, so one the
+ *  account serves without a name is offered rather than dropped.
+ *
+ *  With no account the answer is the covered baseline -- the three funcIds this
+ *  tool configures -- because this is asked for on mount, before a key exists,
+ *  and manual entry never has an account at all. Pass `accountId` once there is
+ *  one and the account's own list replaces it (see core.func_ids).
+ *
+ *  `covered` is the difference between a funcId this tool has option groups and
+ *  images for and one it can only name. Served rather than derived here: a page
+ *  that showed `delphix` beside `performance` with nothing to tell them apart
+ *  would be offering to configure something no bundle can.
  *
  *  `changes_images` is false for a funcId that needs the same images as one
- *  already offered -- functionalApi is "the taurus engine", exactly as
- *  performance is. Creating a location keeps the full list, because BlazeMeter
+ *  already offered. Creating a location keeps the full list, because BlazeMeter
  *  distinguishes them there; the manual form, where the only thing a funcId
  *  does is pick images, offers only the ones that change the answer. */
-export type FuncIdChoice = { id: string; label: string; changes_images: boolean };
+export type FuncIdChoice = {
+  id: string; label: string; changes_images: boolean; covered: boolean;
+};
 
 /** How reading the namespace ended. The watch panel is the only thing in this
  *  client that needs a cluster, and the only one allowed to: cluster access is

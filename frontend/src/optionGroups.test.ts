@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Functionality, Options } from "./api";
+import { FuncIdChoice, Functionality, Options } from "./api";
 import {
   allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
   enabledFunctionalities, groupsOf,
@@ -303,6 +303,18 @@ const SECRETS: Functionality = {
 };
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
+/** The funcId vocabulary /api/func-ids serves once an account has been read --
+ *  the account's own display names, and `covered` false for every funcId this
+ *  tool has no options for. Keyless it is the three covered ones only, which is
+ *  what NO_ACCOUNT stands in for. */
+const VOCABULARY: FuncIdChoice[] = [
+  { id: "performance", label: "Performance", changes_images: true, covered: true },
+  { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true },
+  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false },
+  { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false },
+  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false },
+];
+const NO_ACCOUNT: FuncIdChoice[] = VOCABULARY.filter((c) => c.covered);
 
 describe("the split the configure step is built on", () => {
   it("puts every group in exactly one bucket", () => {
@@ -357,14 +369,32 @@ describe("which functionality a location starts on", () => {
       .toBe("sv");
     expect(startFunctionality(UNMODELLED, FUNCTIONALITIES)).toBe("performance");
     expect(functionalitiesOf(UNMODELLED, FUNCTIONALITIES)).toEqual([]);
-    // …and they are nameable, so the page can say what it has no options for
-    // rather than pretending the location is only what it models.
-    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES))
-      .toEqual(UNMODELLED);
-    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES))
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+      .toHaveLength(UNMODELLED.length);
+    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES, VOCABULARY))
       .toEqual([]);
     expect(startFunctionality([], FUNCTIONALITIES)).toBe("performance");
     expect(startFunctionality(undefined, FUNCTIONALITIES)).toBe("performance");
+  });
+
+  it("names the funcIds it has no options for, in the account's own words", () => {
+    // Silence would read as coverage. The location runs these, this tool
+    // configures none of them, and BlazeMeter has a name for each -- so the
+    // sentence on the configure step is "also runs TDM Integration", not a
+    // camelCase id the reader has to recognise.
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+      .toEqual(["TDM Integration", "Data Orchestration", "Delphix Integration"]);
+  });
+
+  it("falls back to the raw funcId where no account has been read", () => {
+    // The keyless vocabulary is the three covered funcIds, so nothing here can
+    // name `tdm` -- and naming it wrongly, or dropping it, are both worse than
+    // showing what the location literally carries. `functionalApi` is the same
+    // case with an account: the account retired it, locations still have it.
+    expect(unclaimedFuncIds([...UNMODELLED, "functionalApi"], FUNCTIONALITIES, NO_ACCOUNT))
+      .toEqual(UNMODELLED);
+    expect(unclaimedFuncIds(["functionalApi", "tdm"], [SV], VOCABULARY))
+      .toEqual(["functionalApi", "TDM Integration"]);
   });
 
   it("offers a functionality added to the vocabulary, with no change here", () => {

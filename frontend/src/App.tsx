@@ -575,6 +575,20 @@ export default function App({ api }: { api: Api }) {
       .finally(() => setWorkspacesBusy(false));
   }, [accountId, who]);
 
+  // The funcId vocabulary again, now that there is an account to ask. The mount
+  // fetch above got the covered baseline -- the three funcIds this tool
+  // configures -- which is all there is with no key; this replaces it with what
+  // the account actually offers, which is longer and carries BlazeMeter's own
+  // display names for the funcIds nothing here has options for (#148).
+  //
+  // Failure keeps the baseline rather than clearing it: an account that refuses
+  // the read has not said the vocabulary is empty, and a page with no funcIds at
+  // all cannot even name what a location runs.
+  useEffect(() => {
+    if (!accountId || !who) return;
+    api.funcIdChoices(accountId).then(setFuncIdChoices).catch(() => {});
+  }, [accountId, who]);
+
   useEffect(() => {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
     setLocations([]); setHarborId(null); setLocErr(null);
@@ -1128,8 +1142,11 @@ export default function App({ api }: { api: Api }) {
   // `locFunctionalities` and `enabled` are derived above, beside the record that reads
   // them. This is the funcIds the location carries that the tool has no options
   // for: locations already run tdm/dataPublisher/delphix, and naming them is
-  // the honest version of a page that quietly models five funcIds.
-  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities);
+  // the honest version of a page that quietly models three funcIds. Named with
+  // the served vocabulary, so where an account has been read they carry
+  // BlazeMeter's own words rather than a camelCase id.
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities,
+                                        funcIdChoices);
   // The second and last place an option is written without anyone pressing
   // anything, and the same shape as the SV correction above: what has to change
   // is a value optionGroups decides, this only applies it. A profile, a

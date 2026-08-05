@@ -468,7 +468,9 @@ test("a location that runs one functionality shows one card, with nothing config
 // Real accounts have them: tdm, dataPublisher and delphix are all funcIds this
 // tool models no functionality for.
 
-/** ...that account, with such a location. */
+/** ...that account, with such a location. Its funcId vocabulary answers the way
+ *  the server does: the covered baseline with no account, and the account's own
+ *  nine -- names and all -- once one is named (#148). */
 const unclaimedAccount = (record: Options[]) =>
   twoFunctionalityAccount(record, {
     locations: async () => [{
@@ -479,6 +481,41 @@ const unclaimedAccount = (record: Options[]) =>
       harbor_id: "h-tdm", func_ids: ["tdm"],
       ships: [{ id: "s-1", name: "agent-1" }], images: [],
     }),
+    funcIdChoices: async (accountId?: number) => accountId ? [
+      { id: "performance", label: "Performance", changes_images: true,
+        covered: true },
+      { id: "mockServices", label: "Service Virtualization",
+        changes_images: true, covered: true },
+      { id: "tdm", label: "TDM Integration", changes_images: false,
+        covered: false },
+    ] : [
+      { id: "performance", label: "Performance", changes_images: true,
+        covered: true },
+    ],
+  });
+
+test("a funcId this tool has no options for is named in the account's own words",
+  async () => {
+    // Silence would read as coverage: this location runs tdm, nothing here
+    // configures it, and the honest sentence names it. The account is the only
+    // thing that knows it is called "TDM Integration" -- the keyless vocabulary
+    // is the three covered funcIds and holds no such row -- so this is also the
+    // assertion that the account's list replaced the baseline on connect.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-tdm", shipId: "s-1",
+      confirmed: { loc: "h-tdm", ship: "s-1" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      options: { namespace: "blazemeter" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    render(<App api={unclaimedAccount([])} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
+
+    expect(await screen.findByText(/TDM Integration/)).toBeTruthy();
+    // ...and the raw id is gone with it. A page showing both would be the
+    // vocabulary arriving and nothing reading it.
+    expect(screen.queryByText(/\btdm\b/)).toBeNull();
   });
 
 test("an SV configuration no location demanded still takes away the formats that refuse it",
@@ -1014,7 +1051,7 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       output_format: "manifests",
     }),
     funcIdChoices: async () => [
-      { id: "performance", label: "Performance", changes_images: true },
+      { id: "performance", label: "Performance", changes_images: true, covered: true },
     ],
     functionalities: async () => [{
       id: "perf", label: "Performance", namespace: "blazemeter",
@@ -1650,8 +1687,9 @@ function manualPage(asked: string[][], generated: Options[] = [],
   return twoFunctionalityAccount(generated, {
     keyStatus: async () => ({ connected: false }),
     funcIdChoices: async () => [
-      { id: "performance", label: "Performance", changes_images: true },
-      { id: "mockServices", label: "Mock Services", changes_images: true },
+      { id: "performance", label: "Performance", changes_images: true, covered: true },
+      { id: "mockServices", label: "Service Virtualization", changes_images: true,
+        covered: true },
     ],
     manualFacts: async (b) => {
       asked.push(b.func_ids);
@@ -1777,8 +1815,9 @@ test("a restored declaration is not lost to the facts it produced",
     // about what was declared.
     await waitFor(() => expect(asked[asked.length - 1]).toEqual([]));
     choices.settle([
-      { id: "performance", label: "Performance", changes_images: true },
-      { id: "mockServices", label: "Mock Services", changes_images: true },
+      { id: "performance", label: "Performance", changes_images: true, covered: true },
+      { id: "mockServices", label: "Service Virtualization", changes_images: true,
+        covered: true },
     ]);
 
     await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
