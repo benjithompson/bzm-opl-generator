@@ -21,12 +21,15 @@ import { downloadPlan, Recall, recalled, recallNote } from "./token";
 // plus a body per group. This file only wires them -- what a group *is*, and
 // which of them a feature puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, caModeOf, caModePatch, CaMode, configureBlockedBy,
-  detectGroups, enabledFeatures,
+  allGroupsOff, blockingGroups, caModeOf, caModePatch, CaMode,
+  configureBlockedBy, detectGroups, enabledFeatures,
   featuresOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, notRunPatch,
   runsFeature, serviceAccountOk, startFeature, suggestNamespace,
   unclaimedFuncIds,
 } from "./optionGroups";
+// Required fields nobody filled in: what they resolve to on the way out, and
+// the one list the two panels warn from.
+import { blankRequired, withPlaceholders } from "./placeholder";
 // What the bundle is, and which options that leaves reaching something. The
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
@@ -817,42 +820,10 @@ export default function App({ api }: { api: Api }) {
     } catch (e) { setShipErr(String((e as Error).message)); }
   };
 
-  // debounced live preview
+  // The debounced live preview is further down, with the rest of what depends
+  // on `sentOptions` -- it has to send what the download sends, and the blank
+  // fields that go into that are not known until the group switches are.
   const previewTimer = useRef<number>();
-  useEffect(() => {
-    // The token report goes with the files: it describes the bundle those came
-    // from, and left behind it announces a placeholder in a bundle that no longer
-    // exists -- which is exactly what switching source mode used to leave on
-    // screen.
-    if (!facts) { setFiles([]); setPreviewToken(null); return; }
-    // A bundle is generated *for an agent*, so without one there is nothing to
-    // preview and generate() refuses -- correctly, and with a sentence about a
-    // ship_id nobody has been asked for yet. Picking a location that has no
-    // agents is a normal state this page has a whole amber panel for, and it
-    // used to spend a 400 on saying so. The preview waits for the agent
-    // instead; the empty preview reads as "not yet", which is what it is.
-    if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
-    window.clearTimeout(previewTimer.current);
-    previewTimer.current = window.setTimeout(async () => {
-      try {
-        const opts = { ...options, ship_id: shipId ?? undefined };
-        const r = await api.generate(facts, opts);
-        setFiles(r.files);
-        setPreviewToken(r.token);
-        setGenErr(null);
-        // Keep the open file open across the re-render every option edit
-        // causes; fall back to the first manifest only once the one being read
-        // stops being generated at all.
-        setActiveFile((a) => (a && r.files.some((f) => f.name === a)
-          ? a : r.files[0]?.name ?? null));
-      } catch (e) { setGenErr(String((e as Error).message)); }
-    }, 250);
-    // No save folder in the dependencies any more: the page used to send one, so
-    // that a directory already holding this ship's bundle made the token branch
-    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
-    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
-    // the branch is unreachable and there is nothing to debounce it against.
-  }, [facts, options, shipId]);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
@@ -1224,8 +1195,62 @@ export default function App({ api }: { api: Api }) {
   // so a feature gaining required options later needs nothing here.
   const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
   // ...and what that leaves the configure step still needing, named. Empty is
-  // "nothing", which is what ticks the step off -- see configureBlockedBy.
-  const configureBlocked = configureBlockedBy(options, applies, incomplete);
+  // "nothing", which is what ticks the step off -- see configureBlockedBy. The
+  // blocking subset, not `incomplete`: a group with an empty required field is
+  // unfinished on its row and no longer in the way of the step.
+  const configureBlocked = configureBlockedBy(
+    options, blockingGroups(options, sv.groupRequired, svConst.backends));
+  // The required fields left empty. One list, feeding three things that must
+  // not be allowed to disagree: what is sent, what the configure step warns
+  // about, and what the download step repeats. Memoised on the options identity
+  // because `withPlaceholders` below is in the preview effect's dependencies.
+  const blanks = useMemo(
+    () => blankRequired(options, applies, grpOn),
+    [options, applies, grpOn]);
+  // What every caller that generates actually sends. Derived, never stored:
+  // the marker must not reach `options`, or it lands in the session snapshot
+  // and comes back on the next load as a value somebody appears to have typed
+  // -- and the input on screen would show it, which is a form answering its own
+  // question. Same object when there is nothing to fill, so the effect below
+  // does not re-POST for a bundle that did not change.
+  const sentOptions = useMemo(
+    () => withPlaceholders(options, blanks), [options, blanks]);
+
+  // debounced live preview
+  useEffect(() => {
+    // The token report goes with the files: it describes the bundle those came
+    // from, and left behind it announces a placeholder in a bundle that no longer
+    // exists -- which is exactly what switching source mode used to leave on
+    // screen.
+    if (!facts) { setFiles([]); setPreviewToken(null); return; }
+    // A bundle is generated *for an agent*, so without one there is nothing to
+    // preview and generate() refuses -- correctly, and with a sentence about a
+    // ship_id nobody has been asked for yet. Picking a location that has no
+    // agents is a normal state this page has a whole amber panel for, and it
+    // used to spend a 400 on saying so. The preview waits for the agent
+    // instead; the empty preview reads as "not yet", which is what it is.
+    if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
+    window.clearTimeout(previewTimer.current);
+    previewTimer.current = window.setTimeout(async () => {
+      try {
+        const opts = { ...sentOptions, ship_id: shipId ?? undefined };
+        const r = await api.generate(facts, opts);
+        setFiles(r.files);
+        setPreviewToken(r.token);
+        setGenErr(null);
+        // Keep the open file open across the re-render every option edit
+        // causes; fall back to the first manifest only once the one being read
+        // stops being generated at all.
+        setActiveFile((a) => (a && r.files.some((f) => f.name === a)
+          ? a : r.files[0]?.name ?? null));
+      } catch (e) { setGenErr(String((e as Error).message)); }
+    }, 250);
+    // No save folder in the dependencies any more: the page used to send one, so
+    // that a directory already holding this ship's bundle made the token branch
+    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
+    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
+    // the branch is unreachable and there is nothing to debounce it against.
+  }, [facts, sentOptions, shipId]);
 
   // -- is the published endpoint answering? ----------------------------------
   // A Running mock pod says nothing about whether anything routes to it: where
@@ -1614,7 +1639,7 @@ export default function App({ api }: { api: Api }) {
               // nothing reads.
               engineNote={applies("engine_cpu_limit") ? engineSize.text : null}
               flipGroup={flipGroup} groupBody={groupBody} envArea={envArea}
-              incomplete={incomplete}
+              incomplete={incomplete} blanks={blanks}
               namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
               exportProfile={exportProfile} importProfile={importProfile} />
           </Section>
@@ -1632,8 +1657,10 @@ export default function App({ api }: { api: Api }) {
                  the credential is drivable rather than only reviewable. */
               api={api}
               bundle={{
-                facts, shipId, options, format,
-                sv, saOk, genErr,
+                // `sentOptions`, not `options`: the zip this panel downloads has
+                // to be the bundle the preview showed, markers included.
+                facts, shipId, options: sentOptions, format,
+                sv, saOk, genErr, blanks,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
               }}
               credential={{ plan: tokenPlan }}

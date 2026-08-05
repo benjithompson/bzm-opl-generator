@@ -1054,6 +1054,21 @@ def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
             f"{os.path.join(manifest_dir, generate.PROFILE_FILE)} was generated "
             f"for ship {prof_ship}, not the {ship_id} this run was told to "
             f"test, and every re-render this run makes would merge onto it")
+    # A field somebody left blank. The API server would refuse the object
+    # anyway -- <PLACEHOLDER> is not a legal name -- but it refuses it *after*
+    # this rig has built a cluster, and the run then spends its whole 12-20
+    # minutes reporting that the agent never came online. The same shape as the
+    # three guards around it, and cheaper than all of them: it is one read of a
+    # file already open.
+    blank = generate.placeholder_options(profile or {})
+    if blank:
+        refusals.append(
+            f"{os.path.join(manifest_dir, generate.PROFILE_FILE)} was generated "
+            f"with {', '.join(blank)} left blank, so the bundle carries "
+            f"{generate.PLACEHOLDER} instead of "
+            f"{'those values' if len(blank) > 1 else 'that value'}. Nothing "
+            f"here can guess {'them' if len(blank) > 1 else 'it'}: re-generate "
+            f"the bundle with {'them' if len(blank) > 1 else 'it'} set")
     unknown = [n for n in bundle_yaml(manifest_dir)
                if n not in emitted_yaml_files()]
     if unknown:

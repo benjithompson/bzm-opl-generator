@@ -186,6 +186,29 @@ to render is the only signal that arrives before someone has spent an afternoon
 on it, so each message names the fix.
 */}}
 {{- define "bzm-opl.validate" -}}
+{{/*
+The generator writes <PLACEHOLDER> into a value somebody left blank, so that a
+bundle handed on unfinished says so instead of carrying an empty string. The
+flat manifests are stopped by the API server -- <PLACEHOLDER> is not a legal
+RFC 1123 name -- but a chart has values the API server never sees as names
+(authToken, privateRegistry, the proxy URLs), so `helm install` has to be the
+one that refuses those. First, and before the emptiness checks below, because
+"you left this blank" is the more specific answer and the one that names the
+form it was left blank on.
+*/}}
+{{- $blank := dict
+      "authToken" .Values.authToken
+      "serviceAccount.name" .Values.serviceAccount.name
+      "privateRegistry" .Values.privateRegistry
+      "caBundle.existingConfigMap" .Values.caBundle.existingConfigMap
+      "caBundle.pem" .Values.caBundle.pem
+      "proxy.http" .Values.proxy.http
+      "proxy.https" .Values.proxy.https -}}
+{{- range $field, $value := $blank -}}
+{{- if eq (trim (toString (default "" $value))) "<PLACEHOLDER>" -}}
+{{- fail (printf "%s was left blank when this bundle was generated and still holds <PLACEHOLDER>. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in -- installing as it stands would deploy an agent that cannot work" $field $field) -}}
+{{- end -}}
+{{- end -}}
 {{- if not .Values.harborId -}}
 {{- fail "harborId is required -- get it from `bzm-opl-gen locations --account-name \"<ACCOUNT>\"` or the private location's page in the BlazeMeter UI" -}}
 {{- end -}}

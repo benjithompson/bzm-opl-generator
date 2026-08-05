@@ -34,6 +34,7 @@ import {
   GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFeature,
   SHARED_GROUPS, SIZING_FEATURE,
 } from "../optionGroups";
+import { placeholderWarning } from "../placeholder";
 
 export interface ConfigurePanelProps {
   features: Feature[];
@@ -89,8 +90,14 @@ export interface ConfigurePanelProps {
    *  like Advanced. Assembled in App with the rest of the domain state; this
    *  panel decides only where it sits. */
   envArea: ReactNode;
-  /** Groups in use but unfinished, so the download is blocked. */
+  /** Groups in use but unfinished. Some of these block the step and some only
+   *  say so on their own row -- see blockingGroups. */
   incomplete: OptionGroup[];
+  /** Required fields left empty, which will carry `<PLACEHOLDER>` into the
+   *  bundle. Not a blocker: the step advances and the bundle says of itself
+   *  that it is unfinished. Named here so the person can fill them in while
+   *  looking at them, which is the one place that is easy. */
+  blanks: string[];
   namespaceOk: boolean;
   saOk: boolean;
   saCreate: boolean;
@@ -415,6 +422,17 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
           bundle you had chosen cannot serve service virtualization
           {p.formatNotice.why ? ` — ${p.formatNotice.why}` : ""}. Switch it off
           in <b>Service virtualization</b> below to pick that format again.
+        </p>
+      )}
+
+      {/* Required fields nobody filled in. Amber and not red, and beside Next
+          rather than in front of it: the bundle generates, and what it carries
+          says so. Listed by option key -- the same names the bundle's README
+          and the manifests use, so the sentence here and the one in the file
+          are searchable as the same thing. */}
+      {p.blanks.length > 0 && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+          {placeholderWarning(p.blanks)}
         </p>
       )}
 

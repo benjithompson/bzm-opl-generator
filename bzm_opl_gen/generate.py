@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import textwrap
 from string import Template
 from urllib.parse import quote
 
@@ -12,6 +13,34 @@ from .facts import image_refs, select_images
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
+
+# What a required text field holds when it was left blank.
+#
+# One marker, not one per field. The alternative -- `<YOUR_AUTH_TOKEN>`,
+# `<YOUR_NAMESPACE>`, and so on -- is the shape components.tsx already argues
+# against for the required asterisk: a marker that means "fill this in" in two
+# shapes means nothing in either, and every guard below would have to know the
+# whole vocabulary to spot one. The key beside it in the YAML says which field
+# it is; the marker only has to say that nobody said.
+#
+# **The angle brackets are the guard, not decoration.** No Kubernetes name,
+# label or namespace may contain `<` or `>` (RFC 1123 is lowercase alphanumerics
+# and dashes), so a bundle carrying one is refused by the API server at apply
+# time with the field named, rather than quietly creating an object called this.
+# That is why a blank field may resolve to a value at all: the failure it buys
+# is loud, local and early, where an empty string's is a Deployment bound to the
+# namespace's `default` ServiceAccount (see service_account) or a Secret holding
+# an empty credential and a pod that reads as a slow boot.
+PLACEHOLDER = "<PLACEHOLDER>"
+
+
+def is_placeholder(v):
+    """True for a value that was left blank. Not `== PLACEHOLDER`: the option
+    may arrive with the whitespace a form leaves around a pasted value, and a
+    marker that stopped being recognised on a stray space would be carried into
+    the bundle as a value somebody meant."""
+    return isinstance(v, str) and v.strip() == PLACEHOLDER
+
 
 DEFAULT_OPTIONS = {
     "platform": "openshift",        # openshift | k8s
@@ -22,7 +51,11 @@ DEFAULT_OPTIONS = {
     "output_format": "manifests",   # manifests | helm
     "namespace": "blazemeter",
     "use_secret": True,              # False -> AUTH_TOKEN in ConfigMap (simplified)
-    "auth_token": "<YOUR_AUTH_TOKEN>",
+    # PLACEHOLDER rather than a token-specific marker: see the constant. This is
+    # the one option whose *default* is the placeholder, because it is the one
+    # with no sensible value to fall back to -- the rest reach it only by being
+    # emptied (see fill_placeholders).
+    "auth_token": PLACEHOLDER,
     "private_registry": None,        # e.g. registry.example.com/blazemeter
     "pull_secret": None,             # name of docker-registry secret for crane image
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
@@ -228,6 +261,91 @@ def ignored_options(o):
     the defaults, and for those "no format stated" means the Kubernetes one.
     """
     return DOCKER_IGNORED if o.get("output_format") == "docker" else {}
+
+
+# The text options a bundle is unusable without, and what makes each one apply
+# to a given bundle. Stated here rather than in whichever surface collected the
+# value, so the CLI, the MCP server and the web page all leave the same bundle
+# behind when a field is blank -- the page used to be the only one that knew,
+# and it knew by refusing to go on, which is a rule no other caller had.
+#
+# Only the options whose requirement is *visible in the options themselves* are
+# here. A private registry, a proxy and a CA ConfigMap are configured by having
+# a value at all, so blank and "not using one" are the same options dict and
+# nothing here could tell them apart -- the page knows, because it holds the
+# group's switch, and it sends the marker itself. Both halves are found again by
+# placeholder_options() below, which reads the marker rather than this table:
+# what is required is decided in one place, what was left blank in another, and
+# a bundle carrying one is reported the same way whichever half put it there.
+REQUIRED_TEXT = {
+    "namespace": lambda o: True,
+    "service_account_name": lambda o: True,
+    # ...except in a chart, where an absent token is the *recommended* state
+    # rather than an unfinished one: the values file is the file people commit,
+    # so the README hands over `--set-string authToken=...` and the overlay
+    # deliberately writes an empty value (see _helm_values). Marking it would
+    # put "this bundle is not finished" on every chart generated the way the
+    # documentation asks for one -- the same distinction this codebase keeps
+    # elsewhere between a thing nobody supplied and a thing supplied somewhere
+    # else. The chart still refuses a marker that reaches it by any other route.
+    "auth_token": lambda o: o.get("output_format") != "helm",
+    # Both are refused outright by _sv_cfg when the ingress is a real backend --
+    # a virtual service with no subdomain stalls at WAITING_FOR_DOMAIN, and
+    # crane will not start without the TLS secret even for plain HTTP.
+    "sv_subdomain": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
+    "sv_tls_secret": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
+}
+
+
+def fill_placeholders(o):
+    """Resolve every required-but-blank text option to PLACEHOLDER, in place.
+
+    A format that has no such field is skipped, on the same rule as every other
+    reader here: a docker bundle has no namespace and no ServiceAccount, and
+    marking them would put a marker in a README for two fields that format's own
+    page deliberately does not show.
+    """
+    ignored = ignored_options(o)
+    for key, applies in REQUIRED_TEXT.items():
+        if key in ignored or not applies(o):
+            continue
+        if not str(o.get(key) or "").strip():
+            o[key] = PLACEHOLDER
+    return o
+
+
+def _reportable(o, key):
+    """Whether a marker on `key` is this bundle's problem.
+
+    A field the format has no such thing as, or one the format supplies another
+    way, is not unfinished -- it is answered elsewhere. Both exemptions are the
+    ones fill_placeholders already applies; asked again here because the value
+    can arrive carrying the marker without having gone through it (the default
+    auth_token is the marker, and the page sends its own).
+    """
+    if key in ignored_options(o):
+        return False
+    applies = REQUIRED_TEXT.get(key)
+    return applies is None or applies(o)
+
+
+def placeholder_options(o):
+    """The fields this bundle carries a PLACEHOLDER for, sorted.
+
+    Reads the values rather than REQUIRED_TEXT: the marker is the fact, and half
+    of the fields that can carry one are the page's to decide (see above), so a
+    table of what is required could only ever report half of them. `proxy` is
+    nested, and is reported under the sub-key somebody has to go and fill in.
+    """
+    found = [k for k, v in o.items()
+             if is_placeholder(v) and _reportable(o, k)]
+    for sub, v in (o.get("proxy") or {}).items():
+        if is_placeholder(v):
+            found.append(f"proxy.{sub}")
+    for name, v in (o.get("extra_env") or {}).items():
+        if is_placeholder(v):
+            found.append(f"extra_env.{name}")
+    return sorted(found)
 
 
 def engine_size(o):
@@ -1470,6 +1588,92 @@ def _bundle_table(facts, o, extra=()):
         f"| {k} | {v} |\n" for k, v in rows)
 
 
+# Where the value for a blank field actually comes from. The marker says nobody
+# said; this says who would know -- which is the whole content of the answer for
+# somebody handed a bundle they did not configure, and the reason this block is
+# a table rather than one sentence naming the fields.
+PLACEHOLDER_SOURCE = {
+    "auth_token": "the agent's own token: BlazeMeter -> Settings -> Private "
+                  "Locations -> this agent -> Docker Command, or re-generate "
+                  "with `--auth-token`",
+    "namespace": "the namespace the agent is being deployed into -- your "
+                 "platform team owns this if you do not",
+    "service_account_name": "the account crane runs as. It is *not* safe to "
+                            "leave to the namespace's `default`, which is why "
+                            "this is not defaulted for you",
+    "sv_subdomain": "the DNS suffix virtual-service endpoints are published "
+                    "under, e.g. `apps.example.com` -- it must resolve to your "
+                    "ingress",
+    "sv_tls_secret": "a wildcard TLS secret in the agent namespace; required "
+                     "even for HTTP virtual services",
+    "private_registry": "the registry the BlazeMeter images were mirrored into",
+    "ca_existing_configmap": "the ConfigMap your platform team keeps the trust "
+                             "bundle in",
+    "ca_bundle": "the PEM itself -- your CA *and* the public roots",
+    "proxy.http": "the proxy URL, e.g. `http://proxy:3128`",
+    "proxy.https": "the proxy URL, e.g. `http://proxy:3128`",
+}
+
+
+def _placeholder_block(o, where=()):
+    """The README section naming every field left blank, or "" when none were.
+
+    Loud and near the top on purpose. The bundle is the artefact that gets
+    handed on -- committed, zipped, pasted into a ticket -- and the person who
+    applies it is routinely not the person who filled the form in. Everything
+    else here reports a decision somebody made; this reports one nobody did.
+
+    `where` names the file to edit for a field, where the format knows -- the
+    docker bundle's two files split the credentials from the command, and "go
+    and fill it in" without saying which file is half an answer.
+    """
+    found = placeholder_options(o)
+    if not found:
+        return ""
+    where = dict(where)
+    rows = "\n".join(
+        f"| `{k}` | {PLACEHOLDER_SOURCE.get(k, 'no value was given')}"
+        + (f" (in `{where[k]}`)" if k in where else "") + " |"
+        for k in found)
+    n = len(found)
+    subject = (f"{n} fields were left blank and carry" if n > 1
+               else "1 field was left blank and carries")
+    # What stops it, per format -- and they genuinely differ, so one sentence
+    # for all three would be wrong twice. The Kubernetes formats are refused by
+    # something (the API server, then the chart's own validation); a docker
+    # agent is not, because `docker run` has no opinion about the value of an
+    # environment variable. Saying "this will be rejected" there would be a
+    # promise the format cannot keep, and the failure it actually gets -- crane
+    # answering 404 and logging `Sleeping for 300`, which reads as a slow boot
+    # -- is exactly the one worth naming instead.
+    if o["output_format"] == "docker":
+        stops = ("The agent will start and fail to register: crane answers "
+                 "`404`, logs `Sleeping for 300` and never starts its health "
+                 "service, so the container sits there looking like a slow "
+                 "boot.")
+    else:
+        stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
+                 "Kubernetes name, so the API server rejects the object and "
+                 "names the field. That is the intended behaviour, not a fault "
+                 "in this bundle.")
+    # Wrapped rather than hand-broken: the sentence differs per format and by
+    # how many fields there are, so fixed line breaks land wherever the shorter
+    # wording leaves them.
+    quote = textwrap.fill(
+        f"**This bundle is not finished.** {subject} `{PLACEHOLDER}` instead of "
+        f"a value. {stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
+        f"with {'them' if n > 1 else 'it'} set.",
+        width=76)
+    quoted = "\n".join("> " + ln for ln in quote.splitlines())
+    return f"""
+{quoted}
+
+| field | where the value comes from |
+|---|---|
+{rows}
+"""
+
+
 def _verify_block(o):
     cli = "oc" if o["platform"] == "openshift" else "kubectl"
     return f"""## Check it worked
@@ -2182,7 +2386,7 @@ def _helm_readme(facts, o):
         token = (" \\\n    --set-string authToken=<AUTH_TOKEN>"
                  "   # not in the values file;\n    # re-generate with "
                  "--auth-token <token> to embed it")
-    return f"""{_bundle_table(facts, o)}
+    return f"""{_bundle_table(facts, o)}{_placeholder_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Install")}```
@@ -2488,13 +2692,12 @@ def _docker_env_file(facts, o):
 
 def _docker_readme(facts, o):
     ignored = _docker_ignored(o)
-    token = ""
-    if not o["auth_token"] or o["auth_token"] == DEFAULT_OPTIONS["auth_token"]:
-        where = DOCKER_ENV_FILE if o["use_secret"] else DOCKER_RUN_FILE
-        token = (f"\n> **The AUTH_TOKEN in `{where}` is a placeholder.** Replace it "
-                 f"with the agent's own, from BlazeMeter's Docker Command tab "
-                 f"(Settings -> Private Locations -> this agent), or re-generate "
-                 f"with `--auth-token`.\n")
+    # The credential and the command are in different files here, so the block
+    # names the one to edit. It replaces a paragraph that said the same thing
+    # about the AUTH_TOKEN alone: this format can leave a proxy URL, a registry
+    # host and an inline PEM blank too, and each of those was silent.
+    token_file = DOCKER_ENV_FILE if o["use_secret"] else DOCKER_RUN_FILE
+    placeholders = _placeholder_block(o, {"auth_token": token_file})
     ignored_block = ""
     if ignored:
         rows = "\n".join(f"| `{k}` | {why} |" for k, why in ignored)
@@ -2518,9 +2721,9 @@ are where they mean something.
   store rather than adding to it, so it has to be a full bundle -- your CA *and*
   the public roots -- or the agent stops trusting BlazeMeter itself.
 """
-    return f"""{_bundle_table(facts, o)}
+    return f"""{_bundle_table(facts, o)}{placeholders}
 ## Run it
-{token}
+
 ```
 ./{DOCKER_RUN_FILE}
 ```
@@ -2581,6 +2784,13 @@ def generate(facts, options):
     # ConfigMap, the helm overlay, the READMEs, profile.json -- then speaks
     # one value, and the profile records it as the resolved option it is.
     o.update(resolve_engine_limits(facts, o))
+    # Same reasoning, one line later and for the same reason: a field somebody
+    # left blank is resolved once, here, so the ConfigMap, the values overlay,
+    # the README's list and profile.json all carry the identical marker. Before
+    # the validators below, because they are what would otherwise refuse it --
+    # `service_account_name is required` was a refusal with no way to satisfy it
+    # from a page that had already let the field be emptied.
+    fill_placeholders(o)
     if "ship_id" not in o:
         ships = facts.get("ships") or []
         if len(ships) == 1:
@@ -2925,7 +3135,7 @@ def _readme(facts, o, files):
                   f"`{_crane_image(facts, o).rsplit(':', 1)[1]}` until you "
                   f"re-generate\n  and re-apply. An agent far enough behind "
                   f"loses BlazeMeter support.")
-    return f"""{_bundle_table(facts, o, token_row)}
+    return f"""{_bundle_table(facts, o, token_row)}{_placeholder_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Apply")}```

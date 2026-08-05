@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Feature, Options } from "./api";
 import {
-  allGroupsOff, configureBlockedBy, detectGroups, enabledFeatures, groupsOf,
+  allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
+  enabledFeatures, groupsOf,
   SHARED_GROUPS, featuresOf, GROUP_BY_ID, GroupId,
   incompleteGroups, notRunPatch, OPTION_GROUPS, OptionGroup, runsFeature,
   serviceAccountOk, startFeature,
@@ -614,55 +615,74 @@ describe("serviceAccountOk", () => {
 
 // -- what the configure step still needs -------------------------------------
 // One derivation behind two things on screen: the tick beside step 2 and the
-// line saying why it has none. The line used to be a fixed string naming a
-// namespace, a service account and "any unfinished group" whatever the bundle
-// was, so a docker bundle -- which has neither of the first two, by design --
-// was told to fix two fields that are deliberately not on the page.
+// line saying why it has none.
+//
+// It used to name a namespace and a service account too, and those are gone:
+// an empty one is a `<PLACEHOLDER>` now, which the bundle carries and complains
+// about itself, so blocking the step as well would be the same answer twice and
+// the worse half of it. What is asserted here is what is *left* -- a group
+// whose state generate() genuinely refuses, and an environment variable with a
+// name no process could read. See placeholder.test.ts for the other half, which
+// kept this block's hardest-won rule: never name a field this format has not
+// got. (The bug that rule came from: a docker bundle, which has neither of
+// those two fields by design, being told to go and fix both.)
 
 describe("configureBlockedBy", () => {
-  /** Every option applies: a Kubernetes bundle. */
-  const k8s = () => true;
-  /** ...and one where the placement fields are not fields at all. */
-  const docker = (k: string) =>
-    !["namespace", "service_account_name", "service_account_create"].includes(k);
-  const filled = { namespace: "blazemeter", service_account_name: "crane" };
-
   it("says nothing when nothing is outstanding", () => {
     // Empty is what ticks the step off, so this is the same assertion twice.
-    expect(configureBlockedBy(filled, k8s, [])).toBe("");
+    expect(configureBlockedBy({}, [])).toBe("");
   });
 
-  it("names the placement fields a cluster bundle is missing", () => {
-    expect(configureBlockedBy({}, k8s, [])).toBe(
-      "a namespace and a service account first");
-    expect(configureBlockedBy({ namespace: "ns" }, k8s, []))
-      .toBe("a service account first");
-  });
-
-  it("never names a field this format does not have", () => {
-    // The bug: both were named for a docker bundle, which has no namespace and
-    // no ServiceAccount -- and the fields are not on screen to be corrected.
-    expect(configureBlockedBy({}, docker, [])).toBe("");
-    // ...and an unfinished group is still named, because that one is real.
-    expect(configureBlockedBy({}, docker, [GROUP_BY_ID.sv]))
-      .toBe("Service virtualization first");
-  });
-
-  it("asks the predicate rather than trusting a filled-in field", () => {
-    // A docker bundle carries a namespace in its options -- the value is kept,
-    // not wiped -- so "is it filled in" cannot answer "is it a field here".
-    expect(configureBlockedBy({ namespace: "" }, docker, [])).toBe("");
+  it("does not block on a field that is merely empty", () => {
+    // The whole change in posture. Both of these used to be sentences here.
+    expect(configureBlockedBy({ namespace: "", service_account_name: "" }, []))
+      .toBe("");
   });
 
   it("names the group by the title on its own row", () => {
     // The sentence is a way back to a control, so it says what that control
     // says. A second wording here would be a second name for one row.
-    expect(configureBlockedBy(filled, k8s, [GROUP_BY_ID.sv, GROUP_BY_ID.ca]))
+    expect(configureBlockedBy({}, [GROUP_BY_ID.sv, GROUP_BY_ID.ca]))
       .toBe(`${GROUP_BY_ID.sv.title} and ${GROUP_BY_ID.ca.title} first`);
   });
 
+  it("names an environment variable no process could read", () => {
+    // Not a blank field: a bad one. A marker can say "nobody filled this in"
+    // and cannot say "this name is not a name", so this one still blocks.
+    expect(configureBlockedBy({ extra_env: { "not a name": "v" } }, []))
+      .toBe("the environment variables first");
+  });
+
   it("joins three the way a sentence does", () => {
-    expect(configureBlockedBy({}, k8s, [GROUP_BY_ID.sv])).toBe(
-      "a namespace, a service account and Service virtualization first");
+    expect(configureBlockedBy(
+      { extra_env: { "not a name": "v" } },
+      [GROUP_BY_ID.sv, GROUP_BY_ID.ca],
+    )).toBe(`${GROUP_BY_ID.sv.title}, ${GROUP_BY_ID.ca.title} `
+      + "and the environment variables first");
+  });
+});
+
+// -- which groups stop the step, and which only look unfinished ---------------
+
+describe("blockingGroups", () => {
+  it("lets an SV group with an empty subdomain past", () => {
+    // It is still `incomplete` -- the row says so -- and the two fields become
+    // markers the API server rejects. What it is not any more is a closed door.
+    const o = { sv_ingress: "nginx", sv_subdomain: "", sv_tls_secret: "" };
+    expect(incompleteGroups(o, { sv: true })).toHaveLength(1);
+    expect(blockingGroups(o, { sv: true })).toEqual([]);
+  });
+
+  it("still stops on a question nobody answered", () => {
+    // No ingress chosen on a location that runs mockServices. generate()
+    // refuses this outright, and there is no field for a marker to go in.
+    expect(blockingGroups({}, { sv: true })).toHaveLength(1);
+  });
+
+  it("still stops on two answers that contradict each other", () => {
+    const o = { sv_ingress: "contour", sv_subdomain: "a.example.com",
+                sv_tls_secret: "wild", service_type: "NODEPORT" };
+    const backends = { contour: { nodeport_ok: false } };
+    expect(blockingGroups(o, { sv: true }, backends)).toHaveLength(1);
   });
 });
