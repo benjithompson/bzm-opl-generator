@@ -949,7 +949,9 @@ def preview_order(files):
 ZIP_PREFIX = "bzm-opl"
 
 
-def zip_bundle(files, prefix=ZIP_PREFIX):
+def zip_bundle(files, prefix):
+    """`prefix` is `zip_stem(options)`, and has no default on purpose: a
+    default is what let the archive and the folder inside it drift apart."""
     buf = io.BytesIO()
     # Names may carry directories (the helm format emits a chart), which zip
     # stores as-is -- the slash is the path separator in the archive too.
@@ -962,8 +964,21 @@ def zip_bundle(files, prefix=ZIP_PREFIX):
     return buf.getvalue()
 
 
+def zip_stem(options):
+    """The one name a downloaded bundle has -- the archive's and the directory
+    it extracts to, which are the same string or the download is one name and
+    the folder another (two bundles for two locations both extracting to
+    `bzm-opl/`, the second silently merging into the first). A blank namespace
+    falls back rather than producing `bzm-opl-`, and the placeholder marker's
+    angle brackets are dropped: no extractor on Windows will write a directory
+    carrying them, and the bundle names the field anyway."""
+    ns = (options or {}).get("namespace") or "blazemeter"
+    ns = re.sub(r"[^A-Za-z0-9._-]", "", ns) or "blazemeter"
+    return f"{ZIP_PREFIX}-{ns}"
+
+
 def zip_filename(options):
-    return f"{ZIP_PREFIX}-{(options or {}).get('namespace', 'blazemeter')}.zip"
+    return f"{zip_stem(options)}.zip"
 
 
 def require_absolute_out_dir(out_dir):

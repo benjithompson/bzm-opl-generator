@@ -619,10 +619,10 @@ def generate_preview(g: GenerateIn):
 @app.post("/api/generate/zip")
 def generate_zip(g: GenerateIn):
     files, source = _generate(g)
-    name = core.zip_filename(g.options)
-    return Response(core.zip_bundle(files), media_type="application/zip",
+    stem = core.zip_stem(g.options)
+    return Response(core.zip_bundle(files, stem), media_type="application/zip",
                     headers=_wire_safe({
-                        "Content-Disposition": f'attachment; filename="{name}"',
+                        "Content-Disposition": f'attachment; filename="{stem}.zip"',
                         **_token_headers(source)}))
 
 

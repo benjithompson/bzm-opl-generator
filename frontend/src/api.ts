@@ -392,8 +392,12 @@ export const api = {
     // zip, so what happened to the credential travels beside the
     // Content-Disposition.
     const token = tokenFromHeaders(r);
-    saveBlob(await r.blob(),
-      `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
+    // The server's name, not one built here: it is also the directory the zip
+    // extracts to, and a second copy of the rule is a file whose name and whose
+    // folder disagree. The local guess is the fallback only -- a namespace the
+    // server sanitised out of the folder would otherwise stay in the filename.
+    saveBlob(await r.blob(), zipNameFromHeaders(r)
+      ?? `bzm-opl-${(options.namespace as string) || "blazemeter"}.zip`);
     return token;
   },
 };
@@ -656,6 +660,14 @@ export function saveBlob(blob: Blob, filename: string) {
  *  rename on one side would quietly lose the sentence rather than fail. */
 const TOKEN_BRANCH_HEADER = "X-Bzm-Token-Branch";
 const TOKEN_MESSAGE_HEADER = "X-Bzm-Token-Message";
+
+/** The name the server gave the archive, which is also the directory it
+ *  extracts to. Null where the header is missing or carries no filename -- the
+ *  caller has a fallback, and a name guessed here is better than none. */
+export function zipNameFromHeaders(r: Response): string | null {
+  const m = /filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") ?? "");
+  return m ? m[1] : null;
+}
 
 function tokenFromHeaders(r: Response): TokenReport {
   return {
