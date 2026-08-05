@@ -747,7 +747,8 @@ def main():
                         "Images come from the built-in catalogue")
     f.add_argument("--ship-id", dest="ship_id", help="required with --manual")
     f.add_argument("--func-ids", dest="func_ids", nargs="+", default=["performance"],
-                   help="with --manual: the location's features, which decide "
+                   help="with --manual: the location's functionalities, which "
+                        "decide "
                         "which images the bundle names (default: performance)")
     f.add_argument("-o", "--output", default="facts.json")
     f.set_defaults(fn=cmd_facts)

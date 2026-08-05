@@ -3,7 +3,8 @@
 The case: producing manifests for a customer whose BlazeMeter account and
 cluster you cannot reach. What matters is that the resulting facts are the same
 *shape* gather() returns, so nothing downstream learns which way they arrived --
-and that the image catalogue actually covers the features a location can be
+and that the image catalogue actually covers the functionalities a location can
+be
 told it has, because a missing key is the silent failure (crane resolves it
 against the public registry).
 """
@@ -130,8 +131,9 @@ PERF_KEYS = {"taurus-cloud:latest", "apm-image:latest",
     (["proxyRecorder"], {"blazemeter/proxy-recorder:latest"}),
     (["functionalGui"], PERF_KEYS | {"blazemeter/doduo:latest"}),
 ])
-def test_every_selectable_feature_names_its_images(func_ids, expect_keys):
-    """A feature whose category the catalogue does not cover produces an empty
+def test_every_selectable_functionality_names_its_images(func_ids, expect_keys):
+    """A functionality whose category the catalogue does not cover produces an
+    empty
     or partial IMAGE_OVERRIDES, and crane then resolves the missing keys against
     the public registry without logging anything -- which looks fine until the
     cluster is actually sealed."""

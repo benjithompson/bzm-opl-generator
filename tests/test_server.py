@@ -707,7 +707,7 @@ def test_a_remembered_credential_never_reaches_a_log_line(connected, caplog):
     assert "TOKEN-FROM-API" not in missing.text and "ship_id" in missing.text
 
 
-def test_no_route_here_turns_a_feature_on_for_a_location(monkeypatch):
+def test_no_route_here_turns_a_functionality_on_for_a_location(monkeypatch):
     """POST /api/locations/func-id went with the affordance that was its only
     caller (#113). What funcIds a location carries is what the location *is*,
     and BlazeMeter's own UI is where that changes -- so a page that offered it
@@ -1022,7 +1022,8 @@ def test_func_id_choices_cover_the_whole_generator_vocabulary():
 def test_unlabelled_func_id_is_still_offered(monkeypatch):
     """The label map is presentation only, so a funcId added to the facts layer
     without one must still appear under its raw name -- the same deliberate
-    failure mode as the SV ingress picker. Dropping it would hide the feature
+    failure mode as the SV ingress picker. Dropping it would hide the
+    functionality
     exactly like the hardcoded list did."""
     from bzm_opl_gen import facts as facts_mod
     monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
