@@ -47,7 +47,7 @@ bzm_opl_gen/
   mcp_server.py  MCP over core.py: six action-dispatch tools, docs as resources
   cli.py         subcommands: plan | facts | generate | doctor | suggest | toolcheck
                               | images | livetest | ui | mcp | sv-expose | locations
-                              | create-location | create-ship | delete-location
+                              | create-location | create-agent | delete-location
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
   profiles/      scenario presets (standard | private-registry | proxy-ca)
   ui_dist/       prebuilt web UI, shipped in the wheel

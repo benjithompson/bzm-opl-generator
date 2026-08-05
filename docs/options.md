@@ -222,7 +222,7 @@ steps, says which one it took, and only the second reaches BlazeMeter:
    `--auth-token`, or `--rotate-token` for a fresh one — and neither reads the
    directory at all, so replacing it stays available to anyone who means to.
 4. **The placeholder**, `<PLACEHOLDER>` — with a message naming the two
-   places a real one comes from: what `create-ship` printed, or an agent already
+   places a real one comes from: what `create-agent` printed, or an agent already
    deployed, `kubectl -n <ns> get secret blazemeter-secret -o
    jsonpath='{.data.AUTH_TOKEN}' | base64 -d`. That command is printed for you
    to run; nothing here reads your cluster.

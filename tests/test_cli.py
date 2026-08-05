@@ -325,7 +325,7 @@ def test_generate_says_where_a_real_token_comes_from(monkeypatch, tmp_path,
     this command reading a cluster -- the kubectl is printed, not run."""
     _generate(monkeypatch, tmp_path, "--namespace", "ns1")
     out = capsys.readouterr().out
-    assert "create-ship" in out
+    assert "create-agent" in out
     assert "kubectl -n ns1 get secret" in out and "base64 -d" in out
 
 
@@ -403,6 +403,29 @@ def test_create_ship_reports_a_refused_credential_and_the_ship_it_made(
     assert "could not be issued" in str(caught.value)
     assert "--auth-token" in str(caught.value)
     assert "s2" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("spelling", ["create-agent", "create-ship"])
+def test_create_agent_is_the_command_and_create_ship_still_reaches_it(
+        monkeypatch, spelling):
+    """One deployment inside a private location is an *agent*; `ship` is the
+    account's field name and nothing else. `create-location` and `create-ship`
+    sat side by side spelling the same vocabulary two ways.
+
+    The old name stays as an argparse alias rather than going away: it is in
+    the README, in `docs/live-test.md`, and in whatever scripts a customer
+    copied out of them, and a rename that breaks those buys nothing. Stopped at
+    the dispatch, because what is under test is which command the word reaches
+    -- both spellings are the same command or one of them is a second one to
+    keep working.
+    """
+    reached = []
+    monkeypatch.setattr(cli, "cmd_create_agent", reached.append)
+    monkeypatch.setattr("sys.argv", [
+        "bzm-opl-gen", spelling, "--api-key", KEY,
+        "--harbor-id", "h1", "--name", "agent1"])
+    cli.main()
+    assert [(a.harbor_id, a.name) for a in reached] == [("h1", "agent1")]
 
 
 def test_generate_reports_a_refused_credential_rather_than_tracebacking(
@@ -507,7 +530,7 @@ def test_livetest_refuses_to_deploy_a_placeholder_token(monkeypatch, tmp_path):
     instead."""
     _, _, exit = _livetest(monkeypatch, tmp_path, FakeClient(), "--auth-token",
                            gen.DEFAULT_OPTIONS["auth_token"])
-    assert "create-ship" in str(exit)
+    assert "create-agent" in str(exit)
 
 
 def test_livetest_refuses_a_placeholder_bundle_with_nothing_to_re_render(
@@ -589,7 +612,7 @@ def test_livetest_refuses_a_leftover_from_an_older_generator(monkeypatch,
 
 def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     """--auth-token is the way out for a caller who already holds one -- the
-    token `create-ship` printed, say. Minting over it would revoke the very
+    token `create-agent` printed, say. Minting over it would revoke the very
     credential they passed."""
     c = FakeClient()
     regenerate, manifests, exit = _livetest(monkeypatch, tmp_path, c,

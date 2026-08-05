@@ -231,7 +231,7 @@ def test_a_bundle_with_no_token_says_so_rather_than_looking_finished(connected):
     body = client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"}}).json()
     assert body["token"]["branch"] == core.TOKEN_PLACEHOLDER
-    assert "create-ship" in body["token"]["message"]
+    assert "create-agent" in body["token"]["message"]
 
 
 def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
@@ -246,7 +246,7 @@ def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
         "X-Bzm-Token-Branch", "X-Bzm-Token-Message")
     assert r.headers[server.TOKEN_BRANCH_HEADER] == core.TOKEN_PLACEHOLDER
     message = r.headers[server.TOKEN_MESSAGE_HEADER]
-    assert "create-ship" in message
+    assert "create-agent" in message
     # One line, because a header is one line -- the recovery hint is three.
     assert "\n" not in message
     assert "bzm-opl-ns1/bzm_secret.yaml" in zipfile.ZipFile(
@@ -492,7 +492,7 @@ def test_creating_an_agent_issues_its_credential_with_it(connected):
     is captured at the one moment it costs nothing, when the ship is new and has
     no previous credential to invalidate. core.create_ship does not fetch,
     because for an *existing* ship it would rotate one on an action whose name
-    says nothing about credentials; `bzm-opl-gen create-ship` fetches for exactly
+    says nothing about credentials; `bzm-opl-gen create-agent` fetches for exactly
     this reason, and this is the same command with a browser in front of it."""
     body = client.post("/api/ships", json={
         "harbor_id": "aaa111", "name": "agent1"}).json()

@@ -62,7 +62,7 @@ bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
 | what | where it comes from |
 |---|---|
 | account / workspace / project | `locations`, or the account owner |
-| scratch private location + ship | create your own (`create-location`, `create-ship`) |
+| scratch private location + agent | create your own (`create-location`, `create-agent`) |
 | smoke test for `--run-test` | an existing Taurus test that makes **real HTTP requests** |
 | API key | `api-key.json` in the repo root (gitignored) |
 

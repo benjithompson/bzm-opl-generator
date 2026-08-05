@@ -359,7 +359,7 @@ def ship_create(s: ShipIn):
     fetch to invalidate. `core.create_ship` deliberately does not fetch -- for an
     existing ship that would rotate a live agent's token on an action whose name
     says nothing about credentials -- and the reservation does not apply here, so
-    this mirrors what `bzm-opl-gen create-ship` has always done.
+    this mirrors what `bzm-opl-gen create-agent` has always done.
 
     A refusal is reported *with* the ship rather than instead of it. Some accounts
     allow the token endpoint only from BlazeMeter's own gateway; answering 502
