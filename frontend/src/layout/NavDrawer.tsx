@@ -23,7 +23,9 @@ export type ViewId = "flow" | "capacity";
 export interface NavItem {
   id: ViewId;
   label: string;
-  hint: string;
+  /** Optional: the Generate view carries none. Step 1 states what it is for on
+   *  the page itself, and a second sentence in the rail said it again. */
+  hint?: string;
   icon: ReactNode;
 }
 
@@ -42,7 +44,6 @@ const Icon = ({ d }: { d: string }) => (
  *  rollup. No icon set is worth a dependency for two glyphs. */
 export const NAV: NavItem[] = [
   { id: "flow", label: "Generate",
-    hint: "size the run, then manifests for one agent",
     icon: <Icon d="M5 2.5h6l4 4v11h-10zM11 2.5v4h4M7.5 11h5M7.5 14h5" /> },
   { id: "capacity", label: "Account capacity", hint: "what this account can generate",
     icon: <Icon d="M3 16.5h14M6 16.5v-5M10 16.5v-9M14 16.5v-3" /> },
@@ -108,7 +109,7 @@ export function NavDrawer(props: {
               // The label is the tooltip while collapsed, so the rail is
               // usable without opening it first.
               title={off ? "connect an account first — the key at the foot of this menu"
-                : open ? item.hint : item.label}
+                : open ? item.hint ?? item.label : item.label}
               className={"w-full flex items-center gap-2.5 rounded-md text-left "
                 + "transition-colors h-9 "
                 + (open ? "px-2.5 " : "justify-center px-0 ")
@@ -124,7 +125,7 @@ export function NavDrawer(props: {
         })}
       </div>
 
-      {open && (
+      {open && NAV.find((x) => x.id === props.view)?.hint && (
         <p className="mt-auto px-3 pt-3 pb-2 text-[11px] text-slate-400 leading-snug">
           {NAV.find((x) => x.id === props.view)?.hint}
         </p>
