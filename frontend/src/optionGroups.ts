@@ -89,6 +89,26 @@ export interface OptionGroup {
    *  without keeping a second copy of it. Undefined before the constants load. */
   incomplete?: (o: Options, required: boolean,
                 backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
+  /** Of that, what still stops the step -- defaulting to `incomplete` when a
+   *  group draws no distinction. Only Service virtualization does: see
+   *  svBlocking for why the row and the step now answer differently. */
+  blocks?: (o: Options, required: boolean,
+            backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
+  /** The keys this group cannot produce a working bundle without, given what is
+   *  set on it — read only while the group is ON, and returning those of them
+   *  that are still empty is `blankRequired`'s job, not this one's.
+   *
+   *  Declared here for the same reason `incomplete` is: the alternative is a
+   *  table somewhere else listing which of a group's keys matter, which is the
+   *  group's own answer kept twice. It is a *function* because the answer
+   *  depends on what has been chosen inside the group — the CA group needs a
+   *  ConfigMap name in one mode, a PEM in another and nothing in the third.
+   *
+   *  This is the half the generator cannot work out for itself. A registry, a
+   *  proxy and a CA are configured by *having a value*, so blank and "not using
+   *  one" are the same options dict on the server; the switch that tells them
+   *  apart is here. Absent means the group has no required text field. */
+  requires?: (o: Options) => string[];
 }
 
 // -- CA trust ----------------------------------------------------------------
@@ -214,6 +234,26 @@ export function svIncomplete(
     || svNodePortConflict(o, backends);
 }
 
+/** The arms of the rule above that still stop the step, now that a blank field
+ *  does not.
+ *
+ *  Deliberately a second predicate rather than a narrowing of the first: the
+ *  row must go on saying it is unfinished with an empty subdomain -- that is
+ *  what `incomplete` is for and it is still true -- while the *step* lets you
+ *  past, because the bundle now carries `<PLACEHOLDER>` and says so about
+ *  itself. What is left here is the two things a marker cannot stand in for and
+ *  `generate()` still refuses outright: no ingress chosen at all on a location
+ *  that runs mockServices, which is an unanswered question rather than an empty
+ *  box, and a service type the chosen backend cannot publish over, which is a
+ *  conflict between two answers that were both given. */
+export function svBlocking(
+    o: Options, required: boolean,
+    backends?: Record<string, { nodeport_ok: boolean }>): boolean {
+  if (o.sv_ingress === SV_NONE) return false;
+  if (!o.sv_ingress) return required;
+  return svNodePortConflict(o, backends);
+}
+
 /** The one arm of the rule above that the SV panel has to name on its own: a
  *  service type the chosen backend cannot publish over needs a different
  *  sentence from an empty field, because only one of them names a fix that is
@@ -236,6 +276,9 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "mirror images into your own registry (air-gapped)",
     features: [],
     keys: ["private_registry", "pull_secret", "registry_auth"],
+    // The host alone. A pull secret is optional (a registry may be anonymous)
+    // and registry_auth is a switch, which cannot be blank.
+    requires: () => ["private_registry"],
     detect: (o) => !!(o.private_registry || o.pull_secret || o.registry_auth),
     enable: () => ({}),
     disable: () => ({ private_registry: null, pull_secret: null, registry_auth: false }),
@@ -246,6 +289,15 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "egress via a corporate proxy, optional authentication",
     features: [],
     keys: ["proxy"],
+    // Not both: one URL is a working proxy configuration, and BlazeMeter's
+    // traffic is HTTPS, so that is the one a proxy group with nothing in it is
+    // missing. Marking both would put two rows in the README for one thing to
+    // go and find out.
+    requires: (o) => {
+      const p = (o.proxy ?? {}) as Record<string, unknown>;
+      const has = (k: string) => !!String(p[k] ?? "").trim();
+      return has("http") || has("https") ? [] : ["proxy.https"];
+    },
     detect: (o) => !!o.proxy,
     enable: () => ({}),
     disable: () => ({ proxy: null }),
@@ -256,6 +308,15 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "TLS-intercepting proxy / private CAs — mounted into crane + engines",
     features: [],
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
+    // Per mode, which is why this is a function. `ca_configmap_key` is not here
+    // in either: it defaults to ca-bundle.crt, and OpenShift injection fills a
+    // ConfigMap this bundle names itself, so that mode needs nothing typed.
+    requires: (o) => {
+      const mode = caModeOf(o);
+      if (mode === "existing") return ["ca_existing_configmap"];
+      if (mode === "inline") return ["ca_bundle"];
+      return [];
+    },
     detect: (o) => caModeOf(o) !== "none",
     // On lands on the recommended mode rather than on no mode at all, which
     // would show three radios and no fields. Which one is recommended depends
@@ -338,10 +399,16 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // by the caller rather than found in the options at all. SV_NONE is an
     // answer, not a configuration, so it leaves the group closed -- an imported
     // profile that declined must not re-open it.
+    // Only once a real backend is chosen. SV_NONE and "nobody has answered"
+    // need an ingress picked before either field means anything, and that is
+    // `incomplete`'s arm below rather than a blank text box.
+    requires: (o) => (svConfigured(o.sv_ingress)
+      ? ["sv_subdomain", "sv_tls_secret"] : []),
     detect: (o) => svConfigured(o.sv_ingress),
     // Stated above, as svIncomplete: sv.ts answers the same question for the
     // panel that has to explain it, and the two must not be two rules.
     incomplete: svIncomplete,
+    blocks: svBlocking,
     // `{}` when an ingress is already chosen, like every other group that has
     // nothing to seed: a patch with a key in it mints a fresh options identity
     // and re-POSTs /api/generate for a configuration that did not change.
@@ -494,6 +561,16 @@ export function incompleteGroups(
   return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
+/** Groups whose state the step genuinely cannot go past, which since blank
+ *  fields became markers is a subset of the above. `blocks ?? incomplete` so a
+ *  group that draws no distinction needs no second declaration. */
+export function blockingGroups(
+    o: Options, required: Partial<Record<GroupId, boolean>>,
+    backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
+  return OPTION_GROUPS.filter(
+    (g) => (g.blocks ?? g.incomplete)?.(o, !!required[g.id], backends));
+}
+
 /** What is stopping the configure step being finished, as the sentence that
  *  says so -- and "" when nothing is, which is what marks the step done.
  *
@@ -504,20 +581,26 @@ export function incompleteGroups(
  *  account and any unfinished group first", which named the same three things
  *  whatever the bundle was -- and a docker bundle has no namespace and no
  *  ServiceAccount, so two thirds of the only sentence telling somebody what to
- *  fix pointed at fields that are deliberately not on the page. It asks
- *  `applies` rather than taking the two booleans the page already has, because
- *  those resolve "filled in" and "this format has no such field" to the same
- *  `true` -- the collapse this codebase keeps refusing to make. A group's title
+ *  fix pointed at fields that are deliberately not on the page. A group's title
  *  is what the row beside it says, so the sentence names the row to go back to.
+ *
+ *  It used to take `applies` for those two fields, to keep "filled in" and
+ *  "this format has no such field" from collapsing into one `true`. They are
+ *  gone from here -- an empty one is a marker now, not a blocker -- and the
+ *  distinction moved with them, into `blankRequired`, which asks the same
+ *  predicate for the same reason: a warning must not name a field the form for
+ *  this format does not show.
  */
 export function configureBlockedBy(
-    o: Options, applies: Applies, incomplete: OptionGroup[]): string {
+    o: Options, blocking: OptionGroup[]): string {
   const needs = [
-    applies("namespace") && !String(o.namespace ?? "").trim()
-      ? "a namespace" : "",
-    applies("service_account_name") && !serviceAccountOk(o)
-      ? "a service account" : "",
-    ...incomplete.map((g) => g.title),
+    // The namespace and the service account used to be here, and are not any
+    // more: an empty one carries `<PLACEHOLDER>` into the bundle, which says
+    // what it is and is refused by the API server at apply time with the field
+    // named. Blocking as well would be the same answer twice, and the worse
+    // half of it -- a step that will not advance, on a page that had already
+    // let the field be emptied. `blankRequired` warns instead.
+    ...blocking.map((g) => g.title),
     // The environment area, which is not a group and so is not in `incomplete`
     // -- it is a list of variables with a name/value editor under it, and only
     // that editor can produce a name no process could read. Named here rather

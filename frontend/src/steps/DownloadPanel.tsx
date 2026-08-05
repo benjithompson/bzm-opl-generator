@@ -31,6 +31,7 @@ import { Attempt, NO_ATTEMPT, downloadFailed, downloaded } from "../attempt";
 import { Button, ErrorMsg, Switch } from "../components";
 import { isDocker } from "../formats";
 import { OptionGroup } from "../optionGroups";
+import { placeholderWarning } from "../placeholder";
 import {
   EVIDENCE_SCRIPT, EvidenceHeader, PreflightState, STATUS_STYLE, worstStatus,
 } from "../preflight";
@@ -77,6 +78,11 @@ export interface BundleHandover {
    *  definition not this one, so the block names them and offers the way back
    *  rather than pointing at a form nobody can see. */
   unfinished: OptionGroup[];
+  /** Required fields left empty, so the bundle carries `<PLACEHOLDER>` for
+   *  them. Never a reason the download is disabled -- the bundle is real and
+   *  says of itself that it is unfinished -- which is why this is beside the
+   *  button rather than in front of it. */
+  blanks: string[];
 }
 
 /** What the next download will do about the agent's credential. */
@@ -225,6 +231,22 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   This bundle carries a placeholder AUTH_TOKEN — fill it in
                   before applying it.
                 </p>
+              )}
+              {/* Required fields left empty. Repeated here rather than left on
+                  step 2, because this is where the bundle is taken away: the
+                  zip really does download, and what it carries has to be said
+                  beside the button that produces it. The token above has its
+                  own line and is not repeated here -- it is the one blank field
+                  with a source this page can offer. */}
+              {bundle.blanks.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-800 grow">
+                    {placeholderWarning(bundle.blanks)}
+                  </p>
+                  <Button kind="ghost" onClick={bundle.goToConfigure}>
+                    Configure
+                  </Button>
+                </div>
               )}
               {/* Why the button is disabled, when the reason is a step back.
                   A disabled button whose cause is elsewhere is the failure this

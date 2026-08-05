@@ -127,11 +127,18 @@ def test_crane_image_is_pinned_to_what_the_account_advertises():
 
 
 def test_unfetched_token_is_left_empty_not_placeholdered():
-    """The default auth_token is a <YOUR_AUTH_TOKEN> placeholder for the
-    manifests. Carried into values it would install an agent that authenticates
-    with the literal string, so it becomes an empty value the chart rejects."""
-    v, _ = _values(auth_token=gen.DEFAULT_OPTIONS["auth_token"])
+    """The default auth_token is gen.PLACEHOLDER for the manifests. Carried into
+    values it would install an agent that authenticates with the literal string,
+    so it becomes an empty value the chart rejects.
+
+    And it is not reported as a blank field either: for a chart, supplying the
+    token at install time is what the README asks for, so a "this bundle is not
+    finished" banner on every chart generated correctly would be a false alarm.
+    See REQUIRED_TEXT."""
+    v, plain = _values(auth_token=gen.DEFAULT_OPTIONS["auth_token"])
     assert v["authToken"] == ""
+    assert gen.PLACEHOLDER not in plain[gen.HELM_VALUES_FILE]
+    assert "not finished" not in plain["README.md"]
 
 
 def test_private_registry_carries_the_derived_image_map():
@@ -391,13 +398,16 @@ def test_helm_readme_names_a_service_account_it_will_not_create():
     assert "must already exist" not in plain["README.md"]
 
 
-def test_unnamed_service_account_is_refused_in_helm_format_too():
-    """The chart refuses the same combination in Go (see bzm-opl.validate), but
-    a bundle that only fails at `helm install` has already been handed over."""
-    with pytest.raises(ValueError) as e:
-        gen.generate(FACTS, {**BASE, "service_account_name": "",
-                             "service_account_create": False})
-    assert "service_account_name" in str(e.value)
+def test_unnamed_service_account_is_marked_in_helm_format_too():
+    """The overlay carries the marker and the README names the field, so a
+    bundle handed over unfinished says so on the page somebody reads rather than
+    only at `helm install`. The chart still refuses it in Go (see
+    bzm-opl.validate) -- that guard now covers a hand-edited values file, which
+    is the only route left to an install with one in it."""
+    v, plain = _values(service_account_name="", service_account_create=False)
+    assert v["serviceAccount"]["name"] == gen.PLACEHOLDER
+    assert "service_account_name" in plain["README.md"]
+    assert "not finished" in plain["README.md"]
 
 
 def test_service_virtualization_is_refused():

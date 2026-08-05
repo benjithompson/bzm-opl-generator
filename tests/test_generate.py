@@ -289,14 +289,21 @@ def test_created_service_account_is_not_advertised_as_a_prerequisite():
 
 
 @pytest.mark.parametrize("name", ["", "   ", None])
-def test_unnamed_service_account_is_refused(name):
-    """Not defaulted at render time. The tempting fallback -- the namespace's
-    `default` account -- deploys, works, and hands crane's Role to every other
-    pod in the namespace."""
-    with pytest.raises(ValueError) as e:
-        gen.generate(FACTS, {"namespace": "ns1", "service_account_name": name,
-                             "service_account_create": False})
-    assert "service_account_name" in str(e.value)
+def test_unnamed_service_account_becomes_a_placeholder(name):
+    """Still not defaulted at render time -- the tempting fallback, the
+    namespace's `default` account, deploys and hands crane's Role to every other
+    pod in the namespace. What changed is only *where* that is stopped: this
+    used to raise, which a page that had already let the field be emptied could
+    not act on. The marker keeps the refusal and moves it to apply time, where
+    `<PLACEHOLDER>` is not a legal name and the API server names the field."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "service_account_name": name,
+                                 "service_account_create": False})
+    assert set(_sa_refs(files).values()) == {gen.PLACEHOLDER}
+    # ...and the person handed the bundle is told, rather than finding out from
+    # a rejected apply.
+    assert "service_account_name" in files["README.md"]
+    assert "not finished" in files["README.md"]
 
 
 def test_service_account_round_trips_through_the_profile():
@@ -854,8 +861,17 @@ def test_mirror_script_absent_without_a_private_registry():
 
 def test_readme_is_short_and_actionable():
     """It is handed to a customer, so it is instructions -- the reasoning lives
-    in the project README. It used to run to 52 lines of rationale."""
-    readme = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
+    in the project README. It used to run to 52 lines of rationale.
+
+    Measured on a *finished* bundle. The placeholder block is the one section
+    whose length is not creep -- it appears only when a field was left blank,
+    and it is bounded by the number of blank fields rather than by anyone's
+    appetite for prose (test_placeholder_block_is_bounded holds it to that).
+    Counting it here would have this guard fire on a bundle that is doing
+    exactly what it should."""
+    readme = gen.generate(
+        FACTS, {"namespace": "ns1", "auth_token": "de" * 32})["README.md"]
+    assert "not finished" not in readme
     assert len(readme.splitlines()) < 45, "README is creeping back towards an essay"
     # The four things someone needs: what this is, how to deploy, how to check,
     # and what it costs to run.
@@ -864,6 +880,96 @@ def test_readme_is_short_and_actionable():
     assert "online" in readme
     assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # the engine request gap
     assert "bzm_limitrange.yaml" not in readme
+
+
+# -- blank required fields ----------------------------------------------------
+#
+# A field somebody left empty resolves to gen.PLACEHOLDER rather than to an
+# empty string or a refusal. The empty string is what these are really about:
+# every one of them had a plausible-looking failure ("" namespace -> the
+# manifests apply into whatever namespace the command names, "" service account
+# -> the namespace's `default`, "" token -> a pod that reads as a slow boot),
+# and the marker converts all of them into one loud, early, named failure.
+
+
+def test_a_finished_bundle_carries_no_marker():
+    files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "de" * 32})
+    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
+    assert gen.PLACEHOLDER not in "".join(files.values())
+
+
+def test_the_marker_reaches_the_objects_that_name_the_field():
+    """Not only the README: the point is that applying it fails. `<PLACEHOLDER>`
+    is not a legal RFC 1123 name, so each of these is rejected by the API server
+    with the field named."""
+    files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
+    assert yaml.safe_load(
+        files["bzm_deployment.yaml"])["metadata"]["namespace"] == gen.PLACEHOLDER
+    assert "apply -f" in files["README.md"]
+
+
+@pytest.mark.parametrize("given", ["<PLACEHOLDER>", "  <PLACEHOLDER>  "])
+def test_the_marker_is_recognised_around_whitespace(given):
+    """A form hands back what was pasted, spaces included. A marker that stopped
+    being one on a stray space would be carried into the bundle as a value
+    somebody meant, which is the single failure this whole mechanism exists to
+    prevent."""
+    assert gen.is_placeholder(given)
+    assert gen.placeholder_options({"namespace": given}) == ["namespace"]
+
+
+def test_docker_does_not_mark_the_fields_it_ignores():
+    """Same rule as everywhere else here: a format may not refuse -- or demand,
+    or complain about -- what it says it ignores. A docker bundle has no
+    namespace and no ServiceAccount, and marking them would put two fields in a
+    README that the page for that format deliberately does not show."""
+    files = gen.generate(FACTS, {**DOCKER, "namespace": "",
+                                 "service_account_name": "",
+                                 "auth_token": "de" * 32})
+    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
+    assert "not finished" not in files["README.md"]
+
+
+def test_a_marker_the_page_supplied_is_reported_too():
+    """The page holds the switch for a private registry, a proxy and a CA
+    ConfigMap, so blank-but-wanted is a state only it can see -- it sends the
+    marker itself. Found by reading the value, not by consulting REQUIRED_TEXT,
+    which is what lets the two halves share one report."""
+    o = {"namespace": "ns1", "auth_token": "de" * 32,
+         "private_registry": gen.PLACEHOLDER,
+         "proxy": {"https": gen.PLACEHOLDER, "no_proxy": "localhost"}}
+    files = gen.generate(FACTS, o)
+    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == [
+        "private_registry", "proxy.https"]
+    readme = files["README.md"]
+    assert "`private_registry`" in readme and "`proxy.https`" in readme
+
+
+def test_placeholder_block_is_bounded_by_the_fields_not_the_prose():
+    """The one section that may lengthen the README, held to the thing it is
+    reporting. Two blank fields is two rows more than none, not an essay."""
+    def lines(**over):
+        files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                     **over})
+        return len(files["README.md"].splitlines())
+    finished = lines(auth_token="de" * 32)
+    one = lines()                                   # the token alone
+    two = lines(namespace="")                       # ...and the namespace
+    assert one - finished <= 10, "the warning itself is creeping"
+    assert two - one == 1, "each further blank field costs one table row"
+
+
+def test_a_marker_survives_a_profile_round_trip():
+    """`generate --profile` replays a bundle exactly, and a bundle that was not
+    finished is one of the things it has to replay faithfully. Silently
+    re-defaulting the field would produce a *different* bundle from the same
+    profile, and the marker is precisely the value nobody chose."""
+    files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
+    prof = json.loads(files[gen.PROFILE_FILE])
+    assert prof["namespace"] == gen.PLACEHOLDER
+    replayed = gen.generate(FACTS, prof)
+    assert yaml.safe_load(
+        replayed["bzm_deployment.yaml"])["metadata"]["namespace"] == gen.PLACEHOLDER
 
 
 def test_no_limitrange_is_emitted():
@@ -1004,13 +1110,22 @@ def test_retired_sv_bridge_funcid_demands_nothing():
                 if "sv-bridge" in i["repo"]]
 
 
-def test_sv_ingress_requires_subdomain_and_tls_secret():
-    with pytest.raises(ValueError, match="sv_subdomain and sv_tls_secret"):
-        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx"})
-    # The TLS secret is mandatory even though the virtual service is HTTP.
-    with pytest.raises(ValueError, match="sv_tls_secret"):
-        gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx",
-                                "sv_subdomain": "apps.example.com"})
+def test_sv_ingress_marks_a_missing_subdomain_and_tls_secret():
+    """Both are still mandatory -- the TLS secret even though the virtual
+    service is HTTP -- and both now say so in the bundle instead of refusing to
+    produce one. The Ingress carries the marker into `host` and `secretName`,
+    neither of which the API server will accept, so the combination that used to
+    fail silently on a cluster still cannot reach one."""
+    files = gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx"})
+    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == [
+        "sv_subdomain", "sv_tls_secret"]
+    readme = files["README.md"]
+    assert "sv_subdomain" in readme and "sv_tls_secret" in readme
+    # ...and one supplied is one not marked.
+    files = gen.generate(SV_FACTS, {"namespace": "ns1", "sv_ingress": "nginx",
+                                    "sv_subdomain": "apps.example.com"})
+    assert gen.placeholder_options(
+        json.loads(files[gen.PROFILE_FILE])) == ["sv_tls_secret"]
 
 
 def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
@@ -1619,8 +1734,12 @@ def test_the_other_formats_still_refuse_all_of_it():
     still refused there -- otherwise the fix would have bought the off-screen
     blocker back as a bad manifest."""
     k8s = {"ship_id": "bbb222", "auth_token": "de" * 32}
-    for over in ({"service_account_name": ""},
-                 {"engine_cpu_limit": "not-a-cpu"},
+    # A malformed value and two modes chosen at once -- neither is a blank
+    # field, so neither is something the marker can stand in for. `<PLACEHOLDER>`
+    # says "nobody filled this in"; it cannot say "this says 4 gigglebytes" or
+    # "you asked for two CA modes", and a bundle that carried it for those would
+    # be reporting the wrong thing about itself.
+    for over in ({"engine_cpu_limit": "not-a-cpu"},
                  {"engine_mem_limit": "not-a-memory"},
                  {"ca_existing_configmap": "cm", "ca_bundle": "PEM"}):
         with pytest.raises(ValueError):

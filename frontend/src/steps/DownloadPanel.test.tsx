@@ -50,7 +50,8 @@ function panel(preflightOut: PreflightOut, format = "manifests",
         sv: svState([], OPTIONS,
                     { func_ids: ["mockServices"], ingress_types: [],
                       backends: {} }),
-        saOk: true, genErr: null, unfinished: [], goToConfigure: () => {},
+        saOk: true, genErr: null, blanks: [], unfinished: [],
+        goToConfigure: () => {},
       }}
       credential={{ plan: downloadPlan(null) }}
       attempt={NO_ATTEMPT} report={() => {}}

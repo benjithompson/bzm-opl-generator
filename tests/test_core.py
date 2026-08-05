@@ -495,8 +495,22 @@ def test_generate_needs_no_client_at_all():
 
 
 def test_generate_refuses_options_it_cannot_render():
+    """A value it cannot make sense of is still a BadRequest. A value nobody
+    supplied is not one -- see below."""
     with pytest.raises(core.BadRequest):
-        core.generate_bundle(FACTS, {"service_account_name": ""}, client=None)
+        core.generate_bundle(FACTS, {"engine_cpu_limit": "not-a-cpu"},
+                             client=None)
+
+
+def test_generate_marks_a_blank_field_rather_than_refusing_it():
+    """The refusal this replaced was unanswerable from the one surface that
+    could reach it: the page had already let the field be emptied, so the
+    download failed naming a field the person was looking at. It is a bundle
+    now, and the bundle says so."""
+    files = core.generate_bundle(FACTS, {"service_account_name": ""},
+                                 client=None)
+    assert "not finished" in files["README.md"]
+    assert "service_account_name" in files["README.md"]
 
 
 # -- a credential the account will not issue ----------------------------------

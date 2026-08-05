@@ -34,7 +34,7 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `auth_token` | `<YOUR_AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Resolved in four steps, and only the second one calls BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with `--api-key`) issues a **new** one; otherwise the token already written into the output directory is reused, provided that bundle's `profile.json` names the same ship; otherwise the placeholder stays and the command says where a real token comes from. It is the one option stripped from `out/profile.json`, and it stays stripped -- a profile is a file people commit and hand over. **Minting invalidates the previous token**, and an agent left holding a stale one does not report an auth error: crane answers `404`, logs `Sleeping for 300` and never starts its health service, so the pod sits `0/1 Running` and reads as a slow boot. Re-apply the whole bundle, Secret included, after any rotation. Supplying the token is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
+| `auth_token` | `<PLACEHOLDER>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Resolved in four steps, and only the second one calls BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with `--api-key`) issues a **new** one; otherwise the token already written into the output directory is reused, provided that bundle's `profile.json` names the same ship; otherwise the placeholder stays and the command says where a real token comes from. It is the one option stripped from `out/profile.json`, and it stays stripped -- a profile is a file people commit and hand over. **Minting invalidates the previous token**, and an agent left holding a stale one does not report an auth error: crane answers `404`, logs `Sleeping for 300` and never starts its health service, so the pod sits `0/1 Running` and reads as a slow boot. Re-apply the whole bundle, Secret included, after any rotation. Supplying the token is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified). Proxy credentials follow it: with `use_secret` on, the credentialed proxy URLs live in the Secret too. |
 
 ### Private registry
@@ -130,14 +130,52 @@ The escape hatch. BlazeMeter's agent-environment reference is much wider than th
 
 <!-- END GENERATED OPTIONS TABLE -->
 
+## Fields left blank
+
+A required text option with nothing in it resolves to the marker
+`<PLACEHOLDER>`, and the bundle says so about itself: its README opens with the
+list of fields carrying one and where each value comes from, and `profile.json`
+records them as the resolved options they are.
+
+This is deliberately not an empty string. Every field below had a *plausible*
+failure when left empty — an unnamed service account silently becomes the
+namespace's `default`, an empty AUTH_TOKEN is a pod that reads as a slow boot,
+a blank subdomain is a virtual service that stalls at `WAITING_FOR_DOMAIN` — and
+the marker converts all of them into one loud failure that arrives early. It is
+in angle brackets because no Kubernetes name may contain them, so `kubectl
+apply` rejects the object and names the field rather than creating something
+subtly wrong. `helm install` refuses one too, in the chart's own validation, for
+the values the API server never sees as names. `bzm-opl-gen livetest` refuses a
+bundle carrying one before it builds a cluster.
+
+Which fields are covered:
+
+| where it comes from | fields |
+|---|---|
+| always | `namespace`, `service_account_name`, `auth_token` |
+| once an SV backend is chosen | `sv_subdomain`, `sv_tls_secret` |
+| once the group is switched on in the web UI | `private_registry`, `proxy.http`/`proxy.https`, `ca_existing_configmap`, `ca_bundle` |
+
+The last row is the web UI's, and only the web UI's: a registry, a proxy and a
+CA are configured by *having* a value, so on the command line a blank one and
+"not using one" are the same thing and there is nothing to mark. The switch that
+tells them apart only exists on the page.
+
+Two exceptions, both because the field is answered somewhere else rather than
+not answered at all. `--format docker` has no namespace and no ServiceAccount,
+so neither is marked there (see [the docker bundle](docker.md)). And a chart
+leaves `authToken` empty rather than marked, because supplying it at install
+time — `helm install --set-string authToken=...` — is what the bundle's own
+README asks for: the values file is the file people commit.
+
 ## The service account
 
 `service_account_name` is required in both Kubernetes formats — manifests and
-the chart — including with `service_account_create: false`, and an empty one is
-refused rather than resolved. The tempting fallback — and what most Helm charts
-scaffold — is the namespace's `default` ServiceAccount: that installs cleanly,
-runs, and binds crane's Role to the account every other pod in the namespace
-runs as. A blank field should not be able to decide that.
+the chart — including with `service_account_create: false`, and an empty one
+carries the marker above rather than being resolved. The tempting fallback — and
+what most Helm charts scaffold — is the namespace's `default` ServiceAccount:
+that installs cleanly, runs, and binds crane's Role to the account every other
+pod in the namespace runs as. A blank field should not be able to decide that.
 
 `--format docker` has no ServiceAccount at all, so it neither reads the option
 nor refuses an empty one: see [the docker bundle](docker.md).
@@ -182,7 +220,7 @@ steps, says which one it took, and only the second reaches BlazeMeter:
    inside an agent already running on it. Say what this bundle's credential is —
    `--auth-token`, or `--rotate-token` for a fresh one — and neither reads the
    directory at all, so replacing it stays available to anyone who means to.
-4. **The placeholder**, `<YOUR_AUTH_TOKEN>` — with a message naming the two
+4. **The placeholder**, `<PLACEHOLDER>` — with a message naming the two
    places a real one comes from: what `create-ship` printed, or an agent already
    deployed, `kubectl -n <ns> get secret blazemeter-secret -o
    jsonpath='{.data.AUTH_TOKEN}' | base64 -d`. That command is printed for you
