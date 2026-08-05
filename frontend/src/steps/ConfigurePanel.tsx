@@ -11,10 +11,10 @@
 // generator's own DOCKER_IGNORED.
 //
 // The option groups split two ways and the page says which is which. Most of
-// them belong to no feature -- registry, proxy, CA trust, scheduling, security
+// them belong to no functionality -- registry, proxy, CA trust, scheduling, security
 // -- and are here whatever the location runs; the rest belong to one, and live
-// in that feature's own card, which is on screen only for a feature the
-// location actually runs. There used to be a feature *selector* switching
+// in that functionality's own card, which is on screen only for a functionality the
+// location actually runs. There used to be a functionality *selector* switching
 // between two views of the same six groups, so pressing it changed a single row
 // while reading as though it changed the step. Nothing is hidden by a *view*
 // now, so nothing has to be recovered: no "also in this bundle", no "not in
@@ -24,7 +24,7 @@
 // The rail is orientation, not navigation-with-a-dot: it names what is set, so
 // "what is in this bundle" is answered without scrolling the form.
 import { ReactNode, useState } from "react";
-import { Feature, Options } from "../api";
+import { Functionality, Options } from "../api";
 import {
   Button, Check, Field, inputCls, RequiredMark, SegmentedControl,
 } from "../components";
@@ -32,21 +32,21 @@ import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFeature,
-  SHARED_GROUPS, SIZING_FEATURE,
+  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFunctionality,
+  SHARED_GROUPS, SIZING_FUNCTIONALITY,
 } from "../optionGroups";
 import { placeholderWarning } from "../placeholder";
 
 export interface ConfigurePanelProps {
-  features: Feature[];
+  functionalities: Functionality[];
   /** `suggestNs` is passed only where picking is a declaration rather than a
    *  view -- manual entry's radio. See its call site. */
-  pickFeature: (id: string, suggestNs?: boolean) => void;
+  pickFunctionality: (id: string, suggestNs?: boolean) => void;
   sourceMode: "connect" | "manual";
-  /** The funcIds this location carries that no feature claims. */
+  /** The funcIds this location carries that no functionality claims. */
   locUnclaimed: string[];
-  /** Which features this location runs, or null while nobody has answered --
-   *  see optionGroups.enabledFeatures. A feature not in it is stated by its
+  /** Which functionalities this location runs, or null while nobody has answered --
+   *  see optionGroups.enabledFunctionalities. A functionality not in it is stated by its
    *  card and configured nowhere. */
   enabled: string[] | null;
   options: Options;
@@ -62,10 +62,10 @@ export interface ConfigurePanelProps {
    *  to explain the error the server would have given. */
   blockedFormats: Record<string, string>;
   /** ...and the same refusal from the other end: why this format cannot serve
-   *  a feature at all, by feature id. The card renders it instead of its
+   *  a functionality at all, by functionality id. The card renders it instead of its
    *  switches, so a docker bundle stops offering an ingress, a subdomain and a
    *  TLS secret that would make the whole bundle unbuildable. */
-  featureBlocked: Record<string, string>;
+  functionalityBlocked: Record<string, string>;
   /** The format the SV correction replaced, and why -- or null. A format the
    *  user picked is never swapped in silence; see the effect in App. */
   formatNotice: { was: string; why: string } | null;
@@ -263,7 +263,7 @@ function AdvancedRow(p: ConfigurePanelProps) {
   );
 }
 
-/** One feature: whether it is on, and -- only where it is -- the options it
+/** One functionality: whether it is on, and -- only where it is -- the options it
  *  owns.
  *
  *  In connect mode every card rendered is one the location runs: the panel
@@ -277,36 +277,36 @@ function AdvancedRow(p: ConfigurePanelProps) {
  *  can only be read is a card that only takes up the step.
  *
  *  So `!on` here means manual entry, where the radio is the declaration rather
- *  than a report of one, and an undeclared feature has to stay on screen to be
+ *  than a report of one, and an undeclared functionality has to stay on screen to be
  *  declarable. That is why the branch below has one sentence and not two. */
-function FeatureCard(
-    p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
+function FunctionalityCard(
+    p: ConfigurePanelProps & { feat: Functionality; own: OptionGroup[] }) {
   const { feat, own } = p;
   // The engine-size statement renders where the sizing group used to sit:
-  // under the feature whose bundles start engines. Read-only by design --
+  // under the functionality whose bundles start engines. Read-only by design --
   // the size is the location's, and this card only states it.
-  const note = feat.id === SIZING_FEATURE ? p.engineNote : null;
+  const note = feat.id === SIZING_FUNCTIONALITY ? p.engineNote : null;
   const manual = p.sourceMode === "manual";
   // Enabled means the location runs it -- or, in manual mode, that this is what
   // the typed identity was declared to be. Unanswered reads as on: see
-  // runsFeature for why that direction is the safe one.
-  const on = runsFeature(p.enabled, feat.id);
+  // runsFunctionality for why that direction is the safe one.
+  const on = runsFunctionality(p.enabled, feat.id);
   // Before the account has been read there is nothing to say: `enabled` is null
   // then, and claiming "enabled" from an unanswered question is the collapse
   // this codebase keeps refusing to make.
   const known = p.enabled != null;
   // ...and the third thing that can be true of a card, which is about the
-  // bundle rather than the location: this format cannot serve this feature at
+  // bundle rather than the location: this format cannot serve this functionality at
   // all. Only asked where the location does run it -- "not enabled here" and
   // "not possible in this format" are different answers and the card may give
   // only the one that is true.
-  const noFormat = on ? p.featureBlocked[feat.id] : undefined;
+  const noFormat = on ? p.functionalityBlocked[feat.id] : undefined;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
         ? "border-bzm/40 bg-bzm/[0.03]" : "border-slate-200 bg-slate-50/70")}>
       <div className="px-3 py-2.5 border-b border-slate-100">
-        {/* State first: whether the feature is on is what the card is about.
+        {/* State first: whether the functionality is on is what the card is about.
             Manual mode has no account to read the answer off, so there it is
             the control rather than a chip. */}
         {manual ? (
@@ -320,7 +320,7 @@ function FeatureCard(
                 nothing has typed over (suggestNamespace), so a hand-written one
                 still wins. */}
             <input type="radio" checked={on}
-              onChange={() => p.pickFeature(feat.id, true)} />
+              onChange={() => p.pickFunctionality(feat.id, true)} />
             Enabled
           </label>
         ) : known && (
@@ -389,7 +389,7 @@ const ENV_KEYS = ["extra_env"];
 
 export function ConfigurePanel(p: ConfigurePanelProps) {
   // Placement is a section of the form only where the bundle has one, and its
-  // groups are the format's rather than the feature's. Both are answered once
+  // groups are the format's rather than the functionality's. Both are answered once
   // and shared with the rail below: derived twice, the rail and the form are
   // free to disagree about what is in this bundle, which is the one thing the
   // rail is for.
@@ -399,39 +399,40 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   // the two would otherwise disagree about what is in this bundle -- the one
   // job the rail has.
   const envCount = envToRows(p.options.extra_env).length;
-  // A feature the location does not run is not on this page at all.
+  // A functionality the location does not run is not on this page at all.
   //
   // It used to be a card that stated it and named the funcId to add (#113) --
   // true, and nothing the reader of this step can act on: what a location runs
   // is BlazeMeter's own UI's to change, and this step is what the *bundle*
   // carries. On a performance location, which is most of them, that was half
-  // the section given over to a feature nobody asked for. The options are still
+  // the section given over to a functionality nobody asked for. The options are still
   // cleared rather than merely hidden -- notRunPatch, in App -- because hiding a
   // row does not empty it, and generate() refuses an sv_ingress with no
   // subdomain whatever the location runs.
   //
   // Manual entry is the exception and structurally so: there the card *is* the
-  // declaration (#118) -- its radio is what says which feature the typed
+  // declaration (#118) -- its radio is what says which functionality the typed
   // identity was gathered for -- so filtering by the answer would take away the
   // control that gives it. Unanswered (`enabled == null`) keeps every card, the
-  // same direction runsFeature reads it in.
-  const features = p.sourceMode === "manual"
-    ? p.features : p.features.filter((f) => runsFeature(p.enabled, f.id));
+  // same direction runsFunctionality reads it in.
+  const functionalities = p.sourceMode === "manual"
+    ? p.functionalities
+    : p.functionalities.filter((f) => runsFunctionality(p.enabled, f.id));
   const secs = [
-    ...features.map((f) => ({
+    ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
-      // A feature this format cannot serve owns nothing here: the card states
+      // A functionality this format cannot serve owns nothing here: the card states
       // that instead of its switches, and the rail agrees rather than listing
       // groups the card does not show. A format's refusal clears no options,
       // because the format is what gives way (see sv.patch). The not-run case
       // no longer reaches this in connect mode -- it is filtered above -- but
-      // `runsFeature` stays in the test for manual entry, where an undeclared
-      // feature is still a card and must still own nothing.
-      gs: runsFeature(p.enabled, f.id) && !p.featureBlocked[f.id]
+      // `runsFunctionality` stays in the test for manual entry, where an undeclared
+      // functionality is still a card and must still own nothing.
+      gs: runsFunctionality(p.enabled, f.id) && !p.functionalityBlocked[f.id]
         ? groupsFor(groupsOf(f.id), p.applies) : [],
-      // ...and the rail says which of the two "no groups set" is: a feature
+      // ...and the rail says which of the two "no groups set" is: a functionality
       // running on defaults, or one this identity was not declared to run.
-      off: p.enabled != null && !runsFeature(p.enabled, f.id),
+      off: p.enabled != null && !runsFunctionality(p.enabled, f.id),
       anchor: "cfg-f-" + f.id,
     })),
     ...(placed
@@ -545,15 +546,15 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
 
         <div className="min-w-0 space-y-5">
           {/* The heading goes with its cards. Nothing the account can say
-              leaves this empty -- a location with no served feature answers
+              leaves this empty -- a location with no served functionality answers
               `enabled == null`, which keeps every card -- but a heading over
               nothing is what the filter above would produce if that ever
               stopped being true, and it would read as a section that failed to
               load. */}
-          {(features.length > 0 || p.locUnclaimed.length > 0) && (
+          {(functionalities.length > 0 || p.locUnclaimed.length > 0) && (
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-              Deployment features
+              Deployment functionalities
             </h3>
             {/* Stacked, not side by side: a card holds group rows, and two
                 columns of those read as two cramped tables. */}
@@ -565,8 +566,8 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   KUBERNETES_RESOURCES_LIMITS_*, so a docker performance card
                   says "nothing extra to configure" rather than stating a size
                   nothing reads. */}
-              {features.map((f) => (
-                <FeatureCard key={f.id} {...p} feat={f}
+              {functionalities.map((f) => (
+                <FunctionalityCard key={f.id} {...p} feat={f}
                   own={groupsIn("f-" + f.id)} />
               ))}
             </div>

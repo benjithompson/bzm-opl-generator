@@ -337,27 +337,29 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     assert m.group(1) == gen_mod.SV_INGRESS_NONE
 
 
-def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
+def test_every_group_s_tag_is_a_functionality_this_server_serves():
     """Read out of the TypeScript for the same reason again, and load-bearing
     since #113.
 
-    A group tags itself with the feature ids it belongs to; the ids themselves
-    are served from core.FUNCTIONALITIES and enumerated nowhere in the frontend. A tag
-    naming something not in that list was always a group on no card -- and now
-    it is worse than invisible: `notRunPatch` clears the groups of a feature the
-    location does not run, and a feature nothing serves is never run, so the
-    group's options would be wiped by a rule nobody could see applying.
+    A group tags itself with the functionality ids it belongs to; the ids
+    themselves are served from core.FUNCTIONALITIES and enumerated nowhere in
+    the frontend. A tag naming something not in that list was always a group on
+    no card -- and now it is worse than invisible: `notRunPatch` clears the
+    groups of a functionality the location does not run, and a functionality
+    nothing serves is never run, so the group's options would be wiped by a rule
+    nobody could see applying.
     """
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     body = re.search(r"export const OPTION_GROUPS: OptionGroup\[\] = \[(.*?)\n\];",
                      (src / "optionGroups.ts").read_text(), re.S)
     assert body, "OPTION_GROUPS not found -- was it renamed or moved?"
     tagged = set(re.findall(r'"([^"]+)"',
-                            " ".join(re.findall(r"^\s*features: \[(.*?)\],$",
-                                                body.group(1), re.M))))
+                            " ".join(re.findall(
+                                r"^\s*functionalities: \[(.*?)\],$",
+                                body.group(1), re.M))))
     # Not empty: every group being untagged would pass a subset check silently,
     # and that is the shape a bad regex leaves behind.
-    assert tagged, "no feature tags found -- did the field move or get renamed?"
+    assert tagged, "no tags found -- did the field move or get renamed?"
     assert tagged <= {f["id"] for f in core.FUNCTIONALITIES}
 
 
@@ -1514,34 +1516,34 @@ def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
     assert body["status"] == "ok" and body["code"] == 200
 
 
-def test_group_tags_name_features_the_server_actually_serves():
-    """The frontend tags each option group with the feature ids it belongs to,
-    and those ids are the join between the two halves. Nothing else checks it:
-    the vitest suite tags against its own fixture, so renaming a served id
-    passes both suites green and silently empties a feature's options in the
-    browser. Read the tags out of the source rather than duplicating them."""
+def test_group_tags_name_functionalities_the_server_actually_serves():
+    """The frontend tags each option group with the functionality ids it belongs
+    to, and those ids are the join between the two halves. Nothing else checks
+    it: the vitest suite tags against its own fixture, so renaming a served id
+    passes both suites green and silently empties a functionality's options in
+    the browser. Read the tags out of the source rather than duplicating them."""
     src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "frontend", "src", "optionGroups.ts")
     with open(src) as fh:
         text = fh.read()
-    tagged = {i for line in text.splitlines() if "features:" in line
+    tagged = {i for line in text.splitlines() if "functionalities:" in line
               for i in re.findall(r'"([^"]+)"', line)}
     served = {f["id"] for f in client.get("/api/functionalities").json()}
     assert tagged, "no group tags found -- has the declaration shape changed?"
     assert tagged <= served, (
-        f"option groups tag features the server does not serve: "
+        f"option groups tag functionalities the server does not serve: "
         f"{sorted(tagged - served)}. Either the id was renamed in "
         f"core.FUNCTIONALITIES, or the tag is a typo -- the group's options would "
         f"never appear.")
-    # sv.ts keys one answer by feature id rather than by group id -- which
-    # format cannot serve the feature at all -- so that literal is the same
-    # join and fails the same way: the card would render its switches on a
+    # sv.ts keys one answer by functionality id rather than by group id -- which
+    # format cannot serve the functionality at all -- so that literal is the
+    # same join and fails the same way: the card would render its switches on a
     # bundle that cannot carry them, and nothing would say so.
     sv_src = os.path.join(os.path.dirname(src), "sv.ts")
     with open(sv_src) as fh:
-        feature = re.search(r'const SV_FEATURE = "([^"]+)"', fh.read())
-    assert feature, "SV_FEATURE not found -- was it renamed or moved?"
-    assert feature.group(1) in served
+        found = re.search(r'const SV_FUNCTIONALITY = "([^"]+)"', fh.read())
+    assert found, "SV_FUNCTIONALITY not found -- was it renamed or moved?"
+    assert found.group(1) in served
 
 
 # -- saving a bundle to disk ---------------------------------------------------

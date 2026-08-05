@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { Feature, Options } from "./api";
+import { Functionality, Options } from "./api";
 import {
   allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
-  enabledFeatures, groupsOf,
-  SHARED_GROUPS, featuresOf, GROUP_BY_ID, GroupId,
+  enabledFunctionalities, groupsOf,
+  SHARED_GROUPS, functionalitiesOf, GROUP_BY_ID, GroupId,
   incompleteGroups, isOpenshift, notRunPatch, OPTION_GROUPS, OptionGroup,
-  runsFeature,
-  serviceAccountOk, startFeature,
+  runsFunctionality,
+  serviceAccountOk, startFunctionality,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
 
@@ -276,27 +276,28 @@ describe("switching a group on", () => {
   });
 });
 
-// -- the feature view ---------------------------------------------------------
-// One feature is configured at a time, chosen from a list /api/features serves.
-// Nothing in the frontend enumerates features: groups tag themselves with the
-// feature ids they belong to, and everything else -- labels, suggested
-// namespaces, which funcIds mean which feature -- is read off the served list.
+// -- the functionality view ---------------------------------------------------
+// One functionality is configured at a time, chosen from the list
+// /api/functionalities serves.
+// Nothing in the frontend enumerates functionalities: groups tag themselves with the
+// functionality ids they belong to, and everything else -- labels, suggested
+// namespaces, which funcIds mean which functionality -- is read off the served list.
 // So the vocabulary below is a fixture standing in for that response, and the
-// "a feature was added" tests extend it exactly the way server.py would.
+// "a functionality was added" tests extend it exactly the way server.py would.
 
-const PERF: Feature = {
+const PERF: Functionality = {
   id: "performance", label: "Performance & functional testing",
   hint: "load and functional tests", namespace: "blazemeter",
   func_ids: ["performance", "functionalApi", "functionalGui", "proxyRecorder"],
 };
-const SV: Feature = {
+const SV: Functionality = {
   id: "sv", label: "Service virtualization", hint: "virtual services",
   namespace: "blazemeter-sv", func_ids: ["mockServices"],
 };
-const FEATURES = [PERF, SV];
-/** Added the way a real new feature is: one entry in the served vocabulary, and
+const FUNCTIONALITIES = [PERF, SV];
+/** Added the way a real new functionality is: one entry in the served vocabulary, and
  *  no frontend edit at all until some group wants to be tagged with it. */
-const SECRETS: Feature = {
+const SECRETS: Functionality = {
   id: "secrets", label: "Private vault", hint: "secrets from a vault",
   namespace: "blazemeter-vault", func_ids: ["secretsPrivateVault"],
 };
@@ -305,22 +306,22 @@ const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
 
 describe("the split the configure step is built on", () => {
   it("puts every group in exactly one bucket", () => {
-    const owned = OPTION_GROUPS.filter((g) => g.features.length);
+    const owned = OPTION_GROUPS.filter((g) => g.functionalities.length);
     expect([...SHARED_GROUPS, ...owned].length).toBe(OPTION_GROUPS.length);
     // A group in both -- or in neither -- is a group on screen twice, or not at
-    // all. That was the feature view's failure and it is structural now.
-    for (const g of SHARED_GROUPS) expect(g.features).toEqual([]);
+    // all. That was the functionality view's failure and it is structural now.
+    for (const g of SHARED_GROUPS) expect(g.functionalities).toEqual([]);
   });
 
-  it("gives a feature the groups tagged with it, and only those", () => {
+  it("gives a functionality the groups tagged with it, and only those", () => {
     expect(groupsOf("sv").map((g) => g.id)).toEqual(["sv"]);
     // Performance owns no group any more: the engine size stopped being one
     // (#132) -- it derives from the location, and the card states it.
     expect(groupsOf("performance")).toEqual([]);
   });
 
-  it("answers a feature nothing is tagged with, rather than throwing", () => {
-    // A backend that grows a feature before the frontend tags a group to it is
+  it("answers a functionality nothing is tagged with, rather than throwing", () => {
+    // A backend that grows a functionality before the frontend tags a group to it is
     // a card that says "nothing extra to configure" -- not a crash, and not a
     // missing card.
     expect(groupsOf("secrets")).toEqual([]);
@@ -332,83 +333,86 @@ describe("the split the configure step is built on", () => {
   });
 });
 
-describe("which feature a location starts on", () => {
-  it("picks the feature its funcIds carry", () => {
-    expect(startFeature(["mockServices"], FEATURES)).toBe("sv");
-    expect(startFeature(["functionalGui"], FEATURES)).toBe("performance");
+describe("which functionality a location starts on", () => {
+  it("picks the functionality its funcIds carry", () => {
+    expect(startFunctionality(["mockServices"], FUNCTIONALITIES)).toBe("sv");
+    expect(startFunctionality(["functionalGui"], FUNCTIONALITIES)).toBe("performance");
   });
 
-  it("picks the first served feature for a location carrying both", () => {
+  it("picks the first served functionality for a location carrying both", () => {
     // Deliberate: a location doing both is a performance location that also
     // serves mocks, and the download-button block routes to the SV settings
     // when they are what is missing.
-    expect(startFeature(["mockServices", "performance"], FEATURES)).toBe("performance");
-    expect(featuresOf(["mockServices", "performance"], FEATURES))
+    expect(startFunctionality(["mockServices", "performance"], FUNCTIONALITIES))
+      .toBe("performance");
+    expect(functionalitiesOf(["mockServices", "performance"], FUNCTIONALITIES))
       .toEqual(["performance", "sv"]);
   });
 
   it("is not broken by a funcId the tool does not model", () => {
     // Real locations carry tdm/dataPublisher/delphix today. An unmodelled
-    // funcId claims no feature: alongside a modelled one it is ignored, and
+    // funcId claims no functionality: alongside a modelled one it is ignored, and
     // alone it leaves the default rather than an empty selector.
-    expect(startFeature([...UNMODELLED, "mockServices"], FEATURES)).toBe("sv");
-    expect(startFeature(UNMODELLED, FEATURES)).toBe("performance");
-    expect(featuresOf(UNMODELLED, FEATURES)).toEqual([]);
+    expect(startFunctionality([...UNMODELLED, "mockServices"], FUNCTIONALITIES))
+      .toBe("sv");
+    expect(startFunctionality(UNMODELLED, FUNCTIONALITIES)).toBe("performance");
+    expect(functionalitiesOf(UNMODELLED, FUNCTIONALITIES)).toEqual([]);
     // …and they are nameable, so the page can say what it has no options for
     // rather than pretending the location is only what it models.
-    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FEATURES))
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES))
       .toEqual(UNMODELLED);
-    expect(unclaimedFuncIds(["performance", "mockServices"], FEATURES)).toEqual([]);
-    expect(startFeature([], FEATURES)).toBe("performance");
-    expect(startFeature(undefined, FEATURES)).toBe("performance");
+    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES))
+      .toEqual([]);
+    expect(startFunctionality([], FUNCTIONALITIES)).toBe("performance");
+    expect(startFunctionality(undefined, FUNCTIONALITIES)).toBe("performance");
   });
 
-  it("offers a feature added to the vocabulary, with no change here", () => {
-    // The acceptance test of "adding a feature is a backend change": the
+  it("offers a functionality added to the vocabulary, with no change here", () => {
+    // The acceptance test of "adding a functionality is a backend change": the
     // vocabulary gains an entry and the location starts on it.
-    const served = [...FEATURES, SECRETS];
-    expect(startFeature(["secretsPrivateVault"], served)).toBe("secrets");
-    expect(featuresOf(["secretsPrivateVault", "performance"], served))
+    const served = [...FUNCTIONALITIES, SECRETS];
+    expect(startFunctionality(["secretsPrivateVault"], served)).toBe("secrets");
+    expect(functionalitiesOf(["secretsPrivateVault", "performance"], served))
       .toEqual(["performance", "secrets"]);
   });
 
   it("claims nothing when the vocabulary has not arrived", () => {
-    expect(startFeature(["performance"], [])).toBe(null);
+    expect(startFunctionality(["performance"], [])).toBe(null);
   });
 });
 
-// -- a feature the location does not run --------------------------------------
+// -- a functionality the location does not run --------------------------------
 // #113. Stated on the page, configured nowhere. The three answers below have to
 // stay three: run, not run, and nobody has said -- collapse the third into
 // either and the page either takes the switches off a location that does run
-// the feature, or claims an enablement no account has confirmed.
+// the functionality, or claims an enablement no account has confirmed.
 
-describe("which features a location runs", () => {
+describe("which functionalities a location runs", () => {
   it("takes manual mode's declaration, and nothing else", () => {
     // No account to read, so the declaration is the whole answer -- and it is
     // an answer, which is why this is never null.
-    expect(enabledFeatures("manual", "performance", [])).toEqual(["performance"]);
-    expect(enabledFeatures("manual", "sv", ["performance"])).toEqual(["sv"]);
-    expect(enabledFeatures("manual", null, [])).toEqual([]);
+    expect(enabledFunctionalities("manual", "performance", [])).toEqual(["performance"]);
+    expect(enabledFunctionalities("manual", "sv", ["performance"])).toEqual(["sv"]);
+    expect(enabledFunctionalities("manual", null, [])).toEqual([]);
   });
 
   it("keeps unanswered distinct from answered-none", () => {
-    expect(enabledFeatures("connect", "performance", [])).toBe(null);
-    expect(enabledFeatures("connect", "performance", ["sv"])).toEqual(["sv"]);
+    expect(enabledFunctionalities("connect", "performance", [])).toBe(null);
+    expect(enabledFunctionalities("connect", "performance", ["sv"])).toEqual(["sv"]);
   });
 
   it("treats unanswered as running everything", () => {
-    // The safe direction: a switch shown for a feature that turns out not to
+    // The safe direction: a switch shown for a functionality that turns out not to
     // apply is corrected the moment the account answers, where one hidden on a
     // guess leaves a location with nowhere to configure what it does run.
-    expect(runsFeature(null, "sv")).toBe(true);
-    expect(runsFeature(["performance"], "sv")).toBe(false);
-    expect(runsFeature(["performance", "sv"], "sv")).toBe(true);
-    expect(runsFeature([], "sv")).toBe(false);
+    expect(runsFunctionality(null, "sv")).toBe(true);
+    expect(runsFunctionality(["performance"], "sv")).toBe(false);
+    expect(runsFunctionality(["performance", "sv"], "sv")).toBe(true);
+    expect(runsFunctionality([], "sv")).toBe(false);
   });
 });
 
-describe("options set for a feature the location does not run", () => {
+describe("options set for a functionality the location does not run", () => {
   const perfOnly = ["performance"];
 
   it("clears them, through the group's own disable", () => {
@@ -428,8 +432,8 @@ describe("options set for a feature the location does not run", () => {
     expect(notRunPatch(once, perfOnly)).toBe(null);
   });
 
-  it("leaves the shared groups and the features that are run alone", () => {
-    // Registry belongs to no feature, so no location is without it; the
+  it("leaves the shared groups and the functionalities that are run alone", () => {
+    // Registry belongs to no functionality, so no location is without it; the
     // engine size belongs to performance, which this one runs.
     expect(notRunPatch({ private_registry: "reg.corp/bzm",
                          engine_cpu_limit: "2" }, perfOnly)).toBe(null);
@@ -455,41 +459,41 @@ describe("options set for a feature the location does not run", () => {
     expect(notRunPatch({ sv_ingress: "nginx" }, null)).toBe(null);
   });
 
-  it("declines rather than clears where the location demands the feature", () => {
+  it("declines rather than clears where the location demands the functionality", () => {
     // SV_NONE is the recorded decline of a location that runs mockServices --
     // an answer, not a configuration -- so `detect` is false and there is
-    // nothing here to do even when the feature is not in `enabled`.
+    // nothing here to do even when the functionality is not in `enabled`.
     expect(notRunPatch({ sv_ingress: SV_NONE }, perfOnly)).toBe(null);
   });
 });
 
 describe("the suggested namespace", () => {
-  it("suggests the feature's namespace when the field is empty", () => {
-    expect(suggestNamespace("", SV, FEATURES)).toBe("blazemeter-sv");
-    expect(suggestNamespace("   ", SV, FEATURES)).toBe("blazemeter-sv");
+  it("suggests the functionality's namespace when the field is empty", () => {
+    expect(suggestNamespace("", SV, FUNCTIONALITIES)).toBe("blazemeter-sv");
+    expect(suggestNamespace("   ", SV, FUNCTIONALITIES)).toBe("blazemeter-sv");
   });
 
-  it("replaces a namespace another feature suggested", () => {
-    expect(suggestNamespace("blazemeter", SV, FEATURES)).toBe("blazemeter-sv");
-    expect(suggestNamespace("blazemeter-sv", PERF, FEATURES)).toBe("blazemeter");
+  it("replaces a namespace another functionality suggested", () => {
+    expect(suggestNamespace("blazemeter", SV, FUNCTIONALITIES)).toBe("blazemeter-sv");
+    expect(suggestNamespace("blazemeter-sv", PERF, FUNCTIONALITIES)).toBe("blazemeter");
   });
 
   it("never overwrites something typed", () => {
-    expect(suggestNamespace("bzm-prod", SV, FEATURES)).toBe(null);
-    expect(suggestNamespace("blazemeter2", SV, FEATURES)).toBe(null);
+    expect(suggestNamespace("bzm-prod", SV, FUNCTIONALITIES)).toBe(null);
+    expect(suggestNamespace("blazemeter2", SV, FUNCTIONALITIES)).toBe(null);
   });
 
   it("suggests nothing when the namespace is already the suggestion", () => {
     // Same value back would still be a state write, and every option change
     // re-POSTs the preview.
-    expect(suggestNamespace("blazemeter-sv", SV, FEATURES)).toBe(null);
-    expect(suggestNamespace(" blazemeter-sv ", SV, FEATURES)).toBe(null);
+    expect(suggestNamespace("blazemeter-sv", SV, FUNCTIONALITIES)).toBe(null);
+    expect(suggestNamespace(" blazemeter-sv ", SV, FUNCTIONALITIES)).toBe(null);
   });
 
-  it("counts a namespace suggested by a feature added later", () => {
+  it("counts a namespace suggested by a functionality added later", () => {
     // The rule is "still holding a suggested value", read off the served list
     // -- not a list of names in the frontend, which is what would go stale.
-    const served = [...FEATURES, SECRETS];
+    const served = [...FUNCTIONALITIES, SECRETS];
     expect(suggestNamespace("blazemeter-vault", SV, served)).toBe("blazemeter-sv");
     expect(suggestNamespace("blazemeter", SECRETS, served)).toBe("blazemeter-vault");
   });
@@ -498,8 +502,8 @@ describe("the suggested namespace", () => {
 
 // -- completeness is the group's own business ---------------------------------
 // The download used to be gated by a rule the page held about one group. That
-// is the promise "adding a feature needs no frontend change" quietly breaking:
-// the second feature with required options would need its own check in App, its
+// is the promise "adding a functionality needs no frontend change" quietly breaking:
+// the second functionality with required options would need its own check in App, its
 // own entry in the incomplete list, and its own arm on the download guard.
 
 describe("a group declares whether its own configuration is finished", () => {
@@ -628,7 +632,7 @@ describe("serviceAccountOk", () => {
   it("does not belong to any option group", () => {
     // The fields sit beside the namespace and are always on screen. If they
     // ever became a group's keys, `setButHidden` could report them as hidden
-    // and a feature view could take a required field off the page.
+    // and a functionality view could take a required field off the page.
     const owned = OPTION_GROUPS.flatMap((g: OptionGroup) => g.keys);
     expect(owned).not.toContain("service_account_name");
     expect(owned).not.toContain("service_account_create");

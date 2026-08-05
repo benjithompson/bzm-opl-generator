@@ -12,7 +12,7 @@ import { OptionGroup } from "../optionGroups";
  *  bundle gives up, instead of reading like a group nobody ever needed.
  *
  *  `applies` is the group's attribution, rendered on every row including the
- *  ones that belong to no feature: with only some rows badged, an unbadged row
+ *  ones that belong to no functionality: with only some rows badged, an unbadged row
  *  reads as an oversight rather than as "this applies to any deployment". It
  *  arrives resolved (appliesTo) because the labels are served, not declared.
  */
@@ -23,7 +23,7 @@ export function GroupRow(props: {
   /** Required by the location, and switched off anyway. Never true with
    *  `required`: they are the two answers to one question. */
   declined?: boolean;
-  /** Which features this group belongs to, always shown -- every row is
+  /** Which functionalities this group belongs to, always shown -- every row is
    *  attributed, so no option is on screen without saying why. */
   applies: string;
   onFlip: (on: boolean) => void;

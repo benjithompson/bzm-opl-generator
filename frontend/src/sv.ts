@@ -14,7 +14,7 @@
 //
 // The completeness rule is NOT restated here. It is the sv group's own
 // (optionGroups.svIncomplete), because a group declaring when it is finished is
-// what keeps "adding a feature needs no frontend change" true.
+// what keeps "adding a functionality needs no frontend change" true.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
 import {
   GroupFlags, isOpenshift, OptionPatch, SV_NONE, svConfigured, svIncomplete,
@@ -22,17 +22,17 @@ import {
 } from "./optionGroups";
 import { SvCtx } from "./SvPrereqs";
 
-/** The served feature these options belong to, as the card and the rail key it.
- *  A literal for the same reason `groupRequired: { sv: ... }` is one: this
+/** The served functionality these options belong to, as the card and the rail
+ *  key it. A literal for the same reason `groupRequired: { sv: ... }` is one: this
  *  module is service virtualization, and the id it answers under is the one
  *  thing about it that cannot be derived from its inputs.
  *
- *  It is a *feature* id, not the group id it happens to match, so it joins to
- *  core.FEATURES rather than to the group table -- and test_server.py holds it
- *  there, beside the group tags, because a rename on the server would
- *  otherwise leave the card offering switches for a bundle that cannot carry
- *  them with both suites green. */
-const SV_FEATURE = "sv";
+ *  It is a *functionality* id, not the group id it happens to match, so it
+ *  joins to core.FUNCTIONALITIES rather than to the group table -- and
+ *  test_server.py holds it there, beside the group tags, because a rename on
+ *  the server would otherwise leave the card offering switches for a bundle
+ *  that cannot carry them with both suites green. */
+const SV_FUNCTIONALITY = "sv";
 
 /** Why a format cannot carry service virtualization, by format.
  *
@@ -49,8 +49,8 @@ const SV_FEATURE = "sv";
  *
  *  A clause, lower case and unpunctuated, as DOCKER_IGNORED's reasons are and
  *  for the same reason: three places say it now -- the disabled segment, the
- *  feature card that offers no switches, and the notice when the correction
- *  moves a format -- and each needs its own lead-in. Written as one finished
+ *  functionality card that offers no switches, and the notice when the
+ *  correction moves a format -- and each needs its own lead-in. Written as one finished
  *  sentence it read "Not for this location" in all three, which had stopped
  *  being true of any of them: what a format is refused over is the
  *  configuration, not the location (see `blockedFormats`). */
@@ -118,20 +118,21 @@ export interface Sv {
    *  location a non-SV one. `svConfigured` reads an option this page wrote, so
    *  the served table cannot make it lie. */
   blockedFormats: Record<string, string>;
-  /** Why this bundle's format cannot serve the feature *at all*, by feature id,
-   *  or empty where it can.
+  /** Why this bundle's format cannot serve the functionality *at all*, by
+   *  functionality id, or empty where it can.
    *
    *  The mirror of `blockedFormats`: that one answers "which formats may I pick
    *  given this configuration", this one answers "may I configure this at all
    *  given the format I picked". Both come from the same table, because they
    *  are the same refusal read from its two ends.
    *
-   *  Keyed by feature id so the walk over the feature cards never tests for one
-   *  by name, exactly as `groupRequired` is keyed by group id. Deliberately not
-   *  a served "which features does a format refuse" vocabulary: helm and docker
-   *  refuse *this* feature, nothing else refuses any, and one served table for
-   *  one feature is a shape invented ahead of its second caller. */
-  featureBlocked: Record<string, string>;
+   *  Keyed by functionality id so the walk over the cards never tests for one
+   *  by name, exactly as `groupRequired` is keyed by group id. Deliberately
+   *  not a served "which functionalities does a format refuse" vocabulary:
+   *  helm and docker refuse *this* one, nothing else refuses any, and one
+   *  served table for one functionality is a shape invented ahead of its
+   *  second caller. */
+  functionalityBlocked: Record<string, string>;
   /** What a group cannot read off the options: SV is required by the location,
    *  not by anything configured. Keyed by group id so the walk over the groups
    *  never has to test for one by name. */
@@ -159,8 +160,8 @@ const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
 /** Everything about service virtualization, for this location and these
  *  options. Pure: the same four inputs always give the same record.
  *
- *  `runs` is `optionGroups.runsFeature(enabled, "sv")` -- does this bundle
- *  still carry SV options at all? It is not the same question as `location`,
+ *  `runs` is `optionGroups.runsFunctionality(enabled, "sv")` -- does this
+ *  bundle still carry SV options at all? It is not the same question as `location`,
  *  and the difference is the whole reason it is a parameter rather than
  *  derived from `funcIds` here. Three states reach this:
  *
@@ -172,12 +173,12 @@ const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
  *    a stranded ingress would have had its format reset on the way to having
  *    the ingress cleared -- losing a docker choice that was valid all along.
  *  - **nobody has answered** (`enabled == null` -- a location whose funcIds
- *    carry no served feature, which real accounts have: tdm, dataPublisher,
- *    delphix). Nothing clears the options there, so a configuration really can
+ *    carry no served functionality, which real accounts have: tdm,
+ *    dataPublisher, delphix). Nothing clears the options there, so a configuration really can
  *    reach generate(), and this is the state the blocked formats were blind to.
  *
- *  It defaults to `true` for the same reason `runsFeature` reads an unanswered
- *  question as yes, and the direction is safe here too: over-blocking costs a
+ *  It defaults to `true` for the same reason `runsFunctionality` reads an
+ *  unanswered question as yes, and the direction is safe here too: over-blocking costs a
  *  segment that comes back the moment SV is declined, where under-blocking is
  *  a server refusal with nothing on screen to clear. */
 export function svState(
@@ -189,7 +190,7 @@ export function svState(
   // What a helm or docker bundle is refused over: an SV configuration this
   // bundle carries, or a demand that is one render from becoming one (the seed
   // below chooses nginx for it). `required` implies `runs` -- a demand comes
-  // from the funcIds a served feature is read off.
+  // from the funcIds a served functionality is read off.
   //
   // One value because the two readers must not disagree: the control disables
   // a segment with it and `correction` moves off a selected one with it, and a
@@ -229,10 +230,11 @@ export function svState(
     rbac: constants.backends[ingress],
     scheme: txt(o, "sv_tls_secret") ? "https" : "http",
     blockedFormats: carries ? BLOCKED_FORMATS : {},
-    // Only where the feature is still the location's to configure: a card for
-    // a feature that is not run already says so, and "not enabled here" and
-    // "not possible in this format" have to stay different answers.
-    featureBlocked: runs && blockedHere ? { [SV_FEATURE]: blockedHere } : {},
+    // Only where the functionality is still the location's to configure: a
+    // card for one that is not run already says so, and "not enabled here"
+    // and "not possible in this format" have to stay different answers.
+    functionalityBlocked:
+      runs && blockedHere ? { [SV_FUNCTIONALITY]: blockedHere } : {},
     groupRequired: { sv: required },
     groupDeclined: { sv: location && declined },
     patch: correction(o, required, carries),

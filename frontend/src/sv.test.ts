@@ -194,28 +194,28 @@ describe("the blocked formats", () => {
 
 // -- and the same refusal read from the other end -----------------------------
 
-describe("the feature a format cannot serve", () => {
-  it("names the format's own refusal, keyed by feature", () => {
+describe("the functionality a format cannot serve", () => {
+  it("names the format's own refusal, keyed by functionality", () => {
     // The card renders this instead of its switches: a docker bundle offering
     // an ingress, a subdomain and a TLS secret is offering three fields that
     // make the whole bundle unbuildable.
-    expect(sv(SV_LOC, { output_format: "docker" }).featureBlocked.sv)
+    expect(sv(SV_LOC, { output_format: "docker" }).functionalityBlocked.sv)
       .toMatch(/HOSTNAME_OVERRIDE/);
-    expect(sv(SV_LOC, { output_format: "helm" }).featureBlocked.sv)
+    expect(sv(SV_LOC, { output_format: "helm" }).functionalityBlocked.sv)
       .toMatch(/ingress, its RBAC and a TLS secret/);
   });
 
   it("says nothing about a format that can serve it", () => {
-    expect(sv(SV_LOC, { output_format: "manifests" }).featureBlocked).toEqual({});
-    expect(sv(SV_LOC, {}).featureBlocked).toEqual({});
+    expect(sv(SV_LOC, { output_format: "manifests" }).functionalityBlocked).toEqual({});
+    expect(sv(SV_LOC, {}).functionalityBlocked).toEqual({});
   });
 
-  it("leaves a feature the location does not run to say so itself", () => {
+  it("leaves a functionality the location does not run to say so itself", () => {
     // "Not enabled here" and "not possible in this format" are different
     // answers and the card must not give the second where the first is true --
     // the location's own funcIds are what that card is about.
     expect(svState(PERF_LOC, { output_format: "docker" }, CONST, false)
-      .featureBlocked).toEqual({});
+      .functionalityBlocked).toEqual({});
   });
 });
 
@@ -370,7 +370,7 @@ describe("the option patch", () => {
   it("falls back from a format a configuration nobody demanded refuses", () => {
     // #115: the same correction, for the state the demand could not see. An
     // imported profile can carry docker and a full SV configuration for a
-    // location whose funcIds carry no served feature at all, and nothing was
+    // location whose funcIds carry no served functionality at all, and nothing was
     // clearing either half.
     expect(settle(PERF_LOC, { ...CONFIGURED, output_format: "docker" }))
       .toEqual({ ...CONFIGURED, output_format: "manifests" });
