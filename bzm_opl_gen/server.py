@@ -81,9 +81,9 @@ _minted_tokens: dict[str, str] = {}
 # Nothing of core's is re-exported here, not even as a convenience: an alias is
 # a second name for one value, it does not follow when the value is replaced,
 # and reaching for it is how a caller ends up describing something core is no
-# longer serving. That is not hypothetical -- FEATURES was aliased here for one
-# commit, and a test patched this name while asserting against the list core
-# was still handing out.
+# longer serving. That is not hypothetical -- FUNCTIONALITIES was aliased here
+# for one commit, and a test patched this name while asserting against the list
+# core was still handing out.
 
 
 def _client():
@@ -408,7 +408,8 @@ def location_update(s: LocationSettingsIn):
     on it, so it has to be the thing that was clicked.
 
     There used to be a third -- POST /api/locations/func-id, which turned a
-    feature on. It went with the affordance that was its only caller (#113):
+    functionality on. It went with the affordance that was its only caller
+    (#113):
     what funcIds a location carries is what the location *is*, where these two
     change an agent's credential and a location's concurrency.
     """
@@ -760,9 +761,9 @@ def func_ids():
     return core.func_ids()
 
 
-@app.get("/api/features", description=core.features.__doc__)
-def features():
-    return core.features()
+@app.get("/api/functionalities", description=core.functionalities.__doc__)
+def functionalities():
+    return core.functionalities()
 
 
 @app.get("/api/sv-constants", description=core.sv_constants.__doc__)
