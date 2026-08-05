@@ -325,8 +325,9 @@ missing tools. The rest is what it cannot fix for you.
   generated.
 
   **The format is step 2's first control, and the form follows it.** A
-  functionality hides nothing; a *format* genuinely does, and the two must not be confused. It
-  used to be chosen on the download step, one step too late — Configure asked
+  functionality hides nothing; a *format* genuinely does, and the two must not
+  be confused. It used to be chosen on the download step, one step too late —
+  Configure asked
   for a namespace, a ServiceAccount, node selectors and engine limits, none of
   which a docker bundle carries. What is on screen now derives from
   `formats.optionApplies` over the generator's own `DOCKER_IGNORED`, **served**
@@ -388,8 +389,8 @@ missing tools. The rest is what it cannot fix for you.
   location: the panel reported `1 → 4, 500 → 400, not set → 2, not set → 8192`
   and the account held exactly that. `core.LOCATION_SETTINGS` is a closed set
   because BlazeMeter's PATCH replaces `funcIds` wholesale, so a general
-  passthrough would drop every functionality a caller did not name. Every route that
-  writes carries `server._writes`, which drops the cache after it; a test
+  passthrough would drop every functionality a caller did not name. Every route
+  that writes carries `server._writes`, which drops the cache after it; a test
   asserts that over the app's own routes, because the one that had to remember
   had forgotten.
 
@@ -408,8 +409,9 @@ missing tools. The rest is what it cannot fix for you.
   bundle" and "not enabled on this location" are separate answers and the card
   gives only the true one. Don't generalise it into a served "which
   functionalities does a format refuse" table: helm and docker refuse *one* and
-  nothing else refuses any, and `DOCKER_IGNORED` is docker-only precisely because helm ignores
-  nothing — it refuses. **A format's refusal clears no options**; the *format*
+  nothing else refuses any, and `DOCKER_IGNORED` is docker-only precisely
+  because helm ignores nothing — it refuses. **A format's refusal clears no
+  options**; the *format*
   gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
   configuration somebody wrote outranks a segment, and only `notRunPatch` — the
   location's answer — wipes anything. That correction is the one write on this
@@ -422,7 +424,8 @@ missing tools. The rest is what it cannot fix for you.
   and never reads the funcIds first. Read off the demand instead, the gap was a
   location whose funcIds carry no served functionality (real accounts have them:
   tdm, dataPublisher, delphix) — `enabledFunctionalities` answers null,
-  `runsFunctionality` reads null as yes, every switch is offered, `notRunPatch` clears nothing, and a full
+  `runsFunctionality` reads null as yes, every switch is offered, `notRunPatch`
+  clears nothing, and a full
   SV configuration generated as docker and was refused by the server with the
   segment still enabled. `svState` therefore takes `runs` as a fourth input:
   options on their way out must not take a format with them, or a docker choice
@@ -431,16 +434,15 @@ missing tools. The rest is what it cannot fix for you.
   two refusals are far apart and easy to grow a third of.
 
   **A functionality the location does not run is not on the configure step at
-  all.**
-  It was *stated* for a while (#113) — a card naming the funcId to add — which
-  is a true sentence about the location and nothing that step's reader can act
-  on, and on a performance location (most of them) it was half the section. So
-  `ConfigurePanel` filters `p.functionalities` by
+  all.** It was *stated* for a while (#113) — a card naming the funcId to add —
+  which is a true sentence about the location and nothing that step's reader can
+  act on, and on a performance location (most of them) it was half the section.
+  So `ConfigurePanel` filters `p.functionalities` by
   `optionGroups.runsFunctionality` and the card, its groups and its rail entry
-  go together. **Manual entry is exempt, and
-  structurally**: there the card *is* the declaration (see below), so filtering
-  by the answer would take away the control that gives it — which is why
-  `FunctionalityCard`'s not-run branch has one sentence and not two. Hiding is still
+  go together. **Manual entry is exempt, and structurally**: there the card *is*
+  the declaration (see below), so filtering by the answer would take away the
+  control that gives it — which is why `FunctionalityCard`'s not-run branch has
+  one sentence and not two. Hiding is still
   only half — `notRunPatch` clears the options too, through each group's own
   `disable`, because `generate()` refuses an `sv_ingress` with no subdomain
   whatever the location runs and a hidden row would just move the blocker to the
