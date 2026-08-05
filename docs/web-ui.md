@@ -157,8 +157,7 @@ namespace can read the Secret — it is about a screen share and a screenshot.
 not in the browser, so reloading the page never actually dropped the
 connection — the page simply forgot. It now asks on load, and puts back the
 account, workspace, location, agent, step and options it was pointed at, plus
-what a manual session declared its identity to be and the preflight it had
-imported. Each selection is re-applied only once the account has confirmed it
+what a manual session declared its identity to be. Each selection is re-applied only once the account has confirmed it
 still exists, so a location deleted since the last load comes back as nothing
 rather than as an id the page believes. **The AUTH_TOKEN is never written to
 browser storage** — see `session.strip` — because browser storage is a file in
@@ -301,88 +300,13 @@ unfinished blocks the download, is named here, and gets a button back to it — 
 disabled button whose cause is a step away is the failure that is here to be
 removed. A bundle carrying the placeholder AUTH_TOKEN says so over the button.
 
-Three things on this step ask whether the cluster will take the bundle, and they
-are the same check reached three ways: **Test deploy** runs it now, the evidence
-file judges a read of the cluster, and **Ship the check with the bundle** hands
-it to whoever applies the bundle. The last of those was on step 2 until #130,
-among the options that shape the agent — it shapes none of it, and what it is
-*about* is the cluster this bundle is going to.
-
-**Test deploy**, above the evidence-file picker under *Preflight the target
-cluster*, hands over crane-hook as a manifest to apply to the cluster under test:
-the same Pod, Role and RoleBinding the bundle would carry, rendered for the
-namespace and registry currently configured. Above rather than beside it, because
-it comes first in time — this is what you run *on* the cluster, and the evidence
-file is what comes back from it. It does not turn the option on: applying the
-check and shipping it inside the agent's bundle are different decisions, and this
-is the one you make before deploying anything, and **Ship the check with the
-bundle** below it is the other. That switch adds
-[crane-hook](https://github.com/Blazemeter/crane-hook) to the bundle: a one-shot
-Pod, plus its own read-only Role and RoleBinding, that checks capacity, egress,
-RBAC and — for service virtualization — the ingress and its TLS secret, then
-exits 0 or 1. It is not part of the agent; `kubectl logs cranehook` is the
-report, and deleting it changes nothing. In a Helm bundle it is the chart's
-`helm test` hook. A docker bundle offers neither: crane-hook is a Pod, and there
-is no cluster to run it in. There is no chart to fetch —
-crane-hook publishes an image, packaged as a `helm test` hook inside the separate
-[helm-crane](https://github.com/Blazemeter/helm-crane/releases) chart, and
-documents a manifest as the standalone way to run it.
-
-**Preflight a cluster from a file.** Pick the JSON
+**Whether the cluster will take it is a terminal's question, not this page's.**
+`bzm-opl-gen doctor` answers it — against a live cluster, or against the JSON
 [`scripts/bzm-cluster-evidence.sh`](preflight.md#a-cluster-you-cannot-reach)
-wrote on a machine with cluster access, and the page shows the verdicts
-`bzm-opl-gen doctor` reaches — PASS, WARN or FAIL each on its own row — against
-the configuration currently on screen. Editing an option re-runs them, so the
-list always describes what is configured rather than what was when the file was
-picked. It needs no API key and no kubecontext, which is the point: the same
-person who cannot reach the account usually cannot reach the cluster either. A
-docker bundle gets none of this and says so rather than dropping the block —
-every check `doctor` runs is about a cluster, and what that bundle needs of its
-host is in the README it ships with.
-
-The panel header states what was imported before any of it: the file name, when
-it was collected, the namespace the file *describes*, the namespace being
-preflighted, and every section its collector could not read. Those last two are
-different things — a file collected for another namespace still describes the
-same nodes, but its LimitRanges, quotas, ServiceAccounts and PSA labels are
-somebody else's, and the header says so. The same facts lead the verdict list as
-its first row, because every verdict under it is only as good as they are. A
-thin file is a page of warnings with a reason attached, never a clean bill of
-health. A file that is not evidence, or carries a schema this version does not
-know, is refused by name and leaves the verdicts already on screen standing.
-
-**A restored answer says that it is one.** The verdicts and the suggestions
-survive a refresh; the evidence document itself does not, because it grows with
-the cluster — 615KB at 60 nodes — where the answer stays flat. So after a reload
-they have stopped following the configuration, and the header says so and asks
-for the file again. Left unsaid, the failure is a verdict list that looks live
-while quietly describing the namespace and engine size of an earlier page load.
-
-### Applying what the cluster implies
-
-Under the verdicts, the same file answers the question that comes first: not
-whether the deployment survives this cluster but how it should have been
-configured. Each row names one option, what the evidence says about it, the
-evidence paths behind it, and what the configuration holds right now — the whole
-point being that you stop transcribing a namespace's ServiceAccount names and a
-router's wildcard domain by hand.
-
-- **Decisive** suggestions offer the value as one click. **Suggestive** ones
-  offer a button per candidate and never a default, at one candidate as much as
-  at three: narrowing the shortlist is not choosing from it.
-- **A value you set is never overwritten silently.** Where the evidence
-  disagrees with it the row turns amber and shows both values, and the button
-  says *Replace* rather than *Apply*.
-- **Applying is reversible for the session.** Each applied row grows an *Undo*
-  that puts the previous value back without you re-entering it — which is half
-  the reason a restored answer is kept at all: the undo is a button on a
-  suggestion row, so verdicts dropped on reload would take it with them.
-- An option no row names is not in this file. It is left exactly as you set it,
-  and nothing here has checked it.
-
-An applied value is an ordinary option from there on: the preview, the bundle
-and `profile.json` are identical to what you get typing it in the form, and
-nothing downstream can tell the difference.
+wrote on a machine with access. This step used to import that file and render
+the verdicts, and offered crane-hook two ways beside it; both are gone. The
+verdicts are the same either way, and the person who can collect the file has a
+shell in front of them already.
 
 **Watch agent status** polls every ten seconds and goes green once the applied
 deployment heartbeats. It needs an API key, so a manual session says so — and
@@ -453,5 +377,5 @@ filesystem boundary exactly there.
 Frontend dev: `cd frontend && npm install && npm run dev` (proxies /api to
 :8765); `npm run build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.
 CI runs `npm test` and `npm run typecheck` as its own job — the logic modules
-(option groups, formats, the session snapshot, the preflight panel) with no DOM
-between them, and the panels that decide something with one.
+(option groups, formats, the session snapshot) with no DOM between them, and
+the panels that decide something with one.

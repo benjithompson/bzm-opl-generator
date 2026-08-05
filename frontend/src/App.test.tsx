@@ -33,10 +33,9 @@ import {
   Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
-// The served docker-ignored table and the served preflight answer, from the one
-// copy of each.
+// The served docker-ignored table, from the one copy of it.
 import {
-  AGENT_ENV, DOCKER_IGNORED, PLATFORM_SUGGESTION, preflightOut, RESERVED_ENV,
+  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV,
 } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
@@ -383,10 +382,6 @@ test("a restored profile's SV options for a location without mockServices are cl
       // Connect mode declared nothing, and cannot: what the location runs is
       // its funcIds, which is what makes these options a state nobody chose.
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      // No file was ever imported here -- which is the only thing null says,
-      // and is why a page restored from it has no preflight rather than an
-      // empty one. The tests that do carry one are at the foot of this file.
-      preflight: null,
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -451,7 +446,6 @@ test("an SV configuration no location demanded still takes away the formats that
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       options: {
         namespace: "blazemeter", output_format: "docker",
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
@@ -492,7 +486,6 @@ test("a feature this bundle's format cannot serve is stated, not offered",
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -793,9 +786,8 @@ test("an imported profile rewrites the environment rows rather than sitting unde
     fireEvent.change(await screen.findByLabelText("Variable name 1"),
                      { target: { value: "TYPED_BY_HAND" } });
 
-    // `text()` is supplied rather than inherited, as importEvidence below does
-    // it: this jsdom's Blob has no Blob.prototype.text, and the page reads the
-    // picked file with it.
+    // `text()` is supplied rather than inherited: this jsdom's Blob has no
+    // Blob.prototype.text, and the page reads the picked file with it.
     const body = JSON.stringify({ namespace: "blazemeter",
                                   extra_env: { FROM_THE_PROFILE: "eth9" } });
     const file = Object.assign(
@@ -1332,7 +1324,6 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       options: { namespace: "ns" }, step: 0, view: "flow" as const,
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1364,7 +1355,6 @@ test("nothing is written back over a saved session until the restore has resolve
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1411,7 +1401,6 @@ test("nothing is written back over a saved session until the restore has resolve
       // could pin the next load to a feature the account never said. The
       // feature here is derived from the location's funcIds every time (#118).
       declaredFeature: null,
-      preflight: null,
     }));
   });
 
@@ -1422,7 +1411,6 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1482,7 +1470,6 @@ test("an id the account no longer has is written away once the account has said 
       harborId: "h-gone", shipId: "s-gone",
       confirmed: { loc: "h-gone", ship: "s-gone" },
       manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-      preflight: null,
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1640,7 +1627,6 @@ test("a restored declaration is not lost to the facts it produced",
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
       declaredFeature: "sv",
-      preflight: null,
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1672,7 +1658,6 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
       declaredFeature: "sv",
-      preflight: null,
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -2118,112 +2103,3 @@ test("a location with no agents is not a bundle request", async () => {
   await new Promise((r) => setTimeout(r, 400));
   expect(generated).toEqual([]);
 });
-
-
-// -- the imported preflight, and the undo for what it applied (#119) ---------
-//
-// The one thing on this page a refresh cannot rebuild by itself: somebody else
-// ran the collector, and re-picking the file is not always possible -- the
-// person who has it may not be the person at the browser. What used to survive
-// a refresh was only the damage, because the values applied are options and
-// options are remembered, while the verdicts explaining them and the history
-// reversing them were not.
-//
-// Driven through the page, both halves, because what has to come back is a
-// *pair*: the undo is a button on a suggestion row, so a history restored
-// without the list it renders in is an undo nothing can reach.
-
-/** The page on its download step, with a location, an agent and the served
- *  answer for whatever file gets imported. */
-function preflightPage(generated: Options[], out = preflightOut({
-  checks: [{ name: "namespace admission", status: "WARN",
-             detail: "restricted PSA labels on the namespace" }],
-  suggestions: [PLATFORM_SUGGESTION],
-})) {
-  session.save({
-    sourceMode: "connect", accountId: 1, workspaceId: 10,
-    harborId: "h-perf", shipId: "s-1",
-    confirmed: { loc: "h-perf", ship: "s-1" },
-    manual: { harbor_id: "", ship_id: "" }, declaredFeature: null,
-    preflight: null,
-    // What the one suggestion disagrees with, so the row is honest about the
-    // value it would replace.
-    options: { namespace: "blazemeter", platform: "openshift" },
-    step: 2, view: "flow", plan: EMPTY_PLAN_INPUTS,
-  });
-  return twoFeatureAccount(generated, { preflight: async () => out });
-}
-
-/** Pick the evidence file, the way the panel's own label does. */
-async function importEvidence(name = "cluster-evidence.json") {
-  const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
-  await waitFor(() => expect(input.disabled).toBe(false));
-  const body = JSON.stringify({ schema: "bzm-cluster-evidence/1" });
-  // `text()` is supplied rather than inherited: this jsdom's Blob has no
-  // Blob.prototype.text, which every browser this page runs in does have, and
-  // the page reads the picked file with it.
-  const file = Object.assign(
-    new File([body], name, { type: "application/json" }),
-    { text: async () => body });
-  await act(async () => {
-    fireEvent.change(input, { target: { files: [file] } });
-  });
-}
-
-/** The options of the last bundle the page asked for. Asserted on rather than
- *  on a field, for the reason every other test here does: what an applied value
- *  has to reach is the request. */
-const lastAsked = (generated: Options[]) => generated[generated.length - 1];
-
-test("an imported preflight and the undo for what it applied survive a refresh",
-  async () => {
-    const generated: Options[] = [];
-    const api = preflightPage(generated);
-    render(<App api={api} />);
-    await importEvidence();
-
-    // The verdicts, and the row the same file implies.
-    expect(await screen.findByText(/restricted PSA labels/)).toBeTruthy();
-    fireEvent.click(await screen.findByRole(
-      "button", { name: /Replace with k8s/ }));
-    await waitFor(() => expect(lastAsked(generated).platform).toBe("k8s"));
-
-    // The refresh. sessionStorage survives it, which is the whole mechanism.
-    cleanup();
-    render(<App api={api} />);
-
-    // Back without the file being picked again -- which is the point, because
-    // whoever is at the browser may not have it to pick.
-    expect(await screen.findByText(/restricted PSA labels/)).toBeTruthy();
-    // Named: the header says which file these verdicts are from, and the line
-    // below says it is the one to pick again. getAll, because both do.
-    expect(screen.getAllByText("cluster-evidence.json").length)
-      .toBeGreaterThan(0);
-    // ...and honest about what it now is: no document came back with it, so
-    // nothing re-judges these verdicts against a configuration that moves.
-    expect(screen.getByText(/not being re-judged/)).toBeTruthy();
-
-    // The undo, which is what the applied value cost when it did not come back:
-    // the option kept the value and nothing left on the page could say what it
-    // had replaced. It restores what the row showed before the panel wrote it.
-    fireEvent.click(await screen.findByRole("button", { name: /Undo/ }));
-    await waitFor(() => expect(lastAsked(generated).platform).toBe("openshift"));
-  });
-
-test("a snapshot with no preflight restores a page with none, not an empty one",
-  async () => {
-    // "Nobody imported anything" and "a file was imported" are the two states a
-    // snapshot can be in, and null is only ever the first. Restored as an empty
-    // preflight it would be a panel with no file, no verdicts and a summary of
-    // nothing -- the collapse this codebase keeps naming, one field along.
-    const generated: Options[] = [];
-    render(<App api={preflightPage(generated)} />);
-
-    // The step is on screen and offering the import, which is what a page
-    // nobody has imported anything into looks like.
-    expect(await screen.findByText(/Choose evidence file/)).toBeTruthy();
-    expect(screen.queryByText(/passed/)).toBeNull();
-    expect(screen.queryByText(/not being re-judged/)).toBeNull();
-    // Not an error either: nothing was refused, because nothing was offered.
-    expect(screen.queryByText(/is not valid JSON/)).toBeNull();
-  });

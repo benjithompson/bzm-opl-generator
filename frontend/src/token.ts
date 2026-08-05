@@ -93,8 +93,8 @@ export function downloadPlan(report: TokenReport | null): DownloadPlan {
  *               with the agent, and the sentence for `none` would be a claim
  *               made without having asked.
  *    held    -- there is one, and it is already in the field. Silently, on
- *               purpose: unlike a restored preflight verdict a token claims
- *               nothing about the world, so there is nothing to caveat.
+ *               purpose: a token claims nothing about the world, so there is
+ *               nothing to caveat.
  *    none    -- this process holds no token for that ship. A ship this app never
  *               minted for, one whose credential was typed over, and a server
  *               that has restarted since, are all honestly this -- so the

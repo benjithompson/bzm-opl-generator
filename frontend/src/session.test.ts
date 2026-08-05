@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PLATFORM_SUGGESTION, preflightOut } from "./fixtures";
 import { clear, load, save, strip, VERSION } from "./session";
-import { Applied } from "./suggestions";
 
 // A memory stand-in for sessionStorage: these tests are about what is written,
 // not about a browser, and the module deliberately guards every call so that a
@@ -30,26 +28,12 @@ const BASE = {
   // Confirmed, and of *these* ids: step 1 is finished when somebody has said
   // so, and a refresh is not a reason to ask again.
   confirmed: { loc: "h1", ship: "s1" },
-  // Nothing was imported. The tests below carry one.
-  preflight: null,
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
   // The two figures the capacity profile owns. Its engine size is a bundle
   // option and is remembered with the rest of them.
   plan: { users: "5000", vusPerEngine: "750" },
-};
-
-/** An imported file's verdicts, and what was applied off one of its rows. The
- *  previous value is kept as the row showed it, which is the whole point of the
- *  record: undo puts an option back without anyone re-entering it, and after a
- *  refresh there is nothing else left that knows what it held. */
-const OUT = preflightOut({
-  checks: [{ name: "nodes", status: "PASS", detail: "2 nodes, 8 CPU each" }],
-  suggestions: [PLATFORM_SUGGESTION],
-});
-const APPLIED: Applied = {
-  platform: { previous: "openshift", previousShown: "openshift", value: "k8s" },
 };
 
 beforeEach(() => {
@@ -80,30 +64,6 @@ describe("what is remembered", () => {
 
   it("returns null when nothing was stored", () => {
     expect(load()).toBeNull();
-  });
-
-  it("round-trips an imported preflight with the undo for what it applied", () => {
-    // The two together, because they are one piece of work: the undo is a
-    // button on a suggestion row, so a history restored without the verdicts is
-    // an undo nothing can reach, and verdicts without the history are a panel
-    // explaining a change it can no longer reverse.
-    save({ ...BASE, preflight: { file: "cluster-evidence.json", out: OUT,
-                                 applied: APPLIED } });
-    const back = load();
-    expect(back?.preflight?.file).toBe("cluster-evidence.json");
-    expect(back?.preflight?.out.checks[0].name).toBe("nodes");
-    expect(back?.preflight?.out.suggestions[0].option).toBe("platform");
-    expect(back?.preflight?.applied.platform).toEqual(
-      { previous: "openshift", previousShown: "openshift", value: "k8s" });
-  });
-
-  it("says nothing was imported rather than that something empty was", () => {
-    // "No file has been imported" and "a file was imported" are the two states,
-    // and null is only ever the first. A restore that turned it into an empty
-    // preflight would put a panel on screen with no file, no verdicts and no
-    // reason to be there -- which is the collapse this codebase keeps naming.
-    save(BASE);
-    expect(load()?.preflight).toBeNull();
   });
 
   it("remembers which view was open, and what was typed into the profile", () => {

@@ -2,7 +2,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Feature,
   GeneratedFile, ManualFactsOut, TokenReport,
-  FuncIdChoice, Location, Options, Ship, Suggestion, SvCheckOut,
+  FuncIdChoice, Location, Options, Ship, SvCheckOut,
   SvConstants, SvMocksOut, Workspace,
 } from "./api";
 // What the last download or save did, as one record with one owner -- see
@@ -44,17 +44,6 @@ import { sizeStatement } from "./engineSize";
 // the RBAC prose, the scheme, the chart's refusal -- and the one patch the
 // options need, which used to be two effects writing what a third read back.
 import { svState } from "./sv";
-// The preflight panel's own decisions -- how a verdict list reads, what a
-// picked file has to be, what a refused import leaves behind. No verdict is
-// reached there either: they are doctor's, and arrive in doctor's order.
-import {
-  evidenceHeader, fromSnapshot, imported, NO_PREFLIGHT, PreflightState,
-  readEvidence, rechecked, refused,
-} from "./preflight";
-// Acting on the same file: what each suggestion offers, what applying writes,
-// and how to take it back. What the evidence means is suggest.py's and how it
-// stands against the options is suggest.merge()'s -- both arrive on the row.
-import { Applied, apply, NOTHING_APPLIED, undo } from "./suggestions";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 // Whether an agent is reporting. One statement of the rule, with its own tests
@@ -336,18 +325,6 @@ export default function App({ api }: { api: Api }) {
   // Where a save writes. Not part of the attempt: it is what was typed rather
   // than what happened, and the preview reads it too -- a folder already
   // holding this ship's bundle supplies the token the save would reuse.
-  // The imported cluster evidence, its verdicts, and whatever the last import
-  // was refused for. The document itself is kept, not just its verdicts: the
-  // preflight re-runs against it on every option change, because verdicts that
-  // described an older configuration would be worse than none.
-  const [preflight, setPreflight] = useState<PreflightState>(NO_PREFLIGHT);
-  const [preflightBusy, setPreflightBusy] = useState(false);
-  // What the panel has written into the options this session, and what each of
-  // those options held first. Kept beside the options rather than in them: an
-  // applied value has to be indistinguishable from a typed one downstream, so
-  // the only place the history can live is here -- which is also what makes
-  // undo possible without the previous value being re-entered.
-  const [applied, setApplied] = useState<Applied>(NOTHING_APPLIED);
 
   useEffect(() => {
     api.keyDetect().then((r) => {
@@ -395,21 +372,6 @@ export default function App({ api }: { api: Api }) {
       if (saved.sourceMode === "manual" && saved.declaredFeature) {
         setFeature(saved.declaredFeature);
         restoredFeature.current = saved.declaredFeature;
-      }
-      // The imported cluster read, and the undo for whatever was applied from
-      // it -- put back together or not at all, which is why they are one field.
-      // Restored through preflight.ts's own transition rather than assembled
-      // here: what comes back is verdicts with no document behind them, and
-      // that is a state the panel has to be able to recognise, not a shape this
-      // effect gets to build (#119).
-      //
-      // Absent, nothing happens: both pieces of state already start where a
-      // page nobody has imported anything into starts, and writing NO_PREFLIGHT
-      // over NO_PREFLIGHT is how "there is nothing there" starts looking like a
-      // decision somebody made.
-      if (saved.preflight) {
-        setPreflight(fromSnapshot(saved.preflight.file, saved.preflight.out));
-        setApplied(saved.preflight.applied);
       }
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
@@ -512,21 +474,10 @@ export default function App({ api }: { api: Api }) {
                    // itself from them, so writing it down could only pin the
                    // next page load to a feature the account never said.
                    declaredFeature: sourceMode === "manual" ? feature : null,
-                   // The verdicts and the undo history, together or not at all.
-                   // `out` decides: it is what the panel renders, and the undo
-                   // is a button on one of its rows -- so a history written
-                   // without it could only come back as an undo with nothing to
-                   // press. The document is deliberately not here (see
-                   // session.SavedPreflight), which is why a restored panel says
-                   // it is no longer being re-judged.
-                   preflight: preflight.file && preflight.out
-                     ? { file: preflight.file, out: preflight.out, applied }
-                     : null,
                    manual, options, step, view, plan: planInputs,
                    confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      feature, manual, options, step, view, planInputs, confirmed,
-      preflight, applied]);
+      feature, manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -716,9 +667,7 @@ export default function App({ api }: { api: Api }) {
   // back, which is why a reload used to lose it permanently and the next bundle
   // fell to a placeholder for an agent created a minute earlier.
   //
-  // **Silently**, with no "restored" notice, and that is the difference from the
-  // preflight this page also puts back: a restored verdict is a statement about
-  // a cluster that has moved on since, where a token claims nothing about the
+  // **Silently**, with no "restored" notice: a token claims nothing about the
   // world. It is the same value that was handed over, and it fails identically
   // whether it came from here or from a clipboard.
   //
@@ -920,7 +869,7 @@ export default function App({ api }: { api: Api }) {
     if (sourceMode !== "manual") return;
     // Nothing is built from a value that is not the shape an id comes in. The
     // fields say what is wrong; what this stops is the rest of the page --
-    // preview, preflight, download -- describing a bundle assembled around a
+    // preview, download -- describing a bundle assembled around a
     // truncated paste, which is a bundle that applies cleanly and then joins
     // nothing. `done` below follows from `facts`, so this is also what keeps
     // step 1 from being leavable.
@@ -1271,85 +1220,6 @@ export default function App({ api }: { api: Api }) {
     }
   };
 
-  // -- preflight against an imported cluster read ----------------------------
-  // The cluster-side twin of manual facts entry: someone with access to the
-  // customer's cluster runs the collector script, and this judges the file it
-  // produced. No API key, no kubecontext, nothing reachable from here.
-
-  /** Import: parse, then let the server say whether it is evidence at all --
-   *  and only commit it once it has. A file that is not evidence must not
-   *  displace the one whose verdicts are on screen, which it would if the doc
-   *  were stored first and left for the re-run effect to fail on. */
-  const importEvidence = async (f: File) => {
-    const read = readEvidence(f.name, await f.text());
-    if ("error" in read) { setPreflight((p) => refused(p, read.error)); return; }
-    setPreflightBusy(true);
-    try {
-      const out = await api.preflight(facts, options, read.doc);
-      setPreflight(imported(f.name, read.doc, out));
-    } catch (e) {
-      setPreflight((p) => refused(p, String((e as Error).message)));
-    } finally { setPreflightBusy(false); }
-  };
-
-  // Re-judged whenever the configuration moves, so the verdicts on screen are
-  // always about what is on screen -- engine sizing against the nodes, the
-  // ingress class against the ones that exist, the namespace against the one
-  // the file describes. Debounced like the preview: this runs on every
-  // keystroke in the namespace field. Held to `facts` for the same reason the
-  // picker is -- the checks measure the cluster against a location's slots and
-  // engine size, and none of it means anything without them.
-  //
-  // No document, no re-judging, and that is now two situations rather than one:
-  // nothing has been imported, or a snapshot brought the verdicts back without
-  // the file behind them. Both are "there is nothing to send", which is why the
-  // gate reads the same for both -- and the difference, which is whether there
-  // are verdicts on screen going stale, is carried by `preflight.restored` and
-  // stated by the panel rather than inferred here.
-  const preflightTimer = useRef<number>();
-  useEffect(() => {
-    if (preflight.doc == null || !facts) return;
-    window.clearTimeout(preflightTimer.current);
-    preflightTimer.current = window.setTimeout(() => {
-      api.preflight(facts, options, preflight.doc)
-        .then((out) => setPreflight((p) => rechecked(p, out)))
-        .catch((e) => setPreflight((p) => refused(p, String((e as Error).message))));
-    }, 250);
-  }, [preflight.doc, facts, options]);
-
-  // Applying one of the suggestions the same file carries. Always a click, and
-  // always one the row has already shown both values for: what would be written
-  // and what is there now. Nothing is applied on import, and nothing suggestive
-  // can be applied without a candidate being picked -- `offer` is what enforces
-  // that, and it is tested as data in suggestions.test.ts.
-  //
-  // The write is the plain option, so the preview, the bundle and profile.json
-  // cannot tell this from a value someone typed. The re-check effect above then
-  // re-judges the evidence against the configuration it just changed, and the
-  // group detection effect opens whichever group now holds something.
-  //
-  // What it writes and what it remembers for the undo are decided together, in
-  // `apply` -- the value being replaced is the one the row displayed, and this
-  // component is not a second place that gets to work it out.
-  const applySuggestion = (s: Suggestion, value: unknown) => {
-    const next = apply(applied, s, value);
-    setApplied(next.applied);
-    setOptions((o) => ({ ...o, ...next.patch }));
-  };
-
-  const undoSuggestion = (option: string) => {
-    const back = undo(applied, option);
-    if (!back) return;                  // never written from here; not ours
-    setApplied(back.applied);
-    setOptions((o) => ({ ...o, ...back.patch }));
-  };
-
-  // What the imported file says about itself -- collected when, for which
-  // namespace, and what its collector could not read. doctor's, off the same
-  // document; the header states all three rather than leaving them in the
-  // leading verdict's prose.
-  const evidence = preflight.out ? evidenceHeader(preflight.out) : null;
-
   // The environment variables, which are no longer a group.
   //
   // #131 made them one, and a switch was the wrong control for them: what the
@@ -1665,18 +1535,6 @@ export default function App({ api }: { api: Api }) {
               }}
               credential={{ plan: tokenPlan }}
               attempt={attempt} report={setAttempt}
-              preflight={{
-                read: preflight, busy: preflightBusy, header: evidence,
-                importFile: importEvidence,
-                applied, applySuggestion, undoSuggestion,
-                // Asked of the served table rather than of `format`: the panel
-                // would otherwise re-derive what a docker bundle drops, which
-                // is the one copy formats.ts exists to keep.
-                craneHook: applies("crane_hook")
-                  ? { on: !!options.crane_hook,
-                      set: (v: boolean) => set("crane_hook", v || null) }
-                  : null,
-              }}
               watch={{
                 available: sourceMode === "connect",
                 on: polling, setOn: setPolling,

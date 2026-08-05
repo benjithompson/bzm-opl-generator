@@ -109,10 +109,9 @@ separate refusals, because they have separate remedies: a path that is not there
 or does not parse is a read that did not happen, and a document that was read
 and carries no recognised `schema` is the wrong file.
 
-The [web UI](web-ui.md) takes the same file under Download & verify and shows
-the same verdicts against the configuration on screen, re-run as you edit it —
-no API key and no kubecontext, the same "no access to anything" path manual
-facts entry serves.
+The [web UI](web-ui.md) used to take the same file under Download & verify and
+render the verdicts beside the download. It no longer does: whoever can collect
+the file has a shell, and this command is where the answer is.
 
 ## What the cluster implies about the options (`suggest`)
 
@@ -152,9 +151,7 @@ Every suggestion names the evidence it came from and how strongly it holds:
 Two things it deliberately does not do:
 
 - **The command applies nothing.** The suggestions are printed (or emitted as
-  JSON); passing them to `generate` stays a decision somebody makes. The web UI
-  can apply one, and only ever one you click — see
-  [the web UI](web-ui.md#applying-what-the-cluster-implies).
+  JSON); passing them to `generate` stays a decision somebody makes.
 - **Nothing is suggested from evidence the collector could not read.** A `null`
   section is skipped as it is everywhere else, but the boolean maps need more
   than that: `auth can-i` and `api-resources` both report failure as *no*, so a

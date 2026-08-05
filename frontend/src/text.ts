@@ -1,9 +1,9 @@
 // Counting things in a sentence.
 //
-// One helper for both summary lines. preflight.ts and suggestions.ts each grew
-// a `plural` of its own -- same name, same job, incompatible signatures, one
-// file apart -- which is the pair that stays wrong once the two start
-// disagreeing about what a caller may leave out.
+// One helper for every summary line. Two modules each grew a `plural` of their
+// own -- same name, same job, incompatible signatures, one file apart -- which
+// is the pair that stays wrong once the two start disagreeing about what a
+// caller may leave out.
 
 /** "1 warning", "3 warnings". `many` defaults to the regular form, so only an
  *  irregular plural has to be spelled out at the call site. */

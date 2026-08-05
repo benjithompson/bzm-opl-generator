@@ -45,11 +45,10 @@ Python buffers stdout when redirected, so the log stays empty until exit;
 **Frontend — `cd frontend && npx vitest run && npx tsc --noEmit`.** Logic lives
 in plain modules, each with its own `.test.ts` — `api`, `attempt`, `capacity`,
 `engineSize`, `env`, `foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`,
-`optionGroups`, `preflight`, `sched`, `session`, `suggestions`, `sv`, `text`,
-`token` — and components wire them. Four suites do render (`App`, `CapacityView`, `SuggestionList`,
-`steps/DownloadPanel`), for the flows only an effect reaches. `noUnusedLocals`
-is on, so a binding left behind by a refactor fails the typecheck rather than
-accumulating.
+`optionGroups`, `sched`, `session`, `sv`, `text`, `token` — and components wire
+them. Two suites do render (`App`, `CapacityView`), for the flows only an effect
+reaches. `noUnusedLocals` is on, so a binding left behind by a refactor fails
+the typecheck rather than accumulating.
 
 ## Account facts
 
@@ -330,17 +329,23 @@ missing tools. The rest is what it cannot fix for you.
   hidden field needs explaining, render the served reason (`whyIgnored`) rather
   than writing a second copy of the generator's sentence.
 
-  **The cluster check is step 3's, not step 2's** (#130). `crane_hook` is a
-  generate option and shapes the bundle, so a naive reading puts its switch with
-  the other options — but it shapes nothing about the *agent*: the same
-  Deployment is applied either way, and what the switch adds is a check that
-  runs beside it. What it is about is the cluster the bundle is going to, which
-  is the question step 3 asks, so it sits with the other two ways of asking it
-  (Test deploy, the evidence file). The write is the download step's own, which
-  is what keeps the move honest — the download has to carry the option, so the
-  control has to be somewhere the download can see. Whether the format can carry
-  it is still `applies("crane_hook")` in App, never `isDocker` re-derived in the
-  panel. It blocks nothing, so nothing went off screen with it.
+  **The page asks nothing about the target cluster, and that is a decision**
+  (#144). It asked three ways at once: Test deploy handed over a crane-hook
+  manifest, an evidence file was imported and judged, and a switch shipped
+  crane-hook inside the bundle. All three are gone, with `preflight.ts`,
+  `suggestions.ts`, `SuggestionList`, `session.SavedPreflight` and
+  `/api/preflight`. Two reasons, and the second is the load-bearing one:
+  crane-hook is BlazeMeter's image rather than ours — a live run on kind proved
+  our own rendering of it could never pass, because `ROLE_NAME` named the hook's
+  read-only Role where `pkg/rbac.go` checks the *agent's*, and `role.yaml` lacks
+  the `createcollection` verb upstream's carries — and the imported preflight was
+  a page of machinery for a customer nobody had. `bzm-opl-gen doctor` and
+  `scripts/bzm-cluster-evidence.sh` are untouched and are where the question is
+  answered; whoever can collect the file has a shell already. `core.preflight`
+  stays for the MCP server, tested in `test_core`/`test_cli`/`test_mcp`. The
+  `crane_hook` **generate option** also stays — a profile that sets it still
+  renders — it is only off the page. Don't put a cluster check back on this page
+  without an image we publish: that was the grilling, and the answer was no.
 
   **The planner is step 1's first card, not a view of its own.**
   `steps/CapacityProfile` states the profile and one Edit expands it downward;
@@ -431,22 +436,6 @@ missing tools. The rest is what it cannot fix for you.
   `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
   reading them can only restate it, or lose it while `/api/func-ids` is still
   outstanding.
-
-  **The imported preflight is in the snapshot; the file it came from is not**
-  (#119). What a refresh used to keep was only the damage: values applied from a
-  suggestion are options and options are remembered, while the verdicts
-  explaining them and the history reversing them were not — and re-picking the
-  file is not always possible, because whoever ran the collector may not be
-  whoever is at the browser. So verdicts, suggestions, file name and undo history
-  travel as **one** field (`session.SavedPreflight`): the undo is a button on a
-  suggestion row, so half that pair is an undo nothing can reach. The evidence
-  *document* stays out, on size — it grows with the cluster (32KB at 3 nodes,
-  615KB at 60) while the answer is flat at 4.2KB, bounded by the check list
-  rather than the cluster, and a quota refusal would cost the whole snapshot
-  rather than the part that grew. The cost is that a restored answer cannot be
-  re-judged, so it is a state of its own (`preflight.fromSnapshot`, carried as
-  `restored`) and the panel says so — never `doc === null`, which "nothing was
-  imported" already means.
 
   **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
   not** (#123). It is seen at exactly two moments, both this page's own writes —
