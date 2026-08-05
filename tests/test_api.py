@@ -55,6 +55,26 @@ def test_list_calls_ask_for_more_than_one_page():
     assert "limit=1000" in paths[1]
 
 
+def test_the_account_is_asked_what_its_functionalities_are_called():
+    """The funcId vocabulary is the account's, not a table in this repo.
+
+    Fixtured rather than called live, but this is the shape a real account
+    answers with: BlazeMeter's own display names, five funcIds this repo never
+    listed, and no `functionalApi` -- which core.FUNC_ID_LABELS used to offer.
+    """
+    c = FakeClient({("GET", "/accounts/291446/functionalities"): {
+        "additionalSpace": 50,
+        "functionalities": [
+            {"funcId": "performance", "size": 5, "displayName": "Performance"},
+            {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
+        ]}})
+    body = c.functionalities(291446)
+
+    assert c.calls == [("GET", "/accounts/291446/functionalities", None)]
+    assert [f["displayName"] for f in body["functionalities"]] == [
+        "Performance", "TDM Integration"]
+
+
 def test_update_private_location_omits_unset_fields():
     c = FakeClient({})
     c.update_private_location("h1", threads_per_engine=100)

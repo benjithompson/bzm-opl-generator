@@ -164,6 +164,26 @@ class BzmClient:
         """
         return self.get(f"/workspaces?accountId={account_id}&limit=1000")
 
+    def functionalities(self, account_id):
+        """What this account is entitled to, and what BlazeMeter calls each one.
+
+        The funcId vocabulary, from the account rather than from a table here:
+        `{"additionalSpace": N, "functionalities": [{"funcId", "size",
+        "displayName", "subFunctionalities"?}]}`. It is the authority on both
+        halves of the question a location's `funcIds` poses -- which exist, and
+        what they are called -- and it disagrees with a hand-written list in
+        both directions: real accounts serve funcIds this repo never listed
+        (tdm, dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle)
+        and no longer serve `functionalApi`, which locations created years ago
+        still carry.
+
+        `subFunctionalities` (functionalGui's 117 browser pins) is passed
+        through untouched -- nothing reads it yet.
+
+        Not paginated: it is an entitlement list, tens of entries at most.
+        """
+        return self.get(f"/accounts/{account_id}/functionalities")
+
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")
 
