@@ -1312,7 +1312,7 @@ def test_every_modelled_func_id_belongs_to_a_feature():
     tool does not model at all stay unclaimed -- the selector reads those as no
     signal rather than as an error."""
     from bzm_opl_gen import facts as facts_mod
-    claimed = {f for feat in core.FEATURES for f in feat["func_ids"]}
+    claimed = {f for fn in core.FUNCTIONALITIES for f in fn["func_ids"]}
     assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
     assert "tdm" not in claimed
 

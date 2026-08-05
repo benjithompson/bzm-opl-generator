@@ -335,7 +335,7 @@ export const api = {
     req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
-  features: () => req<Feature[]>("GET", "/api/features"),
+  features: () => req<Feature[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   /** {option: why} for the options a docker bundle drops — generate's own
    *  DOCKER_IGNORED. Served rather than restated in TypeScript: the configure

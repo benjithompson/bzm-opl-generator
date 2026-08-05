@@ -342,7 +342,7 @@ def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
     since #113.
 
     A group tags itself with the feature ids it belongs to; the ids themselves
-    are served from core.FEATURES and enumerated nowhere in the frontend. A tag
+    are served from core.FUNCTIONALITIES and enumerated nowhere in the frontend. A tag
     naming something not in that list was always a group on no card -- and now
     it is worse than invisible: `notRunPatch` clears the groups of a feature the
     location does not run, and a feature nothing serves is never run, so the
@@ -358,7 +358,7 @@ def test_every_group_s_feature_tag_is_a_feature_this_server_serves():
     # Not empty: every group being untagged would pass a subset check silently,
     # and that is the shape a bad regex leaves behind.
     assert tagged, "no feature tags found -- did the field move or get renamed?"
-    assert tagged <= {f["id"] for f in core.FEATURES}
+    assert tagged <= {f["id"] for f in core.FUNCTIONALITIES}
 
 
 # -- the connection outlives the page -----------------------------------------
@@ -1032,14 +1032,15 @@ def test_unlabelled_func_id_is_still_offered(monkeypatch):
         {"id": r["id"], "label": r["label"]} for r in body]
 
 
-def test_features_are_served_with_a_label_and_a_suggested_namespace():
-    """The configure step shows one feature's options at a time and offers this
-    list. Served rather than written in TypeScript for the same reason as the
-    funcId choices: functional testing, secrets and API monitoring are expected
-    to follow, and a feature has to become selectable by being added here."""
+def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
+    """The configure step shows one functionality's options at a time and offers
+    this list. Served rather than written in TypeScript for the same reason as
+    the funcId choices: functional testing, secrets and API monitoring are
+    expected to follow, and a functionality has to become selectable by being
+    added here."""
     from bzm_opl_gen import generate as gen_mod
-    body = client.get("/api/features").json()
-    assert [f["id"] for f in body] == [f["id"] for f in core.FEATURES]
+    body = client.get("/api/functionalities").json()
+    assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
         assert f["label"] and f["namespace"] and f["func_ids"]
@@ -1047,19 +1048,20 @@ def test_features_are_served_with_a_label_and_a_suggested_namespace():
     # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
     # second list -- the same reason /api/sv-constants exists.
     assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
-    # Distinct namespaces are the point of suggesting one per feature: sharing a
-    # namespace is what makes redeploying one agent take the other's pods down.
+    # Distinct namespaces are the point of suggesting one per functionality:
+    # sharing a namespace is what makes redeploying one agent take the other's
+    # pods down.
     assert len({f["namespace"] for f in body}) == len(body)
 
 
-def test_a_feature_added_to_the_vocabulary_is_offered(monkeypatch):
-    """The end-to-end shape of adding a feature: one entry here, plus a tag on
-    whichever option groups it owns. Nothing in the frontend enumerates
-    features, so this is the whole of the backend half."""
-    monkeypatch.setattr(core, "FEATURES", core.FEATURES + [
+def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
+    """The end-to-end shape of adding a functionality: one entry here, plus a
+    tag on whichever option groups it owns. Nothing in the frontend enumerates
+    functionalities, so this is the whole of the backend half."""
+    monkeypatch.setattr(core, "FUNCTIONALITIES", core.FUNCTIONALITIES + [
         {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
          "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
-    body = client.get("/api/features").json()
+    body = client.get("/api/functionalities").json()
     assert body[-1] == {"id": "secrets", "label": "Private vault",
                         "hint": "secrets from a vault",
                         "namespace": "blazemeter-vault",
@@ -1144,7 +1146,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-mocks"),
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
-    ("get", "/api/features"), ("get", "/api/sv-constants"),
+    ("get", "/api/functionalities"), ("get", "/api/sv-constants"),
     ("get", "/api/docker-ignored"), ("get", "/api/reserved-env"),
 ]
 
@@ -1524,12 +1526,12 @@ def test_group_tags_name_features_the_server_actually_serves():
         text = fh.read()
     tagged = {i for line in text.splitlines() if "features:" in line
               for i in re.findall(r'"([^"]+)"', line)}
-    served = {f["id"] for f in client.get("/api/features").json()}
+    served = {f["id"] for f in client.get("/api/functionalities").json()}
     assert tagged, "no group tags found -- has the declaration shape changed?"
     assert tagged <= served, (
         f"option groups tag features the server does not serve: "
         f"{sorted(tagged - served)}. Either the id was renamed in "
-        f"server.FEATURES, or the tag is a typo -- the group's options would "
+        f"core.FUNCTIONALITIES, or the tag is a typo -- the group's options would "
         f"never appear.")
     # sv.ts keys one answer by feature id rather than by group id -- which
     # format cannot serve the feature at all -- so that literal is the same
