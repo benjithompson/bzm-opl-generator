@@ -1830,6 +1830,52 @@ def app_routes():
     return [r for r in server.app.routes if hasattr(r, "methods")]
 
 
+def _keys(body):
+    """Every key anywhere in a decoded response body."""
+    if isinstance(body, dict):
+        return set(body) | {k for v in body.values() for k in _keys(v)}
+    if isinstance(body, list):
+        return {k for v in body for k in _keys(v)}
+    return set()
+
+
+def test_this_api_never_says_feature():
+    """The word on the wire is `functionality`, which is BlazeMeter's own.
+
+    Asserted over the app's own routes and their own answers rather than over a
+    list written here, for the reason `test_every_write_route_drops_the_cache`
+    gives: the surface a customer's browser and an MCP session read is the one
+    that has to hold to it, and a route added later is exactly the one nobody
+    would think to add to a list. Scoped to the API and nothing else -- comments
+    and docs say `feature` about plenty of things that are not this one, and
+    a rule that reached prose would be a rule about English.
+
+    Every parameterless GET is called for its body; the rest answer 422 or 401,
+    which is a body too and is checked the same way. `/api/docs` is the same
+    vocabulary once more, from FastAPI's side.
+    """
+    paths = [r.path for r in app_routes()]
+    assert not [p for p in paths if "feature" in p.lower()]
+
+    served, seen = set(), []
+    for r in app_routes():
+        if "GET" not in r.methods or "{" in r.path or not r.path.startswith("/api/"):
+            continue
+        body = client.get(r.path)
+        seen.append(r.path)
+        try:
+            served |= _keys(body.json())
+        except ValueError:                    # the SPA's HTML, not an answer
+            pass
+    # Not empty: a walk that reached nothing would pass this silently, which is
+    # the shape a changed route registry leaves behind.
+    assert len(seen) > 5, f"only reached {seen} -- did the routes move?"
+    assert not [k for k in served if "feature" in k.lower()], sorted(served)
+
+    spec = server.app.openapi()
+    assert not [p for p in spec["paths"] if "feature" in p.lower()]
+
+
 def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
     """Liveness is the one read that must always be live: the status poll is
     what says an agent came online, and a cached answer would say it had not."""
