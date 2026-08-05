@@ -740,7 +740,7 @@ def token_recovery_hint(options=None):
     """Where a real AUTH_TOKEN comes from, for a bundle that has no token.
 
     Two sources, and neither of them is this tool going and getting one: what
-    `create-ship` printed when the agent was made -- the durable copy, and the
+    `create-agent` printed when the agent was made -- the durable copy, and the
     reason that command prints it -- or the Secret of an agent already running.
     The kubectl for the second is *named*, never run: nothing in this package
     reads a cluster to build a bundle, and the person at the terminal is the one
@@ -755,7 +755,7 @@ def token_recovery_hint(options=None):
     # of it follows in brackets.
     return (
         f"A real one comes from what was shown when the agent was created "
-        f"(`create-ship` prints it; the web page puts it in the field) -- keep "
+        f"(`create-agent` prints it; the web page puts it in the field) -- keep "
         f"it, nothing here stores it -- or from the agent's install command in "
         f"the BlazeMeter UI (Settings -> Private Locations -> the location -> "
         f"the agent), or out of an agent already deployed:\n"

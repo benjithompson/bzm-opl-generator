@@ -301,7 +301,7 @@ def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
             in (tmp_path / "bzm_secret.yaml").read_text())
     assert body["token_source"]["branch"] == core.TOKEN_PLACEHOLDER
     # And where a real one comes from, since this bundle cannot be applied yet.
-    assert "create-ship" in body["token_source"]["message"]
+    assert "create-agent" in body["token_source"]["message"]
 
 
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,

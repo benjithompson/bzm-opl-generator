@@ -127,7 +127,7 @@ says which of two ways its bundle got its token — as entered, or the placehold
 - **Creating an agent captures its token**, in a masked field with a *Show*
   toggle. That is the one moment issuing one is free — a new ship has no previous
   credential to invalidate — and the bundle you download is the copy to keep, as
-  you would what `create-ship` prints.
+  you would what `create-agent` prints.
 - **A token this app minted comes back after a refresh**, silently and with
   nothing typed: both moments it is ever shown one are its own writes, so the
   server keeps what it handed over, in memory, for that agent, until you

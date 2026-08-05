@@ -463,11 +463,11 @@ def test_the_placeholder_message_reads_on_every_surface_that_shows_it():
 
 def test_one_sentence_names_every_place_a_token_can_be_got_from():
     """There were two of these -- one naming the BlazeMeter UI's install command,
-    one naming create-ship and a deployed Secret -- and `resolve_auth_token` used
+    one naming create-agent and a deployed Secret -- and `resolve_auth_token` used
     each in a different branch. Three real sources, so one sentence carries all
-    three; a caller who never ran create-ship still has somewhere to go."""
+    three; a caller who never ran create-agent still has somewhere to go."""
     msg = core.token_recovery_hint({"namespace": "ns1"})
-    assert "create-ship" in msg, "what was printed when the agent was made"
+    assert "create-agent" in msg, "what was printed when the agent was made"
     assert "Private Locations" in msg, "the BlazeMeter UI's install command"
     assert "kubectl -n ns1 get secret" in msg, "an agent already deployed"
 
