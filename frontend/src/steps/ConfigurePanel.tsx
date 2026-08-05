@@ -13,7 +13,8 @@
 // The option groups split two ways and the page says which is which. Most of
 // them belong to no feature -- registry, proxy, CA trust, scheduling, security
 // -- and are here whatever the location runs; the rest belong to one, and live
-// in that feature's own card. There used to be a feature *selector* switching
+// in that feature's own card, which is on screen only for a feature the
+// location actually runs. There used to be a feature *selector* switching
 // between two views of the same six groups, so pressing it changed a single row
 // while reading as though it changed the step. Nothing is hidden by a *view*
 // now, so nothing has to be recovered: no "also in this bundle", no "not in
@@ -265,18 +266,19 @@ function AdvancedRow(p: ConfigurePanelProps) {
 /** One feature: whether it is on, and -- only where it is -- the options it
  *  owns.
  *
- *  A feature the location does not run is *stated* and nothing more (#113). It
- *  used to be half-configurable: the card offered "Enable on this location…",
+ *  In connect mode every card rendered is one the location runs: the panel
+ *  filters the rest out before this is reached. It has been three things in
+ *  turn. Half-configurable first: the card offered "Enable on this location…",
  *  which PATCHed the location's funcIds, and its group rows sat under a div
  *  carrying both `pointer-events-none` and the click handler that opened that
- *  offer -- so the rows were simply dead, and a restored session that had
- *  opened the SV group left a switch nobody could reach. In manual mode the
- *  guard was `!on && !manual && known`, which is no guard at all: the switch
- *  flipped, seeded an ingress with no domain behind it, and blocked the step.
+ *  offer -- so the rows were simply dead. Then stated and nothing more (#113),
+ *  because turning a funcId on changes what the location *is*, which is
+ *  BlazeMeter's own UI's to do. Now not rendered at all, because a card that
+ *  can only be read is a card that only takes up the step.
  *
- *  Turning a funcId on changes what the location *is*, which is BlazeMeter's
- *  own UI's to do -- unlike this page's other two writes, which change an
- *  agent's credential and a location's concurrency. So the card says where. */
+ *  So `!on` here means manual entry, where the radio is the declaration rather
+ *  than a report of one, and an undeclared feature has to stay on screen to be
+ *  declarable. That is why the branch below has one sentence and not two. */
 function FeatureCard(
     p: ConfigurePanelProps & { feat: Feature; own: OptionGroup[] }) {
   const { feat, own } = p;
@@ -333,23 +335,20 @@ function FeatureCard(
         <p className="text-[11px] text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Four answers, and they stay four. Not run: where to turn it on, and no
-          control. Run but not by a bundle of this format: which format would,
-          and no control either -- the switches would configure a bundle the
-          generator refuses outright. Run with nothing of its own: said so,
-          rather than left blank. Run: its rows. */}
-      {known && !on ? (
+      {/* Four answers, and they stay four. Not declared (manual entry only --
+          see the docstring): which control declares it, and none of its own.
+          Run but not by a bundle of this format: which format would, and no
+          control either -- the switches would configure a bundle the generator
+          refuses outright. Run with nothing of its own: said so, rather than
+          left blank. Run: its rows.
+
+          `!on` rather than `manual && !on` on purpose: if a card the location
+          does not run ever reached this again, a sentence is the safe thing to
+          land on and live switches are not. */}
+      {!on ? (
         <p className="px-3 py-3 text-[11px] text-slate-500">
-          {manual ? (
-            <>Not what this identity was declared to run — pick <b>Enabled</b>{" "}
-              above to configure it.</>
-          ) : (
-            <>Not enabled on this location. Add{" "}
-              <span className="font-mono">{feat.func_ids[0]}</span> to it in
-              BlazeMeter (Settings → Private Locations), then pick the location
-              again — an agent is only asked to serve what its location says it
-              runs.</>
-          )}
+          Not what this identity was declared to run — pick <b>Enabled</b> above
+          to configure it.
         </p>
       ) : noFormat ? (
         <p className="px-3 py-3 text-[11px] text-slate-500">
@@ -400,19 +399,38 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   // the two would otherwise disagree about what is in this bundle -- the one
   // job the rail has.
   const envCount = envToRows(p.options.extra_env).length;
+  // A feature the location does not run is not on this page at all.
+  //
+  // It used to be a card that stated it and named the funcId to add (#113) --
+  // true, and nothing the reader of this step can act on: what a location runs
+  // is BlazeMeter's own UI's to change, and this step is what the *bundle*
+  // carries. On a performance location, which is most of them, that was half
+  // the section given over to a feature nobody asked for. The options are still
+  // cleared rather than merely hidden -- notRunPatch, in App -- because hiding a
+  // row does not empty it, and generate() refuses an sv_ingress with no
+  // subdomain whatever the location runs.
+  //
+  // Manual entry is the exception and structurally so: there the card *is* the
+  // declaration (#118) -- its radio is what says which feature the typed
+  // identity was gathered for -- so filtering by the answer would take away the
+  // control that gives it. Unanswered (`enabled == null`) keeps every card, the
+  // same direction runsFeature reads it in.
+  const features = p.sourceMode === "manual"
+    ? p.features : p.features.filter((f) => runsFeature(p.enabled, f.id));
   const secs = [
-    ...p.features.map((f) => ({
+    ...features.map((f) => ({
       id: "f-" + f.id, label: f.label,
-      // A feature the location does not run owns nothing here, and neither does
-      // one this format cannot serve: the card states it either way and the
-      // rail agrees, rather than listing groups the card does not show. The
-      // options of a feature that is not run are cleared in App -- hiding a row
-      // does not empty it, and the group is what does. A format's refusal
-      // clears nothing, because the format is what gives way (see sv.patch).
+      // A feature this format cannot serve owns nothing here: the card states
+      // that instead of its switches, and the rail agrees rather than listing
+      // groups the card does not show. A format's refusal clears no options,
+      // because the format is what gives way (see sv.patch). The not-run case
+      // no longer reaches this in connect mode -- it is filtered above -- but
+      // `runsFeature` stays in the test for manual entry, where an undeclared
+      // feature is still a card and must still own nothing.
       gs: runsFeature(p.enabled, f.id) && !p.featureBlocked[f.id]
         ? groupsFor(groupsOf(f.id), p.applies) : [],
       // ...and the rail says which of the two "no groups set" is: a feature
-      // running on defaults, or one the location does not run at all.
+      // running on defaults, or one this identity was not declared to run.
       off: p.enabled != null && !runsFeature(p.enabled, f.id),
       anchor: "cfg-f-" + f.id,
     })),
@@ -526,6 +544,13 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
         </nav>
 
         <div className="min-w-0 space-y-5">
+          {/* The heading goes with its cards. Nothing the account can say
+              leaves this empty -- a location with no served feature answers
+              `enabled == null`, which keeps every card -- but a heading over
+              nothing is what the filter above would produce if that ever
+              stopped being true, and it would read as a section that failed to
+              load. */}
+          {(features.length > 0 || p.locUnclaimed.length > 0) && (
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
               Deployment features
@@ -540,7 +565,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   KUBERNETES_RESOURCES_LIMITS_*, so a docker performance card
                   says "nothing extra to configure" rather than stating a size
                   nothing reads. */}
-              {p.features.map((f) => (
+              {features.map((f) => (
                 <FeatureCard key={f.id} {...p} feat={f}
                   own={groupsIn("f-" + f.id)} />
               ))}
@@ -554,6 +579,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               </p>
             )}
           </section>
+          )}
 
           {/* Where the agent goes in the cluster -- its own section, because a
               docker bundle has no such place and the whole card goes with the

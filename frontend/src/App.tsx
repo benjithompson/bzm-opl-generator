@@ -1552,7 +1552,23 @@ export default function App({ api }: { api: Api }) {
   );
 
   return (
-    <div className="min-h-screen flex flex-col">
+    // The window's height, not a minimum of it, and the overflow is the inner
+    // pane's. `min-h-screen` let the *document* grow to whatever the view
+    // rendered, so the `overflow-y-auto` below never had a bounded parent to
+    // scroll inside: on a real account Account capacity is 11,000px tall, the
+    // drawer stretched to match, and the account menu at its foot sat that far
+    // below the fold -- the one control that switches account, unreachable on
+    // the view whose whole subject is the account. Generate never showed it
+    // because StepFlow pins itself to `100vh - 6.75rem` and scrolls its own
+    // step; this is that assumption made true for the shell rather than
+    // restated per view.
+    //
+    // The height alone, with no `overflow-hidden` beside it: bounding the row
+    // is what makes the pane scroll, and a clip here would also clip the one
+    // thing that has to leave the drawer -- the account menu, which is
+    // absolutely positioned inside it. It is what the drawer's own workspace
+    // picker was already cut by once.
+    <div className="h-screen flex flex-col">
       <header className="bg-white border-b border-slate-200 px-4 py-2.5 shrink-0">
         <div className="flex items-baseline gap-3">
           <h1 className="text-lg font-bold text-slate-900 whitespace-nowrap">
