@@ -699,7 +699,7 @@ export function AgentPanel({
               <NoticeMsg msg={agents.tokenNotice} />
               {agents.facts && (
                 <p className="text-xs text-slate-500">
-                  image inventory: {agents.facts.images_source} · features:{" "}
+                  image inventory: {agents.facts.images_source} · functionalities:{" "}
                   {agents.facts.func_ids?.join(", ")}
                 </p>
               )}

@@ -37,10 +37,10 @@ import type { PlanInputs } from "./usePlan";
 // pair would read as "confirmed nothing" -- which is the honest answer, but it
 // is the same answer as a deliberate one, and this is the file whose whole rule
 // is that a half-understood snapshot is worse than starting over.
-// 7: manual entry's feature declaration joined the ids it belongs with. A v6
-// snapshot cannot say what a typed identity was declared to run, and its
+// 7: manual entry's functionality declaration joined the ids it belongs with.
+// A v6 snapshot cannot say what a typed identity was declared to run, and its
 // absence reads as "declared nothing" -- which is what fell back to the first
-// served feature and gathered another feature's images (#118).
+// served functionality and gathered another one's images (#118).
 // 8: the imported preflight -- its verdicts, its suggestions, the name of the
 // file -- and the undo history for what was applied from it. A v7 snapshot
 // carries the applied *values*, because those are options, and nothing that can
@@ -51,7 +51,12 @@ import type { PlanInputs } from "./usePlan";
 // options that were written from a suggestion beside verdicts nothing renders
 // any more -- the same half-a-pair #119 is about, arrived at from the other
 // side, so it is dropped rather than part-read.
-export const VERSION = 9;
+// 10: `declaredFeature` is `declaredFunctionality` (#155). A pure rename, and
+// still a bump rather than a migration: `load()` returns null on a version it
+// does not know, and reading a v9 snapshot under this shape would restore every
+// id and option *except* the declaration -- a typed identity landing back on the
+// first served functionality, which is what 7 was added to stop.
+export const VERSION = 10;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -78,19 +83,19 @@ export interface Session {
   manual: { harbor_id: string; ship_id: string };
   /** What manual entry declared the typed identity runs, or null.
    *
-   *  Kept with the ids because it is one of them: in manual entry the feature
+   *  Kept with the ids because it is one of them: in manual entry the functionality
    *  is not a view over a location, it is the declaration -- it names the funcId
    *  the facts are gathered for, which names the images the bundle carries. It
    *  was the one input deciding the bundle that a refresh did not restore, so a
    *  service-virtualization identity came back a performance one (#118).
    *
    *  Null in connect mode, and structurally rather than by convention: there the
-   *  feature is derived from the location's funcIds, so a value written here
+   *  functionality is derived from the location's funcIds, so a value written here
    *  would pin a restored page to whatever was last on screen instead of to what
    *  the account says. Restoring it is `App`'s, and it checks it against the
    *  served vocabulary first -- the same rule the confirmations keep by being
    *  stored as the ids they were made against. */
-  declaredFeature: string | null;
+  declaredFunctionality: string | null;
   options: Options;
   step: number;
   /** Which of the two views is open. The account rollup is not a step, so the

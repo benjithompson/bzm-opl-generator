@@ -10,7 +10,7 @@
 // Nothing in this file imports React: it is plain data in, plain data out,
 // which is what makes optionGroups.test.ts possible without a DOM.
 
-import { Feature, Options } from "./api";
+import { Functionality, Options } from "./api";
 // The environment area's own rule about what blocks the step. The area is not
 // a group -- it is a list of the variables no group here writes, with a
 // name/value editor under it (see EnvVars) -- so the only thing this file wants
@@ -50,19 +50,20 @@ export interface OptionGroup {
    *  Service virtualization gave up its claim on `service_type` (#60). The list
    *  is also what a later view can use to say "set, but not currently shown". */
   keys: string[];
-  /** The ids of the served features this group belongs to (see Feature in
+  /** The ids of the served functionalities this group belongs to (see Functionality in
    *  api.ts). Empty means every deployment needs it whatever is being
    *  configured -- registry, proxy, CA trust, scheduling -- and such a group is
    *  never hidden, so it can never be the reason a download is blocked off
-   *  screen. This tag is the whole frontend half of adding a feature: the list
-   *  of features itself is served, never enumerated here.
+   *  screen. This tag is the whole frontend half of adding a functionality: the list
+   *  of functionalities itself is served, never enumerated here.
    *
-   *  A tag must name a feature the server serves. It always had to -- a group
+   *  A tag must name a functionality the server serves. It always had to -- a group
    *  tagged with anything else is on no card and reachable from nowhere -- but
-   *  since notRunPatch clears the groups of a feature the location does not
-   *  run, an unserved tag would clear itself silently as well. Held to
-   *  core.FEATURES by test_server.py, which reads the tags out of this file. */
-  features: string[];
+   *  since notRunPatch clears the groups of a functionality the location does
+   *  not run, an unserved tag would clear itself silently as well. Held to
+   *  core.FUNCTIONALITIES by test_server.py, which reads the tags out of this
+   *  file. */
+  functionalities: string[];
   /** Does this config already mean the group is on? Runs on every option
    *  change, including the ones a preset or an imported profile brings in. */
   detect: (o: Options) => boolean;
@@ -77,8 +78,8 @@ export interface OptionGroup {
   disable: (o: Options, required: boolean) => OptionPatch;
   /** Is this group in use but not yet finished, so the bundle cannot generate?
    *  Declared here with everything else about the group, because the page
-   *  holding one group's rule is how "adding a feature needs no frontend
-   *  change" breaks: the next feature with required options would otherwise
+   *  holding one group's rule is how "adding a functionality needs no frontend
+   *  change" breaks: the next functionality with required options would otherwise
    *  need its own check in App, its own entry in a list, and its own arm on the
    *  download guard. `required` is the location's own demand -- funcIds can make
    *  a group mandatory when nothing is set yet. Absent means never blocks.
@@ -170,13 +171,13 @@ export const ENGINE_SIZES = [
  *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The feature whose bundles start engines -- the old group's tag, kept for
+/** The functionality whose bundles start engines -- the old group's tag, kept for
  *  the statement's card and the not-run clearing below. */
-export const SIZING_FEATURE = "performance";
+export const SIZING_FUNCTIONALITY = "performance";
 
 // -- service account ---------------------------------------------------------
 // Deliberately not a group. A group is a switch that hides its fields when it is
-// off, and these two are neither optional nor feature-specific: every
+// off, and these two are neither optional nor functionality-specific: every
 // deployment runs as some account, so they sit beside the namespace and are
 // always sent. What lives here rather than in App is the one rule that must not
 // be restated -- generate.service_account() refuses an empty name in both
@@ -290,7 +291,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "registry",
     title: "Private registry",
     hint: "mirror images into your own registry (air-gapped)",
-    features: [],
+    functionalities: [],
     keys: ["private_registry", "pull_secret", "registry_auth"],
     // The host alone. A pull secret is optional (a registry may be anonymous)
     // and registry_auth is a switch, which cannot be blank.
@@ -303,7 +304,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "proxy",
     title: "HTTP(S) proxy",
     hint: "egress via a corporate proxy, optional authentication",
-    features: [],
+    functionalities: [],
     keys: ["proxy"],
     // Not both: one URL is a working proxy configuration, and BlazeMeter's
     // traffic is HTTPS, so that is the one a proxy group with nothing in it is
@@ -322,7 +323,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "ca",
     title: "Custom CA trust",
     hint: "TLS-intercepting proxy / private CAs — mounted into crane + engines",
-    features: [],
+    functionalities: [],
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
     // Per mode, which is why this is a function. `ca_configmap_key` is not here
     // in either: it defaults to ca-bundle.crt, and OpenShift injection fills a
@@ -348,7 +349,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     id: "sched",
     title: "Scheduling",
     hint: "node pools for crane & engines (separate pools optional)",
-    features: [],
+    functionalities: [],
     keys: ["tolerations", "node_selector", "engine_tolerations",
            "engine_node_selector"],
     // `!= null`, not truthiness: an engine override of {} or [] is a real
@@ -372,7 +373,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "defaults: the credential kept apart from the configuration, no agent self-update",
     // Untagged deliberately: how the auth token is stored and whether the
     // bundle asks for cluster RBAC are questions every deployment answers.
-    features: [],
+    functionalities: [],
     // Sole owner of service_type -- the SV group gave up its claim once #60
     // showed an ingress publishes fine over NODEPORT.
     keys: ["use_secret", "cluster_rbac", "service_type", "restrict_engines",
@@ -396,7 +397,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
   {
     id: "sv",
     title: "Service virtualization",
-    hint: "only for locations with the mockServices feature",
+    hint: "only for locations with the mockServices functionality",
     requiredHint: "this location runs mockServices — virtual services need an ingress",
     // Switched off on a location that runs mockServices. Allowed, because a
     // location often carries both funcIds and the customer runs tests on it and
@@ -404,7 +405,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // performance one, so the row says what it costs rather than falling silent
     // the moment it stopped blocking the download.
     declinedHint: "performance only — virtual services deployed here will stall at WAITING_FOR_DOMAIN",
-    features: ["sv"],
+    functionalities: ["sv"],
     // service_type is *not* here. This group used to own it as well, to force
     // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
     // on namespaced RBAC, so SV has no opinion on it and Security owns it
@@ -462,22 +463,22 @@ export function detectGroups(
 
 // -- the split the configure step is built on --------------------------------
 // Two buckets, derived from the declarations rather than listed anywhere: a
-// group belongs to no feature and is therefore in every bundle, or it belongs
-// to one and lives in that feature's card. Every group is in exactly one of
+// group belongs to no functionality and is therefore in every bundle, or it belongs
+// to one and lives in that functionality's card. Every group is in exactly one of
 // them, which is what stops a group being on screen twice or not at all -- the
-// failure the feature *view* had, where five of six groups were in both views.
+// failure the functionality *view* had, where five of six groups were in both views.
 
-/** Groups no feature owns: every deployment gets them. */
-export const SHARED_GROUPS = OPTION_GROUPS.filter((g) => !g.features.length);
+/** Groups no functionality owns: every deployment gets them. */
+export const SHARED_GROUPS = OPTION_GROUPS.filter((g) => !g.functionalities.length);
 
-/** The groups a feature owns. Empty is legal and means the feature adds no
+/** The groups a functionality owns. Empty is legal and means the functionality adds no
  *  options of its own -- its card says so rather than being left out, because
  *  "nothing to configure" and "not shown" are different answers. */
-export function groupsOf(featureId: string): OptionGroup[] {
-  return OPTION_GROUPS.filter((g) => g.features.includes(featureId));
+export function groupsOf(functionalityId: string): OptionGroup[] {
+  return OPTION_GROUPS.filter((g) => g.functionalities.includes(functionalityId));
 }
 
-// -- a feature the location does not run -------------------------------------
+// -- a functionality the location does not run --------------------------------
 // Not on the configure step at all, and configured nowhere. It was stated there
 // for a while (#113) -- a card naming the funcId to add -- which is true and
 // nothing the reader of that step can act on, so the panel now filters it out;
@@ -489,37 +490,37 @@ export function groupsOf(featureId: string): OptionGroup[] {
 // subdomain and TLS fields, and the step went red for something nothing on the
 // page had asked for.
 
-/** Which features this location runs, or null while nobody has answered.
+/** Which functionalities this location runs, or null while nobody has answered.
  *
  *  Three states in one value, and the third is why it is not a plain array.
- *  Manual entry *declares* a feature; a location read off the account carries
- *  the funcIds its features come from; before either has happened the question
+ *  Manual entry *declares* a functionality; a location read off the account carries
+ *  the funcIds its functionalities come from; before either has happened the question
  *  is simply unanswered. Answering the unanswered case with `[]` takes every
  *  card's switches off the page while the account is still being read, and
  *  answering it with the whole list claims an enablement nobody has confirmed
  *  -- the same collapse from either end. */
-export function enabledFeatures(
+export function enabledFunctionalities(
     mode: "connect" | "manual", declared: string | null,
-    locFeatures: string[]): string[] | null {
+    locFunctionalities: string[]): string[] | null {
   // Manual declares rather than reads, so there is nothing outstanding: the
   // answer is the declaration, and no declaration yet is an empty one.
   if (mode === "manual") return declared ? [declared] : [];
   // An account that has not been read and a location whose funcIds carry no
-  // served feature both arrive as an empty list, and "nothing has said" is the
+  // served functionality both arrive as an empty list, and "nothing has said" is the
   // honest answer to both.
-  return locFeatures.length ? locFeatures : null;
+  return locFunctionalities.length ? locFunctionalities : null;
 }
 
-/** Does this location run the feature? Unanswered counts as yes, deliberately:
- *  a switch shown for a feature that turns out not to apply is corrected the
+/** Does this location run the functionality? Unanswered counts as yes, deliberately:
+ *  a switch shown for a functionality that turns out not to apply is corrected the
  *  moment the account answers, where one hidden on a guess leaves a location
- *  that does run the feature with nowhere to configure it. */
-export function runsFeature(
-    enabled: string[] | null, featureId: string): boolean {
-  return enabled == null || enabled.includes(featureId);
+ *  that does run the functionality with nowhere to configure it. */
+export function runsFunctionality(
+    enabled: string[] | null, functionalityId: string): boolean {
+  return enabled == null || enabled.includes(functionalityId);
 }
 
-/** What must be cleared because it configures a feature the location does not
+/** What must be cleared because it configures a functionality the location does not
  *  run, or null when nothing must.
  *
  *  The options can reach that state without anyone choosing it -- an imported
@@ -532,22 +533,24 @@ export function runsFeature(
  *  Each group's own `disable()`, never a wipe list written here -- the drift
  *  between the two is what this file exists to stop. `required` is false by
  *  construction: a demand comes from the location's funcIds, and these are the
- *  features those funcIds do not carry. Applying the patch makes every `detect`
+ *  functionalities those funcIds do not carry. Applying the patch makes every `detect`
  *  it fired on false, so the next answer is null and the page settles in one
  *  pass -- the property sv.correction is written to hold too. */
 export function notRunPatch(
     o: Options, enabled: string[] | null): OptionPatch | null {
   const patch: OptionPatch = {};
   for (const g of OPTION_GROUPS) {
-    if (g.features.length && !g.features.some((f) => runsFeature(enabled, f))
-        && g.detect(o)) Object.assign(patch, g.disable(o, false));
+    if (g.functionalities.length && g.detect(o)
+        && !g.functionalities.some((f) => runsFunctionality(enabled, f))) {
+      Object.assign(patch, g.disable(o, false));
+    }
   }
   // The engine size is a section's statement rather than a group (#132), so
   // its clearing is spelled here instead of through a disable(): the options
   // still travel (the capacity profile and an imported profile write them),
   // and a location that starts no engines must not carry them out in the
   // bundle -- generate would emit an explicit option over anything.
-  if (!runsFeature(enabled, SIZING_FEATURE)
+  if (!runsFunctionality(enabled, SIZING_FUNCTIONALITY)
       && (o.engine_cpu_limit != null || o.engine_mem_limit != null)) {
     patch.engine_cpu_limit = null;
     patch.engine_mem_limit = null;
@@ -565,7 +568,7 @@ export function notRunPatch(
  *  imagePullSecret. Derived from `keys`, so a group gaining an option needs
  *  nothing here.
  *
- *  Unlike the two above this is not a *view*: a feature hides nothing, and a
+ *  Unlike the two above this is not a *view*: a functionality hides nothing, and a
  *  group dropped here is one the bundle has no such thing as. */
 export function groupsFor(gs: OptionGroup[], applies: Applies): OptionGroup[] {
   return gs.filter((g) => keysApply(g.keys, applies));
@@ -635,59 +638,61 @@ export function configureBlockedBy(
 }
 
 // -- the served vocabulary ---------------------------------------------------
-// Nothing here enumerates features: a group names the feature ids it belongs
-// to, and labels, suggested namespaces and which funcIds mean which feature are
-// all read off /api/features. Adding functional testing, secrets or API
+// Nothing here enumerates functionalities: a group names the ids it belongs
+// to, and labels, suggested namespaces and which funcIds mean which
+// functionality are all read off /api/functionalities. Adding functional testing, secrets or API
 // monitoring is then a backend entry plus a tag on the groups it owns.
 //
 // The configure step shows every group at once -- the shared ones, then each
-// feature's own inside its card -- so nothing here selects a *view*. It used
+// functionality's own inside its card -- so nothing here selects a *view*. It used
 // to: visibleGroups, setButHidden and hiddenBlockers existed to work out what
 // the view was hiding and hand it back somewhere else, and went with the view.
 // Nothing below writes or clears an option; suggestNamespace comes closest, and
 // it hands a string back for the caller to apply only while the field still
 // holds a suggestion.
 
-/** The features a location's funcIds carry, in served order. funcIds the tool
+/** The functionalities a location's funcIds carry, in served order. funcIds the tool
  *  does not model (tdm, dataPublisher, delphix, secretsPrivateVault) match no
- *  feature and are simply not a signal -- never an error, and never a reason to
+ *  functionality and are simply not a signal -- never an error, and never a reason to
  *  leave the selector empty. */
-export function featuresOf(
-    funcIds: string[] | undefined, features: Feature[]): string[] {
-  return features
+export function functionalitiesOf(
+    funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
+  return functionalities
     .filter((f) => (funcIds ?? []).some((id) => f.func_ids.includes(id)))
     .map((f) => f.id);
 }
 
-/** The funcIds a location has that no served feature claims. Named on screen
+/** The funcIds a location has that no served functionality claims. Named on screen
  *  rather than dropped: the tool models five funcIds and accounts already carry
  *  more, and "this location also runs X, which there are no options for" is a
  *  truthful thing to say where silence reads as coverage. */
 export function unclaimedFuncIds(
-    funcIds: string[] | undefined, features: Feature[]): string[] {
+    funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
   return (funcIds ?? []).filter(
-    (id) => !features.some((f) => f.func_ids.includes(id)));
+    (id) => !functionalities.some((f) => f.func_ids.includes(id)));
 }
 
-/** Which feature to open a location on: the first served feature its funcIds
- *  carry, else the first served feature. A location carrying both therefore
+/** Which functionality to open a location on: the first served one its funcIds
+ *  carry, else the first served of all. A location carrying both therefore
  *  starts on the first -- performance, the common case -- and is routed to the
  *  other by the download-button block if that is where the missing settings
  *  are. `null` only before the vocabulary lands. */
-export function startFeature(
-    funcIds: string[] | undefined, features: Feature[]): string | null {
-  return featuresOf(funcIds, features)[0] ?? features[0]?.id ?? null;
+export function startFunctionality(
+    funcIds: string[] | undefined, functionalities: Functionality[]): string | null {
+  return functionalitiesOf(funcIds, functionalities)[0]
+    ?? functionalities[0]?.id ?? null;
 }
 
-/** The namespace to suggest as the view moves to `feature`, or null to leave
+/** The namespace to suggest as the view moves to `functionality`, or null to leave
  *  the field alone. Suggested only while it still holds a namespace some
- *  feature suggested (or nothing at all): a name that was typed outranks any
+ *  functionality suggested (or nothing at all): a name that was typed outranks any
  *  suggestion, and returning the value it already has would be a state write
  *  that re-POSTs the preview for no change. Which names count as suggestions is
- *  read off the served vocabulary, so a feature added later brings its own. */
+ *  read off the served vocabulary, so a functionality added later brings its own. */
 export function suggestNamespace(
-    current: string, feature: Feature, features: Feature[]): string | null {
+    current: string, functionality: Functionality,
+    functionalities: Functionality[]): string | null {
   const ns = current.trim();
-  const suggested = !ns || features.some((f) => f.namespace === ns);
-  return suggested && ns !== feature.namespace ? feature.namespace : null;
+  const suggested = !ns || functionalities.some((f) => f.namespace === ns);
+  return suggested && ns !== functionality.namespace ? functionality.namespace : null;
 }

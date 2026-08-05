@@ -13,7 +13,7 @@
 //
 // Identity only. What the location *runs* is declared once, in the Configure
 // step -- asking it here as well made one fact two questions in two
-// vocabularies (funcIds here, features there).
+// vocabularies (funcIds here, functionalities there).
 import { Field, SecretInput, TextInput } from "../components";
 import { checkId, HARBOR, IdRule, SHIP, tidy, TOKEN } from "../manualIds";
 
