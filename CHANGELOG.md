@@ -57,6 +57,35 @@ anything that breaks.
   cluster the bundle is going to. The option, the manifest it emits and the
   Helm `helm test` hook are unchanged; only where you switch it on has moved.
 
+### Fixed
+
+- **The documented install command did not work, and installing is now one
+  line.** Every copy of it — the README, `docs/mcp.md`, and the footer appended
+  to every GitHub Release's notes — said `pipx install
+  './bzm_opl_gen-*.whl[ui]'`. Quoted, that glob is expanded by neither the shell
+  nor pipx, so the first command of the first step exited `Unable to parse
+  package spec`. Installing is now a single line that downloads nothing first:
+
+  ```
+  gh auth login && gh auth setup-git
+  pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.0"
+  ```
+
+  `gh auth setup-git` is the new part and the load-bearing one: it leaves the
+  token where plain `git` — and so `pip` — will find it, which is what the
+  README previously said made a `git+https://` install impossible. The release
+  wheel is still attached to every release and still installable; the docs now
+  name it by its real filename rather than by a glob. The prebuilt web UI is
+  committed, so there is no npm step on either route.
+
+  A new `tests/test_install_docs.py` holds the three copies to the same spec and
+  refuses a `*` in a quoted install command, because the release workflow
+  checked the wheel's contents thoroughly and the prose not at all.
+
+- **The README says how to run it from a checkout.** It described the release
+  wheel and, under *Contributing*, an editable install with the test extras —
+  nothing that read as "you have cloned this and want the page".
+
 ## [0.3.0] — 2026-08-03
 
 The docker output format, a capacity planner that needs no account, and a web UI

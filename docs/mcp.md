@@ -15,13 +15,14 @@ those three does not exist as far as it is concerned.
 ## Install and configure
 
 ```
-gh release download --repo benjithompson/bzm-opl-generator --pattern '*.whl'
-pipx install './bzm_opl_gen-*.whl[mcp]'
+gh auth login && gh auth setup-git          # once, if gh isn't set up
+pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.0"
 ```
 
-The repo is private and there is no PyPI package, so the wheel comes from a
-GitHub Release and `gh` is what authenticates for it — see the
-[README](../README.md#install), which has the rest of that story.
+The repo is private and there is no PyPI package, so `pip` clones it over https
+and `gh auth setup-git` is what leaves a credential where `git` will find it —
+see the [README](../README.md#install), which has the rest of that story,
+including the release-wheel route if you would rather install an artifact.
 
 Then add it to your client. The API key goes in the server's environment — never
 in a tool argument, and never in chat.

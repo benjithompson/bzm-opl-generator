@@ -26,15 +26,14 @@ get wrong by hand. Ship id, crane version and heartbeat are read, not typed.
 
 ## Install
 
-Needs Python 3.10+ and access to this repo. Releases ship a prebuilt wheel —
-the UI bundle is inside it, so there's no npm step.
+Needs Python 3.10+ and access to this repo. The UI bundle is committed, so
+there's no npm step whichever way you install.
 
 ```
 brew install pipx gh && pipx ensurepath     # once, if you don't have them
-gh auth login                               # once, if gh isn't set up
+gh auth login && gh auth setup-git          # once, if gh isn't set up
 
-gh release download --repo benjithompson/bzm-opl-generator --pattern '*.whl'
-pipx install './bzm_opl_gen-*.whl[ui]'
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.0"
 bzm-opl-gen ui                              # opens the web UI
 ```
 
@@ -42,18 +41,37 @@ bzm-opl-gen ui                              # opens the web UI
 ([docs/mcp.md](docs/mcp.md)), and `[ui,mcp]` installs both. Neither extra changes
 what the CLI does.
 
-`gh release download` with no tag takes the newest release; pass a tag like
-`v0.1.1` to pin an older one. `gh` is what handles the authentication — this
-repo is private, so a plain `pip install git+https://…` fails for anyone whose
-git credentials aren't already set up for GitHub. No `gh`? Download the `.whl`
-from the Releases page in a browser and `pipx install` it the same way.
+**`gh auth setup-git` is the load-bearing half** — this repo is private, and
+that command is what teaches plain `git` (and so `pip`) to use the token `gh
+auth login` just stored. Without it the install fails on authentication, not on
+anything about the spec.
 
-**"release not found" or "repository not found" means you don't have access to
-the repo** — GitHub reports private repos as missing rather than forbidden. Ask
-for access; it isn't a typo in the command.
+`@v0.3.0` pins a release; drop it to track `main`. Upgrade with the same line
+plus `--force`. Drop `[ui]` if you only want the CLI — it has no dependencies at
+all. `uv tool install "<the same spec>"` works identically if you have `uv`.
 
-Upgrade with `pipx install --force` on the newer wheel. Drop `[ui]` if you only
-want the CLI — it has no dependencies at all.
+**"repository not found" means you don't have access to the repo** — GitHub
+reports private repos as missing rather than forbidden. Ask for access; it isn't
+a typo in the command.
+
+Prefer a release artifact? Every release attaches the built wheel. Download it
+from the Releases page (or `gh release download --repo
+benjithompson/bzm-opl-generator --pattern '*.whl'`) and install the file by its
+real name — `pipx install './bzm_opl_gen-0.3.0-py3-none-any.whl[ui]'`. Don't
+paste a `*` into that: neither the shell (inside quotes) nor pipx expands it,
+and the error is `Unable to parse package spec`.
+
+### From a checkout
+
+Working on it, or already cloned? Same page, no wheel:
+
+```
+python3 -m venv .venv && .venv/bin/pip install -e ".[ui]"
+.venv/bin/bzm-opl-gen ui
+```
+
+`[dev]` instead of `[ui]` adds the test dependencies — see
+[Contributing](#contributing).
 
 ### Credentials
 

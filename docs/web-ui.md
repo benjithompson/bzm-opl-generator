@@ -4,8 +4,9 @@
 bzm-opl-gen ui          # opens http://127.0.0.1:8765
 ```
 
-Installed from the release wheel with the `[ui]` extra (see the
-[README](../README.md#install)); from a checkout, `pip install -e ".[ui]"`.
+Installed with the `[ui]` extra (see the [README](../README.md#install)); from a
+checkout, `pip install -e ".[ui]"`. The page is committed prebuilt, so neither
+route has an npm step.
 
 Two views, in a drawer down the left that collapses to a rail: **Generate**, the
 three steps below, and **Account capacity**, the account's rated virtual users

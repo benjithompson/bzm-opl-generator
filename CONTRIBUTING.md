@@ -134,16 +134,20 @@ seatbelt, not a lock.
 
 ## Cutting a release
 
-Users install from a GitHub Release, not from git — the repo is private, so a
-`pip install git+https://…` needs credentials that `gh release download`
-handles for them.
+**The tag is what users install**, so cut one for anything they should get.
+`pipx install "bzm-opl-gen[ui] @ git+https://…@vX.Y.Z"` resolves that tag out of
+the repo directly, and the release's attached wheel is the alternative rather
+than the only route — but the release is still what carries the notes, and the
+notes are where the install command people paste comes from
+(`.github/release-footer.md`, whose `VERSION` placeholder the workflow replaces
+with the tag).
 
 On a PR like anything else: bump `version` in `pyproject.toml`, and move your
 entries from `## [Unreleased]` into a new `## [x.y.z] — YYYY-MM-DD` section of
 `CHANGELOG.md`. Then tag:
 
 ```
-git tag v0.1.1 && git push origin v0.1.1
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 `.github/workflows/release.yml` runs the offline suite, builds the wheel,

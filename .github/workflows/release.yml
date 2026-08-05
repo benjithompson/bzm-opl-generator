@@ -1,9 +1,11 @@
 name: release
 
-# Cut a release by pushing a version tag:  git tag v0.1.0 && git push --tags
-# This builds the wheel and attaches it to a GitHub Release, which is how users
-# install (the repo is private, so `pip install git+https://...` needs git
-# credentials that `gh release download` handles for them).
+# Cut a release by pushing a version tag:  git tag v0.3.0 && git push --tags
+# The tag is what users install -- `pipx install "bzm-opl-gen[ui] @
+# git+https://...@vX.Y.Z"` resolves it out of the repo, so pushing the tag is
+# the release. This job builds the wheel and attaches it as the alternative
+# route, and carries the notes, which is where the command people paste comes
+# from: `.github/release-footer.md`, VERSION substituted below.
 on:
   push:
     tags: ["v*"]
@@ -111,7 +113,14 @@ jobs:
               sys.exit(f"CHANGELOG.md has no entry for {version} -- add one before tagging")
           print(m.group(1).strip())
           PY
-          cat .github/release-footer.md >> notes.md
+          # The footer pins the tag it is published under: a static `@v0.2.0`
+          # in the file would tell every later release's readers to install an
+          # older one. VERSION is the tag, VERSION_NUMBER the same without `v`
+          # (the wheel filename's form) -- longest placeholder first, or the
+          # first substitution eats the prefix of the second.
+          sed -e "s/VERSION_NUMBER/${GITHUB_REF_NAME#v}/g" \
+              -e "s/VERSION/${GITHUB_REF_NAME}/g" \
+              .github/release-footer.md >> notes.md
           echo "--- notes.md ---"; cat notes.md
 
       - name: publish
