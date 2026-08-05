@@ -72,3 +72,34 @@ test("a zip with no credential headers reads as the placeholder, not as nothing"
     // have is the failure worth avoiding, and "" is a message, not a token.
     expect(token.branch).toBe("placeholder");
   });
+
+test("the file is saved under the server's name, which is the folder it extracts to",
+  async () => {
+    // The name is the server's because it is also the archive's root directory
+    // (core.zip_stem). Built here instead, a namespace the server sanitised out
+    // of the folder stays in the filename and the two disagree again.
+    const saved: string[] = [];
+    stubFetch(() => new Response(new Blob(["PK"]), {
+      headers: {
+        "Content-Disposition": 'attachment; filename="bzm-opl-ns1.zip"',
+      },
+    }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function (this: HTMLAnchorElement) { saved.push(this.download); });
+
+    await api.downloadZip(facts, { namespace: "<NAMESPACE>" },
+                          { rotate_token: false });
+
+    expect(saved).toEqual(["bzm-opl-ns1.zip"]);
+  });
+
+test("a download with no name header still saves under one", async () => {
+  const saved: string[] = [];
+  stubFetch(() => new Response(new Blob(["PK"])));
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+    function (this: HTMLAnchorElement) { saved.push(this.download); });
+
+  await api.downloadZip(facts, { namespace: "bzm" }, { rotate_token: false });
+
+  expect(saved).toEqual(["bzm-opl-bzm.zip"]);
+});

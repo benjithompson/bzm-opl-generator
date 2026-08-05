@@ -60,9 +60,9 @@ def test_generate_zip_mirror_script_executable():
         "options": {"namespace": "ns1", "private_registry": "reg.local/bzm"}})
     assert r.status_code == 200
     z = zipfile.ZipFile(io.BytesIO(r.content))
-    info = z.getinfo("bzm-opl/bzm-opl-image-mirror.sh")
+    info = z.getinfo("bzm-opl-ns1/bzm-opl-image-mirror.sh")
     assert info.external_attr >> 16 & 0o111          # executable bits
-    assert "bzm-opl/bzm_configmap.yaml" in z.namelist()
+    assert "bzm-opl-ns1/bzm_configmap.yaml" in z.namelist()
 
 
 def test_generate_preview_helm_format():
@@ -84,9 +84,9 @@ def test_generate_zip_helm_keeps_the_chart_directory():
         "facts": FACTS, "options": {"namespace": "ns1", "output_format": "helm"}})
     assert r.status_code == 200
     names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
-    assert "bzm-opl/helm/Chart.yaml" in names
-    assert "bzm-opl/helm/templates/deployment.yaml" in names
-    assert "bzm-opl/bzm-opl-values.yaml" in names
+    assert "bzm-opl-ns1/helm/Chart.yaml" in names
+    assert "bzm-opl-ns1/helm/templates/deployment.yaml" in names
+    assert "bzm-opl-ns1/bzm-opl-values.yaml" in names
 
 
 def test_generate_helm_rejects_service_virtualization_400():
@@ -249,8 +249,22 @@ def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
     assert "create-ship" in message
     # One line, because a header is one line -- the recovery hint is three.
     assert "\n" not in message
-    assert "bzm-opl/bzm_secret.yaml" in zipfile.ZipFile(
+    assert "bzm-opl-ns1/bzm_secret.yaml" in zipfile.ZipFile(
         io.BytesIO(r.content)).namelist()
+
+
+def test_the_download_extracts_to_the_folder_it_is_named():
+    """One name, held equal on the route rather than in each half: the header
+    the browser saves the file under and the directory every entry sits in. They
+    were computed apart, so a bundle downloaded as `bzm-opl-ns1.zip` extracted
+    to `bzm-opl/`, and two locations' bundles merged into one folder."""
+    r = client.post("/api/generate/zip", json={
+        "facts": FACTS, "options": {"namespace": "ns1"}})
+    name = re.search(r'filename="([^"]+)"', r.headers["Content-Disposition"])[1]
+    assert name.endswith(".zip")
+    roots = {n.split("/")[0]
+             for n in zipfile.ZipFile(io.BytesIO(r.content)).namelist()}
+    assert roots == {name[:-len(".zip")]}
 
 
 def test_a_namespace_no_header_could_carry_does_not_fail_the_download(connected):

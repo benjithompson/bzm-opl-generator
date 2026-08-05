@@ -632,8 +632,8 @@ def test_zip_keeps_the_mirror_script_executable():
     files = core.generate_bundle(
         FACTS, {"namespace": "ns1", "private_registry": "reg.local/bzm"},
         client=None)
-    z = zipfile.ZipFile(io.BytesIO(core.zip_bundle(files)))
-    info = z.getinfo("bzm-opl/bzm-opl-image-mirror.sh")
+    z = zipfile.ZipFile(io.BytesIO(core.zip_bundle(files, "bzm-opl-ns1")))
+    info = z.getinfo("bzm-opl-ns1/bzm-opl-image-mirror.sh")
     assert info.external_attr >> 16 & 0o111
 
 
@@ -642,13 +642,33 @@ def test_zip_keeps_the_chart_directory():
     a pile of files no helm command can install."""
     files = core.generate_bundle(
         FACTS, {"namespace": "ns1", "output_format": "helm"}, client=None)
-    names = zipfile.ZipFile(io.BytesIO(core.zip_bundle(files))).namelist()
-    assert "bzm-opl/helm/templates/deployment.yaml" in names
+    names = zipfile.ZipFile(
+        io.BytesIO(core.zip_bundle(files, "bzm-opl-ns1"))).namelist()
+    assert "bzm-opl-ns1/helm/templates/deployment.yaml" in names
 
 
 def test_zip_filename_names_the_namespace():
     assert core.zip_filename({"namespace": "ns1"}) == "bzm-opl-ns1.zip"
     assert core.zip_filename({}) == "bzm-opl-blazemeter.zip"
+
+
+def test_zip_extracts_to_the_directory_the_archive_is_named():
+    """The archive and the folder it extracts to are one string. They were two,
+    so every bundle whatever its location extracted to `bzm-opl/` -- and a
+    second download merged into the first rather than sitting beside it."""
+    files = core.generate_bundle(FACTS, {"namespace": "ns1"}, client=None)
+    stem = core.zip_stem({"namespace": "ns1"})
+    assert core.zip_filename({"namespace": "ns1"}) == stem + ".zip"
+    roots = {n.split("/")[0] for n in zipfile.ZipFile(
+        io.BytesIO(core.zip_bundle(files, stem))).namelist()}
+    assert roots == {stem}
+
+
+def test_zip_stem_survives_a_blank_and_a_placeholder_namespace():
+    """A blank gave `bzm-opl-.zip`; the placeholder marker's angle brackets are
+    a directory no Windows extractor will write."""
+    assert core.zip_stem({"namespace": ""}) == "bzm-opl-blazemeter"
+    assert core.zip_stem({"namespace": "<NAMESPACE>"}) == "bzm-opl-NAMESPACE"
 
 
 # -- the rule three call sites applied ----------------------------------------
