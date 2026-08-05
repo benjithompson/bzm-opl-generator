@@ -306,7 +306,8 @@ export function DownloadPanel(p: DownloadPanelProps) {
                       file is what comes back from it. Stacked rather than in a
                       row so the order reads as the sequence it is. */}
                   <div className="flex flex-col items-start gap-2">
-                  <TestDeploy api={api} facts={facts} options={options} />
+                  <TestDeploy api={api} facts={facts} shipId={shipId}
+                              options={options} />
                   {/* A label rather than a Button so the file dialog is the
                       click, as in Connect and Import above. */}
                   <label className={"rounded-md px-3 py-1.5 text-sm font-medium "
@@ -634,19 +635,40 @@ function CraneHookRow({ hook }: { hook: Toggle }) {
  *  a module-level import here was the one call site left with nowhere to put a
  *  different implementation, so the one thing this component does could not be
  *  driven from a test at all.
+ *
+ *  It renders through `generate`, which requires a `ship_id` whatever it is
+ *  asked for -- so this call carries the agent chosen on step 1, exactly as the
+ *  download below it does. It did not, and the render was refused with
+ *  `ship_id required: location has N ships ([...])` for every location holding
+ *  more than one agent, with an agent selected on screen the whole time.
+ *
+ *  Where there is no agent to carry -- a location with several, none confirmed
+ *  -- the ids in that refusal are ids nobody can act on, so this asks instead:
+ *  the same list, by name, in a select beside the button. It is local state and
+ *  deliberately not App's `shipId`: nothing about the crane-hook manifest is
+ *  the agent's (it is a Pod, a Role and a RoleBinding over this namespace and
+ *  registry), so the choice names whose settings the check is rendered from
+ *  rather than choosing the bundle's agent behind step 1's back.
  */
 function TestDeploy(
-  { api, facts, options }:
-  { api: Api; facts: Facts | null; options: Options },
+  { api, facts, shipId, options }:
+  { api: Api; facts: Facts | null; shipId: string | null; options: Options },
 ) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [picked, setPicked] = useState("");
+
+  const ships = facts?.ships ?? [];
+  // A lone agent needs no asking -- generate() resolves it the same way, and a
+  // select of one is a question with one answer.
+  const ship = shipId ?? (ships.length === 1 ? ships[0].id : picked || null);
 
   const run = async () => {
-    if (!facts) return;
+    if (!facts || !ship) return;
     setBusy(true); setErr(null);
     try {
-      const out = await api.generate(facts, { ...options, crane_hook: true });
+      const out = await api.generate(facts,
+        { ...options, ship_id: ship, crane_hook: true });
       const f = out.files.find((x: GeneratedFile) => x.name.includes("cranehook"));
       if (!f) throw new Error("this bundle renders no crane-hook manifest");
       const url = URL.createObjectURL(
@@ -661,7 +683,21 @@ function TestDeploy(
 
   return (
     <span className="flex items-center gap-1">
-      <Button kind="ghost" onClick={run} disabled={!facts} busy={busy}>
+      {/* Only where there is a question: an agent came from step 1, or the
+          location has exactly one. Named by name, because the id is what the
+          refusal already offered and nobody picks an agent by it. */}
+      {!shipId && ships.length > 1 && (
+        <select value={picked} onChange={(e) => setPicked(e.target.value)}
+          aria-label="Agent to render the check for"
+          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm
+                     text-slate-600 max-w-[12rem]">
+          <option value="">Agent…</option>
+          {ships.map((s) => (
+            <option key={s.id} value={s.id}>{s.name || s.id}</option>
+          ))}
+        </select>
+      )}
+      <Button kind="ghost" onClick={run} disabled={!facts || !ship} busy={busy}>
         Test deploy
       </Button>
       <a href="https://github.com/Blazemeter/crane-hook" target="_blank"

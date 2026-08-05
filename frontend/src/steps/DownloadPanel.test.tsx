@@ -15,7 +15,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
-import { Facts, Options, PreflightOut } from "../api";
+import { Api, Facts, Options, PreflightOut } from "../api";
 import { NO_ATTEMPT } from "../attempt";
 import { fakeApi } from "../fakeApi";
 // The served answer, from the one builder for it: the panel that renders it,
@@ -38,14 +38,22 @@ const OPTIONS: Options = { namespace: "blazemeter" };
  *  the option rather than only rendering a row. */
 let hookWrote: boolean | null = null;
 
+/** What the panel is handed about the agent, where a test is about that rather
+ *  than about the preflight header. Everything else stays as it was: these
+ *  three are the only props Test deploy reads. */
+interface Over { api?: Api; facts?: Facts | null; shipId?: string | null }
+
 function panel(preflightOut: PreflightOut, format = "manifests",
                read: PreflightState =
-                 imported("cluster-evidence.json", { schema: "x" }, preflightOut)) {
+                 imported("cluster-evidence.json", { schema: "x" }, preflightOut),
+               over: Over = {}) {
   hookWrote = null;
   return render(
-    <DownloadPanel api={fakeApi()}
+    <DownloadPanel api={over.api ?? fakeApi()}
       bundle={{
-        facts: FACTS, shipId: "S1", options: OPTIONS,
+        facts: over.facts === undefined ? FACTS : over.facts,
+        shipId: over.shipId === undefined ? "S1" : over.shipId,
+        options: OPTIONS,
         format,
         sv: svState([], OPTIONS,
                     { func_ids: ["mockServices"], ingress_types: [],
@@ -137,6 +145,70 @@ test("ships the cluster check with the bundle, from this step", () => {
   panel(out());
   fireEvent.click(screen.getByRole("switch", { name: /Ship the check/ }));
   expect(hookWrote).toBe(true);
+});
+
+/** A generate stub that records the options it was called with and answers with
+ *  a crane-hook manifest, plus the object-URL machinery jsdom has none of --
+ *  what Test deploy does with the file it gets back is a download, and the
+ *  subject here is the request it made to get one. */
+function renderStub() {
+  const sent: Options[] = [];
+  const api = fakeApi({
+    generate: async (_f: Facts, o: Options) => {
+      sent.push(o);
+      return { files: [{ name: "bzm_cranehook.yaml", content: "kind: Pod" }],
+               token: { branch: "given" as const, ship_id: null, message: "" },
+               namespace: "blazemeter" };
+    },
+  });
+  URL.createObjectURL = () => "blob:x";
+  URL.revokeObjectURL = () => {};
+  return { api, sent };
+}
+
+test("renders the check for the agent step 1 chose", async () => {
+  // The bug: this call is a `generate` like any other, and generate wants a
+  // ship_id -- so with the agent left out, every location holding more than one
+  // was refused with `ship_id required` while an agent sat selected on screen.
+  const { api, sent } = renderStub();
+  panel(out(), "manifests", undefined, { api, shipId: "S2" });
+  fireEvent.click(screen.getByRole("button", { name: "Test deploy" }));
+  await screen.findByRole("button", { name: "Test deploy" });
+  expect(sent[0].ship_id).toBe("S2");
+  // ...and nothing is asked, because nothing is in question.
+  expect(screen.queryByLabelText(/Agent to render the check/)).toBeNull();
+});
+
+test("asks which agent, by name, when no agent has been chosen", async () => {
+  // The refusal it replaces listed the ids. They are the ids of agents this
+  // page already has the names of, so it offers those instead -- and the choice
+  // is this control's own: it names whose settings the check is rendered from,
+  // not the agent the bundle is for.
+  const { api, sent } = renderStub();
+  const facts: Facts = { harbor_id: "H1", images: [],
+                         ships: [{ id: "S1", name: "agent-one" },
+                                 { id: "S2", name: "agent-two" }] };
+  panel(out(), "manifests", undefined, { api, facts, shipId: null });
+  const pick = screen.getByLabelText(/Agent to render the check/);
+  expect(screen.getByRole("option", { name: "agent-two" })).toBeTruthy();
+  // Nothing to render it for yet, so there is nothing to press.
+  expect(screen.getByRole("button", { name: "Test deploy" })
+    .hasAttribute("disabled")).toBe(true);
+  fireEvent.change(pick, { target: { value: "S2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test deploy" }));
+  await screen.findByRole("button", { name: "Test deploy" });
+  expect(sent[0].ship_id).toBe("S2");
+});
+
+test("asks nothing where the location has one agent", async () => {
+  // generate() resolves a lone ship itself, and a select of one is a question
+  // with one answer.
+  const { api, sent } = renderStub();
+  panel(out(), "manifests", undefined, { api, shipId: null });
+  expect(screen.queryByLabelText(/Agent to render the check/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Test deploy" }));
+  await screen.findByRole("button", { name: "Test deploy" });
+  expect(sent[0].ship_id).toBe("S1");
 });
 
 test("offers no cluster check where the bundle cannot carry one", () => {
