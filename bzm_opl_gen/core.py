@@ -1643,38 +1643,73 @@ def option_docs():
             for o in options_mod.OPTIONS}
 
 
-# Display names only -- the vocabulary itself is facts.CATEGORY_BY_FUNC, which
-# already has to list every funcId to pick the right images. A funcId missing
-# from here is served under its raw name rather than dropped.
-FUNC_ID_LABELS = {
+# The funcIds this tool *covers* -- has option groups, environment variables and
+# images for -- with BlazeMeter's own display names, transcribed from
+# GET /accounts/{id}/functionalities. Three, deliberately: an account offers
+# nine and this is a subset of them, which is the whole reason a row has to say
+# which kind it is.
+#
+# Hardcoded because it is the **keyless** answer, not a copy of the account's.
+# The page fetches this vocabulary on mount, before a key has been pasted let
+# alone an account chosen (App.test.tsx drives the entire page that way), and
+# manual entry never has an account at all -- so "ask the account" cannot be the
+# only route to a funcId's name. Using BlazeMeter's words here is what keeps the
+# handover silent: the labels do not change when an account arrives.
+#
+# It is never a *fallback*. An account that refuses the read raises, because
+# answering "this account offers exactly the three we cover" to a 401 is
+# could-not-read wearing there-is-nothing-else.
+COVERED_FUNC_IDS = {
     "performance": "Performance",
-    "functionalApi": "Functional API",
-    "functionalGui": "Functional GUI",
-    "mockServices": "Mock Services",
-    "proxyRecorder": "Proxy Recorder",
+    "functionalGui": "GUI Functional",
+    "mockServices": "Service Virtualization",
 }
 
 
-def func_ids():
-    """The funcIds a location can be created with, in declaration order.
+def func_ids(client=None, account_id=None):
+    """The funcId vocabulary: what a location can be created with, and what
+    each funcId a location already carries is called.
 
-    Served rather than restated by each caller: the create-location form used
-    to hold its own list in TypeScript, and whatever was missing from that copy
-    could not be selected from the UI at all. Derived from the facts layer, so
-    adding a funcId there -- already required for its images to be selected --
-    is the only edit needed.
+    The account's, where there is one -- BlazeMeter serves the list and the
+    display names, and a table written here disagreed with it in both
+    directions: it was missing five funcIds real locations carry (tdm,
+    dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle) and it
+    offered `functionalApi`, which the account has retired. Dropping it from
+    what a location can be *created* with therefore needs no rule: it is simply
+    not in the answer. Reading it off a location that already has one is
+    untouched, and 43 of one account's 168 locations still do.
+
+    With no account -- no key yet, or manual entry, which never has one -- the
+    answer is COVERED_FUNC_IDS: the three this tool configures, under the names
+    the account would give them.
+
+    `covered` says which of those two an entry is. A row this tool can only
+    name is still served, because a page that dropped it would say nothing
+    about a functionality the location runs, and silence there reads as
+    coverage.
 
     `changes_images` marks the ones worth offering where a funcId's only job is
-    to pick images -- the manual-entry form. functionalApi and performance both
-    mean "the taurus engine", so offering both there is a choice that cannot
-    change the output. Answered here rather than filtered by the caller for the
-    same reason the list itself is: a copy in the frontend is how the
-    vocabulary and the thing it describes drift apart.
+    to pick images -- the manual-entry form. Two funcIds needing the same image
+    categories generate byte-identical manifests, so offering both there is a
+    choice with no consequence. Answered here rather than filtered by the
+    caller for the same reason the list itself is served: a copy in the
+    frontend is how a vocabulary and the thing it describes drift apart.
     """
+    if client is None or account_id is None:
+        rows = list(COVERED_FUNC_IDS.items())
+    else:
+        served = _upstream(client.functionalities, account_id) or {}
+        # `displayName` falling back to the funcId rather than to a table here:
+        # an entry the account added and never named is offered under its raw
+        # id, which is exactly what a location carrying it would show.
+        # `subFunctionalities` is left alone -- consuming it is #152's.
+        rows = [(f["funcId"], f.get("displayName") or f["funcId"])
+                for f in served.get("functionalities") or [] if f.get("funcId")]
     distinct = set(facts_mod.image_distinct_funcs())
-    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f),
-             "changes_images": f in distinct}
-            for f in facts_mod.CATEGORY_BY_FUNC]
+    return [{"id": f, "label": label,
+             "changes_images": f in distinct,
+             "covered": f in COVERED_FUNC_IDS}
+            for f, label in rows]
 
 
 # The functionalities a bundle can be configured for -- BlazeMeter's own word

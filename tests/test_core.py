@@ -26,6 +26,36 @@ from bzm_opl_gen import api, core, generate as gen
 from test_generate import FACTS
 
 
+# What a real account answers to GET /accounts/{id}/functionalities, trimmed to
+# the entries that decide something here and otherwise verbatim: the display
+# names are BlazeMeter's, `functionalApi` is absent because the account no
+# longer serves it, and `subFunctionalities` is present so a reader that starts
+# consuming it (#152) has something to consume rather than a shape invented on
+# the day.
+ACCOUNT_FUNCTIONALITIES = {
+    "additionalSpace": 50,
+    "functionalities": [
+        {"funcId": "performance", "size": 5, "displayName": "Performance"},
+        {"funcId": "proxyRecorder", "size": 1, "displayName": "Proxy Recorder"},
+        {"funcId": "secretsPrivateVault", "size": 1,
+         "displayName": "Secrets Private Vault"},
+        {"funcId": "enableSecretsToggle", "size": 1,
+         "displayName": "Vault Access Controls"},
+        {"funcId": "mockServices", "size": 1,
+         "displayName": "Service Virtualization"},
+        {"funcId": "functionalGui", "size": 0, "displayName": "GUI Functional",
+         "subFunctionalities": [
+             {"id": "chrome:default", "size": 2, "displayName": "Chrome Default",
+              "default": True},
+             {"id": "firefox:139", "size": 2, "displayName": "Firefox 139"},
+         ]},
+        {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
+        {"funcId": "dataPublisher", "size": 1, "displayName": "Data Orchestration"},
+        {"funcId": "delphix", "size": 1, "displayName": "Delphix Integration"},
+    ],
+}
+
+
 class FakeClient:
     """Enough BzmClient to exercise the paths that reach for one.
 
@@ -62,6 +92,10 @@ class FakeClient:
     def workspaces(self, account_id):
         self.calls.append(("workspaces", account_id))
         return self._workspaces
+
+    def functionalities(self, account_id):
+        self.calls.append(("functionalities", account_id))
+        return ACCOUNT_FUNCTIONALITIES
 
     def private_locations(self, account_id=None, workspace_id=None):
         self.calls.append(("private_locations", account_id, workspace_id))
@@ -551,7 +585,7 @@ class ExpiredClient(FakeClient):
     def _refuse(self, *a, **kw):
         raise api.BzmApiError(EXPIRED_401)
 
-    user = accounts = workspaces = _refuse
+    user = accounts = workspaces = functionalities = _refuse
     private_locations = private_location = _refuse
     create_private_location = update_private_location = _refuse
     delete_private_location = create_ship = auth_token = _refuse
@@ -1302,6 +1336,65 @@ def test_option_defaults_are_the_generator_s_own():
 def test_option_docs_cover_every_option():
     from bzm_opl_gen import generate as gen_mod
     assert set(core.option_docs()) == set(gen_mod.DEFAULT_OPTIONS)
+
+
+# -- the funcId vocabulary, and where it comes from ----------------------------
+#
+# #148. It was `core.FUNC_ID_LABELS`, five funcIds written by hand, and the
+# account disagreed with it in both directions.
+
+
+def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
+    """Asked with no account, the answer is the three this tool configures.
+
+    Not a stand-in for the account's list and not a guess at it: the page
+    fetches this on mount, before there is a key let alone an account, and
+    manual entry never has an account at all. So there has to be an answer with
+    nothing connected, and the only honest one is what this tool covers -- with
+    BlazeMeter's own display names, so the words do not change when an account
+    arrives and replaces it.
+    """
+    rows = core.func_ids()
+    assert [(r["id"], r["label"]) for r in rows] == [
+        ("performance", "Performance"),
+        ("functionalGui", "GUI Functional"),
+        ("mockServices", "Service Virtualization")]
+    assert all(r["covered"] for r in rows)
+
+
+def test_the_account_replaces_the_baseline_with_its_own_vocabulary():
+    """...and the account's list is longer, differently named, and does not
+    offer `functionalApi` at all -- which the hand-written table did."""
+    client = FakeClient()
+    rows = core.func_ids(client, 291446)
+    by_id = {r["id"]: r for r in rows}
+
+    assert client.calls == [("functionalities", 291446)]
+    assert "functionalApi" not in by_id
+    assert by_id["functionalGui"]["label"] == "GUI Functional"
+    assert by_id["tdm"]["label"] == "TDM Integration"
+
+
+def test_the_vocabulary_says_which_funcids_this_tool_covers():
+    """A funcId this tool has options for and one it can only name are both
+    served, and the difference is on the row. Silence would read as coverage:
+    a page that listed `delphix` beside `performance` with nothing to tell them
+    apart is a page offering to configure something it cannot."""
+    by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 291446)}
+    assert [f for f, r in by_id.items() if r["covered"]] == [
+        "performance", "mockServices", "functionalGui"]
+    for f in ("proxyRecorder", "tdm", "dataPublisher", "delphix",
+              "secretsPrivateVault", "enableSecretsToggle"):
+        assert by_id[f]["covered"] is False
+
+
+def test_an_unreadable_account_is_not_an_account_with_three_functionalities():
+    """The baseline is the keyless answer, never a fallback for a read that
+    failed. Falling back would answer "this account offers exactly what we
+    cover" to a 401 -- could-not-read wearing there-is-nothing-else, about the
+    one question whose whole point is that the account knows better."""
+    with pytest.raises(core.CoreError):
+        core.func_ids(ExpiredClient(), 291446)
 
 
 def test_every_modelled_func_id_belongs_to_a_functionality():

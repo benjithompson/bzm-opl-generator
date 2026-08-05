@@ -724,18 +724,19 @@ def test_no_route_here_turns_a_functionality_on_for_a_location(monkeypatch):
     assert not [c for c in fake.calls if c[0] == "update_private_location"]
 
 
-def test_func_ids_mark_which_ones_change_the_images():
-    """The create-location form needs every funcId; the manual form needs only
-    the ones that change the answer. Both read this one response, so the
-    distinction is served rather than re-derived in TypeScript."""
-    rows = client.get("/api/func-ids").json()
-    by_id = {r["id"]: r for r in rows}
-    assert by_id["performance"]["changes_images"] is True
-    assert by_id["functionalApi"]["changes_images"] is False
-    # Still offered -- creating a location with it is a real, different thing.
-    assert "functionalApi" in by_id
-    for f in ("mockServices", "proxyRecorder", "functionalGui"):
+def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
+    """The create-location form needs every funcId the account offers; the
+    manual form needs only the ones that change the answer. Both read this one
+    response, so the distinction is served rather than re-derived in
+    TypeScript."""
+    connect(monkeypatch, FakeClient())
+    by_id = {r["id"]: r for r in
+             client.get("/api/func-ids?account_id=291446").json()}
+    for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
+    # A funcId whose images no bundle selects on. Offered, because the location
+    # runs it and the page has to be able to name it -- see `covered`.
+    assert by_id["tdm"]["changes_images"] is False
 
 
 def test_option_defaults_are_served():
@@ -1004,35 +1005,61 @@ def test_sv_constants_carry_what_each_backend_publishes():
         "nginx": True, "openshift": True, "contour": False, "istio": False}
 
 
-def test_func_id_choices_cover_the_whole_generator_vocabulary():
+def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     """A location whose funcId the UI never offers can only be created from the
     CLI or the BlazeMeter web app -- which is what a hardcoded copy of the list
-    in TypeScript caused. Serving it from the funcId vocabulary the facts layer
-    already keys its image selection off means adding one there is enough to
-    make it selectable, and retiring one removes it from the form."""
-    from bzm_opl_gen import facts as facts_mod
-    body = client.get("/api/func-ids").json()
-    assert [c["id"] for c in body] == list(facts_mod.CATEGORY_BY_FUNC)
-    ids = {c["id"] for c in body}
-    assert {"mockServices", "proxyRecorder"} <= ids
-    assert "sv-bridge" not in ids                 # retired, so not offered
+    in TypeScript caused, and then what a hardcoded copy in Python caused after
+    it. The account is the vocabulary, so a funcId it adds is selectable with no
+    edit here and one it retires leaves the form on its own."""
+    connect(monkeypatch, FakeClient())
+    body = client.get("/api/func-ids?account_id=291446").json()
+    ids = [c["id"] for c in body]
+
+    assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
+    # Retired: the account stopped serving either, so neither is offered --
+    # without a rule here naming them.
+    assert "functionalApi" not in ids and "sv-bridge" not in ids
     assert all(c["label"] for c in body)
 
 
-def test_unlabelled_func_id_is_still_offered(monkeypatch):
-    """The label map is presentation only, so a funcId added to the facts layer
-    without one must still appear under its raw name -- the same deliberate
-    failure mode as the SV ingress picker. Dropping it would hide the
-    functionality
-    exactly like the hardcoded list did."""
-    from bzm_opl_gen import facts as facts_mod
-    monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
+def test_the_vocabulary_is_reachable_with_no_account_at_all():
+    """The page asks on mount, before a key exists; manual entry never has an
+    account. `account_id` is therefore optional, and the answer with none is the
+    three funcIds this tool covers, under the names the account would give
+    them."""
     body = client.get("/api/func-ids").json()
-    # Matched on id/label rather than the whole row: the row carries other
-    # fields, and what this pins is that an unlabelled funcId is still offered
-    # under its raw name.
-    assert {"id": "tdm", "label": "tdm"} in [
-        {"id": r["id"], "label": r["label"]} for r in body]
+    assert [(c["id"], c["label"], c["covered"]) for c in body] == [
+        ("performance", "Performance", True),
+        ("functionalGui", "GUI Functional", True),
+        ("mockServices", "Service Virtualization", True)]
+
+
+def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
+    """The display name is the account's, so a funcId it serves without one must
+    still appear -- under the raw id, which is what a location carrying it shows
+    anyway. Dropping it would hide the functionality exactly like the hardcoded
+    list did."""
+    class Unnamed(FakeClient):
+        def functionalities(self, account_id):
+            return {"functionalities": [{"funcId": "brandNew", "size": 1}]}
+
+    connect(monkeypatch, Unnamed())
+    body = client.get("/api/func-ids?account_id=291447").json()
+    assert [(r["id"], r["label"], r["covered"]) for r in body] == [
+        ("brandNew", "brandNew", False)]
+
+
+def test_reading_the_vocabulary_is_not_a_write(monkeypatch):
+    """It is account-scoped, so it is cached with the other account reads -- and
+    it is a read, so it must not carry `_writes`, which drops that cache. A
+    vocabulary that dropped the cache would re-fetch the account's locations
+    every time the page reconnected."""
+    fake = connect(monkeypatch, FakeClient())
+    server._cache.clear()
+    client.get("/api/func-ids?account_id=291446")
+    client.get("/api/func-ids?account_id=291446")
+    assert [c for c in fake.calls if c[0] == "functionalities"] == [
+        ("functionalities", 291446)]
 
 
 def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():

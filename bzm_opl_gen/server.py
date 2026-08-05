@@ -757,8 +757,24 @@ def option_docs():
 
 
 @app.get("/api/func-ids", description=core.func_ids.__doc__)
-def func_ids():
-    return core.func_ids()
+def func_ids(account_id: Optional[int] = None):
+    """The funcId vocabulary, the account's where one is named.
+
+    Optional rather than required, and that is the point: the page asks for
+    this on mount, with no key in the process and no account chosen, and gets
+    the keyless baseline; it asks again with the account and gets what the
+    account actually offers. Requiring the parameter would make the vocabulary
+    unreachable exactly when the page needs it most.
+
+    Cached per account with the rest of the account reads -- it is
+    account-scoped, and a page that re-asks on every reconnect would re-ask
+    BlazeMeter. Not `_writes`: reading what an account is entitled to changes
+    nothing about it.
+    """
+    if account_id is None:
+        return core.func_ids()
+    return _cached(f"func-ids:{account_id}",
+                   _answer, core.func_ids, _client(), account_id)
 
 
 @app.get("/api/functionalities", description=core.functionalities.__doc__)
