@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FuncIdChoice, Functionality, Options } from "./api";
+import { FuncIdVocabulary, Functionality, Options } from "./api";
 import {
   allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
   enabledFunctionalities, groupsOf,
@@ -314,19 +314,36 @@ const SECRETS: Functionality = {
 };
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
+/** funcIds no account serves any more, still carried by the locations created
+ *  before they were retired -- 43 and 62 of one account's 171. */
+const RETIRED = ["functionalApi", "sv-bridge"];
+/** Three of `functionalGui`'s 117 browser pins. Several, not one: a reader
+ *  keeping them in a list rather than a set looks right on one. */
+const PINS = ["chrome:default", "firefox:139", "safari:15"];
 /** The funcId vocabulary /api/func-ids serves once an account has been read --
- *  the account's own display names, and `covered` false for every funcId this
- *  tool has no options for. Keyless it is the three covered ones only, which is
+ *  the account's own display names, `covered` false for every funcId this tool
+ *  has no options for, and the browser pins under the parent they are a
+ *  parameter of. Keyless it is the three covered ones with no pins, which is
  *  what NO_ACCOUNT stands in for. */
-const VOCABULARY: FuncIdChoice[] = [
-  { id: "performance", label: "Performance", changes_images: true, covered: true },
-  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true },
-  { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true },
-  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false },
-  { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false },
-  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false },
-];
-const NO_ACCOUNT: FuncIdChoice[] = VOCABULARY.filter((c) => c.covered);
+const VOCABULARY: FuncIdVocabulary = { source: "account", choices: [
+  { id: "performance", label: "Performance", changes_images: true, covered: true,
+    sub_func_ids: [] },
+  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true,
+    sub_func_ids: PINS },
+  { id: "mockServices", label: "Service Virtualization", changes_images: true,
+    covered: true, sub_func_ids: [] },
+  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false,
+    sub_func_ids: [] },
+  { id: "dataPublisher", label: "Data Orchestration", changes_images: false,
+    covered: false, sub_func_ids: [] },
+  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false,
+    sub_func_ids: [] },
+] };
+const NO_ACCOUNT: FuncIdVocabulary = {
+  source: "baseline",
+  choices: VOCABULARY.choices
+    .filter((c) => c.covered).map((c) => ({ ...c, sub_func_ids: [] })),
+};
 
 describe("the split the configure step is built on", () => {
   it("puts every group in exactly one bucket", () => {
@@ -391,10 +408,12 @@ describe("which functionality a location starts on", () => {
       .toBe("mockServices");
     expect(startFunctionality(UNMODELLED, FUNCTIONALITIES)).toBe("performance");
     expect(functionalitiesOf(UNMODELLED, FUNCTIONALITIES)).toEqual([]);
-    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES,
+                            VOCABULARY).uncovered)
       .toHaveLength(UNMODELLED.length);
-    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES, VOCABULARY))
-      .toEqual([]);
+    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES,
+                            VOCABULARY))
+      .toEqual({ uncovered: [], retired: [] });
     expect(startFunctionality([], FUNCTIONALITIES)).toBe("performance");
     expect(startFunctionality(undefined, FUNCTIONALITIES)).toBe("performance");
   });
@@ -409,7 +428,8 @@ describe("which functionality a location starts on", () => {
     expect(functionalitiesOf(["functionalApi", "proxyRecorder"], FUNCTIONALITIES))
       .toEqual([]);
     expect(unclaimedFuncIds(["performance", "functionalApi"], FUNCTIONALITIES,
-                            VOCABULARY)).toEqual(["functionalApi"]);
+                            VOCABULARY))
+      .toEqual({ uncovered: [], retired: ["functionalApi"] });
   });
 
   it("names the funcIds it has no options for, in the account's own words", () => {
@@ -417,20 +437,59 @@ describe("which functionality a location starts on", () => {
     // configures none of them, and BlazeMeter has a name for each -- so the
     // sentence on the configure step is "also runs TDM Integration", not a
     // camelCase id the reader has to recognise.
-    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES,
+                            VOCABULARY).uncovered)
       .toEqual(["TDM Integration", "Data Orchestration", "Delphix Integration"]);
   });
 
-  it("falls back to the raw funcId where no account has been read", () => {
-    // The keyless vocabulary is the three covered funcIds, so nothing here can
-    // name `tdm` -- and naming it wrongly, or dropping it, are both worse than
-    // showing what the location literally carries. `functionalApi` is the same
-    // case with an account: the account retired it, locations still have it.
-    expect(unclaimedFuncIds([...UNMODELLED, "functionalApi"], FUNCTIONALITIES,
-                            NO_ACCOUNT))
-      .toEqual([...UNMODELLED, "functionalApi"]);
+  it("tells a funcId the account retired from one it never had options for", () => {
+    // Two sentences, because they are two answers (#160). `tdm` is served by
+    // the account and configured nowhere here; `sv-bridge` is not served at
+    // all, and the only way a location has one is that it predates the
+    // removal. Told apart on `source`: with the account's own vocabulary in
+    // hand, absent *is* retired, and there is no third case -- a funcId
+    // nobody ever served cannot get onto a location.
+    //
+    // Retired ones keep their raw id, and honestly: the display name is the
+    // account's, and the account no longer has a row to read one off.
+    expect(unclaimedFuncIds([...RETIRED, "tdm", "performance"], FUNCTIONALITIES,
+                            VOCABULARY))
+      .toEqual({ uncovered: ["TDM Integration"], retired: RETIRED });
     expect(unclaimedFuncIds(["functionalApi", "tdm"], [SV], VOCABULARY))
-      .toEqual(["functionalApi", "TDM Integration"]);
+      .toEqual({ uncovered: ["TDM Integration"], retired: ["functionalApi"] });
+  });
+
+  it("never names a browser pin, whether or not its parent is covered", () => {
+    // The reported bug (#160). A pin is a *parameter* of `functionalGui` --
+    // which browser it runs -- not a capability of its own, and 43% of one
+    // account's locations carry at least one, 41 on the worst. Tested against
+    // the top-level vocabulary alone every one of them fell through as
+    // something this tool has no options for, and buried the two funcIds the
+    // sentence exists for underneath.
+    expect(unclaimedFuncIds(["functionalGui", ...PINS], FUNCTIONALITIES,
+                            VOCABULARY))
+      .toEqual({ uncovered: [], retired: [] });
+    // ...and with the parent uncovered too: the pin is a parameter of the
+    // parent whether or not this tool configures the parent, so a page that
+    // named the parent once and its pins 41 times would be no better.
+    expect(unclaimedFuncIds(["functionalGui", ...PINS, "sv-bridge"], [SV],
+                            VOCABULARY))
+      .toEqual({ uncovered: ["GUI Functional"], retired: ["sv-bridge"] });
+  });
+
+  it("says nothing at all where no account has been read", () => {
+    // The keyless vocabulary is the three covered funcIds and no pins, so
+    // nothing here can tell `tdm` from `chrome:default` from a funcId the
+    // account retired -- and the honest answer to a question nobody has read
+    // the answer to is silence, which is the direction DOCKER_IGNORED and the
+    // reserved-env table already take. It used to name the raw funcIds, which
+    // is how a GUI Functional location got 41 lines of browser.
+    expect(unclaimedFuncIds([...UNMODELLED, ...PINS, ...RETIRED], FUNCTIONALITIES,
+                            NO_ACCOUNT))
+      .toEqual({ uncovered: [], retired: [] });
+    // Empty is not "there is nothing there" here, and nothing has to remember
+    // which: `source` is on the answer the vocabulary came in.
+    expect(NO_ACCOUNT.source).toBe("baseline");
   });
 
   it("offers a functionality added to the vocabulary, with no change here", () => {

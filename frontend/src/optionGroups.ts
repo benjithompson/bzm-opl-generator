@@ -10,7 +10,7 @@
 // Nothing in this file imports React: it is plain data in, plain data out,
 // which is what makes optionGroups.test.ts possible without a DOM.
 
-import { FuncIdChoice, Functionality, Options } from "./api";
+import { FuncIdVocabulary, Functionality, Options } from "./api";
 // The environment area's own rule about what blocks the step. The area is not
 // a group -- it is a list of the variables no group here writes, with a
 // name/value editor under it (see EnvVars) -- so the only thing this file wants
@@ -795,32 +795,67 @@ export function functionalitiesOf(
     .map((f) => f.id);
 }
 
-/** What to call the funcIds a location has that no served functionality claims.
+/** The funcIds a location has that no card claims, in the two kinds they are.
  *
  *  Named on screen rather than dropped: this tool covers three funcIds, accounts
  *  serve nine, and "this location also runs X, which there are no options for"
  *  is a truthful thing to say where silence reads as coverage.
  *
- *  Names, not ids, and that is what `choices` is for (#148). /api/func-ids is
- *  the account's own vocabulary once one has been read, so an unclaimed funcId
- *  gets BlazeMeter's display name -- "TDM Integration", the words the customer
- *  sees in their own UI. Where no account has been read the served list is the
- *  covered baseline and holds none of these, so the answer is the raw funcId:
- *  what the location literally carries, which is worse than a display name and
- *  much better than a guess. `functionalApi` is the same case *with* an
- *  account -- BlazeMeter retired it and locations still have it -- so the
- *  fallback is not only a startup state.
+ *  **`uncovered` and `retired` are two answers, and the page says which** (#160).
+ *  The account serves `tdm` and this tool configures it nowhere; it does not
+ *  serve `sv-bridge` at all, and the only way a location has one is that it was
+ *  created before the removal -- 43 locations still carry `functionalApi` and 62
+ *  `sv-bridge` in one real account. Both belong on screen and neither sentence
+ *  is the other's.
  *
- *  Since the split (#149) `functionalApi` and `proxyRecorder` arrive here too:
- *  `performance` used to claim them, which is what made its label name four
- *  things at once. Named beside the cards is the honest place for a funcId
- *  nothing here configures. */
+ *  Told apart on `source` and never by remembering which fetch filled the list:
+ *  with the account's own vocabulary in hand, absent *is* retired, and there is
+ *  no third case, because a funcId nobody ever served cannot get onto a
+ *  location. `uncovered` is named -- BlazeMeter's display name, the words the
+ *  customer's own UI uses -- and `retired` keeps the raw funcId, because the
+ *  name was the account's and the account no longer has a row to read one off.
+ *
+ *  **A browser pin is neither, and says nothing at all.** `functionalGui`
+ *  carries 117 of them (`chrome:default`, `firefox:139`), they arrive in a
+ *  location's `funcIds` beside the parent, and a pin is a *parameter* -- which
+ *  browser -- rather than a capability the location has in its own right.
+ *  Tested against the top-level vocabulary alone, every one fell through here:
+ *  43% of one account's 171 locations, 41 pins on the worst, burying the two
+ *  funcIds the sentence exists for. Skipped whether or not the parent is
+ *  covered, since what a pin is a parameter *of* does not depend on that. A pin
+ *  the account has also retired reads as retired rather than being guessed at
+ *  from its shape: "the account no longer offers this" is true of it too, and a
+ *  rule about colons in BlazeMeter's ids would be this repo inventing a default
+ *  for something only the account knows.
+ *
+ *  **With the baseline, nothing is unclaimed.** It holds the three covered
+ *  funcIds and no pins, so it cannot tell `tdm` from `chrome:default` from
+ *  something retired, and an answer is not a guess: empty means "not read yet",
+ *  which is the direction `DOCKER_IGNORED` and the reserved-env table already
+ *  take. It used to fall back to the raw funcId, which is defensible for `tdm`
+ *  and is how a GUI Functional location got 41 lines of browser. */
+export type UnclaimedFuncIds = {
+  /** Served by the account, configured nowhere here. Display names. */
+  uncovered: string[];
+  /** Not served by the account any more. Raw funcIds. */
+  retired: string[];
+};
+
 export function unclaimedFuncIds(
     funcIds: string[] | undefined, functionalities: Functionality[],
-    choices: FuncIdChoice[]): string[] {
-  return (funcIds ?? [])
-    .filter((id) => !functionalities.some((f) => f.id === id))
-    .map((id) => choices.find((c) => c.id === id)?.label ?? id);
+    vocabulary: FuncIdVocabulary): UnclaimedFuncIds {
+  if (vocabulary.source !== "account") return { uncovered: [], retired: [] };
+  const pins = new Set(vocabulary.choices.flatMap((c) => c.sub_func_ids));
+  const served = new Map(vocabulary.choices.map((c) => [c.id, c.label]));
+  const rest = (funcIds ?? []).filter(
+    (id) => !functionalities.some((f) => f.id === id) && !pins.has(id));
+  return {
+    // flatMap over map+filter so the name and the membership test are one read:
+    // a row the account serves has a label, because the server falls back to the
+    // raw funcId for one it never named.
+    uncovered: rest.flatMap((id) => served.get(id) ?? []),
+    retired: rest.filter((id) => !served.has(id)),
+  };
 }
 
 /** Which functionality to open a location on: the first served one its funcIds

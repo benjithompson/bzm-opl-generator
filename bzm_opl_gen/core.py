@@ -1858,8 +1858,11 @@ def covered_func_ids():
 
 
 def func_ids(client=None, account_id=None):
-    """The funcId vocabulary: what a location can be created with, and what
-    each funcId a location already carries is called.
+    """The funcId vocabulary: what a location can be created with, what each
+    funcId a location already carries is called, and which of them are not
+    funcIds in their own right at all.
+
+    `{"source": "account" | "baseline", "choices": [...]}`.
 
     The account's, where there is one -- BlazeMeter serves the list and the
     display names, and a table written here disagreed with it in both
@@ -1874,7 +1877,27 @@ def func_ids(client=None, account_id=None):
     answer is covered_func_ids(): the three this tool configures, under the
     names the account would give them.
 
-    `covered` says which of those two an entry is. A row this tool can only
+    **`source` is which of those two this answer is**, and it exists because a
+    funcId missing from the list means opposite things in them (#160). Against
+    the account, missing is *retired*: BlazeMeter stopped serving it, and the
+    locations that predate the removal still carry it. Against the baseline,
+    missing means nothing whatsoever -- six of the account's nine funcIds are
+    missing from the baseline too. A caller that had to remember which call it
+    made would be one refactor from saying "retired" about a vocabulary nobody
+    read, which is this repo's oldest bug wearing a new noun.
+
+    **`sub_func_ids` is what a funcId is a *parameter* of its parent by.**
+    `functionalGui` carries 117 of them -- `chrome:default`, `firefox:139`,
+    `safari:15` -- and they arrive in a location's `funcIds` beside the parent,
+    which is what made 43% of one account's 171 locations look like they ran
+    something this tool has no options for. A pin says which browser GUI
+    Functional uses; it is not a capability the location has on its own, and
+    nothing here will ever grow options for one apart from its parent. Served
+    under the parent rather than flattened into the list: the row that knows
+    which functionality a pin belongs to is the only one that can say, and a
+    flat set could not answer it.
+
+    `covered` says whether this tool configures an entry. A row it can only
     name is still served, because a page that dropped it would say nothing
     about a functionality the location runs, and silence there reads as
     coverage.
@@ -1888,20 +1911,27 @@ def func_ids(client=None, account_id=None):
     """
     covered = covered_func_ids()
     if client is None or account_id is None:
-        rows = list(covered.items())
+        # No pins, because only the account knows them -- and `source` is what
+        # keeps that from reading as an account whose GUI Functional has none.
+        source, rows = "baseline", [(f, label, []) for f, label in covered.items()]
     else:
+        source = "account"
         served = _upstream(client.functionalities, account_id) or {}
         # `displayName` falling back to the funcId rather than to a table here:
         # an entry the account added and never named is offered under its raw
-        # id, which is exactly what a location carrying it would show.
-        # `subFunctionalities` is left alone -- consuming it is #152's.
-        rows = [(f["funcId"], f.get("displayName") or f["funcId"])
+        # id, which is exactly what a location carrying it would show. A pin is
+        # taken by `id` alone -- its own displayName ("Chrome Default") names a
+        # browser rather than a functionality, and nothing offers or asks for one.
+        rows = [(f["funcId"], f.get("displayName") or f["funcId"],
+                 [s["id"] for s in f.get("subFunctionalities") or [] if s.get("id")])
                 for f in served.get("functionalities") or [] if f.get("funcId")]
     distinct = set(facts_mod.image_distinct_funcs())
-    return [{"id": f, "label": label,
-             "changes_images": f in distinct,
-             "covered": f in covered}
-            for f, label in rows]
+    return {"source": source,
+            "choices": [{"id": f, "label": label,
+                         "changes_images": f in distinct,
+                         "covered": f in covered,
+                         "sub_func_ids": subs}
+                        for f, label, subs in rows]}
 
 
 def docker_ignored():

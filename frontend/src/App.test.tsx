@@ -29,8 +29,8 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import {
-  AgentStatus, Api, Capacity, CapacityPlan, Facts, Functionality, Location,
-  Options, Ship, TokenRequest,
+  AgentStatus, Api, Capacity, CapacityPlan, Facts, FuncIdChoice,
+  FuncIdVocabulary, Functionality, Location, Options, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table, from the one copy of it.
@@ -46,6 +46,17 @@ import { EMPTY_PLAN_INPUTS } from "./usePlan";
 // the same fixture the page's own /api/sizing-models stub answers with.
 import { defaultSizings } from "./sizings";
 const DEFAULT_SIZINGS = defaultSizings(SIZING_MODELS);
+
+/** The funcId vocabulary as /api/func-ids answers it: the rows, and which of
+ *  the two lists they are. Written out rather than defaulted, because `source`
+ *  is load-bearing -- the account's list makes a funcId missing from it
+ *  *retired*, and the baseline's makes it nothing at all (#160). A test whose
+ *  subject is elsewhere passes the baseline with no rows, which is honestly
+ *  what a fake that answers the same thing to both calls has read. */
+const vocabulary = (choices: FuncIdChoice[],
+                    source: FuncIdVocabulary["source"]): FuncIdVocabulary =>
+  ({ source, choices });
+const NO_VOCABULARY = vocabulary([], "baseline");
 
 afterEach(cleanup);
 // The page writes its selections to sessionStorage, and one test's would
@@ -93,7 +104,7 @@ test("a slow capacity answer for the previous account never lands under the new 
       // is about the capacity read and a location list would only add noise.
       workspaces: async () => [],
       optionDefaults: async () => ({}),
-      funcIdChoices: async () => [],
+      funcIdVocabulary: async () => NO_VOCABULARY,
       functionalities: async () => [],
       svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
       capacity: (accountId: number) =>
@@ -202,7 +213,7 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
       namespace: "blazemeter", service_account_name: "crane",
       platform: "openshift", output_format: "helm",
     }),
-    funcIdChoices: async () => [],
+    funcIdVocabulary: async () => NO_VOCABULARY,
     functionalities: async () => [{
       id: "mockServices", label: "Service Virtualization",
       namespace: "blazemeter-sv", runs_engine: false,
@@ -327,7 +338,7 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
       namespace: "blazemeter", service_account_name: "crane",
       output_format: "manifests",
     }),
-    funcIdChoices: async () => [],
+    funcIdVocabulary: async () => NO_VOCABULARY,
     functionalities: async () => [
       { id: "performance", label: "Performance", namespace: "blazemeter",
         runs_engine: true },
@@ -477,28 +488,41 @@ test("a location that runs one functionality shows one card, with nothing config
 
 /** ...that account, with such a location. Its funcId vocabulary answers the way
  *  the server does: the covered baseline with no account, and the account's own
- *  nine -- names and all -- once one is named (#148). */
-const unclaimedAccount = (record: Options[]) =>
+ *  nine -- names, pins and all -- once one is named (#148, #160).
+ *
+ *  `funcIds` is what the location carries, `["tdm"]` unless a test says
+ *  otherwise: a funcId no functionality claims, which is the state the
+ *  format-refusal tests below need (nobody has said what this location runs).
+ *  A test about what gets *named* passes its own. */
+const unclaimedAccount = (record: Options[], funcIds = ["tdm"]) =>
   twoFunctionalityAccount(record, {
     locations: async () => [{
-      id: "h-tdm", name: "Tdm", funcIds: ["tdm"], slots: 1,
+      id: "h-tdm", name: "Tdm", funcIds, slots: 1,
       ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
     }],
     facts: async () => ({
-      harbor_id: "h-tdm", func_ids: ["tdm"],
+      harbor_id: "h-tdm", func_ids: funcIds,
       ships: [{ id: "s-1", name: "agent-1" }], images: [],
     }),
-    funcIdChoices: async (accountId?: number) => accountId ? [
+    funcIdVocabulary: async (accountId?: number) => accountId ? vocabulary([
       { id: "performance", label: "Performance", changes_images: true,
-        covered: true },
+        covered: true, sub_func_ids: [] },
       { id: "mockServices", label: "Service Virtualization",
-        changes_images: true, covered: true },
+        changes_images: true, covered: true, sub_func_ids: [] },
+      // Three of the 117 pins the account serves under this one. They are not
+      // rows of their own anywhere: not here, and not in a location's funcIds
+      // where they arrive beside the parent.
+      { id: "functionalGui", label: "GUI Functional", changes_images: true,
+        covered: true,
+        sub_func_ids: ["chrome:default", "firefox:139", "safari:15"] },
       { id: "tdm", label: "TDM Integration", changes_images: false,
-        covered: false },
-    ] : [
+        covered: false, sub_func_ids: [] },
+      // `functionalApi` and `sv-bridge` are deliberately absent, as they are
+      // from the real account: 43 and 62 of its 171 locations still carry one.
+    ], "account") : vocabulary([
       { id: "performance", label: "Performance", changes_images: true,
-        covered: true },
-    ],
+        covered: true, sub_func_ids: [] },
+    ], "baseline"),
   });
 
 test("a funcId this tool has no options for is named in the account's own words",
@@ -524,6 +548,40 @@ test("a funcId this tool has no options for is named in the account's own words"
     // vocabulary arriving and nothing reading it.
     expect(screen.queryByText(/\btdm\b/)).toBeNull();
   });
+
+test("a browser pin is not a funcId this tool has no options for", async () => {
+  // #160, end to end. This location is the shape 43% of one account's are: the
+  // parent beside the browsers it is pinned to, plus a funcId the account
+  // retired years ago. Every pin used to be named on the configure step as
+  // something this tool has no options for -- 41 of them on the worst location
+  // -- which is a true sentence about nothing and buried the one funcId the
+  // sentence exists for.
+  session.save({
+    sourceMode: "connect", accountId: 1, workspaceId: 10,
+    harborId: "h-tdm", shipId: "s-1",
+    confirmed: { loc: "h-tdm", ship: "s-1" },
+    manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
+    options: { namespace: "blazemeter" },
+    step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
+  });
+  render(<App api={unclaimedAccount([], [
+    "functionalGui", "chrome:default", "firefox:139", "safari:15", "sv-bridge",
+  ])} />);
+  fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
+
+  // The retired one, and it is the whole of that sentence: the account does not
+  // serve `sv-bridge`, so this location was created before the removal.
+  expect(await screen.findByText(/no longer offers/)).toBeTruthy();
+  expect(screen.getByText("sv-bridge")).toBeTruthy();
+  // Not one pin anywhere on the page. `functionalGui` is uncovered here -- this
+  // account's served functionalities are performance and SV -- so this is also
+  // the case where the parent is named and its pins still are not: what a pin
+  // is a parameter *of* does not depend on whether that is configurable.
+  for (const pin of ["chrome:default", "firefox:139", "safari:15"]) {
+    expect(screen.queryByText(new RegExp(pin))).toBeNull();
+  }
+  expect(screen.getByText(/GUI Functional/)).toBeTruthy();
+});
 
 test("an SV configuration no location demanded still takes away the formats that refuse it",
   async () => {
@@ -770,7 +828,7 @@ function perfAccount(extra: Partial<Api> = {}) {
       namespace: "blazemeter", service_account_name: "crane",
       output_format: "manifests",
     }),
-    funcIdChoices: async () => [],
+    funcIdVocabulary: async () => NO_VOCABULARY,
     functionalities: async () => [{
       id: "performance", label: "Performance", namespace: "blazemeter",
       runs_engine: true,
@@ -1236,9 +1294,10 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       namespace: "blazemeter", service_account_name: "crane",
       output_format: "manifests",
     }),
-    funcIdChoices: async () => [
-      { id: "performance", label: "Performance", changes_images: true, covered: true },
-    ],
+    funcIdVocabulary: async () => vocabulary([
+      { id: "performance", label: "Performance", changes_images: true,
+        covered: true, sub_func_ids: [] },
+    ], "baseline"),
     functionalities: async () => [{
       id: "performance", label: "Performance", namespace: "blazemeter",
       runs_engine: true,
@@ -1357,12 +1416,12 @@ test("a GUI Functional location says its slot minimum before Create is pressed",
     // after the account has thrown the write away.
     const created: unknown[] = [];
     render(<App api={accountOf([loc("h-0", "Region 0")], {
-      funcIdChoices: async () => [
+      funcIdVocabulary: async () => vocabulary([
         { id: "performance", label: "Performance", changes_images: true,
-          covered: true },
+          covered: true, sub_func_ids: [] },
         { id: "functionalGui", label: "GUI Functional", changes_images: true,
-          covered: true },
-      ],
+          covered: true, sub_func_ids: [] },
+      ], "account"),
       slotMinimums: async () => SLOT_MINIMUMS,
       createLocation: async (body) => { created.push(body); return loc("h-new", "x"); },
     })} />);
@@ -1923,11 +1982,12 @@ function manualPage(asked: string[][], generated: Options[] = [],
                     extra: Partial<Api> = {}) {
   return twoFunctionalityAccount(generated, {
     keyStatus: async () => ({ connected: false }),
-    funcIdChoices: async () => [
-      { id: "performance", label: "Performance", changes_images: true, covered: true },
+    funcIdVocabulary: async () => vocabulary([
+      { id: "performance", label: "Performance", changes_images: true,
+        covered: true, sub_func_ids: [] },
       { id: "mockServices", label: "Service Virtualization", changes_images: true,
-        covered: true },
-    ],
+        covered: true, sub_func_ids: [] },
+    ], "baseline"),
     manualFacts: async (b) => {
       asked.push(b.func_ids);
       return {
@@ -2480,7 +2540,7 @@ const unconnected = (extra: Partial<Api>) => fakeApi({
   keyDetect: async () => ({ candidates: [], active_key_id: null }),
   keyStatus: async () => ({ connected: false }),
   optionDefaults: async () => ({ namespace: "blazemeter" }),
-  funcIdChoices: async () => [],
+  funcIdVocabulary: async () => NO_VOCABULARY,
   functionalities: async () => [],
   svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
   // Per model, as the route answers: the card reads each row's own rating,

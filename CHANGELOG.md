@@ -191,6 +191,31 @@ anything that breaks.
   *Another variable by name*, and the bundle still writes it. Where no location
   has been chosen yet, the whole reference is offered.
 
+- **A browser your GUI Functional location is pinned to is not a capability
+  this tool is missing.** The configure step names the funcIds a location
+  carries that it has no options for — and it was naming every browser pin
+  among them. `chrome:default`, `firefox:139` and `safari:15` arrive in a
+  location's funcIds beside `functionalGui`, which serves 117 of them; 43% of
+  one real account's 171 locations carry at least one, and the worst carries 41.
+  A pin says *which browser* GUI Functional uses. It is a parameter of that
+  functionality, not a capability of its own, and it is no longer listed.
+
+  **What is left is what the line is for, in two sentences rather than one.**
+  A funcId your account serves and this tool configures nowhere — TDM
+  Integration, Delphix — reads as before. A funcId your account no longer serves
+  at all now says so: `functionalApi` and `sv-bridge` were retired, 43 and 62
+  locations in that same account still carry one, and "the account no longer
+  offers that funcId, so this location predates the removal" is a different
+  sentence from "there are no options here for it". Neither is generated or
+  removed by anything here.
+
+  **Where no account has been read, nothing is listed.** The vocabulary is then
+  the three funcIds this tool covers and carries no pins, so it cannot tell a
+  browser from a retired funcId — and an empty answer means "not read yet",
+  which is the direction the docker-ignored and reserved-variable tables already
+  take. It used to fall back to the raw funcId, which is how a GUI Functional
+  location got 41 lines of browser.
+
 ### Changed
 
 - **Entering an identity by hand declares everything it runs, not one thing.**

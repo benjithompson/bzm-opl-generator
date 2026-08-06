@@ -2,7 +2,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Functionality,
   GeneratedFile, ManualFactsOut, TokenReport,
-  FuncIdChoice, Location, Options, Ship, SvCheckOut,
+  FuncIdVocabulary, Location, Options, Ship, SvCheckOut,
   SizingModel, SlotMinimum, SvConstants, SvMocksOut, Workspace,
 } from "./api";
 // What the last download or save did, as one record with one owner -- see
@@ -128,7 +128,13 @@ export default function App({ api }: { api: Api }) {
   // Served from facts.CATEGORY_BY_FUNC over /api/func-ids, not listed here: the
   // copy that used to live in this file omitted sv-bridge, so an SV-bridge
   // location could not be created from the UI at all.
-  const [funcIdChoices, setFuncIdChoices] = useState<FuncIdChoice[]>([]);
+  //
+  // The whole envelope, not its `choices`: `source` is what tells a funcId the
+  // account retired from one nobody has read the vocabulary for, and a reader
+  // handed the list alone would have to remember which fetch filled it (#160).
+  // "baseline" before either lands, which is what an empty list honestly is.
+  const [funcIds, setFuncIds] = useState<FuncIdVocabulary>(
+    { source: "baseline", choices: [] });
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
@@ -386,7 +392,7 @@ export default function App({ api }: { api: Api }) {
     api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.slotMinimums().then(setSlotMinimums).catch(() => {});
-    api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
+    api.funcIdVocabulary().then(setFuncIds).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
     api.sizingModels().then((ms) => {
       setSizingModels(ms);
@@ -642,7 +648,7 @@ export default function App({ api }: { api: Api }) {
   // all cannot even name what a location runs.
   useEffect(() => {
     if (!accountId || !who) return;
-    api.funcIdChoices(accountId).then(setFuncIdChoices).catch(() => {});
+    api.funcIdVocabulary(accountId).then(setFuncIds).catch(() => {});
   }, [accountId, who]);
 
   // The agent variables that are left, scoped to what this location runs
@@ -1282,10 +1288,10 @@ export default function App({ api }: { api: Api }) {
   // them. This is the funcIds the location carries that the tool has no options
   // for: locations already run tdm/dataPublisher/delphix, and naming them is
   // the honest version of a page that quietly models three funcIds. Named with
-  // the served vocabulary, so where an account has been read they carry
-  // BlazeMeter's own words rather than a camelCase id.
-  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities,
-                                        funcIdChoices);
+  // the served vocabulary, so they carry BlazeMeter's own words rather than a
+  // camelCase id -- and split by whether the account still serves them, which
+  // is why the whole vocabulary goes in and not its `choices` (#160).
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities, funcIds);
   // The second and last place an option is written without anyone pressing
   // anything, and the same shape as the SV correction above: what has to change
   // is a value optionGroups decides, this only applies it. A profile, a
@@ -1625,7 +1631,7 @@ export default function App({ api }: { api: Api }) {
                   // The draft the panel edits is four of the five fields; the
                   // workspace id is the drawer's and is merged back here.
                   setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
-                  choices: funcIdChoices, engines: engineFuncIds,
+                  choices: funcIds.choices, engines: engineFuncIds,
                   minimums: slotMinimums,
                   blockedBy: createLocBlockedBy,
                   submit: createLocationNow,
