@@ -157,10 +157,11 @@ is also why `livetest` consumes the same directory.
 
 `options.output_format` takes `docker` as well as `manifests` and `helm`. That
 one is not a cluster deployment at all — one agent as one container on a host,
-emitted as a `docker run` script — so the two dozen Kubernetes options are
-ignored rather than refused, and the `next` steps a generate comes back with are
-the script rather than a `kubectl apply`. See [docker.md](docker.md) before
-offering it.
+emitted as a `docker run` script and a `compose.yaml` for the same container —
+so the two dozen Kubernetes options are ignored rather than refused, and the
+`next` steps a generate comes back with are those two rather than a `kubectl
+apply`. They are either/or, and the steps say so. See [docker.md](docker.md)
+before offering it.
 
 ## `generate` issues no credential unless you say `rotate_token`
 
