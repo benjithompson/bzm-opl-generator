@@ -841,7 +841,19 @@ stale list can cost a credential nothing can read back.
   file, so the rule above has no counterpart here and parity with the script is
   what holds it honest: every fixed value (`DOCKER_USER`, `DOCKER_RESTART`,
   `DOCKER_NETWORK`, the mounts, the workdir, the entrypoint) is a constant both
-  renderers read, and the environment is `docker_split_env()` for both. Two
+  renderers read, and the environment is `docker_split_env()` for both. **The
+  constants make the comparison cheap; they are not what performs it** (#178) --
+  a value written into one file alone has no constant to be caught by. So the
+  two files are checked twice, and the questions are different:
+  `test_compose_and_docker_run_describe_the_same_container` parses both and
+  holds them against each other over `helm_parity.py`'s own matrix (pytest, and
+  it must not skip -- both sides are built in Python, so unlike helm parity
+  there is no binary to be missing), and the workflow's `docker` job runs
+  `docker compose config -q` over generated bundles, which parity cannot answer:
+  two python dicts can agree perfectly about a document compose refuses to
+  parse. The one difference the parity check licenses is a value nobody supplied
+  -- the marker to the script, `${...:?}` to compose (#183) -- and it is asserted
+  in both directions rather than skipped. Two
   traps, both silent: **never emit a file named `.env`** -- compose auto-loads
   that one for interpolation *into the compose file*, not into the container, so
   a token there never reaches crane while looking as though it had (the
