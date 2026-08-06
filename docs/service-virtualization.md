@@ -29,13 +29,22 @@ crane's istio backend reads it — setting it elsewhere would silently do nothin
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
 already exist (the generator names it, it does not create it).
 
-**Only `--format manifests` can carry this.** Configuring service
-virtualization takes `--format helm` and `--format docker` off the table: helm
-would emit a chart with no ingress, no SV RBAC and no TLS secret, which deploys,
-reports idle and stalls at `WAITING_FOR_DOMAIN`; a docker agent publishes mocks
-with `HOSTNAME_OVERRIDE` and a `TLS_CERT`/`TLS_KEY` pair, and every `sv_*`
-option here is a `KUBERNETES_WEB_EXPOSE_*` one. Both refusals follow what is
-**configured**, never the location's funcIds — so a `mockServices` location
+**Only `--format manifests` carries this today**, and the other two formats are
+refused for reasons that are not the same reason. Helm is a limit of *our
+chart*: it would emit one with no ingress, no SV RBAC and no TLS secret, which
+deploys, reports idle and stalls at `WAITING_FOR_DOMAIN`. Docker is a limit of
+*this generator* rather than of the agent — a docker agent serves virtual
+services perfectly well, publishing them with `HOSTNAME_OVERRIDE` and a
+`TLS_CERT`/`TLS_KEY` pair, and there is no option here for that shape, because
+every `sv_*` option this tool has writes a `KUBERNETES_WEB_EXPOSE_*` variable
+and a container agent reads none of them. Until
+[#182](https://github.com/benjithompson/bzm-opl-generator/issues/182) supplies
+those three, generate the docker bundle for performance and set
+`HOSTNAME_OVERRIDE`, `TLS_CERT` and `TLS_KEY` by hand on BlazeMeter's own
+`docker run` — their [bring your own certificate
+page](https://help.blazemeter.com/docs/guide/private-locations-optional-installation-step-bring-your-own-certificate-mock-services.html)
+carries a working one. Both refusals follow what is **configured**, never the
+location's funcIds — so a `mockServices` location
 generated `--sv-ingress none` is a performance bundle and both formats are
 available for it ([below](#not-using-it-on-a-location-that-offers-it)). Ask for
 either alongside an `sv_ingress` and `generate` refuses by name rather than
@@ -54,8 +63,12 @@ bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
 
 The bundle is then the performance one — no ingress, no SV RBAC, no TLS secret,
 and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and **`--format helm` and
-`--format docker` are both available again**, since there is nothing left for
-either to be missing. Both refusals are keyed on the *configuration* (an
+`--format docker` are both available again**, since neither is now being asked
+for the half it cannot express: our chart's absent ingress, RBAC and TLS secret,
+and this generator's absent `HOSTNAME_OVERRIDE`/`TLS_CERT`/`TLS_KEY`
+([#182](https://github.com/benjithompson/bzm-opl-generator/issues/182)), which
+is the docker agent's shape for the same job rather than anything the agent
+lacks. Both refusals are keyed on the *configuration* (an
 `sv_ingress` other than none), never on the location's funcIds, which is exactly
 why declining the functionality clears them. What
 you give up is what the refusal was protecting: deploy a virtual service to
