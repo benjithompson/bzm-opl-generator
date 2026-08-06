@@ -142,7 +142,10 @@ your own fork's `main` costs nobody anything.
 - CI is three jobs and all of them must be green: the offline suite on Python
   3.10 (the declared floor) and 3.13, which also generates the manifests and the
   chart from the sample facts; helm parity, which lints the chart first; and the
-  frontend's tests and typecheck.
+  frontend's tests and typecheck. **No run at all is not a pass** — push and
+  pull-request events are webhooks and can be dropped, and re-pushing an
+  unchanged ref emits nothing. Start one by hand instead:
+  `gh workflow run tests.yml --ref <branch>`.
 - If you change what a live check proves, update its offline counterpart and
   the relevant page under `docs/` in the same PR.
 - Add your entry to `## [Unreleased]` in `CHANGELOG.md` — that section is what
