@@ -62,7 +62,15 @@ import type { PlanInputs } from "./usePlan";
 // a declaration it cannot find and restore every other id and option -- a typed
 // SV identity landing back on Performance with its namespace intact, which is
 // the half-read state 7 was added to stop. Dropped whole instead.
-export const VERSION = 11;
+// 12: the declaration is a *list* (#151). A v11 snapshot holds a string where
+// this build reads an array, and every reader of it -- the vocabulary check,
+// the funcIds the facts are gathered for, the cards -- would take the string's
+// characters for ids. Migrating it to a one-element list is the obvious
+// alternative and is exactly what this file refuses to do: `load()` returns
+// null on a version it does not know, and a migration is a second shape of the
+// snapshot to keep right forever so that one refresh keeps a namespace. Dropped
+// whole, as 10 and 11 were.
+export const VERSION = 12;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -87,21 +95,27 @@ export interface Session {
    *  themselves to prove the browser was listening. */
   confirmed: { loc: string | null; ship: string | null };
   manual: { harbor_id: string; ship_id: string };
-  /** What manual entry declared the typed identity runs, or null.
+  /** What manual entry declared the typed identity runs.
    *
-   *  Kept with the ids because it is one of them: in manual entry the functionality
-   *  is not a view over a location, it is the declaration -- it names the funcId
-   *  the facts are gathered for, which names the images the bundle carries. It
-   *  was the one input deciding the bundle that a refresh did not restore, so a
-   *  service-virtualization identity came back a performance one (#118).
+   *  Kept with the ids because it is one of them: in manual entry a
+   *  functionality is not a view over a location, it is the declaration -- it
+   *  names the funcIds the facts are gathered for, which name the images the
+   *  bundle carries. It was the one input deciding the bundle that a refresh
+   *  did not restore, so a service-virtualization identity came back a
+   *  performance one (#118).
    *
-   *  Null in connect mode, and structurally rather than by convention: there the
-   *  functionality is derived from the location's funcIds, so a value written here
-   *  would pin a restored page to whatever was last on screen instead of to what
-   *  the account says. Restoring it is `App`'s, and it checks it against the
-   *  served vocabulary first -- the same rule the confirmations keep by being
-   *  stored as the ids they were made against. */
-  declaredFunctionality: string | null;
+   *  A list since #151, because one id could not say what a real location is:
+   *  71 of 168 locations in one account run performance and GUI functional
+   *  together. Dropping a member the vocabulary no longer offers must not drop
+   *  the rest, which is `App`'s check rather than this file's.
+   *
+   *  Empty in connect mode, and structurally rather than by convention: there
+   *  the functionalities are derived from the location's funcIds, so a value
+   *  written here would pin a restored page to whatever was last on screen
+   *  instead of to what the account says. Restoring it is `App`'s, and it checks
+   *  it against the served vocabulary first -- the same rule the confirmations
+   *  keep by being stored as the ids they were made against. */
+  declaredFunctionalities: string[];
   options: Options;
   step: number;
   /** Which of the two views is open. The account rollup is not a step, so the

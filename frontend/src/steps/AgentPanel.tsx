@@ -29,6 +29,11 @@ import {
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
+// The funcId list of a location being created is a declaration like manual
+// entry's, so it is edited by the same function and keeps the same rule: see
+// sv.exclusiveWith for why service virtualization is created on its own.
+import { toggleDeclared } from "../optionGroups";
+import { exclusiveWith, SV_ALONE } from "../sv";
 import { ManualSource } from "../groups/ManualSource";
 // Whether an agent is reporting, from one module rather than from a function
 // this panel is handed. Two readers here -- the count on a location's row and
@@ -767,12 +772,22 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
           {create.choices.map((c) => (
             <Check key={c.id} label={c.label}
               checked={draft.func_ids.includes(c.id)}
+              // The same rule the manual declaration keeps, at the other
+              // surface that *decides* what a location is: service
+              // virtualization is created on its own, because crane sizes every
+              // pod it creates from one CPU/memory pair. `toggleDeclared` is
+              // also what keeps the list in the order the boxes are drawn and
+              // free of the duplicate the old spread could produce.
               onChange={(on) => setDraft((d) => ({
                 ...d,
-                func_ids: on ? [...d.func_ids, c.id]
-                  : d.func_ids.filter((x) => x !== c.id),
+                func_ids: toggleDeclared(d.func_ids, c.id, on,
+                                         create.choices.map((x) => x.id),
+                                         exclusiveWith),
               }))} />
           ))}
+          {/* Said whether or not it has happened yet: a rule that only speaks
+              up after it has taken a tick away reads as the form losing one. */}
+          <p className="basis-full text-[11px] text-slate-500">{SV_ALONE}</p>
         </div>
         <Field label="Slots" hint="concurrent engines">
           <NumberInput className="w-20" value={String(draft.slots)}

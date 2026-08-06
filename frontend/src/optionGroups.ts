@@ -572,22 +572,67 @@ export function reservedList(
 /** Which functionalities this location runs, or null while nobody has answered.
  *
  *  Three states in one value, and the third is why it is not a plain array.
- *  Manual entry *declares* a functionality; a location read off the account carries
- *  the funcIds its functionalities come from; before either has happened the question
- *  is simply unanswered. Answering the unanswered case with `[]` takes every
- *  card's switches off the page while the account is still being read, and
- *  answering it with the whole list claims an enablement nobody has confirmed
- *  -- the same collapse from either end. */
+ *  Manual entry *declares* functionalities; a location read off the account
+ *  carries the funcIds its functionalities come from; before either has happened
+ *  the question is simply unanswered. Answering the unanswered case with `[]`
+ *  takes every card's switches off the page while the account is still being
+ *  read, and answering it with the whole list claims an enablement nobody has
+ *  confirmed -- the same collapse from either end.
+ *
+ *  `declared` is a list because a location is (#151), and it is handed through
+ *  rather than reduced to its first member: a bundle declared for performance
+ *  *and* GUI functional has to have both cards live, and the one that got
+ *  dropped is exactly the one whose card then said it had not been declared. */
 export function enabledFunctionalities(
-    mode: "connect" | "manual", declared: string | null,
+    mode: "connect" | "manual", declared: string[],
     locFunctionalities: string[]): string[] | null {
   // Manual declares rather than reads, so there is nothing outstanding: the
   // answer is the declaration, and no declaration yet is an empty one.
-  if (mode === "manual") return declared ? [declared] : [];
+  if (mode === "manual") return declared;
   // An account that has not been read and a location whose funcIds carry no
   // served functionality both arrive as an empty list, and "nothing has said" is the
   // honest answer to both.
   return locFunctionalities.length ? locFunctionalities : null;
+}
+
+/** The declaration after ticking or unticking `id`, in `order`.
+ *
+ *  Manual entry's checkbox and the new-location form's funcId list are the two
+ *  surfaces where a functionality is *chosen* rather than read, and both need
+ *  the same three things: the member added or removed, no duplicate, and a
+ *  stable order. `order` is the served vocabulary's (or the account's funcId
+ *  list, in the create form), so the result reads down the screen the way the
+ *  boxes do and the funcIds a bundle is gathered for do not shuffle when a box
+ *  is ticked -- which is what would make a request look new to every reader of
+ *  it, `manualFuncIds` included.
+ *
+ *  An id `order` does not carry is kept where it is: the create form offers the
+ *  account's whole vocabulary, and a location may already hold a funcId
+ *  BlazeMeter has since retired (43 locations carry `functionalApi`). Dropping
+ *  one silently is how a form edits something it never showed.
+ *
+ *  Emptying is allowed. A declaration nobody has made is a real state -- it is
+ *  what a fresh page holds before the vocabulary lands -- and the surface says
+ *  what it means rather than refusing the click; a checkbox that will not
+ *  untick is the off-screen blocker in one control.
+ *
+ *  `excludes` is what a tick takes away with it, and it is a parameter rather
+ *  than a table here: which functionalities cannot share a location is a fact
+ *  about crane's one pod-limit pair, which is service virtualization's to state
+ *  (sv.exclusiveWith). This file owns "a declaration is a list, in order"; it
+ *  has no opinion about what may be in one. */
+export function toggleDeclared(
+    declared: string[], id: string, on: boolean, order: string[],
+    excludes: (id: string) => string[]): string[] {
+  const want = new Set(declared);
+  if (on) {
+    want.add(id);
+    for (const gone of excludes(id)) want.delete(gone);
+  } else want.delete(id);
+  // A Set iterates in insertion order, so the ids `order` does not carry keep
+  // the order they were declared in, with a newly ticked one last.
+  return [...order.filter((f) => want.has(f)),
+          ...[...want].filter((f) => !order.includes(f))];
 }
 
 /** Does this location run the functionality? Unanswered counts as yes, deliberately:

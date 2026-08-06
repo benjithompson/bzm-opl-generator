@@ -381,7 +381,7 @@ test("a functionality a manually entered identity was not declared to run has "
     // was pressable, seeded an ingress with no domain behind it, and turned the
     // step red for a functionality nobody had asked for.
     expect(card("mockServices").queryByRole("switch")).toBeNull();
-    expect(card("mockServices").getByText(/pick/)).toBeTruthy();
+    expect(card("mockServices").getByText(/tick/)).toBeTruthy();
     // ...and this is not passing because no card rendered anything: the
     // declared functionality states the engine size its bundle will carry -- the
     // documented default, since manual mode has no location to read.
@@ -403,7 +403,7 @@ test("a restored profile's SV options for a location without mockServices are cl
       confirmed: { loc: "h-perf", ship: "s-1" },
       // Connect mode declared nothing, and cannot: what the location runs is
       // its funcIds, which is what makes these options a state nobody chose.
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -447,7 +447,7 @@ test("a location that runs one functionality shows one card, with nothing config
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -507,7 +507,7 @@ test("a funcId this tool has no options for is named in the account's own words"
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -531,7 +531,7 @@ test("an SV configuration no location demanded still takes away the formats that
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: {
         namespace: "blazemeter", output_format: "docker",
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
@@ -571,7 +571,7 @@ test("a functionality this bundle's format cannot serve is stated, not offered",
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter", output_format: "docker" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
     });
@@ -1674,7 +1674,7 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
       sourceMode: "connect" as const, accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
       confirmed: { loc: "h-perf", ship },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "ns" }, step: 0, view: "flow" as const,
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1705,7 +1705,7 @@ test("nothing is written back over a saved session until the restore has resolve
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1751,7 +1751,7 @@ test("nothing is written back over a saved session until the restore has resolve
       // Connected, nothing is declared -- and nothing is written down that
       // could pin the next load to a functionality the account never said. The
       // functionality here is derived from the location's funcIds every time (#118).
-      declaredFunctionality: null,
+      declaredFunctionalities: [],
     }));
   });
 
@@ -1761,7 +1761,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-dublin", shipId: "s-1",
       confirmed: { loc: "h-dublin", ship: "s-1" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1820,7 +1820,7 @@ test("an id the account no longer has is written away once the account has said 
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-gone", shipId: "s-gone",
       confirmed: { loc: "h-gone", ship: "s-gone" },
-      manual: { harbor_id: "", ship_id: "" }, declaredFunctionality: null,
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
@@ -1903,7 +1903,7 @@ test("declaring a functionality in manual entry suggests its namespace",
     const generated: Options[] = [];
     render(<App api={manualPage([], generated)} />);
     await declareManually();
-    fireEvent.click(card("mockServices").getByRole("radio"));
+    fireEvent.click(card("mockServices").getByRole("checkbox"));
 
     await waitFor(() => expect(generated.length).toBeGreaterThan(0));
     await waitFor(() =>
@@ -1985,7 +1985,7 @@ test("a restored declaration waits for the vocabulary rather than being lost to 
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFunctionality: "mockServices",
+      declaredFunctionalities: ["mockServices"],
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -2017,7 +2017,7 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFunctionality: "mockServices",
+      declaredFunctionalities: ["mockServices"],
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -2043,6 +2043,173 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
     // that is generated into every manifest is not part of it.
     expect(screen.getByPlaceholderText("e.g. blazemeter"))
       .toHaveProperty("value", "blazemeter-sv");
+  });
+
+// -- ...and the declaration is a list, because a location is (#151) -----------
+// One id was tenable while `performance` claimed four funcIds. Since #149 it is
+// not: a bundle declared for GUI functional alone carries `func_ids:
+// ['functionalGui']`, which is a location nobody would create, and 71 of the 168
+// locations in one real account run performance and GUI functional together.
+// The claim below that only a page can make is that the *list* survives a
+// refresh -- #118 exists because "the declaration is restored" was false once.
+
+/** The three covered functionalities, as the server serves them. */
+const THREE = [
+  { id: "performance", label: "Performance", namespace: "blazemeter" },
+  { id: "functionalGui", label: "GUI Functional", namespace: "blazemeter-gui" },
+  { id: "mockServices", label: "Service Virtualization",
+    namespace: "blazemeter-sv" },
+];
+
+test("a declaration of two functionalities is what the facts are gathered for "
+     + "after a refresh",
+  async () => {
+    const asked: string[][] = [];
+    const api = () => manualPage(asked, [], { functionalities: async () => THREE });
+    render(<App api={api()} />);
+    await declareManually();
+
+    // Performance is what a fresh manual session opens on; this adds the
+    // browser half, which is the pairing most of a real account's locations
+    // run. Both boxes are ticked at once, which a radio could not say.
+    fireEvent.click(card("functionalGui").getByLabelText("Enabled"));
+    await waitFor(() => expect(asked[asked.length - 1])
+      .toEqual(["performance", "functionalGui"]));
+    expect(card("performance").getByLabelText("Enabled"))
+      .toHaveProperty("checked", true);
+
+    // The refresh. sessionStorage survives it, which is the whole mechanism.
+    const asBefore = asked.length;
+    cleanup();
+    render(<App api={api()} />);
+
+    // A request of its own, then long enough for a late one to land behind it:
+    // the facts effect is debounced and the vocabulary it needs is served, so a
+    // second request under a shorter declaration is exactly the shape of this
+    // failure.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(asBefore));
+    await new Promise((r) => setTimeout(r, 400));
+    // The acceptance criterion, as the assertion. Restored as one id it was
+    // ["performance"], and the GUI half of the bundle -- its grid and its
+    // browser images -- was gathered for nothing.
+    expect(asked.slice(asBefore)).toEqual([["performance", "functionalGui"]]);
+    expect(card("functionalGui").getByLabelText("Enabled"))
+      .toHaveProperty("checked", true);
+  });
+
+test("a restored declaration keeps the members the vocabulary still offers",
+  async () => {
+    // The check #118 added, now that there is more than one thing to check.
+    // Dropping the whole declaration over one withdrawn member would inflict
+    // that loss on the members that are still offered -- and dropping nothing
+    // would gather the identity's facts for a funcId nothing serves, with no
+    // box on screen to say so or to change it with.
+    const asked: string[][] = [];
+    session.save({
+      sourceMode: "manual", accountId: null, workspaceId: null,
+      harborId: null, shipId: null, confirmed: { loc: null, ship: null },
+      manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
+      declaredFunctionalities: ["performance", "functionalGui"],
+      options: { namespace: "blazemeter" }, step: 1, view: "flow",
+      plan: EMPTY_PLAN_INPUTS,
+    });
+    render(<App api={manualPage(asked, [], {
+      // GUI functional is not in this build's vocabulary -- withdrawn, or a tab
+      // reloaded against a newer server.
+      functionalities: async () => [THREE[0], THREE[2]],
+    })} />);
+
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(asked[asked.length - 1]).toEqual(["performance"]);
+    expect(card("performance").getByLabelText("Enabled"))
+      .toHaveProperty("checked", true);
+    // ...and the namespace that was read back is still the one read back:
+    // dropping a member is a decision about the declaration, and rewriting a
+    // name generated into every manifest is not part of it.
+    expect(screen.getByPlaceholderText("e.g. blazemeter"))
+      .toHaveProperty("value", "blazemeter");
+  });
+
+test("declaring service virtualization clears the functionalities that run engines",
+  async () => {
+    // The one opinion this page is entitled to, and only where a location is
+    // being decided. Crane applies one CPU/memory limit pair to every pod it
+    // creates, so engine sizing and mock throughput cannot be set apart.
+    const asked: string[][] = [];
+    const generated: Options[] = [];
+    render(<App api={manualPage(asked, generated, {
+      functionalities: async () => THREE,
+    })} />);
+    await declareManually();
+    fireEvent.click(card("functionalGui").getByLabelText("Enabled"));
+    await waitFor(() => expect(asked[asked.length - 1])
+      .toEqual(["performance", "functionalGui"]));
+
+    fireEvent.click(card("mockServices").getByLabelText("Enabled"));
+
+    // The declaration, and therefore the images, are service virtualization's
+    // alone -- an SV agent carries crane, group-gateway and service-mock and no
+    // taurus engine at all.
+    await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
+    expect(card("performance").getByLabelText("Enabled"))
+      .toHaveProperty("checked", false);
+    expect(card("functionalGui").getByLabelText("Enabled"))
+      .toHaveProperty("checked", false);
+    // ...and the namespace follows the one thing now declared.
+    await waitFor(() => expect(
+      generated[generated.length - 1].namespace).toBe("blazemeter-sv"));
+
+    // Ticking an engine functionality again is the same statement the other way
+    // round: whichever was ticked second is the one just asked for.
+    fireEvent.click(card("performance").getByLabelText("Enabled"));
+    await waitFor(() => expect(asked[asked.length - 1]).toEqual(["performance"]));
+    expect(card("mockServices").getByLabelText("Enabled"))
+      .toHaveProperty("checked", false);
+  });
+
+test("the reason it is exclusive is on screen before anything is ticked",
+  async () => {
+    // A rule that only speaks up after it has taken a tick away reads as the
+    // page losing one.
+    render(<App api={manualPage([], [], { functionalities: async () => THREE })} />);
+    await declareManually();
+    expect(await screen.findByText(/one CPU and memory limit pair/)).toBeTruthy();
+  });
+
+test("a location that already mixes the two is warned about, never blocked",
+  async () => {
+    // The asymmetry (#147). Connected, the location exists and nothing here can
+    // un-mix it -- POST /api/locations/func-id was removed in #113, because
+    // changing what a location *is* belongs in BlazeMeter's own UI. So the
+    // bundle generates and the page says what the mixture costs.
+    session.save({
+      sourceMode: "connect", accountId: 1, workspaceId: 10,
+      harborId: "h-both", shipId: "s-1",
+      confirmed: { loc: "h-both", ship: "s-1" },
+      manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
+      options: { namespace: "blazemeter" },
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+    });
+    const asked: Options[] = [];
+    render(<App api={twoFunctionalityAccount(asked, {
+      locations: async () => [{
+        id: "h-both", name: "Both", funcIds: ["performance", "mockServices"],
+        slots: 1, ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
+      }],
+      facts: async () => ({
+        harbor_id: "h-both", func_ids: ["performance", "mockServices"],
+        ships: [{ id: "s-1", name: "agent-1" }], images: [],
+      }),
+    })} />);
+
+    expect(await screen.findByText(/alongside load or browser tests/)).toBeTruthy();
+    // Both cards are live -- the location runs both, and the warning is a
+    // sentence rather than a view that hides one of them.
+    expect(hasCard("performance")).toBe(true);
+    expect(card("mockServices").queryByRole("switch")).not.toBeNull();
+    // ...and nothing is blocked: the step advances and the bundle is requested.
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
   });
 
 // -- the live preview, and the two things that decide when it is asked -------

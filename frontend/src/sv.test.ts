@@ -9,8 +9,10 @@
 // a browser.
 import { describe, expect, it } from "vitest";
 import { Options, SvConstants } from "./api";
-import { SV_NONE } from "./optionGroups";
-import { SV_FUNCTIONALITY, svState } from "./sv";
+import { SV_NONE, toggleDeclared } from "./optionGroups";
+import {
+  exclusiveWith, SV_FUNCTIONALITY, svMixedWithEngines, svState,
+} from "./sv";
 
 // The funcId a location carries to mean "runs mockServices" is served, not
 // spelled here -- the same reason the page reads it off /api/sv-constants.
@@ -42,8 +44,8 @@ const CONFIGURED: Options = {
   sv_tls_secret: "wildcard-credential",
 };
 
-const sv = (funcIds: string[] | undefined, o: Options = {}) =>
-  svState(funcIds, o, CONST);
+const sv = (funcIds: string[] | undefined, o: Options = {}, runs = true) =>
+  svState(funcIds, o, CONST, runs);
 
 // -- what the location asks for ----------------------------------------------
 
@@ -304,6 +306,19 @@ describe("the option patch", () => {
     expect(settle(SV_LOC, {}).sv_ingress).toBe("nginx");
   });
 
+  it("seeds nothing for a bundle that no longer carries the functionality", () => {
+    // The other writer's turn. `notRunPatch` clears these options through the
+    // group's own disable() the moment the bundle stops carrying mockServices,
+    // and this used to re-seed an ingress from a demand read off funcIds that
+    // had not caught up -- two writers, one question, two sources, and an
+    // effect loop that never settled. In manual entry that is not a race but
+    // the normal case: `runs` is the declaration and the funcIds are the facts
+    // fetched for the previous one, a debounce behind it (#151).
+    expect(sv(SV_LOC, {}, false).patch).toBeNull();
+    expect(sv(SV_LOC, {}, false).required).toBe(false);
+    expect(sv(SV_LOC, {}, false).groupRequired.sv).toBe(false);
+  });
+
   it("rescues a profile stranded on the OpenShift backend", () => {
     // An imported profile can arrive with sv_ingress "openshift" while the
     // platform is not OpenShift, which generate() refuses -- and the option
@@ -393,5 +408,60 @@ describe("the option patch", () => {
     expect(settle(PERF_LOC, { sv_ingress: "openshift", platform: "k8s",
                               output_format: "docker" }, false).output_format)
       .toBe("docker");
+  });
+});
+
+// -- and the one thing SV is not: something to share a location with ----------
+// #151. Crane applies one KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY pair to every
+// pod it creates, so a location running both an engine and a mock has one
+// number for two sizing problems. Where the location is being *decided* -- manual
+// entry, the new-location form -- the opinion is free and the rule is enforced;
+// where it already exists nothing on this page can un-mix it, so it is warned
+// about and never refused.
+
+describe("service virtualization on a location of its own", () => {
+  const ORDER = ["performance", "functionalGui", "mockServices"];
+  const tick = (d: string[], id: string, on: boolean) =>
+    toggleDeclared(d, id, on, ORDER, exclusiveWith);
+
+  it("clears the engine functionalities when it is declared", () => {
+    expect(tick(["performance", "functionalGui"], "mockServices", true))
+      .toEqual(["mockServices"]);
+  });
+
+  it("...and is cleared by either of them", () => {
+    // Both ways round, because both are the same statement about one limit
+    // pair: whichever is ticked second is the one somebody just asked for.
+    expect(tick(["mockServices"], "performance", true)).toEqual(["performance"]);
+    expect(tick(["mockServices"], "functionalGui", true))
+      .toEqual(["functionalGui"]);
+  });
+
+  it("leaves the two engine functionalities alone together", () => {
+    // The pair the exclusivity is not about: one agent, one engine pod size,
+    // and 71 of 168 locations in one real account run exactly this.
+    expect(tick(["performance"], "functionalGui", true))
+      .toEqual(["performance", "functionalGui"]);
+  });
+
+  it("says nothing about a funcId neither side names", () => {
+    // tdm, dataPublisher, delphix: real funcIds this tool models no
+    // functionality for. Nothing here knows what they cost, so nothing here
+    // clears anything for them -- the create-location form offers the account's
+    // whole vocabulary and must not edit what it cannot judge.
+    expect(tick(["mockServices"], "tdm", true)).toEqual(["mockServices", "tdm"]);
+    expect(exclusiveWith("tdm")).toEqual([]);
+  });
+
+  it("names a location that already mixes the two, and only such a one", () => {
+    // Connect mode's answer. A location that exists is BlazeMeter's own UI's to
+    // change -- #113 removed the one route here that did -- so this is a
+    // sentence, never a refusal, and it is only true of the mixture.
+    expect(svMixedWithEngines(["performance", "mockServices"])).toBe(true);
+    expect(svMixedWithEngines(["functionalGui", "mockServices"])).toBe(true);
+    expect(svMixedWithEngines(["mockServices"])).toBe(false);
+    expect(svMixedWithEngines(["performance", "functionalGui"])).toBe(false);
+    // ...and an unclaimed funcId beside it is not an engine.
+    expect(svMixedWithEngines(["tdm", "mockServices"])).toBe(false);
   });
 });

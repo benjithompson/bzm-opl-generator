@@ -21,10 +21,10 @@ const BASE = {
   harborId: "h1",
   shipId: "s1",
   manual: { harbor_id: "", ship_id: "" },
-  // Connected, so nothing was declared: the functionality is derived from the
-  // location's funcIds, and a value here would pin a restored page to one the
-  // account never said. Manual entry is the case that carries one.
-  declaredFunctionality: null,
+  // Connected, so nothing was declared: the functionalities are derived from
+  // the location's funcIds, and a value here would pin a restored page to one
+  // the account never said. Manual entry is the case that carries one.
+  declaredFunctionalities: [] as string[],
   // Confirmed, and of *these* ids: step 1 is finished when somebody has said
   // so, and a refresh is not a reason to ask again.
   confirmed: { loc: "h1", ship: "s1" },
@@ -54,12 +54,19 @@ describe("what is remembered", () => {
 
   it("round-trips what manual entry declared the identity runs", () => {
     // The one input deciding the bundle that a refresh used to lose: it names
-    // the funcId the facts are gathered for, which names the images. Stored as
-    // the functionality it declared, so the page can check it against the served
-    // vocabulary rather than trust it -- the same reason the confirmations are
-    // stored as the ids they were made against.
-    save({ ...BASE, sourceMode: "manual", declaredFunctionality: "sv" });
-    expect(load()?.declaredFunctionality).toBe("sv");
+    // the funcIds the facts are gathered for, which name the images. Stored as
+    // the functionalities it declared, so the page can check them against the
+    // served vocabulary rather than trust them -- the same reason the
+    // confirmations are stored as the ids they were made against.
+    //
+    // A list, not one id (#151): a single value was tenable while `performance`
+    // claimed four funcIds, and since #149 it is not -- 71 of 168 locations in
+    // one real account run performance and GUI functional together, and an
+    // identity declared for both has to come back declared for both.
+    save({ ...BASE, sourceMode: "manual",
+           declaredFunctionalities: ["performance", "functionalGui"] });
+    expect(load()?.declaredFunctionalities)
+      .toEqual(["performance", "functionalGui"]);
   });
 
   it("returns null when nothing was stored", () => {

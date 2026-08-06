@@ -8,7 +8,8 @@ import {
   runsFunctionality,
   serviceAccountOk, startFunctionality,
   reservedList, reservedWhere,
-  suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
+  suggestNamespace, SV_NONE, svConfigured, toggleDeclared as declared,
+  unclaimedFuncIds,
 } from "./optionGroups";
 import { RESERVED_ENV } from "./fixtures";
 
@@ -451,18 +452,64 @@ describe("which functionality a location starts on", () => {
 // the functionality, or claims an enablement no account has confirmed.
 
 describe("which functionalities a location runs", () => {
+  const ORDER = ["performance", "functionalGui", "mockServices"];
+  /** `toggleDeclared` with nothing excluding anything, on purpose: which
+   *  functionalities cannot share a location is a fact about crane's one
+   *  pod-limit pair, stated and tested in sv.ts. This file owns only the list
+   *  mechanics -- added once, removed, and in the order the boxes are drawn. */
+  const toggleDeclared = (d: string[], id: string, on: boolean, o: string[]) =>
+    declared(d, id, on, o, () => []);
+
   it("takes manual mode's declaration, and nothing else", () => {
     // No account to read, so the declaration is the whole answer -- and it is
     // an answer, which is why this is never null.
-    expect(enabledFunctionalities("manual", "performance", [])).toEqual(["performance"]);
-    expect(enabledFunctionalities("manual", "mockServices", ["performance"]))
+    expect(enabledFunctionalities("manual", ["performance"], []))
+      .toEqual(["performance"]);
+    expect(enabledFunctionalities("manual", ["mockServices"], ["performance"]))
       .toEqual(["mockServices"]);
-    expect(enabledFunctionalities("manual", null, [])).toEqual([]);
+    expect(enabledFunctionalities("manual", [], [])).toEqual([]);
+  });
+
+  it("carries every functionality manual entry declared, not the first", () => {
+    // #151. A location running performance and GUI functional together is 71 of
+    // 168 in one real account, so a declaration that could only name one made a
+    // bundle nobody would create -- and the card for the other one was on
+    // screen saying it had not been declared.
+    expect(enabledFunctionalities(
+      "manual", ["performance", "functionalGui"], []))
+      .toEqual(["performance", "functionalGui"]);
+  });
+
+  it("ticks and unticks a member, in the order the boxes are drawn", () => {
+    // Added in served order rather than in click order: these ids become the
+    // funcIds the facts are gathered for, and a list that reshuffles on a tick
+    // is a new request for a declaration that did not change.
+    expect(toggleDeclared(["functionalGui"], "performance", true, ORDER))
+      .toEqual(["performance", "functionalGui"]);
+    expect(toggleDeclared(["performance", "functionalGui"], "performance",
+                          false, ORDER)).toEqual(["functionalGui"]);
+    // Ticking what is already ticked is not a second copy of it.
+    expect(toggleDeclared(["performance"], "performance", true, ORDER))
+      .toEqual(["performance"]);
+    // Emptying is a state, not a refusal: a checkbox that will not untick is an
+    // off-screen blocker in one control, and the surface says what empty means.
+    expect(toggleDeclared(["performance"], "performance", false, ORDER))
+      .toEqual([]);
+  });
+
+  it("keeps an id the vocabulary on screen does not carry", () => {
+    // The create-location form offers the account's whole funcId list, and a
+    // location can already hold one BlazeMeter has retired -- 43 in one account
+    // still carry functionalApi. Dropping it here would be a form editing
+    // something it never showed.
+    expect(toggleDeclared(["functionalApi"], "performance", true,
+                          ["performance", "mockServices"]))
+      .toEqual(["performance", "functionalApi"]);
   });
 
   it("keeps unanswered distinct from answered-none", () => {
-    expect(enabledFunctionalities("connect", "performance", [])).toBe(null);
-    expect(enabledFunctionalities("connect", "performance", ["mockServices"]))
+    expect(enabledFunctionalities("connect", ["performance"], [])).toBe(null);
+    expect(enabledFunctionalities("connect", ["performance"], ["mockServices"]))
       .toEqual(["mockServices"]);
   });
 

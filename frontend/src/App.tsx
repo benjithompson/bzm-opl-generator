@@ -26,7 +26,7 @@ import {
   functionalitiesOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
   notRunPatch,
   runsFunctionality, serviceAccountOk, startFunctionality, suggestNamespace,
-  unclaimedFuncIds,
+  toggleDeclared, unclaimedFuncIds,
 } from "./optionGroups";
 // Required fields nobody filled in: what they resolve to on the way out, and
 // the one list the two panels warn from.
@@ -44,7 +44,11 @@ import { sizeStatement } from "./engineSize";
 // declined, whether what is configured is finished, the prerequisite context,
 // the RBAC prose, the scheme, the chart's refusal -- and the one patch the
 // options need, which used to be two effects writing what a third read back.
-import { SV_FUNCTIONALITY, svState } from "./sv";
+// ...and, since a location is decided here as well as read, which
+// functionalities may not share one: crane has a single pod-limit pair, so
+// service virtualization is declared alone. `exclusiveWith` is that rule,
+// applied only where something is being decided -- see sv.ts for the asymmetry.
+import { exclusiveWith, SV_FUNCTIONALITY, svState } from "./sv";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 // Whether an agent is reporting. One statement of the rule, with its own tests
@@ -179,14 +183,21 @@ export default function App({ api }: { api: Api }) {
   // than an option nobody can reach.
   const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
-  // The functionality being configured, and the vocabulary it is chosen from. A view
-  // over the options, never a scope: one crane is deployed for the selected
-  // location and that location's funcIds decide what the manifests contain, so
-  // this only decides what is on screen. The list is served (/api/functionalities) so
-  // that adding a functionality is a backend entry plus a tag on the groups it owns;
-  // null until it lands, which hides nothing.
+  // The functionalities in play, and the vocabulary they are chosen from.
+  //
+  // Connected it is a view over the options -- one crane is deployed for the
+  // selected location and that location's funcIds decide what the manifests
+  // contain, so it only decides what the namespace is suggested from. In manual
+  // entry it is the declaration itself, which is why it is a *list*: an account
+  // read live has 71 of its 168 locations running performance and GUI
+  // functional together, and a bundle that could be declared for one of them
+  // was a location nobody would create (#151).
+  //
+  // The vocabulary is served (/api/functionalities) so that adding a
+  // functionality is a backend entry plus a tag on the groups it owns; empty
+  // until it lands, which hides nothing.
   const [functionalities, setFunctionalities] = useState<Functionality[]>([]);
-  const [functionality, setFunctionality] = useState<string | null>(null);
+  const [declared, setDeclared] = useState<string[]>([]);
   // One way to read a text option. Written out per-site, the `.trim()` was
   // getting forgotten -- an ingress name pasted with a trailing space missed
   // the SV_PREREQS lookup and the panel silently lost its prose.
@@ -203,7 +214,7 @@ export default function App({ api }: { api: Api }) {
   // deriving that below the record that needs it was how the two got out of
   // step. `locUnclaimed` and `notRun` stay where they are used.
   const locFunctionalities = functionalitiesOf(facts?.func_ids, functionalities);
-  const enabled = enabledFunctionalities(sourceMode, functionality, locFunctionalities);
+  const enabled = enabledFunctionalities(sourceMode, declared, locFunctionalities);
   // Everything about service virtualization, answered once. Four blocks of this
   // file used to derive it -- what the location demands, whether that demand
   // was declined, whether what is set is finished, what the panels render
@@ -359,19 +370,19 @@ export default function App({ api }: { api: Api }) {
       setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
       // Manual entry's declaration, and only manual entry's: connected, the
-      // functionality is derived from the location's funcIds, and putting one back
-      // would pin the page to a stale one (#118).
+      // functionalities are derived from the location's funcIds, and putting
+      // any back would pin the page to a stale one (#118).
       //
-      // Selected now rather than held until the vocabulary confirms it, unlike
-      // the ids above -- because `functionality` cannot carry the wait. Null here does
-      // not mean "not answered yet", it means "declared nothing", and
+      // Applied now rather than held until the vocabulary confirms it, unlike
+      // the ids above -- because `declared` cannot carry the wait. An empty list
+      // here does not mean "not answered yet", it means "declared nothing", and
       // notRunPatch reads it on the very first render and clears every SV option
       // the snapshot has just restored. So it is applied, and the effect that
-      // watches the vocabulary land is what drops it if it turns out not to be
-      // offered any more.
-      if (saved.sourceMode === "manual" && saved.declaredFunctionality) {
-        setFunctionality(saved.declaredFunctionality);
-        restoredFunctionality.current = saved.declaredFunctionality;
+      // watches the vocabulary land is what drops whichever members turn out not
+      // to be offered any more.
+      if (saved.sourceMode === "manual" && saved.declaredFunctionalities.length) {
+        setDeclared(saved.declaredFunctionalities);
+        restoredDeclaration.current = saved.declaredFunctionalities;
       }
       // The four account-side ids are not page state yet, and may never become
       // it -- see `held`, which is what carries them until something answers.
@@ -414,10 +425,11 @@ export default function App({ api }: { api: Api }) {
   const pendingShip = useRef<string | null>(null);
   // ...and the restored declaration, for as long as nothing could have refuted
   // it. Not one of the three above: those are ids waiting to be *selected*,
-  // where this is already selected (it has to be -- see the restore) and waiting
+  // where this is already applied (it has to be -- see the restore) and waiting
   // to be *checked*. What could refute it is the served vocabulary, and the
-  // effect below is where that arrives.
-  const restoredFunctionality = useRef<string | null>(null);
+  // effect below is where that arrives -- member by member, because a list that
+  // loses one entry to a withdrawn functionality must not lose the rest with it.
+  const restoredDeclaration = useRef<string[] | null>(null);
 
   // The four ids the restored snapshot named, for as long as nothing has
   // answered for them -- and what the page writes back in their place while
@@ -472,12 +484,13 @@ export default function App({ api }: { api: Api }) {
                    // Only manual entry has declared anything. Connected, this
                    // is a view over the location's funcIds and re-derives
                    // itself from them, so writing it down could only pin the
-                   // next page load to a functionality the account never said.
-                   declaredFunctionality: sourceMode === "manual" ? functionality : null,
+                   // next page load to functionalities the account never said.
+                   declaredFunctionalities:
+                     sourceMode === "manual" ? declared : [],
                    manual, options, step, view, plan: planInputs,
                    confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      functionality, manual, options, step, view, planInputs, confirmed]);
+      declared, manual, options, step, view, planInputs, confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -878,8 +891,8 @@ export default function App({ api }: { api: Api }) {
   // show in the one case that sets it -- see switchMode.
 
   // What manual mode declares the typed identity runs: the declared
-  // functionality, which *is* the funcId (#149) -- so the declaration reaches
-  // `manualFacts` with nothing in between and nothing to wait for.
+  // functionalities, which *are* the funcIds (#149) -- so the declaration
+  // reaches `manualFacts` with nothing in between and nothing to wait for.
   //
   // It used to pick "the first funcId this functionality claims that changes
   // the images", off /api/func-ids, because one functionality claimed four. Two
@@ -887,11 +900,15 @@ export default function App({ api }: { api: Api }) {
   // until the second did the identity was gathered for no funcId at all -- a
   // wait indistinguishable from a declaration nobody had made. The 1:1 mapping
   // removes the lookup rather than fixing it. Still no literal funcId here:
-  // `functionality` is only ever set from the served list.
+  // `declared` is only ever written from the served list.
+  //
+  // Filtered against that list on the way out rather than trusted: a member the
+  // vocabulary does not carry names no funcId, and the effect below is what
+  // drops it for good. In the render before it does, this is what stops it
+  // reaching the account as one.
   const manualFuncIds = useMemo(
-    () => (functionality && functionalities.some((f) => f.id === functionality)
-      ? [functionality] : []),
-    [functionalities, functionality]);
+    () => functionalities.filter((f) => declared.includes(f.id)).map((f) => f.id),
+    [functionalities, declared]);
 
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
@@ -1032,13 +1049,25 @@ export default function App({ api }: { api: Api }) {
   // functionality change the bundle -- the one thing a view is not allowed to do. It
   // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
 
-  const pickFunctionality = useCallback((id: string, suggestNs = false) => {
-    setFunctionality(id);
-    // In manual mode the functionality buttons are the declaration rather than a
-    // view -- but nothing is written here: manualFuncIds derives it from
-    // `functionality`, so selecting one is the whole action.
-    const f = functionalities.find((x) => x.id === id);
-    if (!f || !suggestNs) return;
+  /** Suggest the namespace that goes with a declaration, if the field still
+   *  holds one somebody else's suggestion put there.
+   *
+   *  **Several functionalities, one namespace.** One bundle deploys into one
+   *  namespace, so a declaration of two cannot have both suggest; the rule is
+   *  the *first in served order*, which is `startFunctionality` -- the same
+   *  tie-break a connected location already uses for the same reason (a
+   *  location carrying both funcIds opens on the first). So a manual identity
+   *  declared for performance and GUI functional lands on `blazemeter`, exactly
+   *  where a connected location carrying those two funcIds lands, rather than
+   *  on whichever box happened to be ticked last. Nothing is suggested for an
+   *  empty declaration: `startFunctionality` answers with the first served
+   *  functionality when it recognises none of the ids, which would be a
+   *  namespace written from having unticked everything. */
+  const suggestNsFor = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    const lead = startFunctionality(ids, functionalities);
+    const f = functionalities.find((x) => x.id === lead);
+    if (!f) return;
     setOptions((o) => {
       const ns = suggestNamespace(String(o.namespace ?? ""), f, functionalities);
       // Same object when there is nothing to suggest: a fresh identity re-POSTs
@@ -1047,11 +1076,37 @@ export default function App({ api }: { api: Api }) {
     });
   }, [functionalities]);
 
+  const pickFunctionality = useCallback((id: string, suggestNs = false) => {
+    setDeclared([id]);
+    if (suggestNs) suggestNsFor([id]);
+  }, [suggestNsFor]);
+
+  /** Manual entry's checkbox: tick or untick one functionality of the
+   *  declaration.
+   *
+   *  A different act from `pickFunctionality`, which *replaces* the list --
+   *  that is a location being opened, and this is somebody saying what they are
+   *  building. Nothing else is written: `manualFuncIds` derives the funcIds from
+   *  `declared`, so ticking a box is the whole action, and the namespace follows
+   *  the rule above.
+   *
+   *  `exclusiveWith` is where a location being *decided* gets an opinion:
+   *  service virtualization is declared on its own, because crane sizes every
+   *  pod it creates from one limit pair. The card states it beside the boxes;
+   *  connect mode has no such rule, only the warning, because there the
+   *  location already exists. */
+  const declareFunctionality = useCallback((id: string, on: boolean) => {
+    const next = toggleDeclared(declared, id, on,
+                                functionalities.map((f) => f.id), exclusiveWith);
+    setDeclared(next);
+    suggestNsFor(next);
+  }, [declared, functionalities, suggestNsFor]);
+
   // Which functionality a location opens on, from its funcIds. Keyed on the harbor
   // rather than on `facts`, which is refetched after creating an agent: that
-  // must not yank the view back from wherever the user moved it. `functionality` is
+  // must not yank the view back from wherever the user moved it. `declared` is
   // read but deliberately not a dependency -- depending on it would re-force
-  // the starting functionality every time the user chose a different one.
+  // the starting functionality every time the user changed the declaration.
   useEffect(() => {
     if (!functionalities.length) return;
     // ...and where a restored declaration is checked, because this is where the
@@ -1059,18 +1114,28 @@ export default function App({ api }: { api: Api }) {
     // vocabulary, and until that has landed there is nothing to check it
     // against. Still offered means it stands, and nothing below may touch it --
     // hence the return rather than a fall-through.
-    const declared = restoredFunctionality.current;
-    if (declared) {
-      restoredFunctionality.current = null;
-      if (functionalities.some((f) => f.id === declared)) return;
-      // Not offered any more: dropped rather than kept. A functionality this build
-      // does not serve names no funcId, so the identity's facts would be
-      // gathered as though nothing had been declared, and no radio would be
-      // selected to say so or to change it with -- which is what being stuck on
-      // it looks like. So the page lands where a fresh manual session lands.
-      // Without the namespace suggestion, though: a restore is not a hand
-      // switch and not a location being picked, and what it read back is
-      // generated into every manifest.
+    const restoredIds = restoredDeclaration.current;
+    if (restoredIds) {
+      restoredDeclaration.current = null;
+      // Checked member by member, and the survivors kept. A functionality this
+      // build does not serve names no funcId, so a member left in would have
+      // the identity's facts gathered for an id nothing offers, with no box on
+      // screen to say so or to change it with. Dropping the whole declaration
+      // over one such member would be the same loss inflicted on the ones that
+      // are still offered -- which is what makes this a filter rather than the
+      // `some(...)` test it was while a declaration was one id (#151).
+      const kept = functionalities.filter((f) => restoredIds.includes(f.id))
+        .map((f) => f.id);
+      // Written back only where something actually went, so a declaration that
+      // stands does not mint a new list identity and re-POST the preview.
+      if (kept.length) {
+        if (kept.length !== restoredIds.length) setDeclared(kept);
+        return;
+      }
+      // None of it is offered any more, so the page lands where a fresh manual
+      // session lands. Without the namespace suggestion, though: a restore is
+      // not a hand switch and not a location being picked, and what it read back
+      // is generated into every manifest.
       pickFunctionality(functionalities[0].id);
       return;
     }
@@ -1085,7 +1150,7 @@ export default function App({ api }: { api: Api }) {
       // facts is cleared while the next location's are fetched. Falling back to
       // the default in that gap would flip the view (and the suggested
       // namespace) to performance and back for every SV location picked.
-      if (!functionality) pickFunctionality(functionalities[0].id, true);
+      if (!declared.length) pickFunctionality(functionalities[0].id, true);
       return;
     }
     const start = startFunctionality(facts.func_ids, functionalities);
@@ -1530,7 +1595,7 @@ export default function App({ api }: { api: Api }) {
           <Section n={2} title="Configure"
             hint="Everything re-renders the preview live.">
             <ConfigurePanel
-              functionalities={functionalities} pickFunctionality={pickFunctionality}
+              functionalities={functionalities} declare={declareFunctionality}
               sourceMode={sourceMode} enabled={enabled}
               locUnclaimed={locUnclaimed}
               options={options} set={set}
