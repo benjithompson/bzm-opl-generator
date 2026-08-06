@@ -10,7 +10,7 @@
 // Nothing in this file imports React: it is plain data in, plain data out,
 // which is what makes optionGroups.test.ts possible without a DOM.
 
-import { Functionality, Options } from "./api";
+import { FuncIdChoice, Functionality, Options } from "./api";
 // The environment area's own rule about what blocks the step. The area is not
 // a group -- it is a list of the variables no group here writes, with a
 // name/value editor under it (see EnvVars) -- so the only thing this file wants
@@ -171,9 +171,31 @@ export const ENGINE_SIZES = [
  *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The functionality whose bundles start engines -- the old group's tag, kept for
- *  the statement's card and the not-run clearing below. */
-export const SIZING_FUNCTIONALITY = "performance";
+/** The funcIds among these whose agent carries a taurus engine, so that "engine
+ *  size" is a true statement about its pod limits.
+ *
+ *  The rows' own `runs_engine`, filtered -- not a list here. It was two ids
+ *  written out (`ENGINE_FUNCTIONALITIES`), which is a served table restated in
+ *  TypeScript: the answer is `facts.CATEGORY_BY_FUNC`'s, read off real
+ *  single-functionality locations' /versions, where performance carries
+ *  apm/crane/v4, functionalGui adds doduo and a browser to the same three, and
+ *  an SV-only agent carries crane, group-gateway and service-mock and **no
+ *  taurus engine at all**.
+ *
+ *  Placement only, and that is the whole of what survives #149. It was
+ *  `SIZING_FUNCTIONALITY`, one id doing two jobs: where the statement renders,
+ *  and which locations had `engine_cpu_limit`/`engine_mem_limit` cleared out
+ *  from under them. The second job was wrong. Crane applies
+ *  KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to **every pod it creates** -- one
+ *  pair, with no per-functionality second one -- so the limits belong to no
+ *  functionality and are never cleared for one; see notRunPatch. An SV
+ *  location's limits still reach its mock pods and are still emitted; what they
+ *  mean there is a sizing model that does not exist yet (#154), and stating an
+ *  engine size over it would be inventing one. So it gets no statement rather
+ *  than a wrong one. */
+export function engineFunctionalities(fs: Functionality[]): string[] {
+  return fs.filter((f) => f.runs_engine).map((f) => f.id);
+}
 
 // -- service account ---------------------------------------------------------
 // Deliberately not a group. A group is a switch that hides its fields when it is
@@ -405,7 +427,11 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // performance one, so the row says what it costs rather than falling silent
     // the moment it stopped blocking the download.
     declinedHint: "performance only — virtual services deployed here will stall at WAITING_FOR_DOMAIN",
-    functionalities: ["sv"],
+    // The funcId, which is what a functionality id is (#149). Not the group id
+    // beside it: `sv` names a row on this page, `mockServices` names something
+    // the account enables, and the two coinciding was how one could be read for
+    // the other.
+    functionalities: ["mockServices"],
     // service_type is *not* here. This group used to own it as well, to force
     // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
     // on namespaced RBAC, so SV has no opinion on it and Security owns it
@@ -478,6 +504,65 @@ export function groupsOf(functionalityId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.functionalities.includes(functionalityId));
 }
 
+// -- where an option is set ---------------------------------------------------
+//
+// The environment area's answer to a variable somebody looks for and does not
+// find (#150). AUTO_KUBERNETES_UPDATE was reported as missing from the list; it
+// is not missing, it is *written by the bundle*, off the `auto_update` option --
+// which is a tri-state inside a group titled "Security & RBAC", behind a hint
+// mentioning agent self-update. So the setting existed and nothing on the page
+// led from the name to it, which is the same failure as offering a name the
+// generator refuses, arrived at from the other side.
+//
+// The section comes off `keys`, which every group already declares. A second
+// table mapping variable to section would be the third copy of one fact, and
+// the one nobody would remember to update.
+
+/** A reserved variable, and where the thing that writes it is set. */
+export interface ReservedWhere {
+  name: string;
+  /** The option that writes it, or null where no single option does — the
+   *  identity, the fixed posture. Straight off the served table, including its
+   *  null: inventing an option to send somebody to would be worse than saying
+   *  there is not one. */
+  owner: string | null;
+  /** The title of the group holding that option, or null where no group does.
+   *  The engine limits are the case: the configure step states them from the
+   *  location and edits them nowhere, so there is no section to name and
+   *  "somewhere on this step" is not a place. */
+  where: string | null;
+}
+
+/** What the page can say about `name`, or null if it is not reserved at all.
+ *
+ *  Null covers both "this name is free" and "the table has not landed" — an
+ *  empty served table means "not read yet" everywhere else on this page, and
+ *  claiming a variable is taken on no evidence is the wrong half to be wrong
+ *  in, exactly as in `envRowError`. */
+export function reservedWhere(
+    name: string, reserved: Record<string, string | null>): ReservedWhere | null {
+  if (!(name in reserved)) return null;
+  const owner = reserved[name];
+  // The CA trio names a one-of pair the way the option table itself does, so
+  // the string is split rather than looked up whole: `ca_bundle |
+  // ca_existing_configmap` is no option's name, and both halves are in the one
+  // group anyway.
+  const keys = owner ? owner.split("|").map((k) => k.trim()) : [];
+  const group = OPTION_GROUPS.find((g) => keys.some((k) => g.keys.includes(k)));
+  return { name, owner, where: group?.title ?? null };
+}
+
+/** ...and all of them, in the order they were served. Rendered as a list rather
+ *  than searched: the failure is somebody looking for a name and finding
+ *  nothing, and a list that is on the page is one the browser's own find lands
+ *  in without this area growing a search box of its own. */
+export function reservedList(
+    reserved: Record<string, string | null>): ReservedWhere[] {
+  return Object.keys(reserved)
+    .map((name) => reservedWhere(name, reserved))
+    .filter((r): r is ReservedWhere => r !== null);
+}
+
 // -- a functionality the location does not run --------------------------------
 // Not on the configure step at all, and configured nowhere. It was stated there
 // for a while (#113) -- a card naming the funcId to add -- which is true and
@@ -493,22 +578,67 @@ export function groupsOf(functionalityId: string): OptionGroup[] {
 /** Which functionalities this location runs, or null while nobody has answered.
  *
  *  Three states in one value, and the third is why it is not a plain array.
- *  Manual entry *declares* a functionality; a location read off the account carries
- *  the funcIds its functionalities come from; before either has happened the question
- *  is simply unanswered. Answering the unanswered case with `[]` takes every
- *  card's switches off the page while the account is still being read, and
- *  answering it with the whole list claims an enablement nobody has confirmed
- *  -- the same collapse from either end. */
+ *  Manual entry *declares* functionalities; a location read off the account
+ *  carries the funcIds its functionalities come from; before either has happened
+ *  the question is simply unanswered. Answering the unanswered case with `[]`
+ *  takes every card's switches off the page while the account is still being
+ *  read, and answering it with the whole list claims an enablement nobody has
+ *  confirmed -- the same collapse from either end.
+ *
+ *  `declared` is a list because a location is (#151), and it is handed through
+ *  rather than reduced to its first member: a bundle declared for performance
+ *  *and* GUI functional has to have both cards live, and the one that got
+ *  dropped is exactly the one whose card then said it had not been declared. */
 export function enabledFunctionalities(
-    mode: "connect" | "manual", declared: string | null,
+    mode: "connect" | "manual", declared: string[],
     locFunctionalities: string[]): string[] | null {
   // Manual declares rather than reads, so there is nothing outstanding: the
   // answer is the declaration, and no declaration yet is an empty one.
-  if (mode === "manual") return declared ? [declared] : [];
+  if (mode === "manual") return declared;
   // An account that has not been read and a location whose funcIds carry no
   // served functionality both arrive as an empty list, and "nothing has said" is the
   // honest answer to both.
   return locFunctionalities.length ? locFunctionalities : null;
+}
+
+/** The declaration after ticking or unticking `id`, in `order`.
+ *
+ *  Manual entry's checkbox and the new-location form's funcId list are the two
+ *  surfaces where a functionality is *chosen* rather than read, and both need
+ *  the same three things: the member added or removed, no duplicate, and a
+ *  stable order. `order` is the served vocabulary's (or the account's funcId
+ *  list, in the create form), so the result reads down the screen the way the
+ *  boxes do and the funcIds a bundle is gathered for do not shuffle when a box
+ *  is ticked -- which is what would make a request look new to every reader of
+ *  it, `manualFuncIds` included.
+ *
+ *  An id `order` does not carry is kept where it is: the create form offers the
+ *  account's whole vocabulary, and a location may already hold a funcId
+ *  BlazeMeter has since retired (43 locations carry `functionalApi`). Dropping
+ *  one silently is how a form edits something it never showed.
+ *
+ *  Emptying is allowed. A declaration nobody has made is a real state -- it is
+ *  what a fresh page holds before the vocabulary lands -- and the surface says
+ *  what it means rather than refusing the click; a checkbox that will not
+ *  untick is the off-screen blocker in one control.
+ *
+ *  `excludes` is what a tick takes away with it, and it is a parameter rather
+ *  than a table here: which functionalities cannot share a location is a fact
+ *  about crane's one pod-limit pair, which is service virtualization's to state
+ *  (sv.exclusiveWith). This file owns "a declaration is a list, in order"; it
+ *  has no opinion about what may be in one. */
+export function toggleDeclared(
+    declared: string[], id: string, on: boolean, order: string[],
+    excludes: (id: string) => string[]): string[] {
+  const want = new Set(declared);
+  if (on) {
+    want.add(id);
+    for (const gone of excludes(id)) want.delete(gone);
+  } else want.delete(id);
+  // A Set iterates in insertion order, so the ids `order` does not carry keep
+  // the order they were declared in, with a newly ticked one last.
+  return [...order.filter((f) => want.has(f)),
+          ...[...want].filter((f) => !order.includes(f))];
 }
 
 /** Does this location run the functionality? Unanswered counts as yes, deliberately:
@@ -545,16 +675,15 @@ export function notRunPatch(
       Object.assign(patch, g.disable(o, false));
     }
   }
-  // The engine size is a section's statement rather than a group (#132), so
-  // its clearing is spelled here instead of through a disable(): the options
-  // still travel (the sizing and an imported profile write them),
-  // and a location that starts no engines must not carry them out in the
-  // bundle -- generate would emit an explicit option over anything.
-  if (!runsFunctionality(enabled, SIZING_FUNCTIONALITY)
-      && (o.engine_cpu_limit != null || o.engine_mem_limit != null)) {
-    patch.engine_cpu_limit = null;
-    patch.engine_mem_limit = null;
-  }
+  // The pod limits used to be cleared here too, on the reading that they size
+  // an engine and a location running no performance has none. #149 removed
+  // that: crane applies KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to every pod it
+  // creates, so one pair covers engines, browser pods and mock-service pods
+  // alike and there is no per-functionality second one. Cleared, an SV-only or
+  // GUI-only agent's pods fall to crane's 250m/256Mi defaults -- the silent
+  // failure the LimitRange note in CLAUDE.md is about, arrived at from the page
+  // instead. Nothing replaces the clause: a value that reaches every pod is
+  // never wrong for the ones a location does not run.
   return Object.keys(patch).length ? patch : null;
 }
 
@@ -651,25 +780,47 @@ export function configureBlockedBy(
 // it hands a string back for the caller to apply only while the field still
 // holds a suggestion.
 
-/** The functionalities a location's funcIds carry, in served order. funcIds the tool
- *  does not model (tdm, dataPublisher, delphix, secretsPrivateVault) match no
- *  functionality and are simply not a signal -- never an error, and never a reason to
- *  leave the selector empty. */
+/** The functionalities a location's funcIds carry, in served order.
+ *
+ *  A funcId this tool covers *is* a functionality id (#149), so the join is
+ *  equality and there is no table between the two vocabularies. funcIds nothing
+ *  covers -- tdm, dataPublisher, delphix, secretsPrivateVault, and since the
+ *  split the retired functionalApi and proxyRecorder -- match nothing and are
+ *  simply not a signal: never an error, and never a reason to leave the page
+ *  empty. */
 export function functionalitiesOf(
     funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
   return functionalities
-    .filter((f) => (funcIds ?? []).some((id) => f.func_ids.includes(id)))
+    .filter((f) => (funcIds ?? []).includes(f.id))
     .map((f) => f.id);
 }
 
-/** The funcIds a location has that no served functionality claims. Named on screen
- *  rather than dropped: the tool models five funcIds and accounts already carry
- *  more, and "this location also runs X, which there are no options for" is a
- *  truthful thing to say where silence reads as coverage. */
+/** What to call the funcIds a location has that no served functionality claims.
+ *
+ *  Named on screen rather than dropped: this tool covers three funcIds, accounts
+ *  serve nine, and "this location also runs X, which there are no options for"
+ *  is a truthful thing to say where silence reads as coverage.
+ *
+ *  Names, not ids, and that is what `choices` is for (#148). /api/func-ids is
+ *  the account's own vocabulary once one has been read, so an unclaimed funcId
+ *  gets BlazeMeter's display name -- "TDM Integration", the words the customer
+ *  sees in their own UI. Where no account has been read the served list is the
+ *  covered baseline and holds none of these, so the answer is the raw funcId:
+ *  what the location literally carries, which is worse than a display name and
+ *  much better than a guess. `functionalApi` is the same case *with* an
+ *  account -- BlazeMeter retired it and locations still have it -- so the
+ *  fallback is not only a startup state.
+ *
+ *  Since the split (#149) `functionalApi` and `proxyRecorder` arrive here too:
+ *  `performance` used to claim them, which is what made its label name four
+ *  things at once. Named beside the cards is the honest place for a funcId
+ *  nothing here configures. */
 export function unclaimedFuncIds(
-    funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
-  return (funcIds ?? []).filter(
-    (id) => !functionalities.some((f) => f.func_ids.includes(id)));
+    funcIds: string[] | undefined, functionalities: Functionality[],
+    choices: FuncIdChoice[]): string[] {
+  return (funcIds ?? [])
+    .filter((id) => !functionalities.some((f) => f.id === id))
+    .map((id) => choices.find((c) => c.id === id)?.label ?? id);
 }
 
 /** Which functionality to open a location on: the first served one its funcIds

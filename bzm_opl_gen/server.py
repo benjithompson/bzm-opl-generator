@@ -670,18 +670,38 @@ def generate_save(g: SaveIn):
 
 # -- planning -----------------------------------------------------------------
 
+class SizingIn(BaseModel):
+    """One functionality being sized, in that model's own unit.
+
+    `Blank` on both numbers for PlanIn's reason, one level in: a figure box
+    nobody typed into posts "" from inside a row rather than beside it, and a
+    row is where the planner's three-valued answer is decided (supplied,
+    assumed, no figure at all). A "" arriving as a *supplied* figure would be
+    the second of those three wearing the first.
+    """
+    functionality: str
+    target: Blank = None
+    figure: Blank = None
+
+
 class PlanIn(BaseModel):
     # Everything but `users` is optional, and every count is `Any` rather than
     # `int`: a number field a browser leaves empty posts "" and a typed one
     # posts a string, and pydantic's own 422 for either names a field of this
     # model rather than saying which number could not be a plan. core's refusal
     # says that, in the words the planner uses at the field itself.
-    users: Any
+    #
+    # ...and `users` is optional too now, because it is the performance model's
+    # target rather than the only one there is: a browser-testing sizing has no
+    # load target, and a plan with none of the three is still a refusal, from
+    # the planner, naming the field a caller with one sizing has.
+    users: Blank = None
     vus_per_engine: Blank = None
     engine_cpu: Blank = None
     engine_mem: Blank = None
     engines_per_node: Blank = None
     agents: Blank = None
+    sizings: Optional[list[SizingIn]] = None
 
 
 @app.post("/api/plan", description=core.capacity_plan.__doc__)
@@ -696,7 +716,19 @@ def capacity_plan(p: PlanIn):
     return _answer(core.capacity_plan, p.users,
                    vus_per_engine=p.vus_per_engine,
                    engine_cpu=p.engine_cpu, engine_mem=p.engine_mem,
-                   engines_per_node=p.engines_per_node, agents=p.agents)
+                   engines_per_node=p.engines_per_node, agents=p.agents,
+                   sizings=[s.model_dump() for s in p.sizings]
+                   if p.sizings is not None else None)
+
+
+@app.get("/api/sizing-models", description=core.sizing_models.__doc__)
+def sizing_models():
+    """What each functionality is sized in, for the card that asks.
+
+    Keyless, like /api/plan and for the same reason: sizing is the question
+    somebody opens this page with before they have an account to connect it to.
+    """
+    return core.sizing_models()
 
 
 # -- reading the cluster ------------------------------------------------------
@@ -757,8 +789,24 @@ def option_docs():
 
 
 @app.get("/api/func-ids", description=core.func_ids.__doc__)
-def func_ids():
-    return core.func_ids()
+def func_ids(account_id: Optional[int] = None):
+    """The funcId vocabulary, the account's where one is named.
+
+    Optional rather than required, and that is the point: the page asks for
+    this on mount, with no key in the process and no account chosen, and gets
+    the keyless baseline; it asks again with the account and gets what the
+    account actually offers. Requiring the parameter would make the vocabulary
+    unreachable exactly when the page needs it most.
+
+    Cached per account with the rest of the account reads -- it is
+    account-scoped, and a page that re-asks on every reconnect would re-ask
+    BlazeMeter. Not `_writes`: reading what an account is entitled to changes
+    nothing about it.
+    """
+    if account_id is None:
+        return core.func_ids()
+    return _cached(f"func-ids:{account_id}",
+                   _answer, core.func_ids, _client(), account_id)
 
 
 @app.get("/api/functionalities", description=core.functionalities.__doc__)
@@ -782,8 +830,17 @@ def reserved_env():
 
 
 @app.get("/api/agent-env", description=core.agent_env.__doc__)
-def agent_env():
-    return core.agent_env()
+def agent_env(func_ids: Optional[str] = None):
+    """The location's funcIds, comma-separated, or the parameter left off.
+
+    A string rather than a repeated parameter so that *absent* and *empty* stay
+    two answers -- `?func_ids=` is a location running nothing this tool covers,
+    and leaving it off is nobody having said yet. FastAPI would collapse both
+    to `[]` for a `List[str]` query, which is this repo's oldest bug wearing a
+    framework default (see the "could not read" section of CLAUDE.md).
+    """
+    return core.agent_env(
+        None if func_ids is None else [f for f in func_ids.split(",") if f])
 
 
 # -- SPA ----------------------------------------------------------------------

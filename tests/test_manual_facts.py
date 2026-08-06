@@ -16,10 +16,13 @@ import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from bzm_opl_gen import api  # noqa: E402
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
 
 from test_generate import FACTS  # noqa: E402
+from versions_fixtures import (VERSIONS_GUI, VERSIONS_PERFORMANCE,  # noqa: E402
+                               VERSIONS_SV)
 
 H, S = "6a63a79dcc45dccca90bf440", "6a679d3445115b6651011715"
 
@@ -190,16 +193,57 @@ def test_dropping_the_alias_does_not_change_what_generates():
     assert _cm(a)["IMAGE_OVERRIDES"] == _cm(b)["IMAGE_OVERRIDES"]
 
 
-def test_gui_browser_images_are_the_known_gap():
-    """Not an oversight: the account carries a version-pinned repo per browser
-    build and only a live inventory names the one a location uses."""
+def test_gui_browser_images_are_the_gap_where_nothing_named_one():
+    """The catalogue carries no browser image and cannot: the account holds 60+
+    version-pinned repos. So a bundle built from it alone runs browser tests
+    with no browser image, whatever else it got right.
+
+    Read off the images rather than off where they came from. Provenance was a
+    proxy for the question -- it said "complete" of any facts with an
+    inventory, including one that happened to carry no browser -- and now it
+    would say it of an image list too, which is the one source that can close
+    the gap and can also fail to.
+    """
     assert facts_mod.gui_images_incomplete(
         facts_mod.manual(H, S, func_ids=["functionalGui"]))
     assert not facts_mod.gui_images_incomplete(
         facts_mod.manual(H, S, func_ids=["performance"]))
-    # Never claimed of facts that came from a real inventory.
-    assert not facts_mod.gui_images_incomplete(
+    # A live inventory with no browser in it is the same gap, not a closed one.
+    assert facts_mod.gui_images_incomplete(
         dict(FACTS, func_ids=["functionalGui"], images_source="live agent inventory"))
+
+
+def test_the_image_list_closes_the_browser_gap():
+    """The gap existed because only a live agent was thought to say which
+    version-pinned browser a location runs. The account says it, off an agent
+    that has never started -- so this is a fact about the location now, not a
+    caveat carried beside the bundle."""
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_GUI,
+                    func_ids=["functionalGui", "chrome:default"]), "H1")
+
+    assert not facts_mod.gui_images_incomplete(f)
+    by_key = {i["key"]: i for i in f["images"]}
+    assert (by_key["blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]["repo"]
+            == "gcr.io/verdant-bulwark-278/blazemeter/charmander/"
+               "chrome_136.0.7103.113")
+    assert (by_key["blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
+            ["category"] == "gui")
+
+
+def test_a_gui_bundle_names_the_browser_the_location_pins():
+    """What it is all for: IMAGE_OVERRIDES carries the exact build, so a sealed
+    cluster's mirror has the key crane asks for."""
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_GUI,
+                    func_ids=["functionalGui", "chrome:default"]), "H1")
+    overrides = yaml.safe_load(
+        _cm(_gen(f, private_registry="reg.io/bzm"))["IMAGE_OVERRIDES"])
+
+    assert (overrides["blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
+            == "reg.io/bzm/chrome_136.0.7103.113:2.10.45")
+    assert overrides["blazemeter/doduo:0.0.144"] == "reg.io/bzm/doduo:0.0.144"
+    assert overrides["taurus-cloud:2.4.454-reduced"] == "reg.io/bzm/v4:2.4.454-reduced"
 
 
 def test_fallback_catalogue_repos_are_all_under_the_blazemeter_project():
@@ -237,12 +281,32 @@ def _ship(images):
 
 
 class _FakeClient:
-    def __init__(self, ships):
+    """Just enough BzmClient for gather(): a location, its agents' reported
+    inventories, and the image list served per agent.
+
+    `versions` is what `GET .../versions` does -- a recorded payload, or an
+    exception to raise. It defaults to raising, because most of these tests are
+    about the inventory and an endpoint that answers would decide their result
+    instead; a test about the image list says so by passing one.
+    """
+
+    def __init__(self, ships, versions=None, func_ids=("performance",)):
         self._ships = ships
+        self._versions = versions if versions is not None else api.BzmApiError(
+            "GET /private-locations/H1/ships/S1/versions -> HTTP 404: not found",
+            status=404)
+        self._func_ids = list(func_ids)
+        self.versions_calls = []
 
     def private_location(self, harbor_id):
-        return {"id": harbor_id, "name": "L", "funcIds": ["performance"],
+        return {"id": harbor_id, "name": "L", "funcIds": self._func_ids,
                 "slots": 1, "threadsPerEngine": 500, "ships": self._ships}
+
+    def ship_versions(self, harbor_id, ship_id):
+        self.versions_calls.append((harbor_id, ship_id))
+        if isinstance(self._versions, Exception):
+            raise self._versions
+        return self._versions
 
 
 def test_kubernetes_agent_inventory_is_read():
@@ -256,7 +320,7 @@ def test_kubernetes_agent_inventory_is_read():
         {"RepoTags": ["torero:4.6.182"], "Size": 0},
         {"RepoTags": ["blazemeter/crane:3.7.55"], "Size": 0},
     ])]), "H1")
-    assert f["images_source"] == "live agent inventory"
+    assert "live agent inventory" in f["images_source"]
     by_key = {i["key"]: i for i in f["images"]}
     # The key names the image; the repo has to be looked up, and does not match.
     assert by_key["taurus-cloud:latest"]["repo"].endswith("/v4")
@@ -273,16 +337,209 @@ def test_docker_agent_inventory_still_read():
         {"RepoTags": ["gcr.io/verdant-bulwark-278/blazemeter/v4:2.4.444",
                       "taurus-cloud:latest"], "Size": 7_900_000_000},
     ])]), "H1")
-    assert f["images_source"] == "live agent inventory"
+    assert "live agent inventory" in f["images_source"]
     img = f["images"][0]
     assert img["key"] == "taurus-cloud:latest"
     assert img["tag"] == "2.4.444" and img["size_mb"] == 7900
+
+
+def test_crane_is_pinned_from_a_reference_carrying_no_key():
+    """A Docker agent reports crane as `blazemeter/crane:3.7.56` beside its
+    registry-qualified reference and *no* `:latest` tag -- read off a live one.
+    There is no key there to override crane by, and there does not need to be:
+    it is the image the Deployment runs, so the version is still the answer."""
+    f = facts_mod.gather(_FakeClient([_ship([
+        {"RepoTags": ["blazemeter/crane:3.7.56",
+                      "gcr.io/verdant-bulwark-278/blazemeter/crane:3.7.56"],
+         "Size": 0}])]), "H1")
+    assert f["crane_image"].endswith("/crane:3.7.56")
+    assert all(i["key"] for i in f["images"])
 
 
 def test_no_inventory_still_falls_back():
     f = facts_mod.gather(_FakeClient([_ship([])]), "H1")
     assert f["images_source"].startswith("fallback-catalogue")
     assert len(f["images"]) == len(facts_mod.FALLBACK_IMAGES)
+
+
+# -- the location's own image list --------------------------------------------
+#
+# GET /private-locations/{h}/ships/{s}/versions. It answers for an agent that
+# has never been online, so it reaches the case the inventory never could: the
+# bundle is generated before anything is deployed, which is every first
+# install.
+
+def test_the_image_list_answers_for_an_agent_that_has_never_run():
+    """The recording is from an agent in state `empty`, with no hostInfo at all
+    -- so there is no inventory here, and the images are still exact."""
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_PERFORMANCE), "H1")
+
+    by_key = {i["key"]: i for i in f["images"]}
+    assert by_key["taurus-cloud:2.4.454-reduced"]["repo"].endswith("/v4")
+    assert by_key["apm-image:1.7.112"]["tag"] == "1.7.112"
+    # crane comes out of the same list, pinned to what the account advertises
+    # rather than floating on :latest as an agentless location used to.
+    assert f["crane_image"].endswith("/crane:3.7.56")
+    assert "location image list" in f["images_source"]
+
+
+def test_the_image_list_outranks_a_live_inventory():
+    """Two live sources, and they can disagree: the inventory is what the agent
+    pulled, the image list is what the location is configured to run now. The
+    bundle is being generated for the next start, so the configuration wins."""
+    f = facts_mod.gather(_FakeClient(
+        [_ship([{"RepoTags": ["taurus-cloud:2.4.444-reduced"], "Size": 0},
+                {"RepoTags": ["blazemeter/crane:3.7.55"], "Size": 0}])],
+        VERSIONS_PERFORMANCE), "H1")
+
+    keys = {i["key"] for i in f["images"]}
+    assert "taurus-cloud:2.4.454-reduced" in keys
+    assert "taurus-cloud:2.4.444-reduced" not in keys
+    assert f["crane_image"].endswith("/crane:3.7.56")
+
+
+def test_a_key_no_image_list_names_is_still_carried():
+    """The image list is the location's resources, not everything crane pulls.
+
+    A live Kubernetes agent reports `torero` and `richrach` beside them and no
+    /versions response names either, so the two earlier sources are not
+    replaced -- they fill keys the image list is silent about. Dropping them
+    would put the ImagePullBackOff the catalogue exists to prevent back into
+    every bundle generated before an agent has ever started.
+    """
+    f = facts_mod.gather(_FakeClient(
+        [_ship([{"RepoTags": ["richrach:1.0.81"], "Size": 0}])],
+        VERSIONS_PERFORMANCE), "H1")
+
+    by_key = {i["key"]: i for i in f["images"]}
+    assert by_key["richrach:1.0.81"]["tag"] == "1.0.81"     # the inventory's
+    assert "torero:latest" in by_key                        # the catalogue's
+    assert f["images_source"] == ("location image list + live agent inventory "
+                                  "+ fallback-catalogue")
+
+
+def test_the_image_list_is_asked_once_per_location():
+    """Every agent in a location answered identically, so the first that answers
+    ends it -- the list is a property of the location's funcIds."""
+    c = _FakeClient([{"id": "S1", "state": "empty"}, {"id": "S2", "state": "idle"}],
+                    VERSIONS_PERFORMANCE)
+    facts_mod.gather(c, "H1")
+    assert c.versions_calls == [("H1", "S1")]
+
+
+def test_a_refusal_that_answers_for_the_location_is_asked_once():
+    """A 403 is about the token and this location, not about the agent it was
+    asked through, so the remaining agents are not asked.
+
+    The loop used to re-issue it per agent: one real account holds 221 agents
+    and 17-agent locations are ordinary, so a dead key or a location this key
+    may not read cost a sequential round trip each before the same `unread`
+    came back."""
+    c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(5)],
+                    api.BzmApiError("GET /private-locations/H1/ships/S0/"
+                                    "versions -> HTTP 403: forbidden",
+                                    status=403))
+    f = facts_mod.gather(c, "H1")
+    assert c.versions_calls == [("H1", "S0")]
+    # ...and it is still a denied read rather than an empty location.
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD
+    assert "403" in f["image_list"]["detail"]
+
+
+def test_a_refusal_that_could_be_this_agents_is_worth_the_next():
+    """A 5xx is not an answer about the location, so the next agent is asked.
+    Keeping the retry for these is why the rule is on the status rather than on
+    "a refusal ends it"."""
+    c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(3)],
+                    api.BzmApiError("GET ... -> HTTP 502: bad gateway",
+                                    status=502))
+    facts_mod.gather(c, "H1")
+    assert len(c.versions_calls) == 3
+
+
+def test_a_service_virtualization_location_carries_no_engine():
+    """Read off a real mockServices-only location: crane, the gateway and the
+    mock, and no `v4` or `apm` anywhere."""
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_SV,
+                    func_ids=["mockServices"]), "H1")
+
+    selected = {i["key"] for i in facts_mod.select_images(f)}
+    assert selected == {"blazemeter/service-mock:6.0.30.4",
+                        "blazemeter/group-gateway:6.0.30.4",
+                        # the catalogue's, which no /versions response names
+                        "blazemeter/mock-pc-service:latest"}
+
+
+# -- "could not read" is not "there is nothing there" -------------------------
+#
+# Four answers, and they have to stay four. `images` alone cannot carry them:
+# a refused read, a location with no agent to ask, an answer with nothing in it
+# and a set of facts nobody ever asked for all leave the same fallback images
+# behind. The state is what tells them apart.
+
+def test_an_image_list_that_was_read_says_how_much_it_held():
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], VERSIONS_PERFORMANCE), "H1")
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_READ
+    assert f["image_list"]["count"] == 3
+
+
+def test_an_empty_image_list_is_read_and_empty():
+    """The account answered and named nothing. That is a fact about the
+    location, and the bundle falls back to the catalogue knowing it."""
+    f = facts_mod.gather(
+        _FakeClient([{"id": "S1", "state": "empty"}], {"resources": {}}), "H1")
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_READ
+    assert f["image_list"]["count"] == 0
+    assert "location image list" not in f["images_source"]
+
+
+def test_a_refused_image_list_is_unread_and_says_so():
+    """A 403 is not an empty location. The images are the catalogue's either
+    way, so nothing downstream could tell them apart from the list itself."""
+    f = facts_mod.gather(_FakeClient(
+        [{"id": "S1", "state": "empty"}],
+        api.BzmApiError("GET /private-locations/H1/ships/S1/versions -> "
+                        "HTTP 403: forbidden")), "H1")
+
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD
+    # Never a count: a number here would be the empty answer's.
+    assert f["image_list"]["count"] is None
+    assert "403" in f["image_list"]["detail"]
+    # ...and the refusal does not fail the gather. The location was read fine.
+    assert f["harbor_id"] == "H1" and f["images"]
+
+
+def test_a_location_with_no_agent_was_never_in_a_position_to_be_asked():
+    """The route is per agent, so there is no request to refuse. Not a denied
+    read and not an empty one."""
+    f = facts_mod.gather(_FakeClient([]), "H1")
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_NO_AGENT
+    assert f["image_list"]["count"] is None
+
+
+def test_manually_entered_facts_never_asked_at_all():
+    """No account, so no read to be refused and no location to be empty."""
+    assert (facts_mod.image_list_state(facts_mod.manual(H, S))
+            == facts_mod.IMAGE_LIST_NOT_ASKED)
+
+
+def test_the_four_answers_are_four_distinct_values():
+    """Stated over the constants so that collapsing two of them -- the bug this
+    whole rule is about -- fails here rather than at a call site that reads one
+    and means the other."""
+    states = {facts_mod.IMAGE_LIST_READ, facts_mod.IMAGE_LIST_UNREAD,
+              facts_mod.IMAGE_LIST_NO_AGENT, facts_mod.IMAGE_LIST_NOT_ASKED}
+    assert len(states) == 4
+
+
+def test_facts_that_predate_the_field_never_claim_a_read():
+    """An older facts.json, or the checked-in example: nothing asked, and the
+    absent field must not read as an answer."""
+    assert (facts_mod.image_list_state({"func_ids": ["performance"]})
+            == facts_mod.IMAGE_LIST_NOT_ASKED)
 
 
 def test_key_to_repo_covers_the_irregular_names():

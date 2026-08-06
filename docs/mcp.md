@@ -62,7 +62,7 @@ second shape.
 
 | tool | actions |
 |---|---|
-| `opl_location` | `list` · `show` · `whoami` · `create` · `create_ship` · `reveal_token` · `delete`\* |
+| `opl_location` | `list` · `show` · `whoami` · `create` · `create_agent` · `reveal_token` · `delete`\* |
 | `opl_facts` | `gather` · `manual` |
 | `opl_bundle` | `generate` · `read` · `options` · `images` |
 | `opl_plan` | `capacity` |
@@ -71,44 +71,68 @@ second shape.
 
 \* off unless an environment variable is set — see [The gates](#the-gates).
 
+**One deployment inside a private location is an agent**, and that is the word
+every action name, response key and sentence here uses. The exception is
+`ship_id` — BlazeMeter's own field name for an agent's id, kept as the account
+spells it so a session reading a response from this server and a response from
+the account does not have to translate between them. `create_agent` was
+`create_ship` until [#156](https://github.com/benjithompson/bzm-opl-generator/issues/156)
+and the old spelling is still accepted, exactly as `bzm-opl-gen create-agent`
+still answers to `create-ship`: a session reads the action list out of the tool
+description at call time, but the prompt somebody saved does not update itself.
+
 **`opl_plan capacity` is the one tool that reaches nothing** — no key, no
-account, no cluster. It answers "what would we need to test N users?", which is
+account, no cluster. It answers "what would we need to run this?", which is
 routinely asked by a customer who cannot start the rest of the path because the
 cluster is a ticket nobody has raised. Alongside the numbers it returns
 `document`: a ready-to-send infrastructure request written for a platform team
 that has never heard of BlazeMeter. Offer that document — it is the deliverable,
 not a formatting of the numbers.
 
-Its `vus_per_engine` is the figure everything multiplies by and the one thing
+**Three sizings, each in its own unit**, and at least one of them: `users` for
+virtual users, `browsers` for browser instances, `requests_per_second` for
+service virtualization. Where several are given the largest pod count decides
+the pool and `driven_by` names which — one agent applies a single CPU/memory
+pair to every pod it creates, so these are three routes to a count of pods of
+one size rather than three sizes.
+
+Not every unit has a figure behind it, and each row says which it had.
+`vus_per_engine` is what a load target multiplies by and the one thing
 arithmetic cannot reach, since it depends on what the script does between
-requests. Unset, what an engine of that size is rated for is assumed and
-`vus_per_engine_assumed` comes back `true`; pass that qualifier on rather than
-reporting the node count as measured. Answer in BlazeMeter's own hierarchy — a
-location holds agents, an agent runs engines, each engine drives virtual users —
-and note that neither the location nor its agent needs a cluster to exist.
+requests; unset, what an engine of that size is rated for is assumed and
+`vus_per_engine_assumed` comes back `true`. `browsers_per_engine` works the same
+way. A request rate has *neither*: how many requests per second one core of a
+mock pod serves has never been measured here, nothing is assumed in its place,
+and so that target is stated in the request document and sizes nothing — asked
+for on its own it is a refusal rather than a plan with an invented number in it.
+Pass the qualifier on rather than reporting a node count as measured.
+
+Answer in BlazeMeter's own hierarchy — a location holds agents, an agent runs
+engines, each engine drives virtual users — and note that neither the location
+nor its agent needs a cluster to exist.
 [capacity-planning.md](capacity-planning.md) has the rest.
 
 **Listing locations is deliberately compact.** `opl_location list` gives one
 line per location — its id, name, `funcIds`, slots, how many agents it has and
 how many of those are reporting — and the first 50 of them. Real accounts hold
-hundreds: one with 171 locations and 221 ships listed in full came to 84,779
+hundreds: one with 171 locations and 221 agents listed in full came to 84,779
 characters, over a client's result ceiling, so the first step of the path never
 completed. Narrow with `name_contains` (a case-insensitive substring of the
-name) rather than raising `limit`, and use `show` for the ships of the one you
+name) rather than raising `limit`, and use `show` for the agents of the one you
 pick. Whatever the cap or the filter left out comes back as a count with a
 sentence saying so — a listing that quietly stopped would read as the whole
 account, and "that location does not exist" is a worse answer than a response
 that was too big.
 
 Two counts describe the agents, because one cannot carry both facts.
-`ships_reporting` counts only the agents the payload vouches for, and
-`ships_unknown` those it carried no heartbeat to judge by — so a location with
+`agents_reporting` counts only the agents the payload vouches for, and
+`agents_unknown` those it carried no heartbeat to judge by — so a location with
 one live agent and one heartbeat-less record reports `1` and `1` rather than
-hiding the live one. A `0` beside a non-zero `ships_unknown` means "none that we
+hiding the live one. A `0` beside a non-zero `agents_unknown` means "none that we
 could see", not "none alive", and where *nothing* is vouched for
-`ships_reporting` is `null` rather than `0`. Don't redeploy on the strength of a
+`agents_reporting` is `null` rather than `0`. Don't redeploy on the strength of a
 zero: `opl_agent status` is the authority on a single agent, and `show` gives
-the per-ship detail (each with its own `reporting`) for the location you pick.
+the per-agent detail (each with its own `reporting`) for the location you pick.
 
 `opl_preflight doctor` and `suggest` take `evidence` as either the **path** of
 the cluster-evidence JSON the customer sent — read here, on the machine running
@@ -162,19 +186,20 @@ Every `generate` reports which of four ways its token arrived, as
 |---|---|
 | `given` | the `auth_token` option was already set — nothing was issued |
 | `rotated` | `rotate_token: true` — a **new** token, and the previous one is dead |
-| `reused` | `out_dir` already held a bundle for this ship; its token was read back, so the bytes are identical and the running agent is unaffected |
+| `reused` | `out_dir` already held a bundle for this agent; its token was read back, so the bytes are identical and the running agent is unaffected |
 | `placeholder` | no token available — the bundle cannot be applied as it stands, and the message names both places a real one comes from |
 
 A rotation is also in `warnings`, not only in `token_source`. A session scanning
 for what went wrong would otherwise miss the one event in a generate that takes a
 working agent down — and that is not hypothetical: a live rotation on this surface
-answered `warnings: []` and named no ship at all.
+answered `warnings: []` and named no agent at all.
 
-The token itself is still never in the response, on any branch. The *ship* is,
-because naming the agent whose credential was just replaced is the point.
+The token itself is still never in the response, on any branch. The agent's own
+`ship_id` is, because naming the agent whose credential was just replaced is the
+point.
 
-`opl_location create_ship` is where a new agent's first token comes from in
-practice: create the ship, then `generate` once with `rotate_token: true`, and
+`opl_location create_agent` is where a new agent's first token comes from in
+practice: create the agent, then `generate` once with `rotate_token: true`, and
 every later regenerate into the same directory takes the `reused` branch.
 
 ## Three rules the server keeps
@@ -186,7 +211,7 @@ a transcript, gets summarised, and is quoted back later; a credential that
 reveal_token` is the single exception, and it is a whole action precisely so it
 cannot happen as a side effect of something else. It says what it did, because
 what it did was invalidate the previous token. `generate` with `rotate_token`
-issues one too, and it also says so — but it says which *ship*, and puts the
+issues one too, and it also says so — but it names the *agent*, and puts the
 value in the Secret on disk rather than in the answer.
 
 **A secret is never a tool argument.** A *path* may be (`api_key_file`); the id
@@ -212,7 +237,7 @@ setting one does not mean restarting the client.
 
 | variable | what it allows |
 |---|---|
-| `BZM_OPL_ALLOW_DESTRUCTIVE=1` | `opl_location delete` — a location and every ship in it |
+| `BZM_OPL_ALLOW_DESTRUCTIVE=1` | `opl_location delete` — a location and every agent in it |
 | `BZM_OPL_ENABLE_LIVETEST=1` | `opl_agent livetest` — deploys to a cluster and blocks for minutes |
 
 Every tool also carries MCP annotations (`readOnlyHint`, `destructiveHint`), so

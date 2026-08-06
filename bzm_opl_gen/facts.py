@@ -4,17 +4,35 @@ Facts = everything the generator needs that comes from the BlazeMeter account
 rather than from the customer's cluster team:
   - harbor (location) id/name, funcIds (which functionalities are enabled)
   - ships (agents): id, name, installed crane version
-  - actual image inventory reported by running agents (ground truth for
-    private-registry mirroring), classified performance vs other
+  - the images this location runs (ground truth for private-registry
+    mirroring), classified performance vs other
+
+Three sources answer that last one and none of them replaces another -- the
+location's own image list, a running agent's inventory, and the catalogue below.
+`gather` says in `images_source` which of them contributed, and in `image_list`
+what happened when the account was asked.
 """
 
 import json
+
+from .api import BzmApiError
+
+# The one directory under the project that holds browser images. Every one of
+# them is version-pinned (`charmander/chrome_136.0.7103.113`), which is why no
+# catalogue can carry a default for them.
+#
+# Declared here because it is the key `IMAGE_CATEGORY` classifies browsers by,
+# and `browser_images()` picks them out with. It was written twice, and a
+# rename on one side left `browser_images()` and `gui_images_incomplete()`
+# answering empty while `image_category()` still said `gui` -- a bundle that
+# names no browser image and does not flag it.
+BROWSER_DIR = "charmander"
 
 # Image classification: substring -> functional category. Anything unmatched
 # is a core performance/engine image.
 IMAGE_CATEGORY = {
     "doduo": "gui",            # grid proxy (GUI functional / Selenium)
-    "charmander": "gui",       # browser image (GUI functional)
+    BROWSER_DIR: "gui",        # browser image (GUI functional)
     "service-mock": "mock",
     "mock-pc-service": "mock",
     "group-gateway": "mock",   # mock services gateway
@@ -63,6 +81,30 @@ def image_distinct_funcs():
     return out
 
 
+# The category the taurus engine is in, so "does this functionality's agent
+# carry an engine?" is a lookup rather than a second list of funcIds.
+ENGINE_CATEGORY = "performance"
+
+
+def runs_engine(func_id):
+    """Does this functionality's agent carry a taurus engine?
+
+    Read off CATEGORY_BY_FUNC, which is where the answer already is: the table
+    above was read off real single-functionality locations' /versions --
+    performance and functionalGui both carry v4, and a mockServices agent
+    carries crane, group-gateway and service-mock and no engine at all. The
+    frontend kept the same two ids as a literal of its own, which is the copy
+    `DOCKER_IGNORED` and the funcId vocabulary are served to avoid; it is on
+    each served functionality now.
+
+    A funcId this table does not name -- tdm, delphix, the account's others --
+    answers False rather than defaulting, unlike `needed_categories`: this asks
+    what an agent carries, and "nothing here knows" is not "it carries an
+    engine".
+    """
+    return ENGINE_CATEGORY in CATEGORY_BY_FUNC.get(func_id, set())
+
+
 def needed_categories(func_ids):
     needed = set()
     for f in func_ids or []:
@@ -78,8 +120,10 @@ def select_images(facts, all_images=False):
         if i.get("key") and (all_images or image_category(i["repo"]) in needed)
     ]
 
-# Fallback catalogue when there is no agent inventory to read -- either no agent
-# has run yet, or nobody has account access at all (see `manual`).
+# The keys neither live source named. Two sources outrank this one -- the
+# location's own image list and a running agent's inventory -- so what is left
+# for the catalogue is manual entry, where there is no account to ask, and the
+# handful of keys below that *no* /versions response carries.
 #
 # Keys are the local tags crane resolves IMAGE_OVERRIDES by; repos are what the
 # account actually reports. Most keys map to a repo of the same name, but not
@@ -91,12 +135,21 @@ FALLBACK_IMAGES = [
     # performance: the taurus engine and its APM sidecar.
     {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},
     {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "category": "performance"},
-    # Also in crane's image set for a performance-only location -- found by
-    # reading what a live Kubernetes agent reports, which is where the two
-    # below had been missing from. Neither is pulled by an ordinary
-    # performance run (a full test on CRC fetched only crane and v4), but
-    # crane may ask for them, and a key it cannot find in a sealed cluster is
-    # an ImagePullBackOff mid-test rather than a warning.
+    # Crane's own, and the reason this catalogue is a backstop rather than a
+    # fallback. A live *Kubernetes* agent reports both beside the location's
+    # images (`torero:4.6.185`, `richrach:1.0.81`, crane 3.7.56) and no
+    # /versions response names either -- not the performance location's, not
+    # the twelve-resource one's. Every Docker agent read in the same account
+    # reports neither, so they belong to the Kubernetes container manager, and
+    # Kubernetes is what this tool generates for.
+    #
+    # So they are not the location's resources and the image list is right not
+    # to carry them; they are still keys crane may ask for, and a key it cannot
+    # find in a sealed cluster is an ImagePullBackOff mid-test rather than a
+    # warning. Left in the performance category, which is where the one live
+    # Kubernetes agent that reports them runs its tests: no SV-only Kubernetes
+    # agent has been read, so whether an agent with no engine carries them is
+    # not something this repo knows.
     {"key": "torero:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/torero", "tag": "latest", "category": "performance"},
     {"key": "richrach:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/richrach", "tag": "latest", "category": "performance"},
     # mock services.
@@ -112,8 +165,10 @@ FALLBACK_IMAGES = [
     # GUI functional: the grid proxy. The browser images (charmander/chrome_*,
     # firefox_*, microsoftedge_*, safari_*) are deliberately absent -- the
     # account carries 60+ version-pinned repos and which one a location needs
-    # comes from its browser funcIds, so there is no defensible default. A GUI
-    # location bound for a private registry needs a live inventory; see
+    # comes from its browser funcIds, so there is no defensible default *here*.
+    # The location's own image list has one, off the funcIds themselves and
+    # without an agent ever starting, which is why a bundle generated with an
+    # API key no longer needs this to have an answer; see
     # `gui_images_incomplete`.
     {"key": "blazemeter/doduo:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/doduo", "tag": "latest", "category": "gui"},
 ]
@@ -129,6 +184,17 @@ KEY_REPO_EXCEPTIONS = {
     "blazemeter": "v3",
     "secrets-image": "secrets",
 }
+
+
+def key_base(key):
+    """A crane image key without its tag -- the part three sources have to agree
+    on before one of them can outrank another.
+
+    The tag is what follows the colon *after* the last slash: `localhost:5001/v4`
+    is a port, not a tag, and splitting on the first colon leaves `localhost`.
+    """
+    head, sep, tail = key.rpartition(":")
+    return head if sep and "/" not in tail else key
 
 
 def repo_for_key(key):
@@ -160,10 +226,7 @@ def repo_for_key(key):
     `.../blazemeter/v4`, which is worse for being plausible -- it says the image
     lives somewhere the agent is not pulling it from.
     """
-    # The tag is what follows the colon *after* the last slash: `localhost:5001/v4`
-    # is a port, not a tag, and splitting on the first colon leaves `localhost`.
-    head, sep, tail = key.rpartition(":")
-    name = head if sep and "/" not in tail else key
+    name = key_base(key)
     for i in FALLBACK_IMAGES:
         if i["key"].split(":", 1)[0] == name:
             return i["repo"]
@@ -177,8 +240,172 @@ def repo_for_key(key):
 
 
 
+# How the read of the location's own image list went -- BzmClient.ship_versions,
+# `GET /private-locations/{h}/ships/{s}/versions`. Four answers, and they must
+# stay four, because every one of them leaves the same fallback images behind
+# and `images` alone cannot say which happened:
+#
+#   read      the account answered. `count` says how much it named, and 0 is a
+#             real answer -- a location whose resources are none.
+#   unread    the request was made and failed or was refused. `detail` carries
+#             what came back. Never a count: a number here would be the empty
+#             answer's.
+#   no-agent  the route is per agent and the location has none, so there was
+#             nothing to ask. Not a refusal and not an empty answer.
+#   not-asked nothing put the question -- manual entry, or a facts file written
+#             before this was read at all.
+IMAGE_LIST_READ = "read"
+IMAGE_LIST_UNREAD = "unread"
+IMAGE_LIST_NO_AGENT = "no-agent"
+IMAGE_LIST_NOT_ASKED = "not-asked"
+
+# The three sources an image set is built from, named in `images_source` in the
+# order they outrank each other.
+VERSIONS_SOURCE = "location image list"
+INVENTORY_SOURCE = "live agent inventory"
+CATALOGUE_SOURCE = "fallback-catalogue"
+
+
+def image_list_state(facts):
+    """Which of the four above these facts record.
+
+    Absent is `not-asked` -- an older facts.json, or the checked-in example, and
+    both are honestly "nobody put the question". What it must never become is
+    `read`: that would have a bundle report a location as carrying no images
+    when nothing had looked.
+    """
+    return (facts.get("image_list") or {}).get("state") or IMAGE_LIST_NOT_ASKED
+
+
+def _image_list_entries(body):
+    """The image entries a /versions payload names.
+
+    The payload's own map keys are BlazeMeter's resource ids --
+    `apmDockerImage`, `blazemeter/charmander/chrome/136` -- and crane resolves
+    an override by none of them. `dockerTag` is the key it does resolve by, and
+    `dockerTag:version` is exactly the form a live Kubernetes agent reports the
+    same image in, which is what lets the two sources be compared at all.
+
+    The repo is the account's own `dockerRegistry` + `imageRelativePath` rather
+    than `repo_for_key`'s lookup: this is the source that table was read off, so
+    where it speaks it is the authority. An entry naming no path falls back to
+    the lookup rather than being dropped -- a key with a resolvable repo is
+    still an override crane can use.
+    """
+    out = []
+    for r in (body or {}).get("resources", {}).values():
+        tag, version = r.get("dockerTag"), r.get("version")
+        if not tag or not version:
+            continue
+        registry, path = r.get("dockerRegistry"), r.get("imageRelativePath")
+        repo = f"{registry.rstrip('/')}/{path}" if registry and path \
+            else repo_for_key(tag)
+        out.append({"key": f"{tag}:{version}", "repo": repo, "tag": version,
+                    # The account states versions, not sizes.
+                    "size_mb": None, "category": image_category(repo)})
+    return out
+
+
+# Statuses that settle the image list for the whole location, so the next agent
+# is not asked. The route is per agent but the answer is not: a token that may
+# not read this location is refused for every agent in it, and a location or a
+# key that is gone is gone for all of them. Retried per agent, a dead key costs
+# one sequential round trip per agent before the same `unread` comes back --
+# and 17-agent locations are ordinary while one real account holds 221 agents,
+# which is where per-agent work over a location stops completing at all.
+#
+# Anything else -- a 5xx, an `{"error": ...}` body with no status behind it --
+# is left retryable, because those are the ones a second agent could plausibly
+# answer differently.
+IMAGE_LIST_SETTLED_BY = (401, 403, 404)
+
+
+def _read_image_list(client, harbor_id, ships):
+    """(entries, state, detail) for the location's own image list.
+
+    `entries` is None wherever the state is not `read`, so that "nothing there"
+    has a representation -- the empty list -- that "could not read" cannot
+    borrow. A caller iterating it without looking at the state gets a
+    TypeError, which is the point.
+
+    Asked of the first agent that answers: every agent in a location answered
+    identically, because the set follows the location's funcIds. A refusal from
+    all of them is a note, never a failure, since the location itself was read
+    fine -- and a refusal that answers for the location (IMAGE_LIST_SETTLED_BY)
+    is not re-asked of the rest.
+    """
+    if not ships:
+        return None, IMAGE_LIST_NO_AGENT, ("the image list is served per agent "
+                                           "and this location has none")
+    refusal = None
+    for ship in ships:
+        try:
+            body = client.ship_versions(harbor_id, ship["id"])
+        except BzmApiError as e:
+            refusal = str(e)
+            if e.status in IMAGE_LIST_SETTLED_BY:
+                break
+            continue
+        return _image_list_entries(body), IMAGE_LIST_READ, None
+    return None, IMAGE_LIST_UNREAD, refusal
+
+
+def _inventory_entries(ships):
+    """What the agents themselves report they are holding.
+
+    Two shapes, because the two container managers report differently:
+
+      Docker      ['gcr.io/.../blazemeter/v4:2.4.444', 'taurus-cloud:latest']
+                  -- registry-qualified, so the repo is read off it.
+      Kubernetes  ['taurus-cloud:latest']
+                  -- the bare key only, and Size 0. This is crane's configured
+                  image set rather than a listing of what is on the node, so
+                  the repo has to be looked up.
+
+    Only the Docker shape used to be handled, which meant every Kubernetes agent
+    -- the kind this tool generates for -- silently produced no inventory at all
+    and fell through to the catalogue.
+    """
+    out, seen = [], set()
+    for ship in ships:
+        info = (ship.get("hostInfo") or {}).get("containerManager", {}).get("info", {})
+        for img in info.get("images", []):
+            tags = img.get("RepoTags") or []
+            gcr = [t for t in tags if t.startswith("gcr.io/")]
+            local = [t for t in tags if not t.startswith("gcr.io/")]
+            if gcr:
+                ref = gcr[0]
+                key = next((t for t in local if t.endswith(":latest")), None)
+                repo, tag = ref.rsplit(":", 1)
+            elif local:
+                key = local[0]
+                repo, tag = repo_for_key(key), key.rsplit(":", 1)[-1]
+                ref = f"{repo}:{tag}"
+            else:
+                continue
+            if ref in seen:
+                continue
+            seen.add(ref)
+            out.append({
+                # crane's IMAGE_OVERRIDES key, and None where the agent reports
+                # a reference with no local tag to read one off. Kept rather
+                # than dropped because crane's own image arrives that way on a
+                # Docker agent -- there is nothing to override, and the version
+                # is still the one to pin the Deployment to.
+                "key": key,
+                "repo": repo,
+                "tag": tag,
+                # Kubernetes reports 0 for every image; None says "unknown"
+                # rather than claiming an empty image.
+                "size_mb": round(img["Size"] / 1e6) if img.get("Size") else None,
+                "category": image_category(repo),
+            })
+    return out
+
+
 def gather(client, harbor_id):
     harbor = client.private_location(harbor_id)
+    ships = harbor.get("ships", [])
     facts = {
         "harbor_id": harbor["id"],
         "harbor_name": harbor.get("name"),
@@ -208,69 +435,71 @@ def gather(client, harbor_id):
         # catches them.
         "engine_xmx_mb": harbor.get("engineXmx"),
         "engine_xms_mb": harbor.get("engineXms"),
-        "ships": [],
-        "images": [],
-        "crane_image": None,  # set from inventory if an agent is live
-    }
-    seen = set()
-    for ship in harbor.get("ships", []):
-        facts["ships"].append({
+        "ships": [{
             "id": ship["id"],
             "name": ship.get("name"),
             "state": ship.get("state"),
             "installed_version": ship.get("installedVersion"),
             "last_heartbeat": ship.get("lastHeartBeat"),
-        })
-        info = (ship.get("hostInfo") or {}).get("containerManager", {}).get("info", {})
-        for img in info.get("images", []):
-            tags = img.get("RepoTags") or []
-            # Two shapes, because the two container managers report differently:
-            #
-            #   Docker      ['gcr.io/.../blazemeter/v4:2.4.444', 'taurus-cloud:latest']
-            #               -- registry-qualified, so the repo is read off it.
-            #   Kubernetes  ['taurus-cloud:latest']
-            #               -- the bare key only, and Size 0. This is crane's
-            #               configured image set rather than a listing of what
-            #               is on the node, so the repo has to be looked up.
-            #
-            # Only the Docker shape used to be handled, which meant every
-            # Kubernetes agent -- the kind this tool generates for -- silently
-            # produced no inventory at all and fell through to the catalogue.
-            gcr = [t for t in tags if t.startswith("gcr.io/")]
-            local = [t for t in tags if not t.startswith("gcr.io/")]
-            if gcr:
-                ref = gcr[0]
-                key = next((t for t in local if t.endswith(":latest")), None)
-                repo, tag = ref.rsplit(":", 1)
-            elif local:
-                key = local[0]
-                repo, tag = repo_for_key(key), key.rsplit(":", 1)[-1]
-                ref = f"{repo}:{tag}"
-            else:
+        } for ship in ships],
+    }
+    resources, state, detail = _read_image_list(client, harbor_id, ships)
+    facts["image_list"] = {
+        "state": state,
+        # Only a read has a count. `unread` with a 0 in it would be the empty
+        # answer wearing the refused one's clothes, which is the whole rule.
+        "count": len(resources) if resources is not None else None,
+        "detail": detail,
+    }
+
+    # Three sources, and the first to name a key keeps it. They are not the same
+    # question, which is why none of them replaces another:
+    #
+    #   the image list  what the *location* is configured to run, exact versions
+    #                   included, and answerable before an agent has ever
+    #                   started. Where it speaks it is the account itself.
+    #   the inventory   what crane on this agent is actually holding. It reaches
+    #                   past the location's resources: a live Kubernetes agent
+    #                   reports `torero` and `richrach` and no /versions
+    #                   response names either.
+    #   the catalogue   what any agent carries, read off live inventories. The
+    #                   only one of the three that answers with no account at
+    #                   all, and the only source for a key the other two are
+    #                   silent about -- see FALLBACK_IMAGES.
+    entries, sources = {}, []
+    inventory = _inventory_entries(ships)
+
+    def take(label, items):
+        taken = False
+        for e in items:
+            # Crane's own image is not one a bundle overrides -- it is the one
+            # the Deployment runs -- and an entry with no key is nothing crane
+            # could resolve an override by.
+            if not e["key"] or e["repo"] == CRANE_REPO:
                 continue
-            if ref in seen:
+            base = key_base(e["key"])
+            if base in entries:
                 continue
-            seen.add(ref)
-            entry = {
-                "key": key,                          # crane's IMAGE_OVERRIDES key
-                "repo": repo,
-                "tag": tag,
-                # Kubernetes reports 0 for every image; None says "unknown"
-                # rather than claiming an empty image.
-                "size_mb": round(img["Size"] / 1e6) if img.get("Size") else None,
-                "category": image_category(repo),
-            }
-            if repo == CRANE_REPO:
-                facts["crane_image"] = ref
-            elif entry["key"]:
-                facts["images"].append(entry)
-    if not facts["images"]:
-        facts["images"] = [dict(i, size_mb=None) for i in FALLBACK_IMAGES]
-        facts["images_source"] = "fallback-catalogue (no agent inventory yet)"
-    else:
-        facts["images_source"] = "live agent inventory"
-    if not facts["crane_image"]:
-        facts["crane_image"] = f"{CRANE_REPO}:latest"
+            entries[base] = e
+            taken = True
+        if taken:
+            sources.append(label)
+
+    take(VERSIONS_SOURCE, resources or [])
+    take(INVENTORY_SOURCE, inventory)
+    take(CATALOGUE_SOURCE, [dict(i, size_mb=None) for i in FALLBACK_IMAGES])
+
+    # Crane is pinned from the same two live sources in the same order, and
+    # identified by its repo: a Docker agent pulling crane from a private mirror
+    # reports a reference that is not this one, and that reference is not what a
+    # fresh bundle should run.
+    facts["crane_image"] = next(
+        (f"{CRANE_REPO}:{e['tag']}"
+         for source in (resources or [], inventory)
+         for e in source if e["repo"] == CRANE_REPO),
+        f"{CRANE_REPO}:latest")
+    facts["images"] = list(entries.values())
+    facts["images_source"] = " + ".join(sources)
     return facts
 
 
@@ -306,17 +535,29 @@ def image_refs(facts, all_images=False):
         f"{i['repo']}:{i['tag']}" for i in select_images(facts, all_images=all_images)]
 
 
+def browser_images(facts):
+    """The version-pinned browser images this bundle names, if any."""
+    return [i for i in select_images(facts) if BROWSER_DIR in i.get("repo", "")]
+
+
 def gui_images_incomplete(facts):
-    """True when this bundle needs GUI browser images that no catalogue can
-    supply -- a functionalGui location built without a live agent inventory.
+    """True when this bundle runs browser tests and names no browser image.
+
+    Read off the images rather than off where they came from. Provenance used to
+    stand in for the question -- manual entry meant incomplete, anything else
+    meant fine -- and it was a proxy in both directions: a live inventory
+    carrying no browser passed, and the location's own image list, which is the
+    source that closes the gap, would have passed by simply existing. The
+    account names the exact build a location pins, so this is now a fact about
+    the images and not about their provenance.
 
     Separate from generation because it is a caveat, not an error: the manifests
     are correct for everything else, and crane resolves a missing key against
     the public registry. That is fine until the cluster is genuinely sealed,
     which is exactly when a private registry is in play -- so callers surface
     this alongside the private-registry options rather than refusing."""
-    return bool(from_manual_entry(facts)
-                and "gui" in needed_categories(facts.get("func_ids")))
+    return bool("gui" in needed_categories(facts.get("func_ids"))
+                and not browser_images(facts))
 
 
 def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
@@ -357,6 +598,11 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
                    "installed_version": None, "last_heartbeat": None}],
         "images": [dict(i, size_mb=None) for i in FALLBACK_IMAGES],
         "images_source": MANUAL_SOURCE,
+        # No account, so the location's image list was never asked for. Not a
+        # refused read and not an empty location -- see image_list_state.
+        "image_list": {"state": IMAGE_LIST_NOT_ASKED, "count": None,
+                       "detail": "no account access, so the location's image "
+                                 "list was never asked for"},
         "crane_image": f"{CRANE_REPO}:latest",
     }
 

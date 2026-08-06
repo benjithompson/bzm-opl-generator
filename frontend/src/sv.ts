@@ -17,8 +17,8 @@
 // what keeps "adding a functionality needs no frontend change" true.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
 import {
-  GroupFlags, isOpenshift, OptionPatch, SV_NONE, svConfigured, svIncomplete,
-  svNodePortConflict,
+  GroupFlags, isOpenshift, OptionPatch, SV_NONE,
+  svConfigured, svIncomplete, svNodePortConflict,
 } from "./optionGroups";
 import { SvCtx } from "./SvPrereqs";
 
@@ -27,12 +27,89 @@ import { SvCtx } from "./SvPrereqs";
  *  module is service virtualization, and the id it answers under is the one
  *  thing about it that cannot be derived from its inputs.
  *
- *  It is a *functionality* id, not the group id it happens to match, so it
- *  joins to core.FUNCTIONALITIES rather than to the group table -- and
- *  test_server.py holds it there, beside the group tags, because a rename on
- *  the server would otherwise leave the card offering switches for a bundle
- *  that cannot carry them with both suites green. */
-const SV_FUNCTIONALITY = "sv";
+ *  It is a *functionality* id -- which since #149 is BlazeMeter's funcId, and
+ *  so no longer the same string as the `sv` group beside it. That it used to
+ *  match the group id was luck, and the sort that hides a confusion: one names
+ *  a row on this page, the other names something an account enables. It joins
+ *  to core.FUNCTIONALITIES rather than to the group table, and test_server.py
+ *  holds it there beside the group tags, because a rename on the server would
+ *  otherwise leave the card offering switches for a bundle that cannot carry
+ *  them with both suites green.
+ *
+ *  Exported so App asks `runsFunctionality` with this rather than a second
+ *  literal of its own: two copies of an id that only one file can be right
+ *  about is how the card and the format refusal would come apart. */
+export const SV_FUNCTIONALITY = "mockServices";
+
+// -- and the location it wants to itself --------------------------------------
+//
+// Crane applies **one** KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY pair to every
+// pod it creates. BlazeMeter's own reference defines them as the limits for
+// "resources created by agent" -- engines, browser pods and mock-service pods
+// alike -- and there is no KUBERNETES_MOCK_RESOURCES_*. So a location running
+// both an engine and a mock has one number answering two sizing questions, and
+// they are genuinely different questions: read off real single-functionality
+// locations' /private-locations/{h}/ships/{s}/versions, an SV agent carries
+// crane, group-gateway and service-mock and **no taurus engine at all**, while
+// performance and functionalGui both carry v4.
+//
+// Enforced asymmetrically, and that asymmetry is the decision (#147):
+//
+//  - **deciding** -- manual entry, the new-location form -- the opinion is free,
+//    so the rule is applied and said.
+//  - **connect mode** -- the location already exists and nothing on this page
+//    can un-mix it: #113 removed the one route that turned a funcId on, because
+//    changing what a location *is* belongs in BlazeMeter's own UI. So a mixed
+//    location generates normally and is warned about, never blocked.
+
+/** What declaring one funcId takes away with it, for the surfaces that are
+ *  deciding.
+ *
+ *  Takes `engines` -- the funcIds whose agent carries one, off the served
+ *  `runs_engine` -- rather than knowing them: that is this repo's record of
+ *  which agents carry an engine, read off those /versions responses, and it is
+ *  a Python table. A funcId neither it nor SV names -- tdm, dataPublisher,
+ *  delphix, the account's other six -- excludes nothing and is excluded by
+ *  nothing, because nothing here knows what those cost; the create-location
+ *  form offers the account's whole vocabulary and must not edit what it cannot
+ *  judge.
+ *
+ *  Curried, because both callers hand the result to `toggleDeclared` as the
+ *  rule it applies per box. */
+export function exclusiveWith(engines: string[]): (id: string) => string[] {
+  return (id) => {
+    if (id === SV_FUNCTIONALITY) return engines;
+    return engines.includes(id) ? [SV_FUNCTIONALITY] : [];
+  };
+}
+
+/** ...and why, in the one sentence both deciding surfaces say it in. Prose
+ *  rather than a per-surface string, because it is one fact about crane and two
+ *  places would drift. No backticks and no `--`: it renders as plain text
+ *  beside a set of checkboxes. */
+export const SV_ALONE =
+  "Service virtualization is declared on its own: the agent applies one CPU "
+  + "and memory limit pair to every pod it creates, so engine sizing and mock "
+  + "throughput cannot be set apart. Ticking it clears Performance and GUI "
+  + "Functional, and ticking either of those clears it.";
+
+/** Does this location already mix the two? Connect mode's whole answer.
+ *
+ *  Deliberately not `!runsFunctionality(...)` machinery and deliberately not a
+ *  blocker: it is one true sentence about a location that exists, and the only
+ *  place it can be acted on is BlazeMeter's own location settings. */
+export function svMixedWithEngines(ids: string[], engines: string[]): boolean {
+  return ids.includes(SV_FUNCTIONALITY) && ids.some((f) => engines.includes(f));
+}
+
+/** ...said. Names where it can be acted on, because this page cannot. */
+export const SV_MIXED =
+  "This location runs service virtualization alongside load or browser tests. "
+  + "The agent applies one CPU and memory limit pair to every pod it creates, "
+  + "so a single number sizes both the engines and the mocks; service "
+  + "virtualization is better off on a location of its own. Nothing here "
+  + "changes what a location runs, which is BlazeMeter's own location "
+  + "settings.";
 
 /** Why a format cannot carry service virtualization, by format.
  *
@@ -160,8 +237,8 @@ const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
 /** Everything about service virtualization, for this location and these
  *  options. Pure: the same four inputs always give the same record.
  *
- *  `runs` is `optionGroups.runsFunctionality(enabled, "sv")` -- does this
- *  bundle still carry SV options at all? It is not the same question as `location`,
+ *  `runs` is `runsFunctionality(enabled, SV_FUNCTIONALITY)` -- does this bundle
+ *  still carry SV options at all? It is not the same question as `location`,
  *  and the difference is the whole reason it is a parameter rather than
  *  derived from `funcIds` here. Three states reach this:
  *
@@ -186,11 +263,22 @@ export function svState(
     constants: SvConstants, runs = true): Sv {
   const location = (funcIds ?? []).some((f) => constants.func_ids.includes(f));
   const declined = o.sv_ingress === SV_NONE;
-  const required = location && !declined;
+  // `runs` is a conjunct, and it has to be. The comment below used to say
+  // `required` implies `runs` because a demand comes from the funcIds a served
+  // functionality is read off -- true connected, where both are `facts.func_ids`,
+  // and false in manual entry, where `runs` is the *declaration* and `funcIds`
+  // is the facts fetched for the previous one, a debounce behind it (#151).
+  //
+  // In that gap the two writers fought: `notRunPatch` cleared `sv_ingress`
+  // because the declaration no longer carries mockServices, and `correction`
+  // re-seeded it from a demand read off the stale facts -- an effect loop that
+  // never settled, so unticking Service virtualization hung the page. Each
+  // write was individually right; what was wrong is that they answered the same
+  // question from two sources. This makes it one.
+  const required = runs && location && !declined;
   // What a helm or docker bundle is refused over: an SV configuration this
   // bundle carries, or a demand that is one render from becoming one (the seed
-  // below chooses nginx for it). `required` implies `runs` -- a demand comes
-  // from the funcIds a served functionality is read off.
+  // below chooses nginx for it).
   //
   // One value because the two readers must not disagree: the control disables
   // a segment with it and `correction` moves off a selected one with it, and a

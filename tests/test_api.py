@@ -4,6 +4,7 @@ import os
 import pytest
 
 from bzm_opl_gen import api
+from versions_fixtures import VERSIONS_PERFORMANCE
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "examples")
 
@@ -53,6 +54,47 @@ def test_list_calls_ask_for_more_than_one_page():
     paths = [p for _, p, _ in c.calls]
     assert paths[0] == "/workspaces?accountId=291446&limit=1000"
     assert "limit=1000" in paths[1]
+
+
+def test_the_account_is_asked_what_its_functionalities_are_called():
+    """The funcId vocabulary is the account's, not a table in this repo.
+
+    Fixtured rather than called live, but this is the shape a real account
+    answers with: BlazeMeter's own display names, five funcIds this repo never
+    listed, and no `functionalApi` -- which core.FUNC_ID_LABELS used to offer.
+    """
+    c = FakeClient({("GET", "/accounts/291446/functionalities"): {
+        "additionalSpace": 50,
+        "functionalities": [
+            {"funcId": "performance", "size": 5, "displayName": "Performance"},
+            {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
+        ]}})
+    body = c.functionalities(291446)
+
+    assert c.calls == [("GET", "/accounts/291446/functionalities", None)]
+    assert [f["displayName"] for f in body["functionalities"]] == [
+        "Performance", "TDM Integration"]
+
+
+def test_the_location_is_asked_which_images_its_agent_runs():
+    """The image list is the account's too, and it needs no live agent.
+
+    Fixtured, but recorded verbatim off a performance-only location whose agent
+    had never been online (`state: empty`): three resources, each carrying the
+    crane key (`dockerTag`), the exact version and the repo it is served from.
+    The map's own keys are BlazeMeter's resource ids -- `taurusEngineDockerImage`
+    is not a name crane resolves an override by -- so nothing may read them.
+    """
+    c = FakeClient({("GET", "/private-locations/H1/ships/S1/versions"):
+                    VERSIONS_PERFORMANCE})
+    body = c.ship_versions("H1", "S1")
+
+    assert c.calls == [("GET", "/private-locations/H1/ships/S1/versions", None)]
+    assert body["resources"]["taurusEngineDockerImage"] == {
+        "dockerTag": "taurus-cloud", "type": "dockerImage",
+        "version": "2.4.454-reduced", "reducedVersion": "2.4.454-reduced",
+        "imageRelativePath": "blazemeter/v4", "restartPolicy": "Never",
+        "minSlots": 1, "dockerRegistry": "gcr.io/verdant-bulwark-278"}
 
 
 def test_update_private_location_omits_unset_fields():

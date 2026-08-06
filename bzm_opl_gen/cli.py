@@ -160,11 +160,21 @@ def cmd_facts(a):
     print(f"wrote {a.output}: location '{f['harbor_name'] or f['harbor_id']}' "
           f"funcIds={f['func_ids']} ships={len(f['ships'])} "
           f"images={len(f['images'])} ({f['images_source']})")
+    # A refused image list is the one state worth a line of its own: the images
+    # below it are a catalogue's, and nothing in the count above says so. An
+    # empty answer is not this -- that is the location saying it runs nothing --
+    # and a location with no agent has nothing to refuse.
+    if facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD:
+        print(f"note: the location's own image list could not be read "
+              f"({f['image_list']['detail']}), so the images above are the "
+              f"fallback catalogue's rather than this location's. Versions may "
+              f"be wrong and browser images are missing.", file=sys.stderr)
     if facts_mod.gui_images_incomplete(f):
         print("note: functionalGui needs a version-pinned browser image "
               "(charmander/chrome_*, firefox_*, ...) that no catalogue can pick "
-              "for you. Fine against the public registry; for a private one, add "
-              "the key to IMAGE_OVERRIDES by hand or gather facts with an API key.",
+              "for you. The account names it, so gather facts with an API key; "
+              "otherwise add the key to IMAGE_OVERRIDES by hand. Fine as it is "
+              "against the public registry, not against a private one.",
               file=sys.stderr)
 
 
@@ -308,12 +318,20 @@ def cmd_sv_expose(a):
 
 
 def cmd_plan(a):
-    """Size the infrastructure a load target needs, before any of it exists."""
+    """Size the infrastructure a sizing needs, before any of it exists."""
+    # One row per model the command was given a target for, off the planner's
+    # own table -- the flags below are its `target_field`/`figure_field` names,
+    # so the namespace is already keyed the way `sizings_from` reads. `--users`
+    # stays the performance model's own flag rather than becoming
+    # --performance: it is what every existing script and every doc calls it,
+    # and the planner takes it under that name too.
+    sizings = plan.sizings_from(vars(a))
     try:
         p = core.capacity_plan(
             a.users, vus_per_engine=a.vus_per_engine,
             engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
-            engines_per_node=a.engines_per_node, agents=a.agents)
+            engines_per_node=a.engines_per_node, agents=a.agents,
+            sizings=sizings)
     except core.CoreError as e:
         sys.exit(str(e))
     if a.json:
@@ -324,11 +342,23 @@ def cmd_plan(a):
         return
 
     eng, node = p["engine"], p["node"]
-    print(f"{p['users']:,} virtual users at {p['vus_per_engine']:,} per engine"
-          + ("  (assumed -- what an engine this size is rated for)"
-             if p["vus_per_engine_assumed"] else ""))
+    # A line per sizing, each in its own unit, and never a virtual-user line
+    # for a browser suite. The unmeasured one has no "at N per engine" to state
+    # and says what it has instead, because a target that produced no arithmetic
+    # is the one somebody looks for.
+    for r in p["sizings"]:
+        if r["per_pod"] is None:
+            print(f"{r['target']:,} {r['unit']}: not sized here, no "
+                  f"{r['per_pod_unit']} figure has been measured")
+            continue
+        print(f"{r['target']:,} {r['unit']} at {r['per_pod']:,} per "
+              f"{r['pod']}"
+              + ("  (assumed -- what a pod this size is rated for)"
+                 if r["per_pod_source"] == "assumed" else ""))
     print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
-          f"{eng['disk_gb']}GB disk")
+          f"{eng['disk_gb']}GB disk"
+          + (f", from the {plan.SIZING_MODELS[p['driven_by']]['name']} sizing "
+             f"(the largest)" if len(p["sizings"]) > 1 else ""))
     print(f"  {p['engines_per_agent']} engines per agent across {p['agents']} "
           f"agent(s) -- the location's slots")
     print(f"  {p['nodes_per_agent']} node(s) per agent of {node['cpu']} vCPU / "
@@ -670,8 +700,43 @@ def main():
     pl = sub.add_parser("plan",
                         help="how much infrastructure a load target needs "
                              "(no account, no cluster)")
-    pl.add_argument("--users", required=True, metavar="N",
+    # Not required, because it is the performance model's target rather than
+    # the only sizing there is -- a GUI Functional customer has no load target.
+    # A run with none of the three is still refused, by the planner, naming
+    # this field.
+    pl.add_argument("--users", metavar="N",
                     help="virtual users the test has to reach")
+    # ...and the rest of the models, walked off plan.SIZING_MODELS rather than
+    # written out. The flag *is* the model's `target_field`, which is the name
+    # the planner's refusals use and the name `sizings_from` reads back out of
+    # the namespace, so a fourth model gets its flags by being added to that
+    # table -- as it already did for the route and the MCP tool. Performance's
+    # two are declared by hand above and below: `--users` is capacity_plan's own
+    # argument, and both carry help nothing in the table could supply.
+    for fid, m in plan.SIZING_MODELS.items():
+        if fid == plan.PERFORMANCE:
+            continue
+        target_help = (f"{m['unit']} to size for -- the {m['name']} sizing's "
+                       f"target, in its own unit")
+        if m["baseline"] is None:
+            # No measured per-pod figure, so the target is stated rather than
+            # sized from. Off `baseline`, because that is what says so.
+            target_help += (f". Stated in the plan and not sized from: how "
+                            f"many {m['unit']} one {m['pod']} carries has not "
+                            f"been measured, and nothing is assumed in its "
+                            f"place")
+        pl.add_argument("--" + m["target_field"].replace("_", "-"),
+                        dest=m["target_field"], metavar="N", help=target_help)
+        if not m["figure_field"]:
+            continue
+        pl.add_argument("--" + m["figure_field"].replace("_", "-"),
+                        dest=m["figure_field"], metavar="N",
+                        help=f"{m['figure_unit']} (default about "
+                             f"{m['baseline']} for the "
+                             f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                             f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled "
+                             f"from there). An estimate from the account "
+                             f"owner, not a measurement")
     pl.add_argument("--vus-per-engine", dest="vus_per_engine",
                     help=f"virtual users one engine carries (BlazeMeter's "
                          f"`threadsPerEngine`). Default is what an engine of "

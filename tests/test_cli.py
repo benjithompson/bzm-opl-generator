@@ -16,7 +16,7 @@ import os
 import pytest
 import yaml
 
-from bzm_opl_gen import cli, core, generate as gen, livetest
+from bzm_opl_gen import api, cli, core, generate as gen, livetest, plan
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -24,6 +24,7 @@ from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
 # whose key BlazeMeter has stopped accepting, as core's suite declares them.
 from test_core import (EXPIRED_401, ExpiredClient, FakeClient,  # noqa: E402
                        RefusingClient)
+from versions_fixtures import VERSIONS_PERFORMANCE  # noqa: E402
 
 # Absolute, because several tests below run the command from a directory of
 # their own -- a command that writes into the working directory has to be given
@@ -231,6 +232,45 @@ def test_the_cli_never_runs_docker_itself(monkeypatch, tmp_path):
     assert verbs, "nothing was mirrored at all"
     assert verbs.count("pull") == verbs.count("tag") == verbs.count("push"), \
         f"one pull, tag and push per image; got {verbs}"
+
+
+# -- gathering facts ----------------------------------------------------------
+#
+# The command prints where the images came from, and one state deserves a line
+# of its own: a refused image list leaves the catalogue's images behind, and the
+# count says nothing about that. An empty answer is a different sentence -- the
+# location runs nothing -- so it does not get this one.
+
+def _gathered(monkeypatch, tmp_path, capsys, client, *extra):
+    _account(monkeypatch, client)
+    _run(monkeypatch, "facts", "--api-key", KEY, "--harbor-id", "H1",
+         "--output", str(tmp_path / "facts.json"), *extra)
+    return capsys.readouterr()
+
+
+HARBOR = {"id": "H1", "name": "loc", "funcIds": ["performance"], "slots": 1,
+          "threadsPerEngine": 500,
+          "ships": [{"id": "S1", "name": "a", "state": "empty"}]}
+
+
+def test_facts_says_when_the_image_list_could_not_be_read(monkeypatch, tmp_path,
+                                                          capsys):
+    """The refusal names itself. Without it the line above reads as a location
+    that carries these images, when they are a catalogue's guess at any
+    location's."""
+    out = _gathered(monkeypatch, tmp_path, capsys, FakeClient(
+        harbor=HARBOR,
+        versions=api.BzmApiError("GET /private-locations/H1/ships/S1/versions "
+                                 "-> HTTP 403: forbidden")))
+    assert "could not be read" in out.err and "403" in out.err
+
+
+def test_facts_says_nothing_extra_when_the_image_list_was_read(monkeypatch,
+                                                               tmp_path, capsys):
+    out = _gathered(monkeypatch, tmp_path, capsys,
+                    FakeClient(harbor=HARBOR, versions=VERSIONS_PERFORMANCE))
+    assert "could not be read" not in out.err
+    assert "location image list" in out.out
 
 
 def _facts_file(tmp_path, ships):
@@ -688,10 +728,97 @@ def test_plan_markdown_prints_the_document_alone(monkeypatch, capsys):
     assert "slots=10" not in out          # the summary, not this
 
 
+def test_plan_sizes_browsers_without_a_load_target(monkeypatch, capsys):
+    """--users is the performance model's target, not the only one there is.
+    A GUI Functional customer has no load target to give."""
+    _run(monkeypatch, "plan", "--browsers", "20")
+    out = capsys.readouterr().out
+    assert "20 browser instances at 4 per engine" in out
+    assert "5 engines" in out
+
+
+def test_plan_names_the_sizing_the_pool_came_from(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--browsers", "20")
+    out = capsys.readouterr().out
+    assert "10 engines" in out
+    assert "from the performance sizing" in out
+
+
+def test_plan_says_service_virtualization_is_not_sized(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--requests-per-second", "2000")
+    out = capsys.readouterr().out
+    assert "2,000 requests per second" in out
+    assert "has not been measured" in out
+
+
+def test_plan_refuses_a_sizing_with_nothing_to_size_it_by(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--requests-per-second", "2000")
+    assert "has not been measured" in str(caught.value)
+
+
+def test_plan_still_needs_a_sizing_of_some_kind(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan")
+    assert "users" in str(caught.value)
+
+
 def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "plan", "--users", "0")
     assert "at least 1" in str(caught.value)
+
+
+def test_plan_offers_a_flag_for_every_sizing_model(monkeypatch, capsys):
+    """The flags are `plan.SIZING_MODELS`, walked -- not three strings written
+    out beside it.
+
+    Nothing held the command to that table, and the MCP server and the route
+    were already generated from it: a fourth model would have reached both of
+    them and not this. `--users` is the exception and stays one, because it is
+    capacity_plan's own argument rather than a row's target field."""
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "plan", "--help")
+    out = capsys.readouterr().out
+    for m in plan.SIZING_MODELS.values():
+        for field in (m["target_field"], m["figure_field"]):
+            # A model with no measured figure has no figure flag, for the same
+            # reason the card offers it no box: there is nothing to default.
+            if field:
+                assert "--" + field.replace("_", "-") in out
+
+
+def test_plan_sizes_every_model_it_offers(monkeypatch, capsys):
+    """...and each flag reaches the planner as its own model, in its own unit.
+    The help text above says the flag exists; this says it is wired to the row
+    the table names."""
+    flags = []
+    for fid, m in plan.SIZING_MODELS.items():
+        if fid != plan.PERFORMANCE:
+            flags += ["--" + m["target_field"].replace("_", "-"), "20"]
+    _run(monkeypatch, "plan", "--users", "5000", *flags)
+    out = capsys.readouterr().out
+    for m in plan.SIZING_MODELS.values():
+        assert m["unit"] in out
+
+
+def test_plan_refuses_a_target_of_zero_by_name(monkeypatch):
+    """Blank, absent and zero are three things. `if a.browsers:` read a typed 0
+    as a flag nobody passed, so a browser suite sized at zero silently planned
+    for the load test beside it."""
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "5000", "--browsers", "0")
+    assert "browsers must be at least 1" in str(caught.value)
+
+
+def test_plan_refuses_a_per_pod_figure_with_no_target(monkeypatch):
+    """`--browsers-per-engine 6` alone used to be dropped on the floor: the row
+    was built from the target, so a figure with nothing to apply it to sized
+    nothing and said nothing."""
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "5000",
+             "--browsers-per-engine", "6")
+    assert "browsers" in str(caught.value)
 
 
 def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):

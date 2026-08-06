@@ -43,7 +43,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import (__version__, core, doctor, generate as gen_mod,
-               facts as facts_mod, livetest)
+               facts as facts_mod, livetest, plan)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -61,11 +61,11 @@ Kubernetes or OpenShift, from a real account rather than from a template.
 
 The path through it:
 
-  0. opl_plan capacity          -- how much cluster a load target needs. Before
+  0. opl_plan capacity          -- how much cluster a sizing needs. Before
                                    everything else, and needs none of it: no
                                    key, no account, no cluster.
-  1. opl_location list          -- find the location, then `show` for its ship
-                                   (agent). Accounts hold hundreds of
+  1. opl_location list          -- find the location, then `show` for its
+                                   agents. Accounts hold hundreds of
                                    locations, so `list` is one line each and
                                    capped: narrow it with name_contains, and
                                    read the omitted counts it comes back with
@@ -82,13 +82,15 @@ theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
 opl_agent livetest, which is off unless its own variable is set.)
 
-Sizing before there is a cluster: `opl_plan capacity` turns a load target
-("we need to test 5,000 virtual users") into engines, nodes and a machine size,
-plus a `document` written for the platform team who has to provide them. That
-request is often the actual blocker -- a customer with no cluster cannot start
-at step 1, and this is what unblocks them. It assumes how many virtual users
-one engine carries unless told; say that the figure is an assumption whenever
-you report what it produced.
+Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
+to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
+machine size, plus a `document` written for the platform team who has to provide
+them. That request is often the actual blocker -- a customer with no cluster
+cannot start at step 1, and this is what unblocks them. Each covered
+functionality is sized in its own unit and not everything has a figure: how many
+virtual users an engine carries is assumed unless told, and how many requests
+per second a mock pod serves has never been measured here at all. Say which
+whenever you report what it produced; the answer says so field by field.
 
 The vocabulary, and it is worth keeping to: a **location** holds **agents**, an
 agent runs **engines**, and each engine drives some number of **virtual users**.
@@ -98,10 +100,11 @@ Neither a location nor an agent needs a cluster to exist -- both can be created
 in BlazeMeter first, and an agent that has never sent a heartbeat is the normal
 state until its manifests are applied.
 
-Facts without an account: `opl_facts manual` builds the same structure from a
-harbor id and ship id read off the BlazeMeter UI, so you can produce a bundle
-for a customer whose account you cannot reach. It cannot know which browser
-image a GUI location uses -- only a live agent reports that -- and says so
+Facts without an account: `opl_facts manual` builds the same structure from the
+harbor_id and ship_id read off the BlazeMeter UI (BlazeMeter's own field names
+for a private location and one agent in it), so you can produce a bundle for a
+customer whose account you cannot reach. It cannot know which browser image a
+GUI location uses -- only the account names the pinned build -- and says so
 rather than guessing.
 
 Preflight without a cluster: `opl_preflight doctor` reads a cluster *evidence*
@@ -138,7 +141,7 @@ Two things about credentials. The API key comes from this server's environment
 ({core.KEY_FILE_ENV}, or {core.KEY_ID_ENV} and {core.KEY_SECRET_ENV}) -- never
 pass a secret as a tool argument. And issuing an agent's AUTH_TOKEN *rotates*
 it: the previous token stops working, and an agent already running on it sits at
-0/1 logging 404 on its status endpoint, which reads like a deleted ship. That is
+0/1 logging 404 on its status endpoint, which reads like a deleted agent. That is
 why the token is written into the bundle and never returned to you, and why the
 two actions that can issue one -- `opl_bundle generate` with rotate_token=true,
 and `opl_location reveal_token` -- have to be asked for by name. Generating
@@ -318,31 +321,53 @@ def _client(args):
 
 # -- opl_location --------------------------------------------------------------
 
-LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_ship",
-                    "reveal_token", "delete")
+# An older spelling, kept working. One deployment inside a private location is
+# an **agent**; `ship` is the account's own field name and lives in `ship_id`
+# and nowhere else (CONTEXT.md). A session reads the current action name out of
+# the description at call time, so nothing stored goes stale by this rename --
+# but a person's saved prompt does, and an action name costs nothing to keep,
+# which is the trade `bzm-opl-gen create-ship` already made as an argparse
+# alias. Declared as a table rather than as a second branch in the dispatch, so
+# that "an old name" is distinguishable from "a name still spelling the wrong
+# vocabulary" without anybody keeping a list of exceptions.
+LOCATION_ALIASES = {"create_ship": "create_agent"}
+
+LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_agent",
+                    "reveal_token", "delete") + tuple(LOCATION_ALIASES)
 
 DESCRIPTIONS["opl_location"] = (
-    "BlazeMeter private locations (harbors) and their agents (ships).\n"
+    "BlazeMeter private locations (harbors) and their agents.\n"
     "  list         -- one line per location {account_id?, workspace_id?, "
     "name_contains?, limit?}. Defaults to this key's own account and to the "
     f"first {core.DEFAULT_LOCATION_LIMIT}; accounts hold hundreds, so narrow "
     "with name_contains rather than raising limit. Whatever it leaves out is "
     "counted in the response.\n"
-    "  show         -- one location with its ships in full {harbor_id}\n"
+    "  show         -- one location with its agents in full {harbor_id}\n"
     "  whoami       -- who this API key is, and its default account\n"
     "  create       -- a new private location {name, account_id, "
-    "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
-    "  create_ship  -- a new agent in a location {harbor_id, name}\n"
-    "  reveal_token -- the ship's AUTH_TOKEN {harbor_id, ship_id}. "
+    "workspace_id, func_ids?, slots?, threads_per_engine?}. func_ids are "
+    f"BlazeMeter's own, and the ones this tool configures a bundle for are "
+    f"{', '.join(core.covered_func_ids())} (default performance). An account "
+    "carries others -- proxyRecorder, tdm, delphix -- which a location may "
+    "hold and nothing here generates for.\n"
+    "  create_agent -- a new agent in a location {harbor_id, name}"
+    + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
+    "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "
     "ROTATES it: the previous token stops working and any agent "
     "running on it goes to 0/1. Use only when re-applying that agent.\n"
-    "  delete       -- delete a location and every ship in it "
+    "  delete       -- delete a location and every agent in it "
     "{harbor_id}. Off unless " + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
-    "create/create_ship/delete change a real customer account -- "
-    "confirm with the person before calling them.")
+    "create/create_agent/delete change a real customer account -- "
+    "confirm with the person before calling them.\n"
+    "`ship_id` is BlazeMeter's own name for an agent's id, spelled as the "
+    "account spells it, so what you read here matches what its API answers.")
 
 
 def _location(action, args):
+    # An old spelling reaches the action it was renamed from, rather than a
+    # branch of its own: two branches is two behaviours waiting to differ.
+    action = LOCATION_ALIASES.get(action, action)
+
     if action == "whoami":
         u = core.user(_client(args))
         return {"email": u.get("email"), "display_name": u.get("displayName"),
@@ -403,8 +428,8 @@ def _location(action, args):
                                         core.api.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
-                "next": [f"opl_location create_ship with harbor_id "
-                         f"{loc.get('id')!r} -- a location with no ship has "
+                "next": [f"opl_location create_agent with harbor_id "
+                         f"{loc.get('id')!r} -- a location with no agent has "
                          f"nothing to deploy"]}
         if made["warning"]:
             # Present only when it applies, like the listing's `note`: a
@@ -414,10 +439,13 @@ def _location(action, args):
             body["warning"] = made["warning"]
         return body
 
-    if action == "create_ship":
+    if action == "create_agent":
         harbor_id, name = _need(args, "harbor_id", "name")
-        ship = core.create_ship(_client(args), harbor_id, name)
-        return {"harbor_id": harbor_id, "ship": ship,
+        # core.create_ship keeps its name: it is the CLI's and the HTTP route's
+        # too, and BlazeMeter's endpoint is /ships. What this surface answers
+        # with is the word a session has to reason in.
+        agent = core.create_ship(_client(args), harbor_id, name)
+        return {"harbor_id": harbor_id, "agent": agent,
                 "next": [f"opl_facts gather with harbor_id {harbor_id!r}"],
                 # Not issued here on purpose: it would rotate a token on an
                 # action whose name says nothing about credentials. And nothing
@@ -440,8 +468,16 @@ def _location(action, args):
     if action == "delete":
         harbor_id, = _need(args, "harbor_id")
         _gate(ALLOW_DESTRUCTIVE_ENV,
-              "deleting a private location (and every ship in it)")
-        return dict(core.delete_location(_client(args), harbor_id),
+              "deleting a private location (and every agent in it)")
+        gone = dict(core.delete_location(_client(args), harbor_id))
+        # core's key stays `ships_deleted` -- it is what the CLI prints and what
+        # the HTTP route answers, both outside this rename. Renamed on the way
+        # out rather than left alone, because a session reading `agents`
+        # everywhere else has no reason to look for a ship here; `pop` rather
+        # than `get`, so a core that renames it fails loudly instead of
+        # answering with an empty list nobody deleted.
+        gone["agents_deleted"] = gone.pop("ships_deleted")
+        return dict(gone,
                     next=["any agent still deployed for it is now orphaned: "
                           "kubectl delete -f <its bundle>"])
 
@@ -453,48 +489,53 @@ def _location_summary(loc):
     fields that decide whether a bundle can be generated at all.
 
     One location's worth, for `show` and `create`. A listing uses
-    _location_brief -- per-ship detail on 171 locations is the size problem
+    _location_brief -- per-agent detail on 171 locations is the size problem
     this pair exists to separate.
+
+    `ship_id` keeps its name inside an agent, and is the only thing here that
+    does: it is BlazeMeter's own field, so a session that reads this and then
+    reads the account's own response should not have to translate.
     """
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "slots": loc.get("slots"), "func_ids": loc.get("funcIds"),
-            "ships": [{"ship_id": s.get("id"), "name": s.get("name"),
-                       "state": s.get("state"),
-                       # null where the payload carried no heartbeat -- see
-                       # core.ship_reporting. opl_agent status is the authority.
-                       "reporting": core.ship_reporting(s)}
-                      for s in loc.get("ships", [])]}
+            "agents": [{"ship_id": s.get("id"), "name": s.get("name"),
+                        "state": s.get("state"),
+                        # null where the payload carried no heartbeat -- see
+                        # core.ship_reporting. opl_agent status is the authority.
+                        "reporting": core.ship_reporting(s)}
+                       for s in loc.get("ships", [])]}
 
 
 def _location_brief(loc):
     """One location as a *listing* entry: enough to pick one and go on.
 
-    An account with 171 locations and 221 ships listed the long way came back
+    An account with 171 locations and 221 agents listed the long way came back
     at 84,779 characters, past the caller's result ceiling, so step 1 of the
-    path never completed. Almost all of it was per-ship detail about locations
+    path never completed. Almost all of it was per-agent detail about locations
     the caller was never going to choose -- and choosing needs only whether
     there is an agent there and whether anything is alive. `show` pays for the
     detail on the one that gets picked.
     """
-    ships = loc.get("ships") or []
-    reporting = [core.ship_reporting(s) for s in ships]
+    agents = loc.get("ships") or []
+    reporting = [core.ship_reporting(s) for s in agents]
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
-            "ship_count": len(ships),
-            # Two counts, because one cannot carry both facts. `ships_reporting`
-            # counts only agents the payload vouches for, so a location with one
-            # live agent and one heartbeat-less record still shows the live one
-            # -- reporting the pair as wholly unknown lost exactly the "one of
-            # two" signal a count exists to give. `ships_unknown` is how a
-            # reader tells 0-because-we-looked from 0-because-we-could-not, so
-            # nobody redeploys a working agent on the strength of a zero. Where
-            # nothing at all is vouched for, `ships_reporting` is null rather
-            # than 0: with every ship unknown there is no count to give, and a 0
-            # beside it would be read as "none alive".
-            "ships_reporting": (None if reporting and all(r is None
-                                                          for r in reporting)
-                                else sum(1 for r in reporting if r)),
-            "ships_unknown": sum(1 for r in reporting if r is None)}
+            "agent_count": len(agents),
+            # Two counts, because one cannot carry both facts.
+            # `agents_reporting` counts only agents the payload vouches for, so
+            # a location with one live agent and one heartbeat-less record still
+            # shows the live one -- reporting the pair as wholly unknown lost
+            # exactly the "one of two" signal a count exists to give.
+            # `agents_unknown` is how a reader tells 0-because-we-looked from
+            # 0-because-we-could-not, so nobody redeploys a working agent on the
+            # strength of a zero. Where nothing at all is vouched for,
+            # `agents_reporting` is null rather than 0: with every agent unknown
+            # there is no count to give, and a 0 beside it would be read as
+            # "none alive".
+            "agents_reporting": (None if reporting and all(r is None
+                                                           for r in reporting)
+                                 else sum(1 for r in reporting if r)),
+            "agents_unknown": sum(1 for r in reporting if r is None)}
 
 
 def _omission_note(sel, name_contains):
@@ -523,11 +564,14 @@ FACTS_ACTIONS = ("gather", "manual")
 
 DESCRIPTIONS["opl_facts"] = (
     "The account facts a bundle is generated from: image references, "
-    "ids, and what the location is enabled for.\n"
+    "ids, and which functionalities the location is enabled for.\n"
     "  gather -- read them from the account {harbor_id}\n"
     "  manual -- build the same structure from ids read off the "
     "BlazeMeter UI {harbor_id, ship_id, func_ids?}, for a customer "
     "whose account you cannot reach\n"
+    "func_ids decide which images the bundle carries, so `manual` needs the "
+    f"ones the location really runs -- {', '.join(core.covered_func_ids())} "
+    "are the ones this tool configures for, and the default is performance.\n"
     "Pass the `facts` object straight to opl_bundle and opl_preflight.")
 
 
@@ -559,17 +603,18 @@ def _facts_warnings(facts):
     """What these facts cannot tell you, said once at the point they are made.
 
     The GUI image gap is the one that matters: the account carries 60+
-    version-pinned browser repos and only a live agent says which a location
-    uses, so a bundle built without one selects an image that may not be the
-    right version. There is no default worth inventing.
+    version-pinned browser repos, and a bundle that names none of them selects
+    an image that may not be the right version. There is no default worth
+    inventing -- but the account itself knows, so this now fires only where
+    nobody could ask it.
     """
     out = []
     if facts_mod.gui_images_incomplete(facts):
         out.append(
             "this location runs GUI/browser tests, and these facts carry no "
-            "browser image. Only a live agent reports which of the account's "
-            "pinned browser images it uses -- ask for the agent's image list, "
-            "or expect the browser engines to fail to pull.")
+            "browser image. The account names the pinned build a location uses "
+            "-- gather facts with an API key rather than by hand, or expect the "
+            "browser engines to fail to pull.")
     return out
 
 
@@ -635,7 +680,7 @@ def _bundle(action, args):
         written = core.write_bundle(files, out_dir)
         return {"out_dir": out_dir, "files": written,
                 "profile": json.loads(files[gen_mod.PROFILE_FILE]),
-                # The branch and the ship, never the value: naming the agent
+                # The branch and the agent, never the value: naming the agent
                 # whose credential was just replaced is the whole point, and it
                 # is not a secret.
                 "token_source": source._asdict(),
@@ -669,7 +714,7 @@ def _bundle(action, args):
         # Not behind the destructive gate, unlike `delete`, and the difference
         # is what the two do: mirroring *adds* images to a registry the caller
         # named, and the worst case is repositories nobody wanted. Deleting a
-        # location destroys an agent and its ships with nothing to restore from.
+        # location destroys it and every agent in it, with nothing to restore.
         # The tool's destructiveHint is what makes a client confirm this one.
         return core.mirror_images(
             refs, mirror=args.get("mirror"),
@@ -751,31 +796,60 @@ def _bundle_warnings(options):
 
 PLAN_ACTIONS = ("capacity",)
 
+# The three sizing models, stated from the table rather than transcribed
+# beside it. #154 added two of them and this description went on describing
+# virtual users alone, which for an audience that has no other documentation is
+# not an incomplete sentence but the whole of what could be asked for: a GUI
+# Functional customer has no load target at all. Generated, so a fourth model
+# reaches this session by being added to plan.SIZING_MODELS.
+_PLAN_ARGS = ", ".join(
+    f"{m['target_field']}?" + (f", {m['figure_field']}?" if m["figure_field"]
+                               else "")
+    for m in plan.SIZING_MODELS.values())
+
+_PLAN_MODELS = "".join(
+    f"  {m['target_field']:<20} -- {m['unit']}, for {m['name']}. "
+    + (f"{m['figure_field']} is how many one pod carries; unset, what a pod "
+       f"that size is rated for is assumed and the answer says which.\n"
+       if m["figure_field"] else
+       f"Stated, never sized: no {m['figure_unit']} figure has been measured "
+       f"here and none is invented, so this target reaches no pod count. "
+       f"Asked on its own it is a refusal rather than a plan with a number "
+       f"nobody measured in it.\n")
+    for m in plan.SIZING_MODELS.values())
+
 DESCRIPTIONS["opl_plan"] = (
-    "How much infrastructure a load target needs, before any of it "
-    "exists.\n"
-    "  capacity -- {users, vus_per_engine?, engine_cpu?, engine_mem?, "
+    "How much infrastructure a sizing needs, before any of it exists.\n"
+    f"  capacity -- {{{_PLAN_ARGS}, engine_cpu?, engine_mem?, "
     "engines_per_node?, agents?}\n"
     "The one tool here that reaches nothing: no API key, no account, no "
-    "cluster. Use it when someone asks 'what would we need to test N "
-    "users?' -- typically before there is a cluster to deploy to, "
-    "because the answer is what they raise the request for one with.\n"
+    "cluster. Use it when someone asks 'what would we need to run this?' "
+    "-- typically before there is a cluster to deploy to, because the "
+    "answer is what they raise the request for one with.\n"
     "It returns the numbers AND `document`, a ready-to-send "
     "infrastructure request written for a platform team that has never "
     "heard of BlazeMeter. Offer that document -- it is the deliverable, "
     "not a formatting of the numbers.\n"
-    "`users` is virtual users. A location holds agents, an agent runs "
-    "engines, and each engine drives some number of virtual users -- "
-    "that is the vocabulary to answer in.\n"
+    "Three sizings, each asked for in its own unit. At least one:\n"
+    + _PLAN_MODELS +
+    "Where several are given, the largest pod count decides the pool and "
+    "`driven_by` names which -- one agent applies a single CPU/memory "
+    "pair to every pod it creates, so these are three routes to a count "
+    "of pods of one size, not three sizes. Two workloads running at once "
+    "want the counts added.\n"
+    "A location holds agents, an agent runs engines, and each engine "
+    "drives some number of virtual users -- that is the vocabulary to "
+    "answer in.\n"
     "`slots` is engines per *agent*, not per location, so a location's "
     "concurrency is agents x slots and `agents` divides the run. Pass "
     "how many agents will serve it; the returned `location.slots` is "
     "already the per-agent figure.\n"
-    "`vus_per_engine` is the input everything multiplies by and the one "
-    "thing arithmetic cannot reach: it depends on what the script does "
-    "between requests. Unset, what an engine of that size is rated for "
-    "is assumed and `vus_per_engine_assumed` says so -- pass on that "
-    "qualifier rather than reporting the node count as measured.\n"
+    "Every per-pod figure is a property of the workload rather than of "
+    "the pod -- what the script does between requests, what the browser "
+    "renders -- so each row says whether its figure was supplied, "
+    "assumed or never measured, and `vus_per_engine_assumed` says it for "
+    "the load target. Pass that qualifier on rather than reporting the "
+    "node count as measured.\n"
     "Nothing here waits for a cluster: the location and its agent can "
     "be created in BlazeMeter now, and an agent that has never sent a "
     "heartbeat is the expected state until the manifests are applied.")
@@ -783,14 +857,23 @@ DESCRIPTIONS["opl_plan"] = (
 
 def _plan(action, args):
     if action == "capacity":
-        users, = _need(args, "users")
+        # `users` is no longer required, for the reason /api/plan and the
+        # command dropped it in #154: it is the performance model's target, not
+        # the only sizing there is. A call that names none of the three is
+        # still a refusal, and it is the planner's -- which names `users`,
+        # the field a caller with one sizing has.
         return core.capacity_plan(
-            users,
+            args.get("users"),
             vus_per_engine=args.get("vus_per_engine"),
             engine_cpu=args.get("engine_cpu"),
             engine_mem=args.get("engine_mem"),
             engines_per_node=args.get("engines_per_node"),
-            agents=args.get("agents"))
+            agents=args.get("agents"),
+            # One row per model this call named a target for, walked off
+            # plan.SIZING_MODELS -- the flat arguments here are that table's
+            # own field names, which is how the tool description was generated
+            # from it too.
+            sizings=plan.sizings_from(args))
 
     raise _unknown(action, PLAN_ACTIONS)
 

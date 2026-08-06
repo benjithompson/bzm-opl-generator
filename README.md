@@ -164,11 +164,16 @@ bzm-opl-gen generate --auth-token <AUTH_TOKEN> --namespace their-ns -o out/
 
 Nothing is validated and nothing is sent to BlazeMeter. What you give up: the
 crane tag floats on `latest`, `IMAGE_OVERRIDES` comes from the built-in
-catalogue rather than a live agent's inventory (complete for performance, mock
-services and the proxy recorder — **not** for GUI browser images, where only a
-running agent says which of the 60+ version-pinned repos a location uses),
+catalogue rather than from the location itself (complete for performance, mock
+services and the proxy recorder — **not** for GUI browser images, where the
+account names one of 60+ version-pinned repos and nothing here can guess which),
 `doctor` has no concurrency numbers to check against, and the agent-status watch
 needs an API key. The UI and CLI both say so when it applies.
+
+With an API key none of that applies, and it does not need a deployed agent
+either: `bzm-opl-gen facts` reads the location's own image list, so the versions
+are exact and a GUI location's browser image is named, for an agent that has
+never been online.
 
 The cluster is the same story, and has the same answer: have someone who *does*
 have access run the read-only

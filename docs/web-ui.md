@@ -43,11 +43,25 @@ step 2 and step 3 as much as in step 1.
 ## Step 1 — Capacity & agent
 
 **The sizing is the first card**, above the locations the run might go
-to. It sizes the load — a virtual user target, virtual users per engine, the
-engine size, how many engines a node holds — and answers in engines, nodes and
+to. Tick the functionalities this run is for and give each one a target **in its
+own unit** — virtual users, browser instances, requests per second — then the
+engine size and how many engines a node holds. It answers in engines, nodes and
 peak vCPU, with the request document to raise the infrastructure ticket with, to
 download, copy or read here ([capacity-planning.md](capacity-planning.md)).
 *Edit* opens it downward; the summary line stays put.
+
+Where several are ticked the pool is sized for the largest of them and the card
+says which. **Service Virtualization has no per-pod figure box**, because no
+requests-per-second-per-core figure has ever been measured here: its target is
+carried into the request and stated, and a sizing with nothing else in it comes
+back as the reason rather than as a node count.
+
+**Saved sizings** sit at the top: pick one to fill the fields, or name what is
+in them now and save it. One ships as a starting point for each sizing model
+the server serves, carrying that model's own example target.
+They last as long as the browser session does, like everything else this page
+remembers, and picking one applies nothing — it fills the fields, and the fields
+*are* the sizing.
 
 It reaches nothing — no key, no account, no cluster — which is why it renders on
 a page nobody has connected, and why it is *first* rather than a view of its own:
@@ -56,7 +70,7 @@ in the drawer the first read as an alternative to the second, with its answer to
 be carried across by hand. It has no *agents* field on purpose: on Kubernetes an
 agent is a cluster, so you raise `slots` and let the node pool scale. The engine
 size it plans against is the bundle's own option rather than a copy of one, so
-the profile and the manifests cannot drift apart.
+the sizing and the manifests cannot drift apart.
 
 Under it, where the harbor id, ship id and token come from: **Connect to
 BlazeMeter**, or **Enter values manually** for an account nobody here can reach.
@@ -94,13 +108,13 @@ to the one that is selected and to nothing else. The case is the correction
 rather than the setup — a location built for 500 virtual users an engine that a
 real run says should be 1,000.
 
-There is no calculator in here and no *Apply*: the profile above fills these
+There is no calculator in here and no *Apply*: the sizing above fills these
 fields and they stay editable. A calculator of its own was a third place the same
 four numbers were worked out, and filling a field applies nothing, so a button to
-do it sat between the profile and the only control here that costs anything.
+do it sat between the sizing and the only control here that costs anything.
 **Save** is that control, and nothing in this panel reaches the account without
 it. `slots` is engines per *agent*, so a location's concurrency is agents ×
-slots, and the row divides the profile by the number of agents this location has.
+slots, and the row divides the sizing by the number of agents this location has.
 
 None of those four values is in a manifest, so changing one needs no
 regenerate, no re-apply and no restart; it applies to the next test that
@@ -157,7 +171,7 @@ namespace can read the Secret — it is about a screen share and a screenshot.
 not in the browser, so reloading the page never actually dropped the
 connection — the page simply forgot. It now asks on load, and puts back the
 account, workspace, location, agent, step and options it was pointed at, plus
-what a manual session declared its identity to be. Each selection is re-applied only once the account has confirmed it
+what a manual session declared its identity to run. Each selection is re-applied only once the account has confirmed it
 still exists, so a location deleted since the last load comes back as nothing
 rather than as an id the page believes. **The AUTH_TOKEN is never written to
 browser storage** — see `session.strip` — because browser storage is a file in
@@ -197,9 +211,12 @@ back to it, until you pick one again. A configuration somebody wrote outranks a
 segment.
 
 **Two kinds of option — a functionality's own, and every deployment's — and
-nothing is hidden between them.** *Deployment functionalities* is one card each,
-marked `Enabled` or `Not enabled` from the location's own funcIds, holding the
-options only that functionality has. *Placement* is the
+nothing is hidden between them.** *Deployment functionalities* is one card per
+funcId this tool configures — Performance, GUI Functional and Service
+Virtualization, under BlazeMeter's own names — marked `Enabled` or `Not
+enabled` from the location's own funcIds, holding the options only that
+functionality has. Anything else the location runs is named underneath, because a page that
+said nothing about it would read as covering it. *Placement* is the
 namespace and the service account — its own section because it is the part a
 docker bundle does not have at all, and a section that comes and goes has to be
 one. *Agent settings* is everything every deployment gets: registry, proxy, CA
@@ -226,26 +243,50 @@ filling a labeled ConfigMap, and anywhere else it emits an empty one nothing
 ever fills, leaving a bundle that reads as configured while the agent trusts
 nothing extra.
 
-**A functionality the location does not run is stated, never configured.** The
-card says so and names the funcId to add in BlazeMeter (Settings → Private
-Locations), and that functionality's options leave the page — cleared, not just hidden, because
-`generate` refuses an `sv_ingress` with no subdomain whatever the location runs,
-so a hidden row would only move the blocker to the server. Turning a funcId on
-was offered here once and is not any more: it changes what the location *is*,
-which is BlazeMeter's own UI's to do, unlike this page's two writes to an agent's
-credential and a location's concurrency. A card can be silent for the other
-reason too — this *format* cannot serve that functionality — and the two answers
-are
-kept apart, because they have different remedies.
+**A functionality the location does not run is not on the step at all.** It was
+stated for a while — a card naming the funcId to add in BlazeMeter (Settings →
+Private Locations) — which is a true sentence about the location and nothing the
+reader of this step can act on, and on a performance location it was half the
+section. So the card, its options and its rail entry go together. The options are
+*cleared*, not just hidden, because `generate` refuses an `sv_ingress` with no
+subdomain whatever the location runs, so a hidden row would only move the blocker
+to the server. Manual entry is the exception, and structurally: there the card
+*is* the declaration, so filtering it out would remove the control that answers
+the question.
+
+Turning a funcId on was offered here once and is not any more: it changes what
+the location *is*, which is BlazeMeter's own UI's to do, unlike this page's two
+writes to an agent's credential and a location's concurrency. A card can be
+silent for the other reason too — this *format* cannot serve that functionality —
+and the two answers are kept apart, because they have different remedies.
 
 **In manual entry the functionality is not a view of the options, it is the
-declaration.** With no account to read funcIds off, that card's radio is what
-says whether the typed identity is a performance agent or a
-service-virtualization one, which decides the funcId, the images the bundle
-carries and the namespace suggested for it. It is in the session snapshot for
+declaration.** With no account to read funcIds off, each card's **Enabled**
+checkbox is what says what the typed identity runs. The cards *are* the funcIds,
+so what is ticked decides the images the bundle carries and the namespace
+suggested for it. It is in the session snapshot for
 that reason: a refresh used to bring an SV identity back as a performance one,
 clearing its options on the way and rewriting the namespace generated into every
 manifest.
+
+**Tick as many as the identity runs** — a real account has 71 of its 168
+locations running Performance and GUI Functional together, so a control that
+could only say one described a location nobody would create. Ticking two suggests
+one namespace, not two: the first in the served order, which is the same
+tie-break a connected location carrying both funcIds already uses. A hand-typed
+namespace still wins over any of it. If a member of a restored declaration is no
+longer in the served vocabulary it is dropped and the rest stand; only when none
+of it survives does the page land where a fresh manual session lands.
+
+**Service virtualization is declared on its own.** Ticking it clears Performance
+and GUI Functional, and ticking either of those clears it, in manual entry and in
+the new-location form alike — the agent applies one CPU and memory limit pair to
+every pod it creates, so engine sizing and mock throughput cannot be set apart,
+and an SV agent carries no test engine at all. Both surfaces say so before
+anything is ticked. **Connected, a location that already runs both is warned
+about and never blocked**: what a location *is* is BlazeMeter's own UI's to
+change, so refusing to generate would be refusing the only bundle that location
+can have.
 
 A location carrying `mockServices` shows **Service virtualization** enabled with
 its group marked *required*, because a bundle without an ingress stalls at
@@ -287,15 +328,28 @@ are not offered here — the page reads the same reserved table the generator
 refuses them by, and a variable stops being offered the moment an option starts
 writing it. Under the list, **Another variable by name** keeps the old name/value
 rows for anything the list does not carry: a variable documented for the other
-platform, or one newer than this tool. A name the bundle already writes is
-**refused** there, naming the option that owns it — two values for one key is a
-ConfigMap with a duplicate entry, and whichever wins is not the one the form
-showed.
+platform, one belonging to a functionality this location does not run, or one
+newer than this tool. A name the bundle already writes is **refused** there,
+naming the option that owns it — two values for one key is a ConfigMap with a
+duplicate entry, and whichever wins is not the one the form showed.
 
-Which half of the reference is on screen follows the format: a Kubernetes bundle
-is offered crane's variables, a docker bundle the container agent's. Nothing is
-lost either way — a variable already set that this platform does not document
-keeps its value and appears in the rows underneath.
+Beside it, **Set by this bundle, elsewhere on this step** is the whole reserved
+table: every variable the bundle writes itself, the option that writes it and the
+section of this step holding that option. It is there for the variable you go
+looking for and do not find — `AUTO_KUBERNETES_UPDATE` is not missing, it is
+written from **Security & RBAC**'s *Agent self-update*, and nothing else on the
+page led from the name to the control.
+
+Two things decide which variables are on screen, and they are different
+questions. **The format** picks which half of BlazeMeter's reference applies: a
+Kubernetes bundle is offered crane's variables, a docker bundle the container
+agent's. **The location** picks which functionality's variables apply: a
+performance location has no Selenium grid and publishes no virtual services, so
+`DODUO_PORT`, the two `_GRID` certificates and the three variables about
+publishing mocks are not offered to it. Nothing is lost either way — a variable
+already set that this bundle does not offer keeps its value and appears in the
+rows underneath, because hiding a variable the bundle carries is exactly what
+this area's rules exist to prevent.
 
 It is an option (`extra_env`), so it travels in `profile.json` and a regenerate
 replays it. All three formats carry it: ConfigMap entries for manifests,

@@ -22,10 +22,83 @@ def test_every_record_is_one_a_form_can_render():
         assert v["platforms"], v["name"]
         assert set(v["platforms"]) <= set(agent_env.BOTH), v["name"]
         assert v["summary"].strip(), v["name"]
+        assert isinstance(v["functionalities"], list), v["name"]
         # Stated, never guessed: a variable the page has no default for says
         # nothing rather than implying one.
         for k in ("default", "example"):
             assert v[k] is None or v[k].strip(), (v["name"], k)
+
+
+def test_a_tag_names_a_functionality_this_tool_serves():
+    """The same rule optionGroups' tags are held to: a tag naming anything
+    else is a variable filtered out for a functionality no location can be
+    found to run, which reads exactly like a variable nobody transcribed."""
+    served = {f["id"] for f in core.FUNCTIONALITIES}
+    for v in agent_env.AGENT_ENV:
+        assert set(v["functionalities"]) <= served, v["name"]
+
+
+def test_a_location_is_offered_only_the_variables_it_has_a_reader_for():
+    """The platform says which agent reads a variable; the functionality says
+    whether this location runs the thing that reads it. Two questions, and
+    a performance location was being offered the answers to both.
+
+    Doduo is the Selenium grid proxy, so its port and its TLS material are the
+    GUI functional agent's -- `facts.IMAGE_CATEGORY` already classifies the
+    `doduo` image as `gui`, and a live functionalGui location's images carry
+    `blazemeter/doduo` where a performance-only location's do not.
+    """
+    perf = {v["name"] for v in core.agent_env(["performance"])}
+    assert {"VERIFY_SSL", "PREFERRED_INTERFACE", "KUBERNETES_LABELS"} <= perf
+    assert not perf & {"DODUO_PORT", "TLS_CERT_GRID", "TLS_KEY_GRID"}
+    assert not perf & {"KUBERNETES_USE_APIPA", "HOSTNAME_OVERRIDE",
+                       "KUBERNETES_SERVICES_BLOCKING_GET",
+                       "KUBERNETES_WEB_EXPOSE_SHORT_URL",
+                       "TLS_CERT", "TLS_KEY"}
+
+    gui = {v["name"] for v in core.agent_env(["functionalGui"])}
+    assert {"DODUO_PORT", "TLS_CERT_GRID", "TLS_KEY_GRID"} <= gui
+    assert "KUBERNETES_USE_APIPA" not in gui
+
+    sv = {v["name"] for v in core.agent_env(["mockServices"])}
+    assert {"KUBERNETES_USE_APIPA", "KUBERNETES_SERVICES_BLOCKING_GET",
+            "KUBERNETES_WEB_EXPOSE_SHORT_URL", "HOSTNAME_OVERRIDE",
+            "TLS_CERT", "TLS_KEY"} <= sv
+    assert "DODUO_PORT" not in sv
+
+    # A location running both is offered both halves, rather than the
+    # intersection: the tag is what reads the variable, not what claims it.
+    both = {v["name"] for v in core.agent_env(["performance", "functionalGui"])}
+    assert both == perf | gui
+
+
+def test_nobody_having_said_is_not_a_location_that_runs_nothing():
+    """`None` is the third state, and it is the one the page mounts in: no key
+    pasted, no location picked. It offers everything, which is the direction
+    that shows a field too many rather than hiding one somebody needs -- the
+    same way `runsFunctionality` reads an unanswered enablement as yes.
+
+    An answered *empty* set is a different sentence and gets a different answer:
+    a location running nothing this tool covers still runs an agent, so the
+    agent-wide variables stay and the functionality-tagged ones go."""
+    assert {v["name"] for v in core.agent_env(None)} \
+        == {v["name"] for v in core.agent_env()}
+    assert "DODUO_PORT" in {v["name"] for v in core.agent_env()}
+
+    none_of_ours = {v["name"] for v in core.agent_env([])}
+    assert {"VERIFY_SSL", "PREFERRED_INTERFACE"} <= none_of_ours
+    assert "DODUO_PORT" not in none_of_ours
+
+
+def test_a_funcid_this_tool_has_no_options_for_takes_nothing_away():
+    """Real accounts carry funcIds no functionality here names -- tdm,
+    dataPublisher, delphix. A location with one of those and `performance` runs
+    performance, and an unrecognised id must not narrow that: filtering is over
+    what a tag *claims*, so an id nothing claims claims nothing."""
+    assert {v["name"] for v in core.agent_env(["performance", "tdm"])} \
+        == {v["name"] for v in core.agent_env(["performance"])}
+    assert {v["name"] for v in core.agent_env(["tdm"])} \
+        == {v["name"] for v in core.agent_env([])}
 
 
 def test_names_are_declared_once():
@@ -54,6 +127,11 @@ def test_the_reference_is_whole_and_the_subtraction_is_at_the_serving_end():
     # ...and something is actually left, or the area this feeds is empty and
     # the form has nothing to offer at all.
     assert {"VERIFY_SSL", "KUBERNETES_LABELS", "PREFERRED_INTERFACE"} <= offered
+    # The subtraction is not the functionality filter's to skip: a location
+    # that runs everything is still offered nothing an option here writes.
+    everything = [f["id"] for f in core.FUNCTIONALITIES]
+    assert not {v["name"] for v in core.agent_env(everything)} \
+        & generate.RESERVED_ENV
 
 
 def test_a_reserved_name_is_refused_with_the_same_words_wherever_it_arrives():

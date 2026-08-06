@@ -196,6 +196,27 @@ missing tools. The rest is what it cannot fix for you.
   supplied and one defaulted. Warnings are plain prose — no backticks, no `--`
   — because they render as Markdown in the document and as text in the panel.
 
+- **Three sizing models, one pod size, and one of the three has no figure**
+  (#154). `plan.SIZING_MODELS` holds what each covered functionality is *asked
+  for* in — virtual users, browser instances, requests per second — and what one
+  pod of the chosen size carries. One pod size because crane applies a single
+  limits pair to every pod it creates, so where several are sized the largest
+  decides and `driven_by` names it; largest and **not** the sum, which the plan
+  warns about. **`baseline: None` is the load-bearing entry.** Requests per
+  second per core has not been measured, so a service-virtualization sizing
+  carries a target, `pods: None` and `per_pod_source: "unmeasured"` — a *third*
+  value beside supplied and assumed, and the same rule as everything else here:
+  a figure nobody has and a figure this tool chose must not share a
+  representation. It drives nothing, and there is no flag or field to supply
+  one — a mock-pod count would size a pool that every number after it calls
+  engines. Sized alone it is a `ValueError` carrying `_unmeasured_note`, which is
+  the one wording of that sentence and is shown **once per surface** (the
+  document drops it from Worth knowing, having already made it an assumption).
+  Don't fill the None in, and don't reuse the performance ratio for it. The card
+  renders the models from `/api/sizing-models` rather than from three field
+  groups in TypeScript — same rule as `DOCKER_IGNORED`, same single
+  `fixtures.ts` copy held equal by `test_server.py`.
+
 - **`slots` is engines per *agent*, not per location.** BlazeMeter's own UI
   calls it "Engines per agent", so a location's concurrency is `agents x slots`;
   real accounts lean on it (17 agents at slots=1; 2 agents at slots=10).
@@ -228,6 +249,61 @@ missing tools. The rest is what it cannot fix for you.
   `tests/test_options.py`, as does adding a key to one side only.
   **`frontend/src/optionGroups.ts` is out of scope for it** — it holds
   `detect`/`enable`/`disable` *functions*, which a Python registry cannot carry.
+
+- **The funcId vocabulary is the account's, and the hardcoded three are the
+  *keyless* answer rather than a fallback.** `core.func_ids()` reads
+  `GET /accounts/{id}/functionalities` (#148), which carries BlazeMeter's own
+  display names and settles what a hand-written table got wrong in both
+  directions: it never listed the five real locations carry (tdm,
+  dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle) and it
+  offered `functionalApi`, which the account retired — so dropping that from
+  what a location can be *created* with needs no rule naming it, while reading
+  it off a location that has one is untouched. `account_id` is optional because
+  the page fetches this on mount with no key and manual entry never has an
+  account, and the answer with none is `core.covered_func_ids()`: the three this
+  tool configures, under the names the account would give them, so nothing on
+  screen changes wording when the real list lands. **An account that refuses the
+  read raises** — answering "this account offers exactly the three we cover"
+  to a 401 is could-not-read wearing there-is-nothing-else, one layer up from
+  the
+  evidence rule below. Every row carries `covered`, because a page listing
+  `delphix` beside `performance` with nothing to tell them apart is offering to
+  configure something no bundle can; an uncovered funcId is *named*, never
+  dropped, since silence there reads as coverage.
+
+- **A functionality *is* a funcId — one entry, `id` equal to it** (#149). It
+  was two entries and `performance` claimed four (`performance`, `functionalApi`,
+  `functionalGui`, `proxyRecorder`), so its label had to name all of them:
+  "Performance & functional testing", printed over a location whose only funcId
+  is `performance`. Everything joins by equality now — a location's funcIds to
+  the cards, `OptionGroup.functionalities` to the served ids, manual entry's
+  declaration to the funcId its facts are gathered for — and a
+  per-functionality list of funcIds would be exactly the translation table the
+  1:1 mapping exists
+  instead of. `covered_func_ids()` is that same list read as a vocabulary rather
+  than a second table beside it, so `covered` on a funcId row and having a card
+  are one fact. The two funcIds that lost their card are not lost:
+  `functionalApi` (retired) and `proxyRecorder` (no options here) are
+  *unclaimed*, named on the configure step like `tdm` — and a location carrying
+  only those claims nothing, which is read one level up as nobody having
+  answered.
+
+- **The engine limits belong to no functionality, and are never cleared for
+  one.** BlazeMeter defines `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY` as the
+  limits for *resources created by agent* — one pair, reaching engines,
+  browser pods and mock-service pods alike, with no `KUBERNETES_MOCK_RESOURCES_*`
+  beside
+  it. `notRunPatch` used to clear them for a location that ran no performance,
+  which left an SV-only or GUI-only agent's pods on crane's 250m/256Mi defaults:
+  the LimitRange note's silent failure, reached from the page. What survives is
+  `ENGINE_FUNCTIONALITIES`, and it decides **placement of the statement only**.
+  Read off single-functionality locations' `/versions`: performance carries
+  apm/crane/v4, functionalGui adds doduo and a pinned browser to the same three,
+  and **an SV-only agent carries no taurus engine at all** (crane,
+  group-gateway, service-mock). Its limits are still emitted and still reach its
+  mock pods; what they *mean* there is a sizing model that does not exist yet
+  (#154), so that card states nothing rather than an engine size that is not
+  there. Don't reintroduce a clearing rule for them.
 
 - **A required field left blank is a `<PLACEHOLDER>`, not an empty string and
   not a refusal.** Every one of these had a plausible-looking failure when
@@ -289,14 +365,31 @@ missing tools. The rest is what it cannot fix for you.
   `configureBlockedBy` instead of a group's `incomplete`. `type` picks the
   control and a **boolean gets three positions**, because "the agent's default"
   is a third answer a switch cannot give and the defaults run both ways
-  (`VERIFY_SSL` on, `KUBERNETES_USE_PRE_PULLING` off). `platforms` picks which of
-  BlazeMeter's two tables is on screen. Nothing is ever hidden by any of it: a
-  variable with no row above it — the other platform's, one the vocabulary has
-  since lost, a JSON value no table can round-trip — keeps the name/value editor
-  underneath (`env.otherRows`), because a form showing nothing for a variable the
-  bundle carries is the failure this area's rules are about. `fixtures.ts` holds
-  a **sample** rather than a copy here, and says so: nothing on the page has to
-  agree with the catalogue.
+  (`VERIFY_SSL` on, `KUBERNETES_USE_PRE_PULLING` off). **`platforms` and
+  `functionalities` are two different questions** and a performance location was
+  being offered the answer to both (#150): the first says which agent reads the
+  variable, the second says whether this location runs the thing that reads it —
+  the Grid proxy's port on a location with no grid. The second is filtered
+  server-side too, `core.agent_env(func_ids)`, so the CLI and the MCP server get
+  one answer; three states, and absent is not empty (the route takes them
+  comma-separated for exactly that reason). Nothing is ever hidden by any of it:
+  a variable with no row above it — the other platform's, another
+  functionality's, one the vocabulary has since lost, a JSON value no table can
+  round-trip — keeps the name/value editor underneath (`env.otherRows`), because
+  a form showing nothing for a variable the bundle carries is the failure this
+  area's rules are about. `fixtures.ts` holds a **sample** rather than a copy
+  here, and says so: nothing on the page has to agree with the catalogue.
+
+  **A remainder says nothing about what was taken out of it**, and that was the
+  other half of the report: `AUTO_KUBERNETES_UPDATE` read as missing when it is
+  `auto_update`'s, a tri-state inside a group titled Security & RBAC. The
+  refusal already named the option — but only to somebody who had typed the name
+  into the editor, which is the one thing a person who thinks it is missing will
+  not do. So the area states the whole reserved table beside the offered one
+  (`EnvVars.SetByTheBundle` over `optionGroups.reservedList`), with the owning
+  option and the *section* holding it, read off each group's own `keys`. A
+  rendered list rather than a search box: the browser's find is the search, and
+  it only works on what is on the page.
 
 - **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
   picks the view (Generate / Account capacity) and holds the key at its foot;
@@ -451,20 +544,61 @@ missing tools. The rest is what it cannot fix for you.
 
   **In manual entry the functionality is not a view at all — it is the
   declaration**
-  (#118). It names the funcId the typed identity is gathered for, which names
+  (#118). It names the funcIds the typed identity is gathered for, which name
   the images the bundle carries, and it was the one bundle-deciding input a
   refresh did not restore: an SV identity came back a performance one,
   `notRunPatch` wiped its `sv_*` options on the way, and the namespace
   suggestion rewrote a name generated into every manifest. So it is in the
-  snapshot (`session.declaredFunctionality`, null in connect mode structurally
-  rather than by convention), and **checked** against the served vocabulary
-  rather than trusted: a functionality no longer offered names no funcId, so it
-  is dropped and the page lands where a fresh manual session lands, rather than
-  gathering facts for nothing with no radio on to say so. Manual mode never
+  snapshot (`session.declaredFunctionalities`, empty in connect mode
+  structurally rather than by convention), and **checked** against the served
+  vocabulary rather than trusted: a functionality no longer offered names no
+  funcId, so it is dropped and, if nothing survives, the page lands where a
+  fresh manual session lands rather than
+  gathering facts for nothing with no box ticked to say so. Manual mode never
   reads a functionality back off
   `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
-  reading them can only restate it, or lose it while `/api/func-ids` is still
-  outstanding.
+  reading them can only restate it, or lose it while `/api/functionalities` is
+  still outstanding. Since #149 the declaration *is* the funcId, so that one
+  list is the only thing it waits on: it used to be turned into a funcId through
+  `/api/func-ids`' `changes_images` as well, and an identity gathered for
+  nothing while the *second* vocabulary was outstanding is a wait that reads as
+  an answer.
+
+  **It is a list, and dropping one member must not drop the others** (#151). One
+  id was tenable while `performance` claimed four funcIds; after #149, 71 of the
+  168 locations in one real account run `performance` and `functionalGui`
+  together, so a single value described a location nobody would create. The
+  control is a checkbox per covered functionality (`toggleDeclared`, which keeps
+  the list in served order — these ids reach `manualFacts`, and a list that
+  reshuffles on a tick is a new request for a declaration that did not change).
+  Several ticked suggest **one** namespace, and the rule is `startFunctionality`
+  — the first in served order, the same tie-break a connected location carrying
+  both funcIds already uses, so a manual identity lands where the equivalent
+  connected one does. Emptying the list is allowed and *warned* rather than
+  refused: a checkbox that will not untick is the off-screen blocker in one
+  control.
+
+  **Service virtualization is exclusive, and only where a location is being
+  decided.** `sv.exclusiveWith` — manual entry and the create-location form —
+  clears the engine functionalities when SV is ticked and the other way round,
+  because crane applies **one** `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY`
+  pair to every pod it creates and an SV agent carries no taurus engine at all
+  (read off single-functionality locations' `/versions`: crane, group-gateway,
+  service-mock, no `v4`). Connect mode gets `sv.SV_MIXED`, a sentence and never
+  a refusal — `POST /api/locations/func-id` went in #113 because what a location
+  *is* belongs in BlazeMeter's own UI, so refusing to generate for a mixed one
+  would refuse the only bundle it can have. Derived from `ENGINE_FUNCTIONALITIES`
+  rather than a second list; a funcId neither side names (tdm, dataPublisher)
+  excludes nothing, because nothing here knows what those cost.
+
+  **`sv.required` conjoins `runs`, and that is what stops an effect loop.** It
+  used to be `location && !declined` on the reading that a demand implies the
+  bundle carries the functionality — true connected, where both come from
+  `facts.func_ids`, and false in manual entry, where `runs` is the *declaration*
+  and the funcIds are the facts fetched for the previous one, a debounce behind.
+  In that gap `notRunPatch` cleared `sv_ingress` and `sv.correction` re-seeded
+  it from the stale demand, forever: unticking Service virtualization hung the
+  page. Two writers, one question, two sources.
 
   **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
   not** (#123). It is seen at exactly two moments, both this page's own writes —
@@ -578,6 +712,13 @@ pydantic type, so an optional field cannot be declared without the blank-vs-
 absent rule; and `plan.capacity_plan` returns `override_cpu: None` where an
 engine is not a whole number of cores, which is what the field cannot express —
 it used to emit a formatted `"500m"` that the UI caught with a regex.
+
+A third, on the account side: `facts.image_list` (#152). Four answers — read,
+unread, no-agent, not-asked — because all four leave the *same* fallback images
+behind, so `images` could never have said which happened. `_read_image_list`
+carries it structurally, returning `None` for the entries wherever the state is
+not `read`; a caller that iterates without looking gets a TypeError rather than
+an empty list it reads as "this location runs nothing".
 
 ## Generator details that bite
 
@@ -705,10 +846,50 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   produces repos that do not exist. `test_manual_facts.py` asserts the catalogue
   covers every category `CATEGORY_BY_FUNC` can ask for, so a new funcId fails
   there rather than on a sealed cluster.
-- GUI browser images are the one gap and cannot be closed: the account carries
-  60+ version-pinned `charmander/*` repos and only a live agent says which one a
-  location uses. `facts.gui_images_incomplete()` flags it; don't invent a
-  default.
+
+- **The location's own image list is the first source, and it needs no agent**
+  (#152). `GET /private-locations/{h}/ships/{s}/versions` — the same call crane
+  makes at startup — answers for an agent in state `empty` that has never been
+  online, which is every first install. `dockerTag` is crane's key and `version`
+  its tag, so an entry is `dockerTag:version`, exactly the form a live
+  Kubernetes agent reports the same image in; the map's *own* keys are
+  BlazeMeter's resource ids (`taurusEngineDockerImage`) and crane resolves an
+  override by none of them.
+
+  **Three sources, and none of them replaces another.** `gather()` takes the
+  image list, then a running agent's inventory, then the catalogue, and the
+  first to name a key keeps it — they answer different questions, so precedence
+  is per key rather than a fallback chain. The middle one is not redundant: a
+  live *Kubernetes* agent reports `torero` and `richrach` beside the location's
+  images and **no `/versions` response names either** — not a performance
+  location's, not a twelve-resource one's — while every Docker agent read in the
+  same account reports neither. They belong to the Kubernetes container manager
+  rather than to the location, which is why the catalogue keeps them (a key
+  crane cannot find in a sealed cluster is an ImagePullBackOff mid-test) and why
+  the image list is right not to carry them. They stay in the `performance`
+  category: the one live Kubernetes agent that reports them runs engines, and no
+  SV-only Kubernetes agent has been read.
+
+- **The GUI browser gap is closed, and `gui_images_incomplete` now reads the
+  images rather than their provenance.** The account carries 60+ version-pinned
+  `charmander/*` repos, and the location's image list names the one this
+  location pins, off its browser funcIds and with no agent running. So the
+  sentence this file used to carry — only a live agent knows — is wrong, and
+  what is left is narrower: **manual entry still cannot know**, because there is
+  no account to ask. Provenance was a proxy in both directions (a live inventory
+  carrying no browser passed; an image list would pass by existing), so the
+  predicate asks the only question that matters — does this bundle name a
+  browser image at all. Still don't invent a default.
+
+- **`images_source` names every source that contributed; `image_list` says how
+  the read went.** Two fields because they are two questions, and the second is
+  the one the rule below is about: `read` (with a count, and 0 is a location
+  whose resources are none), `unread` (refused — never a count), `no-agent`
+  (per-agent route, no agent, so nothing was asked) and `not-asked` (manual
+  entry, or a facts file written before any of this). `_read_image_list`
+  returns `None` rather than `[]` wherever the state is not `read`, so a reader
+  that ignores the state raises instead of seeing an empty answer somebody was
+  refused.
 
 ## Conventions
 

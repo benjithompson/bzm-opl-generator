@@ -724,18 +724,19 @@ def test_no_route_here_turns_a_functionality_on_for_a_location(monkeypatch):
     assert not [c for c in fake.calls if c[0] == "update_private_location"]
 
 
-def test_func_ids_mark_which_ones_change_the_images():
-    """The create-location form needs every funcId; the manual form needs only
-    the ones that change the answer. Both read this one response, so the
-    distinction is served rather than re-derived in TypeScript."""
-    rows = client.get("/api/func-ids").json()
-    by_id = {r["id"]: r for r in rows}
-    assert by_id["performance"]["changes_images"] is True
-    assert by_id["functionalApi"]["changes_images"] is False
-    # Still offered -- creating a location with it is a real, different thing.
-    assert "functionalApi" in by_id
-    for f in ("mockServices", "proxyRecorder", "functionalGui"):
+def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
+    """The create-location form needs every funcId the account offers; the
+    manual form needs only the ones that change the answer. Both read this one
+    response, so the distinction is served rather than re-derived in
+    TypeScript."""
+    connect(monkeypatch, FakeClient())
+    by_id = {r["id"]: r for r in
+             client.get("/api/func-ids?account_id=291446").json()}
+    for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
+    # A funcId whose images no bundle selects on. Offered, because the location
+    # runs it and the page has to be able to name it -- see `covered`.
+    assert by_id["tdm"]["changes_images"] is False
 
 
 def test_option_defaults_are_served():
@@ -953,6 +954,35 @@ def test_agent_env_is_served_as_what_is_left_after_the_options():
         assert v["type"] in env_mod.TYPES
         assert set(v["platforms"]) <= {"kubernetes", "docker"}
         assert v["summary"]
+        assert isinstance(v["functionalities"], list)
+
+
+def test_agent_env_is_scoped_to_what_the_location_runs():
+    """...and the other half of the same question, which the route has to be
+    asked: which functionality reads the variable (#150).
+
+    The parameter is optional and absent is not empty, which is the whole
+    reason it is a query string rather than a required field: the page asks
+    once on mount with no location chosen and gets the reference whole, then
+    asks again for the location it is generating for. An empty value is a
+    location that runs nothing this tool covers, which is a different sentence
+    and gets a different answer.
+    """
+    whole = {v["name"] for v in client.get("/api/agent-env").json()}
+    perf = {v["name"] for v in
+            client.get("/api/agent-env?func_ids=performance").json()}
+    assert perf < whole
+    assert "VERIFY_SSL" in perf
+    assert "DODUO_PORT" in whole and "DODUO_PORT" not in perf
+
+    # Several, comma-separated, the way a location carries several funcIds.
+    two = {v["name"] for v in client.get(
+        "/api/agent-env?func_ids=performance,functionalGui").json()}
+    assert "DODUO_PORT" in two
+
+    # Absent, and answered-empty, are not the same read.
+    empty = {v["name"] for v in client.get("/api/agent-env?func_ids=").json()}
+    assert "VERIFY_SSL" in empty and "DODUO_PORT" not in empty
 
 
 def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
@@ -1004,35 +1034,61 @@ def test_sv_constants_carry_what_each_backend_publishes():
         "nginx": True, "openshift": True, "contour": False, "istio": False}
 
 
-def test_func_id_choices_cover_the_whole_generator_vocabulary():
+def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     """A location whose funcId the UI never offers can only be created from the
     CLI or the BlazeMeter web app -- which is what a hardcoded copy of the list
-    in TypeScript caused. Serving it from the funcId vocabulary the facts layer
-    already keys its image selection off means adding one there is enough to
-    make it selectable, and retiring one removes it from the form."""
-    from bzm_opl_gen import facts as facts_mod
-    body = client.get("/api/func-ids").json()
-    assert [c["id"] for c in body] == list(facts_mod.CATEGORY_BY_FUNC)
-    ids = {c["id"] for c in body}
-    assert {"mockServices", "proxyRecorder"} <= ids
-    assert "sv-bridge" not in ids                 # retired, so not offered
+    in TypeScript caused, and then what a hardcoded copy in Python caused after
+    it. The account is the vocabulary, so a funcId it adds is selectable with no
+    edit here and one it retires leaves the form on its own."""
+    connect(monkeypatch, FakeClient())
+    body = client.get("/api/func-ids?account_id=291446").json()
+    ids = [c["id"] for c in body]
+
+    assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
+    # Retired: the account stopped serving either, so neither is offered --
+    # without a rule here naming them.
+    assert "functionalApi" not in ids and "sv-bridge" not in ids
     assert all(c["label"] for c in body)
 
 
-def test_unlabelled_func_id_is_still_offered(monkeypatch):
-    """The label map is presentation only, so a funcId added to the facts layer
-    without one must still appear under its raw name -- the same deliberate
-    failure mode as the SV ingress picker. Dropping it would hide the
-    functionality
-    exactly like the hardcoded list did."""
-    from bzm_opl_gen import facts as facts_mod
-    monkeypatch.setitem(facts_mod.CATEGORY_BY_FUNC, "tdm", {"performance"})
+def test_the_vocabulary_is_reachable_with_no_account_at_all():
+    """The page asks on mount, before a key exists; manual entry never has an
+    account. `account_id` is therefore optional, and the answer with none is the
+    three funcIds this tool covers, under the names the account would give
+    them."""
     body = client.get("/api/func-ids").json()
-    # Matched on id/label rather than the whole row: the row carries other
-    # fields, and what this pins is that an unlabelled funcId is still offered
-    # under its raw name.
-    assert {"id": "tdm", "label": "tdm"} in [
-        {"id": r["id"], "label": r["label"]} for r in body]
+    assert [(c["id"], c["label"], c["covered"]) for c in body] == [
+        ("performance", "Performance", True),
+        ("functionalGui", "GUI Functional", True),
+        ("mockServices", "Service Virtualization", True)]
+
+
+def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
+    """The display name is the account's, so a funcId it serves without one must
+    still appear -- under the raw id, which is what a location carrying it shows
+    anyway. Dropping it would hide the functionality exactly like the hardcoded
+    list did."""
+    class Unnamed(FakeClient):
+        def functionalities(self, account_id):
+            return {"functionalities": [{"funcId": "brandNew", "size": 1}]}
+
+    connect(monkeypatch, Unnamed())
+    body = client.get("/api/func-ids?account_id=291447").json()
+    assert [(r["id"], r["label"], r["covered"]) for r in body] == [
+        ("brandNew", "brandNew", False)]
+
+
+def test_reading_the_vocabulary_is_not_a_write(monkeypatch):
+    """It is account-scoped, so it is cached with the other account reads -- and
+    it is a read, so it must not carry `_writes`, which drops that cache. A
+    vocabulary that dropped the cache would re-fetch the account's locations
+    every time the page reconnected."""
+    fake = connect(monkeypatch, FakeClient())
+    server._cache.clear()
+    client.get("/api/func-ids?account_id=291446")
+    client.get("/api/func-ids?account_id=291446")
+    assert [c for c in fake.calls if c[0] == "functionalities"] == [
+        ("functionalities", 291446)]
 
 
 def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
@@ -1046,11 +1102,13 @@ def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
     assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
-        assert f["label"] and f["namespace"] and f["func_ids"]
-    sv = next(f for f in body if f["id"] == "sv")
-    # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
-    # second list -- the same reason /api/sv-constants exists.
-    assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
+        assert f["label"] and f["namespace"]
+    # The id *is* the funcId (#149), so the join a location makes is on it and
+    # there is no second list to keep: which funcId means service
+    # virtualization is generate.SV_FUNC_IDS', the same answer
+    # /api/sv-constants serves and _sv_cfg validates against.
+    assert [f["id"] for f in body if f["id"] in gen_mod.SV_FUNC_IDS] \
+        == list(gen_mod.SV_FUNC_IDS)
     # Distinct namespaces are the point of suggesting one per functionality:
     # sharing a namespace is what makes redeploying one agent take the other's
     # pods down.
@@ -1062,13 +1120,22 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
     tag on whichever option groups it owns. Nothing in the frontend enumerates
     functionalities, so this is the whole of the backend half."""
     monkeypatch.setattr(core, "FUNCTIONALITIES", core.FUNCTIONALITIES + [
-        {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
-         "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
+        {"id": "secretsPrivateVault", "label": "Secrets Private Vault",
+         "hint": "secrets from a vault", "namespace": "blazemeter-vault"}])
     body = client.get("/api/functionalities").json()
-    assert body[-1] == {"id": "secrets", "label": "Private vault",
+    assert body[-1] == {"id": "secretsPrivateVault",
+                        "label": "Secrets Private Vault",
                         "hint": "secrets from a vault",
                         "namespace": "blazemeter-vault",
-                        "func_ids": ["secretsPrivateVault"]}
+                        # False rather than absent, and it follows from the
+                        # entry rather than needing a second edit: nothing in
+                        # facts.CATEGORY_BY_FUNC says this agent carries an
+                        # engine, so it does not claim one.
+                        "runs_engine": False}
+    # ...and it is a covered funcId by the same act, because `covered` is that
+    # list read as a vocabulary rather than a second table beside it.
+    assert next(r for r in client.get("/api/func-ids").json()
+                if r["id"] == "secretsPrivateVault")["covered"] is True
 
 
 def test_create_location_forwards_every_selected_func_id(monkeypatch):
@@ -1678,6 +1745,137 @@ def test_plan_still_refuses_a_target_that_was_never_typed():
     """`users` is the one field with no default, so blank is a refusal rather
     than an assumption -- there is no plan without a load target."""
     assert client.post("/api/plan", json={"users": ""}).status_code == 400
+
+
+def test_plan_sizes_the_functionalities_the_card_asked_about():
+    """The card sends one row per functionality it is sizing, each in that
+    model's own unit, and gets back one row per model plus the name of the one
+    the pool came from."""
+    body = client.post("/api/plan", json={
+        "users": "5000",
+        "sizings": [{"functionality": "functionalGui", "target": "20"},
+                    {"functionality": "mockServices", "target": "2000"}],
+    }).json()
+    assert body["driven_by"] == "performance"
+    assert [(s["functionality"], s["pods"]) for s in body["sizings"]] == [
+        ("performance", 10), ("functionalGui", 5), ("mockServices", None)]
+
+
+def test_plan_takes_the_blanks_a_sizing_row_arrives_with():
+    """A figure box nobody typed in posts "", inside the row rather than beside
+    it -- the same rule one level down, and the one place `Blank` had nothing to
+    apply to."""
+    body = client.post("/api/plan", json={
+        "sizings": [{"functionality": "functionalGui", "target": "20",
+                     "figure": ""}]}).json()
+    assert body["sizings"][0]["per_pod_source"] == "assumed"
+    assert body["engines"] == 5
+
+
+def test_plan_refuses_a_sizing_it_cannot_work_out_and_says_why():
+    """Service virtualization alone. 400 carrying the sentence, because the
+    panel shows the refusal where it would otherwise show a node count."""
+    r = client.post("/api/plan", json={
+        "sizings": [{"functionality": "mockServices", "target": "2000"}]})
+    assert r.status_code == 400
+    assert "has not been measured" in r.json()["detail"]
+
+
+def test_sizing_models_are_served_with_the_account_s_own_label():
+    """The card renders a field per model, so the models are served for the
+    same reason /api/functionalities is: a fourth one has to reach the page by
+    being added to the table, not by an edit in TypeScript. The label is
+    BlazeMeter's, joined on here -- `plan` reaches nothing, including core."""
+    from bzm_opl_gen import plan as plan_mod
+    body = client.get("/api/sizing-models").json()
+    assert [m["functionality"] for m in body] == list(plan_mod.SIZING_MODELS)
+    by_id = {m["functionality"]: m for m in body}
+    assert by_id["mockServices"]["label"] == "Service Virtualization"
+    assert by_id["performance"]["unit"] == "virtual users"
+    # The one field the card branches on: a model with no measured figure
+    # offers no figure box, and says so instead.
+    assert [m["measured"] for m in body] == [True, True, False]
+    assert by_id["mockServices"]["figure_unit"] == "requests per second per core"
+
+
+def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
+    """As with DOCKER_IGNORED and RESERVED_ENV: the page's tests run without a
+    server, so the fixture is a second copy, and this is what keeps it from
+    drifting. `measured` most of all -- the card branches on it, and a fixture
+    that quietly gave service virtualization a figure would let a test pass over
+    the exact case the card exists to get right."""
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const SIZING_MODELS: SizingModel\[\] = \[(.*?)\n\];",
+                     text, re.S)
+    assert body, "SIZING_MODELS not found -- was it renamed or moved?"
+    served = client.get("/api/sizing-models").json()
+    assert re.findall(r'functionality: "(\w+)"', body.group(1)) \
+        == [m["functionality"] for m in served]
+    assert re.findall(r"measured: (true|false)", body.group(1)) \
+        == ["true" if m["measured"] else "false" for m in served]
+    assert re.findall(r'unit: "([^"]+)"', body.group(1)) \
+        == [v for m in served for v in (m["unit"], m["figure_unit"])]
+    # ...and the two the guard used to leave out, both of which render:
+    # `label` names the card and the "sized for the X sizing" line, and `pods`
+    # is the word the plan counts in -- "mock pods", never assume engines.
+    assert re.findall(r'label: "([^"]+)"', body.group(1)) \
+        == [m["label"] for m in served]
+    assert re.findall(r'pods: "([^"]+)"', body.group(1)) \
+        == [m["pods"] for m in served]
+    # The default saved sizings are built from this, so a fixture inventing one
+    # would be the page inventing a target -- the thing the served column
+    # exists to stop.
+    assert re.findall(r"example_target: (\d+)", body.group(1)) \
+        == [str(m["example_target"]) for m in served]
+    # Every field the page's type declares, so a field added to SizingModel and
+    # not to this fixture fails here rather than in whatever renders it.
+    assert set(re.findall(r"(\w+):", body.group(1))) == {
+        "functionality", "label", "unit", "figure_unit", "pods", "measured",
+        "example_target"}
+
+
+def test_the_engine_rating_is_answered_for_every_sizing_model():
+    """The card suggests a per-pod figure beside each model's box, and had one
+    number to do it with -- so it branched on `functionality === "performance"`
+    and told a browser field only what blank *meant*. The route answers per
+    model, and the model with no measured figure is null rather than missing:
+    that absence is the value, not a rule the page has to know."""
+    from bzm_opl_gen import plan as plan_mod
+    body = client.get("/api/engine-vus",
+                      params={"cpu": "4", "mem": "16Gi"}).json()
+    assert set(body["rated"]) == set(plan_mod.SIZING_MODELS)
+    # Twice the standard engine, so twice what it is rated for -- and
+    # `supported_vus` is the same figure under the name doctor calls it by.
+    assert body["rated"]["performance"] == 1000 == body["supported_vus"]
+    assert body["rated"]["functionalGui"] == 8
+    assert body["rated"]["mockServices"] is None
+
+
+def test_a_functionality_says_whether_its_agent_carries_an_engine():
+    """`runs_engine` was a two-id literal in the frontend
+    (`ENGINE_FUNCTIONALITIES`), which is the copy DOCKER_IGNORED and the funcId
+    vocabulary are served to avoid: an id renamed here left the page deciding
+    where the engine-size statement goes, and what service virtualization is
+    exclusive with, from a list nothing could correct.
+
+    Held against the planner's own table, which knows the same fact under
+    another name: a model whose pods are engines is a functionality whose agent
+    carries one. Two tables, one answer, and this is where they have to agree.
+    """
+    from bzm_opl_gen import plan as plan_mod
+    served = {f["id"]: f["runs_engine"]
+              for f in client.get("/api/functionalities").json()}
+    assert served == {"performance": True, "functionalGui": True,
+                      "mockServices": False}
+    for fid, m in plan_mod.SIZING_MODELS.items():
+        assert served[fid] == (m["pod"] == "engine"), fid
+
+
+def test_every_sizing_model_is_a_functionality_the_page_configures():
+    """A model for a funcId with no card is a unit nothing can be asked for."""
+    from bzm_opl_gen import plan as plan_mod
+    assert set(plan_mod.SIZING_MODELS) <= set(core.covered_func_ids())
 
 
 # -- changing a location's settings -------------------------------------------

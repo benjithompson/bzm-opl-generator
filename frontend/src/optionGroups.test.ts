@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Functionality, Options } from "./api";
+import { FuncIdChoice, Functionality, Options } from "./api";
 import {
   allGroupsOff, blockingGroups, configureBlockedBy, detectGroups,
   enabledFunctionalities, groupsOf,
@@ -7,8 +7,11 @@ import {
   incompleteGroups, isOpenshift, notRunPatch, OPTION_GROUPS, OptionGroup,
   runsFunctionality,
   serviceAccountOk, startFunctionality,
-  suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
+  reservedList, reservedWhere,
+  suggestNamespace, SV_NONE, svConfigured, toggleDeclared as declared,
+  unclaimedFuncIds,
 } from "./optionGroups";
+import { RESERVED_ENV } from "./fixtures";
 
 // The lifecycle of a group is data in, data out -- a detect over the options, a
 // patch to merge on enable, a patch to merge on disable -- so it is tested as
@@ -285,24 +288,45 @@ describe("switching a group on", () => {
 // So the vocabulary below is a fixture standing in for that response, and the
 // "a functionality was added" tests extend it exactly the way server.py would.
 
+// One entry per covered funcId, and the id *is* the funcId (#149) -- so a
+// location's funcIds join to these by equality, with no table in between.
 const PERF: Functionality = {
-  id: "performance", label: "Performance & functional testing",
-  hint: "load and functional tests", namespace: "blazemeter",
-  func_ids: ["performance", "functionalApi", "functionalGui", "proxyRecorder"],
+  id: "performance", label: "Performance",
+  hint: "load tests", namespace: "blazemeter", runs_engine: true,
+};
+const GUI: Functionality = {
+  id: "functionalGui", label: "GUI Functional",
+  hint: "browser tests", namespace: "blazemeter-gui", runs_engine: true,
 };
 const SV: Functionality = {
-  id: "sv", label: "Service virtualization", hint: "virtual services",
-  namespace: "blazemeter-sv", func_ids: ["mockServices"],
+  id: "mockServices", label: "Service Virtualization",
+  // No taurus engine at all: crane, group-gateway and service-mock. The one
+  // false in the served vocabulary, and what `engineFunctionalities` filters on.
+  hint: "virtual services", namespace: "blazemeter-sv", runs_engine: false,
 };
-const FUNCTIONALITIES = [PERF, SV];
+const FUNCTIONALITIES = [PERF, GUI, SV];
 /** Added the way a real new functionality is: one entry in the served vocabulary, and
  *  no frontend edit at all until some group wants to be tagged with it. */
 const SECRETS: Functionality = {
-  id: "secrets", label: "Private vault", hint: "secrets from a vault",
-  namespace: "blazemeter-vault", func_ids: ["secretsPrivateVault"],
+  id: "secretsPrivateVault", label: "Secrets Private Vault",
+  hint: "secrets from a vault", namespace: "blazemeter-vault",
+  runs_engine: false,
 };
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
+/** The funcId vocabulary /api/func-ids serves once an account has been read --
+ *  the account's own display names, and `covered` false for every funcId this
+ *  tool has no options for. Keyless it is the three covered ones only, which is
+ *  what NO_ACCOUNT stands in for. */
+const VOCABULARY: FuncIdChoice[] = [
+  { id: "performance", label: "Performance", changes_images: true, covered: true },
+  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true },
+  { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true },
+  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false },
+  { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false },
+  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false },
+];
+const NO_ACCOUNT: FuncIdChoice[] = VOCABULARY.filter((c) => c.covered);
 
 describe("the split the configure step is built on", () => {
   it("puts every group in exactly one bucket", () => {
@@ -314,17 +338,22 @@ describe("the split the configure step is built on", () => {
   });
 
   it("gives a functionality the groups tagged with it, and only those", () => {
-    expect(groupsOf("sv").map((g) => g.id)).toEqual(["sv"]);
+    // Tagged with the funcId, because that is what a functionality id is now.
+    // `sv` is still the *group* id -- what the row is called on the page -- and
+    // the two no longer coincide, which is the point: one is a bundle's
+    // options, the other is a thing the account enables.
+    expect(groupsOf("mockServices").map((g) => g.id)).toEqual(["sv"]);
     // Performance owns no group any more: the engine size stopped being one
-    // (#132) -- it derives from the location, and the card states it.
+    // (#132) -- it derives from the location, and the panel states it.
     expect(groupsOf("performance")).toEqual([]);
+    expect(groupsOf("functionalGui")).toEqual([]);
   });
 
   it("answers a functionality nothing is tagged with, rather than throwing", () => {
     // A backend that grows a functionality before the frontend tags a group to it is
     // a card that says "nothing extra to configure" -- not a crash, and not a
     // missing card.
-    expect(groupsOf("secrets")).toEqual([]);
+    expect(groupsOf("secretsPrivateVault")).toEqual([]);
   });
 
   it("keeps the shared groups shared", () => {
@@ -335,8 +364,13 @@ describe("the split the configure step is built on", () => {
 
 describe("which functionality a location starts on", () => {
   it("picks the functionality its funcIds carry", () => {
-    expect(startFunctionality(["mockServices"], FUNCTIONALITIES)).toBe("sv");
-    expect(startFunctionality(["functionalGui"], FUNCTIONALITIES)).toBe("performance");
+    expect(startFunctionality(["mockServices"], FUNCTIONALITIES))
+      .toBe("mockServices");
+    // The reported bug, in one line: this used to answer "performance",
+    // because one entry claimed four funcIds and its label had to name them
+    // all. A GUI Functional location now opens on GUI Functional.
+    expect(startFunctionality(["functionalGui"], FUNCTIONALITIES))
+      .toBe("functionalGui");
   });
 
   it("picks the first served functionality for a location carrying both", () => {
@@ -346,7 +380,7 @@ describe("which functionality a location starts on", () => {
     expect(startFunctionality(["mockServices", "performance"], FUNCTIONALITIES))
       .toBe("performance");
     expect(functionalitiesOf(["mockServices", "performance"], FUNCTIONALITIES))
-      .toEqual(["performance", "sv"]);
+      .toEqual(["performance", "mockServices"]);
   });
 
   it("is not broken by a funcId the tool does not model", () => {
@@ -354,26 +388,59 @@ describe("which functionality a location starts on", () => {
     // funcId claims no functionality: alongside a modelled one it is ignored, and
     // alone it leaves the default rather than an empty selector.
     expect(startFunctionality([...UNMODELLED, "mockServices"], FUNCTIONALITIES))
-      .toBe("sv");
+      .toBe("mockServices");
     expect(startFunctionality(UNMODELLED, FUNCTIONALITIES)).toBe("performance");
     expect(functionalitiesOf(UNMODELLED, FUNCTIONALITIES)).toEqual([]);
-    // …and they are nameable, so the page can say what it has no options for
-    // rather than pretending the location is only what it models.
-    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES))
-      .toEqual(UNMODELLED);
-    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES))
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+      .toHaveLength(UNMODELLED.length);
+    expect(unclaimedFuncIds(["performance", "mockServices"], FUNCTIONALITIES, VOCABULARY))
       .toEqual([]);
     expect(startFunctionality([], FUNCTIONALITIES)).toBe("performance");
     expect(startFunctionality(undefined, FUNCTIONALITIES)).toBe("performance");
+  });
+
+  it("leaves a retired funcId unclaimed rather than folding it into a card", () => {
+    // `functionalApi` and `proxyRecorder` were two of the four `performance`
+    // used to claim (#149). Neither is covered -- BlazeMeter retired one and
+    // this tool has options for neither -- so they are named beside the cards
+    // instead, which is the same answer tdm has always got. A location
+    // carrying only those claims nothing, and an empty answer is read one
+    // level up as nobody having said.
+    expect(functionalitiesOf(["functionalApi", "proxyRecorder"], FUNCTIONALITIES))
+      .toEqual([]);
+    expect(unclaimedFuncIds(["performance", "functionalApi"], FUNCTIONALITIES,
+                            VOCABULARY)).toEqual(["functionalApi"]);
+  });
+
+  it("names the funcIds it has no options for, in the account's own words", () => {
+    // Silence would read as coverage. The location runs these, this tool
+    // configures none of them, and BlazeMeter has a name for each -- so the
+    // sentence on the configure step is "also runs TDM Integration", not a
+    // camelCase id the reader has to recognise.
+    expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
+      .toEqual(["TDM Integration", "Data Orchestration", "Delphix Integration"]);
+  });
+
+  it("falls back to the raw funcId where no account has been read", () => {
+    // The keyless vocabulary is the three covered funcIds, so nothing here can
+    // name `tdm` -- and naming it wrongly, or dropping it, are both worse than
+    // showing what the location literally carries. `functionalApi` is the same
+    // case with an account: the account retired it, locations still have it.
+    expect(unclaimedFuncIds([...UNMODELLED, "functionalApi"], FUNCTIONALITIES,
+                            NO_ACCOUNT))
+      .toEqual([...UNMODELLED, "functionalApi"]);
+    expect(unclaimedFuncIds(["functionalApi", "tdm"], [SV], VOCABULARY))
+      .toEqual(["functionalApi", "TDM Integration"]);
   });
 
   it("offers a functionality added to the vocabulary, with no change here", () => {
     // The acceptance test of "adding a functionality is a backend change": the
     // vocabulary gains an entry and the location starts on it.
     const served = [...FUNCTIONALITIES, SECRETS];
-    expect(startFunctionality(["secretsPrivateVault"], served)).toBe("secrets");
+    expect(startFunctionality(["secretsPrivateVault"], served))
+      .toBe("secretsPrivateVault");
     expect(functionalitiesOf(["secretsPrivateVault", "performance"], served))
-      .toEqual(["performance", "secrets"]);
+      .toEqual(["performance", "secretsPrivateVault"]);
   });
 
   it("claims nothing when the vocabulary has not arrived", () => {
@@ -388,27 +455,76 @@ describe("which functionality a location starts on", () => {
 // the functionality, or claims an enablement no account has confirmed.
 
 describe("which functionalities a location runs", () => {
+  const ORDER = ["performance", "functionalGui", "mockServices"];
+  /** `toggleDeclared` with nothing excluding anything, on purpose: which
+   *  functionalities cannot share a location is a fact about crane's one
+   *  pod-limit pair, stated and tested in sv.ts. This file owns only the list
+   *  mechanics -- added once, removed, and in the order the boxes are drawn. */
+  const toggleDeclared = (d: string[], id: string, on: boolean, o: string[]) =>
+    declared(d, id, on, o, () => []);
+
   it("takes manual mode's declaration, and nothing else", () => {
     // No account to read, so the declaration is the whole answer -- and it is
     // an answer, which is why this is never null.
-    expect(enabledFunctionalities("manual", "performance", [])).toEqual(["performance"]);
-    expect(enabledFunctionalities("manual", "sv", ["performance"])).toEqual(["sv"]);
-    expect(enabledFunctionalities("manual", null, [])).toEqual([]);
+    expect(enabledFunctionalities("manual", ["performance"], []))
+      .toEqual(["performance"]);
+    expect(enabledFunctionalities("manual", ["mockServices"], ["performance"]))
+      .toEqual(["mockServices"]);
+    expect(enabledFunctionalities("manual", [], [])).toEqual([]);
+  });
+
+  it("carries every functionality manual entry declared, not the first", () => {
+    // #151. A location running performance and GUI functional together is 71 of
+    // 168 in one real account, so a declaration that could only name one made a
+    // bundle nobody would create -- and the card for the other one was on
+    // screen saying it had not been declared.
+    expect(enabledFunctionalities(
+      "manual", ["performance", "functionalGui"], []))
+      .toEqual(["performance", "functionalGui"]);
+  });
+
+  it("ticks and unticks a member, in the order the boxes are drawn", () => {
+    // Added in served order rather than in click order: these ids become the
+    // funcIds the facts are gathered for, and a list that reshuffles on a tick
+    // is a new request for a declaration that did not change.
+    expect(toggleDeclared(["functionalGui"], "performance", true, ORDER))
+      .toEqual(["performance", "functionalGui"]);
+    expect(toggleDeclared(["performance", "functionalGui"], "performance",
+                          false, ORDER)).toEqual(["functionalGui"]);
+    // Ticking what is already ticked is not a second copy of it.
+    expect(toggleDeclared(["performance"], "performance", true, ORDER))
+      .toEqual(["performance"]);
+    // Emptying is a state, not a refusal: a checkbox that will not untick is an
+    // off-screen blocker in one control, and the surface says what empty means.
+    expect(toggleDeclared(["performance"], "performance", false, ORDER))
+      .toEqual([]);
+  });
+
+  it("keeps an id the vocabulary on screen does not carry", () => {
+    // The create-location form offers the account's whole funcId list, and a
+    // location can already hold one BlazeMeter has retired -- 43 in one account
+    // still carry functionalApi. Dropping it here would be a form editing
+    // something it never showed.
+    expect(toggleDeclared(["functionalApi"], "performance", true,
+                          ["performance", "mockServices"]))
+      .toEqual(["performance", "functionalApi"]);
   });
 
   it("keeps unanswered distinct from answered-none", () => {
-    expect(enabledFunctionalities("connect", "performance", [])).toBe(null);
-    expect(enabledFunctionalities("connect", "performance", ["sv"])).toEqual(["sv"]);
+    expect(enabledFunctionalities("connect", ["performance"], [])).toBe(null);
+    expect(enabledFunctionalities("connect", ["performance"], ["mockServices"]))
+      .toEqual(["mockServices"]);
   });
 
   it("treats unanswered as running everything", () => {
     // The safe direction: a switch shown for a functionality that turns out not to
     // apply is corrected the moment the account answers, where one hidden on a
     // guess leaves a location with nowhere to configure what it does run.
-    expect(runsFunctionality(null, "sv")).toBe(true);
-    expect(runsFunctionality(["performance"], "sv")).toBe(false);
-    expect(runsFunctionality(["performance", "sv"], "sv")).toBe(true);
-    expect(runsFunctionality([], "sv")).toBe(false);
+    expect(runsFunctionality(null, "mockServices")).toBe(true);
+    expect(runsFunctionality(["performance"], "mockServices")).toBe(false);
+    expect(runsFunctionality(["performance", "mockServices"], "mockServices"))
+      .toBe(true);
+    expect(runsFunctionality([], "mockServices")).toBe(false);
   });
 });
 
@@ -432,26 +548,29 @@ describe("options set for a functionality the location does not run", () => {
     expect(notRunPatch(once, perfOnly)).toBe(null);
   });
 
-  it("leaves the shared groups and the functionalities that are run alone", () => {
-    // Registry belongs to no functionality, so no location is without it; the
-    // engine size belongs to performance, which this one runs.
-    expect(notRunPatch({ private_registry: "reg.corp/bzm",
-                         engine_cpu_limit: "2" }, perfOnly)).toBe(null);
+  it("leaves the shared groups alone", () => {
+    // Registry belongs to no functionality, so no location is without it.
+    expect(notRunPatch({ private_registry: "reg.corp/bzm" }, perfOnly))
+      .toBe(null);
   });
 
-  it("clears an engine size bound for a location that starts no engines", () => {
-    // The size is not a group any more (#132), so its clearing is notRunPatch's
-    // own clause: the options still travel (the sizing, an imported
-    // profile), generate() emits an explicit option over anything, and a
-    // mocks-only location has no engine for it to describe.
-    expect(notRunPatch({ engine_cpu_limit: "2", engine_mem_limit: "8Gi" },
-                       ["sv"]))
-      .toEqual({ engine_cpu_limit: null, engine_mem_limit: null });
-    // ...settling in one pass, like the group path.
-    expect(notRunPatch({ engine_cpu_limit: null, engine_mem_limit: null },
-                       ["sv"])).toBe(null);
-    // ...and never while nobody has answered.
-    expect(notRunPatch({ engine_cpu_limit: "2" }, null)).toBe(null);
+  it("never clears the pod limits, whatever the location runs", () => {
+    // #149. They were cleared for a location that ran no performance, on the
+    // reading that they size an engine and a mocks location has none. Crane
+    // applies KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to every pod it creates
+    // -- there is one pair and no per-functionality second one -- so cleared,
+    // an SV-only or GUI-only agent's pods land on crane's 250m/256Mi defaults,
+    // which is the silent failure this repo's LimitRange note is about.
+    const sized = { engine_cpu_limit: "2", engine_mem_limit: "8Gi" };
+    expect(notRunPatch(sized, ["mockServices"])).toBe(null);
+    expect(notRunPatch(sized, ["functionalGui"])).toBe(null);
+    expect(notRunPatch(sized, [])).toBe(null);
+    expect(notRunPatch(sized, null)).toBe(null);
+    // ...and a functionality's own options still go, in the same options dict:
+    // the two answers are separate, which is what stopped being true.
+    expect(notRunPatch({ ...sized, sv_ingress: "nginx" }, perfOnly))
+      .toEqual({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
+                 sv_istio_gateway: null });
   });
 
   it("clears nothing while nobody has answered", () => {
@@ -710,5 +829,68 @@ describe("blockingGroups", () => {
                 sv_tls_secret: "wild", service_type: "NODEPORT" };
     const backends = { contour: { nodeport_ok: false } };
     expect(blockingGroups(o, { sv: true }, backends)).toHaveLength(1);
+  });
+});
+
+// -- where a variable this bundle writes itself is set ------------------------
+
+describe("reservedWhere", () => {
+  it("names the option, and the section of the step holding it", () => {
+    // The complaint behind #150 was that Kubernetes auto-update is missing from
+    // the environment list. It is not missing -- AUTO_KUBERNETES_UPDATE is
+    // written by the bundle itself, off the `auto_update` option -- but that
+    // option is a tri-state inside a group about RBAC, so the only route to it
+    // was to open the wrong question and read to the bottom. The env area
+    // answers instead: the served table says which option, and the group that
+    // owns the key says where that option is.
+    expect(reservedWhere("AUTO_KUBERNETES_UPDATE", RESERVED_ENV)).toEqual({
+      name: "AUTO_KUBERNETES_UPDATE", owner: "auto_update",
+      where: "Security & RBAC",
+    });
+    expect(reservedWhere("IMAGE_OVERRIDES", RESERVED_ENV)).toEqual({
+      name: "IMAGE_OVERRIDES", owner: "private_registry",
+      where: "Private registry",
+    });
+  });
+
+  it("names an owner without inventing a place for it", () => {
+    // An option no group owns -- the engine limits, which the configure step
+    // states from the location and does not edit -- has an owner and no
+    // section. "Somewhere on this step" is not a place, and the owner alone is
+    // still the answer to "then where is it set".
+    expect(reservedWhere("KUBERNETES_RESOURCES_LIMITS_CPU", RESERVED_ENV))
+      .toEqual({ name: "KUBERNETES_RESOURCES_LIMITS_CPU",
+                 owner: "engine_cpu_limit", where: null });
+  });
+
+  it("follows a one-of pair to the group that holds both", () => {
+    // The CA trio names a pair, which is what the option table itself calls
+    // them. Splitting on the served separator rather than looking the whole
+    // string up: `ca_bundle | ca_existing_configmap` is no option's name.
+    expect(reservedWhere("REQUESTS_CA_BUNDLE", RESERVED_ENV)?.where)
+      .toBe("Custom CA trust");
+  });
+
+  it("keeps 'no option owns it' apart from 'this name is not reserved'", () => {
+    // The served table answers null for the identity and the fixed posture, and
+    // that is a real answer: the refusal stands, and inventing an option to
+    // send somebody to would be worse than saying there is not one.
+    expect(reservedWhere("SHIP_ID", RESERVED_ENV))
+      .toEqual({ name: "SHIP_ID", owner: null, where: null });
+    // A name the table does not carry is not reserved at all, and an empty
+    // table is "not read yet" -- neither is a claim about where anything is.
+    expect(reservedWhere("VERIFY_SSL", RESERVED_ENV)).toBe(null);
+    expect(reservedWhere("AUTO_KUBERNETES_UPDATE", {})).toBe(null);
+  });
+
+  it("lists every reserved name, in the order the table is served in", () => {
+    // On the page rather than behind a search box: the whole failure is
+    // somebody looking for a name and finding nothing, and a list that is
+    // rendered is one the browser's own find can land in.
+    const all = reservedList(RESERVED_ENV);
+    expect(all.map((r) => r.name)).toEqual(Object.keys(RESERVED_ENV));
+    expect(all.find((r) => r.name === "AUTO_KUBERNETES_UPDATE")?.where)
+      .toBe("Security & RBAC");
+    expect(reservedList({})).toEqual([]);
   });
 });

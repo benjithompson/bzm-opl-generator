@@ -51,6 +51,48 @@ Written to be *checked*, not just read: a capacity request that cannot be
 questioned tends to get halved by whoever holds the budget, and the node count
 is usually the half that goes.
 
+## Three sizing models, one pod size
+
+Two of the three functionalities this tool covers are not sized in virtual users
+at all, so the planner has a model for each — and one of them has no figure:
+
+| functionality | asked for in | what one 2 CPU / 8Gi pod carries |
+|---|---|---|
+| Performance | virtual users | 500 — BlazeMeter's own figure |
+| GUI Functional | browser instances | about 4 — the account owner's estimate |
+| Service Virtualization | requests per second | **nothing measured** |
+
+`--users`, `--browsers` and `--requests-per-second` are the three targets, and
+any of them can be given on their own or together. Each scales its figure with
+the pod, on whichever of CPU and memory is tighter, for the reason the
+virtual-user figure does.
+
+**One pod size across all of them, and that is crane's doing.** BlazeMeter
+defines `KUBERNETES_RESOURCES_LIMITS_CPU` as the CPU limit for "resources
+created by agent" — every pod it creates, engines and browser pods and mock pods
+alike — and there is no second pair. So three models cannot mean three sets of
+limits. They mean three routes to how many pods of the one size are needed, and
+where several are sized **the largest decides**; the plan names which one it
+was, in the summary, in the JSON (`driven_by`) and in the document. Largest, not
+the sum: if a load test and a browser suite will run at the same time, add the
+pod counts and size for the total, which the plan says too.
+
+### Service virtualization is stated, not sized
+
+How many requests per second one core of a mock pod serves **has not been
+measured**, and nothing here can measure it: it is a property of the mocks, in
+the way that virtual users per engine is a property of the script. So there is
+no figure, nothing is assumed in its place, and there is no flag to supply one —
+a mock-pod count would size a pool that every number after it here calls
+engines.
+
+What a `--requests-per-second` target does instead is get itself **stated**: it
+is in the ask at the top of the request document, in the assumptions section
+saying why it produced no arithmetic, and in the warnings. Sized on its own it
+is a refusal carrying that sentence rather than a plan with a number nobody
+measured in it. To size it, deploy one mock pod at the pod size above, drive it
+until it saturates, and multiply.
+
 ## The one thing it cannot know
 
 How many users **one engine** carries is a property of the script, not of the
@@ -76,8 +118,11 @@ re-run `plan` with the number that comes out. That first step needs one node.
 
 | flag | default | |
 |---|---|---|
-| `--users` | *required* | virtual users the test has to reach |
+| `--users` | – | virtual users the test has to reach. One of the three targets; at least one is needed |
 | `--vus-per-engine` | what the engine size is rated for | virtual users one engine carries (BlazeMeter's `threadsPerEngine`) — see above |
+| `--browsers` | – | browser instances a GUI Functional suite runs at once |
+| `--browsers-per-engine` | about 4 for the standard engine | an estimate from the account owner, not a measurement |
+| `--requests-per-second` | – | what the virtual services have to serve. Stated in the request, never sized from — see above |
 | `--engine-cpu-limit` / `--engine-mem-limit` | `2` / `8Gi` | the same two flags `generate` takes, so a plan and the bundle it leads to are one vocabulary |
 | `--agents` | 1 | agents that will serve the location; `slots` is per agent, so this divides the run |
 | `--engines-per-node` | 1 | more is cheaper (a node spends ~1 CPU / 2Gi on itself) and they contend — see [`engines_per_node`](options.md) |

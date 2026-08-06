@@ -26,6 +26,36 @@ from bzm_opl_gen import api, core, generate as gen
 from test_generate import FACTS
 
 
+# What a real account answers to GET /accounts/{id}/functionalities, trimmed to
+# the entries that decide something here and otherwise verbatim: the display
+# names are BlazeMeter's, `functionalApi` is absent because the account no
+# longer serves it, and `subFunctionalities` is present so a reader that starts
+# consuming it (#152) has something to consume rather than a shape invented on
+# the day.
+ACCOUNT_FUNCTIONALITIES = {
+    "additionalSpace": 50,
+    "functionalities": [
+        {"funcId": "performance", "size": 5, "displayName": "Performance"},
+        {"funcId": "proxyRecorder", "size": 1, "displayName": "Proxy Recorder"},
+        {"funcId": "secretsPrivateVault", "size": 1,
+         "displayName": "Secrets Private Vault"},
+        {"funcId": "enableSecretsToggle", "size": 1,
+         "displayName": "Vault Access Controls"},
+        {"funcId": "mockServices", "size": 1,
+         "displayName": "Service Virtualization"},
+        {"funcId": "functionalGui", "size": 0, "displayName": "GUI Functional",
+         "subFunctionalities": [
+             {"id": "chrome:default", "size": 2, "displayName": "Chrome Default",
+              "default": True},
+             {"id": "firefox:139", "size": 2, "displayName": "Firefox 139"},
+         ]},
+        {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
+        {"funcId": "dataPublisher", "size": 1, "displayName": "Data Orchestration"},
+        {"funcId": "delphix", "size": 1, "displayName": "Delphix Integration"},
+    ],
+}
+
+
 class FakeClient:
     """Enough BzmClient to exercise the paths that reach for one.
 
@@ -36,8 +66,14 @@ class FakeClient:
     """
 
     def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None,
-                 ignores=()):
+                 ignores=(), versions=None):
         self._token = token
+        # What GET .../versions does -- a recorded payload, or an exception to
+        # raise. It defaults to raising, because a stand-in account that answers
+        # would decide the images for every test here rather than the one asking
+        # about them.
+        self._versions = versions if versions is not None else api.BzmApiError(
+            "GET /private-locations/h/ships/s/versions -> HTTP 404: not found")
         self._harbor = harbor if harbor is not None else {}
         self._locations = locations
         self._workspaces = [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]
@@ -55,6 +91,12 @@ class FakeClient:
         self.calls.append(("private_location", harbor_id))
         return self._harbor
 
+    def ship_versions(self, harbor_id, ship_id):
+        self.calls.append(("ship_versions", harbor_id, ship_id))
+        if isinstance(self._versions, Exception):
+            raise self._versions
+        return self._versions
+
     def user(self):
         return {"email": "se@example.com", "displayName": "SE",
                 "defaultProject": {"accountId": 7}}
@@ -62,6 +104,10 @@ class FakeClient:
     def workspaces(self, account_id):
         self.calls.append(("workspaces", account_id))
         return self._workspaces
+
+    def functionalities(self, account_id):
+        self.calls.append(("functionalities", account_id))
+        return ACCOUNT_FUNCTIONALITIES
 
     def private_locations(self, account_id=None, workspace_id=None):
         self.calls.append(("private_locations", account_id, workspace_id))
@@ -551,7 +597,7 @@ class ExpiredClient(FakeClient):
     def _refuse(self, *a, **kw):
         raise api.BzmApiError(EXPIRED_401)
 
-    user = accounts = workspaces = _refuse
+    user = accounts = workspaces = functionalities = _refuse
     private_locations = private_location = _refuse
     create_private_location = update_private_location = _refuse
     delete_private_location = create_ship = auth_token = _refuse
@@ -1304,18 +1350,120 @@ def test_option_docs_cover_every_option():
     assert set(core.option_docs()) == set(gen_mod.DEFAULT_OPTIONS)
 
 
-def test_every_modelled_func_id_belongs_to_a_functionality():
-    """A funcId the facts layer models but no functionality claims would leave
-    a location carrying only that one with nothing to start on. The reverse is
-    deliberately allowed: a functionality may claim a funcId that needs no
-    images of
-    its own (tdm and delphix are already in that position), and the funcIds the
-    tool does not model at all stay unclaimed -- the selector reads those as no
-    signal rather than as an error."""
+# -- the funcId vocabulary, and where it comes from ----------------------------
+#
+# #148. It was `core.FUNC_ID_LABELS`, five funcIds written by hand, and the
+# account disagreed with it in both directions.
+
+
+def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
+    """Asked with no account, the answer is the three this tool configures.
+
+    Not a stand-in for the account's list and not a guess at it: the page
+    fetches this on mount, before there is a key let alone an account, and
+    manual entry never has an account at all. So there has to be an answer with
+    nothing connected, and the only honest one is what this tool covers -- with
+    BlazeMeter's own display names, so the words do not change when an account
+    arrives and replaces it.
+    """
+    rows = core.func_ids()
+    assert [(r["id"], r["label"]) for r in rows] == [
+        ("performance", "Performance"),
+        ("functionalGui", "GUI Functional"),
+        ("mockServices", "Service Virtualization")]
+    assert all(r["covered"] for r in rows)
+
+
+def test_the_account_replaces_the_baseline_with_its_own_vocabulary():
+    """...and the account's list is longer, differently named, and does not
+    offer `functionalApi` at all -- which the hand-written table did."""
+    client = FakeClient()
+    rows = core.func_ids(client, 291446)
+    by_id = {r["id"]: r for r in rows}
+
+    assert client.calls == [("functionalities", 291446)]
+    assert "functionalApi" not in by_id
+    assert by_id["functionalGui"]["label"] == "GUI Functional"
+    assert by_id["tdm"]["label"] == "TDM Integration"
+
+
+def test_the_vocabulary_says_which_funcids_this_tool_covers():
+    """A funcId this tool has options for and one it can only name are both
+    served, and the difference is on the row. Silence would read as coverage:
+    a page that listed `delphix` beside `performance` with nothing to tell them
+    apart is a page offering to configure something it cannot."""
+    by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 291446)}
+    assert [f for f, r in by_id.items() if r["covered"]] == [
+        "performance", "mockServices", "functionalGui"]
+    for f in ("proxyRecorder", "tdm", "dataPublisher", "delphix",
+              "secretsPrivateVault", "enableSecretsToggle"):
+        assert by_id[f]["covered"] is False
+
+
+def test_an_unreadable_account_is_not_an_account_with_three_functionalities():
+    """The baseline is the keyless answer, never a fallback for a read that
+    failed. Falling back would answer "this account offers exactly what we
+    cover" to a 401 -- could-not-read wearing there-is-nothing-else, about the
+    one question whose whole point is that the account knows better."""
+    with pytest.raises(core.CoreError):
+        core.func_ids(ExpiredClient(), 291446)
+
+
+def test_a_functionality_is_one_funcid_under_blazemeter_s_own_name():
+    """One entry per covered funcId, `id` equal to the funcId (#149).
+
+    It was two entries and `performance` claimed four funcIds, so its label had
+    to name all of them at once -- "Performance & functional testing", printed
+    over a location whose only funcId is `performance`. A list of funcIds per
+    functionality is a translation table between this tool's ids and
+    BlazeMeter's, and the 1:1 mapping exists so that there is not one: the
+    funcId a location carries *is* the id, in both directions, with nothing to
+    look up.
+    """
+    served = core.functionalities()
+    assert [(f["id"], f["label"]) for f in served] == [
+        ("performance", "Performance"),
+        ("functionalGui", "GUI Functional"),
+        ("mockServices", "Service Virtualization")]
+    # The labels are the account's own words (from
+    # GET /accounts/{id}/functionalities), so a customer reading their own
+    # location settings does not have to translate -- and nothing here has a
+    # `func_ids` to keep them apart from.
+    assert not any("func_ids" in f for f in served)
+
+
+def test_a_covered_funcid_and_a_functionality_are_one_table():
+    """`covered` on the funcId vocabulary and having a card on the configure
+    step are the same fact, so they are the same declaration. Kept twice they
+    are free to disagree about the one thing a row exists to say -- and the row
+    that says it is the one telling a funcId this tool configures from a funcId
+    it can only name."""
+    ids = [f["id"] for f in core.functionalities()]
+    assert [r["id"] for r in core.func_ids()] == ids
+    assert all(r["covered"] for r in core.func_ids())
+    # ...and with an account, whose vocabulary is longer, the covered rows are
+    # still exactly the functionalities.
+    rows = core.func_ids(FakeClient(), 291446)
+    assert {r["id"] for r in rows if r["covered"]} == set(ids)
+
+
+def test_every_functionality_names_a_funcid_the_facts_layer_models():
+    """A functionality whose funcId the facts layer does not model would select
+    no images for the bundle it declares -- which is the one thing manual entry
+    reads a declaration for.
+
+    The reverse is deliberately *not* asserted, and #149 is where it stopped
+    holding: `functionalApi` and `proxyRecorder` are modelled here and covered
+    by nothing, because BlazeMeter has retired one and this tool has no options
+    for either. A location carrying only those claims no functionality, which
+    the page reads as nobody having said -- and names them, rather than folding
+    them into a card whose label would then have to mean four things."""
     from bzm_opl_gen import facts as facts_mod
-    claimed = {f for fn in core.FUNCTIONALITIES for f in fn["func_ids"]}
-    assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
-    assert "tdm" not in claimed
+    ids = {f["id"] for f in core.functionalities()}
+    assert ids <= set(facts_mod.CATEGORY_BY_FUNC)
+    modelled = set(facts_mod.CATEGORY_BY_FUNC)
+    assert {"functionalApi", "proxyRecorder"} <= modelled - ids
+    assert "tdm" not in ids
 
 
 # -- where a token lives, and that redaction still knows -----------------------

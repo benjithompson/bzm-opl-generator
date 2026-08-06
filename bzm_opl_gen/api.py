@@ -24,7 +24,21 @@ ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
 
 
 class BzmApiError(RuntimeError):
-    pass
+    """A call BlazeMeter refused, with the HTTP status where there was one.
+
+    `status` is None for the failures that are not a status at all -- an
+    `{"error": ...}` body, a command with no token in it -- and a reader must
+    not read that as a code it can judge. It exists because a caller deciding
+    whether the *next* call could go differently needs the code rather than the
+    sentence: 401/403/404 are properties of the token or of what was asked for,
+    and re-issuing per item is a loop that cannot succeed. Parsing "HTTP 403"
+    back out of the message would be the same fact stated twice, in the place
+    least able to be right about it.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def parse_auth_token(docker_command):
@@ -98,7 +112,9 @@ class BzmClient:
             with urllib.request.urlopen(req, timeout=30) as r:
                 raw = r.read()
         except urllib.error.HTTPError as e:
-            raise BzmApiError(f"{method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:300]}") from e
+            raise BzmApiError(
+                f"{method} {path} -> HTTP {e.code}: "
+                f"{e.read().decode(errors='replace')[:300]}", status=e.code) from e
         if not raw:
             return None  # e.g. DELETE returns an empty body
         parsed = json.loads(raw)
@@ -122,7 +138,8 @@ class BzmClient:
                 parsed = json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
             raise BzmApiError(f"POST {path} -> HTTP {e.code}: "
-                              f"{e.read().decode(errors='replace')[:300]}") from e
+                              f"{e.read().decode(errors='replace')[:300]}",
+                              status=e.code) from e
         if parsed.get("error"):
             raise BzmApiError(f"POST {path} -> API error: {parsed['error']}")
         return parsed.get("result")
@@ -164,8 +181,48 @@ class BzmClient:
         """
         return self.get(f"/workspaces?accountId={account_id}&limit=1000")
 
+    def functionalities(self, account_id):
+        """What this account is entitled to, and what BlazeMeter calls each one.
+
+        The funcId vocabulary, from the account rather than from a table here:
+        `{"additionalSpace": N, "functionalities": [{"funcId", "size",
+        "displayName", "subFunctionalities"?}]}`. It is the authority on both
+        halves of the question a location's `funcIds` poses -- which exist, and
+        what they are called -- and it disagrees with a hand-written list in
+        both directions: real accounts serve funcIds this repo never listed
+        (tdm, dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle)
+        and no longer serve `functionalApi`, which locations created years ago
+        still carry.
+
+        `subFunctionalities` (functionalGui's 117 browser pins) is passed
+        through untouched -- nothing reads it yet.
+
+        Not paginated: it is an entitlement list, tens of entries at most.
+        """
+        return self.get(f"/accounts/{account_id}/functionalities")
+
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")
+
+    def ship_versions(self, harbor_id, ship_id):
+        """The images this location is configured to run, and their versions.
+
+        `{"resources": {<resource id>: {dockerTag, version, imageRelativePath,
+        dockerRegistry, restartPolicy, minSlots, ...}}}`. It is the same call
+        crane makes at startup -- a dead token answers it 404, which is the
+        `Sleeping for 300` failure -- so the answer is what the agent will
+        actually pull, not what somebody thought it would.
+
+        **It needs no live agent.** Read against agents in state `empty` that
+        had never been online, which is what makes it usable at the moment a
+        bundle is generated: the funcIds decide the set, so a performance
+        location answers with three images and a GUI one names the exact browser
+        build its browser funcIds pin.
+
+        Per agent rather than per location because that is the route BlazeMeter
+        serves; every agent in a location answered identically.
+        """
+        return self.get(f"/private-locations/{harbor_id}/ships/{ship_id}/versions")
 
     def private_locations(self, account_id=None, workspace_id=None):
         """All private locations for a workspace or account. The endpoint

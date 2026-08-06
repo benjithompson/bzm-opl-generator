@@ -341,16 +341,19 @@ function ProfileLine({ plan, agents, busy, touched }: {
   return (
     <div className={"space-y-1 " + (busy ? "opacity-50" : "")}>
       <p className="text-[11px] text-slate-500">
-        The profile — <b>{plan.users.toLocaleString()} virtual users</b> at{" "}
-        {plan.vus_per_engine.toLocaleString()} an engine — needs{" "}
+        {/* Every sizing in its own unit, because two of the three are not
+            virtual users -- and `plan.users` is null where no load test was
+            sized at all, which this sentence used to read straight through. */}
+        The sizing — <b>{plan.sizings.map(
+          (s) => `${s.target.toLocaleString()} ${s.unit}`).join(", ")}</b>
+        {" "}— needs{" "}
         <b>{plan.engines} engine{plan.engines === 1 ? "" : "s"}</b>, which is{" "}
         <b>{plan.engines_per_agent} per agent</b> across this location&apos;s{" "}
         {agents} agent{agents === 1 ? "" : "s"}, on{" "}
         {plan.nodes_per_agent} node{plan.nodes_per_agent === 1 ? "" : "s"} each.
         {touched && " The fields below were edited by hand and no longer follow it."}
       </p>
-      <PlanCaveats compact assumed={plan.vus_per_engine_assumed}
-        vusPerEngine={plan.vus_per_engine} warnings={plan.warnings} />
+      <PlanCaveats compact sizings={plan.sizings} warnings={plan.warnings} />
     </div>
   );
 }

@@ -68,11 +68,84 @@ export interface Options { [k: string]: unknown }
  *
  *  `vus_per_engine_assumed` is the field the panel must never drop: the whole
  *  plan is that number multiplied out, and nothing here can measure it. */
+/** One functionality's sizing model, from /api/sizing-models.
+ *
+ *  `measured` false is the field this list exists for: no figure for that unit
+ *  has ever been measured, so there is no per-pod box to offer and nothing to
+ *  default. That is a different answer from a figure nobody has supplied yet,
+ *  and the two must not share a control any more than they share a value. */
+export interface SizingModel {
+  /** The funcId, so it joins to `Functionality.id` and to a location's
+   *  `func_ids` by equality. */
+  functionality: string;
+  /** BlazeMeter's own display name, joined on in core. */
+  label: string;
+  /** What the target counts: "virtual users", "browser instances". */
+  unit: string;
+  /** What one pod carries, in that unit: "virtual users per engine". */
+  figure_unit: string;
+  /** What the plan calls the pods this model needs — "engines", "mock pods".
+   *  Never assume they are engines: a service-virtualization location carries
+   *  no taurus engine at all. */
+  pods: string;
+  measured: boolean;
+  /** A target to offer before anybody has typed one — the sizing this model's
+   *  default saved sizing carries. A starting point and never a
+   *  recommendation; served, because a number invented here for a model the
+   *  page has only just been told about is exactly the figure this tool never
+   *  measured. */
+  example_target: number;
+}
+
+/** What one pod of a given engine size is rated for, from /api/engine-vus.
+ *
+ *  Asked as soon as the size changes rather than waiting for a plan: the figure
+ *  is most use *before* a target is typed, because that is when the size is
+ *  being chosen.
+ *
+ *  `rated` is per model and **null** where that model has no measured per-pod
+ *  figure -- the same absence `SizingModel.measured` reports, arriving as the
+ *  value rather than as a rule the page has to know. It is why no field here
+ *  has to ask which model is the performance one. */
+export interface EngineRating {
+  cpu: string;
+  memory: string;
+  /** The performance model under the name doctor and `threadsPerEngine` call
+   *  it by. `rated.performance` is the same number; this is the one the
+   *  location settings speak in. */
+  supported_vus: number;
+  rated: Record<string, number | null>;
+}
+
+/** One model's answer inside a plan: its target, what a pod carries, and how
+ *  many pods that is. */
+export interface PlanSizing {
+  functionality: string;
+  unit: string;
+  target: number;
+  /** Null where no figure has been measured, which is also `pods` null: the
+   *  model was asked for and could not be answered, which is not the same as
+   *  a model that needs nothing. */
+  per_pod: number | null;
+  per_pod_unit: string;
+  /** Three answers, and they stay three. "assumed" is a figure this tool chose
+   *  from the pod size; "unmeasured" is one nobody has ever measured. */
+  per_pod_source: "supplied" | "assumed" | "unmeasured";
+  pods: number | null;
+  pods_label: string;
+}
+
 export interface CapacityPlan {
-  /** Virtual users: the load target. A location holds agents, an agent runs
-   *  engines, and each engine drives virtual users -- that hierarchy is the
-   *  vocabulary this whole panel speaks. */
-  users: number;
+  /** Virtual users: the performance model's target, and **null** when no load
+   *  test was sized. A location holds agents, an agent runs engines, and each
+   *  engine drives virtual users -- that hierarchy is the vocabulary this
+   *  whole panel speaks, but it is only one of the three sizings. */
+  users: number | null;
+  /** Every model asked for, in the server's own order. */
+  sizings: PlanSizing[];
+  /** The funcId of the model the pod count came from: where several were
+   *  sized, the largest decides and this says which it was. */
+  driven_by: string;
   vus_per_engine: number;
   vus_per_engine_assumed: boolean;
   engines: number;
@@ -320,21 +393,34 @@ export const api = {
    *  planner panel works with nothing connected -- see core.capacity_plan.
    *  Blank fields are sent as typed; the server reads "" as "not given". */
   plan: (body: {
-    users: string; vus_per_engine?: string; engine_cpu?: string;
+    users?: string; vus_per_engine?: string; engine_cpu?: string;
     engine_mem?: string; engines_per_node?: string; agents?: string;
+    /** One row per functionality being sized, each in that model's own unit.
+     *  `users` is the performance model's shorthand and still taken; a caller
+     *  sizing more than one thing sends rows and nothing else. */
+    sizings?: { functionality: string; target: string; figure?: string }[];
   }) => req<CapacityPlan>("POST", "/api/plan", body),
-  /** What an engine of this size is rated for, so a field can suggest it. The
-   *  ratio stays on the server -- doctor judges locations against the same one,
-   *  and a second copy here is how the two come to disagree. */
+  /** What each functionality is sized in — plan.SIZING_MODELS with the
+   *  account's label joined on. Served for the reason `functionalities` is: the
+   *  card renders a field group per model, and a fourth model has to reach it
+   *  by being added to the table rather than by an edit here. */
+  sizingModels: () => req<SizingModel[]>("GET", "/api/sizing-models"),
+  /** What a pod of this size is rated for, per model, so a field can suggest
+   *  it. The ratios stay on the server -- doctor judges locations against the
+   *  same one, and a second copy here is how the two come to disagree. */
   engineVus: (cpu: string, mem: string) =>
-    req<{ cpu: string; memory: string; supported_vus: number }>(
+    req<EngineRating>(
       "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
   /** What the account can generate, by workspace. See core.account_capacity
    *  for what "rated" means and why a shared location is counted once. */
   capacity: (accountId: number) =>
     req<Capacity>("GET", `/api/capacity?account_id=${accountId}`),
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
-  funcIdChoices: () => req<FuncIdChoice[]>("GET", "/api/func-ids"),
+  /** The funcId vocabulary. `accountId` is optional and the page uses both
+   *  answers: the covered baseline on mount, when there is no key to ask with,
+   *  and the account's own list the moment one is chosen. */
+  funcIdChoices: (accountId?: number) => req<FuncIdChoice[]>(
+    "GET", accountId ? `/api/func-ids?account_id=${accountId}` : "/api/func-ids"),
   functionalities: () => req<Functionality[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
   /** {option: why} for the options a docker bundle drops — generate's own
@@ -353,8 +439,18 @@ export const api = {
    *  name a control on this page already writes (core.agent_env). Served, so
    *  the page offers exactly what is left over: an option removed from the
    *  generator hands its variable back to this list, and one added takes it
-   *  away, without a second table here agreeing to it. */
-  agentEnv: () => req<AgentEnvVar[]>("GET", "/api/agent-env"),
+   *  away, without a second table here agreeing to it.
+   *
+   *  `funcIds` scopes it to what the location runs, and the scoping is done
+   *  there rather than here so that the CLI and the MCP server get the same
+   *  answer (#150). Absent — which is `null`/`undefined`, and reaches the route
+   *  as no parameter at all — is nobody having said yet, and offers the
+   *  reference whole; `[]` is a location running nothing this tool covers, and
+   *  offers only what every agent reads. Two reads, never one. */
+  agentEnv: (funcIds?: string[] | null) => req<AgentEnvVar[]>(
+    "GET", funcIds == null
+      ? "/api/agent-env"
+      : "/api/agent-env?" + new URLSearchParams({ func_ids: funcIds.join(",") })),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
@@ -432,17 +528,28 @@ export type SvConstants = {
   backends: Record<string, SvBackend>;
 };
 
-/** Likewise served: facts.CATEGORY_BY_FUNC owns the vocabulary, and the copy
- *  that used to live here is how sv-bridge went missing from the create form.
- *  `label` falls back to the raw id server-side, so an unlabelled funcId is
- *  offered rather than dropped.
+/** Likewise served, and the account's rather than anybody's table: `label` is
+ *  BlazeMeter's own display name, so the words on this page are the words in the
+ *  customer's own UI. It falls back to the raw funcId server-side, so one the
+ *  account serves without a name is offered rather than dropped.
+ *
+ *  With no account the answer is the covered baseline -- the three funcIds this
+ *  tool configures -- because this is asked for on mount, before a key exists,
+ *  and manual entry never has an account at all. Pass `accountId` once there is
+ *  one and the account's own list replaces it (see core.func_ids).
+ *
+ *  `covered` is the difference between a funcId this tool has option groups and
+ *  images for and one it can only name. Served rather than derived here: a page
+ *  that showed `delphix` beside `performance` with nothing to tell them apart
+ *  would be offering to configure something no bundle can.
  *
  *  `changes_images` is false for a funcId that needs the same images as one
- *  already offered -- functionalApi is "the taurus engine", exactly as
- *  performance is. Creating a location keeps the full list, because BlazeMeter
+ *  already offered. Creating a location keeps the full list, because BlazeMeter
  *  distinguishes them there; the manual form, where the only thing a funcId
  *  does is pick images, offers only the ones that change the answer. */
-export type FuncIdChoice = { id: string; label: string; changes_images: boolean };
+export type FuncIdChoice = {
+  id: string; label: string; changes_images: boolean; covered: boolean;
+};
 
 /** How reading the namespace ended. The watch panel is the only thing in this
  *  client that needs a cluster, and the only one allowed to: cluster access is
@@ -453,22 +560,38 @@ export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks
 
 /** One functionality the configure step can be pointed at, from
  *  /api/functionalities. The list is served for the same reason as the two
- *  above -- functional testing,
- *  secrets and API monitoring are expected to follow, and a functionality has to
- *  become selectable by being added to the vocabulary, not by an edit here.
- *  Option groups tag themselves with `id` (see optionGroups.ts); nothing in the
- *  frontend enumerates the functionalities themselves. */
+ *  above -- secrets, TDM and data orchestration are expected to follow, and a
+ *  functionality has to become selectable by being added to the vocabulary, not
+ *  by an edit here. Option groups tag themselves with `id` (see
+ *  optionGroups.ts); nothing in the frontend enumerates the functionalities
+ *  themselves. */
 export interface Functionality {
+  /** **The funcId** (#149), so a location's `func_ids` join to these by
+   *  equality. There is no list of claimed funcIds here any more: one entry
+   *  claiming four was why a card over a `performance`-only location was
+   *  labelled "Performance & functional testing", and a per-functionality list
+   *  is a translation table between this tool's ids and BlazeMeter's. A funcId
+   *  no entry has is simply not covered -- named on the page, configured
+   *  nowhere. */
   id: string;
+  /** BlazeMeter's own display name, so it reads as the customer's location
+   *  settings read. */
   label: string;
   hint?: string;
   /** Suggested, never forced: applied only while the namespace field still
    *  holds a namespace some functionality suggested. Served with the label so the
    *  suggestion extends with the vocabulary. */
   namespace: string;
-  /** The location funcIds that mean a location has this functionality. A location's
-   *  funcIds may include ones no functionality claims -- that is not an error. */
-  func_ids: string[];
+  /** Does this functionality's agent carry a taurus engine? Which is what makes
+   *  "engine size" a true statement about its pod limits, and what service
+   *  virtualization is declared apart from.
+   *
+   *  Served (facts.CATEGORY_BY_FUNC, read off real single-functionality
+   *  locations' /versions) rather than kept here: it was
+   *  `ENGINE_FUNCTIONALITIES`, two funcIds written out in optionGroups.ts, and
+   *  a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED` and
+   *  the funcId vocabulary are served to avoid. */
+  runs_engine: boolean;
 }
 
 /** One agent variable the environment area offers, from /api/agent-env --
@@ -488,6 +611,11 @@ export interface AgentEnvVar {
    *  -- a variable the agent under this bundle has no reader for is a setting
    *  that would go quietly nowhere. */
   platforms: string[];
+  /** The funcIds whose agent reads it, empty meaning every location — the same
+   *  rule `OptionGroup.functionalities` follows. The *filtering* is the
+   *  server's (see `agentEnv` below), so this is here to be read rather than
+   *  applied: what a row is here for, not whether it is here. */
+  functionalities: string[];
   summary: string;
   default: string | null;
   example: string | null;

@@ -20,10 +20,18 @@ and an option removed later hands its variable back to this list without anyone
 remembering to. Declaring only the leftovers would be the same table written
 twice, out of sync at the first change.
 
-**The platform is part of the record.** The page has two tables and they are
-not the same table: HOSTNAME_OVERRIDE and TLS_CERT are Docker's, the
-KUBERNETES_* half is not, and a form that offered all of them would be offering
-a setting the agent under the bundle has no reader for.
+**The platform is part of the record, and so is the functionality.** They are
+two different questions and a performance location was being offered the answer
+to both. The page has two tables and they are not the same table:
+HOSTNAME_OVERRIDE and TLS_CERT are Docker's, the KUBERNETES_* half is not, and a
+form that offered all of them would be offering a setting the agent under the
+bundle has no reader for. Beside that, a variable can be documented for this
+platform and still reach nothing the *location* runs -- the Grid proxy's port on
+a location with no grid -- so each row also names the functionalities that read
+it, empty meaning every location. `core.agent_env()` applies both filters at the
+point it is served, for the same reason it subtracts RESERVED_ENV there:
+declaring only what a given location is offered would be this table written once
+per location.
 
 **The type is what the control is chosen from.** A boolean gets a three-way
 control rather than a text box (see `env.ts` for why three), an integer a number
@@ -52,9 +60,23 @@ DOC_URL = ("https://help.blazemeter.com/docs/guide/"
            "private-locations-blazemeter-agent-environment-variables.html")
 
 
-def _v(name, type_, platforms, summary, default=None, example=None):
+def _v(name, type_, platforms, summary, default=None, example=None,
+       functionalities=()):
+    """One row of the reference.
+
+    `functionalities` is read exactly the way `OptionGroup.functionalities` is
+    on the page: the funcIds whose agent has a reader for this variable, and
+    **empty means every location**. Empty is therefore both "agent-wide" and
+    "nobody has decided", which is the safe direction to be wrong in -- a
+    variable offered where it reaches nothing costs a row, one filtered out
+    where it was needed costs the setting. The reserved names below are
+    untagged for that reason and no other: nothing offers them, so there is no
+    decision to record, and if an option is removed later its variable comes
+    back offered to everyone rather than to nobody.
+    """
     return {"name": name, "type": type_, "platforms": list(platforms),
-            "summary": summary, "default": default, "example": example}
+            "summary": summary, "default": default, "example": example,
+            "functionalities": list(functionalities)}
 
 
 # Transcribed in the page's own order, Docker's table first and then the
@@ -120,11 +142,24 @@ AGENT_ENV = (
        "Network interface to read the machine's IP address from",
        default="the first interface that is not docker0 or lo",
        example="eth0"),
+    # Doduo is BlazeMeter's Selenium *grid* proxy, which is why this and the two
+    # _GRID certificates below are GUI functional's rather than agent-wide.
+    # Not a new claim: `facts.IMAGE_CATEGORY` already classifies the `doduo`
+    # image as `gui`, and a live functionalGui location's /versions carries
+    # blazemeter/doduo where a performance-only location's does not -- so the
+    # tag agrees with a table this repo already had rather than asserting
+    # something beside it.
     _v("DODUO_PORT", "int", BOTH,
-       "Port the BlazeMeter Grid proxy (Doduo) listens on", default="8000"),
+       "Port the BlazeMeter Grid proxy (Doduo) listens on", default="8000",
+       functionalities=["functionalGui"]),
     # -- virtual services: how they are published
+    # BlazeMeter's own reference defines this one, TLS_CERT and TLS_KEY against
+    # "transactional virtual services", which is service virtualization -- the
+    # sentence is in the summaries below, and the tag is that sentence read as
+    # data.
     _v("HOSTNAME_OVERRIDE", "string", (DOCKER,),
-       "Hostname for transactional virtual services created on this agent"),
+       "Hostname for transactional virtual services created on this agent",
+       functionalities=["mockServices"]),
     _v("KUBERNETES_WEB_EXPOSE_TYPE", "string", (KUBERNETES,),
        "How virtual services are published: INGRESS, CONTOUR or ISTIO"),
     _v("KUBERNETES_WEB_EXPOSE_SUB_DOMAIN", "string", (KUBERNETES,),
@@ -138,26 +173,32 @@ AGENT_ENV = (
     _v("KUBERNETES_WEB_EXPOSE_SHORT_URL", "bool", (KUBERNETES,),
        "Shorter ingress URLs, omitting namespace and container port. Limits a "
        "container to one exposed port",
-       default="false"),
+       default="false", functionalities=["mockServices"]),
     _v("KUBERNETES_SERVICE_USE_TYPE", "string", (KUBERNETES,),
        "Service type for virtual services: NODEPORT or CLUSTERIP",
        default="NODEPORT"),
     _v("KUBERNETES_SERVICES_BLOCKING_GET", "bool", (KUBERNETES,),
        "Wait for each Service to be readable before continuing. For agents "
        "creating many transactional virtual services at once",
-       default="false"),
+       default="false", functionalities=["mockServices"]),
     _v("KUBERNETES_USE_APIPA", "bool", (KUBERNETES,),
        "Publish endpoints on the node's IP address rather than 127.0.0.1",
-       default="true"),
-    # -- TLS material for the endpoints the agent serves itself
+       default="true", functionalities=["mockServices"]),
+    # -- TLS material for the endpoints the agent serves itself. The first pair
+    # is the domain HOSTNAME_OVERRIDE names, so it goes where that does; the
+    # _GRID pair is Doduo's, so it goes where DODUO_PORT does.
     _v("TLS_CERT", "pem", (DOCKER,),
-       "Public certificate for the domain in HOSTNAME_OVERRIDE"),
+       "Public certificate for the domain in HOSTNAME_OVERRIDE",
+       functionalities=["mockServices"]),
     _v("TLS_KEY", "pem", (DOCKER,),
-       "Private key for the domain in HOSTNAME_OVERRIDE"),
+       "Private key for the domain in HOSTNAME_OVERRIDE",
+       functionalities=["mockServices"]),
     _v("TLS_CERT_GRID", "pem", BOTH,
-       "Public certificate for the domain the Grid proxy serves over HTTPS"),
+       "Public certificate for the domain the Grid proxy serves over HTTPS",
+       functionalities=["functionalGui"]),
     _v("TLS_KEY_GRID", "pem", BOTH,
-       "Private key for the domain the Grid proxy serves over HTTPS"),
+       "Private key for the domain the Grid proxy serves over HTTPS",
+       functionalities=["functionalGui"]),
     # -- what the agent puts on the objects it creates
     _v("KUBERNETES_LABELS", "json_object", (KUBERNETES,),
        "Labels added to every object the agent creates",

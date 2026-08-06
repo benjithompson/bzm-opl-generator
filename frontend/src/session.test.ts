@@ -21,19 +21,27 @@ const BASE = {
   harborId: "h1",
   shipId: "s1",
   manual: { harbor_id: "", ship_id: "" },
-  // Connected, so nothing was declared: the functionality is derived from the
-  // location's funcIds, and a value here would pin a restored page to one the
-  // account never said. Manual entry is the case that carries one.
-  declaredFunctionality: null,
+  // Connected, so nothing was declared: the functionalities are derived from
+  // the location's funcIds, and a value here would pin a restored page to one
+  // the account never said. Manual entry is the case that carries one.
+  declaredFunctionalities: [] as string[],
   // Confirmed, and of *these* ids: step 1 is finished when somebody has said
   // so, and a refresh is not a reason to ask again.
   confirmed: { loc: "h1", ship: "s1" },
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
-  // The two figures the sizing owns. Its engine size is a bundle
-  // option and is remembered with the rest of them.
-  plan: { users: "5000", vusPerEngine: "750" },
+  // What the sizing owns: which functionalities are being sized and what each
+  // was asked for, in its own unit. Its engine size is a bundle option and is
+  // remembered with the rest of them.
+  plan: { functionalities: ["performance", "functionalGui"],
+          targets: { performance: "5000", functionalGui: "20" },
+          figures: { performance: "750" } },
+  // ...and the sizings saved under a name, defaults included: they are edited
+  // here and nowhere else, so nothing else could put them back.
+  sizings: [{ name: "Black Friday",
+              inputs: { functionalities: ["performance"],
+                        targets: { performance: "40000" }, figures: {} } }],
 };
 
 beforeEach(() => {
@@ -54,12 +62,19 @@ describe("what is remembered", () => {
 
   it("round-trips what manual entry declared the identity runs", () => {
     // The one input deciding the bundle that a refresh used to lose: it names
-    // the funcId the facts are gathered for, which names the images. Stored as
-    // the functionality it declared, so the page can check it against the served
-    // vocabulary rather than trust it -- the same reason the confirmations are
-    // stored as the ids they were made against.
-    save({ ...BASE, sourceMode: "manual", declaredFunctionality: "sv" });
-    expect(load()?.declaredFunctionality).toBe("sv");
+    // the funcIds the facts are gathered for, which name the images. Stored as
+    // the functionalities it declared, so the page can check them against the
+    // served vocabulary rather than trust them -- the same reason the
+    // confirmations are stored as the ids they were made against.
+    //
+    // A list, not one id (#151): a single value was tenable while `performance`
+    // claimed four funcIds, and since #149 it is not -- 71 of 168 locations in
+    // one real account run performance and GUI functional together, and an
+    // identity declared for both has to come back declared for both.
+    save({ ...BASE, sourceMode: "manual",
+           declaredFunctionalities: ["performance", "functionalGui"] });
+    expect(load()?.declaredFunctionalities)
+      .toEqual(["performance", "functionalGui"]);
   });
 
   it("returns null when nothing was stored", () => {
@@ -73,8 +88,13 @@ describe("what is remembered", () => {
     save({ ...BASE, view: "capacity" });
     const back = load();
     expect(back?.view).toBe("capacity");
-    expect(back?.plan.users).toBe("5000");
-    expect(back?.plan.vusPerEngine).toBe("750");
+    expect(back?.plan.targets.performance).toBe("5000");
+    expect(back?.plan.figures.performance).toBe("750");
+    expect(back?.plan.functionalities).toEqual(["performance", "functionalGui"]);
+    // A saved sizing survives a refresh whole: its name, and everything the
+    // fields would be filled with by picking it.
+    expect(back?.sizings?.[0].name).toBe("Black Friday");
+    expect(back?.sizings?.[0].inputs.targets.performance).toBe("40000");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

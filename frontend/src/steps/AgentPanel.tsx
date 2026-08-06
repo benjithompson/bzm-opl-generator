@@ -29,6 +29,11 @@ import {
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
 } from "../components";
 import { LocationSettings } from "../groups/LocationSettings";
+// The funcId list of a location being created is a declaration like manual
+// entry's, so it is edited by the same function and keeps the same rule: see
+// sv.exclusiveWith for why service virtualization is created on its own.
+import { toggleDeclared } from "../optionGroups";
+import { exclusiveWith, SV_ALONE } from "../sv";
 import { ManualSource } from "../groups/ManualSource";
 // Whether an agent is reporting, from one module rather than from a function
 // this panel is handed. Two readers here -- the count on a location's row and
@@ -88,6 +93,12 @@ export interface NewLocationHandover {
   /** What a location may be for. Served (facts.CATEGORY_BY_FUNC), never spelled
    *  in the frontend -- the copy that used to be here lost sv-bridge. */
   choices: FuncIdChoice[];
+  /** Which of those funcIds run a taurus engine, from the served `runs_engine`
+   *  -- what `exclusiveWith` applies its one rule against. Handed down rather
+   *  than derived here for the reason `choices` is: the answer is a Python
+   *  table, and this form offers the account's whole vocabulary rather than the
+   *  three functionalities the page configures. */
+  engines: string[];
   /** What Create is waiting for, as the sentence it shows; "" when ready. */
   blockedBy: string;
   submit: () => Promise<void>;
@@ -370,8 +381,8 @@ export function AgentPanel({
             summary={location
               ? `${location.name} · ${location.slots ?? "?"} engine(s)/agent`
               : "none selected"}
-            hint="A location holds agents. Open one to see what the capacity
-                  profile would change about it, and to save that change.">
+            hint="A location holds agents. Open one to see what the sizing
+                  above would change about it, and to save that change.">
             <div className="space-y-3">
               {/* Neither picker is here any more: both are at the foot of the
                   nav drawer with the key, because the account decides what
@@ -767,12 +778,22 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
           {create.choices.map((c) => (
             <Check key={c.id} label={c.label}
               checked={draft.func_ids.includes(c.id)}
+              // The same rule the manual declaration keeps, at the other
+              // surface that *decides* what a location is: service
+              // virtualization is created on its own, because crane sizes every
+              // pod it creates from one CPU/memory pair. `toggleDeclared` is
+              // also what keeps the list in the order the boxes are drawn and
+              // free of the duplicate the old spread could produce.
               onChange={(on) => setDraft((d) => ({
                 ...d,
-                func_ids: on ? [...d.func_ids, c.id]
-                  : d.func_ids.filter((x) => x !== c.id),
+                func_ids: toggleDeclared(d.func_ids, c.id, on,
+                                         create.choices.map((x) => x.id),
+                                         exclusiveWith(create.engines)),
               }))} />
           ))}
+          {/* Said whether or not it has happened yet: a rule that only speaks
+              up after it has taken a tick away reads as the form losing one. */}
+          <p className="basis-full text-[11px] text-slate-500">{SV_ALONE}</p>
         </div>
         <Field label="Slots" hint="concurrent engines">
           <NumberInput className="w-20" value={String(draft.slots)}

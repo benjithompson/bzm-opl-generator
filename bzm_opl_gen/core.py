@@ -1107,8 +1107,9 @@ def bundle_images(facts, all_images=False):
 
 # -- planning, before any of the above exists ---------------------------------
 
-def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=None, agents=None):
+def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None, agents=None,
+                  sizings=None):
     """What a load target needs, as numbers and as a document to request it with.
 
     The only thing here that reaches nothing at all -- no key, no account, no
@@ -1129,7 +1130,8 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         p = plan.capacity_plan(
             users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
-            engines_per_node=engines_per_node, agents=agents)
+            engines_per_node=engines_per_node, agents=agents,
+            sizings=sizings)
     except ValueError as e:
         # Every one of these is the caller's number rather than a failure here,
         # and each names the field it is about. 400, not 500.
@@ -1139,14 +1141,62 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
                 document_file=plan.DOCUMENT_FILE)
 
 
-def engine_vus(engine_cpu=None, engine_mem=None):
-    """How many virtual users an engine of this size is rated for.
+def sizing_models():
+    """What each covered functionality is sized in, for the card that asks.
 
-    The same ratio capacity_plan assumes from and doctor judges against, asked
-    on its own so a form can *suggest* the figure beside the field rather than
+    `plan.SIZING_MODELS` with BlazeMeter's own label joined on. The join is here
+    and not there because `plan` reaches nothing -- including this module -- so
+    it carries prose of its own rather than the account's display names, and a
+    surface that shows a card next to a location's settings wants the words the
+    location's settings use.
+
+    Served for the reason `functionalities()` is: the page renders a field per
+    model, and a fourth model has to reach it by being added to the table rather
+    than by an edit in TypeScript.
+
+    `measured` is the whole point of the list on the page. False means no figure
+    for that unit has ever been measured here, so there is no per-pod box to
+    offer and nothing to default -- which is a different answer from a figure
+    the caller has not supplied yet, and the two must not share a control any
+    more than they share a value.
+    """
+    labels = covered_func_ids()
+    return [{"functionality": fid,
+             "label": labels.get(fid, m["name"]),
+             "unit": m["unit"],
+             "target_field": m["target_field"],
+             "figure_field": m["figure_field"],
+             "figure_unit": m["figure_unit"],
+             "measured": m["baseline"] is not None,
+             "pods": m["pods"],
+             # A sizing to offer before anybody has typed one. Served rather
+             # than written on the page for the reason the units are: a fourth
+             # model has to arrive with an example of its own, and a number
+             # invented in TypeScript for a unit it has just been told about is
+             # a recommendation nobody made.
+             "example_target": m["example_target"]}
+            for fid, m in plan.SIZING_MODELS.items()]
+
+
+def engine_vus(engine_cpu=None, engine_mem=None):
+    """What a pod of this size is rated for, in each model's own unit.
+
+    The same ratios capacity_plan assumes from and doctor judges against, asked
+    on their own so a form can *suggest* the figure beside the field rather than
     leaving "virtual users per engine" as a number the user has to know. 500 is
     only right for the 2 CPU / 8Gi engine, which is exactly the mistake the
     planner's own default used to make.
+
+    `rated` is per functionality, and **None** where that model has no measured
+    per-pod figure -- which is service virtualization, and is why the card can
+    render this answer beside any model rather than branching on which one is
+    performance. The card did branch, having only the one number to render, so
+    a GUI Functional field said "blank uses what a pod of this size is rated
+    for" about a figure this route could already have given it.
+
+    `supported_vus` stays beside it: it is the performance model under the name
+    `doctor` and `threadsPerEngine` call it by, which is a different question
+    from "what may this field suggest".
     """
     try:
         cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
@@ -1155,7 +1205,9 @@ def engine_vus(engine_cpu=None, engine_mem=None):
         raise BadRequest(str(e))
     return {"cpu": gen_mod.format_cpu(cpu),
             "memory": gen_mod.format_memory(mem),
-            "supported_vus": plan.supported_vus(cpu, mem)}
+            "supported_vus": plan.supported_vus(cpu, mem),
+            "rated": {fid: plan.per_pod_capacity(fid, cpu, mem)
+                      for fid in plan.SIZING_MODELS}}
 
 
 def account_capacity(client, account_id):
@@ -1643,53 +1695,39 @@ def option_docs():
             for o in options_mod.OPTIONS}
 
 
-# Display names only -- the vocabulary itself is facts.CATEGORY_BY_FUNC, which
-# already has to list every funcId to pick the right images. A funcId missing
-# from here is served under its raw name rather than dropped.
-FUNC_ID_LABELS = {
-    "performance": "Performance",
-    "functionalApi": "Functional API",
-    "functionalGui": "Functional GUI",
-    "mockServices": "Mock Services",
-    "proxyRecorder": "Proxy Recorder",
-}
-
-
-def func_ids():
-    """The funcIds a location can be created with, in declaration order.
-
-    Served rather than restated by each caller: the create-location form used
-    to hold its own list in TypeScript, and whatever was missing from that copy
-    could not be selected from the UI at all. Derived from the facts layer, so
-    adding a funcId there -- already required for its images to be selected --
-    is the only edit needed.
-
-    `changes_images` marks the ones worth offering where a funcId's only job is
-    to pick images -- the manual-entry form. functionalApi and performance both
-    mean "the taurus engine", so offering both there is a choice that cannot
-    change the output. Answered here rather than filtered by the caller for the
-    same reason the list itself is: a copy in the frontend is how the
-    vocabulary and the thing it describes drift apart.
-    """
-    distinct = set(facts_mod.image_distinct_funcs())
-    return [{"id": f, "label": FUNC_ID_LABELS.get(f, f),
-             "changes_images": f in distinct}
-            for f in facts_mod.CATEGORY_BY_FUNC]
-
-
 # The functionalities a bundle can be configured for -- BlazeMeter's own word
-# for what a private location is enabled to do. The UI shows one functionality's
-# options at a time and builds its selector from this list, so a functionality
-# becomes offered by being added here -- the frontend enumerates nothing. The
-# other half of adding one is tagging whichever option groups it owns with its
-# `id`; a functionality no group is tagged with is still selectable and shows
-# the groups that apply to any deployment (registry, proxy, CA trust,
-# scheduling).
+# for what a private location is enabled to do. The configure step shows a card
+# each and the option groups tag themselves with an `id`, so a functionality
+# becomes offered by being added here; the frontend enumerates nothing. The
+# other half of adding one is tagging whichever option groups it owns; a
+# functionality no group names still gets a card, saying it has nothing of its
+# own beyond the groups every deployment gets (registry, proxy, CA trust,
+# scheduling) -- "nothing to configure" and "not shown" being different answers.
 #
-# `func_ids` is how a location's funcIds pick the functionality to start on.
-# Locations carry funcIds no functionality claims (tdm, dataPublisher, delphix,
-# secretsPrivateVault); those are no signal rather than an error, which is what
-# lets this list model less than the account does.
+# **One entry per covered funcId, and `id` is the funcId** (#149). It was two
+# entries and `performance` claimed four funcIds -- performance, functionalApi,
+# functionalGui, proxyRecorder -- so its label had to name all of them:
+# "Performance & functional testing", printed over a location whose only funcId
+# is `performance`. A per-functionality list of funcIds is a translation table
+# between this tool's ids and BlazeMeter's, and the 1:1 mapping is what exists
+# instead of one -- a location's funcId *is* the id, read in either direction
+# with nothing to look up.
+#
+# Three, deliberately: an account offers nine, and the difference is the whole
+# reason a funcId row has to say which kind it is (`covered`, below). The two
+# that lost their card are the retired `functionalApi` and `proxyRecorder`,
+# which have no options here; a location carrying only those claims no
+# functionality, which the page reads as nobody having answered and names on
+# screen rather than folding into a card.
+#
+# The labels are the account's, transcribed from
+# GET /accounts/{id}/functionalities, because they are also the words the
+# customer sees in their own location settings. Written down rather than fetched
+# because this is the **keyless** answer: the page asks for the vocabulary on
+# mount, before a key has been pasted let alone an account chosen
+# (App.test.tsx drives the entire page that way), and manual entry never has an
+# account at all. Using BlazeMeter's own words is what keeps the handover
+# silent -- nothing renames itself when an account arrives.
 #
 # `namespace` is a suggestion, applied only while the field still holds one --
 # a namespace per functionality is what keeps redeploying one agent from taking
@@ -1697,30 +1735,108 @@ def func_ids():
 FUNCTIONALITIES = [
     {
         "id": "performance",
-        "label": "Performance & functional testing",
-        "hint": "load and functional tests -- engines started on demand",
+        "label": "Performance",
+        "hint": "load tests -- engines started on demand",
         "namespace": "blazemeter",
-        # Every non-SV funcId the facts layer models: the recorder and the
-        # functional suites all run on this agent, so they configure as it.
-        "func_ids": ["performance", "functionalApi", "functionalGui",
-                     "proxyRecorder"],
     },
     {
-        "id": "sv",
-        "label": "Service virtualization",
+        "id": "functionalGui",
+        "label": "GUI Functional",
+        # Read off a real single-functionality location's
+        # /private-locations/{h}/ships/{s}/versions: apm, crane, v4, doduo and a
+        # pinned charmander browser -- the taurus engine plus the grid.
+        "hint": "browser tests -- a Selenium grid and browser pods "
+                "beside the engine",
+        "namespace": "blazemeter-gui",
+    },
+    {
+        "id": "mockServices",
+        "label": "Service Virtualization",
         "hint": "virtual services / mocks -- needs an ingress",
         "namespace": "blazemeter-sv",
-        # Which funcIds mean SV is generate.SV_FUNC_IDS', the same list
-        # sv_constants serves and _sv_cfg validates against.
-        "func_ids": list(gen_mod.SV_FUNC_IDS),
     },
 ]
 
 
 def functionalities():
-    """The functionalities the configure step can be pointed at, in selector
-    order."""
-    return FUNCTIONALITIES
+    """The functionalities the configure step offers, in card order.
+
+    `runs_engine` says whether this functionality's agent carries a taurus
+    engine, which is what makes "engine size" a true statement about its pod
+    limits. Derived from `facts.CATEGORY_BY_FUNC` rather than declared beside
+    the rows: that table already holds the answer, read off real
+    single-functionality locations' /versions. It is served for the reason the
+    list itself is -- the page kept the same two ids as a literal of its own,
+    and a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED`
+    exists to keep from happening again.
+
+    Derived here rather than stored on FUNCTIONALITIES so the two cannot fall
+    out of step, and so a test that monkeypatches the list is followed --
+    `covered_func_ids` is a function for the same reason.
+    """
+    return [{**f, "runs_engine": facts_mod.runs_engine(f["id"])}
+            for f in FUNCTIONALITIES]
+
+
+def covered_func_ids():
+    """The funcIds this tool covers, as {funcId: label} -- which is the
+    functionalities read as a vocabulary.
+
+    Derived rather than declared beside them: `covered` on a funcId row and
+    having a card on the configure step are the same fact, and two tables of it
+    are two answers to the one question a row exists to ask. A function rather
+    than a module constant so a test that monkeypatches FUNCTIONALITIES is
+    followed here too -- the aliasing trap `server` is kept clear of, one module
+    in.
+    """
+    return {f["id"]: f["label"] for f in FUNCTIONALITIES}
+
+
+def func_ids(client=None, account_id=None):
+    """The funcId vocabulary: what a location can be created with, and what
+    each funcId a location already carries is called.
+
+    The account's, where there is one -- BlazeMeter serves the list and the
+    display names, and a table written here disagreed with it in both
+    directions: it was missing five funcIds real locations carry (tdm,
+    dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle) and it
+    offered `functionalApi`, which the account has retired. Dropping it from
+    what a location can be *created* with therefore needs no rule: it is simply
+    not in the answer. Reading it off a location that already has one is
+    untouched, and 43 of one account's 168 locations still do.
+
+    With no account -- no key yet, or manual entry, which never has one -- the
+    answer is covered_func_ids(): the three this tool configures, under the
+    names the account would give them.
+
+    `covered` says which of those two an entry is. A row this tool can only
+    name is still served, because a page that dropped it would say nothing
+    about a functionality the location runs, and silence there reads as
+    coverage.
+
+    `changes_images` marks the ones worth offering where a funcId's only job is
+    to pick images -- the manual-entry form. Two funcIds needing the same image
+    categories generate byte-identical manifests, so offering both there is a
+    choice with no consequence. Answered here rather than filtered by the
+    caller for the same reason the list itself is served: a copy in the
+    frontend is how a vocabulary and the thing it describes drift apart.
+    """
+    covered = covered_func_ids()
+    if client is None or account_id is None:
+        rows = list(covered.items())
+    else:
+        served = _upstream(client.functionalities, account_id) or {}
+        # `displayName` falling back to the funcId rather than to a table here:
+        # an entry the account added and never named is offered under its raw
+        # id, which is exactly what a location carrying it would show.
+        # `subFunctionalities` is left alone -- consuming it is #152's.
+        rows = [(f["funcId"], f.get("displayName") or f["funcId"])
+                for f in served.get("functionalities") or [] if f.get("funcId")]
+    distinct = set(facts_mod.image_distinct_funcs())
+    return [{"id": f, "label": label,
+             "changes_images": f in distinct,
+             "covered": f in covered}
+            for f, label in rows]
 
 
 def docker_ignored():
@@ -1758,27 +1874,50 @@ def reserved_env():
             for name in sorted(gen_mod.RESERVED_ENV)}
 
 
-def agent_env():
-    """The agent variables `extra_env` can usefully carry: BlazeMeter's own
-    documented reference, minus every name this generator already writes.
+def agent_env(func_ids=None):
+    """The agent variables `extra_env` can usefully carry on a location running
+    `func_ids`: BlazeMeter's own documented reference, minus every name this
+    generator already writes, minus everything that reaches a functionality this
+    location does not run.
 
-    The subtraction is the point, and it happens here rather than in the table.
-    `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN, the proxy trio,
-    the engine limits and the rest of RESERVED_ENV included -- because each of
-    those already has a control of its own on the configure step, and this list
-    is what is *left*: the variables with no setting here, which is the only
-    reason `extra_env` exists. Declaring only the leftovers would be the same
-    table kept twice, and an option removed later would take its variable out of
-    the reference instead of handing it back.
+    The subtraction is the point, and both halves of it happen here rather than
+    in the table. `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN,
+    the proxy trio, the engine limits and the rest of RESERVED_ENV included --
+    because each of those already has a control of its own on the configure
+    step, and this list is what is *left*: the variables with no setting here,
+    which is the only reason `extra_env` exists. Declaring only the leftovers
+    would be the same table kept twice, and an option removed later would take
+    its variable out of the reference instead of handing it back. Filtering by
+    functionality at the same point is what puts the CLI, the MCP server and the
+    page on one answer: a table declared per location would be the reference
+    written once per location.
+
+    `func_ids` is the location's own -- functionality ids *are* funcIds
+    (#149) -- and the three states are three:
+
+    - `None` for nobody having said, which offers everything. It is what the
+      page mounts in, before a key is pasted or a location picked, and it is
+      the direction that shows a field too many rather than hiding one somebody
+      needs. `runsFunctionality` reads an unanswered enablement the same way.
+    - a list, which offers the variables no functionality claims plus the ones
+      claimed by a functionality in it. An id nothing claims -- `tdm`,
+      `delphix`, the funcIds real accounts carry that this tool has no options
+      for -- narrows nothing, because the filter reads what a tag claims rather
+      than what a location holds.
+    - `[]`, which is a location running nothing this tool covers. It still runs
+      an agent, so the agent-wide variables stay and the tagged ones go.
 
     Each record carries the name, the type a control is chosen from, which
-    platforms document it, the agent's own default and an example. Types are
-    `agent_env.TYPES`; a caller that meets one it does not know should fall back
-    to a text box rather than hide the row, for the reason an empty
-    docker_ignored() means "everything applies".
+    platforms document it, which functionalities read it, the agent's own
+    default and an example. Types are `agent_env.TYPES`; a caller that meets one
+    it does not know should fall back to a text box rather than hide the row,
+    for the reason an empty docker_ignored() means "everything applies".
     """
+    runs = None if func_ids is None else set(func_ids)
     return [dict(v) for v in agent_env_mod.AGENT_ENV
-            if v["name"] not in gen_mod.RESERVED_ENV]
+            if v["name"] not in gen_mod.RESERVED_ENV
+            and (runs is None or not v["functionalities"]
+                 or bool(runs & set(v["functionalities"])))]
 
 
 def sv_constants():

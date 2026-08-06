@@ -10,7 +10,30 @@
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
-import { AgentEnvVar } from "./api";
+import { AgentEnvVar, SizingModel } from "./api";
+
+/** plan.SIZING_MODELS as the page receives it from /api/sizing-models.
+ *
+ *  A copy, and the only one, held equal to the planner's table by
+ *  `tests/test_server.py::test_the_pages_copy_of_the_sizing_models_is_the_planner_s`.
+ *  It cannot be derived: the authority is Python and the page's tests run
+ *  without a server.
+ *
+ *  `measured: false` is the one the card branches on, and the reason this is a
+ *  copy rather than a sample: a model with no measured figure offers no
+ *  per-pod box, and a fixture that quietly gave service virtualization one
+ *  would let a test pass over the exact case the card exists to get right. */
+export const SIZING_MODELS: SizingModel[] = [
+  { functionality: "performance", label: "Performance",
+    unit: "virtual users", figure_unit: "virtual users per engine",
+    pods: "engines", measured: true, example_target: 5000 },
+  { functionality: "functionalGui", label: "GUI Functional",
+    unit: "browser instances", figure_unit: "browser instances per engine",
+    pods: "engines", measured: true, example_target: 20 },
+  { functionality: "mockServices", label: "Service Virtualization",
+    unit: "requests per second", figure_unit: "requests per second per core",
+    pods: "mock pods", measured: false, example_target: 2000 },
+];
 
 /** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.
  *
@@ -103,22 +126,29 @@ export const RESERVED_ENV: Record<string, string | null> = {
  *
  *  The names are real ones, so a record that stopped being offered -- an option
  *  added to the generator claims it into RESERVED_ENV -- shows up as a test
- *  about a variable the server would no longer serve. */
+ *  about a variable the server would no longer serve. Their `functionalities`
+ *  are the real tags too, for the same reason and no stronger one: a test that
+ *  serves this list scoped, as the server would, wants a row that really does
+ *  drop out of a performance location's answer. */
 export const AGENT_ENV: AgentEnvVar[] = [
   { name: "PREFERRED_INTERFACE", type: "string",
-    platforms: ["kubernetes", "docker"],
+    platforms: ["kubernetes", "docker"], functionalities: [],
     summary: "Network interface to read the machine's IP address from",
     default: "the first interface that is not docker0 or lo", example: "eth0" },
   { name: "VERIFY_SSL", type: "bool", platforms: ["kubernetes", "docker"],
+    functionalities: [],
     summary: "Verify certificates on outbound HTTPS", default: "true",
     example: null },
   { name: "DODUO_PORT", type: "int", platforms: ["kubernetes", "docker"],
+    functionalities: ["functionalGui"],
     summary: "Port the BlazeMeter Grid proxy listens on", default: "8000",
     example: null },
   { name: "KUBERNETES_LABELS", type: "json_object", platforms: ["kubernetes"],
+    functionalities: [],
     summary: "Labels added to every object the agent creates",
     default: null, example: '{"team": "perf"}' },
   { name: "HOSTNAME_OVERRIDE", type: "string", platforms: ["docker"],
+    functionalities: ["mockServices"],
     summary: "Hostname for transactional virtual services on this agent",
     default: null, example: null },
 ];

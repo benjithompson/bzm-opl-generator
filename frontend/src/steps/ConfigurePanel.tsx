@@ -32,16 +32,23 @@ import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFunctionality,
-  SHARED_GROUPS, SIZING_FUNCTIONALITY,
+  engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
+  runsFunctionality, SHARED_GROUPS,
 } from "../optionGroups";
 import { placeholderWarning } from "../placeholder";
+// The two sentences about crane's one pod-limit pair, and the predicate for the
+// second. One rule, said differently at the two surfaces because they are
+// different questions: manual entry is *deciding* what to build and applies it,
+// where a location that already exists can only be described.
+import { SV_ALONE, SV_MIXED, svMixedWithEngines } from "../sv";
 
 export interface ConfigurePanelProps {
   functionalities: Functionality[];
-  /** `suggestNs` is passed only where picking is a declaration rather than a
-   *  view -- manual entry's radio. See its call site. */
-  pickFunctionality: (id: string, suggestNs?: boolean) => void;
+  /** Manual entry's declaration, one box at a time: which functionality, and
+   *  whether it is now ticked. Only manual entry calls it -- connected, what a
+   *  location runs is the account's answer and this page has no say in it
+   *  (#113). */
+  declare: (id: string, on: boolean) => void;
   sourceMode: "connect" | "manual";
   /** The funcIds this location carries that no functionality claims. */
   locUnclaimed: string[];
@@ -81,7 +88,7 @@ export interface ConfigurePanelProps {
    *  editor (#132): the size derives from the location's engine requests and
    *  is set there (Location settings), so there is nothing here to toggle,
    *  fill in or leave blank. Null where the format has no such env (docker),
-   *  and the performance card is where it renders, in the slot the sizing
+   *  and it renders on one card -- see `engineSizeOn` -- in the slot the sizing
    *  group used to hold. */
   engineNote: string | null;
   flipGroup: (id: GroupId, on: boolean) => void;
@@ -280,12 +287,19 @@ function AdvancedRow(p: ConfigurePanelProps) {
  *  than a report of one, and an undeclared functionality has to stay on screen to be
  *  declarable. That is why the branch below has one sentence and not two. */
 function FunctionalityCard(
-    p: ConfigurePanelProps & { feat: Functionality; own: OptionGroup[] }) {
+    p: ConfigurePanelProps & {
+      feat: Functionality; own: OptionGroup[];
+      /** Does the engine-size statement belong on this card? Decided by the
+       *  panel, over the cards it is showing, so it renders once -- a location
+       *  runs performance and GUI functional together and both start engines,
+       *  and a per-card `id === ...` test would state the size twice. */
+      statesEngineSize: boolean;
+    }) {
   const { feat, own } = p;
   // The engine-size statement renders where the sizing group used to sit:
-  // under the functionality whose bundles start engines. Read-only by design --
-  // the size is the location's, and this card only states it.
-  const note = feat.id === SIZING_FUNCTIONALITY ? p.engineNote : null;
+  // under a functionality whose agent carries the taurus engine. Read-only by
+  // design -- the size is the location's, and this card only states it.
+  const note = p.statesEngineSize ? p.engineNote : null;
   const manual = p.sourceMode === "manual";
   // Enabled means the location runs it -- or, in manual mode, that this is what
   // the typed identity was declared to be. Unanswered reads as on: see
@@ -311,16 +325,24 @@ function FunctionalityCard(
             the control rather than a chip. */}
         {manual ? (
           <label className="flex items-center gap-2 text-[11px] font-medium text-slate-600 mb-1">
-            {/* ...and it suggests a namespace, which the same control does not
+            {/* A checkbox, not a radio (#151): a location runs as many
+                functionalities as it is enabled for, and 71 of 168 in one real
+                account run performance and GUI functional together -- so a
+                control that could only say one made a bundle nobody would
+                create, and put the other one's card on screen saying it had not
+                been declared.
+
+                ...and it suggests a namespace, which the same control does not
                 do connected. The rule there is that switching a *view* must not
-                change the bundle; here the radio is not a view, it is the
-                declaration -- picking service virtualization is choosing to
+                change the bundle; here the box is not a view, it is the
+                declaration -- ticking service virtualization is choosing to
                 build an SV bundle, and connected the equivalent act (picking an
                 SV location) suggests one too. It only ever replaces a namespace
                 nothing has typed over (suggestNamespace), so a hand-written one
-                still wins. */}
-            <input type="radio" checked={on}
-              onChange={() => p.pickFunctionality(feat.id, true)} />
+                still wins. Which of several ticked boxes supplies it is
+                App.suggestNsFor. */}
+            <input type="checkbox" checked={on}
+              onChange={(e) => p.declare(feat.id, e.target.checked)} />
             Enabled
           </label>
         ) : known && (
@@ -347,7 +369,7 @@ function FunctionalityCard(
           land on and live switches are not. */}
       {!on ? (
         <p className="px-3 py-3 text-[11px] text-slate-500">
-          Not what this identity was declared to run — pick <b>Enabled</b> above
+          Not what this identity was declared to run — tick <b>Enabled</b> above
           to configure it.
         </p>
       ) : noFormat ? (
@@ -418,6 +440,14 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const functionalities = p.sourceMode === "manual"
     ? p.functionalities
     : p.functionalities.filter((f) => runsFunctionality(p.enabled, f.id));
+  // Which card states the engine size: the first on screen whose agent carries
+  // the taurus engine. Once, not per card -- a location running performance
+  // and GUI functional runs one agent with one pod-limit pair, and the
+  // statement is about that pair. Undefined where no such card is on screen (an
+  // SV-only location): the limits are still carried and still sent, and what
+  // they mean for a mock pod is a sizing model that does not exist yet (#154),
+  // so nothing is stated rather than an engine size that is not there.
+  const engineSizeOn = functionalities.find((f) => f.runs_engine)?.id;
   const secs = [
     ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
@@ -568,13 +598,52 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   nothing reads. */}
               {functionalities.map((f) => (
                 <FunctionalityCard key={f.id} {...p} feat={f}
+                  statesEngineSize={f.id === engineSizeOn}
                   own={groupsIn("f-" + f.id)} />
               ))}
             </div>
+            {/* Why one of the boxes clears the others, stated whether or not it
+                has happened yet: it is a rule about what is being built, so
+                somebody deciding should read it before the click and not only
+                after one. Manual entry only -- connected there is nothing to
+                decide. */}
+            {p.sourceMode === "manual" && (
+              <p className="text-[11px] text-slate-500 mt-1.5">{SV_ALONE}</p>
+            )}
+            {/* ...and the same fact about a location that already runs both.
+                Warned, never blocked: what a location *is* is BlazeMeter's own
+                UI's to change (#113 removed the one route here that did), so a
+                page that refused to generate for one would be refusing the only
+                bundle that location can have. */}
+            {p.sourceMode === "connect"
+              && svMixedWithEngines(p.enabled ?? [],
+                                    engineFunctionalities(p.functionalities)) && (
+              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                {SV_MIXED}
+              </p>
+            )}
+            {/* Ticking nothing is a real state -- a checkbox that will not
+                untick is an off-screen blocker in one control -- so it is said
+                rather than refused. Warned and not blocked, like a required
+                field left blank: the bundle generates, and what it is for is
+                what nobody has answered. Manual entry only; connected, an empty
+                answer comes from the account and this page cannot change it. */}
+            {p.sourceMode === "manual" && p.enabled?.length === 0 && (
+              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                Nothing is declared, so nothing says which funcIds this identity
+                runs — and the images its bundle carries are chosen from those.
+                Tick what it runs above.
+              </p>
+            )}
+            {/* Names, not ids: the account's own display names where one has
+                been read, and the raw funcId only where none has -- so this
+                sentence reads as BlazeMeter's UI reads. Not mono for that
+                reason; "Data Orchestration" set in a code face reads as
+                something to type. */}
             {p.locUnclaimed.length > 0 && (
               <p className="text-[11px] text-slate-500 mt-1.5">
                 Also runs{" "}
-                <span className="font-mono">{p.locUnclaimed.join(", ")}</span> —
+                <span className="text-slate-600">{p.locUnclaimed.join(", ")}</span> —
                 no options here for those; nothing about them is generated or
                 removed.
               </p>

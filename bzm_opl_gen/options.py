@@ -520,9 +520,12 @@ OPTIONS = [
             "too: it reaches nothing there either, and accepting it would read "
             "as a setting that had been made. What is left to set is served as "
             "`/api/agent-env` -- BlazeMeter's documented reference minus every "
-            "name an option above writes -- so the web UI offers the variables "
-            "as a list with a control per type rather than asking for a name "
-            "typed from memory."),
+            "name an option above writes, and minus everything that reaches a "
+            "functionality the location does not run -- so the web UI offers "
+            "the variables as a list with a control per type rather than "
+            "asking for a name typed from memory. Offering is not refusing: a "
+            "variable the list leaves out is still accepted here and still "
+            "carried by the bundle."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
         default_note=gen.CRANE_EPHEMERAL_STORAGE,
