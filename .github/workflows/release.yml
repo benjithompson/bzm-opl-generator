@@ -5,9 +5,26 @@ name: release
 # PyPI (`pipx install "bzm-opl-gen[ui]"`, the front door), the wheel attached
 # below, and the git URL at that tag. The notes carry the command people paste
 # -- `.github/release-footer.md`, VERSION substituted below.
+# `workflow_dispatch` is the same release, started by hand:
+#
+#   gh workflow run release.yml --ref v0.3.2
+#
+# It exists because the push trigger is a *webhook*, and a webhook is a thing
+# that can be dropped. During GitHub's Actions incident on 2026-08-06 webhook
+# processing fell to ~15%, so a tag push produced no run at all -- not a queued
+# one, not a failed one, nothing to retry. Re-pushing does not help either: the
+# remote ref already matches, so there is no ref change to emit an event for,
+# and the fix was to delete the remote tag and push it again for another ~15%
+# roll of the dice. `gh workflow run` goes through the REST API instead and
+# needs no webhook, so it works when the push trigger cannot.
+#
+# **Dispatch it on the tag, never on a branch.** The version this publishes is
+# read from the ref's name, so `--ref main` would try to release a version
+# called "main"; the gate below refuses that rather than letting it run.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 # Declared per job rather than here: the two jobs need different things, and the
 # publishing one must not inherit write access to the repository.
@@ -32,8 +49,19 @@ jobs:
 
       # The tag is what users will pin to, so it must not disagree with the
       # version baked into the wheel.
+      #
+      # The ref-type check is only reachable from `workflow_dispatch`, which
+      # takes any ref: the push trigger already filters to `v*` tags. Dispatched
+      # on a branch, every later step still runs -- the name would just be
+      # "main", and the release would be published under it. Refusing here costs
+      # one comparison; finding out costs a release nobody can delete cleanly.
       - name: tag matches pyproject version
         run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::this workflow releases a tag, but was started on $GITHUB_REF_TYPE '$GITHUB_REF_NAME'."
+            echo "::error::re-run it with a tag: gh workflow run release.yml --ref vX.Y.Z"
+            exit 1
+          fi
           tag="${GITHUB_REF_NAME#v}"
           proj=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "$tag" != "$proj" ]; then

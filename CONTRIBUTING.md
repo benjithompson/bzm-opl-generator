@@ -151,21 +151,31 @@ your own fork's `main` costs nobody anything.
 
 ## Cutting a release
 
-**The tag is what users install**, so cut one for anything they should get.
-`pipx install "bzm-opl-gen[ui] @ git+https://…@vX.Y.Z"` resolves that tag out of
-the repo directly, and the release's attached wheel is the alternative rather
-than the only route — but the release is still what carries the notes, and the
-notes are where the install command people paste comes from
-(`.github/release-footer.md`, whose `VERSION` placeholder the workflow replaces
-with the tag).
+**The tag is the release**, and it fans out to PyPI (the front door), the wheel
+attached to the GitHub Release, and the git URL at that tag. The notes carry the
+command people paste, from `.github/release-footer.md`, whose `VERSION`
+placeholder the workflow replaces with the tag.
 
-On a PR like anything else: bump `version` in `pyproject.toml`, and move your
-entries from `## [Unreleased]` into a new `## [x.y.z] — YYYY-MM-DD` section of
-`CHANGELOG.md`. Then tag:
+On a PR like anything else: bump `version` in `pyproject.toml`, move your entries
+from `## [Unreleased]` into a new `## [x.y.z] — YYYY-MM-DD` section with a
+compare link, and update the version pinned in `README.md` and `docs/mcp.md` —
+`tests/test_install_docs.py` fails if those disagree. Then tag:
 
 ```
-git tag v0.3.1 && git push origin v0.3.1
+git tag v0.3.2 && git push origin v0.3.2
 ```
+
+**If no run appears, the webhook was dropped**, which is a thing that happens
+when Actions is degraded. Pushing again does nothing — the remote ref already
+matches, so there is no change to emit an event for. Start it through the API
+instead, which needs no webhook:
+
+```
+gh workflow run release.yml --ref v0.3.2
+```
+
+Dispatch it on the **tag**, never a branch: the version comes from the ref's
+name, and the workflow refuses anything that is not a tag.
 
 `.github/workflows/release.yml` runs the offline suite, builds the wheel,
 checks it carries the templates, the profiles, the UI bundle and every page
