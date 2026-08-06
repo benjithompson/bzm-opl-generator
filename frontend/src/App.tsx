@@ -3,7 +3,7 @@ import {
   Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Functionality,
   GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdChoice, Location, Options, Ship, SvCheckOut,
-  SizingModel, SvConstants, SvMocksOut, Workspace,
+  SizingModel, SlotMinimum, SvConstants, SvMocksOut, Workspace,
 } from "./api";
 // What the last download or save did, as one record with one owner -- see
 // attempt.ts for why the four it replaced could not stay four.
@@ -49,6 +49,9 @@ import { sizeStatement } from "./engineSize";
 // service virtualization is declared alone. `exclusiveWith` is that rule,
 // applied only where something is being decided -- see sv.ts for the asymmetry.
 import { exclusiveWith, SV_FUNCTIONALITY, svState } from "./sv";
+// What BlazeMeter requires of a new location's `slots`, applied where the
+// number is typed rather than where the 400 comes back (#159).
+import { slotsBlockedBy } from "./slots";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 // Whether an agent is reporting. One statement of the rule, with its own tests
@@ -180,6 +183,13 @@ export default function App({ api }: { api: Api }) {
   // authoritatively either way and a name rejected on a guess is the worse
   // half of being wrong.
   const [reservedEnv, setReservedEnv] = useState<Record<string, string | null>>({});
+  // ...and what BlazeMeter requires of a new location's `slots` before it will
+  // make one at all (#159). Empty the same way and meaning the same thing:
+  // until it lands the form states no rule and refuses nothing, because
+  // core.create_location refuses authoritatively either way and a create held
+  // back on a guess is the worse half of being wrong.
+  const [slotMinimums, setSlotMinimums] =
+    useState<Record<string, SlotMinimum>>({});
   // ...and the other half of it: the documented variables that are left, which
   // the env area offers as a list. Empty again means "not read yet" -- the area
   // falls back to naming a variable by hand, which is a field too many rather
@@ -375,6 +385,7 @@ export default function App({ api }: { api: Api }) {
     api.svConstants().then(setSvConst).catch(() => {});
     api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
+    api.slotMinimums().then(setSlotMinimums).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
     api.sizingModels().then((ms) => {
@@ -1461,8 +1472,15 @@ export default function App({ api }: { api: Api }) {
 
   // What Create is waiting for, as the sentence it shows rather than as a
   // silently greyed button.
+  //
+  // The slot minimum is last and is the one that is not this form's own rule:
+  // BlazeMeter refuses the create outright below it (#159), so the sentence is
+  // BlazeMeter's, said here before the write rather than relayed from the 400
+  // afterwards. The two above it are questions nobody has answered yet, which
+  // is why they come first.
   const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
-    : !newLoc.workspace_id ? "pick a workspace above first" : "";
+    : !newLoc.workspace_id ? "pick a workspace above first"
+    : slotsBlockedBy(newLoc.func_ids, newLoc.slots, slotMinimums);
 
   /** Create the private location the form describes, and work on it.
    *
@@ -1608,6 +1626,7 @@ export default function App({ api }: { api: Api }) {
                   // workspace id is the drawer's and is merged back here.
                   setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
                   choices: funcIdChoices, engines: engineFuncIds,
+                  minimums: slotMinimums,
                   blockedBy: createLocBlockedBy,
                   submit: createLocationNow,
                 },

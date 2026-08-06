@@ -35,7 +35,7 @@ import {
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table, from the one copy of it.
 import {
-  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV, SIZING_MODELS,
+  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV, SIZING_MODELS, SLOT_MINIMUMS,
 } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
@@ -1347,6 +1347,54 @@ test("creating a location sends what the form holds, and selects what comes back
     // account is what this asserts on.
     await waitFor(() => expect(asked).toEqual(["h-new"]));
     expect(screen.getAllByText("Frankfurt").length).toBeGreaterThan(0);
+  });
+
+test("a GUI Functional location says its slot minimum before Create is pressed",
+  async () => {
+    // #159. BlazeMeter refuses the create outright below two, and `slots`
+    // defaults to one, so this form's own default was a 400 on every GUI
+    // Functional location it made. The rule is stated on the form, not only
+    // after the account has thrown the write away.
+    const created: unknown[] = [];
+    render(<App api={accountOf([loc("h-0", "Region 0")], {
+      funcIdChoices: async () => [
+        { id: "performance", label: "Performance", changes_images: true,
+          covered: true },
+        { id: "functionalGui", label: "GUI Functional", changes_images: true,
+          covered: true },
+      ],
+      slotMinimums: async () => SLOT_MINIMUMS,
+      createLocation: async (body) => { created.push(body); return loc("h-new", "x"); },
+    })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /New location/ }));
+    const name = await screen.findByLabelText(/^Name \(created in workspace/);
+    fireEvent.change(name, { target: { value: "Frankfurt" } });
+    // Nothing is said about slots while no rule reaches the declaration: the
+    // number is a real cost and most locations run one.
+    expect(screen.queryByText(/needs at least/)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("GUI Functional"));
+    // Said as soon as the box is ticked, whether or not the number is wrong
+    // yet -- the constraint is what the form is for, and a rule that only
+    // speaks up after it has taken Create away reads as the form breaking.
+    expect(await screen.findByText(/GUI Functional needs at least 2/)).toBeTruthy();
+    // ...and while the default stands, Create is held with BlazeMeter's own
+    // sentence rather than a paraphrase of it.
+    expect(screen.getByText(/Parallel engine runs must be greater than 1/))
+      .toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(created).toEqual([]);
+
+    // Typing the number the form asked for clears it, and nothing raised it
+    // on anybody's behalf: what is sent is what is on screen.
+    fireEvent.change(screen.getByLabelText(/^Slots/), { target: { value: "2" } });
+    expect(screen.queryByText(/Parallel engine runs/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(created.length).toBe(1));
+    expect(created[0]).toMatchObject({
+      func_ids: ["performance", "functionalGui"], slots: 2,
+    });
   });
 
 test("creating an agent in an empty location keeps the credential it is issued with",

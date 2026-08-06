@@ -121,6 +121,25 @@ anything that breaks.
 
 ### Fixed
 
+- **A GUI Functional private location could not be created at all.** BlazeMeter
+  refuses one whose "Parallel engine runs" is 1 — `The option Parallel engine
+  runs must be greater than 1 for a Private Location with the GUI Functional
+  Functionality enabled` — and `slots` defaults to 1 in the CLI, on the web
+  page's New location form and in the MCP server's `opl_location create`, so
+  every one this tool made was a 400 from the account. Found on a live POST;
+  the constraint is not in BlazeMeter's private-location documentation.
+
+  The rule is now applied where the functionalities are chosen, before the
+  write: `bzm-opl-gen create-location --func-ids functionalGui` refuses with
+  BlazeMeter's own sentence and says to pass `--slots 2` or more, `--help` says
+  so on the flag, and the MCP tool description says so before the call. On the
+  page, ticking **GUI Functional** puts "GUI Functional needs at least 2" on
+  the Slots field and holds Create until the number is there.
+
+  **Nobody's `slots` is raised for them.** It is engines per *agent* and a real
+  cost — accounts run 17 agents at 1 apiece — so a location without GUI
+  Functional is still created at 1, and the number sent is the one on screen.
+
 - **A card on the configure step is one functionality, under BlazeMeter's own
   name.** A performance-only location was given a card labelled "Performance &
   functional testing", because one entry stood for four funcIds at once and its
