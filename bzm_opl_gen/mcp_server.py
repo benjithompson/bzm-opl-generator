@@ -738,6 +738,12 @@ def _after_generate(out_dir, options):
         return [f"chmod +x {out_dir}/{gen_mod.DOCKER_RUN_FILE}",
                 f"{out_dir}/{gen_mod.DOCKER_RUN_FILE}   (YOU run this, on the "
                 f"docker host itself -- nothing here reaches it)",
+                # The other route to the same container, for a host that
+                # installs with compose. Either one, never both: they share the
+                # container name, so the second refuses.
+                f"...or `docker compose up -d` in {out_dir}, which starts the "
+                f"same container from {gen_mod.DOCKER_COMPOSE_FILE}. One or the "
+                f"other, not both",
                 "opl_agent status, to see whether the agent reported in"]
     if options.get("output_format") == "helm":
         return [f"helm install bzm-opl {out_dir}/helm "

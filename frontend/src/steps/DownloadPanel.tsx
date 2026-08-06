@@ -145,7 +145,11 @@ const checkTone = (r: SvCheckOut) =>
 const BUNDLE_HOLDS: Record<string, string> = {
   manifests: "manifests + README",
   helm: "helm/ + bzm-opl-values.yaml + README",
-  docker: "bzm-opl-agent.sh + .env + README",
+  // Both routes to one container, and the credential file is named in full:
+  // it is deliberately not called `.env`, which compose reads for its own
+  // substitution rather than passing to the container, and a line here saying
+  // ".env" is the shorthand somebody renames the file to match.
+  docker: "bzm-opl-agent.sh + compose.yaml + bzm-opl-agent.env + README",
 };
 
 export function DownloadPanel(p: DownloadPanelProps) {

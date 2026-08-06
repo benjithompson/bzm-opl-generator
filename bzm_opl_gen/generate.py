@@ -2478,6 +2478,19 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 # says what *this* bundle asked for and did not get.
 
 DOCKER_RUN_FILE = "bzm-opl-agent.sh"
+# Compose v2's canonical name, and it is chosen for discovery rather than for
+# tidiness: `docker compose up -d` in the unzipped directory finds a file called
+# this with no `-f`, which is the whole of the instruction a customer who
+# installs with compose is asking for. `docker-compose.yaml` is the legacy
+# spelling and is also found, one place lower in the precedence list; a
+# bzm-opl-prefixed name like the two files above would be found by nothing. The
+# bundle holds exactly one project, so there is nothing here for a prefix to
+# disambiguate it from.
+DOCKER_COMPOSE_FILE = "compose.yaml"
+# The compose service, which is what `docker compose logs -f <name>` takes.
+# Crane is BlazeMeter's own name for the agent process, and the container is
+# named after it too (docker_container_name).
+DOCKER_COMPOSE_SERVICE = "crane"
 DOCKER_ENV_FILE = "bzm-opl-agent.env"
 DOCKER_CA_FILE = "ca-bundle.crt"
 # Where BlazeMeter's Docker documentation says the trust bundle has to land, and
@@ -2502,6 +2515,26 @@ DOCKER_MOUNTS = ["/var/run/docker.sock:/var/run/docker.sock", "/tmp:/tmp"]
 DOCKER_PORT_RANGE = "6000-7000"
 DOCKER_WORKDIR = "/usr/src/app/"
 DOCKER_ENTRYPOINT = "python agent/agent.py"
+# As root, because the socket above is how this agent starts engines and on a
+# stock host it is root:docker 0660. The crane image runs as a non-root user, so
+# without this the container comes up, reaches the daemon, and dies on
+# `PermissionError: [Errno 13]` out of docker/transport/unixconn -- an error
+# about a Python socket that says nothing about the uid that could not open it.
+# BlazeMeter's own generated command carries `-u 0`; this generator was built
+# from their *docs*, which do not mention it, and that is how it came to be
+# missing.
+#
+# Not `run_as_user`: that option is a pod securityContext field (see
+# IGNORED_BY_FORMAT), and this is not a preference -- an agent that cannot open
+# the socket cannot do the one thing it is for.
+DOCKER_USER = "0"
+# on-failure rather than always: a crane that exits cleanly has been told to
+# stop, and BlazeMeter's own command says on-failure.
+DOCKER_RESTART = "on-failure"
+# The agent has to advertise an address the engines it starts can reach, and on
+# this platform they are containers on the same host. Bridge networking gives it
+# a private address it cannot hand out.
+DOCKER_NETWORK = "host"
 
 # What each output format cannot carry, as {format: {option: why}}, with what
 # each ignored option is for. Every format in OUTPUT_FORMATS has an entry --
@@ -2638,27 +2671,18 @@ def docker_split_env(facts, o):
 
 
 def _docker_run_lines(facts, o):
-    """The `docker run` invocation, one argument per line."""
+    """The `docker run` invocation, one argument per line.
+
+    Every fixed value below comes from a constant above rather than from a
+    literal here, because the compose file states the same container and the two
+    have to be the same fact stated twice, not two facts that agree today."""
     cmd, secret = docker_split_env(facts, o)
     lines = ["docker run -d \\",
              '  --name "$NAME" \\',
-             # on-failure rather than always: a crane that exits cleanly has
-             # been told to stop, and BlazeMeter's own command says on-failure.
-             "  --restart on-failure \\",
-             # As root, because the socket below is how this agent starts
-             # engines and on a stock host it is root:docker 0660. The crane
-             # image runs as a non-root user, so without this the container
-             # comes up, reaches the daemon, and dies on
-             # `PermissionError: [Errno 13]` out of docker/transport/unixconn --
-             # an error about a Python socket that says nothing about the uid
-             # that could not open it. BlazeMeter's own generated command
-             # carries `-u 0`; this generator was built from their *docs*, which
-             # do not mention it, and that is how it came to be missing.
-             #
-             # Not `run_as_user`: that option is a pod securityContext field
-             # (see IGNORED_BY_FORMAT), and this is not a preference -- an agent
-             # that cannot open the socket cannot do the one thing it is for.
-             "  -u 0 \\"]
+             f"  --restart {DOCKER_RESTART} \\",
+             # See DOCKER_USER: the socket below is the reason, and it is not a
+             # preference.
+             f"  -u {DOCKER_USER} \\"]
     if secret:
         lines.append('  --env-file "$ENV_FILE" \\')
     lines += [f"  --env {k}={_sh_value(v)} \\" for k, v in cmd.items()]
@@ -2666,11 +2690,7 @@ def _docker_run_lines(facts, o):
     if _ca_cfg(o):
         lines.append(f'  -v "$CA_BUNDLE":{DOCKER_CA_PATH}:ro \\')
     lines += [f"  -w {DOCKER_WORKDIR} \\",
-              # The agent has to advertise an address the engines it starts can
-              # reach, and on this platform they are containers on the same
-              # host. Bridge networking gives it a private address it cannot
-              # hand out.
-              "  --net=host \\",
+              f"  --net={DOCKER_NETWORK} \\",
               f"  {_crane_image(facts, o)} {DOCKER_ENTRYPOINT}"]
     return "\n".join(lines)
 
@@ -2766,13 +2786,133 @@ def _docker_env_file(facts, o):
             + "".join(f"{k}={v}\n" for k, v in secret.items()))
 
 
+def _compose_value(value):
+    """One YAML scalar for the compose file: double-quoted, with every `$`
+    doubled.
+
+    Compose interpolates `$VAR` and `${VAR}` in this file's own values before it
+    parses them, so a literal `$` has to be written `$$` or it is substituted --
+    usually by nothing, silently. A proxy password is the live case: the script
+    beside this passes it to `--env` untouched, and a compose file that did not
+    escape it would start an agent authenticating with a shorter password, with
+    no error anywhere to say so. Escaped rather than moved into the env file,
+    because which variables live there is `use_secret`'s answer and not this
+    renderer's -- one question, one owner, and a proxy URL that changed file
+    depending on its punctuation is a bundle nobody could reason about.
+
+    Double-quoted always, unlike `_sh_value` next door, which quotes only where
+    it must so the command reads like BlazeMeter's own. A shell word is what a
+    reader expects there; here a bare scalar has too many ways to change meaning
+    (a leading `*` or `&`, a bare `yes`, a token that parses as a number) for
+    the unquoted form to be anything but a judgement per value."""
+    text = (str(value).replace("\\", "\\\\").replace('"', '\\"')
+            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t"))
+    return '"' + text.replace("$", "$$") + '"'
+
+
+def _docker_compose_yaml(facts, o):
+    """The same container as `_docker_run_sh`, described for Docker Compose.
+
+    It buys no capability -- for one container compose adds nothing `docker run`
+    cannot do -- and it is here because some customers install with compose and
+    will not take a script. So the two are **either/or** rather than
+    complementary, and `container_name` is what enforces it: run both and two
+    cranes hold one agent identity, which BlazeMeter reports as duplicated
+    results rather than as an error. A README warning fails at "why are my
+    results duplicated"; a name collision fails at `compose up`, naming it.
+
+    Every fixed value is the constant the script reads too. Nothing here reads
+    an option this format ignores -- there is no namespace, no ServiceAccount
+    and no pod in a compose project either, and a refusal over one would be a
+    blocker with nothing on the configure page to clear (see ignored_options).
+    """
+    cmd, secret = docker_split_env(facts, o)
+    name = docker_container_name(o["ship_id"])
+    body = [
+        # No `version:` key. It has been obsolete since Compose v2 and a file
+        # carrying one is warned about on every command.
+        #
+        # The project name is stated rather than left to compose, which
+        # otherwise takes it from the name of whatever directory the customer
+        # unzipped into -- so two agents unzipped into `bundle/` and `bundle
+        # (1)/` would be one project or two depending on the file manager. The
+        # agent's own name is the right one: `docker compose ls` and
+        # `docker ps` then say the same thing about the same container.
+        f"name: {_compose_value(name)}",
+        "services:",
+        f"  {DOCKER_COMPOSE_SERVICE}:",
+        f"    image: {_compose_value(_crane_image(facts, o))}",
+        # The whole of the either/or rule, and the reason it is not prose.
+        f"    container_name: {_compose_value(name)}",
+        f"    user: {_compose_value(DOCKER_USER)}",
+        f"    restart: {DOCKER_RESTART}",
+        f"    network_mode: {DOCKER_NETWORK}",
+        f"    working_dir: {_compose_value(DOCKER_WORKDIR)}",
+    ]
+    if secret:
+        # The same file the script hands to --env-file, not a copy: the
+        # credential is written once and read by whichever route is used.
+        # Relative to this file, which is where compose resolves it from.
+        body += ["    env_file:", f"      - ./{DOCKER_ENV_FILE}"]
+    body.append("    environment:")
+    body += [f"      {k}: {_compose_value(v)}" for k, v in cmd.items()]
+    body.append("    volumes:")
+    body += [f"      - {m}" for m in DOCKER_MOUNTS]
+    if _ca_cfg(o):
+        # The one deliberate interpolation in the file, and the counterpart of
+        # the script's `CA_BUNDLE="${CA_BUNDLE:-$DIR/ca-bundle.crt}"`: a host may
+        # already keep the trust bundle its platform team maintains. Unset, the
+        # default is the file beside this one -- compose resolves a relative
+        # host path against this file's directory, which is what `$DIR` means in
+        # the script.
+        body.append(
+            f"      - ${{CA_BUNDLE:-./{DOCKER_CA_FILE}}}:{DOCKER_CA_PATH}:ro")
+    body.append(f"    command: {_compose_value(DOCKER_ENTRYPOINT)}")
+    # The trap is the same either way and the file to warn about is not: with
+    # the credential split out it is the one sitting here waiting to be tidied
+    # up, and without it there is no file yet, only the one somebody is about to
+    # create in the belief that compose passes it on.
+    dot_env = (f"""# Do not rename {DOCKER_ENV_FILE} to `.env`, and do not create one here.
+# Compose reads a file of that name for variable interpolation into *this file*
+# rather than into the container: the AUTH_TOKEN would never reach crane while
+# looking exactly as though it had, and a `$` in a proxy password would be
+# substituted on the way past. The env_file entry below is how a value reaches
+# the container.""") if secret else (
+        """# Do not create a file called `.env` beside this one. Compose reads that name
+# for variable interpolation into *this file* rather than into the container, so
+# a variable put there reaches nothing while looking exactly as though it had.
+# The environment block below is what the container is given.""")
+    where = facts.get("harbor_name") or facts["harbor_id"]
+    head = f'''# The BlazeMeter agent for private location {where},
+# as one container on this host. Generated by bzm-opl-gen; see README.md.
+#
+# Run it on the machine that is to be the private location:
+#
+#   docker compose up -d
+#
+# Needs `docker compose version` 2 or newer, and a daemon whose socket this
+# user can reach -- crane starts the engines as sibling containers through it,
+# which is why the socket is mounted below.
+#
+# This file or {DOCKER_RUN_FILE}, never both. They start the same agent under
+# the same container name, so the second one refuses and names it.
+#
+{dot_env}
+'''
+    return head + "\n".join(body) + "\n"
+
+
 def _docker_readme(facts, o):
     ignored = _set_but_not_carried(o)
     # The credential and the command are in different files here, so the block
     # names the one to edit. It replaces a paragraph that said the same thing
     # about the AUTH_TOKEN alone: this format can leave a proxy URL, a registry
     # host and an inline PEM blank too, and each of those was silent.
-    token_file = DOCKER_ENV_FILE if o["use_secret"] else DOCKER_RUN_FILE
+    # With the credential split out there is one file to edit; inline, it is in
+    # both of the two files that start this container, and naming only the
+    # script would send somebody to fix half of the bundle.
+    token_file = (DOCKER_ENV_FILE if o["use_secret"]
+                  else f"{DOCKER_RUN_FILE} and {DOCKER_COMPOSE_FILE}")
     placeholders = _placeholder_block(o, {"auth_token": token_file})
     ignored_block = ""
     if ignored:
@@ -2788,6 +2928,15 @@ are where they mean something.
 |---|---|
 {rows}
 """
+    # Only where the file exists to be renamed. It is the tidy-up somebody
+    # reaches for on seeing a compose file beside a `.env`-shaped one, and it
+    # fails silently: compose reads `.env` for interpolation into compose.yaml
+    # rather than into the container.
+    env_note = (f"""
+- **Never rename `{DOCKER_ENV_FILE}` to `.env`.** Compose reads a file of that
+  name for its own variable substitution rather than passing it to the
+  container, so the token would stop reaching the agent while the bundle went on
+  looking finished.""") if o["use_secret"] else ""
     ca = _ca_cfg(o)
     ca_block = ""
     if ca:
@@ -2800,8 +2949,15 @@ are where they mean something.
     return f"""{_bundle_table(facts, o)}{placeholders}
 ## Run it
 
+Either of these, not both -- they are the same container by two routes, so pick
+whichever your host is set up for.
+
 ```
 ./{DOCKER_RUN_FILE}
+```
+
+```
+docker compose up -d          # needs `docker compose version` 2 or newer
 ```
 
 The agent should report online in BlazeMeter within a minute or two; the first
@@ -2812,13 +2968,15 @@ run pulls crane and can take considerably longer. Watch it with
 
 {_sizing_bullet(o)}{_location_bullet(facts)}
 - **The socket is the point.** Crane starts engines as containers on this host
-  through `/var/run/docker.sock`, so whoever runs the script needs access to it.
-  That is effectively root on the machine -- BlazeMeter's own instructions say
-  the same.
-- **One agent per host.** The container is named after the agent
-  (`{docker_container_name(o["ship_id"])}`), and the script refuses rather than
-  replacing an existing one, because that container may be the agent currently
-  serving this location.
+  through `/var/run/docker.sock`, so whoever starts it needs access to it. That
+  is effectively root on the machine -- BlazeMeter's own instructions say the
+  same.
+- **One agent per host.** Both files name the container after the agent
+  (`{docker_container_name(o["ship_id"])}`), so whichever you run second refuses
+  and says so. That is what stops two routes becoming two cranes on one agent
+  identity, which BlazeMeter reports as duplicated results rather than as an
+  error. Neither replaces an existing container: it may be the agent serving
+  this location right now.{env_note}
 - **Engines run beside it, not inside it.** Size the host for the whole
   location, not for crane: every engine is another container here.{ca_block}
 - BlazeMeter's Docker Command tab generates the same command without this
@@ -2841,9 +2999,12 @@ def preview_order(files):
         lead = [HELM_VALUES_FILE, "README.md", f"{CHART_DIR}/README.md",
                 HELM_CHART_FILE, f"{CHART_DIR}/values.yaml"]
     elif DOCKER_RUN_FILE in files:
-        # The command first: it is the bundle, and the other three files are
-        # about it.
-        lead = [DOCKER_RUN_FILE, DOCKER_ENV_FILE, DOCKER_CA_FILE] + PREVIEW_TAIL
+        # The command first: it is the bundle, and the rest of the files are
+        # about it. The compose file second and never first -- it is the same
+        # container by the other route, and BlazeMeter's own shape leads, which
+        # is the tie-break the README's "Run it" section uses too.
+        lead = ([DOCKER_RUN_FILE, DOCKER_COMPOSE_FILE, DOCKER_ENV_FILE,
+                 DOCKER_CA_FILE] + PREVIEW_TAIL)
     else:
         lead = APPLY_ORDER + PREVIEW_TAIL
     return [n for n in lead if n in files] + sorted(set(files) - set(lead))
@@ -2921,7 +3082,14 @@ def generate(facts, options):
             "HOSTNAME_OVERRIDE, TLS_CERT and TLS_KEY by hand.")
 
     if o["output_format"] == "docker":
-        out = {DOCKER_RUN_FILE: _docker_run_sh(facts, o)}
+        # Two descriptions of one container, and the bundle carries both because
+        # which one a customer will take is theirs rather than ours: some
+        # install with compose and will not run a script. Not a fourth
+        # output_format -- a format is a platform, and these are two syntaxes
+        # for the same one. They are either/or, enforced by the container name
+        # they share rather than by the README.
+        out = {DOCKER_RUN_FILE: _docker_run_sh(facts, o),
+               DOCKER_COMPOSE_FILE: _docker_compose_yaml(facts, o)}
         env_file = _docker_env_file(facts, o)
         if env_file:
             out[DOCKER_ENV_FILE] = env_file

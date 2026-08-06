@@ -144,14 +144,15 @@ OPTIONS = [
     Option(
         "output_format", "string", "Platform and output",
         choices=["manifests", "helm", "docker"],
-        summary="Flat YAML for kubectl, the Helm chart plus a values overlay, or a docker run script.",
+        summary="Flat YAML for kubectl, the Helm chart plus a values overlay, or a docker bundle.",
         doc="`manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus "
             "a values overlay -- see [Helm](helm.md). The same deployment "
             "expressed twice rather than two codebases, which `tests/helm_parity.py` "
             "is what holds it to. `docker` is the other platform entirely: one "
             "agent as one container on a host with a docker daemon, emitted as a "
-            "`docker run` script in BlazeMeter's own documented shape -- see "
-            "[Docker](docker.md). Most options here are Kubernetes vocabulary and "
+            "`docker run` script in BlazeMeter's own documented shape *and* a "
+            "`compose.yaml` describing the same container, which are either/or "
+            "-- see [Docker](docker.md). Most options here are Kubernetes vocabulary and "
             "reach nothing in it, and its README names the ones this bundle set. "
             "All three refuse a service-virtualization location except "
             "`manifests`, whose ingress is the only one carried."),

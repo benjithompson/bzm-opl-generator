@@ -831,6 +831,27 @@ stale list can cost a credential nothing can read back.
   pages, and the bundle did not start -- the container ran as the image's
   non-root user and died on the docker socket it exists to use.
 
+  **`compose.yaml` is that same container, and the two are either/or** (#177).
+  Compose buys no capability for one container; it is a shape some customers
+  require, so it ships *inside* the docker bundle rather than as a fourth
+  format. Both files carry `container_name: bzm-crane-<shipId>`, which is what
+  makes running both fail at `compose up` with the name in the message --
+  otherwise two cranes hold one agent identity and BlazeMeter reports
+  **duplicated results rather than an error**. BlazeMeter publishes no compose
+  file, so the rule above has no counterpart here and parity with the script is
+  what holds it honest: every fixed value (`DOCKER_USER`, `DOCKER_RESTART`,
+  `DOCKER_NETWORK`, the mounts, the workdir, the entrypoint) is a constant both
+  renderers read, and the environment is `docker_split_env()` for both. Two
+  traps, both silent: **never emit a file named `.env`** -- compose auto-loads
+  that one for interpolation *into the compose file*, not into the container, so
+  a token there never reaches crane while looking as though it had (the
+  credential stays `bzm-opl-agent.env`, read as `env_file:`) -- and **every
+  inline value is written with `$` doubled** (`_compose_value`), because compose
+  substitutes `$VAR` in its own values while the `--env` beside it passes the
+  same string through untouched. The one deliberate interpolation is
+  `${CA_BUNDLE:-./ca-bundle.crt}`, the counterpart of the script's overridable
+  `CA_BUNDLE`.
+
 - **The chart is copied, never re-rendered.** `--format helm` walks
   `templates/helm/` and emits it verbatim, so anything added there ships in every
   bundle — including files `package-data` would drop. Its globs do not recurse

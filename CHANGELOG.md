@@ -11,6 +11,25 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **`--format docker` now emits `compose.yaml` beside `bzm-opl-agent.sh`.** Some
+  customers install with Docker Compose and will not take a `docker run` script.
+  It is not a fourth `--format`: a format is a platform, and these are two
+  syntaxes for one — `docker compose up -d` in the unzipped directory starts the
+  same container the script does, from the same credential file
+  (`bzm-opl-agent.env`, read as `env_file:`). They are **either/or**, and docker
+  enforces it rather than the README: both name the container
+  `bzm-crane-<shipId>`, so whichever you run second refuses with the name in the
+  message. Running both would put two cranes on one agent identity, which
+  BlazeMeter reports as duplicated results rather than as an error.
+
+  The bundle never contains a file called `.env`, and the compose file says why:
+  compose auto-loads that one for variable interpolation into the compose file
+  rather than into the container, so a token moved there would silently never
+  reach the agent. For the same reason every inline value is written with `$`
+  doubled.
+
 ## [0.3.2] — 2026-08-06
 
 ### Added

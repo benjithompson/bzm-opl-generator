@@ -1575,6 +1575,10 @@ def docker_sh(**opts):
     return gen.generate(FACTS, {**DOCKER, **opts})["bzm-opl-agent.sh"]
 
 
+def docker_compose(**opts):
+    return gen.generate(FACTS, {**DOCKER, **opts})[gen.DOCKER_COMPOSE_FILE]
+
+
 def test_docker_command_is_the_documented_shape():
     """BlazeMeter's Docker Command tab and their installation page give this
     command; api.parse_auth_token at the top of this file parses their version
@@ -1713,6 +1717,166 @@ def test_docker_auto_update_is_the_docker_variable_and_only_when_answered():
     assert "--env AUTO_UPDATE=true" in docker_sh(auto_update=True)
     assert "--env AUTO_UPDATE=false" in docker_sh(auto_update=False)
     assert "AUTO_KUBERNETES_UPDATE" not in docker_sh(auto_update=True)
+
+
+# -- ...and the same container as a compose project ---------------------------
+#
+# Compose buys no capability -- for one container it adds nothing `docker run`
+# cannot do -- so every check below is about the two files staying one container
+# rather than becoming two agents, and about the file compose reads that nobody
+# meant it to.
+
+# Every branch of the compose file that is conditional, so the parse and the
+# escape rules below are walked over all of them rather than over the default.
+COMPOSE_CASES = [
+    {},
+    {"use_secret": False},
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n"},
+    {"private_registry": "reg.example.com/bzm", "auto_update": True},
+    {"proxy": {"http": "http://p:1", "https": "http://p:1",
+               "username": "o'brien", "password": "a b"}},
+    {"extra_env": {"PREFERRED_INTERFACE": "eth1"}},
+]
+
+
+def test_the_docker_bundle_carries_both_routes_to_one_container():
+    """Not a fourth output_format: a format is a platform, and these are two
+    syntaxes for the same one. Some customers install with compose and will not
+    take a script, so which file they use is theirs and the bundle carries
+    both."""
+    files = gen.generate(FACTS, DOCKER)
+    assert gen.DOCKER_RUN_FILE in files and gen.DOCKER_COMPOSE_FILE in files
+    # The script leads everywhere it is listed -- BlazeMeter's own shape is the
+    # one their documentation describes, which is the tie-break this repo uses.
+    order = gen.preview_order(list(files))
+    assert order.index(gen.DOCKER_RUN_FILE) < order.index(gen.DOCKER_COMPOSE_FILE)
+
+
+def test_compose_is_valid_yaml_in_every_branch():
+    """The counterpart of test_docker_scripts_are_valid_shell. A generated file
+    with a quoting mistake in one branch is invisible until somebody runs that
+    branch on a customer's host -- and here it is a YAML value carrying a quote,
+    a space or a backslash out of a proxy password or a free-form variable."""
+    for extra in COMPOSE_CASES:
+        doc = yaml.safe_load(docker_compose(**extra))
+        svc = doc["services"][gen.DOCKER_COMPOSE_SERVICE]
+        assert svc["image"] == FACTS["crane_image"] or extra.get("private_registry")
+        assert svc["environment"]["HARBOR_ID"] == "aaa111"
+
+
+def test_compose_is_v2_and_names_its_own_project():
+    """`version:` has been obsolete since Compose v2 and a file carrying one is
+    warned about on every command. The project name is the other half: left out,
+    compose takes it from whatever directory the customer unzipped into, so the
+    same bundle is one project or two depending on the file manager."""
+    text = docker_compose()
+    assert "version:" not in text
+    doc = yaml.safe_load(text)
+    assert doc["name"] == gen.docker_container_name("bbb222")
+    assert set(doc["services"]) == {gen.DOCKER_COMPOSE_SERVICE}
+
+
+def test_both_routes_carry_the_same_container_name():
+    """The either/or rule, and the reason it is not a README warning. Run both
+    and two cranes hold one agent identity, which BlazeMeter reports as
+    duplicated results rather than as an error; a name collision fails at
+    `compose up` with the name in the message. Verified live in both directions
+    against a real daemon: `Conflict. The container name "/bzm-crane-..." is
+    already in use`, and the script's own guard the other way round."""
+    name = gen.docker_container_name("bbb222")
+    files = gen.generate(FACTS, DOCKER)
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]
+    assert svc[gen.DOCKER_COMPOSE_SERVICE]["container_name"] == name
+    assert f"NAME={name}" in files[gen.DOCKER_RUN_FILE]
+
+
+def test_compose_reads_the_credential_file_the_script_does():
+    """One credential file, not a copy: `use_secret` decides where the token is
+    written and both routes read whatever that answer was."""
+    files = gen.generate(FACTS, DOCKER)
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["env_file"] == [f"./{gen.DOCKER_ENV_FILE}"]
+    # The value, like the script: with use_secret on it is in neither file.
+    assert "de" * 32 not in files[gen.DOCKER_COMPOSE_FILE]
+    assert "AUTH_TOKEN" not in svc["environment"]
+    # Off, there is no env file to point at and the token is inline in both --
+    # BlazeMeter's own shape, and the same shape twice.
+    plain = gen.generate(FACTS, {**DOCKER, "use_secret": False})
+    svc = yaml.safe_load(plain[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert "env_file" not in svc
+    assert svc["environment"]["AUTH_TOKEN"] == "de" * 32
+
+
+def test_no_docker_bundle_holds_a_file_called_dot_env():
+    """The trap the compose file's own header is about. Compose auto-loads a
+    `.env` for variable interpolation into the compose file rather than into the
+    container, so an AUTH_TOKEN written there never reaches crane while looking
+    exactly as though it had -- and a `$` in a proxy password is substituted on
+    the way past. The credential file is `bzm-opl-agent.env` for that reason, so
+    this holds across every branch rather than at the one place it is named."""
+    for extra in COMPOSE_CASES:
+        files = gen.generate(FACTS, {**DOCKER, **extra})
+        assert ".env" not in files
+        assert not [f for f in files if f.endswith("/.env")]
+        # ...and the compose file says why, in both branches -- with the
+        # credential split out there is a file sitting there to be renamed,
+        # without it there is only the one somebody is about to create.
+        assert "`.env`" in files[gen.DOCKER_COMPOSE_FILE]
+
+
+def test_compose_escapes_a_dollar_so_it_reaches_the_container():
+    """Compose interpolates `$VAR` and `${VAR}` in this file's own values before
+    parsing them, so a literal `$` has to be doubled or it is substituted --
+    usually by nothing, and silently. `--env` in the script beside it passes the
+    same value through untouched, so an unescaped compose file would start an
+    agent authenticating with a shorter password and no error anywhere.
+
+    Confirmed against a real daemon: `a$$b$${HOME}c` in the file arrives in the
+    container as `a$b${HOME}c`.
+
+    Escaped rather than moved into the env file: which variables live there is
+    `use_secret`'s answer, and a value that changed file depending on its
+    punctuation is a bundle nobody could reason about."""
+    text = docker_compose(extra_env={"PREFERRED_INTERFACE": "a$b${HOME}c"})
+    assert 'PREFERRED_INTERFACE: "a$$b$${HOME}c"' in text
+    # ...and it is still one value to whatever reads the YAML.
+    svc = yaml.safe_load(text)["services"]["crane"]
+    assert svc["environment"]["PREFERRED_INTERFACE"] == "a$$b$${HOME}c"
+
+
+def test_compose_restates_the_fixed_half_of_the_command():
+    """user, network, restart, mounts, workdir and entrypoint are the same fact
+    stated twice, so both sides read the constant rather than a literal of their
+    own -- `-u 0` is the flag that already went missing once, and it would go
+    missing here first. Issue #178 holds the two equal properly; this is the
+    shape."""
+    svc = yaml.safe_load(docker_compose())["services"]["crane"]
+    assert svc["user"] == gen.DOCKER_USER
+    assert svc["restart"] == gen.DOCKER_RESTART
+    assert svc["network_mode"] == gen.DOCKER_NETWORK
+    assert svc["working_dir"] == gen.DOCKER_WORKDIR
+    assert svc["command"] == gen.DOCKER_ENTRYPOINT
+    assert svc["volumes"] == gen.DOCKER_MOUNTS
+    # The CA mount is conditional in the script and conditional here, and it
+    # keeps the same override: a host may already keep the trust bundle its
+    # platform team maintains. Compose resolves the relative default against
+    # this file's directory, which is what `$DIR` means in the script.
+    with_ca = yaml.safe_load(docker_compose(ca_bundle="PEM\n"))["services"]["crane"]
+    assert with_ca["volumes"][-1] == (
+        f"${{CA_BUNDLE:-./{gen.DOCKER_CA_FILE}}}:{gen.DOCKER_CA_PATH}:ro")
+
+
+def test_docker_readme_offers_both_routes_and_says_to_pick_one():
+    """`.sh` first: BlazeMeter's own shape leads. The sentence is what stops
+    somebody running both and reading the duplicated results as a load problem
+    -- docker refuses the second, but only after they have tried."""
+    readme = gen.generate(FACTS, DOCKER)["README.md"]
+    run = readme.split("## Run it")[1].split("##")[0]
+    assert run.index(f"./{gen.DOCKER_RUN_FILE}") < run.index("docker compose up -d")
+    assert "not both" in run
+    assert "docker compose version" in run          # the version requirement
+    # ...and the file people would tidy into a `.env` is named where it exists.
+    assert "`.env`" in gen.generate(FACTS, DOCKER)["README.md"]
 
 
 def test_docker_readme_names_what_it_could_not_carry():
@@ -1901,7 +2065,11 @@ def _env_names(facts, opts):
     for name, content in files.items():
         if name.endswith(".yaml"):
             for doc in yaml.safe_load_all(content):
-                if not isinstance(doc, dict):
+                # `metadata` is what makes it a Kubernetes object rather than
+                # merely YAML. The docker bundle's compose.yaml is a .yaml this
+                # generator emits and is not a manifest; its variables are
+                # counted by docker_env below, with the rest of that format's.
+                if not isinstance(doc, dict) or "metadata" not in doc:
                     continue
                 # The agent's two only. The CA ConfigMap is keyed by *file*
                 # name (ca-bundle.crt) and is mounted rather than read as env,

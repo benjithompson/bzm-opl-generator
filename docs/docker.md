@@ -9,7 +9,7 @@ same host, through the socket it is given.
 bzm-opl-gen generate --format docker --auth-token <AUTH_TOKEN> -o out/
 
 # on the host that is to be the private location
-./out/bzm-opl-agent.sh
+./out/bzm-opl-agent.sh          # ...or `docker compose up -d` in out/
 ```
 
 The bundle is:
@@ -17,6 +17,7 @@ The bundle is:
 | file | |
 |---|---|
 | `bzm-opl-agent.sh` | the `docker run` command, with the settings folded in |
+| `compose.yaml` | the same container for Docker Compose — see below |
 | `bzm-opl-agent.env` | the `AUTH_TOKEN`, when `use_secret` is on (the default) |
 | `ca-bundle.crt` | the inline PEM, when one was given |
 | `bzm-opl-image-mirror.sh` | when `--private-registry` was given |
@@ -121,6 +122,68 @@ With it off you get BlazeMeter's own shape, `--env AUTH_TOKEN=...` inline and no
 second file. A proxy URL carrying `user:password` moves into the env file too,
 by the same rule the Kubernetes Secret follows.
 
+## Docker Compose
+
+`compose.yaml` sits beside the script and describes the same container. It is
+**not** a fourth `--format`: a format is a platform, and these are two syntaxes
+for one. It buys no capability either — for a single container compose adds
+nothing `docker run` cannot do — and it is here because some customers install
+with compose and will not take a script.
+
+```
+cd out/
+docker compose up -d            # needs `docker compose version` 2 or newer
+docker compose logs -f crane
+```
+
+The name is `compose.yaml` because that is what compose looks for: the customer
+unzips and runs `docker compose up -d` with no `-f`. There is no `version:` key
+(obsolete since v2, and warned about), and the top-level `name:` is stated
+rather than left to compose, which otherwise takes the project name from
+whatever directory the bundle was unzipped into.
+
+BlazeMeter publishes no compose file — their install page and their
+`docker-command` endpoint both return a `docker run` — so the rule above, *check
+it against the command their API returns*, has no counterpart here. What holds
+it honest instead is parity with the script beside it: `user`, `network_mode`,
+`restart`, `volumes`, `working_dir` and `command` are the generator's own
+constants, read by both renderers, and the environment comes from
+`docker_split_env()` for both.
+
+### Either/or, and docker enforces it
+
+Both files start one agent for one `ship_id`, and running both would put two
+cranes on one agent identity — which BlazeMeter reports as **duplicated results
+rather than as an error**. So both name the container `bzm-crane-<shipId>` and
+the second one to start refuses:
+
+```
+Error response from daemon: Conflict. The container name
+"/bzm-crane-<shipId>" is already in use by container "482fff816b3c..."
+```
+
+A README warning fails at "why are my results duplicated"; a name collision
+fails at `compose up`.
+
+### Never a file called `.env`
+
+`use_secret` writes the credential to `bzm-opl-agent.env`, and compose reads
+that same file through `env_file:`. The name matters: compose auto-loads a file
+called `.env` for **variable interpolation into `compose.yaml`**, not into the
+container. An `AUTH_TOKEN` moved there would never reach crane while looking
+exactly as though it had, and a `$` in a proxy password would be substituted on
+the way past. The compose file carries that as a comment, because renaming it is
+the tidy-up somebody will reach for.
+
+The same interpolation is why every value the compose file carries inline is
+written with `$` doubled — `a$b` is emitted as `a$$b`, which arrives in the
+container as `a$b`. Escaped rather than moved into the env file: which variables
+live there is `use_secret`'s answer, and a value that changed file depending on
+its punctuation is a bundle nobody could reason about. The one deliberate
+interpolation is the CA mount, `${CA_BUNDLE:-./ca-bundle.crt}`, which is the
+counterpart of the script's overridable `CA_BUNDLE` — a host may already keep
+the trust bundle its platform team maintains.
+
 ## Worth knowing
 
 - **The socket is the point, and it is root.** Crane starts engines through
@@ -129,9 +192,9 @@ by the same rule the Kubernetes Secret follows.
 - **Size the host for the location, not for crane.** Every engine is another
   container on it. `bzm-opl-gen plan` sizes the whole thing.
 - **One agent per host.** The container is named `bzm-crane-<shipId>`, as
-  BlazeMeter names it, and the script refuses rather than replacing an existing
-  one — that container may be the agent currently serving this location.
-  `docker rm -f` it deliberately.
+  BlazeMeter names it, and neither route replaces an existing one — that
+  container may be the agent currently serving this location. `docker rm -f` it
+  deliberately.
 - **Docker Desktop for Mac 4.3.0+** additionally needs `--privileged -v
   /sys/fs/cgroup:/sys/fs/cgroup:rw`, per BlazeMeter's installation page. The
   generated script does not add them: they are a property of that one runtime,
