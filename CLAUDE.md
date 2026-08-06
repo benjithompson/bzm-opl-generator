@@ -692,6 +692,13 @@ absent rule; and `plan.capacity_plan` returns `override_cpu: None` where an
 engine is not a whole number of cores, which is what the field cannot express —
 it used to emit a formatted `"500m"` that the UI caught with a regex.
 
+A third, on the account side: `facts.image_list` (#152). Four answers — read,
+unread, no-agent, not-asked — because all four leave the *same* fallback images
+behind, so `images` could never have said which happened. `_read_image_list`
+carries it structurally, returning `None` for the entries wherever the state is
+not `read`; a caller that iterates without looking gets a TypeError rather than
+an empty list it reads as "this location runs nothing".
+
 ## Generator details that bite
 
 - **`livetest` deploys the directory, and only sometimes re-renders it.**
@@ -818,10 +825,50 @@ it used to emit a formatted `"500m"` that the UI caught with a regex.
   produces repos that do not exist. `test_manual_facts.py` asserts the catalogue
   covers every category `CATEGORY_BY_FUNC` can ask for, so a new funcId fails
   there rather than on a sealed cluster.
-- GUI browser images are the one gap and cannot be closed: the account carries
-  60+ version-pinned `charmander/*` repos and only a live agent says which one a
-  location uses. `facts.gui_images_incomplete()` flags it; don't invent a
-  default.
+
+- **The location's own image list is the first source, and it needs no agent**
+  (#152). `GET /private-locations/{h}/ships/{s}/versions` — the same call crane
+  makes at startup — answers for an agent in state `empty` that has never been
+  online, which is every first install. `dockerTag` is crane's key and `version`
+  its tag, so an entry is `dockerTag:version`, exactly the form a live
+  Kubernetes agent reports the same image in; the map's *own* keys are
+  BlazeMeter's resource ids (`taurusEngineDockerImage`) and crane resolves an
+  override by none of them.
+
+  **Three sources, and none of them replaces another.** `gather()` takes the
+  image list, then a running agent's inventory, then the catalogue, and the
+  first to name a key keeps it — they answer different questions, so precedence
+  is per key rather than a fallback chain. The middle one is not redundant: a
+  live *Kubernetes* agent reports `torero` and `richrach` beside the location's
+  images and **no `/versions` response names either** — not a performance
+  location's, not a twelve-resource one's — while every Docker agent read in the
+  same account reports neither. They belong to the Kubernetes container manager
+  rather than to the location, which is why the catalogue keeps them (a key
+  crane cannot find in a sealed cluster is an ImagePullBackOff mid-test) and why
+  the image list is right not to carry them. They stay in the `performance`
+  category: the one live Kubernetes agent that reports them runs engines, and no
+  SV-only Kubernetes agent has been read.
+
+- **The GUI browser gap is closed, and `gui_images_incomplete` now reads the
+  images rather than their provenance.** The account carries 60+ version-pinned
+  `charmander/*` repos, and the location's image list names the one this
+  location pins, off its browser funcIds and with no agent running. So the
+  sentence this file used to carry — only a live agent knows — is wrong, and
+  what is left is narrower: **manual entry still cannot know**, because there is
+  no account to ask. Provenance was a proxy in both directions (a live inventory
+  carrying no browser passed; an image list would pass by existing), so the
+  predicate asks the only question that matters — does this bundle name a
+  browser image at all. Still don't invent a default.
+
+- **`images_source` names every source that contributed; `image_list` says how
+  the read went.** Two fields because they are two questions, and the second is
+  the one the rule below is about: `read` (with a count, and 0 is a location
+  whose resources are none), `unread` (refused — never a count), `no-agent`
+  (per-agent route, no agent, so nothing was asked) and `not-asked` (manual
+  entry, or a facts file written before any of this). `_read_image_list`
+  returns `None` rather than `[]` wherever the state is not `read`, so a reader
+  that ignores the state raises instead of seeing an empty answer somebody was
+  refused.
 
 ## Conventions
 

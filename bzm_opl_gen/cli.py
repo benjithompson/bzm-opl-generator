@@ -160,11 +160,21 @@ def cmd_facts(a):
     print(f"wrote {a.output}: location '{f['harbor_name'] or f['harbor_id']}' "
           f"funcIds={f['func_ids']} ships={len(f['ships'])} "
           f"images={len(f['images'])} ({f['images_source']})")
+    # A refused image list is the one state worth a line of its own: the images
+    # below it are a catalogue's, and nothing in the count above says so. An
+    # empty answer is not this -- that is the location saying it runs nothing --
+    # and a location with no agent has nothing to refuse.
+    if facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD:
+        print(f"note: the location's own image list could not be read "
+              f"({f['image_list']['detail']}), so the images above are the "
+              f"fallback catalogue's rather than this location's. Versions may "
+              f"be wrong and browser images are missing.", file=sys.stderr)
     if facts_mod.gui_images_incomplete(f):
         print("note: functionalGui needs a version-pinned browser image "
               "(charmander/chrome_*, firefox_*, ...) that no catalogue can pick "
-              "for you. Fine against the public registry; for a private one, add "
-              "the key to IMAGE_OVERRIDES by hand or gather facts with an API key.",
+              "for you. The account names it, so gather facts with an API key; "
+              "otherwise add the key to IMAGE_OVERRIDES by hand. Fine as it is "
+              "against the public registry, not against a private one.",
               file=sys.stderr)
 
 

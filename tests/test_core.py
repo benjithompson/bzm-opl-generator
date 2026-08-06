@@ -66,8 +66,14 @@ class FakeClient:
     """
 
     def __init__(self, token="TOKEN-FROM-API", harbor=None, locations=None,
-                 ignores=()):
+                 ignores=(), versions=None):
         self._token = token
+        # What GET .../versions does -- a recorded payload, or an exception to
+        # raise. It defaults to raising, because a stand-in account that answers
+        # would decide the images for every test here rather than the one asking
+        # about them.
+        self._versions = versions if versions is not None else api.BzmApiError(
+            "GET /private-locations/h/ships/s/versions -> HTTP 404: not found")
         self._harbor = harbor if harbor is not None else {}
         self._locations = locations
         self._workspaces = [{"id": 1, "name": "Alpha"}, {"id": 2, "name": "Beta"}]
@@ -84,6 +90,12 @@ class FakeClient:
     def private_location(self, harbor_id):
         self.calls.append(("private_location", harbor_id))
         return self._harbor
+
+    def ship_versions(self, harbor_id, ship_id):
+        self.calls.append(("ship_versions", harbor_id, ship_id))
+        if isinstance(self._versions, Exception):
+            raise self._versions
+        return self._versions
 
     def user(self):
         return {"email": "se@example.com", "displayName": "SE",

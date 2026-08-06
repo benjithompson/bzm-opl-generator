@@ -11,6 +11,42 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **A bundle's images come from the location itself, and no longer wait for an
+  agent to be running.** BlazeMeter serves the image list a private location
+  runs — the same list the agent asks for when it starts — so `bzm-opl-gen
+  facts` reads it directly. Three things follow for anyone generating with an
+  API key:
+
+  **The GUI browser image is named.** It was the one gap this tool said it could
+  not close: a GUI Functional location runs one of the account's 60-odd
+  version-pinned browser builds, and the catalogue here has no defensible
+  default. The location says which, off its own browser settings, so a browser
+  bundle for a sealed cluster now carries the right `IMAGE_OVERRIDES` key
+  instead of a warning.
+
+  **Versions are exact.** `taurus-cloud:2.4.454-reduced`, not
+  `taurus-cloud:latest` — and the agent image itself is pinned to the version
+  the account advertises rather than floating, for a location whose agent has
+  never come online.
+
+  **The images follow what the location runs.** A Service Virtualization
+  location carries no load-test engine at all; a performance one carries three
+  images and no browser.
+
+  Nothing is lost where the list cannot be read. A running agent's own inventory
+  and the built-in catalogue still fill in behind it, in that order, and the
+  catalogue keeps two Kubernetes images (`torero`, `richrach`) that no image list
+  names but every live Kubernetes agent holds. Entering a harbor id and ship id
+  by hand is unchanged: there is no account to ask, so it gets the catalogue and
+  still says so.
+
+  `bzm-opl-gen facts` now says when the location's image list was *refused*,
+  which is not the same as a location that names nothing and not the same as
+  having nobody to ask — the images beneath that line are a catalogue's, and the
+  count alone never said so.
+
 ### Fixed
 
 - **A card on the configure step is one functionality, under BlazeMeter's own

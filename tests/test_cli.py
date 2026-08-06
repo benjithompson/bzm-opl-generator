@@ -16,7 +16,7 @@ import os
 import pytest
 import yaml
 
-from bzm_opl_gen import cli, core, generate as gen, livetest
+from bzm_opl_gen import api, cli, core, generate as gen, livetest
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -24,6 +24,7 @@ from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
 # whose key BlazeMeter has stopped accepting, as core's suite declares them.
 from test_core import (EXPIRED_401, ExpiredClient, FakeClient,  # noqa: E402
                        RefusingClient)
+from versions_fixtures import VERSIONS_PERFORMANCE  # noqa: E402
 
 # Absolute, because several tests below run the command from a directory of
 # their own -- a command that writes into the working directory has to be given
@@ -231,6 +232,45 @@ def test_the_cli_never_runs_docker_itself(monkeypatch, tmp_path):
     assert verbs, "nothing was mirrored at all"
     assert verbs.count("pull") == verbs.count("tag") == verbs.count("push"), \
         f"one pull, tag and push per image; got {verbs}"
+
+
+# -- gathering facts ----------------------------------------------------------
+#
+# The command prints where the images came from, and one state deserves a line
+# of its own: a refused image list leaves the catalogue's images behind, and the
+# count says nothing about that. An empty answer is a different sentence -- the
+# location runs nothing -- so it does not get this one.
+
+def _gathered(monkeypatch, tmp_path, capsys, client, *extra):
+    _account(monkeypatch, client)
+    _run(monkeypatch, "facts", "--api-key", KEY, "--harbor-id", "H1",
+         "--output", str(tmp_path / "facts.json"), *extra)
+    return capsys.readouterr()
+
+
+HARBOR = {"id": "H1", "name": "loc", "funcIds": ["performance"], "slots": 1,
+          "threadsPerEngine": 500,
+          "ships": [{"id": "S1", "name": "a", "state": "empty"}]}
+
+
+def test_facts_says_when_the_image_list_could_not_be_read(monkeypatch, tmp_path,
+                                                          capsys):
+    """The refusal names itself. Without it the line above reads as a location
+    that carries these images, when they are a catalogue's guess at any
+    location's."""
+    out = _gathered(monkeypatch, tmp_path, capsys, FakeClient(
+        harbor=HARBOR,
+        versions=api.BzmApiError("GET /private-locations/H1/ships/S1/versions "
+                                 "-> HTTP 403: forbidden")))
+    assert "could not be read" in out.err and "403" in out.err
+
+
+def test_facts_says_nothing_extra_when_the_image_list_was_read(monkeypatch,
+                                                               tmp_path, capsys):
+    out = _gathered(monkeypatch, tmp_path, capsys,
+                    FakeClient(harbor=HARBOR, versions=VERSIONS_PERFORMANCE))
+    assert "could not be read" not in out.err
+    assert "location image list" in out.out
 
 
 def _facts_file(tmp_path, ships):

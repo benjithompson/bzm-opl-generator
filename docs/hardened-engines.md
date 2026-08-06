@@ -192,5 +192,6 @@ deploy a bundle, then start a test on it and watch the pods crane creates
 GUI-functional test is what creates the `doduo-r-gp-*` and `grid-r-sg-*` pods).
 
 Tags matter: the ones above are what a live GUI-functional location reported.
-Only a live agent says which browser image a location uses, so re-read them with
-`bzm-opl-gen facts` before repeating this for a customer.
+Which browser image a location uses is the account's answer, not a guess and not
+something only a running agent knows — `bzm-opl-gen facts` reads it off the
+location — so re-read them before repeating this for a customer.
