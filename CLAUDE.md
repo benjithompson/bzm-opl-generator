@@ -720,6 +720,42 @@ carries it structurally, returning `None` for the entries wherever the state is
 not `read`; a caller that iterates without looking gets a TypeError rather than
 an empty list it reads as "this location runs nothing".
 
+A fourth, arriving from BlazeMeter rather than from a file: **404 is the one
+upstream status that is a different type.** `core._upstream` had every
+`BzmApiError` become an `UpstreamError`/502, so a location somebody deleted and
+a BlazeMeter nobody could reach were the same failure carrying whatever sentence
+the API wrote — while the two remedies are opposites, re-read the account or
+wait. `api.BzmApiError` had carried the code all along; it was thrown away one
+line later. Only 404: a 401 is an expired key and a 403 is an account that
+restricts the endpoint, and neither says the thing asked for is gone. The
+browser half is `frontend/src/stale.ts`, which branches on `ApiError.status` and
+on nothing else — never on the message, and never on a status-less failure like
+fetch rejecting because the server is not running.
+
+**The page has a Refresh, and it is a button because the staleness is rare.**
+The location list ages while the page is open (an agent a colleague created, a
+location deleted in BlazeMeter's own UI); a poll was considered and rejected,
+because a control that exists is itself the hint that the data can age, and a
+background timer is not. It lives in `AgentPanel`'s private-location header —
+connect mode only, structurally, since manual entry renders none of that branch
+and has no account to re-read. **`POST /api/refresh` is what makes it mean
+anything**: without dropping `_cache` first, a re-read is served the same list
+for up to `CACHE_TTL_S` and the click looks exactly like one that worked. It is
+not `_writes` — nothing there reaches the account — and it answers nothing,
+because what to re-read is the caller's; the page re-reads one list.
+`App.refreshLocations` is a **separate path from the workspace effect**, which
+is the initial load: that one blanks the list, resolves the harbor id a restored
+session is holding and calls `release()`, none of which may happen again on a
+page that is already configured. So a refresh writes `locations` and nothing
+else — not the selection, not the options, not facts (their cache is dropped
+too, so picking the location again re-reads them). A selected location missing
+from the answer is `vanished` in the panel: a notice and a forced fold back to
+the list, not a silent repoint, and not the sentence a *failed action* gets —
+`stale.goneNotice` says "press Refresh", `stale.vanishedNotice` cannot, having
+been reached by one. Neither says **reload**: a pasted AUTH_TOKEN does not
+survive one (#123), so sending somebody to the browser's reload button to fix a
+stale list can cost a credential nothing can read back.
+
 ## Generator details that bite
 
 - **`livetest` deploys the directory, and only sometimes re-renders it.**

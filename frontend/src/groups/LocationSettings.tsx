@@ -29,6 +29,9 @@ import { Button, ErrorMsg, NumberInput, PlanCaveats } from "../components";
 // The same ask the profile card makes, re-made with this location's agent
 // count: `slots` is engines per *agent*, and the division is plan.py's.
 import { PlanAsk, useCapacityPlan } from "../usePlan";
+// A location deleted since the list was read, told apart from a write the
+// account refused for any other reason.
+import { goneNotice } from "../stale";
 
 /** The form, as strings. Blank means "leave this one alone", which is also what
  *  the API takes: there is deliberately no way to *clear* a setting here, since
@@ -199,7 +202,9 @@ export function LocationSettings(props: {
       setResult(out);
       props.onUpdated(out.location);
     } catch (e) {
-      setErr(String((e as Error).message));
+      // A location deleted since this list was read says so, rather than
+      // relaying BlazeMeter's 404 as though the settings had been rejected.
+      setErr(goneNotice(e, "location") ?? String((e as Error).message));
     } finally {
       setBusy(false);
     }

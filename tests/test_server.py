@@ -2102,6 +2102,83 @@ def test_the_cache_expires(monkeypatch):
     assert [x[0] for x in c.calls].count("private_locations") == 2
 
 
+def test_refresh_is_what_makes_the_button_mean_anything(monkeypatch):
+    """Without it, Refresh is served from the same cache it exists to get past.
+
+    The page holds a location list for as long as it is open and the account
+    under it moves. The button beside that list re-reads -- but a re-read alone
+    hits `_cached`, so for up to CACHE_TTL_S it returns the byte-identical list
+    and the click looks exactly like one that worked. Asserted as two reads of
+    the account rather than as an empty `_cache`, because what the user is owed
+    is the round trip, not the bookkeeping.
+    """
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.get("/api/locations?workspace_id=42")
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 1
+    assert client.post("/api/refresh").status_code == 200
+    client.get("/api/locations?workspace_id=42")
+    assert [x[0] for x in c.calls].count("private_locations") == 2
+
+
+def test_refresh_reaches_blazemeter_by_itself_for_nothing(monkeypatch):
+    """It forgets; it does not fetch. What to re-read afterwards is the caller's
+    -- the page re-reads one list -- and re-reading the rest on its behalf would
+    be this route deciding which of the account's slow calls a click is worth
+    (the capacity rollup is 1.3s on a real account and is on another view)."""
+    c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
+    connect(monkeypatch, c)
+    client.post("/api/refresh")
+    assert c.calls == []
+
+
+def test_refresh_needs_no_key(monkeypatch):
+    """Nothing here reaches the account, so there is nothing to be connected
+    for. 401ing would make the button's failure depend on state it never
+    reads."""
+    server._state["client"] = None
+    server._cache["locations:None:42"] = (time.monotonic() + 60, [])
+    assert client.post("/api/refresh").status_code == 200
+    assert not server._cache
+
+
+class DeletedLocation(FakeClient):
+    """An account that has had this location removed out from under the page."""
+
+    def private_location(self, harbor_id):
+        self.calls.append(("private_location", harbor_id))
+        raise core.api.BzmApiError(
+            f"GET /private-locations/{harbor_id} -> HTTP 404: not found",
+            status=404)
+
+
+def test_a_deleted_location_reaches_the_browser_as_a_404(monkeypatch):
+    """...and with a detail, which is what lets the page say which failure it is.
+
+    The browser cannot read a sentence: `stale.isGone` branches on the status
+    and on nothing else, so a deleted location arriving as the 502 it used to be
+    would have the page report "something went wrong" about the one failure it
+    has a remedy for. The detail matters too -- api.ts reads a *detail-less* 404
+    as the SPA's static mount answering for a route the server has never heard
+    of, which is a different message entirely.
+    """
+    connect(monkeypatch, DeletedLocation())
+    r = client.get("/api/status?harbor_id=h1&ship_id=s1")
+    assert r.status_code == 404
+    assert "404" in r.json()["detail"]
+
+
+def test_an_account_that_refuses_is_not_an_account_that_deleted_anything(
+        monkeypatch):
+    """The other half, one layer up from core's own test of it. An expired key
+    must not reach the page as the status that means "gone", or the page offers
+    Refresh at a problem no re-read can fix."""
+    from test_core import ExpiredClient
+    connect(monkeypatch, ExpiredClient())
+    assert client.get("/api/status?harbor_id=h1&ship_id=s1").status_code == 502
+
+
 def test_every_write_route_drops_the_cache():
     """The rule is the decorator's, not each route's memory of it.
 

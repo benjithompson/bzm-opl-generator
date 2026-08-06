@@ -1365,6 +1365,83 @@ test("a long list is filtered, and the row picked is the one whose facts are rea
     expect(screen.getByText("no locations match")).toBeTruthy();
   });
 
+// -- Refresh -----------------------------------------------------------------
+// stale.ts is tested as plain data. What needs a page is the ordering and the
+// ownership: that the cache is dropped *before* the re-read (or the button is
+// served the same list it was pressed about), and that the re-read writes the
+// list and leaves everything else where it was.
+
+test("Refresh drops the server's cache before re-reading, or it re-reads nothing",
+  async () => {
+    const calls: string[] = [];
+    const listing = [loc("h-0", "Region 0")];
+    render(<App api={accountOf(listing, {
+      refresh: async () => { calls.push("refresh"); return null; },
+      locations: async () => { calls.push("locations"); return [...listing]; },
+    })} />);
+
+    expect(await screen.findByText("Region 0")).toBeTruthy();
+    expect(calls).toEqual(["locations"]);
+
+    // What a colleague did while this page sat open.
+    listing.push(loc("h-1", "Region 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("Region 1")).toBeTruthy();
+    // The order is the whole point. The server holds a location list for
+    // CACHE_TTL_S, so a re-read on its own comes back byte-identical and the
+    // click looks exactly like one that worked.
+    expect(calls).toEqual(["locations", "refresh", "locations"]);
+  });
+
+test("a location that has gone is said, and nothing else on the page moves",
+  async () => {
+    const listing = [loc("h-0", "Region 0"), loc("h-1", "Region 1")];
+    const asked: string[] = [];
+    render(<App api={accountOf(listing, {
+      refresh: async () => null,
+      facts: async (harborId: string) => {
+        asked.push(harborId);
+        return { harbor_id: harborId, func_ids: ["performance"], ships: [],
+                 images: [] };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Region 0"));
+    await waitFor(() => expect(asked).toEqual(["h-0"]));
+
+    // Deleted in BlazeMeter's own UI, and a Refresh finds out.
+    listing.splice(0, 1);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText(/no longer in the account/)).toBeTruthy();
+    // It does not send the reader back to the button that just answered, and it
+    // does not say "reload" -- a reload loses a pasted AUTH_TOKEN.
+    expect(screen.queryByText(/reload/i)).toBeNull();
+    // The refresh wrote the list and nothing else: no second facts read for a
+    // location that is gone, and none for the one that happens to be left.
+    expect(asked).toEqual(["h-0"]);
+    // ...and the list it wrote is the account's.
+    expect(screen.getByText("Region 1")).toBeTruthy();
+    expect(screen.queryByText("Region 0")).toBeNull();
+  });
+
+test("a refresh that fails leaves the list it could not replace on screen",
+  async () => {
+    // The rule the whole page keeps: a read that failed has said nothing about
+    // what the account holds, and blanking here would answer "could not read"
+    // with "there is nothing there".
+    render(<App api={accountOf([loc("h-0", "Region 0")], {
+      refresh: async () => { throw new Error("BlazeMeter is unreachable"); },
+    })} />);
+
+    expect(await screen.findByText("Region 0")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText(/unreachable/)).toBeTruthy();
+    expect(screen.getByText("Region 0")).toBeTruthy();
+  });
+
 test("creating a location sends what the form holds, and selects what comes back",
   async () => {
     const created: unknown[] = [];

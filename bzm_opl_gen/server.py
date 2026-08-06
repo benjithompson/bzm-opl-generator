@@ -297,6 +297,30 @@ def key_set(k: KeyIn):
 
 # -- account tree -------------------------------------------------------------
 
+@app.post("/api/refresh")
+def refresh():
+    """Forget what was read from BlazeMeter, so the next read is a real one.
+
+    The page holds a location list that ages: an agent created by a colleague,
+    a location deleted in BlazeMeter's own UI, an agent that has stopped
+    reporting since the list was fetched. There is a Refresh beside that list,
+    and this is what it presses -- without which it would be a button that does
+    nothing for up to CACHE_TTL_S while looking exactly like one that worked,
+    which is worse than the staleness it is there to fix.
+
+    Not `_writes`. That decorator is for a route that changes the customer's
+    account and drops the cache *after* it; nothing here reaches BlazeMeter at
+    all. What the two share is `_forget`, and the whole-cache argument it makes
+    is the same one: a rule about which keys a human means by "this is out of
+    date" is a rule that goes wrong quietly.
+
+    Answers with nothing. What to re-read afterwards is the caller's -- the
+    page re-reads one list, and re-reading the rest on its behalf would be this
+    route deciding which of the account's slow calls a click is worth.
+    """
+    _forget()
+
+
 @app.get("/api/accounts")
 def accounts():
     return _cached("accounts", _answer, core.accounts, _client())
