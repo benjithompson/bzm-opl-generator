@@ -559,17 +559,18 @@ def _facts_warnings(facts):
     """What these facts cannot tell you, said once at the point they are made.
 
     The GUI image gap is the one that matters: the account carries 60+
-    version-pinned browser repos and only a live agent says which a location
-    uses, so a bundle built without one selects an image that may not be the
-    right version. There is no default worth inventing.
+    version-pinned browser repos, and a bundle that names none of them selects
+    an image that may not be the right version. There is no default worth
+    inventing -- but the account itself knows, so this now fires only where
+    nobody could ask it.
     """
     out = []
     if facts_mod.gui_images_incomplete(facts):
         out.append(
             "this location runs GUI/browser tests, and these facts carry no "
-            "browser image. Only a live agent reports which of the account's "
-            "pinned browser images it uses -- ask for the agent's image list, "
-            "or expect the browser engines to fail to pull.")
+            "browser image. The account names the pinned build a location uses "
+            "-- gather facts with an API key rather than by hand, or expect the "
+            "browser engines to fail to pull.")
     return out
 
 
