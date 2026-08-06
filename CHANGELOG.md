@@ -11,306 +11,143 @@ anything that breaks.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-08-06
+
 ### Added
 
-- **This is an open-source project now: Apache-2.0, and on PyPI.** `pipx install
-  "bzm-opl-gen[ui]"` is the install — no `gh auth`, no git URL, no access to ask
-  for. The git spec and the release wheel still work and are still documented,
-  as the way to run `main` or a tag PyPI has not seen. Releases publish to PyPI
-  through trusted publishing, so no API token exists to leak, and that job is
-  pinned to a GitHub-hosted runner because it is where the publishing identity
-  is minted.
-- **A LICENSE, a NOTICE, and the metadata a package needs to describe itself.**
-  The wheel carried no license, no README and no project URLs, so its PyPI page
-  would have rendered blank. Also `SECURITY.md` — which is where an AUTH_TOKEN
-  problem goes rather than into a public issue — a code of conduct, issue and PR
-  templates, and Dependabot over all three ecosystems this repo builds from.
-
+- **Open source: Apache-2.0, and on PyPI.** `pipx install "bzm-opl-gen[ui]"` is
+  the install — no `gh auth`, no git URL, no access to ask for. The git spec and
+  the release wheel still work, for `main` or a tag PyPI has not seen. Releases
+  publish through trusted publishing, so there is no API token to leak.
+- **A LICENSE, a NOTICE, and the metadata a package needs to describe itself** —
+  the wheel had no license, README or URLs, so its PyPI page would have rendered
+  blank. Plus issue and PR templates, CODEOWNERS, and Dependabot over all three
+  ecosystems this repo builds from.
 - **The planner sizes all three covered functionalities, each in its own unit.**
-  It only ever spoke virtual users, and two of the three are not asked for in
-  virtual users at all. `bzm-opl-gen plan` now takes `--browsers` and
-  `--requests-per-second` beside `--users`, any of them alone or together, and
-  the sizing card on step 1 of the web UI has a tick and a target for each.
+  It only spoke virtual users, and two of the three are not asked for in those.
+  `plan` now takes `--browsers` and `--requests-per-second` beside `--users`,
+  any of them alone or together; `--users` is no longer required, though a run
+  naming none of the three is still refused.
 
-  | functionality | asked for in | what one 2 CPU / 8Gi pod carries |
+  | functionality | asked for in | one 2 CPU / 8Gi pod carries |
   |---|---|---|
   | Performance | virtual users | 500 — BlazeMeter's own figure |
   | GUI Functional | browser instances | about 4 — the account owner's estimate |
   | Service Virtualization | requests per second | **nothing measured** |
 
-  **One pod size across all of them**, because crane applies a single
-  `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY` pair to every pod it creates and
-  there is no second one. So where several are sized, the largest decides the
-  pool and the plan names which — in the summary, in the request document, and
-  as `driven_by` in the JSON. Largest and not the sum: if a load test and a
-  browser suite will run at the same time, add the pod counts and size for the
-  total, which the plan says as well.
-
-  **Service virtualization is stated, not sized.** How many requests per second
-  one core of a mock pod serves has not been measured, and nothing here can
-  measure it — it is a property of the mocks, in the way virtual users per
-  engine is a property of the script. Nothing is assumed in its place and there
-  is no flag to supply one. A request rate is carried into the ask at the top of
-  the request document, into the assumptions section saying why it produced no
-  arithmetic, and into the warnings; sized on its own it is a refusal carrying
-  that sentence rather than a plan with an invented number in it.
-
-  `--users` is therefore no longer required — it is the performance model's
-  target, not the only sizing there is — though a run with none of the three is
-  still refused, naming it.
-
+  **One pod size across all of them**, because the agent applies a single CPU and
+  memory limit pair to every pod it creates. Where several are sized the largest
+  decides, and the plan names which — largest, not the sum, so if a load test and
+  a browser suite run together, add the pod counts yourself. **Service
+  virtualization is stated, not sized**: requests per second per core has never
+  been measured, nothing is assumed in its place, and there is no flag to supply
+  one. Sized alone it is a refusal carrying that sentence, not a plan with an
+  invented number in it.
 - **Named sizings on the web UI's step 1.** Save what is in the fields under a
   name and pick it back later; three ship as starting points, one per
-  functionality. They last as long as the browser session, like everything else
-  that page remembers. Picking one applies nothing: it fills the fields, and the
-  fields are the sizing.
+  functionality. Picking one fills the fields and applies nothing else.
 
 ### Changed
 
 - **A pull request on a public repo can no longer reach a self-hosted runner.**
   `runs-on` reads the trigger and `github.event.repository.private` as well as
-  the `RUNNER_LABELS` variable. Without it, a fork PR would have run a
-  stranger's `conftest.py`, build backend and npm lifecycle scripts on the
-  maintainer's own machine -- on runners that are reused rather than ephemeral,
-  so the next thing that host does is build the release wheel.
-
-  It is keyed on `private` rather than refusing every PR, because a private repo
-  cannot be forked by a stranger and so has nothing to defend against yet, while
-  its hosted minutes are metered: a blanket rule left three of four jobs queued
-  until their allocation timeout cancelled them. Now the same commit runs
-  self-hosted while private and hosted the moment the repo is flipped, with no
-  edit. It fails safe -- an absent `private` reads as public, which forces
-  `ubuntu-latest`.
-
+  `RUNNER_LABELS`. Without it a fork PR would run a stranger's `conftest.py`,
+  build backend and npm lifecycle scripts on the maintainer's own machine — on
+  reused, non-ephemeral runners, the same host that later builds the release
+  wheel. Keyed on `private` because a private repo cannot be forked by a
+  stranger; it fails safe, since an absent `private` reads as public.
+- **A bundle's images come from the location itself, and no longer wait for a
+  running agent.** BlazeMeter serves the image list a location runs — the list
+  the agent asks for at startup — so `facts` reads it directly. Three things
+  follow: **the GUI browser image is named** (the one gap this tool said it could
+  not close, since a location runs one of 60-odd version-pinned builds and there
+  is no defensible default), **versions are exact** rather than `latest`, and
+  **the images follow what the location runs**. Where the list cannot be read, a
+  running agent's inventory and the built-in catalogue still fill in behind it —
+  and `facts` now says when the list was *refused*, which is not the same as a
+  location that names nothing.
 - **An MCP session can size all three functionalities, and is told so.**
   `opl_plan capacity` required `users` and described virtual users alone, which
-  for a GUI Functional or Service Virtualization customer was not an incomplete
-  sentence but the whole of what could be asked for. It now takes `browsers`
-  (with `browsers_per_engine`) and `requests_per_second` beside `users`, any of
-  them alone or together, exactly as `bzm-opl-gen plan` and the web UI already
-  did — and its description states each model in its own unit, including the
-  request-rate figure that has never been measured and so sizes nothing.
-
-  `opl_location create` and `opl_facts manual` also now name the funcIds a
-  bundle can be configured for, rather than taking `func_ids` with nothing
-  anywhere naming a valid value.
-
-- **The MCP server says agent, not ship.** One deployment inside a private
-  location is an *agent*, and for a session driving this server the tool
-  descriptions and the docs it serves are the whole documentation — so being
-  told "a location with no ship has nothing to deploy to" left it guessing what
-  a ship was, with nothing anywhere to check against.
-
-  `opl_location create_ship` is now **`create_agent`** and answers with an
-  `agent` key; a listing counts `agent_count`, `agents_reporting` and
-  `agents_unknown`; `show` returns `agents`; `delete` reports `agents_deleted`.
-  `create_ship` goes on working as an accepted alias, exactly as `bzm-opl-gen
-  create-agent` still answers to `create-ship` — an action name is read out of
-  the description at call time, but a saved prompt is not.
-
-  **`ship_id` is unchanged**, everywhere it appears, and so are `harbor_id`,
-  `SHIP_ID` and `HARBOR_ID`. Those are BlazeMeter's own field names, and this
-  tool's word for a field must not differ from the word in the response it was
-  read out of.
-
-- **A bundle's images come from the location itself, and no longer wait for an
-  agent to be running.** BlazeMeter serves the image list a private location
-  runs — the same list the agent asks for when it starts — so `bzm-opl-gen
-  facts` reads it directly. Three things follow for anyone generating with an
-  API key:
-
-  **The GUI browser image is named.** It was the one gap this tool said it could
-  not close: a GUI Functional location runs one of the account's 60-odd
-  version-pinned browser builds, and the catalogue here has no defensible
-  default. The location says which, off its own browser settings, so a browser
-  bundle for a sealed cluster now carries the right `IMAGE_OVERRIDES` key
-  instead of a warning.
-
-  **Versions are exact.** `taurus-cloud:2.4.454-reduced`, not
-  `taurus-cloud:latest` — and the agent image itself is pinned to the version
-  the account advertises rather than floating, for a location whose agent has
-  never come online.
-
-  **The images follow what the location runs.** A Service Virtualization
-  location carries no load-test engine at all; a performance one carries three
-  images and no browser.
-
-  Nothing is lost where the list cannot be read. A running agent's own inventory
-  and the built-in catalogue still fill in behind it, in that order, and the
-  catalogue keeps two Kubernetes images (`torero`, `richrach`) that no image list
-  names but every live Kubernetes agent holds. Entering a harbor id and ship id
-  by hand is unchanged: there is no account to ask, so it gets the catalogue and
-  still says so.
-
-  `bzm-opl-gen facts` now says when the location's image list was *refused*,
-  which is not the same as a location that names nothing and not the same as
-  having nobody to ask — the images beneath that line are a catalogue's, and the
-  count alone never said so.
+  for a GUI or SV customer was the whole of what could be asked. It now takes
+  `browsers` and `requests_per_second` too. `opl_location create` and
+  `opl_facts manual` also name the funcIds a bundle can be configured for.
+- **The MCP server says agent, not ship.** For a session driving this server the
+  tool descriptions are the whole documentation, so "a location with no ship"
+  left it guessing. `create_ship` is now **`create_agent`**, listings count
+  `agent_count`/`agents_reporting`/`agents_unknown`, and `create_ship` still
+  works as an alias. **`ship_id`, `harbor_id`, `SHIP_ID` and `HARBOR_ID` are
+  unchanged** — those are BlazeMeter's own field names.
+- **Entering an identity by hand declares everything it runs, not one thing.**
+  The *Enabled* control was a radio button, so a typed identity could be
+  Performance *or* GUI Functional, never both — but 71 of 168 locations in one
+  real account run both, and the bundle carried the wrong images for half of
+  what they do. It is a checkbox now. Ticking two suggests one namespace, and a
+  namespace you typed still wins.
+- **Service Virtualization is declared on its own, where you are deciding.** In
+  manual entry and the create-location form, ticking it clears the engine
+  functionalities and vice versa, with the reason on screen first: one limit pair
+  reaches every pod, and an SV agent carries no test engine at all — two sizing
+  problems sharing one number. **A location that already runs both still
+  generates**; what a location *is* is changed in BlazeMeter, not here.
+- **`AUTO_KUBERNETES_UPDATE` is findable.** It was never missing — the bundle
+  writes it from *Agent self-update* under **Security & RBAC** — but nothing led
+  from the variable's name to that control. The environment area now lists every
+  variable the bundle writes for itself, the option that writes it, and the
+  section holding it.
+- **The funcIds on screen are your account's, with BlazeMeter's own names.** The
+  list was hand-written here and disagreed with real accounts in both directions.
+  `functionalApi` is no longer offered when creating a location — BlazeMeter
+  retired it — though a location carrying it still reads and generates. With no
+  key connected the list is the three this tool configures.
 
 ### Fixed
 
-- **The wheel no longer carries stale UI bundles.** setuptools stages into
-  `build/lib` and does not clear what it finds there, and `ui_dist` filenames
-  carry a content hash -- so a rebuilt bundle never overwrote the old one and
-  the wheel shipped both. `index.html` names only the live pair, so this was
-  ~300KB of dead weight per install rather than a wrong UI. Invisible on a
-  GitHub-hosted runner, which starts clean; a self-hosted one reuses its
-  workspace.
-- **Placeholder ids in the web UI and the tests are obviously fake.** The Harbor
-  ID placeholder was a real private location's id, compiled into the shipped
-  bundle; the auth-token placeholder was a 32-hex string of unclear provenance
-  sitting on a credential field. Both now come from the same made-up vocabulary
-  `examples/facts.example.json` uses.
-
 - **A GUI Functional private location could not be created at all.** BlazeMeter
-  refuses one whose "Parallel engine runs" is 1 — `The option Parallel engine
-  runs must be greater than 1 for a Private Location with the GUI Functional
-  Functionality enabled` — and `slots` defaults to 1 in the CLI, on the web
-  page's New location form and in the MCP server's `opl_location create`, so
-  every one this tool made was a 400 from the account. Found on a live POST;
-  the constraint is not in BlazeMeter's private-location documentation.
-
-  The rule is now applied where the functionalities are chosen, before the
-  write: `bzm-opl-gen create-location --func-ids functionalGui` refuses with
-  BlazeMeter's own sentence and says to pass `--slots 2` or more, `--help` says
-  so on the flag, and the MCP tool description says so before the call. On the
-  page, ticking **GUI Functional** puts "GUI Functional needs at least 2" on
-  the Slots field and holds Create until the number is there.
-
-  **Nobody's `slots` is raised for them.** It is engines per *agent* and a real
-  cost — accounts run 17 agents at 1 apiece — so a location without GUI
-  Functional is still created at 1, and the number sent is the one on screen.
-
+  refuses one whose "Parallel engine runs" is 1, and `slots` defaulted to 1
+  everywhere, so every one this tool made was a 400. Found on a live POST; the
+  constraint is not in BlazeMeter's documentation. The rule is now applied where
+  the functionalities are chosen, before the write. **Nobody's `slots` is raised
+  for them** — it is engines per *agent* and a real cost.
 - **A card on the configure step is one functionality, under BlazeMeter's own
   name.** A performance-only location was given a card labelled "Performance &
-  functional testing", because one entry stood for four funcIds at once and its
-  label had to name all of them. There are now three cards — **Performance**,
-  **GUI Functional** and **Service Virtualization**, the words your own location
-  settings use — and a location opens on the one it actually runs, so a GUI
-  Functional location no longer opens on Performance.
-
-  Two consequences worth knowing. `functionalApi` and `proxyRecorder` no longer
-  belong to the Performance card; they are named beside the cards, with the note
-  that nothing here generates or removes them, the same as `tdm` and Delphix
-  already were. Nothing about what the bundle carries changes — which images a
-  location needs is still read from its funcIds. And a browser tab left open on
-  the configure step starts over: the saved page state names a functionality by
-  its funcId now, and a snapshot from before this release is dropped rather than
-  half-read.
-
-- **A bundle for a location that runs no load tests keeps its pod limits.** The
-  engine CPU and memory limits were cleared for any location not running
-  Performance, on the reading that they size an engine. They do not: BlazeMeter
-  applies one pair to *every* pod the agent creates, so a Service Virtualization
-  or GUI Functional bundle was losing them and its pods were landing on the
-  agent's 250m/256Mi defaults — enough capacity to look healthy and not enough
-  to run on. The limits are always carried now. The engine-size statement on the
-  configure step is still shown only where the agent runs an engine: a Service
-  Virtualization agent carries no engine at all, and what those limits should be
-  for a mock is not a figure this tool can state yet.
-
+  functional testing", because one entry stood for four funcIds. There are three
+  cards now, and a location opens on the one it actually runs. A tab left open on
+  this step starts over rather than half-reading an older snapshot.
+- **A bundle for a location that runs no load tests keeps its pod limits.** They
+  were cleared for anything not running Performance, on the reading that they
+  size an engine. They do not — one pair reaches *every* pod — so SV and GUI
+  bundles were landing on the agent's 250m/256Mi defaults: enough to look healthy
+  and not enough to run on.
+- **A browser your GUI Functional location is pinned to is not a capability this
+  tool is missing.** Pins like `chrome:default` arrive as funcIds beside
+  `functionalGui`; 43% of one account's 171 locations carry at least one and the
+  worst carries 41, all of which were being listed as unconfigurable. A pin is a
+  parameter of GUI Functional, not a capability. What remains says two different
+  things properly: a funcId this tool configures nowhere, and one your account
+  has retired.
+- **The environment list is the variables *this* location's agent reads.** It was
+  filtered by platform only, so a performance-only location was offered nine
+  variables it has no reader for — the Selenium grid's and the virtual-service
+  publishing ones. **Nothing is refused or cleared**: a variable already set stays
+  editable and is still written.
 - **Changing what a manually entered identity runs no longer hangs the page.**
-  Declaring a typed identity Service Virtualization and then changing your mind
-  left two rules fighting: one cleared the ingress because the bundle no longer
-  carried virtual services, the other put it straight back from the location
-  facts fetched for the *previous* declaration, and the browser tab locked up.
-  Both were reading the same question from two sources; they read one now.
+  Two rules read the same question from different sources — one cleared the
+  ingress, the other restored it from facts fetched for the previous declaration.
+  They read one source now.
+- **The wheel no longer carries stale UI bundles.** setuptools stages into
+  `build/lib` and does not clear it, and `ui_dist` filenames carry a content
+  hash, so a rebuild never overwrote its predecessor and the wheel shipped both —
+  ~300KB of dead weight per install.
+- **Placeholder ids in the web UI and tests are obviously fake.** The Harbor ID
+  placeholder was a real location's id, compiled into the shipped bundle.
 
-- **The environment list is the variables *this* location's agent reads.** It
-  was filtered by platform and nothing else, so a performance-only Kubernetes
-  location was offered nine variables it has no reader for: `DODUO_PORT` and the
-  two `TLS_*_GRID` certificates belong to the Selenium grid a GUI Functional
-  agent runs, and `KUBERNETES_USE_APIPA`, `KUBERNETES_SERVICES_BLOCKING_GET`,
-  `KUBERNETES_WEB_EXPOSE_SHORT_URL` (with `HOSTNAME_OVERRIDE`, `TLS_CERT` and
-  `TLS_KEY` on docker) are about publishing virtual services. Each variable now
-  says which functionality reads it, and the list follows what the location
-  runs.
+### Removed
 
-  **Nothing is refused and nothing is cleared.** A variable already set that
-  this location's list does not carry — from an imported profile, or a location
-  chosen after the form was filled in — keeps its value and stays editable under
-  *Another variable by name*, and the bundle still writes it. Where no location
-  has been chosen yet, the whole reference is offered.
-
-- **A browser your GUI Functional location is pinned to is not a capability
-  this tool is missing.** The configure step names the funcIds a location
-  carries that it has no options for — and it was naming every browser pin
-  among them. `chrome:default`, `firefox:139` and `safari:15` arrive in a
-  location's funcIds beside `functionalGui`, which serves 117 of them; 43% of
-  one real account's 171 locations carry at least one, and the worst carries 41.
-  A pin says *which browser* GUI Functional uses. It is a parameter of that
-  functionality, not a capability of its own, and it is no longer listed.
-
-  **What is left is what the line is for, in two sentences rather than one.**
-  A funcId your account serves and this tool configures nowhere — TDM
-  Integration, Delphix — reads as before. A funcId your account no longer serves
-  at all now says so: `functionalApi` and `sv-bridge` were retired, 43 and 62
-  locations in that same account still carry one, and "the account no longer
-  offers that funcId, so this location predates the removal" is a different
-  sentence from "there are no options here for it". Neither is generated or
-  removed by anything here.
-
-  **Where no account has been read, nothing is listed.** The vocabulary is then
-  the three funcIds this tool covers and carries no pins, so it cannot tell a
-  browser from a retired funcId — and an empty answer means "not read yet",
-  which is the direction the docker-ignored and reserved-variable tables already
-  take. It used to fall back to the raw funcId, which is how a GUI Functional
-  location got 41 lines of browser.
-
-### Changed
-
-- **Entering an identity by hand declares everything it runs, not one thing.**
-  The configure step's *Enabled* control in manual entry was a radio button, so
-  a typed harbor id and ship id could be declared a Performance agent *or* a GUI
-  Functional one — never both. That was tenable while one card stood for four
-  funcIds; with one card per funcId it stopped being, because 71 of the 168
-  locations in one real account run Performance and GUI Functional together, and
-  the bundle it produced carried the wrong images for half of what the location
-  does. It is a checkbox now: tick what the identity runs.
-
-  Ticking two suggests one namespace — the first of them in the order the cards
-  are shown, which is the same tie-break a connected location carrying both
-  funcIds already uses — and a namespace you typed still wins over any
-  suggestion. A browser tab left open on this page starts over: the saved page
-  state records a *list* now, and a snapshot from before this release is dropped
-  rather than half-read.
-
-- **Service Virtualization is declared on its own, where you are deciding.** In
-  manual entry and in the create-location form, ticking Service Virtualization
-  clears Performance and GUI Functional, and ticking either of those clears it —
-  with the reason on screen before anything is ticked. The agent applies one CPU
-  and memory limit pair to *every* pod it creates, so engine sizing and mock
-  throughput cannot be set apart, and a Service Virtualization agent carries no
-  test engine at all: they are two different sizing problems sharing one number.
-
-  **A location that already runs both still generates.** Connected, the configure
-  step says what the mixture costs and nothing more — what a location *is* is
-  changed in BlazeMeter's own location settings, not here, so refusing to
-  generate for one would be refusing the only bundle it can have.
-
-- **`AUTO_KUBERNETES_UPDATE` is findable.** Reported as missing from the
-  environment list; it was never missing — the bundle writes it itself, from
-  *Agent self-update* inside **Security & RBAC** — but nothing on the page led
-  from the variable's name to that control, and the only hint was a group about
-  RBAC. The environment area now carries **Set by this bundle, elsewhere on this
-  step**: every variable the bundle writes for itself, the option that writes it
-  and the section holding that option. Your browser's find works on it.
-
-- **The funcIds on screen are your account's, with BlazeMeter's own names.**
-  The list of what a private location can be enabled for was written into this
-  tool by hand, five entries long, and it disagreed with real accounts in both
-  directions. It now comes from your account, so a location that runs TDM
-  Integration, Data Orchestration or Delphix Integration is described in the
-  words your own BlazeMeter UI uses instead of a raw `tdm`, and the
-  create-location form offers exactly what the account offers.
-
-  Two consequences worth knowing. `functionalApi` is no longer offered when you
-  create a location — BlazeMeter has retired it — but one that already carries
-  it still reads, generates and selects its images as before. And with
-  no API key connected (manual entry, or before you connect) the list is the
-  three this tool actually configures: Performance, GUI Functional and Service
-  Virtualization. Anything else your location runs is still named on the
-  configure step, with the note that nothing here generates or removes it.
+- **`SECURITY.md` and `CODE_OF_CONDUCT.md`.** Neither earned its place on a
+  single-maintainer project: the code of conduct governed a community that does
+  not exist, and the security policy restated the README. Where to report a
+  vulnerability is unchanged — a GitHub security advisory, private until
+  published — it is just said once now, beside where bugs go.
 
 ## [0.3.1] — 2026-08-05
 
@@ -1477,7 +1314,8 @@ First packaged release.
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
 
-[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.1.0...v0.2.0
