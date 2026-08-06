@@ -116,7 +116,7 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   // Debounced, because every keystroke in a number field is a plan: typing
   // "5000" passes through 5, 50 and 500, and three answers nobody wanted
   // arrive before the one they did.
-  const timer = useRef<number>();
+  const timer = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (!sizings.length) { setPlan(null); setErr(null); setBusy(false); return; }
     window.clearTimeout(timer.current);

@@ -58,10 +58,13 @@ const vocabulary = (choices: FuncIdChoice[],
   ({ source, choices });
 const NO_VOCABULARY = vocabulary([], "baseline");
 
-afterEach(cleanup);
-// The page writes its selections to sessionStorage, and one test's would
-// otherwise be restored into the next one's page.
+// Registered before `cleanup` so that it runs *after* it: hooks run in
+// reverse, and unmounting writes. The page persists its selections on the way
+// out, so clearing first left the storage repopulated by the very unmount that
+// followed -- and the next test restored a session it never saved. React 18
+// never showed it, because the write did not land before the clear.
 afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
+afterEach(cleanup);
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 // Before cleanup, which unmounts: hooks run in reverse, and an effect cleanup
 // clearing a faked interval on the way out is one more thing to get right for
@@ -532,9 +535,16 @@ test("a restored profile's SV options for a location without mockServices are cl
     // put `pointer-events-none` on the body) and is now not there at all.
     const next = await screen.findByRole<HTMLButtonElement>(
       "button", { name: /Next/ });
-    await waitFor(() => expect(next.disabled).toBe(false));
-    expect(screen.queryByText(/needs attention/)).toBeNull();
-    expect(screen.queryByText(/Service virtualization first/)).toBeNull();
+    // All three in one wait. They are one settled state, but not one render:
+    // the button re-enables as soon as the options are cleared, and the rail
+    // re-reads a render later. React 18 batched the pair; 19 does not, so
+    // asserting the second two after waiting only for the first caught the
+    // page between them.
+    await waitFor(() => {
+      expect(next.disabled).toBe(false);
+      expect(screen.queryByText(/needs attention/)).toBeNull();
+      expect(screen.queryByText(/Service virtualization first/)).toBeNull();
+    });
     // ...and the option itself is gone from the bundle, not merely off screen:
     // generate() refuses an ingress with no subdomain whatever the location
     // runs, so hiding the row alone moves the blocker to the server.
@@ -545,8 +555,10 @@ test("a restored profile's SV options for a location without mockServices are cl
     // stating it and naming the funcId to add, which is a true sentence about
     // the location and nothing this step's reader can act on. Not the card, not
     // the rail entry: both are the same list.
-    expect(hasCard("sv")).toBe(false);
-    expect(screen.queryByText(/Service virtualization/)).toBeNull();
+    await waitFor(() => {
+      expect(hasCard("mockServices")).toBe(false);
+      expect(screen.queryByText(/Service virtualization/)).toBeNull();
+    });
     // The one that is run is still there, so this is not passing on an empty
     // section.
     expect(hasCard("performance")).toBe(true);
@@ -571,10 +583,10 @@ test("a location that runs one functionality shows one card, with nothing config
     render(<App api={twoFunctionalityAccount(asked)} />);
 
     await waitFor(() => expect(hasCard("performance")).toBe(true));
-    expect(hasCard("sv")).toBe(false);
-    // The rail is the same list read the other way, so a card missing from one
-    // and present in the other is the rail failing at its only job.
-    expect(screen.queryByText(/Service virtualization/)).toBeNull();
+    await waitFor(() => {
+      expect(hasCard("mockServices")).toBe(false);
+      expect(screen.queryByText(/Service virtualization/)).toBeNull();
+    });
   });
 
 // -- a format that cannot serve a functionality -------------------------------
@@ -1828,9 +1840,13 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
     // this location and the ones above.
     const live = { id: "s-live", name: "agent-live", state: "IDLE",
                    lastHeartBeat: Date.now() / 1000 - 10 };
-    render(<App api={accountOf([loc("h-0", "Busy", [live])])} />);
+    // Named for the case rather than "Busy": the page prints a location's name
+    // in the list and again in the header once one is chosen, so a name that is
+    // also a word the page uses made `findByText` ambiguous the moment React 19
+    // had both on screen at once.
+    render(<App api={accountOf([loc("h-0", "Reporting", [live])])} />);
 
-    fireEvent.click(await screen.findByText("Busy"));
+    fireEvent.click(await screen.findByText("Reporting"));
     // Counted as online in the row for its location...
     expect(await screen.findByText(/1 agent · 1 online/)).toBeTruthy();
     // ...and left unpicked: a new deployment on an identity that is already
