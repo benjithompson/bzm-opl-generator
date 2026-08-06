@@ -340,7 +340,6 @@ export default function App({ api }: { api: Api }) {
     api.svConstants().then(setSvConst).catch(() => {});
     api.dockerIgnored().then(setDockerIgnored).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
-    api.agentEnv().then(setAgentEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
 
@@ -588,6 +587,28 @@ export default function App({ api }: { api: Api }) {
     if (!accountId || !who) return;
     api.funcIdChoices(accountId).then(setFuncIdChoices).catch(() => {});
   }, [accountId, who]);
+
+  // The agent variables that are left, scoped to what this location runs
+  // (#150). Not part of the mount fetch above any more, because the answer
+  // changes with the location: a performance location has no Selenium grid and
+  // publishes no virtual services, so the Grid proxy's port and the three
+  // variables about publishing mocks reach nothing it runs.
+  //
+  // Scoped on the server rather than here, so the CLI and the MCP server get
+  // the same answer from the same place -- which is also why the first fetch
+  // asks with nothing: `null` is nobody having said, and it offers the
+  // reference whole. Keyed on the joined ids rather than on the array, which is
+  // rebuilt on every render; the empty string is a real key, and is not null.
+  //
+  // A failed read leaves what was there, as everywhere else on this page: an
+  // account that refused the call has not said the reference is empty, and an
+  // empty list here would take the whole list off screen and leave the
+  // name/value editor alone with it.
+  const enabledKey = enabled === null ? null : enabled.join(",");
+  useEffect(() => {
+    api.agentEnv(enabledKey === null ? null : enabledKey.split(",").filter(Boolean))
+      .then(setAgentEnv).catch(() => {});
+  }, [enabledKey, api]);
 
   useEffect(() => {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));

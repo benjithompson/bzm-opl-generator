@@ -5,6 +5,10 @@ import {
   kvToJson, KvRow, offeredVars, otherRows, Reserved, rowsToEnv, setVar,
   varError, varSet, varValue,
 } from "../env";
+// Which section of this step holds the option that writes a reserved variable.
+// From the group declarations, because they already carry the keys -- a table
+// here mapping variable to section would be a third copy of one fact.
+import { reservedList } from "../optionGroups";
 
 /** Environment variables the agent takes and this tool has no setting of its
  *  own for (#131).
@@ -79,6 +83,74 @@ export function EnvVars(props: {
 
       <OtherRows env={props.env} shown={shown} reserved={props.reserved}
         onChange={props.onChange} />
+      <SetByTheBundle reserved={props.reserved} />
+    </div>
+  );
+}
+
+/** Every variable the bundle writes itself, and where the thing that writes it
+ *  is set (#150).
+ *
+ *  The list above is a remainder, and a remainder says nothing about what was
+ *  taken out of it. AUTO_KUBERNETES_UPDATE was reported as missing from it: it
+ *  is not missing, the bundle writes it off the `auto_update` option -- a
+ *  tri-state inside a group titled "Security & RBAC", behind a hint about agent
+ *  self-update -- so the only route from the name to the control was to open a
+ *  group about RBAC on a hunch. The refusal already said "set it with
+ *  auto_update instead", but only to somebody who had typed the name into the
+ *  editor above, which is the one thing a person who thinks it is missing will
+ *  not do.
+ *
+ *  A rendered list rather than a search box, and closed rather than absent: the
+ *  browser's own find is the search this area needs, and it only works on what
+ *  is on the page. Served (`reserved`), never enumerated here -- same rule as
+ *  the offered list, and empty means the table has not landed, which is a fold
+ *  with nothing to say rather than a claim that nothing is taken. */
+function SetByTheBundle(props: { reserved: Reserved }) {
+  const [open, setOpen] = useState(false);
+  const rows = reservedList(props.reserved);
+  if (!rows.length) return null;
+  return (
+    <div>
+      <button type="button" onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-700">
+        <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+        Set by this bundle, elsewhere on this step
+        <span className="text-slate-400">({rows.length})</span>
+      </button>
+      {open && (
+        <div className="mt-2">
+          <p className="text-[11px] text-slate-400">
+            These are written from the settings above, so they are not offered
+            here and are refused if typed in. This is where each one is set.
+          </p>
+          <ul className="mt-1.5 divide-y divide-slate-100 border-y border-slate-100">
+            {rows.map((r) => (
+              <li key={r.name}
+                className="py-1.5 flex gap-3 items-baseline justify-between">
+                <span className="text-[11px] font-mono text-slate-700">{r.name}</span>
+                <span className="text-[11px] text-slate-500 text-right">
+                  {r.owner ? (
+                    <>
+                      <span className="font-mono text-slate-600">{r.owner}</span>
+                      {/* Only where there is one. A group is a place on this
+                          step; an option no group owns is set from the location
+                          or the format, and naming a section for it would send
+                          somebody to a row that is not there. */}
+                      {r.where && <> — {r.where}</>}
+                    </>
+                  ) : (
+                    // The served null, kept as its own sentence: no option owns
+                    // it, which is not the same as nobody having said which.
+                    "written by the bundle itself"
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -294,7 +366,8 @@ function OtherRows(props: {
         <div className="mt-2 space-y-1.5">
           <p className="text-[11px] text-slate-400">
             For anything the list above does not carry — a variable documented
-            for the other platform, or one newer than this tool.
+            for the other platform, one belonging to a functionality this
+            location does not run, or one newer than this tool.
           </p>
           {rows.map((r, i) => {
             const err = envRowError(rows, i, props.reserved);

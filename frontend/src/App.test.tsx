@@ -893,6 +893,106 @@ test("the offered variables reach the bundle, each through the control its type 
       .toEqual({ PREFERRED_INTERFACE: "eth1", VERIFY_SSL: "false" });
   });
 
+test("the catalogue is asked for over the funcIds the chosen location runs",
+  async () => {
+    // #150. The scoping is the server's -- one answer for the CLI, the MCP
+    // server and this page -- so what has to hold here is that the page asks
+    // the right question, and that "nobody has said" reaches the route as an
+    // absent parameter rather than as an empty list. They are different reads:
+    // absent offers the reference whole, empty offers only what every location
+    // has a reader for.
+    const asked: (string[] | null | undefined)[] = [];
+    render(<App api={perfAccount({
+      reservedEnv: async () => RESERVED_ENV,
+      agentEnv: async (funcIds) => { asked.push(funcIds); return AGENT_ENV; },
+    })} />);
+
+    await waitFor(() => expect(asked.length).toBeGreaterThan(0));
+    expect(asked[0] ?? null).toBe(null);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    await waitFor(() => expect(asked).toContainEqual(["performance"]));
+  });
+
+test("a variable the location's catalogue leaves out is still on screen and still editable",
+  async () => {
+    // The way #150 is most easily got wrong. Scoping is a filter on what is
+    // *offered*, never on what is carried: a profile written for a GUI
+    // location, or a location changed after the form was filled in, still holds
+    // the value and the bundle still writes it. So the name/value editor
+    // underneath keeps it -- a form denying a variable the ConfigMap has is the
+    // failure this whole area's rules are about.
+    const sent: Sent[] = [];
+    render(<App api={perfAccount({
+      ...transfers(sent),
+      reservedEnv: async () => RESERVED_ENV,
+      // What the server serves a performance location: the tagged rows gone.
+      agentEnv: async () => AGENT_ENV.filter((v) => !v.functionalities.length),
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(await screen.findByText("Environment variables"));
+    // Not offered as a row of its own...
+    expect(screen.queryByLabelText("DODUO_PORT")).toBe(null);
+
+    const body = JSON.stringify({ namespace: "blazemeter",
+                                  extra_env: { DODUO_PORT: "8080" } });
+    const file = Object.assign(
+      new File([body], "profile.json", { type: "application/json" }),
+      { text: async () => body });
+    await act(async () => {
+      fireEvent.change(document.querySelector(
+        'input[type="file"][accept=".json"]') as HTMLInputElement,
+        { target: { files: [file] } });
+    });
+
+    // ...and still on screen, by name, with the value the profile carried. The
+    // editor's own row states the count while it is closed, so nothing is
+    // silent about it either.
+    expect(await screen.findByText(/Another variable by name/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("(1 set)")).toBeTruthy());
+    fireEvent.click(screen.getByText(/Another variable by name/));
+    await waitFor(() => expect(
+      (screen.getByLabelText("Variable name 1") as HTMLInputElement).value)
+      .toBe("DODUO_PORT"));
+    fireEvent.change(screen.getByLabelText("Variable value 1"),
+                     { target: { value: "9090" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect((sent[0].options as { extra_env?: Record<string, string> }).extra_env)
+      .toEqual({ DODUO_PORT: "9090" });
+  });
+
+test("the environment area says where a variable it will not take is set instead",
+  async () => {
+    // The other half of #150, and the reported complaint: "the list is missing
+    // kubernetes auto update". It is not missing -- the bundle writes it, off
+    // the `auto_update` option -- but that option is a tri-state inside a group
+    // about RBAC, so nothing on the page led from the name to the control. The
+    // area now states the whole reserved table with the owning option and the
+    // section holding it, which is what a browser's find can land in.
+    render(<App api={perfAccount({
+      reservedEnv: async () => RESERVED_ENV,
+      agentEnv: async () => AGENT_ENV,
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(await screen.findByText("Environment variables"));
+    fireEvent.click(await screen.findByText(/Set by this bundle/));
+
+    const row = (await screen.findByText("AUTO_KUBERNETES_UPDATE"))
+      .closest("li") as HTMLElement;
+    expect(within(row).getByText(/auto_update/)).toBeTruthy();
+    expect(within(row).getByText(/Security & RBAC/)).toBeTruthy();
+  });
+
 test("a name typed by hand is still refused with the option that owns it",
   async () => {
     // The editor underneath the list, which is what stops a variable the

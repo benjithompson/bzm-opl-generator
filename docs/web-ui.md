@@ -296,15 +296,28 @@ are not offered here — the page reads the same reserved table the generator
 refuses them by, and a variable stops being offered the moment an option starts
 writing it. Under the list, **Another variable by name** keeps the old name/value
 rows for anything the list does not carry: a variable documented for the other
-platform, or one newer than this tool. A name the bundle already writes is
-**refused** there, naming the option that owns it — two values for one key is a
-ConfigMap with a duplicate entry, and whichever wins is not the one the form
-showed.
+platform, one belonging to a functionality this location does not run, or one
+newer than this tool. A name the bundle already writes is **refused** there,
+naming the option that owns it — two values for one key is a ConfigMap with a
+duplicate entry, and whichever wins is not the one the form showed.
 
-Which half of the reference is on screen follows the format: a Kubernetes bundle
-is offered crane's variables, a docker bundle the container agent's. Nothing is
-lost either way — a variable already set that this platform does not document
-keeps its value and appears in the rows underneath.
+Beside it, **Set by this bundle, elsewhere on this step** is the whole reserved
+table: every variable the bundle writes itself, the option that writes it and the
+section of this step holding that option. It is there for the variable you go
+looking for and do not find — `AUTO_KUBERNETES_UPDATE` is not missing, it is
+written from **Security & RBAC**'s *Agent self-update*, and nothing else on the
+page led from the name to the control.
+
+Two things decide which variables are on screen, and they are different
+questions. **The format** picks which half of BlazeMeter's reference applies: a
+Kubernetes bundle is offered crane's variables, a docker bundle the container
+agent's. **The location** picks which functionality's variables apply: a
+performance location has no Selenium grid and publishes no virtual services, so
+`DODUO_PORT`, the two `_GRID` certificates and the three variables about
+publishing mocks are not offered to it. Nothing is lost either way — a variable
+already set that this bundle does not offer keeps its value and appears in the
+rows underneath, because hiding a variable the bundle carries is exactly what
+this area's rules exist to prevent.
 
 It is an option (`extra_env`), so it travels in `profile.json` and a regenerate
 replays it. All three formats carry it: ConfigMap entries for manifests,

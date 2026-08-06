@@ -7,8 +7,10 @@ import {
   incompleteGroups, isOpenshift, notRunPatch, OPTION_GROUPS, OptionGroup,
   runsFunctionality,
   serviceAccountOk, startFunctionality,
+  reservedList, reservedWhere,
   suggestNamespace, SV_NONE, svConfigured, unclaimedFuncIds,
 } from "./optionGroups";
+import { RESERVED_ENV } from "./fixtures";
 
 // The lifecycle of a group is data in, data out -- a detect over the options, a
 // patch to merge on enable, a patch to merge on disable -- so it is tested as
@@ -777,5 +779,68 @@ describe("blockingGroups", () => {
                 sv_tls_secret: "wild", service_type: "NODEPORT" };
     const backends = { contour: { nodeport_ok: false } };
     expect(blockingGroups(o, { sv: true }, backends)).toHaveLength(1);
+  });
+});
+
+// -- where a variable this bundle writes itself is set ------------------------
+
+describe("reservedWhere", () => {
+  it("names the option, and the section of the step holding it", () => {
+    // The complaint behind #150 was that Kubernetes auto-update is missing from
+    // the environment list. It is not missing -- AUTO_KUBERNETES_UPDATE is
+    // written by the bundle itself, off the `auto_update` option -- but that
+    // option is a tri-state inside a group about RBAC, so the only route to it
+    // was to open the wrong question and read to the bottom. The env area
+    // answers instead: the served table says which option, and the group that
+    // owns the key says where that option is.
+    expect(reservedWhere("AUTO_KUBERNETES_UPDATE", RESERVED_ENV)).toEqual({
+      name: "AUTO_KUBERNETES_UPDATE", owner: "auto_update",
+      where: "Security & RBAC",
+    });
+    expect(reservedWhere("IMAGE_OVERRIDES", RESERVED_ENV)).toEqual({
+      name: "IMAGE_OVERRIDES", owner: "private_registry",
+      where: "Private registry",
+    });
+  });
+
+  it("names an owner without inventing a place for it", () => {
+    // An option no group owns -- the engine limits, which the configure step
+    // states from the location and does not edit -- has an owner and no
+    // section. "Somewhere on this step" is not a place, and the owner alone is
+    // still the answer to "then where is it set".
+    expect(reservedWhere("KUBERNETES_RESOURCES_LIMITS_CPU", RESERVED_ENV))
+      .toEqual({ name: "KUBERNETES_RESOURCES_LIMITS_CPU",
+                 owner: "engine_cpu_limit", where: null });
+  });
+
+  it("follows a one-of pair to the group that holds both", () => {
+    // The CA trio names a pair, which is what the option table itself calls
+    // them. Splitting on the served separator rather than looking the whole
+    // string up: `ca_bundle | ca_existing_configmap` is no option's name.
+    expect(reservedWhere("REQUESTS_CA_BUNDLE", RESERVED_ENV)?.where)
+      .toBe("Custom CA trust");
+  });
+
+  it("keeps 'no option owns it' apart from 'this name is not reserved'", () => {
+    // The served table answers null for the identity and the fixed posture, and
+    // that is a real answer: the refusal stands, and inventing an option to
+    // send somebody to would be worse than saying there is not one.
+    expect(reservedWhere("SHIP_ID", RESERVED_ENV))
+      .toEqual({ name: "SHIP_ID", owner: null, where: null });
+    // A name the table does not carry is not reserved at all, and an empty
+    // table is "not read yet" -- neither is a claim about where anything is.
+    expect(reservedWhere("VERIFY_SSL", RESERVED_ENV)).toBe(null);
+    expect(reservedWhere("AUTO_KUBERNETES_UPDATE", {})).toBe(null);
+  });
+
+  it("lists every reserved name, in the order the table is served in", () => {
+    // On the page rather than behind a search box: the whole failure is
+    // somebody looking for a name and finding nothing, and a list that is
+    // rendered is one the browser's own find can land in.
+    const all = reservedList(RESERVED_ENV);
+    expect(all.map((r) => r.name)).toEqual(Object.keys(RESERVED_ENV));
+    expect(all.find((r) => r.name === "AUTO_KUBERNETES_UPDATE")?.where)
+      .toBe("Security & RBAC");
+    expect(reservedList({})).toEqual([]);
   });
 });

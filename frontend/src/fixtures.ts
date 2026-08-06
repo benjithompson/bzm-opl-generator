@@ -103,22 +103,29 @@ export const RESERVED_ENV: Record<string, string | null> = {
  *
  *  The names are real ones, so a record that stopped being offered -- an option
  *  added to the generator claims it into RESERVED_ENV -- shows up as a test
- *  about a variable the server would no longer serve. */
+ *  about a variable the server would no longer serve. Their `functionalities`
+ *  are the real tags too, for the same reason and no stronger one: a test that
+ *  serves this list scoped, as the server would, wants a row that really does
+ *  drop out of a performance location's answer. */
 export const AGENT_ENV: AgentEnvVar[] = [
   { name: "PREFERRED_INTERFACE", type: "string",
-    platforms: ["kubernetes", "docker"],
+    platforms: ["kubernetes", "docker"], functionalities: [],
     summary: "Network interface to read the machine's IP address from",
     default: "the first interface that is not docker0 or lo", example: "eth0" },
   { name: "VERIFY_SSL", type: "bool", platforms: ["kubernetes", "docker"],
+    functionalities: [],
     summary: "Verify certificates on outbound HTTPS", default: "true",
     example: null },
   { name: "DODUO_PORT", type: "int", platforms: ["kubernetes", "docker"],
+    functionalities: ["functionalGui"],
     summary: "Port the BlazeMeter Grid proxy listens on", default: "8000",
     example: null },
   { name: "KUBERNETES_LABELS", type: "json_object", platforms: ["kubernetes"],
+    functionalities: [],
     summary: "Labels added to every object the agent creates",
     default: null, example: '{"team": "perf"}' },
   { name: "HOSTNAME_OVERRIDE", type: "string", platforms: ["docker"],
+    functionalities: ["mockServices"],
     summary: "Hostname for transactional virtual services on this agent",
     default: null, example: null },
 ];

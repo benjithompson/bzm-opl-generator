@@ -41,7 +41,31 @@ anything that breaks.
   Virtualization agent carries no engine at all, and what those limits should be
   for a mock is not a figure this tool can state yet.
 
+- **The environment list is the variables *this* location's agent reads.** It
+  was filtered by platform and nothing else, so a performance-only Kubernetes
+  location was offered nine variables it has no reader for: `DODUO_PORT` and the
+  two `TLS_*_GRID` certificates belong to the Selenium grid a GUI Functional
+  agent runs, and `KUBERNETES_USE_APIPA`, `KUBERNETES_SERVICES_BLOCKING_GET`,
+  `KUBERNETES_WEB_EXPOSE_SHORT_URL` (with `HOSTNAME_OVERRIDE`, `TLS_CERT` and
+  `TLS_KEY` on docker) are about publishing virtual services. Each variable now
+  says which functionality reads it, and the list follows what the location
+  runs.
+
+  **Nothing is refused and nothing is cleared.** A variable already set that
+  this location's list does not carry — from an imported profile, or a location
+  chosen after the form was filled in — keeps its value and stays editable under
+  *Another variable by name*, and the bundle still writes it. Where no location
+  has been chosen yet, the whole reference is offered.
+
 ### Changed
+
+- **`AUTO_KUBERNETES_UPDATE` is findable.** Reported as missing from the
+  environment list; it was never missing — the bundle writes it itself, from
+  *Agent self-update* inside **Security & RBAC** — but nothing on the page led
+  from the variable's name to that control, and the only hint was a group about
+  RBAC. The environment area now carries **Set by this bundle, elsewhere on this
+  step**: every variable the bundle writes for itself, the option that writes it
+  and the section holding that option. Your browser's find works on it.
 
 - **The funcIds on screen are your account's, with BlazeMeter's own names.**
   The list of what a private location can be enabled for was written into this

@@ -203,6 +203,20 @@ describe("what has no control above it", () => {
       .toEqual([{ name: "A", value: "1" }]);
     expect(otherRows({ VERIFY_SSL: "false" }, ["VERIFY_SSL"])).toEqual([]);
   });
+
+  it("keeps one the location's own catalogue leaves out", () => {
+    // #150 gave the served list a second reason to be short: it is scoped to
+    // what the location runs, so a performance location is served no
+    // DODUO_PORT. That is a filter on what is *offered* and never on what is
+    // carried -- a profile written for a GUI location, or a location changed
+    // after the form was filled in, still has the value, and the bundle still
+    // writes it. Hiding it would be a form denying a variable the ConfigMap
+    // has.
+    const scoped = AGENT_ENV.filter((v) => !v.functionalities.length);
+    expect(scoped.map((v) => v.name)).not.toContain("DODUO_PORT");
+    expect(otherRows({ DODUO_PORT: "8080" }, scoped.map((v) => v.name)))
+      .toEqual([{ name: "DODUO_PORT", value: "8080" }]);
+  });
 });
 
 describe("what a typed value refuses", () => {

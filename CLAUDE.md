@@ -344,14 +344,31 @@ missing tools. The rest is what it cannot fix for you.
   `configureBlockedBy` instead of a group's `incomplete`. `type` picks the
   control and a **boolean gets three positions**, because "the agent's default"
   is a third answer a switch cannot give and the defaults run both ways
-  (`VERIFY_SSL` on, `KUBERNETES_USE_PRE_PULLING` off). `platforms` picks which of
-  BlazeMeter's two tables is on screen. Nothing is ever hidden by any of it: a
-  variable with no row above it — the other platform's, one the vocabulary has
-  since lost, a JSON value no table can round-trip — keeps the name/value editor
-  underneath (`env.otherRows`), because a form showing nothing for a variable the
-  bundle carries is the failure this area's rules are about. `fixtures.ts` holds
-  a **sample** rather than a copy here, and says so: nothing on the page has to
-  agree with the catalogue.
+  (`VERIFY_SSL` on, `KUBERNETES_USE_PRE_PULLING` off). **`platforms` and
+  `functionalities` are two different questions** and a performance location was
+  being offered the answer to both (#150): the first says which agent reads the
+  variable, the second says whether this location runs the thing that reads it —
+  the Grid proxy's port on a location with no grid. The second is filtered
+  server-side too, `core.agent_env(func_ids)`, so the CLI and the MCP server get
+  one answer; three states, and absent is not empty (the route takes them
+  comma-separated for exactly that reason). Nothing is ever hidden by any of it:
+  a variable with no row above it — the other platform's, another
+  functionality's, one the vocabulary has since lost, a JSON value no table can
+  round-trip — keeps the name/value editor underneath (`env.otherRows`), because
+  a form showing nothing for a variable the bundle carries is the failure this
+  area's rules are about. `fixtures.ts` holds a **sample** rather than a copy
+  here, and says so: nothing on the page has to agree with the catalogue.
+
+  **A remainder says nothing about what was taken out of it**, and that was the
+  other half of the report: `AUTO_KUBERNETES_UPDATE` read as missing when it is
+  `auto_update`'s, a tri-state inside a group titled Security & RBAC. The
+  refusal already named the option — but only to somebody who had typed the name
+  into the editor, which is the one thing a person who thinks it is missing will
+  not do. So the area states the whole reserved table beside the offered one
+  (`EnvVars.SetByTheBundle` over `optionGroups.reservedList`), with the owning
+  option and the *section* holding it, read off each group's own `keys`. A
+  rendered list rather than a search box: the browser's find is the search, and
+  it only works on what is on the page.
 
 - **The UI: two views, three steps, two option buckets.** `layout/NavDrawer`
   picks the view (Generate / Account capacity) and holds the key at its foot;

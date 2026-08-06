@@ -357,8 +357,18 @@ export const api = {
    *  name a control on this page already writes (core.agent_env). Served, so
    *  the page offers exactly what is left over: an option removed from the
    *  generator hands its variable back to this list, and one added takes it
-   *  away, without a second table here agreeing to it. */
-  agentEnv: () => req<AgentEnvVar[]>("GET", "/api/agent-env"),
+   *  away, without a second table here agreeing to it.
+   *
+   *  `funcIds` scopes it to what the location runs, and the scoping is done
+   *  there rather than here so that the CLI and the MCP server get the same
+   *  answer (#150). Absent — which is `null`/`undefined`, and reaches the route
+   *  as no parameter at all — is nobody having said yet, and offers the
+   *  reference whole; `[]` is a location running nothing this tool covers, and
+   *  offers only what every agent reads. Two reads, never one. */
+  agentEnv: (funcIds?: string[] | null) => req<AgentEnvVar[]>(
+    "GET", funcIds == null
+      ? "/api/agent-env"
+      : "/api/agent-env?" + new URLSearchParams({ func_ids: funcIds.join(",") })),
   svMocks: (namespace: string, subdomain: string) =>
     req<SvMocksOut>("GET", "/api/sv-mocks?" + new URLSearchParams(
       subdomain ? { namespace, sv_subdomain: subdomain } : { namespace })),
@@ -509,6 +519,11 @@ export interface AgentEnvVar {
    *  -- a variable the agent under this bundle has no reader for is a setting
    *  that would go quietly nowhere. */
   platforms: string[];
+  /** The funcIds whose agent reads it, empty meaning every location — the same
+   *  rule `OptionGroup.functionalities` follows. The *filtering* is the
+   *  server's (see `agentEnv` below), so this is here to be read rather than
+   *  applied: what a row is here for, not whether it is here. */
+  functionalities: string[];
   summary: string;
   default: string | null;
   example: string | null;

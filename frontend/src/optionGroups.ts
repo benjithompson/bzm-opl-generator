@@ -498,6 +498,65 @@ export function groupsOf(functionalityId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.functionalities.includes(functionalityId));
 }
 
+// -- where an option is set ---------------------------------------------------
+//
+// The environment area's answer to a variable somebody looks for and does not
+// find (#150). AUTO_KUBERNETES_UPDATE was reported as missing from the list; it
+// is not missing, it is *written by the bundle*, off the `auto_update` option --
+// which is a tri-state inside a group titled "Security & RBAC", behind a hint
+// mentioning agent self-update. So the setting existed and nothing on the page
+// led from the name to it, which is the same failure as offering a name the
+// generator refuses, arrived at from the other side.
+//
+// The section comes off `keys`, which every group already declares. A second
+// table mapping variable to section would be the third copy of one fact, and
+// the one nobody would remember to update.
+
+/** A reserved variable, and where the thing that writes it is set. */
+export interface ReservedWhere {
+  name: string;
+  /** The option that writes it, or null where no single option does — the
+   *  identity, the fixed posture. Straight off the served table, including its
+   *  null: inventing an option to send somebody to would be worse than saying
+   *  there is not one. */
+  owner: string | null;
+  /** The title of the group holding that option, or null where no group does.
+   *  The engine limits are the case: the configure step states them from the
+   *  location and edits them nowhere, so there is no section to name and
+   *  "somewhere on this step" is not a place. */
+  where: string | null;
+}
+
+/** What the page can say about `name`, or null if it is not reserved at all.
+ *
+ *  Null covers both "this name is free" and "the table has not landed" — an
+ *  empty served table means "not read yet" everywhere else on this page, and
+ *  claiming a variable is taken on no evidence is the wrong half to be wrong
+ *  in, exactly as in `envRowError`. */
+export function reservedWhere(
+    name: string, reserved: Record<string, string | null>): ReservedWhere | null {
+  if (!(name in reserved)) return null;
+  const owner = reserved[name];
+  // The CA trio names a one-of pair the way the option table itself does, so
+  // the string is split rather than looked up whole: `ca_bundle |
+  // ca_existing_configmap` is no option's name, and both halves are in the one
+  // group anyway.
+  const keys = owner ? owner.split("|").map((k) => k.trim()) : [];
+  const group = OPTION_GROUPS.find((g) => keys.some((k) => g.keys.includes(k)));
+  return { name, owner, where: group?.title ?? null };
+}
+
+/** ...and all of them, in the order they were served. Rendered as a list rather
+ *  than searched: the failure is somebody looking for a name and finding
+ *  nothing, and a list that is on the page is one the browser's own find lands
+ *  in without this area growing a search box of its own. */
+export function reservedList(
+    reserved: Record<string, string | null>): ReservedWhere[] {
+  return Object.keys(reserved)
+    .map((name) => reservedWhere(name, reserved))
+    .filter((r): r is ReservedWhere => r !== null);
+}
+
 // -- a functionality the location does not run --------------------------------
 // Not on the configure step at all, and configured nowhere. It was stated there
 // for a while (#113) -- a card naming the funcId to add -- which is true and
