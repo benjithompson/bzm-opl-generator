@@ -28,7 +28,8 @@ spec:
 ```
 
 **This is a Kubernetes posture, and `--format docker` has none.** `restrict_engines`
-is in the generator's `DOCKER_IGNORED` table: a docker bundle has no pod spec to
+is in docker's entry of the generator's `IGNORED_BY_FORMAT` table: a docker
+bundle has no pod spec to
 stamp, so neither key is emitted and nothing on this page applies to it. The
 bundle's README names the option as ignored when it was set away from its
 default. A docker agent's engines are containers on the host, run by the agent

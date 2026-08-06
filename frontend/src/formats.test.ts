@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { isDocker, keysApply, optionApplies, OUTPUT_FORMATS } from "./formats";
-import { DOCKER_IGNORED as IGNORED } from "./fixtures";
+import {
+  ignoredFor, isDocker, keysApply, optionApplies, OUTPUT_FORMATS, whyIgnored,
+} from "./formats";
+import { IGNORED_BY_FORMAT as IGNORED } from "./fixtures";
 import { GROUP_BY_ID, groupsFor, OPTION_GROUPS, SHARED_GROUPS } from "./optionGroups";
 
 // What the page does with the served table -- the half no Python test can see.
-// The table itself is the generator's, and `fixtures.DOCKER_IGNORED` is the one
-// copy of it; tests/test_server.py holds both the route and that copy equal to
-// generate.DOCKER_IGNORED, so nothing here can be right about a stale table.
+// The table itself is the generator's, and `fixtures.IGNORED_BY_FORMAT` is the
+// one copy of it; tests/test_server.py holds both the route and that copy equal
+// to generate.IGNORED_BY_FORMAT, so nothing here can be right about a stale
+// table.
 
 it("offers the three formats the generator has", () => {
   expect(OUTPUT_FORMATS.map((f) => f.id))
@@ -20,9 +23,70 @@ it("hides nothing from the two cluster formats", () => {
   for (const format of ["manifests", "helm"]) {
     expect(isDocker(format)).toBe(false);
     const applies = (k: string) => optionApplies(k, format, IGNORED);
-    for (const key of Object.keys(IGNORED)) expect(applies(key)).toBe(true);
+    for (const key of Object.keys(IGNORED.docker)) expect(applies(key)).toBe(true);
     expect(groupsFor(OPTION_GROUPS, applies)).toEqual(OPTION_GROUPS);
   }
+});
+
+describe("read, and dropping nothing, is not the same as unread", () => {
+  // The distinction the per-format table exists to keep. Both answers show
+  // every field, so nothing on screen tells them apart -- which is exactly why
+  // the *values* have to, or a page that never reached the server looks like
+  // one that read "helm drops nothing".
+
+  it("answers a format's own table, and null where there is none", () => {
+    // Read and empty. A fact, and the fixture states it rather than leaving
+    // helm out, because leaving it out is the other answer.
+    expect(ignoredFor("helm", IGNORED)).toEqual({});
+    expect(Object.keys(ignoredFor("docker", IGNORED) ?? {})).not.toEqual([]);
+    // Nothing read: the mount state, the fetch that failed, and a format the
+    // answer did not carry. All three are "nobody has said", and none of them
+    // is a format that drops nothing.
+    expect(ignoredFor("helm", {})).toBe(null);
+    expect(ignoredFor("docker", {})).toBe(null);
+    expect(ignoredFor("kustomize", IGNORED)).toBe(null);
+  });
+
+  it("shows every option either way", () => {
+    // The safe direction, and the same one for both: hiding a required field
+    // on a guess is the mistake worth being wrong about the other way.
+    for (const table of [IGNORED, {}]) {
+      const applies = (k: string) => optionApplies(k, "helm", table);
+      expect(applies("namespace")).toBe(true);
+      expect(applies("engine_cpu_limit")).toBe(true);
+      expect(groupsFor(OPTION_GROUPS, applies)).toEqual(OPTION_GROUPS);
+    }
+  });
+
+  it("has no sentence to give for a field it is not hiding", () => {
+    expect(whyIgnored("namespace", "helm", IGNORED)).toBe(null);
+    expect(whyIgnored("namespace", "helm", {})).toBe(null);
+    expect(whyIgnored("namespace", "docker", {})).toBe(null);
+    // ...and the generator's own sentence where it is.
+    expect(whyIgnored("namespace", "docker", IGNORED))
+      .toBe(IGNORED.docker.namespace);
+  });
+});
+
+it("hides what a non-docker format drops, when one does", () => {
+  // The case the per-format table exists for: `manifests` and `helm` have empty
+  // entries today and #182 fills them, so the reader must already be answering
+  // by format rather than by asking whether this is docker. A local table, not
+  // the fixture -- the fixture is the generator's answer, and this is the shape
+  // of the next one.
+  const table = {
+    manifests: { sv_hostname_override: "a cluster agent returns DNS-based URLs" },
+    helm: {},
+    docker: IGNORED.docker,
+  };
+  expect(optionApplies("sv_hostname_override", "manifests", table)).toBe(false);
+  expect(whyIgnored("sv_hostname_override", "manifests", table))
+    .toBe("a cluster agent returns DNS-based URLs");
+  // ...and it is this format's table that is read, not any other's: helm has an
+  // entry of its own and keeps the field, and docker's keys stay docker's.
+  expect(optionApplies("sv_hostname_override", "helm", table)).toBe(true);
+  expect(optionApplies("namespace", "manifests", table)).toBe(true);
+  expect(optionApplies("namespace", "docker", table)).toBe(false);
 });
 
 describe("docker", () => {
@@ -69,7 +133,7 @@ describe("docker", () => {
     // Scheduling is the only shared group a docker bundle loses whole. The
     // environment area survives too and is not in this list: it stopped being
     // a group when it stopped being a switch, and the panel asks `keysApply`
-    // over extra_env for it -- which is in DOCKER_IGNORED nowhere, because
+    // over extra_env for it -- which is in the ignored table nowhere, because
     // there it is `--env` flags.
     expect(kept.map((g) => g.id))
       .toEqual(["registry", "proxy", "ca", "security"]);

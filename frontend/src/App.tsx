@@ -34,7 +34,9 @@ import { blankRequired, withPlaceholders } from "./placeholder";
 // What the bundle is, and which options that leaves reaching something. The
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
-import { isDocker, optionApplies, whyIgnored as why } from "./formats";
+import {
+  IgnoredByFormat, isDocker, optionApplies, whyIgnored as why,
+} from "./formats";
 // The engine size the bundle will carry, and where the figure came from
 // (#132): generate derives it from the location's engine requests, so the
 // configure step states it rather than editing it.
@@ -183,10 +185,12 @@ export default function App({ api }: { api: Api }) {
   const [defaults, setDefaults] = useState<Options>({});
   const [svConst, setSvConst] = useState<SvConstants>(
     { func_ids: [], ingress_types: [], backends: {} });
-  // What a docker bundle drops, from the generator (see formats.ts). Empty
-  // until it lands, and empty means every option applies -- the configure step
-  // shows a field too many rather than hiding a required one on a guess.
-  const [dockerIgnored, setDockerIgnored] = useState<Record<string, string>>({});
+  // What each format drops, from the generator (see formats.ts). No entry for a
+  // format is nothing having been read for it -- which is every format until
+  // this lands -- and a format whose entry is `{}` drops nothing, which is an
+  // answer. Both show every option: the configure step shows a field too many
+  // rather than hiding a required one on a guess.
+  const [ignored, setIgnored] = useState<IgnoredByFormat>({});
   // ...and which environment variables the bundle writes for itself, which the
   // env area refuses. Empty the same way, and meaning the same thing: nothing
   // is refused until the table lands, because generate() refuses
@@ -428,7 +432,7 @@ export default function App({ api }: { api: Api }) {
       setOptions((o) => ({ ...d, ...o }));
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
-    api.dockerIgnored().then(setDockerIgnored).catch(() => {});
+    api.ignoredOptions().then(setIgnored).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.slotMinimums().then(setSlotMinimums).catch(() => {});
     api.funcIdVocabulary().then(setFuncIds).catch(() => {});
@@ -1314,14 +1318,14 @@ export default function App({ api }: { api: Api }) {
    *  configure step hides by, and what the two blockers below are judged
    *  against. The table is the generator's; see formats.ts. */
   const applies = useCallback(
-    (k: string) => optionApplies(k, format, dockerIgnored),
-    [format, dockerIgnored]);
+    (k: string) => optionApplies(k, format, ignored),
+    [format, ignored]);
   /** ...and, where a field's absence needs explaining, the generator's own
    *  sentence for it. Served with the keys for exactly this: the bundle's
    *  README prints these, and the form hiding the field should not have to
    *  write its own version. */
   const whyIgnored = useCallback(
-    (k: string) => why(k, format, dockerIgnored), [format, dockerIgnored]);
+    (k: string) => why(k, format, ignored), [format, ignored]);
 
   // Both are answered against the format, not against the options alone: they
   // are what blocks the download, and an option this bundle cannot carry must

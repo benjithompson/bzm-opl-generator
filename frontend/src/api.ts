@@ -476,11 +476,16 @@ export const api = {
     "GET", accountId ? `/api/func-ids?account_id=${accountId}` : "/api/func-ids"),
   functionalities: () => req<Functionality[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
-  /** {option: why} for the options a docker bundle drops — generate's own
-   *  DOCKER_IGNORED. Served rather than restated in TypeScript: the configure
+  /** {format: {option: why}} for what each output format drops — generate's own
+   *  IGNORED_BY_FORMAT. Served rather than restated in TypeScript: the configure
    *  step hides what it names, and a key added to the generator would
-   *  otherwise go on being offered for a format that ignores it. */
-  dockerIgnored: () => req<Record<string, string>>("GET", "/api/docker-ignored"),
+   *  otherwise go on being offered for a format that ignores it.
+   *
+   *  Every format has an entry, and an entry that is `{}` is a format that
+   *  drops nothing — which is not the same answer as this request never having
+   *  landed. `formats.ignoredFor` is where the two are told apart. */
+  ignoredOptions: () => req<Record<string, Record<string, string>>>(
+    "GET", "/api/ignored-options"),
   /** {funcId: the slots BlazeMeter needs before it will make the location} —
    *  core's SLOT_MINIMUMS. Served for the same reason as the table above: the
    *  new-location form states the rule before the account does, and the number
@@ -674,7 +679,7 @@ export interface Functionality {
    *  Served (facts.CATEGORY_BY_FUNC, read off real single-functionality
    *  locations' /versions) rather than kept here: it was
    *  `ENGINE_FUNCTIONALITIES`, two funcIds written out in optionGroups.ts, and
-   *  a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED` and
+   *  a copy in TypeScript of a table Python owns is what `IGNORED_BY_FORMAT` and
    *  the funcId vocabulary are served to avoid. */
   runs_engine: boolean;
 }
@@ -685,7 +690,7 @@ export interface Functionality {
  *
  *  `type` is what a control is chosen from, and a type this page does not know
  *  falls back to a text box rather than taking the row off screen: the same
- *  direction an empty docker-ignored table goes, for the same reason. `default`
+ *  direction an unread ignored-options table goes, for the same reason. `default`
  *  is the *agent's* default, stated on the row, because a variable left unset
  *  is not a variable with no value. */
 export interface AgentEnvVar {

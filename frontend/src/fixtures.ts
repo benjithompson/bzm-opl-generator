@@ -3,8 +3,8 @@
 // The rule is tests/evidence_fixtures.py's, one layer up: there were two
 // builders for the evidence document with different defaults for the same
 // schema, and one test file imported both. The same thing had started here --
-// formats.test.ts and App.test.tsx each carried their own slice of
-// DOCKER_IGNORED, and they had already diverged by five keys, so the page test
+// formats.test.ts and App.test.tsx each carried their own slice of the ignored
+// table, and they had already diverged by five keys, so the page test
 // was asserting against a table the unit test would have called incomplete.
 //
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
@@ -52,40 +52,51 @@ export const SIZING_MODELS: SizingModel[] = [
     pods: "mock pods", measured: false, example_target: 2000 },
 ];
 
-/** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.
+/** generate.IGNORED_BY_FORMAT, as the page receives it from
+ *  /api/ignored-options.
  *
  *  A copy, and the only one. It cannot be derived -- the authority is Python --
- *  so `tests/test_server.py::test_docker_ignored_is_served_from_the_generator`
+ *  so `tests/test_server.py::test_ignored_options_are_served_from_the_generator`
  *  holds the route equal to the generator's table, and what is checked here is
- *  the half no Python test can see: what a page does with such a table. */
-export const DOCKER_IGNORED: Record<string, string> = {
-  platform: "there is no OpenShift/Kubernetes distinction on a docker host",
-  openshift_cluster: "there is no cluster, so no oc and no Route",
-  namespace: "containers are not namespaced",
-  service_account_name: "there is no ServiceAccount to run as",
-  service_account_create: "there is no ServiceAccount to create",
-  cluster_rbac: "there is no RBAC",
-  service_type: "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
-  pull_secret: "the host's own docker login is what authenticates a pull",
-  run_as_user: "the container runs as root (-u 0) because that is what opens "
-    + "the docker socket it starts engines through",
-  restrict_engines: "engine security context is a pod field",
-  tolerations: "scheduling is a Kubernetes concern",
-  node_selector: "scheduling is a Kubernetes concern",
-  engine_tolerations: "scheduling is a Kubernetes concern",
-  engine_node_selector: "scheduling is a Kubernetes concern",
-  engine_cpu_limit: "KUBERNETES_RESOURCES_LIMITS_CPU is a Kubernetes variable",
-  engine_mem_limit: "KUBERNETES_RESOURCES_LIMITS_MEMORY is a Kubernetes variable",
-  engine_ephemeral_request_mb: "ephemeral storage is a pod field",
-  engine_ephemeral_limit_mb: "ephemeral storage is a pod field",
-  crane_ephemeral_storage: "ephemeral storage is a pod field",
-  ca_existing_configmap: "there is no ConfigMap; the bundle mounts a file",
-  ca_configmap_key: "there is no ConfigMap; the bundle mounts a file",
-  ca_openshift_inject: "nothing injects a trust bundle into a container",
-  engines_per_node: "there is one host, and it is this one",
-  crane_hook: "crane-hook is a Pod, and there is no cluster to run it in",
-  registry_auth: "the stubs are ConfigMap lines; a docker host authenticates "
-    + "with its own docker login",
+ *  the half no Python test can see: what a page does with such a table.
+ *
+ *  **Every format is stated, including the two that drop nothing.** `{}` is the
+ *  answer "this format drops nothing", and a fixture that left those formats
+ *  out would be handing the page the one state that means "nothing has been
+ *  read" -- so a test asserting that every field shows for a helm bundle would
+ *  pass without the page ever having read an answer. */
+export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
+  manifests: {},
+  helm: {},
+  docker: {
+    platform: "there is no OpenShift/Kubernetes distinction on a docker host",
+    openshift_cluster: "there is no cluster, so no oc and no Route",
+    namespace: "containers are not namespaced",
+    service_account_name: "there is no ServiceAccount to run as",
+    service_account_create: "there is no ServiceAccount to create",
+    cluster_rbac: "there is no RBAC",
+    service_type: "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
+    pull_secret: "the host's own docker login is what authenticates a pull",
+    run_as_user: "the container runs as root (-u 0) because that is what opens "
+      + "the docker socket it starts engines through",
+    restrict_engines: "engine security context is a pod field",
+    tolerations: "scheduling is a Kubernetes concern",
+    node_selector: "scheduling is a Kubernetes concern",
+    engine_tolerations: "scheduling is a Kubernetes concern",
+    engine_node_selector: "scheduling is a Kubernetes concern",
+    engine_cpu_limit: "KUBERNETES_RESOURCES_LIMITS_CPU is a Kubernetes variable",
+    engine_mem_limit: "KUBERNETES_RESOURCES_LIMITS_MEMORY is a Kubernetes variable",
+    engine_ephemeral_request_mb: "ephemeral storage is a pod field",
+    engine_ephemeral_limit_mb: "ephemeral storage is a pod field",
+    crane_ephemeral_storage: "ephemeral storage is a pod field",
+    ca_existing_configmap: "there is no ConfigMap; the bundle mounts a file",
+    ca_configmap_key: "there is no ConfigMap; the bundle mounts a file",
+    ca_openshift_inject: "nothing injects a trust bundle into a container",
+    engines_per_node: "there is one host, and it is this one",
+    crane_hook: "crane-hook is a Pod, and there is no cluster to run it in",
+    registry_auth: "the stubs are ConfigMap lines; a docker host authenticates "
+      + "with its own docker login",
+  },
 };
 
 
@@ -135,7 +146,7 @@ export const RESERVED_ENV: Record<string, string | null> = {
  *  render.
  *
  *  A **sample**, and deliberately not a copy: unlike RESERVED_ENV and
- *  DOCKER_IGNORED above, nothing on the page has to agree with this list. The
+ *  IGNORED_BY_FORMAT above, nothing on the page has to agree with this list. The
  *  area renders what it is served and offers a name box for whatever is not in
  *  it, so a table here held equal to the catalogue would be forty records kept
  *  in step to prove something no rendering depends on. What the tests need is

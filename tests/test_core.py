@@ -273,7 +273,7 @@ def test_nobody_s_slots_are_raised_for_them():
 
 def test_the_minimum_is_a_table_the_page_can_be_told():
     """Served rather than restated, so the form can say it before the account
-    does -- the DOCKER_IGNORED rule, one vocabulary along."""
+    does -- the IGNORED_BY_FORMAT rule, one vocabulary along."""
     mins = core.slot_minimums()
     assert mins["functionalGui"]["minimum"] == 2
     assert mins["functionalGui"]["label"] == "GUI Functional"

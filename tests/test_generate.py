@@ -700,7 +700,7 @@ def test_derived_engine_limits_land_in_the_profile_and_replay_stably():
 
 
 def test_docker_derives_no_engine_limits():
-    """The two keys are DOCKER_IGNORED, so deriving them would only add a
+    """The two keys are ignored by docker, so deriving them would only add a
     README line about an option nobody set: the derivation asks
     ignored_options() like every other reader of the pair, and a docker
     bundle's README states the size it actually carries (the default, via
@@ -1743,9 +1743,39 @@ def test_docker_names_the_two_options_that_used_to_go_quiet():
     assert not [f for f in bundle if "cranehook" in f]
 
 
+# The smallest options a bundle of each format generates from, so the two rules
+# below can be walked over every format rather than over the one that happens to
+# ignore anything today. Keyed by gen.OUTPUT_FORMATS, and the assertion in
+# test_every_format_has_an_ignored_entry is what keeps a fourth from being
+# tested by nobody.
+FORMAT_BASE = {
+    "manifests": {"namespace": "ns1", "ship_id": "bbb222",
+                  "auth_token": "de" * 32},
+    "helm": {"output_format": "helm", "namespace": "ns1", "ship_id": "bbb222",
+             "auth_token": "de" * 32},
+    "docker": DOCKER,
+}
+
+
+def test_every_format_has_an_ignored_entry():
+    """One entry per output format, `{}` included.
+
+    An entry that is empty is a format that ignores nothing, and it is an
+    answer: only the *table* being unread means nobody has said, and that is a
+    state a reader over the wire can be in and this module cannot (see
+    core.ignored_options). So a fourth format cannot arrive without somebody
+    deciding what it drops -- which is this assertion, and the FORMAT_BASE above
+    it, which is what would then walk it."""
+    assert set(gen.IGNORED_BY_FORMAT) == set(gen.OUTPUT_FORMATS)
+    assert set(FORMAT_BASE) == set(gen.OUTPUT_FORMATS)
+    # The one non-empty entry today, named so a table that silently emptied
+    # itself fails here rather than passing every rule below vacuously.
+    assert gen.IGNORED_BY_FORMAT["docker"]["namespace"]
+
+
 def test_a_format_never_refuses_what_it_says_it_ignores():
-    """The rule, over the whole table rather than the three keys that happened
-    to break it.
+    """The rule, over every format's table rather than the three keys that
+    happened to break it.
 
     An ignored option has no control on the configure page for that format, so
     a refusal over its value is a blocker with nothing on screen to clear it.
@@ -1756,11 +1786,15 @@ def test_a_format_never_refuses_what_it_says_it_ignores():
 
     Junk in every one of them at once, because they are ignored: nothing reads
     them, so nothing can object to the shape. The README still names them all,
-    which is the other half of the promise and the assertion below."""
-    junk = {k: "nonsense" for k in gen.DOCKER_IGNORED}
-    out = gen.generate(FACTS, {**DOCKER, **junk})
-    for key in gen.DOCKER_IGNORED:
-        assert f"`{key}`" in out["README.md"], f"{key} carried silently"
+    which is the other half of the promise and the assertion below. Walked per
+    format so the day a cluster format ignores something, its own README is
+    held to the same promise without this test being rewritten first."""
+    for fmt, ignored in gen.IGNORED_BY_FORMAT.items():
+        junk = {k: "nonsense" for k in ignored}
+        out = gen.generate(FACTS, {**FORMAT_BASE[fmt], **junk})
+        for key in ignored:
+            assert f"`{key}`" in out["README.md"], \
+                f"{fmt}: {key} carried silently"
     # ...and the CA pair that is reachable by clicking: the inline PEM wins and
     # the ConfigMap it was switched away from is ignored, not a second mode.
     both = gen.generate(FACTS, {**DOCKER, "ca_existing_configmap": "corp-trust",
@@ -1891,7 +1925,7 @@ def test_reserved_env_is_what_the_bundles_actually_write():
     that nothing writes refuses a variable the customer could have had.
 
     Emitted from the bundles rather than restated, because a set restated is a
-    set that drifts -- which is the whole of what this file's DOCKER_IGNORED
+    set that drifts -- which is the whole of what this file's ignored-option
     tests are about one layer up."""
     written = set()
     for facts, opts in ENV_COVERAGE:

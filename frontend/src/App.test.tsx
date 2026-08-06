@@ -33,9 +33,9 @@ import {
   FuncIdVocabulary, Functionality, Location, Options, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
-// The served docker-ignored table, from the one copy of it.
+// The served ignored-options table, from the one copy of it.
 import {
-  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV, SIZING_MODELS, SLOT_MINIMUMS,
+  AGENT_ENV, IGNORED_BY_FORMAT, RESERVED_ENV, SIZING_MODELS, SLOT_MINIMUMS,
 } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
@@ -1421,11 +1421,12 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
     // unreachable one are different answers and the page says different things
     // about them -- the tests that mean the second say so themselves.
     mintedToken: async () => ({ auth_token: null }),
-    // generate.DOCKER_IGNORED as the page receives it, from the one copy of
+    // generate.IGNORED_BY_FORMAT as the page receives it, from the one copy of
     // that table (see fixtures.ts -- this used to be a second, shorter slice,
     // which is how a page test comes to assert against a table the unit test
-    // would call incomplete).
-    dockerIgnored: async () => DOCKER_IGNORED,
+    // would call incomplete). Every format is stated, the two that drop nothing
+    // included: `{}` is an answer and a missing entry is not.
+    ignoredOptions: async () => IGNORED_BY_FORMAT,
     // plan.SIZING_MODELS, from the same one copy: the sizing card renders a
     // field group per model, so a page with no table has no fields.
     sizingModels: async () => SIZING_MODELS,

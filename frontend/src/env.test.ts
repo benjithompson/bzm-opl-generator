@@ -72,7 +72,7 @@ describe("what a row refuses", () => {
 
   it("refuses nothing while the table has not been read", () => {
     // Empty is "not read yet", and it means everything is allowed -- the same
-    // direction as an empty docker-ignored table. generate() refuses
+    // direction as an unread ignored-options table. generate() refuses
     // authoritatively either way, and a row rejected on a guess is the worse
     // half of being wrong.
     expect(envRowError(rows("KUBERNETES_SERVICE_USE_TYPE"), 0, {})).toBe("");

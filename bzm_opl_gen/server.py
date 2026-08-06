@@ -848,9 +848,9 @@ def slot_minimums():
     return core.slot_minimums()
 
 
-@app.get("/api/docker-ignored", description=core.docker_ignored.__doc__)
-def docker_ignored():
-    return core.docker_ignored()
+@app.get("/api/ignored-options", description=core.ignored_options.__doc__)
+def ignored_options():
+    return core.ignored_options()
 
 
 @app.get("/api/reserved-env", description=core.reserved_env.__doc__)

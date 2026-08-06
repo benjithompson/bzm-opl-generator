@@ -798,21 +798,31 @@ def test_sv_constants_are_served_from_the_generator():
     assert "ingress_types" not in client.get("/api/option-defaults").json()
 
 
-def test_docker_ignored_is_served_from_the_generator():
-    """What the configure step hides when the bundle is a docker one. Served
-    for the same reason the SV vocabulary is: the page would otherwise carry a
-    second copy of two dozen option keys, and a key added to the generator
-    would go on being offered for a format that drops it."""
+def test_ignored_options_are_served_from_the_generator():
+    """What the configure step hides, per format. Served for the same reason
+    the SV vocabulary is: the page would otherwise carry a second copy of two
+    dozen option keys, and a key added to the generator would go on being
+    offered for a format that drops it.
+
+    Keyed by format, and **every format has an entry** -- including the two
+    that drop nothing. That is what lets the page tell "read, and this format
+    drops nothing" from "nothing has been read", which are the same rendering
+    and different facts: a route that answered only the formats with keys would
+    hand a helm bundle the second one forever."""
     from bzm_opl_gen import generate as gen_mod
-    body = client.get("/api/docker-ignored").json()
-    assert body == gen_mod.DOCKER_IGNORED
+    body = client.get("/api/ignored-options").json()
+    assert body == gen_mod.IGNORED_BY_FORMAT
+    assert set(body) == set(gen_mod.OUTPUT_FORMATS)
+    assert body["helm"] == {} and body["manifests"] == {}
     # The four the page hides whole sections for.
     for key in ("namespace", "service_account_name", "node_selector",
                 "engine_cpu_limit"):
-        assert body[key]
+        assert body["docker"][key]
     # Every key is a real option: a name that matched nothing would hide
     # nothing, and would say so nowhere.
-    assert not set(body) - set(client.get("/api/option-defaults").json())
+    options = set(client.get("/api/option-defaults").json())
+    for fmt, table in body.items():
+        assert not set(table) - options, fmt
 
 
 def test_the_page_knows_the_same_three_formats_the_generator_does():
@@ -875,7 +885,7 @@ def test_the_page_blocks_exactly_the_formats_that_refuse_a_virtual_service():
 
 
 def test_the_pages_copy_of_the_ignored_table_is_the_generators():
-    """The one copy of DOCKER_IGNORED in TypeScript, held equal to this one.
+    """The one copy of IGNORED_BY_FORMAT in TypeScript, held equal to this one.
 
     It cannot be derived -- the authority is Python and the page's tests run
     without a server -- so it is a fixture, and a fixture of a table is a table
@@ -883,22 +893,41 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
     carried slices that differed by five keys, so the page test asserted against
     a table the unit test would have called incomplete. Now there is one, and
     this is what keeps it honest.
+
+    Compared per format, empties included, because that is where the fixture
+    can now be wrong in a way no page test would notice: a format left out of
+    the fixture is handed to the page as the one state that means "nothing has
+    been read", and every assertion about it still passes.
     """
     from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
-    body = re.search(r"export const DOCKER_IGNORED: Record<string, string> = \{"
+    body = re.search(r"export const IGNORED_BY_FORMAT: "
+                     r"Record<string, Record<string, string>> = \{"
                      r"(.*?)\n\};", text, re.S)
-    assert body, "DOCKER_IGNORED not found -- was it renamed or moved?"
-    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
-        == set(gen_mod.DOCKER_IGNORED)
+    assert body, "IGNORED_BY_FORMAT not found -- was it renamed or moved?"
+    # Two indents: a format at 2 spaces, its option keys at 4. The continuation
+    # lines of a wrapped reason start with `+`, which is not a key.
+    found, table = {}, None
+    for line in body.group(1).splitlines():
+        empty = re.match(r"  (\w+): \{\},?$", line)
+        opens = re.match(r"  (\w+): \{$", line)
+        key = re.match(r"    (\w+):", line)
+        if empty:
+            found[empty.group(1)] = set()
+        elif opens:
+            table = found.setdefault(opens.group(1), set())
+        elif key and table is not None:
+            table.add(key.group(1))
+    assert found == {fmt: set(keys)
+                     for fmt, keys in gen_mod.IGNORED_BY_FORMAT.items()}
 
 
 def test_the_placeholder_marker_is_one_string_in_both_languages():
     """The page writes it into what it sends and the generator recognises it
     coming back, so a marker that differed by a character would be carried into
     the bundle as a value somebody meant -- silently, and in the one field
-    nobody filled in. Not served like DOCKER_IGNORED, because the page has to
+    nobody filled in. Not served like IGNORED_BY_FORMAT, because the page has to
     write it before any response has arrived; held equal here instead, which is
     what every other constant these two share does."""
     from bzm_opl_gen import generate as gen_mod
@@ -1000,7 +1029,7 @@ def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
 
 
 def test_the_pages_copy_of_the_reserved_env_names_is_the_generators():
-    """As with DOCKER_IGNORED above: the page's tests run without a server, so
+    """As with IGNORED_BY_FORMAT above: the page's tests run without a server, so
     the fixture is a second copy, and this is what keeps it from drifting."""
     from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
@@ -1219,7 +1248,7 @@ def test_a_gui_functional_location_is_refused_at_one_slot(monkeypatch):
 
 def test_the_slot_minimums_are_served_so_the_form_can_say_them_first():
     """The page must state the rule before the account does, and the number and
-    BlazeMeter's sentence are core's. Served for the reason DOCKER_IGNORED is:
+    BlazeMeter's sentence are core's. Served for the reason IGNORED_BY_FORMAT is:
     a copy in TypeScript is how a figure found on a live POST and a figure a
     form asserts stop being the same figure."""
     body = client.get("/api/slot-minimums").json()
@@ -1228,7 +1257,7 @@ def test_the_slot_minimums_are_served_so_the_form_can_say_them_first():
 
 
 def test_the_pages_copy_of_the_slot_minimums_is_cores():
-    """As with DOCKER_IGNORED and the sizing models: the page's tests run
+    """As with IGNORED_BY_FORMAT and the sizing models: the page's tests run
     without a server, so the fixture is a second copy and this is what holds
     it equal."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
@@ -1312,7 +1341,7 @@ DOCUMENTED_ROUTES = [
     ("get", "/api/sv-check"), ("get", "/api/option-defaults"),
     ("get", "/api/option-docs"), ("get", "/api/func-ids"),
     ("get", "/api/functionalities"), ("get", "/api/sv-constants"),
-    ("get", "/api/docker-ignored"), ("get", "/api/reserved-env"),
+    ("get", "/api/ignored-options"), ("get", "/api/reserved-env"),
 ]
 
 
@@ -1894,7 +1923,7 @@ def test_sizing_models_are_served_with_the_account_s_own_label():
 
 
 def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
-    """As with DOCKER_IGNORED and RESERVED_ENV: the page's tests run without a
+    """As with IGNORED_BY_FORMAT and RESERVED_ENV: the page's tests run without a
     server, so the fixture is a second copy, and this is what keeps it from
     drifting. `measured` most of all -- the card branches on it, and a fixture
     that quietly gave service virtualization a figure would let a test pass over
@@ -1949,7 +1978,7 @@ def test_the_engine_rating_is_answered_for_every_sizing_model():
 
 def test_a_functionality_says_whether_its_agent_carries_an_engine():
     """`runs_engine` was a two-id literal in the frontend
-    (`ENGINE_FUNCTIONALITIES`), which is the copy DOCKER_IGNORED and the funcId
+    (`ENGINE_FUNCTIONALITIES`), which is the copy IGNORED_BY_FORMAT and the funcId
     vocabulary are served to avoid: an id renamed here left the page deciding
     where the engine-size statement goes, and what service virtualization is
     exclusive with, from a list nothing could correct.

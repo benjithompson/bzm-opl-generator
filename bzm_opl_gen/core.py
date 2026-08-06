@@ -423,7 +423,7 @@ def location_runnable(location):
 # 1.5). Raising the default instead was the tempting fix and is the one this
 # must not be: `slots` is engines per *agent* and a real cost (accounts run 17
 # agents at slots=1), so a location that quietly asked for twice the
-# concurrency somebody chose would be the silent setting DOCKER_IGNORED exists
+# concurrency somebody chose would be the silent setting IGNORED_BY_FORMAT exists
 # to prevent.
 SLOT_MINIMUMS = {
     "functionalGui": {
@@ -441,7 +441,7 @@ def slot_minimums():
     message}}.
 
     Served (`/api/slot-minimums`) rather than restated by each caller, for the
-    reason DOCKER_IGNORED is: the create-location form has to state the rule
+    reason IGNORED_BY_FORMAT is: the create-location form has to state the rule
     *before* the account does, and a copy in TypeScript is how a number found
     live and a number typed on a page stop being the same number.
     """
@@ -1848,7 +1848,7 @@ def functionalities():
     the rows: that table already holds the answer, read off real
     single-functionality locations' /versions. It is served for the reason the
     list itself is -- the page kept the same two ids as a literal of its own,
-    and a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED`
+    and a copy in TypeScript of a table Python owns is what `IGNORED_BY_FORMAT`
     exists to keep from happening again.
 
     Derived here rather than stored on FUNCTIONALITIES so the two cannot fall
@@ -1950,27 +1950,34 @@ def func_ids(client=None, account_id=None):
                         for f, label, subs in rows]}
 
 
-def docker_ignored():
-    """The options a docker bundle cannot carry, as {option: why}.
+def ignored_options():
+    """The options each output format cannot carry, as {format: {option: why}}.
 
-    Served for the same reason as the SV vocabulary: a caller that hides what
-    this format drops must not keep its own list of it. The configure step does
+    Served for the same reason as the SV vocabulary: a caller that hides what a
+    format drops must not keep its own list of it. The configure step does
     exactly that -- a docker bundle has no namespace, no ServiceAccount and no
     scheduling, so the fields for them are not on screen -- and the bundle's
     README states the same table for whatever was set anyway.
 
-    An empty answer therefore means "every option applies", which is the only
-    safe way to be wrong about this: a reader that cannot see the table shows a
-    field too many rather than hiding one that matters.
+    **Every format has an entry, and the two empties are different facts.** A
+    format whose entry is `{}` ignores nothing, and that has been read; the
+    whole mapping missing -- not fetched yet, or a caller that could not reach
+    this route -- is nobody having read anything, and it is the only one of the
+    two that is a guess. Both show every field, because that is the only safe
+    way to be wrong about this: a reader that cannot see the table shows a
+    field too many rather than hiding one that matters. Keeping them apart is
+    what lets a reader say which it is looking at without the format's own
+    entry having to carry a flag.
     """
-    return dict(gen_mod.DOCKER_IGNORED)
+    return {fmt: dict(table)
+            for fmt, table in gen_mod.IGNORED_BY_FORMAT.items()}
 
 
 def reserved_env():
     """The environment variable names a bundle writes for itself, and the
     option that writes each one where there is one, as {NAME: option | null}.
 
-    Served for the same reason as docker_ignored(): `extra_env` is refused for
+    Served for the same reason as ignored_options(): `extra_env` is refused for
     every one of these at generate time, and a form that let somebody type one
     and only learned it was taken when the download failed would be an
     off-screen blocker with the field right there on screen. A caller that
@@ -2022,7 +2029,7 @@ def agent_env(func_ids=None):
     platforms document it, which functionalities read it, the agent's own
     default and an example. Types are `agent_env.TYPES`; a caller that meets one
     it does not know should fall back to a text box rather than hide the row,
-    for the reason an empty docker_ignored() means "everything applies".
+    for the reason an unread ignored_options() means "everything applies".
     """
     runs = None if func_ids is None else set(func_ids)
     return [dict(v) for v in agent_env_mod.AGENT_ENV

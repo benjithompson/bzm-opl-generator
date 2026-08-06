@@ -139,12 +139,20 @@ by the same rule the Kubernetes Secret follows.
 
 Two things differ from the Kubernetes formats, both deliberate:
 
-- **Service virtualization is not supported.** A docker agent can serve virtual
-  services, but it publishes them with `HOSTNAME_OVERRIDE` and a
-  `TLS_CERT`/`TLS_KEY` pair, and every `sv_*` option here is a
-  `KUBERNETES_WEB_EXPOSE_*` one. `--format docker` refuses a bundle *configured*
-  for service virtualization — an `sv_ingress` other than none — rather than
-  emitting a command that would install, report idle, and publish nothing. The
+- **Service virtualization is not in this bundle yet, and the gap is this
+  generator's rather than the agent's.** A docker agent serves virtual services
+  perfectly well: it publishes them with `HOSTNAME_OVERRIDE` and a
+  `TLS_CERT`/`TLS_KEY` pair, which nothing here has an option for, because every
+  `sv_*` option this tool has writes a `KUBERNETES_WEB_EXPOSE_*` variable that a
+  container agent never reads.
+  [#182](https://github.com/benjithompson/bzm-opl-generator/issues/182) is the
+  work that adds those three; until it lands, take the `docker run` from
+  BlazeMeter's own Docker Command tab — their [bring your own certificate
+  page](https://help.blazemeter.com/docs/guide/private-locations-optional-installation-step-bring-your-own-certificate-mock-services.html)
+  carries a working one — and set them by hand. `--format docker` refuses a
+  bundle *configured* for service virtualization — an `sv_ingress` other than
+  none — rather than emitting a command that would install, report idle, and
+  publish nothing. The
   test is the configuration, not the location: a location that offers mocks but
   is being generated for performance alone ([declining the
   functionality](service-virtualization.md#not-using-it-on-a-location-that-offers-it))

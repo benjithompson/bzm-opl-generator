@@ -481,7 +481,7 @@ describe("which functionality a location starts on", () => {
     // The keyless vocabulary is the three covered funcIds and no pins, so
     // nothing here can tell `tdm` from `chrome:default` from a funcId the
     // account retired -- and the honest answer to a question nobody has read
-    // the answer to is silence, which is the direction DOCKER_IGNORED and the
+    // the answer to is silence, which is the direction IGNORED_BY_FORMAT and the
     // reserved-env table already take. It used to name the raw funcIds, which
     // is how a GUI Functional location got 41 lines of browser.
     expect(unclaimedFuncIds([...UNMODELLED, ...PINS, ...RETIRED], FUNCTIONALITIES,
