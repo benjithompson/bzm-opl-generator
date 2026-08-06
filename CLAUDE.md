@@ -733,22 +733,32 @@ on nothing else — never on the message, and never on a status-less failure lik
 fetch rejecting because the server is not running.
 
 **The page has a Refresh, and it is a button because the staleness is rare.**
-The location list ages while the page is open (an agent a colleague created, a
-location deleted in BlazeMeter's own UI); a poll was considered and rejected,
-because a control that exists is itself the hint that the data can age, and a
-background timer is not. It lives in `AgentPanel`'s private-location header —
-connect mode only, structurally, since manual entry renders none of that branch
-and has no account to re-read. **`POST /api/refresh` is what makes it mean
-anything**: without dropping `_cache` first, a re-read is served the same list
-for up to `CACHE_TTL_S` and the click looks exactly like one that worked. It is
-not `_writes` — nothing there reaches the account — and it answers nothing,
-because what to re-read is the caller's; the page re-reads one list.
+What the page holds ages while it is open (an agent a colleague created, a
+location deleted in BlazeMeter's own UI, somebody else raising a location's
+engines-per-agent); a poll was considered and rejected, because a control that
+exists is itself the hint that the data can age, and a background timer is not.
+There are **two**, because there are two reads: `AgentPanel`'s private-location
+header — connect mode only, structurally, since manual entry renders none of
+that branch and has no account to re-read — and the Account capacity header,
+which re-reads the whole-account rollup. **`POST /api/refresh` is what makes
+either mean anything**: without dropping `_cache` first, a re-read is served the
+same answer for up to `CACHE_TTL_S` and the click looks exactly like one that
+worked. It is not `_writes` — nothing there reaches the account — and it answers
+nothing, because what to re-read is the caller's; each button re-reads its own
+one thing, and a route that re-read both would be deciding which of the
+account's slow calls a click on the other view is worth.
 `App.refreshLocations` is a **separate path from the workspace effect**, which
 is the initial load: that one blanks the list, resolves the harbor id a restored
 session is holding and calls `release()`, none of which may happen again on a
 page that is already configured. So a refresh writes `locations` and nothing
 else — not the selection, not the options, not facts (their cache is dropped
-too, so picking the location again re-reads them). A selected location missing
+too, so picking the location again re-reads them). `App.refreshCapacity` is the
+same shape and carries the **same guard as the effect it sits beside**, in the
+form a callback can have it: `live` is a closure over one run of an effect, and
+a button outlives all of them, so the account is compared through a ref — 1.3s
+on a 171-location account is plenty of time to change account in the drawer, and
+the slower answer must not land under the newer account's name. A selected
+location missing
 from the answer is `vanished` in the panel: a notice and a forced fold back to
 the list, not a silent repoint, and not the sentence a *failed action* gets —
 `stale.goneNotice` says "press Refresh", `stale.vanishedNotice` cannot, having

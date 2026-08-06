@@ -56,7 +56,15 @@ function Swatch(props: { i?: number; shared?: boolean; className?: string }) {
   );
 }
 
-export function CapacityView({ cap }: { cap: Capacity }) {
+export function CapacityView({ cap, refresh, refreshing }: {
+  cap: Capacity;
+  /** Re-read the whole account, past the server's cache. Rendered as one
+   *  button beside the other two header controls -- the rollup ages while this
+   *  view is open exactly as the location list does, and it is the same account
+   *  underneath. App owns the read; this file owns where the control is. */
+  refresh: () => void;
+  refreshing: boolean;
+}) {
   const [filter, setFilter] = useState("");
   // Grouped once per account, filtered from that. It used to group the whole
   // account twice on mount (once here, once for `widest`) and again on every
@@ -123,6 +131,11 @@ export function CapacityView({ cap }: { cap: Capacity }) {
             )}
           </div>
           <span className="grow" />
+          {/* First of the three, because it is about the numbers beside it
+              rather than about how they are laid out. What is on screen stays
+              while it runs and stays if it fails -- the read is one call and
+              the view has nothing to blank. */}
+          <Button kind="ghost" onClick={refresh} busy={refreshing}>Refresh</Button>
           {/* Folds every workspace on the account, not every one on screen:
               leaving the ones a filter is hiding open is a state that only
               shows itself when the filter is cleared. */}

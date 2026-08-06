@@ -347,6 +347,41 @@ export default function App({ api }: { api: Api }) {
     return () => { live = false; };
   }, [view, accountId]);
   useEffect(() => { setCap(null); }, [accountId]);
+  // ...and the same read on demand, for the same reason the location list has
+  // one: the rollup is one read of the whole account and it ages while the view
+  // is open. Its own path rather than the effect above, which is entered by
+  // arriving at the view -- re-firing it would mean leaving and coming back,
+  // and it would be a no-op inside the cache's minute anyway.
+  //
+  // The guard is the effect's, in the shape a callback can have it: `live` is a
+  // closure over one run of an effect, and this outlives any of them. Same
+  // hazard exactly -- 1.3s on a 171-location account is plenty of time to
+  // change account in the drawer, and the slower answer must not land under the
+  // newer account's name.
+  const [capRefreshing, setCapRefreshing] = useState(false);
+  const accountRef = useRef(accountId);
+  accountRef.current = accountId;
+  const refreshCapacity = useCallback(async () => {
+    const id = accountRef.current;
+    if (!id) return;
+    setCapRefreshing(true);
+    setCapErr(null);
+    try {
+      // Dropped first, then re-read -- see refreshLocations. Served from the
+      // cache, this button would do nothing for up to a minute and say so in no
+      // way at all.
+      await api.refresh();
+      const c = await api.capacity(id);
+      if (accountRef.current === id) setCap(c);
+    } catch (e) {
+      // What is on screen stays. A rollup that could not be re-read has said
+      // nothing about the account, and this view's whole subject is a number
+      // people act on.
+      if (accountRef.current === id) setCapErr((e as Error).message);
+    } finally {
+      setCapRefreshing(false);
+    }
+  }, [api]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   // The three sizing models, served: what each functionality is asked for in,
   // and which of them has a measured per-pod figure at all. Read on mount with
@@ -1603,7 +1638,8 @@ export default function App({ api }: { api: Api }) {
           {!cap && accountId && !capErr && (
             <p className="text-sm text-slate-500">reading the account…</p>
           )}
-          {cap && <CapacityView cap={cap} />}
+          {cap && <CapacityView cap={cap} refresh={refreshCapacity}
+            refreshing={capRefreshing} />}
         </main>
       ) : (
       <main className="max-w-screen-xl mx-auto p-6">

@@ -32,6 +32,13 @@ const cap: Capacity = {
   unrated: 0,
 };
 
+/** The view, with the header's Refresh stubbed. The read behind that button is
+ *  App's -- what belongs here is that the control exists and is wired -- so
+ *  `refresh` defaults to a spy nothing asserts on, and the one test that cares
+ *  passes its own. */
+const view = (refresh: () => void = () => {}, refreshing = false) =>
+  render(<CapacityView cap={cap} refresh={refresh} refreshing={refreshing} />);
+
 const header = (name: string) =>
   screen.getByRole("button", { name: new RegExp(name) });
 
@@ -55,7 +62,7 @@ const detail = (name: string) =>
   document.getElementById(header(name).getAttribute("aria-controls")!)!;
 
 test("a workspace header folds its own card, and moves nothing else", () => {
-  render(<CapacityView cap={cap} />);
+  view();
   expect(within(detail("Alpha")).getByText("Dublin")).toBeTruthy();
   expect(folded("Alpha")).toBe(false);
 
@@ -72,7 +79,7 @@ test("a workspace header folds its own card, and moves nothing else", () => {
 });
 
 test("what stays on screen folded is the summary, not just the name", () => {
-  render(<CapacityView cap={cap} />);
+  view();
   fireEvent.click(header("Alpha"));
 
   // The point of folding to *this* line: 54 of these is an index of the
@@ -90,7 +97,7 @@ test("what stays on screen folded is the summary, not just the name", () => {
 });
 
 test("Collapse all reaches the workspaces the filter is hiding", () => {
-  render(<CapacityView cap={cap} />);
+  view();
   const filter = screen.getByLabelText("Filter workspaces");
 
   // Narrow to one -- the filter removes the card entirely, which is not the
@@ -113,7 +120,7 @@ test("Collapse all reaches the workspaces the filter is hiding", () => {
 });
 
 test("the control offers the move that is left to make", () => {
-  render(<CapacityView cap={cap} />);
+  view();
   expect(screen.getByRole("button", { name: "Collapse all" })).toBeTruthy();
 
   // One of two folded is not all of them.
@@ -125,7 +132,7 @@ test("the control offers the move that is left to make", () => {
 });
 
 test("the account bar is the account's, folded or not", () => {
-  const { container } = render(<CapacityView cap={cap} />);
+  const { container } = view();
   const bar = () => container.querySelectorAll("[title$='rated VUs (91%)']");
   expect(bar().length).toBe(1);
 
@@ -135,4 +142,23 @@ test("the account bar is the account's, folded or not", () => {
   expect(bar().length).toBe(1);
   expect(within(screen.getByText("account rated VUs").parentElement!)
     .getByText("5,500")).toBeTruthy();
+});
+
+test("Refresh asks for the account again, and says so while it does", () => {
+  const asked: number[] = [];
+  view(() => asked.push(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+  expect(asked.length).toBe(1);
+
+  // In flight it stops taking clicks: this is the slowest read on the page
+  // (1.3s on a 171-location account), so an impatient second press is the
+  // ordinary thing to do rather than the unlucky one.
+  cleanup();
+  view(() => asked.push(1), true);
+  const button = screen.getByRole<HTMLButtonElement>(
+    "button", { name: "Refresh" });
+  expect(button.disabled).toBe(true);
+  fireEvent.click(button);
+  expect(asked.length).toBe(1);
 });
