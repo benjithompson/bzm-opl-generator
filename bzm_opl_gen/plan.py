@@ -53,30 +53,236 @@ API_HOST = API_BASE.split("/")[2]
 # engine given twice the memory and the same CPU is not twice the engine.
 BASELINE_VUS = DEFAULT_THREADS_PER_ENGINE
 
+# Browser instances one baseline engine carries, from the account owner and
+# "roughly" is how it was given. Nothing here measures it either, so it is an
+# assumption in exactly the way BASELINE_VUS is -- and, being the pod's capacity
+# rather than a constant of the workload, it scales with the pod for the same
+# reason 500 does.
+BASELINE_BROWSERS = 4
+
 DOCUMENT_FILE = "capacity-request.md"
+
+PERFORMANCE, GUI, SV = "performance", "functionalGui", "mockServices"
+
+# -- the three sizing models --------------------------------------------------
+#
+# Each answers one question -- how much of *its own unit* does one pod of the
+# chosen size carry? -- because two of the three covered functionalities are
+# not sized in virtual users at all, and a planner that speaks only virtual
+# users answers a GUI-functional customer with a figure about somebody else's
+# workload.
+#
+# One pod size across all of them, and that is crane's doing rather than a
+# simplification here: BlazeMeter's own reference defines
+# KUBERNETES_RESOURCES_LIMITS_CPU as the CPU limit for "resources created by
+# agent" -- every pod it creates, engines and browser pods and mock pods alike
+# -- and there is no second pair. So three models cannot mean three sets of
+# limits. They mean three routes to how many pods of the one size are needed,
+# and the largest of them decides.
+#
+# `baseline` is what one pod of ENGINE_DEFAULT_CPU / ENGINE_DEFAULT_MEM carries,
+# and **None where no such figure exists**. That third state is why this is a
+# table rather than two constants: `vus_per_engine_assumed` already carries the
+# difference between a figure supplied and one defaulted, and service
+# virtualization is in neither position -- requests per second per core has not
+# been measured. It ships absent and stated. Do not fill it in with the
+# performance ratio and do not average one out of somebody's mock set: the whole
+# reason there is a None here is that a plan cannot quietly turn one into a node
+# count.
+#
+# `target_field` and `figure_field` are the names every surface above calls
+# these by -- the CLI flag, the JSON key, the label on the card -- so a refusal
+# names the field somebody typed into rather than the model it belongs to.
+SIZING_MODELS = {
+    PERFORMANCE: {
+        "unit": "virtual users",
+        "target_field": "users",
+        "figure_field": "vus_per_engine",
+        "figure_unit": "virtual users per engine",
+        "baseline": BASELINE_VUS,
+        "pod": "engine", "pods": "engines",
+        "runs": "performance tests",
+        "asks": "load testing",
+    },
+    GUI: {
+        "unit": "browser instances",
+        "target_field": "browsers",
+        "figure_field": "browsers_per_engine",
+        "figure_unit": "browser instances per engine",
+        "baseline": BASELINE_BROWSERS,
+        "pod": "engine", "pods": "engines",
+        "runs": "browser tests",
+        "asks": "browser testing",
+    },
+    SV: {
+        "unit": "requests per second",
+        "target_field": "requests_per_second",
+        # No figure field, and that is the absence rather than an omission: see
+        # _unmeasured_note. A caller offering one would be sizing mock pods,
+        # which every number after the pod count here is not about.
+        "figure_field": None,
+        "figure_unit": "requests per second per core",
+        "baseline": None,
+        "pod": "mock pod", "pods": "mock pods",
+        "runs": "virtual services",
+        "asks": "service virtualization",
+    },
+}
+
+
+def per_pod_capacity(functionality, cpu_millis, mem_bytes):
+    """What one pod of this size carries, in that functionality's own unit --
+    or None where there is no measured figure to scale.
+
+    Linear on the smaller of the two ratios, and floored at 1: a pod sized below
+    the baseline in either dimension carries proportionally less, and 500
+    threads on a 1 CPU / 4Gi engine is not a smaller run, it is a run that
+    OOM-kills or throttles halfway up the ramp.
+
+    None is not zero and not one. A model with no baseline cannot be sized at
+    all, and every caller has to decide what to do about that rather than
+    multiply by it.
+    """
+    baseline = SIZING_MODELS[functionality]["baseline"]
+    if baseline is None:
+        return None
+    base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
+    ratio = min(cpu_millis / base_cpu, mem_bytes / base_mem)
+    return max(int(baseline * ratio), 1)
 
 
 def supported_vus(cpu_millis, mem_bytes):
-    """Threads an engine of this size can carry, scaled from BlazeMeter's own
-    pairing of BASELINE_VUS threads with ENGINE_DEFAULT_CPU/_MEM.
-
-    Linear on the smaller of the two ratios, and floored at 1: an engine sized
-    below the baseline in either dimension carries proportionally less, and
-    500 threads on a 1 CPU / 4Gi engine is not a smaller run, it is a run that
-    OOM-kills or throttles halfway up the ramp.
+    """Threads an engine of this size can carry: the performance model, under
+    the name doctor calls it by.
 
     doctor.check_threads_per_engine judges a *configured* location against this;
-    plan_capacity works out the engine count *from* it. Same ratio, one place --
-    they were two sentences of arithmetic in two files for exactly one commit.
+    capacity_plan works out the engine count *from* it. Same ratio, one place --
+    they were two sentences of arithmetic in two files for exactly one commit,
+    and tests/test_plan.py asserts the pair still agree.
     """
-    base_cpu, base_mem = parse_cpu(ENGINE_DEFAULT_CPU), parse_memory(ENGINE_DEFAULT_MEM)
-    ratio = min(cpu_millis / base_cpu, mem_bytes / base_mem)
-    return max(int(BASELINE_VUS * ratio), 1)
+    return per_pod_capacity(PERFORMANCE, cpu_millis, mem_bytes)
 
 
-def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=None, agents=None):
-    """What `users` concurrent users needs, as numbers.
+def _unmeasured_note(row):
+    """Why a model with no baseline sizes nothing, in the words both surfaces
+    that have to say it use.
+
+    One sentence set, two callers: the warning a plan carries when service
+    virtualization is sized beside something else, and the refusal when it is
+    sized alone. They were going to be two wordings of one fact, and the
+    refusal is the one somebody reads first.
+
+    Plain prose, like every other warning here -- no backticks and no `--`.
+    """
+    m = SIZING_MODELS[row["functionality"]]
+    return (
+        f"{row['target']:,} {m['unit']} is what the virtual services here have "
+        f"to serve, and this plan does not size for it. How many {m['unit']} "
+        f"one core of a {m['pod']} carries has not been measured, in the way "
+        f"that virtual users per engine is a property of the script rather "
+        f"than of the engine, and nothing in this tool reaches it. Nothing is "
+        f"assumed in its place, because a figure invented here would arrive as "
+        f"a node count somebody buys. To size it, deploy one {m['pod']} at the "
+        f"pod size above, drive it until it saturates, and multiply.")
+
+
+def _given(value):
+    """Whether a caller said anything. Blank is what a browser posts for a
+    field nobody filled in, and it means the same as absent."""
+    return value is not None and str(value).strip() != ""
+
+
+def _sizing_row(functionality, target, figure, cpu, mem):
+    """One model's answer: its target, what a pod carries, and how many pods.
+
+    `per_pod_source` is three-valued on purpose and must stay that way.
+    "supplied" and "assumed" are the distinction `vus_per_engine_assumed`
+    already carried; "unmeasured" is the one that had nowhere to go, and
+    collapsing it into either is how a figure nobody has becomes a figure
+    somebody defaulted.
+    """
+    m = SIZING_MODELS[functionality]
+    target = _positive(target, m["target_field"])
+    rated = per_pod_capacity(functionality, cpu, mem)
+    if _given(figure):
+        if not m["figure_field"]:
+            raise ValueError(
+                f"{functionality} takes no {m['figure_unit']} figure: none has "
+                f"been measured, and one supplied here would size "
+                f"{m['pods']} against engines")
+        per_pod, source = _positive(figure, m["figure_field"]), "supplied"
+    elif rated is not None:
+        per_pod, source = rated, "assumed"
+    else:
+        per_pod, source = None, "unmeasured"
+    return {
+        "functionality": functionality,
+        "unit": m["unit"],
+        "target": target,
+        "per_pod": per_pod,
+        "per_pod_unit": m["figure_unit"],
+        "per_pod_source": source,
+        "rated": rated,
+        "pod": m["pod"],
+        "pods_label": m["pods"],
+        # None, never zero: a model with no figure has not been sized at 0 pods,
+        # it has not been sized.
+        "pods": math.ceil(target / per_pod) if per_pod else None,
+    }
+
+
+def _sizing_rows(users, vus_per_engine, sizings, cpu, mem):
+    """Everything being sized, in model order.
+
+    `users` is the performance model's shorthand and not a second way of saying
+    it: every caller that sizes one thing has only ever had a load target, and
+    the CLI flag, the JSON key and doctor's own vocabulary are all built on that
+    name. It is folded in here so there is one list downstream.
+    """
+    given = []
+    if _given(users):
+        given.append((PERFORMANCE, users, vus_per_engine))
+    for s in sizings or []:
+        fid = s.get("functionality")
+        if fid not in SIZING_MODELS:
+            raise ValueError(
+                f"{fid!r} has no sizing model; there is one for "
+                f"{', '.join(SIZING_MODELS)}")
+        if any(f == fid for f, _, _ in given):
+            raise ValueError(f"{fid} is sized twice, and two targets for one "
+                             f"functionality is two plans")
+        given.append((fid, s.get("target"), s.get("figure")))
+    if not given:
+        # Named `users` because that is the field a caller with one sizing has,
+        # and _positive is what says so.
+        _positive(users, "users")
+    order = list(SIZING_MODELS)
+    return [_sizing_row(fid, target, figure, cpu, mem)
+            for fid, target, figure in sorted(given,
+                                              key=lambda g: order.index(g[0]))]
+
+
+def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None, agents=None,
+                  sizings=None):
+    """What a sizing needs, as numbers.
+
+    **Three models, one pod size.** `users` is the performance model's target
+    and the shorthand every caller with one sizing uses; `sizings` is the
+    general form, one row per functionality, each asked for in its own unit
+    (SIZING_MODELS). Where several are sized the **largest** decides the pool
+    and `driven_by` names it, because crane applies one limits pair to every pod
+    it creates and so the sizes cannot be set apart -- and because a reader of a
+    node count needs to know which workload it was reached from before they
+    need anything else in this dict.
+
+    Largest of the ones that *can* be worked out. Service virtualization has no
+    measured requests-per-second-per-core figure, so its row carries a target,
+    `per_pod: None` and `pods: None`, and it drives nothing: the comparison
+    would be a mock pod against an engine, which is only legitimate because they
+    are the same size, and it is not made here at all because there is no figure
+    to reach a mock-pod count with. Sized alone it is a ValueError carrying
+    _unmeasured_note, not a plan with a number nobody measured in it.
 
     **`slots` is per agent, not per location**, and this used to have it wrong.
     BlazeMeter calls the field "Engines per agent" in its own UI -- "the number
@@ -106,23 +312,45 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     # one. Defaulted here and nowhere else: every caller passes a form field or
     # a flag that may be blank, and each of them defaulting for itself is how
     # two callers come to disagree about what blank means.
-    users = _positive(users, "users")
     per_node = _positive(1 if engines_per_node is None else engines_per_node,
                          "engines_per_node")
     agents = _positive(1 if agents is None else agents, "agents")
 
     # Reuse generate's own parse-and-default so an engine size means exactly
-    # what it will mean in the bundle, error message included. Before the
-    # threads default, because that is now derived from it.
+    # what it will mean in the bundle, error message included. Before every
+    # model, because what a pod carries is derived from it.
     cpu, mem = engine_size({"engine_cpu_limit": engine_cpu,
                             "engine_mem_limit": engine_mem})
     supported = supported_vus(cpu, mem)
 
-    assumed = vus_per_engine is None
-    vus = (supported if assumed
-           else _positive(vus_per_engine, "vus_per_engine"))
+    rows = _sizing_rows(users, vus_per_engine, sizings, cpu, mem)
+    sized = [r for r in rows if r["pods"]]
+    if not sized:
+        # Only a model with no baseline can get here, and there is exactly one.
+        # A refusal rather than a plan of one pod: the number would be this
+        # tool's own invention arriving as a cluster somebody buys.
+        raise ValueError(" ".join(
+            [_unmeasured_note(r) for r in rows if r["pods"] is None]
+            + ["Nothing else is sized here, so there is no pod count to build "
+               "a plan from."]))
+    # max() keeps the first of a tie, and the rows are in SIZING_MODELS order,
+    # so two models needing the same pool are always attributed the same way.
+    driver = max(sized, key=lambda r: r["pods"])
+    engines = driver["pods"]
 
-    engines = math.ceil(users / vus)
+    # The performance row's figures, which stay top-level whether or not a load
+    # target was given: `threads_per_engine` is a location setting that has to
+    # be right on any location that runs a test, and doctor judges it against
+    # the same ratio. Absent a performance sizing it is what an engine of this
+    # size is rated for, which is what it has always defaulted to.
+    perf = next((r for r in rows if r["functionality"] == PERFORMANCE), None)
+    if perf is not None:
+        vus, assumed = perf["per_pod"], perf["per_pod_source"] == "assumed"
+    elif _given(vus_per_engine):
+        vus, assumed = _positive(vus_per_engine, "vus_per_engine"), False
+    else:
+        vus, assumed = supported, True
+    users = perf["target"] if perf is not None else None
     # Engines one agent runs -- the location's `slots`. Rounded up, so the
     # agents together can always reach the target: 10 engines over 3 agents is
     # 4 each, which is 12 available and 10 used, not 9 and a test that cannot
@@ -142,9 +370,16 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     node_mem = mem * per_node + NODE_OVERHEAD_MEM
 
     return {
+        # The performance target, and None where no load test was sized -- a
+        # plan for browser tests has no virtual users, and 0 would read as one
+        # that has none of them on purpose.
         "users": users,
         "vus_per_engine": vus,
         "vus_per_engine_assumed": assumed,
+        # Every model asked for, in model order, each in its own unit; and which
+        # of them the pod count came from.
+        "sizings": rows,
+        "driven_by": driver["functionality"],
         "engines": engines,
         "agents": agents,
         "engines_per_agent": per_agent,
@@ -210,7 +445,7 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
             "override_memory": mem // (1024 ** 2),
         },
         "egress": [API_HOST, *ENGINE_UPLOAD_HOSTS, PUBLIC_REGISTRY.split("/")[0]],
-        "warnings": _warnings(vus, supported, cpu, mem, per_node, engines),
+        "warnings": _warnings(rows, sized, driver, cpu, mem, per_node, engines),
     }
 
 
@@ -234,7 +469,7 @@ def _positive(value, name):
     return n
 
 
-def _warnings(vus, supported, cpu, mem, per_node, engines):
+def _warnings(rows, sized, driver, cpu, mem, per_node, engines):
     """Everything true of this plan that a node count cannot express.
 
     Warnings, never refusals: each describes a plan that runs and reports
@@ -247,6 +482,39 @@ def _warnings(vus, supported, cpu, mem, per_node, engines):
     writing them once.
     """
     out = []
+    # The models that were asked for and could not be answered. First, because
+    # the reader's next question is what happened to the workload they typed a
+    # target for and cannot find in the arithmetic.
+    for r in rows:
+        if r["per_pod_source"] == "unmeasured":
+            out.append(_unmeasured_note(r))
+    # Largest, not sum, and the difference is a cluster. Both models peaking at
+    # once is a plan this one is not; saying so is cheaper than a customer
+    # discovering it when the browser suite and the load test are scheduled
+    # together.
+    if len(sized) > 1:
+        m = SIZING_MODELS[driver["functionality"]]
+        out.append(
+            f"This cluster is sized for the largest of the workloads above on "
+            f"its own, which is {engines} {driver['pods_label']} for "
+            f"{m['runs']}, and not for all of them at once. Crane gives every "
+            f"pod it creates the same limits, so the sizes cannot be told "
+            f"apart, but the counts can: if these workloads are expected to "
+            f"run at the same time, add their pod counts together and size for "
+            f"the total instead.")
+    gui = next((r for r in rows if r["functionality"] == GUI), None)
+    if gui and gui["per_pod_source"] == "supplied" \
+            and gui["per_pod"] > gui["rated"]:
+        out.append(
+            f"{gui['per_pod']} browser instances on a {format_cpu(cpu)} CPU / "
+            f"{format_memory(mem)} engine is more than that size is assumed to "
+            f"carry, which is about {gui['rated']}. That assumption is the "
+            f"account owner's rather than a measurement, so a higher figure may "
+            f"well be right, but a browser that runs out of memory fails the "
+            f"test it was running rather than reporting a slow one.")
+    perf = next((r for r in rows if r["functionality"] == PERFORMANCE), None)
+    vus = perf["per_pod"] if perf else 0
+    supported = per_pod_capacity(PERFORMANCE, cpu, mem)
     if vus > supported:
         out.append(
             f"{vus} virtual users on a {format_cpu(cpu)} CPU / "

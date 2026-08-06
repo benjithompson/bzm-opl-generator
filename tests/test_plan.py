@@ -165,6 +165,156 @@ def test_doctor_judges_against_the_same_ratio_the_planner_sizes_from():
     assert str(supported) in over[0].detail
 
 
+# -- three sizing models, one pod size ---------------------------------------
+#
+# Two of the three covered functionalities are not sized in virtual users at
+# all, and the third has no measured figure to be sized with. What these defend
+# is that each model keeps its own unit, and that the one with no figure says so
+# rather than borrowing the performance one.
+
+def test_each_model_is_asked_for_in_its_own_unit():
+    units = {f: m["unit"] for f, m in plan.SIZING_MODELS.items()}
+    assert units == {"performance": "virtual users",
+                     "functionalGui": "browser instances",
+                     "mockServices": "requests per second"}
+
+
+def test_browser_instances_scale_with_the_pod_as_virtual_users_do():
+    """4 is the account owner's figure for BlazeMeter's own engine size, not a
+    constant -- the same thing 500 is, so it moves the same way."""
+    base = (2000, 8 * 1024 ** 3)
+    assert plan.per_pod_capacity("functionalGui", *base) == 4
+    assert plan.per_pod_capacity("functionalGui", 1000, 4 * 1024 ** 3) == 2
+    assert plan.per_pod_capacity("functionalGui", 4000, 16 * 1024 ** 3) == 8
+    # Never zero, for supported_vus' reason: a small pod carries few browsers,
+    # not none.
+    assert plan.per_pod_capacity("functionalGui", 1, 1) == 1
+
+
+def test_service_virtualization_has_no_figure_to_be_sized_with():
+    """The point of the whole table. `vus_per_engine_assumed` carries supplied
+    against defaulted; requests per second per core is in neither position,
+    because nobody has measured it. None, so no arithmetic can reach past it."""
+    assert plan.SIZING_MODELS["mockServices"]["baseline"] is None
+    assert plan.per_pod_capacity("mockServices", 2000, 8 * 1024 ** 3) is None
+
+
+def test_supported_vus_is_the_performance_model_under_its_own_name():
+    """doctor calls this one, and the pairing test above is what holds the two
+    together. It has to stay the same function, not a second copy of it."""
+    for cpu, mem in ((2000, 8 * 1024 ** 3), (1000, 4 * 1024 ** 3), (1, 1)):
+        assert plan.supported_vus(cpu, mem) \
+            == plan.per_pod_capacity("performance", cpu, mem)
+
+
+def test_a_gui_sizing_counts_browser_instances():
+    p = plan.capacity_plan(
+        sizings=[{"functionality": "functionalGui", "target": 20}])
+    assert p["engines"] == 5                       # 20 browsers at 4 an engine
+    assert p["driven_by"] == "functionalGui"
+    row = _row(p, "functionalGui")
+    assert (row["target"], row["per_pod"], row["pods"]) == (20, 4, 5)
+    assert row["per_pod_source"] == "assumed"
+
+
+def test_a_supplied_browser_figure_is_not_marked_assumed():
+    p = plan.capacity_plan(sizings=[{"functionality": "functionalGui",
+                                     "target": 20, "figure": 2}])
+    assert p["engines"] == 10
+    assert _row(p, "functionalGui")["per_pod_source"] == "supplied"
+
+
+def test_the_largest_model_decides_the_pool_and_the_plan_names_it():
+    """Where a location runs several, one of them is the one being sized for --
+    and which one is the first thing a reader of the node count needs."""
+    perf = plan.capacity_plan(5000, sizings=[
+        {"functionality": "functionalGui", "target": 20}])
+    assert (perf["engines"], perf["driven_by"]) == (10, "performance")
+
+    gui = plan.capacity_plan(500, sizings=[
+        {"functionality": "functionalGui", "target": 100}])
+    assert (gui["engines"], gui["driven_by"]) == (25, "functionalGui")
+
+
+def test_sizing_for_several_says_it_is_the_largest_and_not_the_sum():
+    p = plan.capacity_plan(5000, sizings=[
+        {"functionality": "functionalGui", "target": 20}])
+    assert any("largest" in w and "not for all of them at once" in w
+               for w in p["warnings"])
+    # ...and one model alone has nothing to say about it.
+    assert not any("largest" in w for w in plan.capacity_plan(5000)["warnings"])
+
+
+def test_service_virtualization_is_carried_unsized_rather_than_defaulted():
+    """It is stated, and it drives nothing: there is no ratio to turn requests
+    per second into pods with, so borrowing the performance one would put a
+    number nobody measured into a node count."""
+    p = plan.capacity_plan(5000, sizings=[
+        {"functionality": "mockServices", "target": 2000}])
+    row = _row(p, "mockServices")
+    assert row["target"] == 2000
+    assert row["per_pod"] is None
+    assert row["per_pod_source"] == "unmeasured"
+    assert row["pods"] is None
+    # The performance sizing is untouched by it.
+    assert (p["engines"], p["driven_by"]) == (10, "performance")
+    assert any("has not been measured" in w for w in p["warnings"])
+
+
+def test_unmeasured_is_not_the_same_answer_as_assumed():
+    """The rule this repo keeps everywhere else: could not read and there is
+    nothing there must not share a representation. Three states, three
+    values."""
+    p = plan.capacity_plan(5000, vus_per_engine=250, sizings=[
+        {"functionality": "functionalGui", "target": 20},
+        {"functionality": "mockServices", "target": 2000}])
+    assert [r["per_pod_source"] for r in p["sizings"]] \
+        == ["supplied", "assumed", "unmeasured"]
+
+
+def test_a_sizing_that_cannot_be_worked_out_is_refused_not_guessed():
+    """Service virtualization on its own. A plan is not a plan without a pod
+    count, and inventing one is the one thing this must never do -- so the
+    refusal is the sentence explaining why, not a number."""
+    with pytest.raises(ValueError) as e:
+        plan.capacity_plan(sizings=[{"functionality": "mockServices",
+                                     "target": 2000}])
+    assert "requests per second" in str(e.value)
+    assert "has not been measured" in str(e.value)
+
+
+def test_no_figure_may_be_supplied_where_none_is_measured():
+    """Not a gap left open for a caller to fill: a requests-per-second figure
+    would size mock pods, and every number after the pod count in this plan --
+    slots, the engines per node, the whole document -- is about engines."""
+    with pytest.raises(ValueError, match="mockServices"):
+        plan.capacity_plan(sizings=[{"functionality": "mockServices",
+                                     "target": 2000, "figure": 250}])
+
+
+def test_an_unknown_functionality_is_refused_by_name():
+    with pytest.raises(ValueError, match="tdm"):
+        plan.capacity_plan(sizings=[{"functionality": "tdm", "target": 5}])
+
+
+def test_one_functionality_cannot_be_sized_twice():
+    with pytest.raises(ValueError, match="performance"):
+        plan.capacity_plan(5000, sizings=[{"functionality": "performance",
+                                           "target": 100}])
+
+
+def test_a_model_names_its_own_field_in_a_refusal():
+    """"users must be at least 1" is no help to somebody who typed a browser
+    count. Each model's field is the one the surfaces above call it."""
+    with pytest.raises(ValueError, match="browsers"):
+        plan.capacity_plan(sizings=[{"functionality": "functionalGui",
+                                     "target": 0}])
+
+
+def _row(p, functionality):
+    return [r for r in p["sizings"] if r["functionality"] == functionality][0]
+
+
 # -- what the plan refuses ---------------------------------------------------
 
 @pytest.mark.parametrize("kwargs", [
