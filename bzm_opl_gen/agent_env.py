@@ -53,7 +53,10 @@ BOTH = (KUBERNETES, DOCKER)
 # What the form builds a control from. `pem` is a string as far as the agent is
 # concerned -- it is here because a certificate pasted into a one-line input is
 # a one-line input holding 40 lines, and that is a different control rather
-# than a different value.
+# than a different value. It is a claim about what the variable *holds*, never
+# about what its name suggests: TLS_CERT reads as a certificate and holds a
+# path to one (#181), and typing it `pem` invited the value the agent cannot
+# use.
 TYPES = ("string", "bool", "int", "json_object", "pem")
 
 DOC_URL = ("https://help.blazemeter.com/docs/guide/"
@@ -187,11 +190,29 @@ AGENT_ENV = (
     # -- TLS material for the endpoints the agent serves itself. The first pair
     # is the domain HOSTNAME_OVERRIDE names, so it goes where that does; the
     # _GRID pair is Doduo's, so it goes where DODUO_PORT does.
-    _v("TLS_CERT", "pem", (DOCKER,),
-       "Public certificate for the domain in HOSTNAME_OVERRIDE",
+    #
+    # These two hold a **path**, not a certificate (#181). BlazeMeter's own
+    # example sets them beside the mounts that put the files there --
+    # `--env TLS_CERT=/etc/ssl/certs/public.pem -v /path/to/public.pem:/etc/
+    # ssl/certs/public.pem` -- which is the same shape REQUESTS_CA_BUNDLE and
+    # AWS_CA_BUNDLE above already carry, so they are typed the same way: a
+    # string whose example is the path. They were `pem`, which put a
+    # certificate textarea on the page, and a certificate pasted into a
+    # variable the agent opens as a filename is an agent that starts, reports
+    # online and serves no TLS. The summary carries what the name cannot --
+    # the path is *inside the container*, so the file has to be mounted there.
+    # The _GRID pair below is left `pem` deliberately: it is declared for both
+    # platforms, only the Docker side is documented as a path, and what
+    # Kubernetes expects is unconfirmed (#186).
+    _v("TLS_CERT", "string", (DOCKER,),
+       "Path in the container to the public certificate for the domain in "
+       "HOSTNAME_OVERRIDE; mount the file there",
+       example="/etc/ssl/certs/public.pem",
        functionalities=["mockServices"]),
-    _v("TLS_KEY", "pem", (DOCKER,),
-       "Private key for the domain in HOSTNAME_OVERRIDE",
+    _v("TLS_KEY", "string", (DOCKER,),
+       "Path in the container to the private key for the domain in "
+       "HOSTNAME_OVERRIDE; mount the file there",
+       example="/etc/ssl/certs/privatekey.pem",
        functionalities=["mockServices"]),
     _v("TLS_CERT_GRID", "pem", BOTH,
        "Public certificate for the domain the Grid proxy serves over HTTPS",

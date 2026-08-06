@@ -149,6 +149,43 @@ def test_a_reserved_name_is_refused_with_the_same_words_wherever_it_arrives():
             raise AssertionError(f"{name} was accepted")
 
 
+def test_a_variable_holding_a_path_is_never_typed_pem():
+    """#181. `pem` puts a certificate textarea on the page, so it is a claim
+    about what the variable holds -- and the docker TLS pair holds a *path*.
+    BlazeMeter's own example sets `TLS_CERT=/etc/ssl/certs/public.pem` beside
+    the `-v` that mounts the file there, which is the shape REQUESTS_CA_BUNDLE
+    and AWS_CA_BUNDLE already carry here: a string whose example is the path.
+
+    Typed `pem`, the one control that invites a value invited the wrong one --
+    a pasted certificate is an agent that starts, reports online and serves no
+    TLS, which is the silent failure the placeholder rule exists for. So the
+    type is asserted, and so is the example: the path is what the row shows in
+    the empty box, and it is the only place the shape is on screen.
+    """
+    paths = ("REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "TLS_CERT", "TLS_KEY")
+    for name in paths:
+        v = agent_env.AGENT_ENV_BY_NAME[name]
+        assert v["type"] == "string", name
+        # Stated on the row one way or the other -- a default where BlazeMeter
+        # documents one, an example where it does not.
+        assert (v["default"] or v["example"]).startswith("/"), name
+
+    # The summary is what says the path is the *container's*, which no name
+    # carries and no mount here supplies (#182).
+    for name in ("TLS_CERT", "TLS_KEY"):
+        summary = agent_env.AGENT_ENV_BY_NAME[name]["summary"]
+        assert "container" in summary and "mount" in summary, name
+        assert len(summary.split()) <= 20, name
+
+    # ...and the _GRID pair is not this ticket's. It is declared for both
+    # platforms and only Docker's side is documented as a path (#186), so it
+    # keeps the textarea until somebody reads what Kubernetes expects.
+    for name in ("TLS_CERT_GRID", "TLS_KEY_GRID"):
+        assert agent_env.AGENT_ENV_BY_NAME[name]["type"] == "pem", name
+        assert agent_env.AGENT_ENV_BY_NAME[name]["platforms"] \
+            == list(agent_env.BOTH), name
+
+
 def test_the_json_object_types_are_ones_a_key_value_table_can_write():
     """`json_object` is the form's key/value table, so a variable typed that
     way has to be an object of scalars rather than an array -- the tolerations
