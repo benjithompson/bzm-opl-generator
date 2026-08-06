@@ -28,14 +28,10 @@ from test_generate import FACTS
 
 # What a real account answers to GET /accounts/{id}/functionalities, trimmed to
 # the entries that decide something here and otherwise verbatim: the display
-# names are BlazeMeter's, and `functionalApi` is absent because the account no
-# longer serves it while locations created before its removal still carry it.
-#
-# `functionalGui` carries three of its 117 `subFunctionalities` -- a parent with
-# several of its pins is the shape #160 is about, and one pin would not show a
-# reader keeping them in a list. They are the browser a GUI Functional location
-# is pinned to, which is a *parameter* of that funcId rather than a funcId of
-# its own; a location carrying one carries the parent beside it.
+# names are BlazeMeter's, `functionalApi` is absent because the account no
+# longer serves it, and `subFunctionalities` is present so a reader that starts
+# consuming it (#152) has something to consume rather than a shape invented on
+# the day.
 ACCOUNT_FUNCTIONALITIES = {
     "additionalSpace": 50,
     "functionalities": [
@@ -52,7 +48,6 @@ ACCOUNT_FUNCTIONALITIES = {
              {"id": "chrome:default", "size": 2, "displayName": "Chrome Default",
               "default": True},
              {"id": "firefox:139", "size": 2, "displayName": "Firefox 139"},
-             {"id": "safari:15", "size": 2, "displayName": "Safari 15"},
          ]},
         {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
         {"funcId": "dataPublisher", "size": 1, "displayName": "Data Orchestration"},
@@ -1444,7 +1439,7 @@ def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
     BlazeMeter's own display names, so the words do not change when an account
     arrives and replaces it.
     """
-    rows = core.func_ids()["choices"]
+    rows = core.func_ids()
     assert [(r["id"], r["label"]) for r in rows] == [
         ("performance", "Performance"),
         ("functionalGui", "GUI Functional"),
@@ -1452,62 +1447,11 @@ def test_the_keyless_vocabulary_is_the_funcids_this_tool_covers():
     assert all(r["covered"] for r in rows)
 
 
-def test_the_vocabulary_says_whether_it_is_the_account_s_or_the_baseline():
-    """The two answers are told apart on the answer, not by remembering which
-    call was made (#160).
-
-    A funcId in neither the vocabulary nor any parent's pins means two
-    different things: read against the account it is *retired* -- BlazeMeter
-    stopped serving it and locations created before that still carry it -- and
-    read against the baseline it means nothing at all, because the baseline is
-    three funcIds and every other one the account has is missing from it too.
-    A reader that could not tell would have to guess, and this repo's oldest
-    rule is that it must not have to.
-    """
-    assert core.func_ids()["source"] == "baseline"
-    assert core.func_ids(FakeClient(), 291446)["source"] == "account"
-
-
-def test_a_browser_pin_is_a_parameter_of_its_parent_not_a_funcid_of_its_own():
-    """`functionalGui` carries its browser pins, and no pin is a row (#160).
-
-    A location's `funcIds` mixes the two -- `functionalGui` arrives with
-    `chrome:default` and `firefox:81` beside it -- and 43% of one account's 171
-    locations carry at least one pin, 41 on the worst. Tested against the
-    top-level vocabulary alone they all fall through as funcIds this tool has
-    no options for, which is a true sentence about nothing: a pin says *which
-    browser* GUI Functional uses, and there is no world in which it gets
-    options of its own.
-
-    Served under the parent for that reason, rather than flattened in beside
-    it: a list of every pin loses which functionality each is a parameter of,
-    and the row that knows is the one that has to say.
-    """
-    by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 291446)["choices"]}
-    assert by_id["functionalGui"]["sub_func_ids"] == [
-        "chrome:default", "firefox:139", "safari:15"]
-    assert not any(":" in f for f in by_id)
-    # Every other row carries an empty list rather than leaving the key off: a
-    # caller reading `.get("sub_func_ids", ...)` would have to invent what its
-    # absence meant, and "this functionality has no pins" is a real answer.
-    assert all(r["sub_func_ids"] == []
-               for f, r in by_id.items() if f != "functionalGui")
-
-
-def test_the_baseline_claims_no_pins_rather_than_guessing_at_them():
-    """...and with no account there are none to serve. Only the account knows
-    which funcIds are pins, so the baseline says so by carrying none -- and
-    `source` is what stops that reading as "this account's GUI Functional has
-    no browsers"."""
-    rows = core.func_ids()["choices"]
-    assert all(r["sub_func_ids"] == [] for r in rows)
-
-
 def test_the_account_replaces_the_baseline_with_its_own_vocabulary():
     """...and the account's list is longer, differently named, and does not
     offer `functionalApi` at all -- which the hand-written table did."""
     client = FakeClient()
-    rows = core.func_ids(client, 291446)["choices"]
+    rows = core.func_ids(client, 291446)
     by_id = {r["id"]: r for r in rows}
 
     assert client.calls == [("functionalities", 291446)]
@@ -1521,7 +1465,7 @@ def test_the_vocabulary_says_which_funcids_this_tool_covers():
     served, and the difference is on the row. Silence would read as coverage:
     a page that listed `delphix` beside `performance` with nothing to tell them
     apart is a page offering to configure something it cannot."""
-    by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 291446)["choices"]}
+    by_id = {r["id"]: r for r in core.func_ids(FakeClient(), 291446)}
     assert [f for f, r in by_id.items() if r["covered"]] == [
         "performance", "mockServices", "functionalGui"]
     for f in ("proxyRecorder", "tdm", "dataPublisher", "delphix",
@@ -1568,11 +1512,11 @@ def test_a_covered_funcid_and_a_functionality_are_one_table():
     that says it is the one telling a funcId this tool configures from a funcId
     it can only name."""
     ids = [f["id"] for f in core.functionalities()]
-    assert [r["id"] for r in core.func_ids()["choices"]] == ids
-    assert all(r["covered"] for r in core.func_ids()["choices"])
+    assert [r["id"] for r in core.func_ids()] == ids
+    assert all(r["covered"] for r in core.func_ids())
     # ...and with an account, whose vocabulary is longer, the covered rows are
     # still exactly the functionalities.
-    rows = core.func_ids(FakeClient(), 291446)["choices"]
+    rows = core.func_ids(FakeClient(), 291446)
     assert {r["id"] for r in rows if r["covered"]} == set(ids)
 
 

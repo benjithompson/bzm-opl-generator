@@ -731,7 +731,7 @@ def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
     TypeScript."""
     connect(monkeypatch, FakeClient())
     by_id = {r["id"]: r for r in
-             client.get("/api/func-ids?account_id=291446").json()["choices"]}
+             client.get("/api/func-ids?account_id=291446").json()}
     for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
     # A funcId whose images no bundle selects on. Offered, because the location
@@ -1041,7 +1041,7 @@ def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     it. The account is the vocabulary, so a funcId it adds is selectable with no
     edit here and one it retires leaves the form on its own."""
     connect(monkeypatch, FakeClient())
-    body = client.get("/api/func-ids?account_id=291446").json()["choices"]
+    body = client.get("/api/func-ids?account_id=291446").json()
     ids = [c["id"] for c in body]
 
     assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
@@ -1056,7 +1056,7 @@ def test_the_vocabulary_is_reachable_with_no_account_at_all():
     account. `account_id` is therefore optional, and the answer with none is the
     three funcIds this tool covers, under the names the account would give
     them."""
-    body = client.get("/api/func-ids").json()["choices"]
+    body = client.get("/api/func-ids").json()
     assert [(c["id"], c["label"], c["covered"]) for c in body] == [
         ("performance", "Performance", True),
         ("functionalGui", "GUI Functional", True),
@@ -1073,7 +1073,7 @@ def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
             return {"functionalities": [{"funcId": "brandNew", "size": 1}]}
 
     connect(monkeypatch, Unnamed())
-    body = client.get("/api/func-ids?account_id=291447").json()["choices"]
+    body = client.get("/api/func-ids?account_id=291447").json()
     assert [(r["id"], r["label"], r["covered"]) for r in body] == [
         ("brandNew", "brandNew", False)]
 
@@ -1134,7 +1134,7 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
                         "runs_engine": False}
     # ...and it is a covered funcId by the same act, because `covered` is that
     # list read as a vocabulary rather than a second table beside it.
-    assert next(r for r in client.get("/api/func-ids").json()["choices"]
+    assert next(r for r in client.get("/api/func-ids").json()
                 if r["id"] == "secretsPrivateVault")["covered"] is True
 
 
