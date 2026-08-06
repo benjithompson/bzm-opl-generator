@@ -1742,6 +1742,63 @@ def test_plan_still_refuses_a_target_that_was_never_typed():
     assert client.post("/api/plan", json={"users": ""}).status_code == 400
 
 
+def test_plan_sizes_the_functionalities_the_card_asked_about():
+    """The card sends one row per functionality it is sizing, each in that
+    model's own unit, and gets back one row per model plus the name of the one
+    the pool came from."""
+    body = client.post("/api/plan", json={
+        "users": "5000",
+        "sizings": [{"functionality": "functionalGui", "target": "20"},
+                    {"functionality": "mockServices", "target": "2000"}],
+    }).json()
+    assert body["driven_by"] == "performance"
+    assert [(s["functionality"], s["pods"]) for s in body["sizings"]] == [
+        ("performance", 10), ("functionalGui", 5), ("mockServices", None)]
+
+
+def test_plan_takes_the_blanks_a_sizing_row_arrives_with():
+    """A figure box nobody typed in posts "", inside the row rather than beside
+    it -- the same rule one level down, and the one place `Blank` had nothing to
+    apply to."""
+    body = client.post("/api/plan", json={
+        "sizings": [{"functionality": "functionalGui", "target": "20",
+                     "figure": ""}]}).json()
+    assert body["sizings"][0]["per_pod_source"] == "assumed"
+    assert body["engines"] == 5
+
+
+def test_plan_refuses_a_sizing_it_cannot_work_out_and_says_why():
+    """Service virtualization alone. 400 carrying the sentence, because the
+    panel shows the refusal where it would otherwise show a node count."""
+    r = client.post("/api/plan", json={
+        "sizings": [{"functionality": "mockServices", "target": "2000"}]})
+    assert r.status_code == 400
+    assert "has not been measured" in r.json()["detail"]
+
+
+def test_sizing_models_are_served_with_the_account_s_own_label():
+    """The card renders a field per model, so the models are served for the
+    same reason /api/functionalities is: a fourth one has to reach the page by
+    being added to the table, not by an edit in TypeScript. The label is
+    BlazeMeter's, joined on here -- `plan` reaches nothing, including core."""
+    from bzm_opl_gen import plan as plan_mod
+    body = client.get("/api/sizing-models").json()
+    assert [m["functionality"] for m in body] == list(plan_mod.SIZING_MODELS)
+    by_id = {m["functionality"]: m for m in body}
+    assert by_id["mockServices"]["label"] == "Service Virtualization"
+    assert by_id["performance"]["unit"] == "virtual users"
+    # The one field the card branches on: a model with no measured figure
+    # offers no figure box, and says so instead.
+    assert [m["measured"] for m in body] == [True, True, False]
+    assert by_id["mockServices"]["figure_unit"] == "requests per second per core"
+
+
+def test_every_sizing_model_is_a_functionality_the_page_configures():
+    """A model for a funcId with no card is a unit nothing can be asked for."""
+    from bzm_opl_gen import plan as plan_mod
+    assert set(plan_mod.SIZING_MODELS) <= set(core.covered_func_ids())
+
+
 # -- changing a location's settings -------------------------------------------
 
 def test_location_settings_reports_what_the_account_now_holds(monkeypatch):

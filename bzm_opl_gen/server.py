@@ -670,18 +670,38 @@ def generate_save(g: SaveIn):
 
 # -- planning -----------------------------------------------------------------
 
+class SizingIn(BaseModel):
+    """One functionality being sized, in that model's own unit.
+
+    `Blank` on both numbers for PlanIn's reason, one level in: a figure box
+    nobody typed into posts "" from inside a row rather than beside it, and a
+    row is where the planner's three-valued answer is decided (supplied,
+    assumed, no figure at all). A "" arriving as a *supplied* figure would be
+    the second of those three wearing the first.
+    """
+    functionality: str
+    target: Blank = None
+    figure: Blank = None
+
+
 class PlanIn(BaseModel):
     # Everything but `users` is optional, and every count is `Any` rather than
     # `int`: a number field a browser leaves empty posts "" and a typed one
     # posts a string, and pydantic's own 422 for either names a field of this
     # model rather than saying which number could not be a plan. core's refusal
     # says that, in the words the planner uses at the field itself.
-    users: Any
+    #
+    # ...and `users` is optional too now, because it is the performance model's
+    # target rather than the only one there is: a browser-testing sizing has no
+    # load target, and a plan with none of the three is still a refusal, from
+    # the planner, naming the field a caller with one sizing has.
+    users: Blank = None
     vus_per_engine: Blank = None
     engine_cpu: Blank = None
     engine_mem: Blank = None
     engines_per_node: Blank = None
     agents: Blank = None
+    sizings: Optional[list[SizingIn]] = None
 
 
 @app.post("/api/plan", description=core.capacity_plan.__doc__)
@@ -696,7 +716,19 @@ def capacity_plan(p: PlanIn):
     return _answer(core.capacity_plan, p.users,
                    vus_per_engine=p.vus_per_engine,
                    engine_cpu=p.engine_cpu, engine_mem=p.engine_mem,
-                   engines_per_node=p.engines_per_node, agents=p.agents)
+                   engines_per_node=p.engines_per_node, agents=p.agents,
+                   sizings=[s.model_dump() for s in p.sizings]
+                   if p.sizings is not None else None)
+
+
+@app.get("/api/sizing-models", description=core.sizing_models.__doc__)
+def sizing_models():
+    """What each functionality is sized in, for the card that asks.
+
+    Keyless, like /api/plan and for the same reason: sizing is the question
+    somebody opens this page with before they have an account to connect it to.
+    """
+    return core.sizing_models()
 
 
 # -- reading the cluster ------------------------------------------------------

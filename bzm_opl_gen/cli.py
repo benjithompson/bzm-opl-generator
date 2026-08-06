@@ -318,12 +318,22 @@ def cmd_sv_expose(a):
 
 
 def cmd_plan(a):
-    """Size the infrastructure a load target needs, before any of it exists."""
+    """Size the infrastructure a sizing needs, before any of it exists."""
+    # One row per model the command was given a target for. `--users` stays the
+    # performance model's own flag rather than becoming --performance: it is
+    # what every existing script and every doc calls it, and the planner takes
+    # it under that name too.
+    sizings = [{"functionality": plan.GUI, "target": a.browsers,
+                "figure": a.browsers_per_engine}] if a.browsers else []
+    if a.requests_per_second:
+        sizings.append({"functionality": plan.SV,
+                        "target": a.requests_per_second})
     try:
         p = core.capacity_plan(
             a.users, vus_per_engine=a.vus_per_engine,
             engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
-            engines_per_node=a.engines_per_node, agents=a.agents)
+            engines_per_node=a.engines_per_node, agents=a.agents,
+            sizings=sizings)
     except core.CoreError as e:
         sys.exit(str(e))
     if a.json:
@@ -334,11 +344,23 @@ def cmd_plan(a):
         return
 
     eng, node = p["engine"], p["node"]
-    print(f"{p['users']:,} virtual users at {p['vus_per_engine']:,} per engine"
-          + ("  (assumed -- what an engine this size is rated for)"
-             if p["vus_per_engine_assumed"] else ""))
+    # A line per sizing, each in its own unit, and never a virtual-user line
+    # for a browser suite. The unmeasured one has no "at N per engine" to state
+    # and says what it has instead, because a target that produced no arithmetic
+    # is the one somebody looks for.
+    for r in p["sizings"]:
+        if r["per_pod"] is None:
+            print(f"{r['target']:,} {r['unit']}: not sized here, no "
+                  f"{r['per_pod_unit']} figure has been measured")
+            continue
+        print(f"{r['target']:,} {r['unit']} at {r['per_pod']:,} per "
+              f"{r['pod']}"
+              + ("  (assumed -- what a pod this size is rated for)"
+                 if r["per_pod_source"] == "assumed" else ""))
     print(f"  {p['engines']} engines of {eng['cpu']} CPU / {eng['memory']} / "
-          f"{eng['disk_gb']}GB disk")
+          f"{eng['disk_gb']}GB disk"
+          + (f", from the {plan.SIZING_MODELS[p['driven_by']]['name']} sizing "
+             f"(the largest)" if len(p["sizings"]) > 1 else ""))
     print(f"  {p['engines_per_agent']} engines per agent across {p['agents']} "
           f"agent(s) -- the location's slots")
     print(f"  {p['nodes_per_agent']} node(s) per agent of {node['cpu']} vCPU / "
@@ -680,8 +702,29 @@ def main():
     pl = sub.add_parser("plan",
                         help="how much infrastructure a load target needs "
                              "(no account, no cluster)")
-    pl.add_argument("--users", required=True, metavar="N",
+    # Not required, because it is the performance model's target rather than
+    # the only sizing there is -- a GUI Functional customer has no load target.
+    # A run with none of the three is still refused, by the planner, naming
+    # this field.
+    pl.add_argument("--users", metavar="N",
                     help="virtual users the test has to reach")
+    pl.add_argument("--browsers", metavar="N",
+                    help="browser instances a GUI Functional suite runs at "
+                         "once. Sized in its own unit: browsers, not users")
+    pl.add_argument("--browsers-per-engine", dest="browsers_per_engine",
+                    metavar="N",
+                    help=f"browser instances one engine carries (default about "
+                         f"{plan.BASELINE_BROWSERS} for the "
+                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
+                         f"there). An estimate from the account owner, not a "
+                         f"measurement")
+    pl.add_argument("--requests-per-second", dest="requests_per_second",
+                    metavar="N",
+                    help="requests per second the virtual services have to "
+                         "serve. Stated in the plan and not sized from: how "
+                         "many a mock pod carries has not been measured, and "
+                         "nothing is assumed in its place")
     pl.add_argument("--vus-per-engine", dest="vus_per_engine",
                     help=f"virtual users one engine carries (BlazeMeter's "
                          f"`threadsPerEngine`). Default is what an engine of "

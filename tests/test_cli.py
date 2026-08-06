@@ -728,6 +728,41 @@ def test_plan_markdown_prints_the_document_alone(monkeypatch, capsys):
     assert "slots=10" not in out          # the summary, not this
 
 
+def test_plan_sizes_browsers_without_a_load_target(monkeypatch, capsys):
+    """--users is the performance model's target, not the only one there is.
+    A GUI Functional customer has no load target to give."""
+    _run(monkeypatch, "plan", "--browsers", "20")
+    out = capsys.readouterr().out
+    assert "20 browser instances at 4 per engine" in out
+    assert "5 engines" in out
+
+
+def test_plan_names_the_sizing_the_pool_came_from(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--browsers", "20")
+    out = capsys.readouterr().out
+    assert "10 engines" in out
+    assert "from the performance sizing" in out
+
+
+def test_plan_says_service_virtualization_is_not_sized(monkeypatch, capsys):
+    _run(monkeypatch, "plan", "--users", "5000", "--requests-per-second", "2000")
+    out = capsys.readouterr().out
+    assert "2,000 requests per second" in out
+    assert "has not been measured" in out
+
+
+def test_plan_refuses_a_sizing_with_nothing_to_size_it_by(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--requests-per-second", "2000")
+    assert "has not been measured" in str(caught.value)
+
+
+def test_plan_still_needs_a_sizing_of_some_kind(monkeypatch):
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan")
+    assert "users" in str(caught.value)
+
+
 def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "plan", "--users", "0")

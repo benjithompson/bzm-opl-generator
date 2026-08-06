@@ -1107,8 +1107,9 @@ def bundle_images(facts, all_images=False):
 
 # -- planning, before any of the above exists ---------------------------------
 
-def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
-                  engine_mem=None, engines_per_node=None, agents=None):
+def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
+                  engine_mem=None, engines_per_node=None, agents=None,
+                  sizings=None):
     """What a load target needs, as numbers and as a document to request it with.
 
     The only thing here that reaches nothing at all -- no key, no account, no
@@ -1129,7 +1130,8 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
         p = plan.capacity_plan(
             users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
-            engines_per_node=engines_per_node, agents=agents)
+            engines_per_node=engines_per_node, agents=agents,
+            sizings=sizings)
     except ValueError as e:
         # Every one of these is the caller's number rather than a failure here,
         # and each names the field it is about. 400, not 500.
@@ -1137,6 +1139,37 @@ def capacity_plan(users, vus_per_engine=None, engine_cpu=None,
     return dict(p,
                 document=plan.plan_document(p),
                 document_file=plan.DOCUMENT_FILE)
+
+
+def sizing_models():
+    """What each covered functionality is sized in, for the card that asks.
+
+    `plan.SIZING_MODELS` with BlazeMeter's own label joined on. The join is here
+    and not there because `plan` reaches nothing -- including this module -- so
+    it carries prose of its own rather than the account's display names, and a
+    surface that shows a card next to a location's settings wants the words the
+    location's settings use.
+
+    Served for the reason `functionalities()` is: the page renders a field per
+    model, and a fourth model has to reach it by being added to the table rather
+    than by an edit in TypeScript.
+
+    `measured` is the whole point of the list on the page. False means no figure
+    for that unit has ever been measured here, so there is no per-pod box to
+    offer and nothing to default -- which is a different answer from a figure
+    the caller has not supplied yet, and the two must not share a control any
+    more than they share a value.
+    """
+    labels = covered_func_ids()
+    return [{"functionality": fid,
+             "label": labels.get(fid, m["name"]),
+             "unit": m["unit"],
+             "target_field": m["target_field"],
+             "figure_field": m["figure_field"],
+             "figure_unit": m["figure_unit"],
+             "measured": m["baseline"] is not None,
+             "pods": m["pods"]}
+            for fid, m in plan.SIZING_MODELS.items()]
 
 
 def engine_vus(engine_cpu=None, engine_mem=None):
