@@ -1397,18 +1397,61 @@ def test_an_unreadable_account_is_not_an_account_with_three_functionalities():
         core.func_ids(ExpiredClient(), 291446)
 
 
-def test_every_modelled_func_id_belongs_to_a_functionality():
-    """A funcId the facts layer models but no functionality claims would leave
-    a location carrying only that one with nothing to start on. The reverse is
-    deliberately allowed: a functionality may claim a funcId that needs no
-    images of
-    its own (tdm and delphix are already in that position), and the funcIds the
-    tool does not model at all stay unclaimed -- the selector reads those as no
-    signal rather than as an error."""
+def test_a_functionality_is_one_funcid_under_blazemeter_s_own_name():
+    """One entry per covered funcId, `id` equal to the funcId (#149).
+
+    It was two entries and `performance` claimed four funcIds, so its label had
+    to name all of them at once -- "Performance & functional testing", printed
+    over a location whose only funcId is `performance`. A list of funcIds per
+    functionality is a translation table between this tool's ids and
+    BlazeMeter's, and the 1:1 mapping exists so that there is not one: the
+    funcId a location carries *is* the id, in both directions, with nothing to
+    look up.
+    """
+    served = core.functionalities()
+    assert [(f["id"], f["label"]) for f in served] == [
+        ("performance", "Performance"),
+        ("functionalGui", "GUI Functional"),
+        ("mockServices", "Service Virtualization")]
+    # The labels are the account's own words (from
+    # GET /accounts/{id}/functionalities), so a customer reading their own
+    # location settings does not have to translate -- and nothing here has a
+    # `func_ids` to keep them apart from.
+    assert not any("func_ids" in f for f in served)
+
+
+def test_a_covered_funcid_and_a_functionality_are_one_table():
+    """`covered` on the funcId vocabulary and having a card on the configure
+    step are the same fact, so they are the same declaration. Kept twice they
+    are free to disagree about the one thing a row exists to say -- and the row
+    that says it is the one telling a funcId this tool configures from a funcId
+    it can only name."""
+    ids = [f["id"] for f in core.functionalities()]
+    assert [r["id"] for r in core.func_ids()] == ids
+    assert all(r["covered"] for r in core.func_ids())
+    # ...and with an account, whose vocabulary is longer, the covered rows are
+    # still exactly the functionalities.
+    rows = core.func_ids(FakeClient(), 291446)
+    assert {r["id"] for r in rows if r["covered"]} == set(ids)
+
+
+def test_every_functionality_names_a_funcid_the_facts_layer_models():
+    """A functionality whose funcId the facts layer does not model would select
+    no images for the bundle it declares -- which is the one thing manual entry
+    reads a declaration for.
+
+    The reverse is deliberately *not* asserted, and #149 is where it stopped
+    holding: `functionalApi` and `proxyRecorder` are modelled here and covered
+    by nothing, because BlazeMeter has retired one and this tool has no options
+    for either. A location carrying only those claims no functionality, which
+    the page reads as nobody having said -- and names them, rather than folding
+    them into a card whose label would then have to mean four things."""
     from bzm_opl_gen import facts as facts_mod
-    claimed = {f for fn in core.FUNCTIONALITIES for f in fn["func_ids"]}
-    assert set(facts_mod.CATEGORY_BY_FUNC) <= claimed
-    assert "tdm" not in claimed
+    ids = {f["id"] for f in core.functionalities()}
+    assert ids <= set(facts_mod.CATEGORY_BY_FUNC)
+    modelled = set(facts_mod.CATEGORY_BY_FUNC)
+    assert {"functionalApi", "proxyRecorder"} <= modelled - ids
+    assert "tdm" not in ids
 
 
 # -- where a token lives, and that redaction still knows -----------------------

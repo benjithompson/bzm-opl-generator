@@ -1073,11 +1073,13 @@ def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
     assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
-        assert f["label"] and f["namespace"] and f["func_ids"]
-    sv = next(f for f in body if f["id"] == "sv")
-    # Which funcIds mean service virtualization is generate.SV_FUNC_IDS', not a
-    # second list -- the same reason /api/sv-constants exists.
-    assert sv["func_ids"] == list(gen_mod.SV_FUNC_IDS)
+        assert f["label"] and f["namespace"]
+    # The id *is* the funcId (#149), so the join a location makes is on it and
+    # there is no second list to keep: which funcId means service
+    # virtualization is generate.SV_FUNC_IDS', the same answer
+    # /api/sv-constants serves and _sv_cfg validates against.
+    assert [f["id"] for f in body if f["id"] in gen_mod.SV_FUNC_IDS] \
+        == list(gen_mod.SV_FUNC_IDS)
     # Distinct namespaces are the point of suggesting one per functionality:
     # sharing a namespace is what makes redeploying one agent take the other's
     # pods down.
@@ -1089,13 +1091,17 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
     tag on whichever option groups it owns. Nothing in the frontend enumerates
     functionalities, so this is the whole of the backend half."""
     monkeypatch.setattr(core, "FUNCTIONALITIES", core.FUNCTIONALITIES + [
-        {"id": "secrets", "label": "Private vault", "hint": "secrets from a vault",
-         "namespace": "blazemeter-vault", "func_ids": ["secretsPrivateVault"]}])
+        {"id": "secretsPrivateVault", "label": "Secrets Private Vault",
+         "hint": "secrets from a vault", "namespace": "blazemeter-vault"}])
     body = client.get("/api/functionalities").json()
-    assert body[-1] == {"id": "secrets", "label": "Private vault",
+    assert body[-1] == {"id": "secretsPrivateVault",
+                        "label": "Secrets Private Vault",
                         "hint": "secrets from a vault",
-                        "namespace": "blazemeter-vault",
-                        "func_ids": ["secretsPrivateVault"]}
+                        "namespace": "blazemeter-vault"}
+    # ...and it is a covered funcId by the same act, because `covered` is that
+    # list read as a vocabulary rather than a second table beside it.
+    assert next(r for r in client.get("/api/func-ids").json()
+                if r["id"] == "secretsPrivateVault")["covered"] is True
 
 
 def test_create_location_forwards_every_selected_func_id(monkeypatch):

@@ -44,7 +44,7 @@ import { sizeStatement } from "./engineSize";
 // declined, whether what is configured is finished, the prerequisite context,
 // the RBAC prose, the scheme, the chart's refusal -- and the one patch the
 // options need, which used to be two effects writing what a third read back.
-import { svState } from "./sv";
+import { SV_FUNCTIONALITY, svState } from "./sv";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
 // Whether an agent is reporting. One statement of the rule, with its own tests
@@ -216,7 +216,7 @@ export default function App({ api }: { api: Api }) {
   // else, and options on their way out must not take an output format with
   // them. Unanswered reads as yes, which is the direction that over-blocks
   // rather than letting a bundle the server refuses through.
-  const svRuns = runsFunctionality(enabled, "sv");
+  const svRuns = runsFunctionality(enabled, SV_FUNCTIONALITY);
   const sv = useMemo(
     () => svState(facts?.func_ids, options, svConst, svRuns),
     [facts?.func_ids, options, svConst, svRuns]);
@@ -856,25 +856,21 @@ export default function App({ api }: { api: Api }) {
   // with it. `sourceOpen` stays because the summary is still the right thing to
   // show in the one case that sets it -- see switchMode.
 
-  // Manual mode declares the location's funcIds through the functionality buttons, so
-  // it needs to know which funcIds a functionality stands for. Only the ones that
-  // change the images are offered -- the rest generate the same bundle.
-  const imageFuncs = useMemo(
-    () => new Set(funcIdChoices.filter((c) => c.changes_images).map((c) => c.id)),
-    [funcIdChoices]);
-  /** The funcId a functionality declares when it is the manual-mode declaration: the
-   *  first of the ones it claims that changes the images. */
-  const primaryFuncOf = useCallback(
-    (id: string | null) => (functionalities.find((f) => f.id === id)?.func_ids ?? [])
-      .find((x) => imageFuncs.has(x)),
-    [functionalities, imageFuncs]);
-  // What manual mode declares the location runs: the selected functionality's primary
-  // funcId. No literal funcId in TypeScript -- it comes from the served
-  // vocabulary via primaryFuncOf.
-  const manualFuncIds = useMemo(() => {
-    const primary = primaryFuncOf(functionality);
-    return primary ? [primary] : [];
-  }, [primaryFuncOf, functionality]);
+  // What manual mode declares the typed identity runs: the declared
+  // functionality, which *is* the funcId (#149) -- so the declaration reaches
+  // `manualFacts` with nothing in between and nothing to wait for.
+  //
+  // It used to pick "the first funcId this functionality claims that changes
+  // the images", off /api/func-ids, because one functionality claimed four. Two
+  // vocabularies had to have landed before a declaration named anything, and
+  // until the second did the identity was gathered for no funcId at all -- a
+  // wait indistinguishable from a declaration nobody had made. The 1:1 mapping
+  // removes the lookup rather than fixing it. Still no literal funcId here:
+  // `functionality` is only ever set from the served list.
+  const manualFuncIds = useMemo(
+    () => (functionality && functionalities.some((f) => f.id === functionality)
+      ? [functionality] : []),
+    [functionalities, functionality]);
 
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.

@@ -171,9 +171,25 @@ export const ENGINE_SIZES = [
  *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The functionality whose bundles start engines -- the old group's tag, kept for
- *  the statement's card and the not-run clearing below. */
-export const SIZING_FUNCTIONALITY = "performance";
+/** The functionalities whose agent carries a taurus engine, so that "engine
+ *  size" is a true statement about its pod limits.
+ *
+ *  Placement only, and that is the whole of what survives #149. It was
+ *  `SIZING_FUNCTIONALITY`, one id doing two jobs: where the statement renders,
+ *  and which locations had `engine_cpu_limit`/`engine_mem_limit` cleared out
+ *  from under them. The second job was wrong. Crane applies
+ *  KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to **every pod it creates** -- one
+ *  pair, with no per-functionality second one -- so the limits belong to no
+ *  functionality and are never cleared for one; see notRunPatch.
+ *
+ *  Read off real single-functionality locations' /versions rather than assumed:
+ *  performance carries apm/crane/v4 and functionalGui adds doduo and a browser
+ *  to the same three, while an SV-only agent carries crane, group-gateway and
+ *  service-mock -- **no taurus engine at all**. Its limits still reach its mock
+ *  pods and are still emitted; what they mean there is a sizing model that does
+ *  not exist yet (#154), and stating an engine size over it would be inventing
+ *  one. So it gets no statement rather than a wrong one. */
+export const ENGINE_FUNCTIONALITIES = ["performance", "functionalGui"];
 
 // -- service account ---------------------------------------------------------
 // Deliberately not a group. A group is a switch that hides its fields when it is
@@ -405,7 +421,11 @@ export const OPTION_GROUPS: OptionGroup[] = [
     // performance one, so the row says what it costs rather than falling silent
     // the moment it stopped blocking the download.
     declinedHint: "performance only — virtual services deployed here will stall at WAITING_FOR_DOMAIN",
-    functionalities: ["sv"],
+    // The funcId, which is what a functionality id is (#149). Not the group id
+    // beside it: `sv` names a row on this page, `mockServices` names something
+    // the account enables, and the two coinciding was how one could be read for
+    // the other.
+    functionalities: ["mockServices"],
     // service_type is *not* here. This group used to own it as well, to force
     // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
     // on namespaced RBAC, so SV has no opinion on it and Security owns it
@@ -545,16 +565,15 @@ export function notRunPatch(
       Object.assign(patch, g.disable(o, false));
     }
   }
-  // The engine size is a section's statement rather than a group (#132), so
-  // its clearing is spelled here instead of through a disable(): the options
-  // still travel (the sizing and an imported profile write them),
-  // and a location that starts no engines must not carry them out in the
-  // bundle -- generate would emit an explicit option over anything.
-  if (!runsFunctionality(enabled, SIZING_FUNCTIONALITY)
-      && (o.engine_cpu_limit != null || o.engine_mem_limit != null)) {
-    patch.engine_cpu_limit = null;
-    patch.engine_mem_limit = null;
-  }
+  // The pod limits used to be cleared here too, on the reading that they size
+  // an engine and a location running no performance has none. #149 removed
+  // that: crane applies KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to every pod it
+  // creates, so one pair covers engines, browser pods and mock-service pods
+  // alike and there is no per-functionality second one. Cleared, an SV-only or
+  // GUI-only agent's pods fall to crane's 250m/256Mi defaults -- the silent
+  // failure the LimitRange note in CLAUDE.md is about, arrived at from the page
+  // instead. Nothing replaces the clause: a value that reaches every pod is
+  // never wrong for the ones a location does not run.
   return Object.keys(patch).length ? patch : null;
 }
 
@@ -651,14 +670,18 @@ export function configureBlockedBy(
 // it hands a string back for the caller to apply only while the field still
 // holds a suggestion.
 
-/** The functionalities a location's funcIds carry, in served order. funcIds the tool
- *  does not model (tdm, dataPublisher, delphix, secretsPrivateVault) match no
- *  functionality and are simply not a signal -- never an error, and never a reason to
- *  leave the selector empty. */
+/** The functionalities a location's funcIds carry, in served order.
+ *
+ *  A funcId this tool covers *is* a functionality id (#149), so the join is
+ *  equality and there is no table between the two vocabularies. funcIds nothing
+ *  covers -- tdm, dataPublisher, delphix, secretsPrivateVault, and since the
+ *  split the retired functionalApi and proxyRecorder -- match nothing and are
+ *  simply not a signal: never an error, and never a reason to leave the page
+ *  empty. */
 export function functionalitiesOf(
     funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
   return functionalities
-    .filter((f) => (funcIds ?? []).some((id) => f.func_ids.includes(id)))
+    .filter((f) => (funcIds ?? []).includes(f.id))
     .map((f) => f.id);
 }
 
@@ -676,12 +699,17 @@ export function functionalitiesOf(
  *  what the location literally carries, which is worse than a display name and
  *  much better than a guess. `functionalApi` is the same case *with* an
  *  account -- BlazeMeter retired it and locations still have it -- so the
- *  fallback is not only a startup state. */
+ *  fallback is not only a startup state.
+ *
+ *  Since the split (#149) `functionalApi` and `proxyRecorder` arrive here too:
+ *  `performance` used to claim them, which is what made its label name four
+ *  things at once. Named beside the cards is the honest place for a funcId
+ *  nothing here configures. */
 export function unclaimedFuncIds(
     funcIds: string[] | undefined, functionalities: Functionality[],
     choices: FuncIdChoice[]): string[] {
   return (funcIds ?? [])
-    .filter((id) => !functionalities.some((f) => f.func_ids.includes(id)))
+    .filter((id) => !functionalities.some((f) => f.id === id))
     .map((id) => choices.find((c) => c.id === id)?.label ?? id);
 }
 

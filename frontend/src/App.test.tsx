@@ -185,13 +185,13 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
     accounts: async () => [{ id: 1, name: "Alpha" }],
     workspaces: async () => [{ id: 10, name: "Alpha workspace" }],
     locations: async () => [{
-      id: "h-mocks", name: "Mocks", funcIds: ["mock-services"], slots: 1,
+      id: "h-mocks", name: "Mocks", funcIds: ["mockServices"], slots: 1,
       // Offline, so the page's own rule auto-picks it -- a running agent is
       // never cloned into a new deployment.
       ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
     }],
     facts: async () => ({
-      harbor_id: "h-mocks", func_ids: ["mock-services"],
+      harbor_id: "h-mocks", func_ids: ["mockServices"],
       ships: [{ id: "s-1", name: "agent-1" }], images: [],
     }),
     optionDefaults: async () => ({
@@ -200,13 +200,16 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
     }),
     funcIdChoices: async () => [],
     functionalities: async () => [{
-      id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
-      func_ids: ["mock-services"],
+      id: "mockServices", label: "Service Virtualization",
+      namespace: "blazemeter-sv",
     }],
-    // The funcId that means "runs virtual services" is served, never spelled
-    // in the frontend -- this is the fixture standing in for that vocabulary.
+    // Two joins, and only one of them is free to be spelled differently here.
+    // A functionality id *is* the funcId (#149), and the sv option group tags
+    // itself with that string, so this fixture has to carry the real one. What
+    // the served constants call it is still the server's own word, which is why
+    // the page reads it off /api/sv-constants rather than testing for it.
     svConstants: async () => ({
-      func_ids: ["mock-services"],
+      func_ids: ["mockServices"],
       ingress_types: ["nginx", "istio"],
       backends: {
         nginx: { group: "networking.k8s.io", resources: ["ingresses"],
@@ -322,10 +325,9 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
     }),
     funcIdChoices: async () => [],
     functionalities: async () => [
-      { id: "performance", label: "Performance & functional testing",
-        namespace: "blazemeter", func_ids: ["performance"] },
-      { id: "sv", label: "Service virtualization", namespace: "blazemeter-sv",
-        func_ids: ["mockServices"] },
+      { id: "performance", label: "Performance", namespace: "blazemeter" },
+      { id: "mockServices", label: "Service Virtualization",
+        namespace: "blazemeter-sv" },
     ],
     svConstants: async () => ({
       func_ids: ["mockServices"], ingress_types: ["nginx"],
@@ -378,8 +380,8 @@ test("a functionality a manually entered identity was not declared to run has "
     // The card for the other one states it and offers nothing. A switch here
     // was pressable, seeded an ingress with no domain behind it, and turned the
     // step red for a functionality nobody had asked for.
-    expect(card("sv").queryByRole("switch")).toBeNull();
-    expect(card("sv").getByText(/pick/)).toBeTruthy();
+    expect(card("mockServices").queryByRole("switch")).toBeNull();
+    expect(card("mockServices").getByText(/pick/)).toBeTruthy();
     // ...and this is not passing because no card rendered anything: the
     // declared functionality states the engine size its bundle will carry -- the
     // documented default, since manual mode has no location to read.
@@ -579,19 +581,19 @@ test("a functionality this bundle's format cannot serve is stated, not offered",
 
     // No switch: pressing one would configure a bundle the generator refuses,
     // and the format would then be yanked out from under the choice just made.
-    await waitFor(() => expect(card("sv").queryByRole("switch")).toBeNull());
+    await waitFor(() => expect(card("mockServices").queryByRole("switch")).toBeNull());
     // It says which of the two answers this is, and names the format that can.
     // The card is on screen at all because nobody has said what this location
     // runs (`tdm` is a funcId no functionality claims), which is the state the two
     // answers are easiest to confuse in.
-    expect(card("sv").getByText(/Not possible in this bundle/)).toBeTruthy();
-    expect(card("sv").queryByText(/was declared to run/)).toBeNull();
+    expect(card("mockServices").getByText(/Not possible in this bundle/)).toBeTruthy();
+    expect(card("mockServices").queryByText(/was declared to run/)).toBeNull();
 
     // ...and it comes back on a format that can serve it, rather than being
     // gone for good: the card is a view over the bundle, not a decision.
     fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
     await waitFor(() =>
-      expect(card("sv").queryByRole("switch")).not.toBeNull());
+      expect(card("mockServices").queryByRole("switch")).not.toBeNull());
   });
 
 test("the docker format is a third bundle, and it is what gets generated",
@@ -765,8 +767,7 @@ function perfAccount(extra: Partial<Api> = {}) {
     }),
     funcIdChoices: async () => [],
     functionalities: async () => [{
-      id: "perf", label: "Performance", namespace: "blazemeter",
-      func_ids: ["performance"],
+      id: "performance", label: "Performance", namespace: "blazemeter",
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
     generate: async () => ({
@@ -830,8 +831,12 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
 
     fireEvent.click(await screen.findByRole("radio", { name: /Separate nodes/ }));
     // The choice states its cost beside it: a dedicated pool without the
-    // location's engine override packs every engine onto the first node.
-    expect(await screen.findByText(/Location settings/)).toBeTruthy();
+    // location's engine override packs every engine onto the first node. Found
+    // by its own words rather than by "Location settings", which the engine-size
+    // statement on the performance card also names -- two sentences about the
+    // same field, each where its own decision is made.
+    expect(await screen.findByText(/autoscalers grow pools by what pods request/))
+      .toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     const button = await screen.findByRole<HTMLButtonElement>(
@@ -960,12 +965,6 @@ test("the configure step states the engine size the location implies, and edits 
       overrideCPU: 1, overrideMemory: 4096 };
     render(<App api={accountOf([held], {
       locations: async () => [held],
-      // The real functionality id: accountOf's "perf" claims the funcId, and the
-      // statement renders on the card of the functionality that starts engines.
-      functionalities: async () => [{
-        id: "performance", label: "Performance", namespace: "blazemeter",
-        func_ids: ["performance"],
-      }],
     })} />);
 
     fireEvent.click(await screen.findByText("Perf"));
@@ -987,10 +986,6 @@ test("a location holding no engine requests is stated as the default, never blan
   async () => {
     render(<App api={accountOf([loc("h-perf", "Perf",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
-      functionalities: async () => [{
-        id: "performance", label: "Performance", namespace: "blazemeter",
-        func_ids: ["performance"],
-      }],
     })} />);
 
     fireEvent.click(await screen.findByText("Perf"));
@@ -1002,6 +997,89 @@ test("a location holding no engine requests is stated as the default, never blan
     const note = await screen.findByText(/2 CPU \/ 8Gi/);
     expect(note.textContent).toContain("default");
     expect(note.textContent).toContain("Location settings");
+  });
+
+test("a location running two engine functionalities states the engine size once",
+  async () => {
+    // One agent, one KUBERNETES_RESOURCES_LIMITS pair, one statement (#149).
+    // Both cards run engines -- a GUI Functional agent carries the same
+    // apm/crane/v4 the performance one does, plus the grid -- so a per-card
+    // `is this the sizing functionality` test would print the size twice and
+    // read as two settings.
+    const both = { ...loc("h-perf", "Perf",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+      funcIds: ["performance", "functionalGui"] };
+    render(<App api={accountOf([both], {
+      facts: async (harborId: string) => ({
+        harbor_id: harborId, func_ids: ["performance", "functionalGui"],
+        ships: [], images: [],
+      }),
+      functionalities: async () => [
+        { id: "performance", label: "Performance", namespace: "blazemeter" },
+        { id: "functionalGui", label: "GUI Functional",
+          namespace: "blazemeter-gui" },
+      ],
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // Both cards are on screen, and the statement is on the first of them.
+    await waitFor(() => expect(hasCard("functionalGui")).toBe(true));
+    expect(screen.getAllByText(/^Engine size\.$/)).toHaveLength(1);
+    expect(card("performance").getByText(/2 CPU \/ 8Gi/)).toBeTruthy();
+  });
+
+test("a GUI Functional location is told its engine size on its own card",
+  async () => {
+    // The statement used to be pinned to the performance card, and a location
+    // that runs GUI Functional and not Performance has none -- so a bundle
+    // carrying engine limits said nothing about them anywhere. A GUI agent
+    // carries the taurus engine too (apm, crane, v4, plus doduo and a browser),
+    // which is what makes "engines run at" true of it.
+    const gui = { ...loc("h-gui", "Gui",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
+      funcIds: ["functionalGui"] };
+    render(<App api={accountOf([gui], {
+      facts: async (harborId: string) => ({
+        harbor_id: harborId, func_ids: ["functionalGui"], ships: [], images: [],
+      }),
+      functionalities: async () => [
+        { id: "performance", label: "Performance", namespace: "blazemeter" },
+        { id: "functionalGui", label: "GUI Functional",
+          namespace: "blazemeter-gui" },
+      ],
+    })} />);
+
+    fireEvent.click(await screen.findByText("Gui"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    // The performance card is not on this page at all -- the location does not
+    // run it -- and the statement is on the card that is.
+    await waitFor(() => expect(hasCard("functionalGui")).toBe(true));
+    expect(hasCard("performance")).toBe(false);
+    expect(card("functionalGui").getByText(/2 CPU \/ 8Gi/)).toBeTruthy();
+  });
+
+test("a location that runs no engine is not told what its engines run at",
+  async () => {
+    // An SV-only agent carries crane, group-gateway and service-mock and no
+    // taurus engine at all, read off /versions. Its pod limits are still
+    // carried and still sent -- crane applies them to every pod it creates --
+    // but "engines run at 2 CPU / 8Gi" is not a true sentence about it, and
+    // what those limits should be for a mock is #154's to say. So nothing is
+    // stated rather than the wrong thing.
+    render(<App api={svAccount([])} />);
+
+    fireEvent.click(await screen.findByText("Mocks"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+
+    await waitFor(() => expect(hasCard("mockServices")).toBe(true));
+    expect(screen.queryByText(/^Engine size\.$/)).toBeNull();
+    expect(screen.queryByText(/per engine/)).toBeNull();
   });
 
 // Rotating from this step is gone with its box. It was the second way to mint
@@ -1054,8 +1132,7 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       { id: "performance", label: "Performance", changes_images: true, covered: true },
     ],
     functionalities: async () => [{
-      id: "perf", label: "Performance", namespace: "blazemeter",
-      func_ids: ["performance"],
+      id: "performance", label: "Performance", namespace: "blazemeter",
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
     // An account whose agents were all made somewhere else, which is the
@@ -1726,7 +1803,7 @@ test("declaring a functionality in manual entry suggests its namespace",
     const generated: Options[] = [];
     render(<App api={manualPage([], generated)} />);
     await declareManually();
-    fireEvent.click(card("sv").getByRole("radio"));
+    fireEvent.click(card("mockServices").getByRole("radio"));
 
     await waitFor(() => expect(generated.length).toBeGreaterThan(0));
     await waitFor(() =>
@@ -1744,11 +1821,11 @@ test("a functionality declared in manual entry is what the facts are gathered "
     // The declaration: this identity runs virtual services. In manual mode the
     // radio is the control rather than a chip, because there is no account to
     // read the answer off.
-    fireEvent.click(await within(document.getElementById("cfg-f-sv")!)
+    fireEvent.click(await within(document.getElementById("cfg-f-mockServices")!)
       .findByLabelText("Enabled"));
     // ...and it is configured as one, so the reload has something of the
     // functionality's own to lose as well.
-    fireEvent.click(within(document.getElementById("cfg-f-sv")!)
+    fireEvent.click(within(document.getElementById("cfg-f-mockServices")!)
       .getByRole("switch"));
 
     // What the page asks the facts for, before the reload.
@@ -1787,37 +1864,43 @@ test("a functionality declared in manual entry is what the facts are gathered "
     expect(after.namespace).toBe(before.namespace);
   });
 
-test("a restored declaration is not lost to the facts it produced",
+test("a restored declaration waits for the vocabulary rather than being lost to it",
   async () => {
     // The same failure by the other route, and the one a fast localhost hides.
-    // A declaration stands for a funcId, and which funcIds are worth declaring
-    // is *served* (`changes_images`) -- so until that list lands the identity is
-    // gathered for no funcId at all. Read those funcIds back and the page
-    // concludes the location runs nothing it knows, falls to the first served
-    // functionality, and the declaration is gone again -- with the namespace
-    // suggestion following it.
-    const choices = deferred<Awaited<ReturnType<Api["funcIdChoices"]>>>();
+    // A declaration stands for a funcId, and until the vocabulary lands there
+    // is nothing to check the restored one against -- so the identity is
+    // gathered for no funcId at all, which must not be mistaken for an answer
+    // about what was declared. Read the wrong way round it falls to the first
+    // served functionality and the declaration is gone again, with the
+    // namespace suggestion following it.
+    //
+    // It was /api/func-ids that was deferred here, because a declaration used
+    // to be turned into a funcId through `changes_images`: two vocabularies had
+    // to have landed. Since #149 the declaration *is* the funcId and only the
+    // one list decides -- fewer ways to be outstanding, and the same rule about
+    // what an outstanding one may be read as.
+    const served = deferred<Awaited<ReturnType<Api["functionalities"]>>>();
     const asked: string[][] = [];
     session.save({
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFunctionality: "sv",
+      declaredFunctionality: "mockServices",
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
     render(<App api={manualPage(asked, [], {
-      funcIdChoices: () => choices.promise,
+      functionalities: () => served.promise,
     })} />);
 
     // The identity is gathered for nothing while that list is outstanding,
     // which is fine -- and is exactly what must not be mistaken for an answer
     // about what was declared.
     await waitFor(() => expect(asked[asked.length - 1]).toEqual([]));
-    choices.settle([
-      { id: "performance", label: "Performance", changes_images: true, covered: true },
-      { id: "mockServices", label: "Service Virtualization", changes_images: true,
-        covered: true },
+    served.settle([
+      { id: "performance", label: "Performance", namespace: "blazemeter" },
+      { id: "mockServices", label: "Service Virtualization",
+        namespace: "blazemeter-sv" },
     ]);
 
     await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
@@ -1834,7 +1917,7 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       sourceMode: "manual", accountId: null, workspaceId: null,
       harborId: null, shipId: null, confirmed: { loc: null, ship: null },
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
-      declaredFunctionality: "sv",
+      declaredFunctionality: "mockServices",
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
       plan: EMPTY_PLAN_INPUTS,
     });
@@ -1842,8 +1925,7 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       // The vocabulary this page is served no longer carries what the snapshot
       // named -- a functionality withdrawn, or a tab reloaded against a newer server.
       functionalities: async () => [
-        { id: "performance", label: "Performance & functional testing",
-          namespace: "blazemeter", func_ids: ["performance"] },
+        { id: "performance", label: "Performance", namespace: "blazemeter" },
       ],
     })} />);
 

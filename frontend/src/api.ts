@@ -468,22 +468,28 @@ export type SvReadStatus = "ok" | "no_cli" | "no_context" | "denied" | "no_mocks
 
 /** One functionality the configure step can be pointed at, from
  *  /api/functionalities. The list is served for the same reason as the two
- *  above -- functional testing,
- *  secrets and API monitoring are expected to follow, and a functionality has to
- *  become selectable by being added to the vocabulary, not by an edit here.
- *  Option groups tag themselves with `id` (see optionGroups.ts); nothing in the
- *  frontend enumerates the functionalities themselves. */
+ *  above -- secrets, TDM and data orchestration are expected to follow, and a
+ *  functionality has to become selectable by being added to the vocabulary, not
+ *  by an edit here. Option groups tag themselves with `id` (see
+ *  optionGroups.ts); nothing in the frontend enumerates the functionalities
+ *  themselves. */
 export interface Functionality {
+  /** **The funcId** (#149), so a location's `func_ids` join to these by
+   *  equality. There is no list of claimed funcIds here any more: one entry
+   *  claiming four was why a card over a `performance`-only location was
+   *  labelled "Performance & functional testing", and a per-functionality list
+   *  is a translation table between this tool's ids and BlazeMeter's. A funcId
+   *  no entry has is simply not covered -- named on the page, configured
+   *  nowhere. */
   id: string;
+  /** BlazeMeter's own display name, so it reads as the customer's location
+   *  settings read. */
   label: string;
   hint?: string;
   /** Suggested, never forced: applied only while the namespace field still
    *  holds a namespace some functionality suggested. Served with the label so the
    *  suggestion extends with the vocabulary. */
   namespace: string;
-  /** The location funcIds that mean a location has this functionality. A location's
-   *  funcIds may include ones no functionality claims -- that is not an error. */
-  func_ids: string[];
 }
 
 /** One agent variable the environment area offers, from /api/agent-env --

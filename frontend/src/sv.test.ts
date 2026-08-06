@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { Options, SvConstants } from "./api";
 import { SV_NONE } from "./optionGroups";
-import { svState } from "./sv";
+import { SV_FUNCTIONALITY, svState } from "./sv";
 
 // The funcId a location carries to mean "runs mockServices" is served, not
 // spelled here -- the same reason the page reads it off /api/sv-constants.
@@ -199,9 +199,13 @@ describe("the functionality a format cannot serve", () => {
     // The card renders this instead of its switches: a docker bundle offering
     // an ingress, a subdomain and a TLS secret is offering three fields that
     // make the whole bundle unbuildable.
-    expect(sv(SV_LOC, { output_format: "docker" }).functionalityBlocked.sv)
-      .toMatch(/HOSTNAME_OVERRIDE/);
-    expect(sv(SV_LOC, { output_format: "helm" }).functionalityBlocked.sv)
+    // Keyed by the funcId, which is what a functionality id is (#149) -- and
+    // no longer the `sv` group id it used to be spelled the same as.
+    expect(SV_FUNCTIONALITY).toBe("mockServices");
+    expect(sv(SV_LOC, { output_format: "docker" })
+      .functionalityBlocked[SV_FUNCTIONALITY]).toMatch(/HOSTNAME_OVERRIDE/);
+    expect(sv(SV_LOC, { output_format: "helm" })
+      .functionalityBlocked[SV_FUNCTIONALITY])
       .toMatch(/ingress, its RBAC and a TLS secret/);
   });
 

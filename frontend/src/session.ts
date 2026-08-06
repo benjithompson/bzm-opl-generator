@@ -56,7 +56,13 @@ import type { PlanInputs } from "./usePlan";
 // does not know, and reading a v9 snapshot under this shape would restore every
 // id and option *except* the declaration -- a typed identity landing back on the
 // first served functionality, which is what 7 was added to stop.
-export const VERSION = 10;
+// 11: a functionality id is BlazeMeter's funcId (#149), so the declaration a
+// v10 snapshot holds is spelled `sv` where this build says `mockServices`.
+// Version 10's own reasoning, one rename along: the vocabulary check would drop
+// a declaration it cannot find and restore every other id and option -- a typed
+// SV identity landing back on Performance with its namespace intact, which is
+// the half-read state 7 was added to stop. Dropped whole instead.
+export const VERSION = 11;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {

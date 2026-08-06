@@ -32,8 +32,8 @@ import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup, runsFunctionality,
-  SHARED_GROUPS, SIZING_FUNCTIONALITY,
+  ENGINE_FUNCTIONALITIES, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
+  runsFunctionality, SHARED_GROUPS,
 } from "../optionGroups";
 import { placeholderWarning } from "../placeholder";
 
@@ -81,7 +81,7 @@ export interface ConfigurePanelProps {
    *  editor (#132): the size derives from the location's engine requests and
    *  is set there (Location settings), so there is nothing here to toggle,
    *  fill in or leave blank. Null where the format has no such env (docker),
-   *  and the performance card is where it renders, in the slot the sizing
+   *  and it renders on one card -- see `engineSizeOn` -- in the slot the sizing
    *  group used to hold. */
   engineNote: string | null;
   flipGroup: (id: GroupId, on: boolean) => void;
@@ -280,12 +280,19 @@ function AdvancedRow(p: ConfigurePanelProps) {
  *  than a report of one, and an undeclared functionality has to stay on screen to be
  *  declarable. That is why the branch below has one sentence and not two. */
 function FunctionalityCard(
-    p: ConfigurePanelProps & { feat: Functionality; own: OptionGroup[] }) {
+    p: ConfigurePanelProps & {
+      feat: Functionality; own: OptionGroup[];
+      /** Does the engine-size statement belong on this card? Decided by the
+       *  panel, over the cards it is showing, so it renders once -- a location
+       *  runs performance and GUI functional together and both start engines,
+       *  and a per-card `id === ...` test would state the size twice. */
+      statesEngineSize: boolean;
+    }) {
   const { feat, own } = p;
   // The engine-size statement renders where the sizing group used to sit:
-  // under the functionality whose bundles start engines. Read-only by design --
-  // the size is the location's, and this card only states it.
-  const note = feat.id === SIZING_FUNCTIONALITY ? p.engineNote : null;
+  // under a functionality whose agent carries the taurus engine. Read-only by
+  // design -- the size is the location's, and this card only states it.
+  const note = p.statesEngineSize ? p.engineNote : null;
   const manual = p.sourceMode === "manual";
   // Enabled means the location runs it -- or, in manual mode, that this is what
   // the typed identity was declared to be. Unanswered reads as on: see
@@ -418,6 +425,15 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const functionalities = p.sourceMode === "manual"
     ? p.functionalities
     : p.functionalities.filter((f) => runsFunctionality(p.enabled, f.id));
+  // Which card states the engine size: the first on screen whose agent carries
+  // the taurus engine. Once, not per card -- a location running performance
+  // and GUI functional runs one agent with one pod-limit pair, and the
+  // statement is about that pair. Undefined where no such card is on screen (an
+  // SV-only location): the limits are still carried and still sent, and what
+  // they mean for a mock pod is a sizing model that does not exist yet (#154),
+  // so nothing is stated rather than an engine size that is not there.
+  const engineSizeOn = functionalities
+    .find((f) => ENGINE_FUNCTIONALITIES.includes(f.id))?.id;
   const secs = [
     ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
@@ -568,6 +584,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   nothing reads. */}
               {functionalities.map((f) => (
                 <FunctionalityCard key={f.id} {...p} feat={f}
+                  statesEngineSize={f.id === engineSizeOn}
                   own={groupsIn("f-" + f.id)} />
               ))}
             </div>

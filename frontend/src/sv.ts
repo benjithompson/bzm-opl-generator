@@ -27,12 +27,19 @@ import { SvCtx } from "./SvPrereqs";
  *  module is service virtualization, and the id it answers under is the one
  *  thing about it that cannot be derived from its inputs.
  *
- *  It is a *functionality* id, not the group id it happens to match, so it
- *  joins to core.FUNCTIONALITIES rather than to the group table -- and
- *  test_server.py holds it there, beside the group tags, because a rename on
- *  the server would otherwise leave the card offering switches for a bundle
- *  that cannot carry them with both suites green. */
-const SV_FUNCTIONALITY = "sv";
+ *  It is a *functionality* id -- which since #149 is BlazeMeter's funcId, and
+ *  so no longer the same string as the `sv` group beside it. That it used to
+ *  match the group id was luck, and the sort that hides a confusion: one names
+ *  a row on this page, the other names something an account enables. It joins
+ *  to core.FUNCTIONALITIES rather than to the group table, and test_server.py
+ *  holds it there beside the group tags, because a rename on the server would
+ *  otherwise leave the card offering switches for a bundle that cannot carry
+ *  them with both suites green.
+ *
+ *  Exported so App asks `runsFunctionality` with this rather than a second
+ *  literal of its own: two copies of an id that only one file can be right
+ *  about is how the card and the format refusal would come apart. */
+export const SV_FUNCTIONALITY = "mockServices";
 
 /** Why a format cannot carry service virtualization, by format.
  *
@@ -160,8 +167,8 @@ const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
 /** Everything about service virtualization, for this location and these
  *  options. Pure: the same four inputs always give the same record.
  *
- *  `runs` is `optionGroups.runsFunctionality(enabled, "sv")` -- does this
- *  bundle still carry SV options at all? It is not the same question as `location`,
+ *  `runs` is `runsFunctionality(enabled, SV_FUNCTIONALITY)` -- does this bundle
+ *  still carry SV options at all? It is not the same question as `location`,
  *  and the difference is the whole reason it is a parameter rather than
  *  derived from `funcIds` here. Three states reach this:
  *

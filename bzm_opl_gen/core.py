@@ -1643,27 +1643,86 @@ def option_docs():
             for o in options_mod.OPTIONS}
 
 
-# The funcIds this tool *covers* -- has option groups, environment variables and
-# images for -- with BlazeMeter's own display names, transcribed from
-# GET /accounts/{id}/functionalities. Three, deliberately: an account offers
-# nine and this is a subset of them, which is the whole reason a row has to say
-# which kind it is.
+# The functionalities a bundle can be configured for -- BlazeMeter's own word
+# for what a private location is enabled to do. The configure step shows a card
+# each and the option groups tag themselves with an `id`, so a functionality
+# becomes offered by being added here; the frontend enumerates nothing. The
+# other half of adding one is tagging whichever option groups it owns; a
+# functionality no group names still gets a card, saying it has nothing of its
+# own beyond the groups every deployment gets (registry, proxy, CA trust,
+# scheduling) -- "nothing to configure" and "not shown" being different answers.
 #
-# Hardcoded because it is the **keyless** answer, not a copy of the account's.
-# The page fetches this vocabulary on mount, before a key has been pasted let
-# alone an account chosen (App.test.tsx drives the entire page that way), and
-# manual entry never has an account at all -- so "ask the account" cannot be the
-# only route to a funcId's name. Using BlazeMeter's words here is what keeps the
-# handover silent: the labels do not change when an account arrives.
+# **One entry per covered funcId, and `id` is the funcId** (#149). It was two
+# entries and `performance` claimed four funcIds -- performance, functionalApi,
+# functionalGui, proxyRecorder -- so its label had to name all of them:
+# "Performance & functional testing", printed over a location whose only funcId
+# is `performance`. A per-functionality list of funcIds is a translation table
+# between this tool's ids and BlazeMeter's, and the 1:1 mapping is what exists
+# instead of one -- a location's funcId *is* the id, read in either direction
+# with nothing to look up.
 #
-# It is never a *fallback*. An account that refuses the read raises, because
-# answering "this account offers exactly the three we cover" to a 401 is
-# could-not-read wearing there-is-nothing-else.
-COVERED_FUNC_IDS = {
-    "performance": "Performance",
-    "functionalGui": "GUI Functional",
-    "mockServices": "Service Virtualization",
-}
+# Three, deliberately: an account offers nine, and the difference is the whole
+# reason a funcId row has to say which kind it is (`covered`, below). The two
+# that lost their card are the retired `functionalApi` and `proxyRecorder`,
+# which have no options here; a location carrying only those claims no
+# functionality, which the page reads as nobody having answered and names on
+# screen rather than folding into a card.
+#
+# The labels are the account's, transcribed from
+# GET /accounts/{id}/functionalities, because they are also the words the
+# customer sees in their own location settings. Written down rather than fetched
+# because this is the **keyless** answer: the page asks for the vocabulary on
+# mount, before a key has been pasted let alone an account chosen
+# (App.test.tsx drives the entire page that way), and manual entry never has an
+# account at all. Using BlazeMeter's own words is what keeps the handover
+# silent -- nothing renames itself when an account arrives.
+#
+# `namespace` is a suggestion, applied only while the field still holds one --
+# a namespace per functionality is what keeps redeploying one agent from taking
+# the other's pods down with it, and typing over it has to win.
+FUNCTIONALITIES = [
+    {
+        "id": "performance",
+        "label": "Performance",
+        "hint": "load tests -- engines started on demand",
+        "namespace": "blazemeter",
+    },
+    {
+        "id": "functionalGui",
+        "label": "GUI Functional",
+        # Read off a real single-functionality location's
+        # /private-locations/{h}/ships/{s}/versions: apm, crane, v4, doduo and a
+        # pinned charmander browser -- the taurus engine plus the grid.
+        "hint": "browser tests -- a Selenium grid and browser pods "
+                "beside the engine",
+        "namespace": "blazemeter-gui",
+    },
+    {
+        "id": "mockServices",
+        "label": "Service Virtualization",
+        "hint": "virtual services / mocks -- needs an ingress",
+        "namespace": "blazemeter-sv",
+    },
+]
+
+
+def functionalities():
+    """The functionalities the configure step offers, in card order."""
+    return FUNCTIONALITIES
+
+
+def covered_func_ids():
+    """The funcIds this tool covers, as {funcId: label} -- which is the
+    functionalities read as a vocabulary.
+
+    Derived rather than declared beside them: `covered` on a funcId row and
+    having a card on the configure step are the same fact, and two tables of it
+    are two answers to the one question a row exists to ask. A function rather
+    than a module constant so a test that monkeypatches FUNCTIONALITIES is
+    followed here too -- the aliasing trap `server` is kept clear of, one module
+    in.
+    """
+    return {f["id"]: f["label"] for f in FUNCTIONALITIES}
 
 
 def func_ids(client=None, account_id=None):
@@ -1680,8 +1739,8 @@ def func_ids(client=None, account_id=None):
     untouched, and 43 of one account's 168 locations still do.
 
     With no account -- no key yet, or manual entry, which never has one -- the
-    answer is COVERED_FUNC_IDS: the three this tool configures, under the names
-    the account would give them.
+    answer is covered_func_ids(): the three this tool configures, under the
+    names the account would give them.
 
     `covered` says which of those two an entry is. A row this tool can only
     name is still served, because a page that dropped it would say nothing
@@ -1695,8 +1754,9 @@ def func_ids(client=None, account_id=None):
     caller for the same reason the list itself is served: a copy in the
     frontend is how a vocabulary and the thing it describes drift apart.
     """
+    covered = covered_func_ids()
     if client is None or account_id is None:
-        rows = list(COVERED_FUNC_IDS.items())
+        rows = list(covered.items())
     else:
         served = _upstream(client.functionalities, account_id) or {}
         # `displayName` falling back to the funcId rather than to a table here:
@@ -1708,54 +1768,8 @@ def func_ids(client=None, account_id=None):
     distinct = set(facts_mod.image_distinct_funcs())
     return [{"id": f, "label": label,
              "changes_images": f in distinct,
-             "covered": f in COVERED_FUNC_IDS}
+             "covered": f in covered}
             for f, label in rows]
-
-
-# The functionalities a bundle can be configured for -- BlazeMeter's own word
-# for what a private location is enabled to do. The UI shows one functionality's
-# options at a time and builds its selector from this list, so a functionality
-# becomes offered by being added here -- the frontend enumerates nothing. The
-# other half of adding one is tagging whichever option groups it owns with its
-# `id`; a functionality no group is tagged with is still selectable and shows
-# the groups that apply to any deployment (registry, proxy, CA trust,
-# scheduling).
-#
-# `func_ids` is how a location's funcIds pick the functionality to start on.
-# Locations carry funcIds no functionality claims (tdm, dataPublisher, delphix,
-# secretsPrivateVault); those are no signal rather than an error, which is what
-# lets this list model less than the account does.
-#
-# `namespace` is a suggestion, applied only while the field still holds one --
-# a namespace per functionality is what keeps redeploying one agent from taking
-# the other's pods down with it, and typing over it has to win.
-FUNCTIONALITIES = [
-    {
-        "id": "performance",
-        "label": "Performance & functional testing",
-        "hint": "load and functional tests -- engines started on demand",
-        "namespace": "blazemeter",
-        # Every non-SV funcId the facts layer models: the recorder and the
-        # functional suites all run on this agent, so they configure as it.
-        "func_ids": ["performance", "functionalApi", "functionalGui",
-                     "proxyRecorder"],
-    },
-    {
-        "id": "sv",
-        "label": "Service virtualization",
-        "hint": "virtual services / mocks -- needs an ingress",
-        "namespace": "blazemeter-sv",
-        # Which funcIds mean SV is generate.SV_FUNC_IDS', the same list
-        # sv_constants serves and _sv_cfg validates against.
-        "func_ids": list(gen_mod.SV_FUNC_IDS),
-    },
-]
-
-
-def functionalities():
-    """The functionalities the configure step can be pointed at, in selector
-    order."""
-    return FUNCTIONALITIES
 
 
 def docker_ignored():

@@ -285,21 +285,26 @@ describe("switching a group on", () => {
 // So the vocabulary below is a fixture standing in for that response, and the
 // "a functionality was added" tests extend it exactly the way server.py would.
 
+// One entry per covered funcId, and the id *is* the funcId (#149) -- so a
+// location's funcIds join to these by equality, with no table in between.
 const PERF: Functionality = {
-  id: "performance", label: "Performance & functional testing",
-  hint: "load and functional tests", namespace: "blazemeter",
-  func_ids: ["performance", "functionalApi", "functionalGui", "proxyRecorder"],
+  id: "performance", label: "Performance",
+  hint: "load tests", namespace: "blazemeter",
+};
+const GUI: Functionality = {
+  id: "functionalGui", label: "GUI Functional",
+  hint: "browser tests", namespace: "blazemeter-gui",
 };
 const SV: Functionality = {
-  id: "sv", label: "Service virtualization", hint: "virtual services",
-  namespace: "blazemeter-sv", func_ids: ["mockServices"],
+  id: "mockServices", label: "Service Virtualization",
+  hint: "virtual services", namespace: "blazemeter-sv",
 };
-const FUNCTIONALITIES = [PERF, SV];
+const FUNCTIONALITIES = [PERF, GUI, SV];
 /** Added the way a real new functionality is: one entry in the served vocabulary, and
  *  no frontend edit at all until some group wants to be tagged with it. */
 const SECRETS: Functionality = {
-  id: "secrets", label: "Private vault", hint: "secrets from a vault",
-  namespace: "blazemeter-vault", func_ids: ["secretsPrivateVault"],
+  id: "secretsPrivateVault", label: "Secrets Private Vault",
+  hint: "secrets from a vault", namespace: "blazemeter-vault",
 };
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
@@ -309,6 +314,7 @@ const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
  *  what NO_ACCOUNT stands in for. */
 const VOCABULARY: FuncIdChoice[] = [
   { id: "performance", label: "Performance", changes_images: true, covered: true },
+  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true },
   { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true },
   { id: "tdm", label: "TDM Integration", changes_images: false, covered: false },
   { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false },
@@ -326,17 +332,22 @@ describe("the split the configure step is built on", () => {
   });
 
   it("gives a functionality the groups tagged with it, and only those", () => {
-    expect(groupsOf("sv").map((g) => g.id)).toEqual(["sv"]);
+    // Tagged with the funcId, because that is what a functionality id is now.
+    // `sv` is still the *group* id -- what the row is called on the page -- and
+    // the two no longer coincide, which is the point: one is a bundle's
+    // options, the other is a thing the account enables.
+    expect(groupsOf("mockServices").map((g) => g.id)).toEqual(["sv"]);
     // Performance owns no group any more: the engine size stopped being one
-    // (#132) -- it derives from the location, and the card states it.
+    // (#132) -- it derives from the location, and the panel states it.
     expect(groupsOf("performance")).toEqual([]);
+    expect(groupsOf("functionalGui")).toEqual([]);
   });
 
   it("answers a functionality nothing is tagged with, rather than throwing", () => {
     // A backend that grows a functionality before the frontend tags a group to it is
     // a card that says "nothing extra to configure" -- not a crash, and not a
     // missing card.
-    expect(groupsOf("secrets")).toEqual([]);
+    expect(groupsOf("secretsPrivateVault")).toEqual([]);
   });
 
   it("keeps the shared groups shared", () => {
@@ -347,8 +358,13 @@ describe("the split the configure step is built on", () => {
 
 describe("which functionality a location starts on", () => {
   it("picks the functionality its funcIds carry", () => {
-    expect(startFunctionality(["mockServices"], FUNCTIONALITIES)).toBe("sv");
-    expect(startFunctionality(["functionalGui"], FUNCTIONALITIES)).toBe("performance");
+    expect(startFunctionality(["mockServices"], FUNCTIONALITIES))
+      .toBe("mockServices");
+    // The reported bug, in one line: this used to answer "performance",
+    // because one entry claimed four funcIds and its label had to name them
+    // all. A GUI Functional location now opens on GUI Functional.
+    expect(startFunctionality(["functionalGui"], FUNCTIONALITIES))
+      .toBe("functionalGui");
   });
 
   it("picks the first served functionality for a location carrying both", () => {
@@ -358,7 +374,7 @@ describe("which functionality a location starts on", () => {
     expect(startFunctionality(["mockServices", "performance"], FUNCTIONALITIES))
       .toBe("performance");
     expect(functionalitiesOf(["mockServices", "performance"], FUNCTIONALITIES))
-      .toEqual(["performance", "sv"]);
+      .toEqual(["performance", "mockServices"]);
   });
 
   it("is not broken by a funcId the tool does not model", () => {
@@ -366,7 +382,7 @@ describe("which functionality a location starts on", () => {
     // funcId claims no functionality: alongside a modelled one it is ignored, and
     // alone it leaves the default rather than an empty selector.
     expect(startFunctionality([...UNMODELLED, "mockServices"], FUNCTIONALITIES))
-      .toBe("sv");
+      .toBe("mockServices");
     expect(startFunctionality(UNMODELLED, FUNCTIONALITIES)).toBe("performance");
     expect(functionalitiesOf(UNMODELLED, FUNCTIONALITIES)).toEqual([]);
     expect(unclaimedFuncIds([...UNMODELLED, "performance"], FUNCTIONALITIES, VOCABULARY))
@@ -375,6 +391,19 @@ describe("which functionality a location starts on", () => {
       .toEqual([]);
     expect(startFunctionality([], FUNCTIONALITIES)).toBe("performance");
     expect(startFunctionality(undefined, FUNCTIONALITIES)).toBe("performance");
+  });
+
+  it("leaves a retired funcId unclaimed rather than folding it into a card", () => {
+    // `functionalApi` and `proxyRecorder` were two of the four `performance`
+    // used to claim (#149). Neither is covered -- BlazeMeter retired one and
+    // this tool has options for neither -- so they are named beside the cards
+    // instead, which is the same answer tdm has always got. A location
+    // carrying only those claims nothing, and an empty answer is read one
+    // level up as nobody having said.
+    expect(functionalitiesOf(["functionalApi", "proxyRecorder"], FUNCTIONALITIES))
+      .toEqual([]);
+    expect(unclaimedFuncIds(["performance", "functionalApi"], FUNCTIONALITIES,
+                            VOCABULARY)).toEqual(["functionalApi"]);
   });
 
   it("names the funcIds it has no options for, in the account's own words", () => {
@@ -391,8 +420,9 @@ describe("which functionality a location starts on", () => {
     // name `tdm` -- and naming it wrongly, or dropping it, are both worse than
     // showing what the location literally carries. `functionalApi` is the same
     // case with an account: the account retired it, locations still have it.
-    expect(unclaimedFuncIds([...UNMODELLED, "functionalApi"], FUNCTIONALITIES, NO_ACCOUNT))
-      .toEqual(UNMODELLED);
+    expect(unclaimedFuncIds([...UNMODELLED, "functionalApi"], FUNCTIONALITIES,
+                            NO_ACCOUNT))
+      .toEqual([...UNMODELLED, "functionalApi"]);
     expect(unclaimedFuncIds(["functionalApi", "tdm"], [SV], VOCABULARY))
       .toEqual(["functionalApi", "TDM Integration"]);
   });
@@ -401,9 +431,10 @@ describe("which functionality a location starts on", () => {
     // The acceptance test of "adding a functionality is a backend change": the
     // vocabulary gains an entry and the location starts on it.
     const served = [...FUNCTIONALITIES, SECRETS];
-    expect(startFunctionality(["secretsPrivateVault"], served)).toBe("secrets");
+    expect(startFunctionality(["secretsPrivateVault"], served))
+      .toBe("secretsPrivateVault");
     expect(functionalitiesOf(["secretsPrivateVault", "performance"], served))
-      .toEqual(["performance", "secrets"]);
+      .toEqual(["performance", "secretsPrivateVault"]);
   });
 
   it("claims nothing when the vocabulary has not arrived", () => {
@@ -422,23 +453,26 @@ describe("which functionalities a location runs", () => {
     // No account to read, so the declaration is the whole answer -- and it is
     // an answer, which is why this is never null.
     expect(enabledFunctionalities("manual", "performance", [])).toEqual(["performance"]);
-    expect(enabledFunctionalities("manual", "sv", ["performance"])).toEqual(["sv"]);
+    expect(enabledFunctionalities("manual", "mockServices", ["performance"]))
+      .toEqual(["mockServices"]);
     expect(enabledFunctionalities("manual", null, [])).toEqual([]);
   });
 
   it("keeps unanswered distinct from answered-none", () => {
     expect(enabledFunctionalities("connect", "performance", [])).toBe(null);
-    expect(enabledFunctionalities("connect", "performance", ["sv"])).toEqual(["sv"]);
+    expect(enabledFunctionalities("connect", "performance", ["mockServices"]))
+      .toEqual(["mockServices"]);
   });
 
   it("treats unanswered as running everything", () => {
     // The safe direction: a switch shown for a functionality that turns out not to
     // apply is corrected the moment the account answers, where one hidden on a
     // guess leaves a location with nowhere to configure what it does run.
-    expect(runsFunctionality(null, "sv")).toBe(true);
-    expect(runsFunctionality(["performance"], "sv")).toBe(false);
-    expect(runsFunctionality(["performance", "sv"], "sv")).toBe(true);
-    expect(runsFunctionality([], "sv")).toBe(false);
+    expect(runsFunctionality(null, "mockServices")).toBe(true);
+    expect(runsFunctionality(["performance"], "mockServices")).toBe(false);
+    expect(runsFunctionality(["performance", "mockServices"], "mockServices"))
+      .toBe(true);
+    expect(runsFunctionality([], "mockServices")).toBe(false);
   });
 });
 
@@ -462,26 +496,29 @@ describe("options set for a functionality the location does not run", () => {
     expect(notRunPatch(once, perfOnly)).toBe(null);
   });
 
-  it("leaves the shared groups and the functionalities that are run alone", () => {
-    // Registry belongs to no functionality, so no location is without it; the
-    // engine size belongs to performance, which this one runs.
-    expect(notRunPatch({ private_registry: "reg.corp/bzm",
-                         engine_cpu_limit: "2" }, perfOnly)).toBe(null);
+  it("leaves the shared groups alone", () => {
+    // Registry belongs to no functionality, so no location is without it.
+    expect(notRunPatch({ private_registry: "reg.corp/bzm" }, perfOnly))
+      .toBe(null);
   });
 
-  it("clears an engine size bound for a location that starts no engines", () => {
-    // The size is not a group any more (#132), so its clearing is notRunPatch's
-    // own clause: the options still travel (the sizing, an imported
-    // profile), generate() emits an explicit option over anything, and a
-    // mocks-only location has no engine for it to describe.
-    expect(notRunPatch({ engine_cpu_limit: "2", engine_mem_limit: "8Gi" },
-                       ["sv"]))
-      .toEqual({ engine_cpu_limit: null, engine_mem_limit: null });
-    // ...settling in one pass, like the group path.
-    expect(notRunPatch({ engine_cpu_limit: null, engine_mem_limit: null },
-                       ["sv"])).toBe(null);
-    // ...and never while nobody has answered.
-    expect(notRunPatch({ engine_cpu_limit: "2" }, null)).toBe(null);
+  it("never clears the pod limits, whatever the location runs", () => {
+    // #149. They were cleared for a location that ran no performance, on the
+    // reading that they size an engine and a mocks location has none. Crane
+    // applies KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to every pod it creates
+    // -- there is one pair and no per-functionality second one -- so cleared,
+    // an SV-only or GUI-only agent's pods land on crane's 250m/256Mi defaults,
+    // which is the silent failure this repo's LimitRange note is about.
+    const sized = { engine_cpu_limit: "2", engine_mem_limit: "8Gi" };
+    expect(notRunPatch(sized, ["mockServices"])).toBe(null);
+    expect(notRunPatch(sized, ["functionalGui"])).toBe(null);
+    expect(notRunPatch(sized, [])).toBe(null);
+    expect(notRunPatch(sized, null)).toBe(null);
+    // ...and a functionality's own options still go, in the same options dict:
+    // the two answers are separate, which is what stopped being true.
+    expect(notRunPatch({ ...sized, sv_ingress: "nginx" }, perfOnly))
+      .toEqual({ sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
+                 sv_istio_gateway: null });
   });
 
   it("clears nothing while nobody has answered", () => {
