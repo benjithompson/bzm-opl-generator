@@ -855,28 +855,6 @@ DESCRIPTIONS["opl_plan"] = (
     "heartbeat is the expected state until the manifests are applied.")
 
 
-def _sizings(args):
-    """One row per model this call was given a target for.
-
-    Flat arguments rather than the route's list of rows, and each named by the
-    model's own `target_field`/`figure_field`: those are the words the CLI
-    flags, the JSON keys and the planner's own refusals use, so a session told
-    `browsers_per_engine must be a whole number` can find what to change.
-    Performance is left out because `users` is capacity_plan's own argument.
-    """
-    rows = []
-    for fid, m in plan.SIZING_MODELS.items():
-        if m["target_field"] == "users":
-            continue
-        if args.get(m["target_field"]) in (None, ""):
-            continue
-        rows.append({"functionality": fid,
-                     "target": args.get(m["target_field"]),
-                     "figure": (args.get(m["figure_field"])
-                                if m["figure_field"] else None)})
-    return rows
-
-
 def _plan(action, args):
     if action == "capacity":
         # `users` is no longer required, for the reason /api/plan and the
@@ -891,7 +869,11 @@ def _plan(action, args):
             engine_mem=args.get("engine_mem"),
             engines_per_node=args.get("engines_per_node"),
             agents=args.get("agents"),
-            sizings=_sizings(args))
+            # One row per model this call named a target for, walked off
+            # plan.SIZING_MODELS -- the flat arguments here are that table's
+            # own field names, which is how the tool description was generated
+            # from it too.
+            sizings=plan.sizings_from(args))
 
     raise _unknown(action, PLAN_ACTIONS)
 

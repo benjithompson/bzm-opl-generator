@@ -319,15 +319,13 @@ def cmd_sv_expose(a):
 
 def cmd_plan(a):
     """Size the infrastructure a sizing needs, before any of it exists."""
-    # One row per model the command was given a target for. `--users` stays the
-    # performance model's own flag rather than becoming --performance: it is
-    # what every existing script and every doc calls it, and the planner takes
-    # it under that name too.
-    sizings = [{"functionality": plan.GUI, "target": a.browsers,
-                "figure": a.browsers_per_engine}] if a.browsers else []
-    if a.requests_per_second:
-        sizings.append({"functionality": plan.SV,
-                        "target": a.requests_per_second})
+    # One row per model the command was given a target for, off the planner's
+    # own table -- the flags below are its `target_field`/`figure_field` names,
+    # so the namespace is already keyed the way `sizings_from` reads. `--users`
+    # stays the performance model's own flag rather than becoming
+    # --performance: it is what every existing script and every doc calls it,
+    # and the planner takes it under that name too.
+    sizings = plan.sizings_from(vars(a))
     try:
         p = core.capacity_plan(
             a.users, vus_per_engine=a.vus_per_engine,
@@ -708,23 +706,37 @@ def main():
     # this field.
     pl.add_argument("--users", metavar="N",
                     help="virtual users the test has to reach")
-    pl.add_argument("--browsers", metavar="N",
-                    help="browser instances a GUI Functional suite runs at "
-                         "once. Sized in its own unit: browsers, not users")
-    pl.add_argument("--browsers-per-engine", dest="browsers_per_engine",
-                    metavar="N",
-                    help=f"browser instances one engine carries (default about "
-                         f"{plan.BASELINE_BROWSERS} for the "
-                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
-                         f"there). An estimate from the account owner, not a "
-                         f"measurement")
-    pl.add_argument("--requests-per-second", dest="requests_per_second",
-                    metavar="N",
-                    help="requests per second the virtual services have to "
-                         "serve. Stated in the plan and not sized from: how "
-                         "many a mock pod carries has not been measured, and "
-                         "nothing is assumed in its place")
+    # ...and the rest of the models, walked off plan.SIZING_MODELS rather than
+    # written out. The flag *is* the model's `target_field`, which is the name
+    # the planner's refusals use and the name `sizings_from` reads back out of
+    # the namespace, so a fourth model gets its flags by being added to that
+    # table -- as it already did for the route and the MCP tool. Performance's
+    # two are declared by hand above and below: `--users` is capacity_plan's own
+    # argument, and both carry help nothing in the table could supply.
+    for fid, m in plan.SIZING_MODELS.items():
+        if fid == plan.PERFORMANCE:
+            continue
+        target_help = (f"{m['unit']} to size for -- the {m['name']} sizing's "
+                       f"target, in its own unit")
+        if m["baseline"] is None:
+            # No measured per-pod figure, so the target is stated rather than
+            # sized from. Off `baseline`, because that is what says so.
+            target_help += (f". Stated in the plan and not sized from: how "
+                            f"many {m['unit']} one {m['pod']} carries has not "
+                            f"been measured, and nothing is assumed in its "
+                            f"place")
+        pl.add_argument("--" + m["target_field"].replace("_", "-"),
+                        dest=m["target_field"], metavar="N", help=target_help)
+        if not m["figure_field"]:
+            continue
+        pl.add_argument("--" + m["figure_field"].replace("_", "-"),
+                        dest=m["figure_field"], metavar="N",
+                        help=f"{m['figure_unit']} (default about "
+                             f"{m['baseline']} for the "
+                             f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
+                             f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled "
+                             f"from there). An estimate from the account "
+                             f"owner, not a measurement")
     pl.add_argument("--vus-per-engine", dest="vus_per_engine",
                     help=f"virtual users one engine carries (BlazeMeter's "
                          f"`threadsPerEngine`). Default is what an engine of "

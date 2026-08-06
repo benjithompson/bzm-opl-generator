@@ -16,7 +16,7 @@ import os
 import pytest
 import yaml
 
-from bzm_opl_gen import api, cli, core, generate as gen, livetest
+from bzm_opl_gen import api, cli, core, generate as gen, livetest, plan
 # The faked kubectl and pod shapes live with the cluster-reading tests; reused
 # rather than re-declared so every layer exercises the same stand-in binary.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
@@ -767,6 +767,58 @@ def test_plan_refuses_a_target_that_is_not_a_plan(monkeypatch):
     with pytest.raises(SystemExit) as caught:
         _run(monkeypatch, "plan", "--users", "0")
     assert "at least 1" in str(caught.value)
+
+
+def test_plan_offers_a_flag_for_every_sizing_model(monkeypatch, capsys):
+    """The flags are `plan.SIZING_MODELS`, walked -- not three strings written
+    out beside it.
+
+    Nothing held the command to that table, and the MCP server and the route
+    were already generated from it: a fourth model would have reached both of
+    them and not this. `--users` is the exception and stays one, because it is
+    capacity_plan's own argument rather than a row's target field."""
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "plan", "--help")
+    out = capsys.readouterr().out
+    for m in plan.SIZING_MODELS.values():
+        for field in (m["target_field"], m["figure_field"]):
+            # A model with no measured figure has no figure flag, for the same
+            # reason the card offers it no box: there is nothing to default.
+            if field:
+                assert "--" + field.replace("_", "-") in out
+
+
+def test_plan_sizes_every_model_it_offers(monkeypatch, capsys):
+    """...and each flag reaches the planner as its own model, in its own unit.
+    The help text above says the flag exists; this says it is wired to the row
+    the table names."""
+    flags = []
+    for fid, m in plan.SIZING_MODELS.items():
+        if fid != plan.PERFORMANCE:
+            flags += ["--" + m["target_field"].replace("_", "-"), "20"]
+    _run(monkeypatch, "plan", "--users", "5000", *flags)
+    out = capsys.readouterr().out
+    for m in plan.SIZING_MODELS.values():
+        assert m["unit"] in out
+
+
+def test_plan_refuses_a_target_of_zero_by_name(monkeypatch):
+    """Blank, absent and zero are three things. `if a.browsers:` read a typed 0
+    as a flag nobody passed, so a browser suite sized at zero silently planned
+    for the load test beside it."""
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "5000", "--browsers", "0")
+    assert "browsers must be at least 1" in str(caught.value)
+
+
+def test_plan_refuses_a_per_pod_figure_with_no_target(monkeypatch):
+    """`--browsers-per-engine 6` alone used to be dropped on the floor: the row
+    was built from the target, so a figure with nothing to apply it to sized
+    nothing and said nothing."""
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "plan", "--users", "5000",
+             "--browsers-per-engine", "6")
+    assert "browsers" in str(caught.value)
 
 
 def test_plan_engine_size_flags_match_generate_s(monkeypatch, capsys):

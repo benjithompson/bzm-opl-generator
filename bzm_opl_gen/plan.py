@@ -272,6 +272,39 @@ def _sizing_rows(users, vus_per_engine, sizings, cpu, mem):
                                               key=lambda g: order.index(g[0]))]
 
 
+def sizings_from(values):
+    """The `sizings` rows a surface's flat fields name, one per model.
+
+    Every surface that collects a sizing collects it as one field per model,
+    named by that model's own `target_field`/`figure_field`: those are the
+    words the CLI flag, the JSON key and this module's refusals all use, so a
+    caller told `browsers_per_engine must be a whole number` can find what to
+    change. Turning those fields into rows is the same walk each time, and the
+    command wrote it out by hand -- three flag names and two model constants,
+    so a fourth model reached the MCP tool and the route and not the command.
+
+    Performance is left out: `users` is capacity_plan's own argument, and every
+    caller with a single sizing has always had it under that name.
+
+    A row is built where the target **or** its figure was given, rather than
+    where the target is truthy. Blank, absent and zero are three things: `0` is
+    a target somebody typed, and belongs in a refusal naming the field rather
+    than being read as a flag nobody passed; and a figure supplied with no
+    target is a question, which the planner answers by name. Dropped, both were
+    silence.
+    """
+    rows = []
+    for fid, m in SIZING_MODELS.items():
+        if fid == PERFORMANCE:
+            continue
+        target = values.get(m["target_field"])
+        figure = values.get(m["figure_field"]) if m["figure_field"] else None
+        if not _given(target) and not _given(figure):
+            continue
+        rows.append({"functionality": fid, "target": target, "figure": figure})
+    return rows
+
+
 def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
                   engine_mem=None, engines_per_node=None, agents=None,
                   sizings=None):
