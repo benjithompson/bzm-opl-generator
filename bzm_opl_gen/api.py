@@ -187,6 +187,26 @@ class BzmClient:
     def private_location(self, harbor_id):
         return self.get(f"/private-locations/{harbor_id}")
 
+    def ship_versions(self, harbor_id, ship_id):
+        """The images this location is configured to run, and their versions.
+
+        `{"resources": {<resource id>: {dockerTag, version, imageRelativePath,
+        dockerRegistry, restartPolicy, minSlots, ...}}}`. It is the same call
+        crane makes at startup -- a dead token answers it 404, which is the
+        `Sleeping for 300` failure -- so the answer is what the agent will
+        actually pull, not what somebody thought it would.
+
+        **It needs no live agent.** Read against agents in state `empty` that
+        had never been online, which is what makes it usable at the moment a
+        bundle is generated: the funcIds decide the set, so a performance
+        location answers with three images and a GUI one names the exact browser
+        build its browser funcIds pin.
+
+        Per agent rather than per location because that is the route BlazeMeter
+        serves; every agent in a location answered identically.
+        """
+        return self.get(f"/private-locations/{harbor_id}/ships/{ship_id}/versions")
+
     def private_locations(self, account_id=None, workspace_id=None):
         """All private locations for a workspace or account. The endpoint
         ignores `offset`, so ask for one big page instead of paginating."""
