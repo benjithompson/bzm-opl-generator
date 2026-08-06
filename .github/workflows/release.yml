@@ -148,7 +148,7 @@ jobs:
       # it. `github-script` runs on the node the runner already uses for
       # checkout and setup-python, so it needs nothing installed.
       - name: publish
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
