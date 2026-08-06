@@ -41,7 +41,7 @@ bzm-opl-gen ui                              # opens the web UI
 
 `brew install pipx && pipx ensurepath` first if you don't have pipx;
 `uv tool install "bzm-opl-gen[ui]"` works identically. Upgrade with
-`pipx upgrade bzm-opl-gen`, and pin with `"bzm-opl-gen[ui]==0.3.1"`.
+`pipx upgrade bzm-opl-gen`, and pin with `"bzm-opl-gen[ui]==0.3.2"`.
 
 `[ui]` is the web page; `[mcp]` is the MCP server for an AI session
 ([docs/mcp.md](docs/mcp.md)), and `[ui,mcp]` installs both. Neither extra changes
@@ -54,17 +54,17 @@ dependencies at all.
 To track `main`, or to run a tag PyPI has not seen:
 
 ```
-pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.2"
 ```
 
-Drop `@v0.3.1` to track `main`; add `--force` to reinstall over an existing copy.
+Drop `@v0.3.2` to track `main`; add `--force` to reinstall over an existing copy.
 
 Every release also attaches the built wheel. Download it from the Releases page,
 or with `gh release download --repo benjithompson/bzm-opl-generator`, then
 install the file by its real name:
 
 ```
-pipx install './bzm_opl_gen-0.3.1-py3-none-any.whl[ui]'
+pipx install './bzm_opl_gen-0.3.2-py3-none-any.whl[ui]'
 ```
 
 Name the version rather than globbing it. Neither the shell (inside quotes) nor
@@ -238,8 +238,10 @@ to read before naming anything new.
 
 Bugs and feature requests go to
 [Issues](https://github.com/benjithompson/bzm-opl-generator/issues). Please
-don't report a security problem there — [SECURITY.md](SECURITY.md) says where
-instead.
+don't report a security problem there — a private-location AUTH_TOKEN is a
+credential, so use
+[a security advisory](https://github.com/benjithompson/bzm-opl-generator/security/advisories/new)
+instead, which stays private until it is published.
 
 This is an independent project, not a BlazeMeter product: it generates manifests
 *for* BlazeMeter private locations but carries no BlazeMeter support commitment.

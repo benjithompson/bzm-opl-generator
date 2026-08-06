@@ -11,6 +11,8 @@ anything that breaks.
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-08-06
+
 ### Added
 
 - **This is an open-source project now: Apache-2.0, and on PyPI.** `pipx install
@@ -311,6 +313,16 @@ anything that breaks.
   three this tool actually configures: Performance, GUI Functional and Service
   Virtualization. Anything else your location runs is still named on the
   configure step, with the note that nothing here generates or removes it.
+
+### Removed
+
+- **`SECURITY.md` and `CODE_OF_CONDUCT.md`.** Both were added on the way to
+  going public and neither earned its place on a single-maintainer project: the
+  code of conduct governed a community that does not exist yet, and the security
+  policy mostly restated what the README's Support section already says. Where
+  to report a vulnerability is unchanged and still stated -- a GitHub security
+  advisory, which stays private until published -- it is just said once now,
+  next to where bugs go.
 
 ## [0.3.1] — 2026-08-05
 
@@ -1477,7 +1489,8 @@ First packaged release.
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
 
-[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.1.0...v0.2.0
