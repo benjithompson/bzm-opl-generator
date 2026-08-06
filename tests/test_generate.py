@@ -1645,8 +1645,14 @@ def test_docker_scripts_are_valid_shell():
     invisible until somebody runs that branch on a customer's host."""
     import itertools
     import subprocess
-    for secret, ca, proxy, reg in itertools.product([True, False], repeat=4):
+    for secret, ca, proxy, reg, blank in itertools.product([True, False], repeat=5):
         o = dict(DOCKER, use_secret=secret)
+        if blank:
+            # A field left blank adds a refusal per variable, in whichever of
+            # the two files holds it -- and the pattern it greps for carries
+            # `<PLACEHOLDER>` and the message carries quotes, which is exactly
+            # the shape a quoting mistake hides in.
+            o["auth_token"] = gen.PLACEHOLDER
         if ca:
             o["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nx\n"
         if proxy:
@@ -1659,7 +1665,92 @@ def test_docker_scripts_are_valid_shell():
         sh = gen.generate(FACTS, o)["bzm-opl-agent.sh"]
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
-        assert r.returncode == 0, (secret, ca, proxy, reg, r.stderr)
+        assert r.returncode == 0, (secret, ca, proxy, reg, blank, r.stderr)
+
+
+def _run_bundle(tmp_path, files=None):
+    """Write a docker bundle out and run its script against a stub docker.
+    Called with no files, it re-runs whatever is in the directory now, which is
+    how the fill-it-in half of these tests is expressed.
+
+    A stub rather than a daemon, and it is the point of the test: what is being
+    checked is that the script refuses *before* it reaches `docker run`, so the
+    thing that has to be observable is the argument list docker was never given.
+    `docker ps` printing nothing is a host with no such container, which is the
+    branch every other check here is downstream of."""
+    import subprocess
+    for name, text in (files or {}).items():
+        (tmp_path / name).write_text(text)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    calls = tmp_path / "docker-calls"
+    (bin_dir / "docker").write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$1" >> "{calls}"\nexit 0\n')
+    (bin_dir / "docker").chmod(0o755)
+    r = subprocess.run(["sh", "bzm-opl-agent.sh"], cwd=tmp_path, text=True,
+                       capture_output=True,
+                       env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    made = calls.read_text().split() if calls.exists() else []
+    return r, made
+
+
+def test_docker_script_refuses_a_placeholder_before_starting_anything(tmp_path):
+    """The hole this covers is `auth_token`'s and it predates compose.
+
+    On Kubernetes the angle brackets are the guard -- the API server refuses the
+    object and names the field -- and that is what makes a blank field safe to
+    allow at all. `docker run` has no such opinion: an environment variable is a
+    string to it, so the marker used to reach crane, which answers 404 and logs
+    `Sleeping for 300` while looking like a slow boot. There is no API server on
+    this platform, so the check is in the artefact."""
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 1
+    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    # ...and the file to edit, which is the half a refusal without it leaves the
+    # reader to guess -- the credential is not in the script.
+    assert "Set it in bzm-opl-agent.env" in r.stderr
+    assert made == ["ps"], made           # nothing was started
+
+    # Filled in, the same bundle runs. The check reads the files as they stand
+    # rather than what was blank when this was generated, so there is no second
+    # step and nothing to delete: a guard that outlived its own fix would be a
+    # bundle that could never be finished by hand.
+    (tmp_path / "bzm-opl-agent.env").write_text("AUTH_TOKEN=" + "ab" * 32 + "\n")
+    r, made = _run_bundle(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "ps", "run"], made
+
+
+def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
+    """With `use_secret` off the value is in the script itself, so the check is
+    over its own run line -- anchored there, which is also what stops it
+    matching the marker in its own message two lines below."""
+    files = gen.generate(FACTS, {**DOCKER, "use_secret": False,
+                                 "auth_token": "", "private_registry": gen.PLACEHOLDER})
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 1
+    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    # Both files, because inline means the value is in both of the two that
+    # start this container and naming one sends somebody to fix half of it.
+    assert "Set it in bzm-opl-agent.sh and compose.yaml" in r.stderr
+    assert made == ["ps"], made
+    # The crane image carries it too and is deliberately not checked: a
+    # reference with `<` in it is refused by docker itself, from either route.
+    assert "<PLACEHOLDER>/crane" in files["bzm-opl-agent.sh"]
+
+
+def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
+    """Nothing is stated about a field nobody left blank. The check is emitted
+    per variable that carries the marker, so the ordinary bundle is the script
+    it was before this existed."""
+    files = gen.generate(FACTS, DOCKER)
+    assert gen.PLACEHOLDER not in files["bzm-opl-agent.sh"]
+    assert gen.PLACEHOLDER not in files[gen.DOCKER_COMPOSE_FILE]
+    assert "BZM_OPL_UNSET" not in files[gen.DOCKER_ENV_FILE]
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "run"], made
 
 
 def test_docker_use_secret_keeps_the_token_out_of_the_process_list():
@@ -1736,6 +1827,11 @@ COMPOSE_CASES = [
     {"proxy": {"http": "http://p:1", "https": "http://p:1",
                "username": "o'brien", "password": "a b"}},
     {"extra_env": {"PREFERRED_INTERFACE": "eth1"}},
+    # A field left blank, in each of the two files it can land in: the guard is
+    # a `${...:?}` carrying a sentence with punctuation in it, which is the
+    # shape a YAML quoting mistake hides in.
+    {"auth_token": gen.PLACEHOLDER},
+    {"auth_token": gen.PLACEHOLDER, "use_secret": False},
 ]
 
 
@@ -1864,6 +1960,62 @@ def test_compose_restates_the_fixed_half_of_the_command():
     with_ca = yaml.safe_load(docker_compose(ca_bundle="PEM\n"))["services"]["crane"]
     assert with_ca["volumes"][-1] == (
         f"${{CA_BUNDLE:-./{gen.DOCKER_CA_FILE}}}:{gen.DOCKER_CA_PATH}:ro")
+
+
+def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
+    """The other half of the refusal, and the reason it is not a README note.
+
+    Compose has no pre-flight and no shell of its own: a check inside the
+    container is one `docker compose up -d` never prints. What it does have is
+    interpolation, and `${X:?message}` aborts the command before anything is
+    created, naming the field's path in the file and then this message.
+    Verified live against a real compose (5.1.4):
+
+        error while interpolating services.crane.environment.AUTH_TOKEN:
+        required variable BZM_OPL_UNSET_AUTH_TOKEN is missing a value:
+        AUTH_TOKEN carries <PLACEHOLDER> -- ...
+
+    One wording for both routes, so a customer reads the same sentence about the
+    same variable and the same file whichever file they started from."""
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE)
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
+    # Split out, the credential is in the one file both routes read -- so that
+    # is where the guard sits. Compose interpolates env_file values; docker's
+    # own --env-file does not, and the script refuses the marker inside the
+    # message before that literal could reach a container.
+    env = files[gen.DOCKER_ENV_FILE]
+    assert env.startswith("# Read by docker --env-file")
+    assert f"AUTH_TOKEN=${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}" in env
+    for line in (wrong, todo):
+        assert line in files[gen.DOCKER_RUN_FILE]
+    # A guard in compose.yaml over a value living in the env file would go on
+    # refusing after somebody had filled it in -- nothing in that file can see
+    # that they had, and a check that outlives its own fix is worse than none.
+    assert "AUTH_TOKEN" not in yaml.safe_load(
+        files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]["environment"]
+
+
+def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
+    """Inline, the value is compose's own, so the guard is the value -- and both
+    files name both files, because an inline value is in both of the two that
+    start this container."""
+    where = f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}"
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where)
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": "", "use_secret": False})
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["environment"]["AUTH_TOKEN"] == (
+        f"${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}")
+    for line in (wrong, todo):
+        assert line in files[gen.DOCKER_RUN_FILE]
+    # The guard's variable is one nobody has. `${AUTH_TOKEN:?...}` would read the
+    # ambient environment, and `${HTTP_PROXY:?...}` would resolve itself away on
+    # the host most likely to have one -- leaving compose starting a bundle the
+    # script beside it refuses, which is the two routes disagreeing about
+    # whether the bundle is finished.
+    proxy = gen.generate(FACTS, {**DOCKER, "use_secret": False,
+                                 "proxy": {"http": gen.PLACEHOLDER}})
+    svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
 
 
 def test_docker_readme_offers_both_routes_and_says_to_pick_one():
