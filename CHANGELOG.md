@@ -41,6 +41,13 @@ anything that breaks.
   Virtualization agent carries no engine at all, and what those limits should be
   for a mock is not a figure this tool can state yet.
 
+- **Changing what a manually entered identity runs no longer hangs the page.**
+  Declaring a typed identity Service Virtualization and then changing your mind
+  left two rules fighting: one cleared the ingress because the bundle no longer
+  carried virtual services, the other put it straight back from the location
+  facts fetched for the *previous* declaration, and the browser tab locked up.
+  Both were reading the same question from two sources; they read one now.
+
 - **The environment list is the variables *this* location's agent reads.** It
   was filtered by platform and nothing else, so a performance-only Kubernetes
   location was offered nine variables it has no reader for: `DODUO_PORT` and the
@@ -58,6 +65,35 @@ anything that breaks.
   has been chosen yet, the whole reference is offered.
 
 ### Changed
+
+- **Entering an identity by hand declares everything it runs, not one thing.**
+  The configure step's *Enabled* control in manual entry was a radio button, so
+  a typed harbor id and ship id could be declared a Performance agent *or* a GUI
+  Functional one — never both. That was tenable while one card stood for four
+  funcIds; with one card per funcId it stopped being, because 71 of the 168
+  locations in one real account run Performance and GUI Functional together, and
+  the bundle it produced carried the wrong images for half of what the location
+  does. It is a checkbox now: tick what the identity runs.
+
+  Ticking two suggests one namespace — the first of them in the order the cards
+  are shown, which is the same tie-break a connected location carrying both
+  funcIds already uses — and a namespace you typed still wins over any
+  suggestion. A browser tab left open on this page starts over: the saved page
+  state records a *list* now, and a snapshot from before this release is dropped
+  rather than half-read.
+
+- **Service Virtualization is declared on its own, where you are deciding.** In
+  manual entry and in the create-location form, ticking Service Virtualization
+  clears Performance and GUI Functional, and ticking either of those clears it —
+  with the reason on screen before anything is ticked. The agent applies one CPU
+  and memory limit pair to *every* pod it creates, so engine sizing and mock
+  throughput cannot be set apart, and a Service Virtualization agent carries no
+  test engine at all: they are two different sizing problems sharing one number.
+
+  **A location that already runs both still generates.** Connected, the configure
+  step says what the mixture costs and nothing more — what a location *is* is
+  changed in BlazeMeter's own location settings, not here, so refusing to
+  generate for one would be refusing the only bundle it can have.
 
 - **`AUTO_KUBERNETES_UPDATE` is findable.** Reported as missing from the
   environment list; it was never missing — the bundle writes it itself, from

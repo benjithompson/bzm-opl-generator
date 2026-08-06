@@ -523,16 +523,17 @@ missing tools. The rest is what it cannot fix for you.
 
   **In manual entry the functionality is not a view at all — it is the
   declaration**
-  (#118). It names the funcId the typed identity is gathered for, which names
+  (#118). It names the funcIds the typed identity is gathered for, which name
   the images the bundle carries, and it was the one bundle-deciding input a
   refresh did not restore: an SV identity came back a performance one,
   `notRunPatch` wiped its `sv_*` options on the way, and the namespace
   suggestion rewrote a name generated into every manifest. So it is in the
-  snapshot (`session.declaredFunctionality`, null in connect mode structurally
-  rather than by convention), and **checked** against the served vocabulary
-  rather than trusted: a functionality no longer offered names no funcId, so it
-  is dropped and the page lands where a fresh manual session lands, rather than
-  gathering facts for nothing with no radio on to say so. Manual mode never
+  snapshot (`session.declaredFunctionalities`, empty in connect mode
+  structurally rather than by convention), and **checked** against the served
+  vocabulary rather than trusted: a functionality no longer offered names no
+  funcId, so it is dropped and, if nothing survives, the page lands where a
+  fresh manual session lands rather than
+  gathering facts for nothing with no box ticked to say so. Manual mode never
   reads a functionality back off
   `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
   reading them can only restate it, or lose it while `/api/functionalities` is
@@ -541,6 +542,42 @@ missing tools. The rest is what it cannot fix for you.
   `/api/func-ids`' `changes_images` as well, and an identity gathered for
   nothing while the *second* vocabulary was outstanding is a wait that reads as
   an answer.
+
+  **It is a list, and dropping one member must not drop the others** (#151). One
+  id was tenable while `performance` claimed four funcIds; after #149, 71 of the
+  168 locations in one real account run `performance` and `functionalGui`
+  together, so a single value described a location nobody would create. The
+  control is a checkbox per covered functionality (`toggleDeclared`, which keeps
+  the list in served order — these ids reach `manualFacts`, and a list that
+  reshuffles on a tick is a new request for a declaration that did not change).
+  Several ticked suggest **one** namespace, and the rule is `startFunctionality`
+  — the first in served order, the same tie-break a connected location carrying
+  both funcIds already uses, so a manual identity lands where the equivalent
+  connected one does. Emptying the list is allowed and *warned* rather than
+  refused: a checkbox that will not untick is the off-screen blocker in one
+  control.
+
+  **Service virtualization is exclusive, and only where a location is being
+  decided.** `sv.exclusiveWith` — manual entry and the create-location form —
+  clears the engine functionalities when SV is ticked and the other way round,
+  because crane applies **one** `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY`
+  pair to every pod it creates and an SV agent carries no taurus engine at all
+  (read off single-functionality locations' `/versions`: crane, group-gateway,
+  service-mock, no `v4`). Connect mode gets `sv.SV_MIXED`, a sentence and never
+  a refusal — `POST /api/locations/func-id` went in #113 because what a location
+  *is* belongs in BlazeMeter's own UI, so refusing to generate for a mixed one
+  would refuse the only bundle it can have. Derived from `ENGINE_FUNCTIONALITIES`
+  rather than a second list; a funcId neither side names (tdm, dataPublisher)
+  excludes nothing, because nothing here knows what those cost.
+
+  **`sv.required` conjoins `runs`, and that is what stops an effect loop.** It
+  used to be `location && !declined` on the reading that a demand implies the
+  bundle carries the functionality — true connected, where both come from
+  `facts.func_ids`, and false in manual entry, where `runs` is the *declaration*
+  and the funcIds are the facts fetched for the previous one, a debounce behind.
+  In that gap `notRunPatch` cleared `sv_ingress` and `sv.correction` re-seeded
+  it from the stale demand, forever: unticking Service virtualization hung the
+  page. Two writers, one question, two sources.
 
   **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
   not** (#123). It is seen at exactly two moments, both this page's own writes —

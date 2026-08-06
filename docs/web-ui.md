@@ -157,7 +157,7 @@ namespace can read the Secret — it is about a screen share and a screenshot.
 not in the browser, so reloading the page never actually dropped the
 connection — the page simply forgot. It now asks on load, and puts back the
 account, workspace, location, agent, step and options it was pointed at, plus
-what a manual session declared its identity to be. Each selection is re-applied only once the account has confirmed it
+what a manual session declared its identity to run. Each selection is re-applied only once the account has confirmed it
 still exists, so a location deleted since the last load comes back as nothing
 rather than as an id the page believes. **The AUTH_TOKEN is never written to
 browser storage** — see `session.strip` — because browser storage is a file in
@@ -247,14 +247,32 @@ silent for the other reason too — this *format* cannot serve that functionalit
 and the two answers are kept apart, because they have different remedies.
 
 **In manual entry the functionality is not a view of the options, it is the
-declaration.** With no account to read funcIds off, that card's radio is what
-says which of the three the typed identity is — a performance agent, a GUI
-functional one or a service-virtualization one. The card *is* the funcId, so
-that one answer decides the images the bundle carries and the namespace
+declaration.** With no account to read funcIds off, each card's **Enabled**
+checkbox is what says what the typed identity runs. The cards *are* the funcIds,
+so what is ticked decides the images the bundle carries and the namespace
 suggested for it. It is in the session snapshot for
 that reason: a refresh used to bring an SV identity back as a performance one,
 clearing its options on the way and rewriting the namespace generated into every
 manifest.
+
+**Tick as many as the identity runs** — a real account has 71 of its 168
+locations running Performance and GUI Functional together, so a control that
+could only say one described a location nobody would create. Ticking two suggests
+one namespace, not two: the first in the served order, which is the same
+tie-break a connected location carrying both funcIds already uses. A hand-typed
+namespace still wins over any of it. If a member of a restored declaration is no
+longer in the served vocabulary it is dropped and the rest stand; only when none
+of it survives does the page land where a fresh manual session lands.
+
+**Service virtualization is declared on its own.** Ticking it clears Performance
+and GUI Functional, and ticking either of those clears it, in manual entry and in
+the new-location form alike — the agent applies one CPU and memory limit pair to
+every pod it creates, so engine sizing and mock throughput cannot be set apart,
+and an SV agent carries no test engine at all. Both surfaces say so before
+anything is ticked. **Connected, a location that already runs both is warned
+about and never blocked**: what a location *is* is BlazeMeter's own UI's to
+change, so refusing to generate would be refusing the only bundle that location
+can have.
 
 A location carrying `mockServices` shows **Service virtualization** enabled with
 its group marked *required*, because a bundle without an ingress stalls at
