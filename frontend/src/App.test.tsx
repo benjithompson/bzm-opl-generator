@@ -150,6 +150,106 @@ test("a slow capacity answer for the previous account never lands under the new 
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
   });
 
+/** The account tree, with the rollup answering from `capacity`. Shared by the
+ *  two Refresh tests below: the rollup needs no workspace, no location and no
+ *  location list -- it is one read of the whole account. */
+function rollupApi(extra: Partial<Api>) {
+  return fakeApi({
+    keyDetect: async () => ({ candidates: [], active_key_id: null }),
+    keyStatus: async () => ({
+      connected: true, user: { email: "someone@example.com" },
+      default_account_id: 1, key_id: "key-1",
+    }),
+    accounts: async () => [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
+    workspaces: async () => [],
+    optionDefaults: async () => ({}),
+    funcIdVocabulary: async () => NO_VOCABULARY,
+    functionalities: async () => [],
+    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+    ...extra,
+  });
+}
+
+/** Open the rollup. Disabled until the key answers, so the click waits for the
+ *  same thing the user does. */
+async function openRollup() {
+  const tab = await screen.findByRole<HTMLButtonElement>(
+    "button", { name: /Account capacity/ });
+  await waitFor(() => expect(tab.disabled).toBe(false));
+  fireEvent.click(tab);
+}
+
+test("Refresh on the rollup drops the server's cache before re-reading", async () => {
+  const calls: string[] = [];
+  let vus = 500;
+  render(<App api={rollupApi({
+    refresh: async () => { calls.push("refresh"); return null; },
+    capacity: async (accountId: number) => {
+      calls.push("capacity");
+      return { ...capacityOf(accountId, "Alpha workspace"), rated_vus: vus };
+    },
+  })} />);
+
+  // The headline specifically: a location's own rating is on screen too, and
+  // the two figures are only distinguishable by where they are.
+  const headline = () => within(
+    screen.getByText("account rated VUs").parentElement!);
+  await openRollup();
+  await waitFor(() => expect(headline().getByText("500")).toBeTruthy());
+  expect(calls).toEqual(["capacity"]);
+
+  // Somebody raised a location's engines-per-agent while this view sat open.
+  vus = 900;
+  fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+  await waitFor(() => expect(headline().getByText("900")).toBeTruthy());
+  // The order is the whole point: served from the cache, this button would do
+  // nothing for a minute and say so in no way at all.
+  expect(calls).toEqual(["capacity", "refresh", "capacity"]);
+});
+
+test("a refreshed rollup for the previous account never lands under the new one",
+  async () => {
+    // The same guard the view's own effect has, in the shape a callback can
+    // have it: `live` is a closure over one run of an effect and a button
+    // outlives all of them. 1.3s on a 171-location account is plenty of time to
+    // change account in the drawer.
+    const pending: { id: number; settle: (c: Capacity) => void }[] = [];
+    render(<App api={rollupApi({
+      refresh: async () => null,
+      capacity: (id: number) => {
+        const d = deferred<Capacity>();
+        pending.push({ id, settle: d.settle });
+        return d.promise;
+      },
+    })} />);
+
+    await openRollup();
+    await waitFor(() => expect(pending.length).toBe(1));
+    await act(async () => { pending[0].settle(capacityOf(1, "Alpha workspace")); });
+    expect(await screen.findByText("Alpha workspace")).toBeTruthy();
+
+    // Refresh account 1, and leave its answer outstanding.
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(pending.length).toBe(2));
+
+    // Change account while it is in flight. That read answers first...
+    fireEvent.click(screen.getByTitle(/the key everything is read with/));
+    fireEvent.focus(screen.getByLabelText("Account"));
+    fireEvent.mouseDown(screen.getByText("Bravo (2)"));
+    await waitFor(() => expect(pending.length).toBe(3));
+    await act(async () => { pending[2].settle(capacityOf(2, "Bravo workspace")); });
+    expect(await screen.findByText("Bravo workspace")).toBeTruthy();
+
+    // ...and only then does the refresh, which is the ordering the guard is
+    // for. Awaited to the end of its own handlers: the unguarded version lands
+    // one microtask later, so an assertion made before that flush passes over a
+    // page about to be wrong.
+    await act(async () => { pending[1].settle(capacityOf(1, "Alpha workspace")); });
+    expect(screen.queryByText("Alpha workspace")).toBeNull();
+    expect(screen.queryByText("Bravo workspace")).not.toBeNull();
+  });
+
 test("the account menu stays up while both of its pickers are used", async () => {
   // It is one control narrowed twice -- an account, then a workspace inside it
   // -- so choosing the first is the middle of the job, not the end of it.
