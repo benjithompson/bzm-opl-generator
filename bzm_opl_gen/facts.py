@@ -353,6 +353,7 @@ def _inventory_entries(ships):
 
 def gather(client, harbor_id):
     harbor = client.private_location(harbor_id)
+    ships = harbor.get("ships", [])
     facts = {
         "harbor_id": harbor["id"],
         "harbor_name": harbor.get("name"),
@@ -388,9 +389,8 @@ def gather(client, harbor_id):
             "state": ship.get("state"),
             "installed_version": ship.get("installedVersion"),
             "last_heartbeat": ship.get("lastHeartBeat"),
-        } for ship in harbor.get("ships", [])],
+        } for ship in ships],
     }
-    ships = harbor.get("ships", [])
     resources, state, detail = _read_image_list(client, harbor_id, ships)
     facts["image_list"] = {
         "state": state,
