@@ -26,13 +26,13 @@ import { AgentEnvVar, SizingModel } from "./api";
 export const SIZING_MODELS: SizingModel[] = [
   { functionality: "performance", label: "Performance",
     unit: "virtual users", figure_unit: "virtual users per engine",
-    pods: "engines", measured: true },
+    pods: "engines", measured: true, example_target: 5000 },
   { functionality: "functionalGui", label: "GUI Functional",
     unit: "browser instances", figure_unit: "browser instances per engine",
-    pods: "engines", measured: true },
+    pods: "engines", measured: true, example_target: 20 },
   { functionality: "mockServices", label: "Service Virtualization",
     unit: "requests per second", figure_unit: "requests per second per core",
-    pods: "mock pods", measured: false },
+    pods: "mock pods", measured: false, example_target: 2000 },
 ];
 
 /** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.

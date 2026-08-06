@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 
+import { SIZING_MODELS } from "./fixtures";
 import { EMPTY_PLAN_INPUTS, PlanInputs } from "./usePlan";
-import { DEFAULT_SIZINGS, remove, save, sizingNamed } from "./sizings";
+import { defaultSizings, remove, save, sizingNamed } from "./sizings";
+
+// The defaults are built from the served models, so the fixture standing in for
+// /api/sizing-models is what they are built from here -- the one copy of that
+// table, held equal to the planner's by test_server.py.
+const DEFAULT_SIZINGS = defaultSizings(SIZING_MODELS);
 
 const perf = (users: string): PlanInputs => ({
   ...EMPTY_PLAN_INPUTS, functionalities: ["performance"],
@@ -9,15 +15,21 @@ const perf = (users: string): PlanInputs => ({
 });
 
 describe("the sizings a session remembers", () => {
-  test("ships with one per functionality, so the control is never empty", () => {
+  test("is one sizing per served model, so the control is never empty", () => {
     expect(DEFAULT_SIZINGS.map((s) => s.name).length).toBeGreaterThan(0);
     for (const s of DEFAULT_SIZINGS) {
       expect(s.inputs.functionalities.length).toBeGreaterThan(0);
     }
     // Every default names exactly what it sizes, so picking one from a list of
-    // names is picking a functionality as much as a number.
+    // names is picking a functionality as much as a number -- and the set is
+    // the served models', not three ids written out here. A fourth model
+    // arrives in this list by being added to plan.SIZING_MODELS.
     expect(new Set(DEFAULT_SIZINGS.flatMap((s) => s.inputs.functionalities)))
-      .toEqual(new Set(["performance", "functionalGui", "mockServices"]));
+      .toEqual(new Set(SIZING_MODELS.map((m) => m.functionality)));
+    // ...and its target is the model's own example, in the model's own unit.
+    expect(DEFAULT_SIZINGS.map((s) => s.name))
+      .toEqual(SIZING_MODELS.map(
+        (m) => `${m.label}: ${m.example_target.toLocaleString()} ${m.unit}`));
   });
 
   test("a default is a starting point and can be edited away from", () => {

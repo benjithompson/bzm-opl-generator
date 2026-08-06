@@ -42,7 +42,10 @@ import {
 // reason the first time the version is bumped -- see session.VERSION.
 import * as session from "./session";
 import { EMPTY_PLAN_INPUTS } from "./usePlan";
-import { DEFAULT_SIZINGS } from "./sizings";
+// The sizings a fresh page offers: one per served model, so they are built from
+// the same fixture the page's own /api/sizing-models stub answers with.
+import { defaultSizings } from "./sizings";
+const DEFAULT_SIZINGS = defaultSizings(SIZING_MODELS);
 
 afterEach(cleanup);
 // The page writes its selections to sessionStorage, and one test's would
@@ -2536,7 +2539,7 @@ test("a sizing saved under a name survives a refresh, and picking it fills the f
     // Written to the session snapshot by the page's own writer, which is what
     // the next render reads.
     await waitFor(() => expect(
-      session.load()?.sizings.some((s) => s.name === "Black Friday")).toBe(true));
+      session.load()?.sizings?.some((s) => s.name === "Black Friday")).toBe(true));
     unmount();
 
     // The refresh.

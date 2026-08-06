@@ -65,7 +65,7 @@ import { CapacityView } from "./CapacityView";
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
 // Sizings saved under a name, and the ones the page ships with. Plain data,
 // like the session snapshot it is stored in.
-import { DEFAULT_SIZINGS, SavedSizing } from "./sizings";
+import { defaultSizings, SavedSizing } from "./sizings";
 import { AgentPanel } from "./steps/AgentPanel";
 // The sizing: step 1's first card, and the planner that used to be a view of
 // its own. See Sizing for why it moved.
@@ -333,10 +333,16 @@ export default function App({ api }: { api: Api }) {
   // the other keyless vocabularies, because sizing is the question somebody
   // opens this page with before they have an account to connect it to.
   const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
-  // Sizings saved under a name. The defaults are seeded here rather than merged
-  // in wherever they are read, so deleting one stays deleted -- a default that
-  // came back on the next load would be a list nobody could edit.
-  const [savedSizings, setSavedSizings] = useState<SavedSizing[]>(DEFAULT_SIZINGS);
+  // Sizings saved under a name, and **null until something has decided them**.
+  // The defaults are one per served model (`defaultSizings`), so they cannot be
+  // the initial value -- the models arrive from /api/sizing-models -- and they
+  // are seeded once rather than merged in wherever the list is read, so
+  // deleting one stays deleted. Which is the whole reason for the null: an
+  // empty list is a list somebody emptied, and filling that one back up is the
+  // "a default came back on the next load" this codebase keeps apart from
+  // "nobody has said yet". It is the snapshot's null too, so a refresh in the
+  // gap before the models land restores the gap rather than an answer.
+  const [savedSizings, setSavedSizings] = useState<SavedSizing[] | null>(null);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
   // download would carry. Read rather than re-derived here -- the rule has four
@@ -371,7 +377,13 @@ export default function App({ api }: { api: Api }) {
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
-    api.sizingModels().then(setSizingModels).catch(() => {});
+    api.sizingModels().then((ms) => {
+      setSizingModels(ms);
+      // ...and the sizings to offer before anybody has saved one, which are one
+      // per model and so cannot exist until this lands. `?? ` and never a
+      // length test: a restored empty list is an answer.
+      setSavedSizings((s) => s ?? defaultSizings(ms));
+    }).catch(() => {});
 
     // The key lives in the server process, so a refresh never disconnected
     // anything -- the page just forgot. Ask, and put back what it was pointed
@@ -1555,7 +1567,7 @@ export default function App({ api }: { api: Api }) {
             <Sizing
               api={api} ask={profileAsk} models={sizingModels}
               inputs={planInputs} setInputs={setPlanInputs}
-              saved={savedSizings} setSaved={setSavedSizings}
+              saved={savedSizings ?? []} setSaved={setSavedSizings}
               /* The engine size and the engines per node are the bundle's own
                  options, edited here as well as in the Configure step's Sizing
                  group: the profile is sized for the engine the manifests ask

@@ -1168,7 +1168,13 @@ def sizing_models():
              "figure_field": m["figure_field"],
              "figure_unit": m["figure_unit"],
              "measured": m["baseline"] is not None,
-             "pods": m["pods"]}
+             "pods": m["pods"],
+             # A sizing to offer before anybody has typed one. Served rather
+             # than written on the page for the reason the units are: a fourth
+             # model has to arrive with an example of its own, and a number
+             # invented in TypeScript for a unit it has just been told about is
+             # a recommendation nobody made.
+             "example_target": m["example_target"]}
             for fid, m in plan.SIZING_MODELS.items()]
 
 

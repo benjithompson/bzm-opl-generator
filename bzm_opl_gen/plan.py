@@ -95,6 +95,13 @@ PERFORMANCE, GUI, SV = "performance", "functionalGui", "mockServices"
 # these by -- the CLI flag, the JSON key, the label on the card -- so a refusal
 # names the field somebody typed into rather than the model it belongs to.
 #
+# `example_target` is a starting point and never a recommendation: nothing here
+# knows what a customer runs. It exists so a surface offering saved sizings has
+# one per model before anybody has typed a number, and so all three units have
+# been seen once -- which the page cannot supply for itself, because a figure
+# invented in TypeScript for a model it was only just told about is the one
+# thing this whole table is arranged to prevent.
+#
 # `name`, `runs` and `asks` are this module's own prose and not the account's
 # display names: a planner that reached core.FUNCTIONALITIES for a word in a
 # sentence would reach an account vocabulary, and reaching nothing is the
@@ -105,6 +112,7 @@ SIZING_MODELS = {
         "name": "performance",
         "unit": "virtual users",
         "target_field": "users",
+        "example_target": 5000,
         "figure_field": "vus_per_engine",
         "figure_unit": "virtual users per engine",
         "baseline": BASELINE_VUS,
@@ -116,6 +124,7 @@ SIZING_MODELS = {
         "name": "GUI functional",
         "unit": "browser instances",
         "target_field": "browsers",
+        "example_target": 20,
         "figure_field": "browsers_per_engine",
         "figure_unit": "browser instances per engine",
         "baseline": BASELINE_BROWSERS,
@@ -127,6 +136,7 @@ SIZING_MODELS = {
         "name": "service virtualization",
         "unit": "requests per second",
         "target_field": "requests_per_second",
+        "example_target": 2000,
         # No figure field, and that is the absence rather than an omission: see
         # _unmeasured_note. A caller offering one would be sizing mock pods,
         # which every number after the pod count here is not about.

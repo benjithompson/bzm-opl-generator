@@ -135,7 +135,8 @@ export interface Session {
    *  and somebody who refreshes while sizing a run must not come back to an
    *  empty target. */
   plan: PlanInputs;
-  /** The sizings saved under a name, defaults included.
+  /** The sizings saved under a name, defaults included -- and **null where
+   *  nothing has decided them yet**.
    *
    *  Here rather than in localStorage, and that is the issue's choice as much
    *  as this file's: a sizing belongs to the session that is sizing, in the way
@@ -143,8 +144,15 @@ export interface Session {
    *  of those live. It survives a refresh and not a closed tab. The defaults
    *  are stored alongside the saved ones rather than merged in on read, so
    *  removing one stays removed -- a default that came back on the next load
-   *  would be a list nobody could edit. */
-  sizings: SavedSizing[];
+   *  would be a list nobody could edit.
+   *
+   *  Which is why null is here and is not the same as `[]`: the defaults are
+   *  one per served sizing model, so there is a moment on every load before
+   *  /api/sizing-models lands when nothing has decided this list. Written as
+   *  `[]` that moment would restore as "somebody deleted them all", and the
+   *  defaults would never appear again. A snapshot from before this field could
+   *  be null always holds an array, which reads as decided, which it was. */
+  sizings: SavedSizing[] | null;
 }
 
 

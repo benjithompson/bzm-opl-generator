@@ -1816,6 +1816,23 @@ def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
         == ["true" if m["measured"] else "false" for m in served]
     assert re.findall(r'unit: "([^"]+)"', body.group(1)) \
         == [v for m in served for v in (m["unit"], m["figure_unit"])]
+    # ...and the two the guard used to leave out, both of which render:
+    # `label` names the card and the "sized for the X sizing" line, and `pods`
+    # is the word the plan counts in -- "mock pods", never assume engines.
+    assert re.findall(r'label: "([^"]+)"', body.group(1)) \
+        == [m["label"] for m in served]
+    assert re.findall(r'pods: "([^"]+)"', body.group(1)) \
+        == [m["pods"] for m in served]
+    # The default saved sizings are built from this, so a fixture inventing one
+    # would be the page inventing a target -- the thing the served column
+    # exists to stop.
+    assert re.findall(r"example_target: (\d+)", body.group(1)) \
+        == [str(m["example_target"]) for m in served]
+    # Every field the page's type declares, so a field added to SizingModel and
+    # not to this fixture fails here rather than in whatever renders it.
+    assert set(re.findall(r"(\w+):", body.group(1))) == {
+        "functionality", "label", "unit", "figure_unit", "pods", "measured",
+        "example_target"}
 
 
 def test_the_engine_rating_is_answered_for_every_sizing_model():

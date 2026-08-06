@@ -89,6 +89,12 @@ export interface SizingModel {
    *  no taurus engine at all. */
   pods: string;
   measured: boolean;
+  /** A target to offer before anybody has typed one — the sizing this model's
+   *  default saved sizing carries. A starting point and never a
+   *  recommendation; served, because a number invented here for a model the
+   *  page has only just been told about is exactly the figure this tool never
+   *  measured. */
+  example_target: number;
 }
 
 /** What one pod of a given engine size is rated for, from /api/engine-vus.

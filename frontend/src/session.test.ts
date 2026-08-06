@@ -93,8 +93,8 @@ describe("what is remembered", () => {
     expect(back?.plan.functionalities).toEqual(["performance", "functionalGui"]);
     // A saved sizing survives a refresh whole: its name, and everything the
     // fields would be filled with by picking it.
-    expect(back?.sizings[0].name).toBe("Black Friday");
-    expect(back?.sizings[0].inputs.targets.performance).toBe("40000");
+    expect(back?.sizings?.[0].name).toBe("Black Friday");
+    expect(back?.sizings?.[0].inputs.targets.performance).toBe("40000");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

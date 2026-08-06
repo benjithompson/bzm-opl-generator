@@ -16,6 +16,7 @@
 // Plain data in, data out, like session.ts beside it: no React, so the rules
 // are testable without a DOM, and the shape is one the session snapshot can
 // hold as it stands.
+import { SizingModel } from "./api";
 import { EMPTY_PLAN_INPUTS, PlanInputs } from "./usePlan";
 
 export interface SavedSizing {
@@ -25,31 +26,41 @@ export interface SavedSizing {
   inputs: PlanInputs;
 }
 
-const sizing = (name: string, functionality: string,
-                target: string): SavedSizing => ({
-  name,
-  inputs: { ...EMPTY_PLAN_INPUTS, functionalities: [functionality],
-            targets: { [functionality]: target }, figures: {} },
-});
-
-/** One per functionality, so the list is never empty and every unit has been
- *  seen once before anybody types a number.
+/** One sizing per served model, so the list is never empty and every unit has
+ *  been seen once before anybody types a number.
  *
- *  Starting points and not recommendations: nothing here knows what a customer
- *  runs, and the figures each model then applies are the ones the plan states
- *  as assumed. They exist so the control has something in it and so the three
- *  units are discoverable, which they are not when the card opens on a single
- *  empty box.
+ *  Mapped over the models rather than written out. It was three records naming
+ *  all three funcIds and inventing a target for each, under a comment claiming
+ *  "one per functionality" -- which is a promise a file on this side cannot
+ *  keep: a fourth model reaches the card by being added to `plan.SIZING_MODELS`
+ *  and would have reached this list never. The target is that table's
+ *  `example_target` for the same reason: a figure invented here, for a unit
+ *  the page has only just been told the name of, is the one thing this whole
+ *  card is arranged not to do.
+ *
+ *  Starting points and not recommendations: nothing anywhere knows what a
+ *  customer runs, and the per-pod figures each model then applies are the ones
+ *  the plan states as assumed. They exist so the control has something in it
+ *  and so the units are discoverable, which they are not when the card opens on
+ *  a single empty box.
  *
  *  The service-virtualization one carries a request rate and produces no plan,
  *  which is the honest demonstration of the thing this whole card has to say:
  *  the figure that would size it has not been measured, so the server refuses
  *  rather than inventing one, and the refusal is the explanation. */
-export const DEFAULT_SIZINGS: SavedSizing[] = [
-  sizing("Load test, 5,000 users", "performance", "5000"),
-  sizing("Browser suite, 20 in parallel", "functionalGui", "20"),
-  sizing("Virtual services, 2,000 rps", "mockServices", "2000"),
-];
+export function defaultSizings(models: SizingModel[]): SavedSizing[] {
+  return models.map((m) => ({
+    // Named from what it is, so a model nobody here has heard of still arrives
+    // with a name that says which unit it is in.
+    name: `${m.label}: ${m.example_target.toLocaleString()} ${m.unit}`,
+    inputs: {
+      ...EMPTY_PLAN_INPUTS,
+      functionalities: [m.functionality],
+      targets: { [m.functionality]: String(m.example_target) },
+      figures: {},
+    },
+  }));
+}
 
 /** The inputs saved under this name, or null if none were.
  *
