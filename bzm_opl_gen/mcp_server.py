@@ -43,7 +43,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from . import (__version__, core, doctor, generate as gen_mod,
-               facts as facts_mod, livetest)
+               facts as facts_mod, livetest, plan)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -61,7 +61,7 @@ Kubernetes or OpenShift, from a real account rather than from a template.
 
 The path through it:
 
-  0. opl_plan capacity          -- how much cluster a load target needs. Before
+  0. opl_plan capacity          -- how much cluster a sizing needs. Before
                                    everything else, and needs none of it: no
                                    key, no account, no cluster.
   1. opl_location list          -- find the location, then `show` for its
@@ -82,13 +82,15 @@ theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
 opl_agent livetest, which is off unless its own variable is set.)
 
-Sizing before there is a cluster: `opl_plan capacity` turns a load target
-("we need to test 5,000 virtual users") into engines, nodes and a machine size,
-plus a `document` written for the platform team who has to provide them. That
-request is often the actual blocker -- a customer with no cluster cannot start
-at step 1, and this is what unblocks them. It assumes how many virtual users
-one engine carries unless told; say that the figure is an assumption whenever
-you report what it produced.
+Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
+to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
+machine size, plus a `document` written for the platform team who has to provide
+them. That request is often the actual blocker -- a customer with no cluster
+cannot start at step 1, and this is what unblocks them. Each covered
+functionality is sized in its own unit and not everything has a figure: how many
+virtual users an engine carries is assumed unless told, and how many requests
+per second a mock pod serves has never been measured here at all. Say which
+whenever you report what it produced; the answer says so field by field.
 
 The vocabulary, and it is worth keeping to: a **location** holds **agents**, an
 agent runs **engines**, and each engine drives some number of **virtual users**.
@@ -343,7 +345,11 @@ DESCRIPTIONS["opl_location"] = (
     "  show         -- one location with its agents in full {harbor_id}\n"
     "  whoami       -- who this API key is, and its default account\n"
     "  create       -- a new private location {name, account_id, "
-    "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
+    "workspace_id, func_ids?, slots?, threads_per_engine?}. func_ids are "
+    f"BlazeMeter's own, and the ones this tool configures a bundle for are "
+    f"{', '.join(core.covered_func_ids())} (default performance). An account "
+    "carries others -- proxyRecorder, tdm, delphix -- which a location may "
+    "hold and nothing here generates for.\n"
     "  create_agent -- a new agent in a location {harbor_id, name}"
     + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
     "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "
@@ -558,11 +564,14 @@ FACTS_ACTIONS = ("gather", "manual")
 
 DESCRIPTIONS["opl_facts"] = (
     "The account facts a bundle is generated from: image references, "
-    "ids, and what the location is enabled for.\n"
+    "ids, and which functionalities the location is enabled for.\n"
     "  gather -- read them from the account {harbor_id}\n"
     "  manual -- build the same structure from ids read off the "
     "BlazeMeter UI {harbor_id, ship_id, func_ids?}, for a customer "
     "whose account you cannot reach\n"
+    "func_ids decide which images the bundle carries, so `manual` needs the "
+    f"ones the location really runs -- {', '.join(core.covered_func_ids())} "
+    "are the ones this tool configures for, and the default is performance.\n"
     "Pass the `facts` object straight to opl_bundle and opl_preflight.")
 
 
@@ -787,46 +796,102 @@ def _bundle_warnings(options):
 
 PLAN_ACTIONS = ("capacity",)
 
+# The three sizing models, stated from the table rather than transcribed
+# beside it. #154 added two of them and this description went on describing
+# virtual users alone, which for an audience that has no other documentation is
+# not an incomplete sentence but the whole of what could be asked for: a GUI
+# Functional customer has no load target at all. Generated, so a fourth model
+# reaches this session by being added to plan.SIZING_MODELS.
+_PLAN_ARGS = ", ".join(
+    f"{m['target_field']}?" + (f", {m['figure_field']}?" if m["figure_field"]
+                               else "")
+    for m in plan.SIZING_MODELS.values())
+
+_PLAN_MODELS = "".join(
+    f"  {m['target_field']:<20} -- {m['unit']}, for {m['name']}. "
+    + (f"{m['figure_field']} is how many one pod carries; unset, what a pod "
+       f"that size is rated for is assumed and the answer says which.\n"
+       if m["figure_field"] else
+       f"Stated, never sized: no {m['figure_unit']} figure has been measured "
+       f"here and none is invented, so this target reaches no pod count. "
+       f"Asked on its own it is a refusal rather than a plan with a number "
+       f"nobody measured in it.\n")
+    for m in plan.SIZING_MODELS.values())
+
 DESCRIPTIONS["opl_plan"] = (
-    "How much infrastructure a load target needs, before any of it "
-    "exists.\n"
-    "  capacity -- {users, vus_per_engine?, engine_cpu?, engine_mem?, "
+    "How much infrastructure a sizing needs, before any of it exists.\n"
+    f"  capacity -- {{{_PLAN_ARGS}, engine_cpu?, engine_mem?, "
     "engines_per_node?, agents?}\n"
     "The one tool here that reaches nothing: no API key, no account, no "
-    "cluster. Use it when someone asks 'what would we need to test N "
-    "users?' -- typically before there is a cluster to deploy to, "
-    "because the answer is what they raise the request for one with.\n"
+    "cluster. Use it when someone asks 'what would we need to run this?' "
+    "-- typically before there is a cluster to deploy to, because the "
+    "answer is what they raise the request for one with.\n"
     "It returns the numbers AND `document`, a ready-to-send "
     "infrastructure request written for a platform team that has never "
     "heard of BlazeMeter. Offer that document -- it is the deliverable, "
     "not a formatting of the numbers.\n"
-    "`users` is virtual users. A location holds agents, an agent runs "
-    "engines, and each engine drives some number of virtual users -- "
-    "that is the vocabulary to answer in.\n"
+    "Three sizings, each asked for in its own unit. At least one:\n"
+    + _PLAN_MODELS +
+    "Where several are given, the largest pod count decides the pool and "
+    "`driven_by` names which -- one agent applies a single CPU/memory "
+    "pair to every pod it creates, so these are three routes to a count "
+    "of pods of one size, not three sizes. Two workloads running at once "
+    "want the counts added.\n"
+    "A location holds agents, an agent runs engines, and each engine "
+    "drives some number of virtual users -- that is the vocabulary to "
+    "answer in.\n"
     "`slots` is engines per *agent*, not per location, so a location's "
     "concurrency is agents x slots and `agents` divides the run. Pass "
     "how many agents will serve it; the returned `location.slots` is "
     "already the per-agent figure.\n"
-    "`vus_per_engine` is the input everything multiplies by and the one "
-    "thing arithmetic cannot reach: it depends on what the script does "
-    "between requests. Unset, what an engine of that size is rated for "
-    "is assumed and `vus_per_engine_assumed` says so -- pass on that "
-    "qualifier rather than reporting the node count as measured.\n"
+    "Every per-pod figure is a property of the workload rather than of "
+    "the pod -- what the script does between requests, what the browser "
+    "renders -- so each row says whether its figure was supplied, "
+    "assumed or never measured, and `vus_per_engine_assumed` says it for "
+    "the load target. Pass that qualifier on rather than reporting the "
+    "node count as measured.\n"
     "Nothing here waits for a cluster: the location and its agent can "
     "be created in BlazeMeter now, and an agent that has never sent a "
     "heartbeat is the expected state until the manifests are applied.")
 
 
+def _sizings(args):
+    """One row per model this call was given a target for.
+
+    Flat arguments rather than the route's list of rows, and each named by the
+    model's own `target_field`/`figure_field`: those are the words the CLI
+    flags, the JSON keys and the planner's own refusals use, so a session told
+    `browsers_per_engine must be a whole number` can find what to change.
+    Performance is left out because `users` is capacity_plan's own argument.
+    """
+    rows = []
+    for fid, m in plan.SIZING_MODELS.items():
+        if m["target_field"] == "users":
+            continue
+        if args.get(m["target_field"]) in (None, ""):
+            continue
+        rows.append({"functionality": fid,
+                     "target": args.get(m["target_field"]),
+                     "figure": (args.get(m["figure_field"])
+                                if m["figure_field"] else None)})
+    return rows
+
+
 def _plan(action, args):
     if action == "capacity":
-        users, = _need(args, "users")
+        # `users` is no longer required, for the reason /api/plan and the
+        # command dropped it in #154: it is the performance model's target, not
+        # the only sizing there is. A call that names none of the three is
+        # still a refusal, and it is the planner's -- which names `users`,
+        # the field a caller with one sizing has.
         return core.capacity_plan(
-            users,
+            args.get("users"),
             vus_per_engine=args.get("vus_per_engine"),
             engine_cpu=args.get("engine_cpu"),
             engine_mem=args.get("engine_mem"),
             engines_per_node=args.get("engines_per_node"),
-            agents=args.get("agents"))
+            agents=args.get("agents"),
+            sizings=_sizings(args))
 
     raise _unknown(action, PLAN_ACTIONS)
 

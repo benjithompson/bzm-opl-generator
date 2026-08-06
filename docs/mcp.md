@@ -82,20 +82,34 @@ still answers to `create-ship`: a session reads the action list out of the tool
 description at call time, but the prompt somebody saved does not update itself.
 
 **`opl_plan capacity` is the one tool that reaches nothing** — no key, no
-account, no cluster. It answers "what would we need to test N users?", which is
+account, no cluster. It answers "what would we need to run this?", which is
 routinely asked by a customer who cannot start the rest of the path because the
 cluster is a ticket nobody has raised. Alongside the numbers it returns
 `document`: a ready-to-send infrastructure request written for a platform team
 that has never heard of BlazeMeter. Offer that document — it is the deliverable,
 not a formatting of the numbers.
 
-Its `vus_per_engine` is the figure everything multiplies by and the one thing
+**Three sizings, each in its own unit**, and at least one of them: `users` for
+virtual users, `browsers` for browser instances, `requests_per_second` for
+service virtualization. Where several are given the largest pod count decides
+the pool and `driven_by` names which — one agent applies a single CPU/memory
+pair to every pod it creates, so these are three routes to a count of pods of
+one size rather than three sizes.
+
+Not every unit has a figure behind it, and each row says which it had.
+`vus_per_engine` is what a load target multiplies by and the one thing
 arithmetic cannot reach, since it depends on what the script does between
-requests. Unset, what an engine of that size is rated for is assumed and
-`vus_per_engine_assumed` comes back `true`; pass that qualifier on rather than
-reporting the node count as measured. Answer in BlazeMeter's own hierarchy — a
-location holds agents, an agent runs engines, each engine drives virtual users —
-and note that neither the location nor its agent needs a cluster to exist.
+requests; unset, what an engine of that size is rated for is assumed and
+`vus_per_engine_assumed` comes back `true`. `browsers_per_engine` works the same
+way. A request rate has *neither*: how many requests per second one core of a
+mock pod serves has never been measured here, nothing is assumed in its place,
+and so that target is stated in the request document and sizes nothing — asked
+for on its own it is a refusal rather than a plan with an invented number in it.
+Pass the qualifier on rather than reporting a node count as measured.
+
+Answer in BlazeMeter's own hierarchy — a location holds agents, an agent runs
+engines, each engine drives virtual users — and note that neither the location
+nor its agent needs a cluster to exist.
 [capacity-planning.md](capacity-planning.md) has the rest.
 
 **Listing locations is deliberately compact.** `opl_location list` gives one

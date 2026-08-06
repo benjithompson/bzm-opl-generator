@@ -20,7 +20,7 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, generate as gen_mod, mcp_server
+from bzm_opl_gen import core, generate as gen_mod, mcp_server, plan
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
@@ -1096,6 +1096,72 @@ def test_plan_marks_the_assumption_a_model_would_otherwise_report_as_fact():
                   {"users": 5000, "vus_per_engine": 250})
     assert supplied["vus_per_engine_assumed"] is False
     assert supplied["engines"] == 20
+
+
+def test_a_session_can_size_each_model_in_its_own_unit():
+    """Three models since #154, and this surface offered one.
+
+    A GUI Functional customer has no load target at all, so `users` being the
+    only argument was not a description that was merely incomplete -- it was the
+    whole of what could be asked for. Each model's target is named by the field
+    the table declares, which is the word the refusals and the CLI flags use.
+    """
+    browsers = plan.SIZING_MODELS[plan.GUI]["target_field"]
+    body = ok("opl_plan", "capacity", {browsers: 40})
+    assert body["driven_by"] == plan.GUI
+    assert body["engines"] == 10
+    # No load test was sized, so there is no load target to report.
+    assert body["users"] is None
+    assert [r["functionality"] for r in body["sizings"]] == [plan.GUI]
+
+
+def test_a_supplied_per_pod_figure_is_not_reported_as_assumed():
+    """The rule `vus_per_engine_assumed` carries, one model along: what a pod
+    of that size is rated for is an assumption, and what the caller measured is
+    not."""
+    m = plan.SIZING_MODELS[plan.GUI]
+    body = ok("opl_plan", "capacity",
+              {m["target_field"]: 40, m["figure_field"]: 10})
+    row, = body["sizings"]
+    assert row["per_pod"] == 10 and row["per_pod_source"] == "supplied"
+    assert body["engines"] == 4
+
+
+def test_sizing_service_virtualization_alone_is_a_refusal_not_a_number():
+    """The third state, on the surface likeliest to report it as a fact: how
+    many requests per second one core of a mock pod serves has never been
+    measured here, and a figure invented in a tool response arrives as a
+    cluster somebody buys."""
+    text = err("opl_plan", "capacity",
+               {plan.SIZING_MODELS[plan.SV]["target_field"]: 5000})
+    assert "has not been measured" in text
+    assert "5,000 requests per second" in text
+
+
+def test_the_capacity_description_states_all_three_models_and_the_missing_figure():
+    """This audience has the description and nothing else, so one that speaks
+    only of virtual users answers two of the three customers about somebody
+    else's workload -- and would leave the unmeasured figure looking like an
+    argument nobody had found yet rather than a figure nobody has."""
+    text = listing()["tools"]["opl_plan"].description
+    for m in plan.SIZING_MODELS.values():
+        assert m["target_field"] in text, m
+        assert m["unit"] in text, m
+        if m["figure_field"]:
+            assert m["figure_field"] in text, m
+    assert "measured" in text, "the figure nobody has is not stated"
+
+
+def test_the_two_actions_that_take_func_ids_say_which_ones_exist():
+    """A funcId decides what a location is and which images its bundle carries,
+    and both actions took one with nothing anywhere naming a valid value. The
+    vocabulary is the account's since #148 and this tool covers three of it, so
+    the three are named from `covered_func_ids` rather than transcribed."""
+    tools = listing()["tools"]
+    for name in ("opl_location", "opl_facts"):
+        text = tools[name].description
+        for fid in core.covered_func_ids():
+            assert fid in text, f"{name} does not name {fid}"
 
 
 def test_plan_refuses_a_target_it_cannot_plan():

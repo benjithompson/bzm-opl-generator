@@ -54,6 +54,19 @@ anything that breaks.
 
 ### Changed
 
+- **An MCP session can size all three functionalities, and is told so.**
+  `opl_plan capacity` required `users` and described virtual users alone, which
+  for a GUI Functional or Service Virtualization customer was not an incomplete
+  sentence but the whole of what could be asked for. It now takes `browsers`
+  (with `browsers_per_engine`) and `requests_per_second` beside `users`, any of
+  them alone or together, exactly as `bzm-opl-gen plan` and the web UI already
+  did — and its description states each model in its own unit, including the
+  request-rate figure that has never been measured and so sizes nothing.
+
+  `opl_location create` and `opl_facts manual` also now name the funcIds a
+  bundle can be configured for, rather than taking `func_ids` with nothing
+  anywhere naming a valid value.
+
 - **The MCP server says agent, not ship.** One deployment inside a private
   location is an *agent*, and for a session driving this server the tool
   descriptions and the docs it serves are the whole documentation — so being
