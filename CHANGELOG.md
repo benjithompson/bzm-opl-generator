@@ -11,6 +11,47 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **The planner sizes all three covered functionalities, each in its own unit.**
+  It only ever spoke virtual users, and two of the three are not asked for in
+  virtual users at all. `bzm-opl-gen plan` now takes `--browsers` and
+  `--requests-per-second` beside `--users`, any of them alone or together, and
+  the sizing card on step 1 of the web UI has a tick and a target for each.
+
+  | functionality | asked for in | what one 2 CPU / 8Gi pod carries |
+  |---|---|---|
+  | Performance | virtual users | 500 — BlazeMeter's own figure |
+  | GUI Functional | browser instances | about 4 — the account owner's estimate |
+  | Service Virtualization | requests per second | **nothing measured** |
+
+  **One pod size across all of them**, because crane applies a single
+  `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY` pair to every pod it creates and
+  there is no second one. So where several are sized, the largest decides the
+  pool and the plan names which — in the summary, in the request document, and
+  as `driven_by` in the JSON. Largest and not the sum: if a load test and a
+  browser suite will run at the same time, add the pod counts and size for the
+  total, which the plan says as well.
+
+  **Service virtualization is stated, not sized.** How many requests per second
+  one core of a mock pod serves has not been measured, and nothing here can
+  measure it — it is a property of the mocks, in the way virtual users per
+  engine is a property of the script. Nothing is assumed in its place and there
+  is no flag to supply one. A request rate is carried into the ask at the top of
+  the request document, into the assumptions section saying why it produced no
+  arithmetic, and into the warnings; sized on its own it is a refusal carrying
+  that sentence rather than a plan with an invented number in it.
+
+  `--users` is therefore no longer required — it is the performance model's
+  target, not the only sizing there is — though a run with none of the three is
+  still refused, naming it.
+
+- **Named sizings on the web UI's step 1.** Save what is in the fields under a
+  name and pick it back later; three ship as starting points, one per
+  functionality. They last as long as the browser session, like everything else
+  that page remembers. Picking one applies nothing: it fills the fields, and the
+  fields are the sizing.
+
 ### Changed
 
 - **A bundle's images come from the location itself, and no longer wait for an

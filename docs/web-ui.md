@@ -43,11 +43,24 @@ step 2 and step 3 as much as in step 1.
 ## Step 1 — Capacity & agent
 
 **The sizing is the first card**, above the locations the run might go
-to. It sizes the load — a virtual user target, virtual users per engine, the
-engine size, how many engines a node holds — and answers in engines, nodes and
+to. Tick the functionalities this run is for and give each one a target **in its
+own unit** — virtual users, browser instances, requests per second — then the
+engine size and how many engines a node holds. It answers in engines, nodes and
 peak vCPU, with the request document to raise the infrastructure ticket with, to
 download, copy or read here ([capacity-planning.md](capacity-planning.md)).
 *Edit* opens it downward; the summary line stays put.
+
+Where several are ticked the pool is sized for the largest of them and the card
+says which. **Service Virtualization has no per-pod figure box**, because no
+requests-per-second-per-core figure has ever been measured here: its target is
+carried into the request and stated, and a sizing with nothing else in it comes
+back as the reason rather than as a node count.
+
+**Saved sizings** sit at the top: pick one to fill the fields, or name what is
+in them now and save it. Three ship as starting points, one per functionality.
+They last as long as the browser session does, like everything else this page
+remembers, and picking one applies nothing — it fills the fields, and the fields
+*are* the sizing.
 
 It reaches nothing — no key, no account, no cluster — which is why it renders on
 a page nobody has connected, and why it is *first* rather than a view of its own:
@@ -56,7 +69,7 @@ in the drawer the first read as an alternative to the second, with its answer to
 be carried across by hand. It has no *agents* field on purpose: on Kubernetes an
 agent is a cluster, so you raise `slots` and let the node pool scale. The engine
 size it plans against is the bundle's own option rather than a copy of one, so
-the profile and the manifests cannot drift apart.
+the sizing and the manifests cannot drift apart.
 
 Under it, where the harbor id, ship id and token come from: **Connect to
 BlazeMeter**, or **Enter values manually** for an account nobody here can reach.
@@ -94,13 +107,13 @@ to the one that is selected and to nothing else. The case is the correction
 rather than the setup — a location built for 500 virtual users an engine that a
 real run says should be 1,000.
 
-There is no calculator in here and no *Apply*: the profile above fills these
+There is no calculator in here and no *Apply*: the sizing above fills these
 fields and they stay editable. A calculator of its own was a third place the same
 four numbers were worked out, and filling a field applies nothing, so a button to
-do it sat between the profile and the only control here that costs anything.
+do it sat between the sizing and the only control here that costs anything.
 **Save** is that control, and nothing in this panel reaches the account without
 it. `slots` is engines per *agent*, so a location's concurrency is agents ×
-slots, and the row divides the profile by the number of agents this location has.
+slots, and the row divides the sizing by the number of agents this location has.
 
 None of those four values is in a manifest, so changing one needs no
 regenerate, no re-apply and no restart; it applies to the next test that

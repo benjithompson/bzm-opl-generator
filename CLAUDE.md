@@ -196,6 +196,27 @@ missing tools. The rest is what it cannot fix for you.
   supplied and one defaulted. Warnings are plain prose — no backticks, no `--`
   — because they render as Markdown in the document and as text in the panel.
 
+- **Three sizing models, one pod size, and one of the three has no figure**
+  (#154). `plan.SIZING_MODELS` holds what each covered functionality is *asked
+  for* in — virtual users, browser instances, requests per second — and what one
+  pod of the chosen size carries. One pod size because crane applies a single
+  limits pair to every pod it creates, so where several are sized the largest
+  decides and `driven_by` names it; largest and **not** the sum, which the plan
+  warns about. **`baseline: None` is the load-bearing entry.** Requests per
+  second per core has not been measured, so a service-virtualization sizing
+  carries a target, `pods: None` and `per_pod_source: "unmeasured"` — a *third*
+  value beside supplied and assumed, and the same rule as everything else here:
+  a figure nobody has and a figure this tool chose must not share a
+  representation. It drives nothing, and there is no flag or field to supply
+  one — a mock-pod count would size a pool that every number after it calls
+  engines. Sized alone it is a `ValueError` carrying `_unmeasured_note`, which is
+  the one wording of that sentence and is shown **once per surface** (the
+  document drops it from Worth knowing, having already made it an assumption).
+  Don't fill the None in, and don't reuse the performance ratio for it. The card
+  renders the models from `/api/sizing-models` rather than from three field
+  groups in TypeScript — same rule as `DOCKER_IGNORED`, same single
+  `fixtures.ts` copy held equal by `test_server.py`.
+
 - **`slots` is engines per *agent*, not per location.** BlazeMeter's own UI
   calls it "Engines per agent", so a location's concurrency is `agents x slots`;
   real accounts lean on it (17 agents at slots=1; 2 agents at slots=10).
