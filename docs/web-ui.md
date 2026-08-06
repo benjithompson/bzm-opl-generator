@@ -229,17 +229,22 @@ filling a labeled ConfigMap, and anywhere else it emits an empty one nothing
 ever fills, leaving a bundle that reads as configured while the agent trusts
 nothing extra.
 
-**A functionality the location does not run is stated, never configured.** The
-card says so and names the funcId to add in BlazeMeter (Settings → Private
-Locations), and that functionality's options leave the page — cleared, not just hidden, because
-`generate` refuses an `sv_ingress` with no subdomain whatever the location runs,
-so a hidden row would only move the blocker to the server. Turning a funcId on
-was offered here once and is not any more: it changes what the location *is*,
-which is BlazeMeter's own UI's to do, unlike this page's two writes to an agent's
-credential and a location's concurrency. A card can be silent for the other
-reason too — this *format* cannot serve that functionality — and the two answers
-are
-kept apart, because they have different remedies.
+**A functionality the location does not run is not on the step at all.** It was
+stated for a while — a card naming the funcId to add in BlazeMeter (Settings →
+Private Locations) — which is a true sentence about the location and nothing the
+reader of this step can act on, and on a performance location it was half the
+section. So the card, its options and its rail entry go together. The options are
+*cleared*, not just hidden, because `generate` refuses an `sv_ingress` with no
+subdomain whatever the location runs, so a hidden row would only move the blocker
+to the server. Manual entry is the exception, and structurally: there the card
+*is* the declaration, so filtering it out would remove the control that answers
+the question.
+
+Turning a funcId on was offered here once and is not any more: it changes what
+the location *is*, which is BlazeMeter's own UI's to do, unlike this page's two
+writes to an agent's credential and a location's concurrency. A card can be
+silent for the other reason too — this *format* cannot serve that functionality —
+and the two answers are kept apart, because they have different remedies.
 
 **In manual entry the functionality is not a view of the options, it is the
 declaration.** With no account to read funcIds off, that card's radio is what
