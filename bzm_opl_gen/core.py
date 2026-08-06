@@ -393,6 +393,63 @@ def location_runnable(location):
     return bool(location.get("slots") and location.get("threadsPerEngine"))
 
 
+# The slots a functionality needs before BlazeMeter will create the location at
+# all, keyed by funcId. One entry, found on a live POST (#159): the constraint
+# is not in the private-location object's documentation, and every fixture here
+# answers a create the account never saw, so nothing offline could have found
+# it. `slots=1` is this tool's default on all three surfaces, so every GUI
+# Functional location it made was refused.
+#
+# `message` is BlazeMeter's own sentence, transcribed rather than paraphrased,
+# because a customer who meets this in BlazeMeter's UI meets those words -- and
+# the two halves either side of it are ours, since the sentence says what is
+# wrong and not what to do about it ("greater than 1" is one reading away from
+# 1.5). Raising the default instead was the tempting fix and is the one this
+# must not be: `slots` is engines per *agent* and a real cost (accounts run 17
+# agents at slots=1), so a location that quietly asked for twice the
+# concurrency somebody chose would be the silent setting DOCKER_IGNORED exists
+# to prevent.
+SLOT_MINIMUMS = {
+    "functionalGui": {
+        "label": "GUI Functional",
+        "minimum": 2,
+        "message": ("The option Parallel engine runs must be greater than 1 "
+                    "for a Private Location with the GUI Functional "
+                    "Functionality enabled."),
+    },
+}
+
+
+def slot_minimums():
+    """The per-functionality slot minimums, as {funcId: {label, minimum,
+    message}}.
+
+    Served (`/api/slot-minimums`) rather than restated by each caller, for the
+    reason DOCKER_IGNORED is: the create-location form has to state the rule
+    *before* the account does, and a copy in TypeScript is how a number found
+    live and a number typed on a page stop being the same number.
+    """
+    return SLOT_MINIMUMS
+
+
+def slots_refusal(func_ids, slots):
+    """Why BlazeMeter would refuse this location, or None if it would not.
+
+    A function of the two things the form holds -- the funcIds chosen and the
+    number typed -- so the answer is the same one whether it is reached before
+    a POST here or on a keystroke in the browser. None rather than "" for the
+    same reason `create_location`'s warning is: the caller shows what it is
+    given and does not decide when the sentence applies.
+    """
+    for func_id in func_ids or ():
+        rule = SLOT_MINIMUMS.get(func_id)
+        if rule and (slots or 0) < rule["minimum"]:
+            return (f"{rule['message']} Create this location with "
+                    f"slots={rule['minimum']} or more, or leave "
+                    f"{rule['label']} off it.")
+    return None
+
+
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
@@ -405,7 +462,15 @@ def create_location(client, name, account_id, workspace_id,
 
     `warning` is None for a runnable location, so a caller shows what it is
     given rather than deciding when the sentence applies.
+
+    A slot minimum is the other half and is a *refusal* rather than a warning,
+    because the account will not make this location at all -- see
+    SLOT_MINIMUMS. Before the POST, so the sentence names the field instead of
+    being BlazeMeter's 400 relayed after a write that did not happen.
     """
+    refusal = slots_refusal(func_ids, slots)
+    if refusal:
+        raise BadRequest(refusal)
     loc = _upstream(client.create_private_location, name, account_id,
                     [workspace_id], func_ids=list(func_ids), slots=slots,
                     threads_per_engine=threads_per_engine)
