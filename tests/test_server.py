@@ -1051,6 +1051,46 @@ def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     assert all(c["label"] for c in body)
 
 
+def _ts_type_fields(text, name):
+    """The field names of an `export type X = {...}` in TypeScript source.
+
+    Block comments first, because a `/** ... */` inside the braces is prose and
+    prose has colons in it."""
+    body = re.search(rf"export type {name} = \{{(.*?)\n\}};", text, re.S)
+    assert body, f"{name} not found in api.ts -- was it renamed or moved?"
+    return set(re.findall(r"(?:^|;)\s*(\w+)\??:",
+                          re.sub(r"/\*.*?\*/", "", body.group(1), flags=re.S)))
+
+
+def test_the_pages_type_for_the_vocabulary_is_the_shape_this_route_serves(monkeypatch):
+    """The page declares what /api/func-ids answers, and nothing but a reader's
+    memory held the two together (#160).
+
+    They came apart the moment the envelope did: the route started answering
+    `{source, choices}` and `api.ts` went on declaring an array, so the client
+    typed a payload it no longer receives. TypeScript cannot catch that -- the
+    shape is asserted at the fetch and never checked against anything -- and the
+    page's own tests cannot either, because their fake answers whatever the type
+    says. It surfaces in a browser, as a vocabulary that reads as empty.
+
+    Fields, not values: what a row *means* is tested above and on the page. This
+    is the join, and it is exactly the join `fixtures.ts` gets for the two
+    served tables that are copied rather than fetched.
+    """
+    connect(monkeypatch, FakeClient())
+    text = (pathlib.Path(__file__).resolve().parent.parent
+            / "frontend" / "src" / "api.ts").read_text()
+    body = client.get("/api/func-ids?account_id=291446").json()
+
+    assert _ts_type_fields(text, "FuncIdVocabulary") == set(body)
+    assert _ts_type_fields(text, "FuncIdChoice") == set(body["choices"][0])
+    # ...and the two answers `source` can take are the two the page branches on,
+    # because a third would land as a string nothing recognised.
+    assert re.search(r'source: "account" \| "baseline";', text), \
+        "FuncIdVocabulary.source no longer names both sources"
+    assert {core.func_ids()["source"], body["source"]} == {"baseline", "account"}
+
+
 def test_the_vocabulary_is_reachable_with_no_account_at_all():
     """The page asks on mount, before a key exists; manual entry never has an
     account. `account_id` is therefore optional, and the answer with none is the

@@ -319,12 +319,18 @@ const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
  *  tool has no options for. Keyless it is the three covered ones only, which is
  *  what NO_ACCOUNT stands in for. */
 const VOCABULARY: FuncIdChoice[] = [
-  { id: "performance", label: "Performance", changes_images: true, covered: true },
-  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true },
-  { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true },
-  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false },
-  { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false },
-  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false },
+  { id: "performance", label: "Performance", changes_images: true, covered: true,
+    sub_func_ids: [] },
+  { id: "functionalGui", label: "GUI Functional", changes_images: true, covered: true,
+    sub_func_ids: [] },
+  { id: "mockServices", label: "Service Virtualization", changes_images: true, covered: true,
+    sub_func_ids: [] },
+  { id: "tdm", label: "TDM Integration", changes_images: false, covered: false,
+    sub_func_ids: [] },
+  { id: "dataPublisher", label: "Data Orchestration", changes_images: false, covered: false,
+    sub_func_ids: [] },
+  { id: "delphix", label: "Delphix Integration", changes_images: false, covered: false,
+    sub_func_ids: [] },
 ];
 const NO_ACCOUNT: FuncIdChoice[] = VOCABULARY.filter((c) => c.covered);
 

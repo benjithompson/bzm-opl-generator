@@ -436,8 +436,10 @@ export const api = {
   optionDefaults: () => req<Options>("GET", "/api/option-defaults"),
   /** The funcId vocabulary. `accountId` is optional and the page uses both
    *  answers: the covered baseline on mount, when there is no key to ask with,
-   *  and the account's own list the moment one is chosen. */
-  funcIdChoices: (accountId?: number) => req<FuncIdChoice[]>(
+   *  and the account's own list the moment one is chosen — which is why the
+   *  answer says which of the two it is rather than leaving the caller to
+   *  remember (FuncIdVocabulary). */
+  funcIdVocabulary: (accountId?: number) => req<FuncIdVocabulary>(
     "GET", accountId ? `/api/func-ids?account_id=${accountId}` : "/api/func-ids"),
   functionalities: () => req<Functionality[]>("GET", "/api/functionalities"),
   svConstants: () => req<SvConstants>("GET", "/api/sv-constants"),
@@ -572,9 +574,33 @@ export type SvConstants = {
  *  `changes_images` is false for a funcId that needs the same images as one
  *  already offered. Creating a location keeps the full list, because BlazeMeter
  *  distinguishes them there; the manual form, where the only thing a funcId
- *  does is pick images, offers only the ones that change the answer. */
+ *  does is pick images, offers only the ones that change the answer.
+ *
+ *  `sub_func_ids` are the funcIds that are *parameters* of this one rather than
+ *  functionalities of their own -- `functionalGui` carries 117 of them, the
+ *  browser pins `chrome:default`, `firefox:139`, `safari:15`. They arrive in a
+ *  location's `funcIds` beside the parent, and under the parent here because
+ *  the row that knows which functionality a pin belongs to is the only one that
+ *  can say. Always present, `[]` where a functionality has none: absence would
+ *  be a third answer nobody defined (#160). */
 export type FuncIdChoice = {
   id: string; label: string; changes_images: boolean; covered: boolean;
+  sub_func_ids: string[];
+};
+
+/** ...and the envelope the vocabulary arrives in, which says which of the two
+ *  answers above this is.
+ *
+ *  `source` exists because a funcId *missing* from `choices` means opposite
+ *  things in them. Against the account, missing is retired -- BlazeMeter
+ *  stopped serving it and the locations predating the removal still carry it.
+ *  Against the baseline it means nothing at all: the baseline is the three
+ *  covered funcIds, and every other one an account has is missing from it too.
+ *  A caller that had to remember which call it made would be one refactor from
+ *  saying "retired" about a vocabulary nobody read. */
+export type FuncIdVocabulary = {
+  source: "account" | "baseline";
+  choices: FuncIdChoice[];
 };
 
 /** How reading the namespace ended. The watch panel is the only thing in this
