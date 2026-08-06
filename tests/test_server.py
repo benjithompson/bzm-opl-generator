@@ -954,6 +954,35 @@ def test_agent_env_is_served_as_what_is_left_after_the_options():
         assert v["type"] in env_mod.TYPES
         assert set(v["platforms"]) <= {"kubernetes", "docker"}
         assert v["summary"]
+        assert isinstance(v["functionalities"], list)
+
+
+def test_agent_env_is_scoped_to_what_the_location_runs():
+    """...and the other half of the same question, which the route has to be
+    asked: which functionality reads the variable (#150).
+
+    The parameter is optional and absent is not empty, which is the whole
+    reason it is a query string rather than a required field: the page asks
+    once on mount with no location chosen and gets the reference whole, then
+    asks again for the location it is generating for. An empty value is a
+    location that runs nothing this tool covers, which is a different sentence
+    and gets a different answer.
+    """
+    whole = {v["name"] for v in client.get("/api/agent-env").json()}
+    perf = {v["name"] for v in
+            client.get("/api/agent-env?func_ids=performance").json()}
+    assert perf < whole
+    assert "VERIFY_SSL" in perf
+    assert "DODUO_PORT" in whole and "DODUO_PORT" not in perf
+
+    # Several, comma-separated, the way a location carries several funcIds.
+    two = {v["name"] for v in client.get(
+        "/api/agent-env?func_ids=performance,functionalGui").json()}
+    assert "DODUO_PORT" in two
+
+    # Absent, and answered-empty, are not the same read.
+    empty = {v["name"] for v in client.get("/api/agent-env?func_ids=").json()}
+    assert "VERIFY_SSL" in empty and "DODUO_PORT" not in empty
 
 
 def test_the_pages_copy_of_the_env_name_rule_is_the_generators():

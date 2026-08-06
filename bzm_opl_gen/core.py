@@ -1807,27 +1807,50 @@ def reserved_env():
             for name in sorted(gen_mod.RESERVED_ENV)}
 
 
-def agent_env():
-    """The agent variables `extra_env` can usefully carry: BlazeMeter's own
-    documented reference, minus every name this generator already writes.
+def agent_env(func_ids=None):
+    """The agent variables `extra_env` can usefully carry on a location running
+    `func_ids`: BlazeMeter's own documented reference, minus every name this
+    generator already writes, minus everything that reaches a functionality this
+    location does not run.
 
-    The subtraction is the point, and it happens here rather than in the table.
-    `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN, the proxy trio,
-    the engine limits and the rest of RESERVED_ENV included -- because each of
-    those already has a control of its own on the configure step, and this list
-    is what is *left*: the variables with no setting here, which is the only
-    reason `extra_env` exists. Declaring only the leftovers would be the same
-    table kept twice, and an option removed later would take its variable out of
-    the reference instead of handing it back.
+    The subtraction is the point, and both halves of it happen here rather than
+    in the table. `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN,
+    the proxy trio, the engine limits and the rest of RESERVED_ENV included --
+    because each of those already has a control of its own on the configure
+    step, and this list is what is *left*: the variables with no setting here,
+    which is the only reason `extra_env` exists. Declaring only the leftovers
+    would be the same table kept twice, and an option removed later would take
+    its variable out of the reference instead of handing it back. Filtering by
+    functionality at the same point is what puts the CLI, the MCP server and the
+    page on one answer: a table declared per location would be the reference
+    written once per location.
+
+    `func_ids` is the location's own -- functionality ids *are* funcIds
+    (#149) -- and the three states are three:
+
+    - `None` for nobody having said, which offers everything. It is what the
+      page mounts in, before a key is pasted or a location picked, and it is
+      the direction that shows a field too many rather than hiding one somebody
+      needs. `runsFunctionality` reads an unanswered enablement the same way.
+    - a list, which offers the variables no functionality claims plus the ones
+      claimed by a functionality in it. An id nothing claims -- `tdm`,
+      `delphix`, the funcIds real accounts carry that this tool has no options
+      for -- narrows nothing, because the filter reads what a tag claims rather
+      than what a location holds.
+    - `[]`, which is a location running nothing this tool covers. It still runs
+      an agent, so the agent-wide variables stay and the tagged ones go.
 
     Each record carries the name, the type a control is chosen from, which
-    platforms document it, the agent's own default and an example. Types are
-    `agent_env.TYPES`; a caller that meets one it does not know should fall back
-    to a text box rather than hide the row, for the reason an empty
-    docker_ignored() means "everything applies".
+    platforms document it, which functionalities read it, the agent's own
+    default and an example. Types are `agent_env.TYPES`; a caller that meets one
+    it does not know should fall back to a text box rather than hide the row,
+    for the reason an empty docker_ignored() means "everything applies".
     """
+    runs = None if func_ids is None else set(func_ids)
     return [dict(v) for v in agent_env_mod.AGENT_ENV
-            if v["name"] not in gen_mod.RESERVED_ENV]
+            if v["name"] not in gen_mod.RESERVED_ENV
+            and (runs is None or not v["functionalities"]
+                 or bool(runs & set(v["functionalities"])))]
 
 
 def sv_constants():

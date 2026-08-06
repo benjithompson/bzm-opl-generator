@@ -798,8 +798,17 @@ def reserved_env():
 
 
 @app.get("/api/agent-env", description=core.agent_env.__doc__)
-def agent_env():
-    return core.agent_env()
+def agent_env(func_ids: Optional[str] = None):
+    """The location's funcIds, comma-separated, or the parameter left off.
+
+    A string rather than a repeated parameter so that *absent* and *empty* stay
+    two answers -- `?func_ids=` is a location running nothing this tool covers,
+    and leaving it off is nobody having said yet. FastAPI would collapse both
+    to `[]` for a `List[str]` query, which is this repo's oldest bug wearing a
+    framework default (see the "could not read" section of CLAUDE.md).
+    """
+    return core.agent_env(
+        None if func_ids is None else [f for f in func_ids.split(",") if f])
 
 
 # -- SPA ----------------------------------------------------------------------
