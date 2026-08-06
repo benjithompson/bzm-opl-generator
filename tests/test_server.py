@@ -731,7 +731,7 @@ def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
     TypeScript."""
     connect(monkeypatch, FakeClient())
     by_id = {r["id"]: r for r in
-             client.get("/api/func-ids?account_id=291446").json()}
+             client.get("/api/func-ids?account_id=291446").json()["choices"]}
     for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
     # A funcId whose images no bundle selects on. Offered, because the location
@@ -1041,7 +1041,7 @@ def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     it. The account is the vocabulary, so a funcId it adds is selectable with no
     edit here and one it retires leaves the form on its own."""
     connect(monkeypatch, FakeClient())
-    body = client.get("/api/func-ids?account_id=291446").json()
+    body = client.get("/api/func-ids?account_id=291446").json()["choices"]
     ids = [c["id"] for c in body]
 
     assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
@@ -1056,7 +1056,7 @@ def test_the_vocabulary_is_reachable_with_no_account_at_all():
     account. `account_id` is therefore optional, and the answer with none is the
     three funcIds this tool covers, under the names the account would give
     them."""
-    body = client.get("/api/func-ids").json()
+    body = client.get("/api/func-ids").json()["choices"]
     assert [(c["id"], c["label"], c["covered"]) for c in body] == [
         ("performance", "Performance", True),
         ("functionalGui", "GUI Functional", True),
@@ -1073,7 +1073,7 @@ def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
             return {"functionalities": [{"funcId": "brandNew", "size": 1}]}
 
     connect(monkeypatch, Unnamed())
-    body = client.get("/api/func-ids?account_id=291447").json()
+    body = client.get("/api/func-ids?account_id=291447").json()["choices"]
     assert [(r["id"], r["label"], r["covered"]) for r in body] == [
         ("brandNew", "brandNew", False)]
 
@@ -1134,7 +1134,7 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
                         "runs_engine": False}
     # ...and it is a covered funcId by the same act, because `covered` is that
     # list read as a vocabulary rather than a second table beside it.
-    assert next(r for r in client.get("/api/func-ids").json()
+    assert next(r for r in client.get("/api/func-ids").json()["choices"]
                 if r["id"] == "secretsPrivateVault")["covered"] is True
 
 
@@ -1155,6 +1155,61 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
     assert r.status_code == 200
     assert seen["func_ids"] == ["mockServices", "proxyRecorder"]
     assert r.json()["funcIds"] == ["mockServices", "proxyRecorder"]
+
+
+def test_a_gui_functional_location_is_refused_at_one_slot(monkeypatch):
+    """#159. BlazeMeter 400s the create, so the route does -- and the write it
+    would have made never happens. 400 rather than 502 because the caller can
+    fix it: it is a number on the form."""
+    posted = []
+
+    class Watching(FakeClient):
+        def create_private_location(self, *a, **kw):
+            posted.append(kw)
+            return {"id": "h9"}
+
+    connect(monkeypatch, Watching())
+    r = client.post("/api/locations", json={
+        "name": "gui", "account_id": 1, "workspace_id": 2,
+        "func_ids": ["functionalGui"], "slots": 1})
+    assert r.status_code == 400
+    assert "Parallel engine runs must be greater than 1" in r.json()["detail"]
+    assert posted == []
+
+
+def test_the_slot_minimums_are_served_so_the_form_can_say_them_first():
+    """The page must state the rule before the account does, and the number and
+    BlazeMeter's sentence are core's. Served for the reason DOCKER_IGNORED is:
+    a copy in TypeScript is how a figure found on a live POST and a figure a
+    form asserts stop being the same figure."""
+    body = client.get("/api/slot-minimums").json()
+    assert body == core.SLOT_MINIMUMS
+    assert body["functionalGui"]["minimum"] == 2
+
+
+def test_the_pages_copy_of_the_slot_minimums_is_cores():
+    """As with DOCKER_IGNORED and the sizing models: the page's tests run
+    without a server, so the fixture is a second copy and this is what holds
+    it equal."""
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const SLOT_MINIMUMS: Record<string, SlotMinimum>"
+                     r" = \{(.*?)\n\};", text, re.S)
+    assert body, "SLOT_MINIMUMS not found -- was it renamed or moved?"
+    served = client.get("/api/slot-minimums").json()
+    assert re.findall(r"^  (\w+): \{", body.group(1), re.M) == list(served)
+    assert re.findall(r"minimum: (\d+)", body.group(1)) \
+        == [str(r["minimum"]) for r in served.values()]
+    # The sentence most of all: it is BlazeMeter's own, which is what a
+    # customer meeting this in their UI reads, so a paraphrase on the page
+    # would be this tool inventing the account's words.
+    assert re.findall(r'label: "([^"]+)"', body.group(1)) \
+        == [r["label"] for r in served.values()]
+    # Wrapped across lines with `+`, which is the source's business and not
+    # the sentence's -- so the joins are closed up before the comparison.
+    flat = re.sub(r'"\s*\+\s*"', "", " ".join(body.group(1).split()))
+    for rule in served.values():
+        assert rule["message"] in flat
 
 
 def test_a_location_a_test_cannot_start_on_says_so(monkeypatch):

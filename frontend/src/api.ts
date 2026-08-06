@@ -97,6 +97,24 @@ export interface SizingModel {
   example_target: number;
 }
 
+/** One functionality's slot minimum, from /api/slot-minimums — what
+ *  BlazeMeter requires before it will create a location carrying that funcId
+ *  at all (#159).
+ *
+ *  Served rather than written here: the number was found on a live POST and
+ *  `message` is BlazeMeter's own sentence, so a second copy on the page is how
+ *  the rule and what the form says about it stop being the same rule. */
+export interface SlotMinimum {
+  /** BlazeMeter's display name for the functionality, as its own error uses
+   *  it — so the form's sentence and the account's read alike. */
+  label: string;
+  /** The smallest `slots` the account will accept. Never applied for anybody:
+   *  slots is engines per agent and a real cost. */
+  minimum: number;
+  /** BlazeMeter's refusal, verbatim. */
+  message: string;
+}
+
 /** What one pod of a given engine size is rated for, from /api/engine-vus.
  *
  *  Asked as soon as the size changes rather than waiting for a plan: the figure
@@ -428,6 +446,14 @@ export const api = {
    *  step hides what it names, and a key added to the generator would
    *  otherwise go on being offered for a format that ignores it. */
   dockerIgnored: () => req<Record<string, string>>("GET", "/api/docker-ignored"),
+  /** {funcId: the slots BlazeMeter needs before it will make the location} —
+   *  core's SLOT_MINIMUMS. Served for the same reason as the table above: the
+   *  new-location form states the rule before the account does, and the number
+   *  and the sentence are both BlazeMeter's. An empty table is "not read yet"
+   *  and refuses nothing — a create the account then rejects beats a form
+   *  refusing on a guess. */
+  slotMinimums: () => req<Record<string, SlotMinimum>>(
+    "GET", "/api/slot-minimums"),
   /** {NAME: owning option | null} for the environment variables a bundle writes
    *  for itself — generate's RESERVED_ENV, which `extra_env` refuses. Served
    *  for the same reason as the table above: the env area names what is taken,
