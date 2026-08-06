@@ -8,7 +8,7 @@
 // bundle's README, which is honest and arrives after the fact; a control that
 // is not on screen cannot be believed to have applied. So the format is chosen
 // first and the form follows it, from formats.optionApplies over the
-// generator's own DOCKER_IGNORED.
+// generator's own IGNORED_BY_FORMAT.
 //
 // The option groups split two ways and the page says which is which. Most of
 // them belong to no functionality -- registry, proxy, CA trust, scheduling, security
@@ -82,7 +82,7 @@ export interface ConfigurePanelProps {
   /** Does this option reach anything in a bundle of this format? Everything
    *  below hides by it -- whole groups, the placement card, Advanced, and the
    *  individual fields inside a group's own body. From formats.ts, over the
-   *  generator's DOCKER_IGNORED. */
+   *  generator's IGNORED_BY_FORMAT. */
   applies: Applies;
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;

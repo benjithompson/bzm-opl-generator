@@ -197,7 +197,7 @@ one agent as one container on a host: no namespace, no ServiceAccount, no node
 selectors, no engine limits — around two dozen options reach nothing in it. The
 choice used to be made on the download step, one step too late, with the
 generated README the only thing that said so. What is on screen is derived from
-the generator's own table, served as `/api/docker-ignored` and never restated
+the generator's own table, served as `/api/ignored-options` and never restated
 here: a key added to the generator would otherwise go on being offered for a
 format that drops it. Hiding is not refusing — the value is kept, sent, and named
 in the bundle's README — and where a hidden field needs explaining, the page

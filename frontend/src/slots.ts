@@ -21,7 +21,7 @@ import { SlotMinimum } from "./api";
  *  would be a bug waiting for it.
  *
  *  An empty table is "not read yet", never "no rules": the same direction
- *  `optionApplies` takes an empty docker-ignored table. A create the account
+ *  `optionApplies` takes an unread ignored-options table. A create the account
  *  then rejects is a worse answer than a form refusing on a guess only if the
  *  form is right, and before the fetch lands it cannot be.
  */

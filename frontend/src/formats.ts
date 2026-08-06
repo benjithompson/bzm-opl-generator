@@ -5,8 +5,8 @@
 // selectors and engine limits, and a docker bundle carries none of them. So the
 // control moved to the top of Configure and the form follows it.
 //
-// What a format drops is NOT declared here. It is generate.DOCKER_IGNORED,
-// fetched from /api/docker-ignored, because a second copy of two dozen option
+// What a format drops is NOT declared here. It is generate.IGNORED_BY_FORMAT,
+// fetched from /api/ignored-options, because a second copy of two dozen option
 // keys in TypeScript is the drift the SV funcId list already cost once -- a key
 // added to the generator would go on being offered for a format that ignores
 // it, and nothing would say so. What is here is the two predicates the page
@@ -52,14 +52,35 @@ export const OUTPUT_FORMATS: OutputFormat[] = [
  *  anything. */
 export const isDocker = (format: string) => format === "docker";
 
-/** {option: why} for the options this format drops, from /api/docker-ignored.
- *
- *  **Empty means the table has not been read**, and `optionApplies` treats that
- *  as "every option applies" -- the only safe way to be wrong about it. Guessed
- *  the other way, a Kubernetes bundle would lose its namespace field until a
- *  fetch landed, which is a required field missing from a form nobody can fix.
- *  Showing one field too many for a moment is the cheaper mistake. */
+/** {option: why} for the options ONE format drops -- one entry of the served
+ *  table below. Empty is a real answer here: a format that ignores nothing. */
 export type IgnoredOptions = Record<string, string>;
+
+/** ...and the table itself, {format: what it drops}, from
+ *  /api/ignored-options (generate.IGNORED_BY_FORMAT).
+ *
+ *  **Two empties, and they are different facts, so they are different shapes.**
+ *  A format with **no entry** is one nothing has been read for -- the fetch has
+ *  not landed, or it failed -- and a format whose entry is `{}` has been read
+ *  and drops nothing. Only the first is a guess. Both show every field, because
+ *  that is the only safe way to be wrong about it: guessed the other way, a
+ *  Kubernetes bundle would lose its namespace field until a fetch landed, which
+ *  is a required field missing from a form nobody can fix. Showing one field
+ *  too many for a moment is the cheaper mistake. */
+export type IgnoredByFormat = Record<string, IgnoredOptions>;
+
+/** What this format drops, or null where nothing has been read for it.
+ *
+ *  The one reader of the table, so the distinction above survives structurally
+ *  rather than by everyone remembering it: `null` is "nobody has read an answer
+ *  for this format" and `{}` is "read, and it drops nothing". Indexing the
+ *  record directly would hand back `undefined` typed as an object and lose
+ *  which of the two it was. */
+export function ignoredFor(
+    format: string, ignored: IgnoredByFormat): IgnoredOptions | null {
+  return Object.prototype.hasOwnProperty.call(ignored, format)
+    ? ignored[format] : null;
+}
 
 /** Does this option reach anything in a bundle of this format?
  *
@@ -69,10 +90,15 @@ export type IgnoredOptions = Record<string, string>;
  *  rather than wiped -- and `generate.ignored_options` is the same rule on that
  *  side, keeping the generator from refusing what it says it ignores. Hiding
  *  the control is the point: an option nobody can see cannot be believed to
- *  have been applied. */
+ *  have been applied.
+ *
+ *  Read by format rather than by asking whether this is docker: docker's is the
+ *  only non-empty entry today, and the day a cluster format drops something the
+ *  page must already be hiding it. */
 export function optionApplies(
-    key: string, format: string, ignored: IgnoredOptions): boolean {
-  return !isDocker(format) || !(key in ignored);
+    key: string, format: string, ignored: IgnoredByFormat): boolean {
+  const drops = ignoredFor(format, ignored);
+  return drops === null || !(key in drops);
 }
 
 /** `optionApplies` with the format and the table already answered. The page
@@ -89,12 +115,13 @@ export type Applies = (key: string) => boolean;
  *  field wants to say the same thing. Restated in TypeScript it was already a
  *  verbatim copy of one of them, free to drift the day the generator's was
  *  edited. Lower case and unpunctuated, like every other hint on the page --
- *  which is how DOCKER_IGNORED is written. */
+ *  which is how IGNORED_BY_FORMAT is written. */
 export type WhyIgnored = (key: string) => string | null;
 
 export function whyIgnored(
-    key: string, format: string, ignored: IgnoredOptions): string | null {
-  return optionApplies(key, format, ignored) ? null : ignored[key] ?? null;
+    key: string, format: string, ignored: IgnoredByFormat): string | null {
+  const drops = ignoredFor(format, ignored);
+  return drops === null ? null : drops[key] ?? null;
 }
 
 /** Does any of these options reach anything?

@@ -124,7 +124,7 @@ export const SV_MIXED =
  *  control: the panel looks each segment up rather than testing for helm and
  *  then for docker.
  *
- *  A clause, lower case and unpunctuated, as DOCKER_IGNORED's reasons are and
+ *  A clause, lower case and unpunctuated, as IGNORED_BY_FORMAT's reasons are and
  *  for the same reason: three places say it now -- the disabled segment, the
  *  functionality card that offers no switches, and the notice when the
  *  correction moves a format -- and each needs its own lead-in. Written as one finished

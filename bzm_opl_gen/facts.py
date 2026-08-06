@@ -94,7 +94,7 @@ def runs_engine(func_id):
     performance and functionalGui both carry v4, and a mockServices agent
     carries crane, group-gateway and service-mock and no engine at all. The
     frontend kept the same two ids as a literal of its own, which is the copy
-    `DOCKER_IGNORED` and the funcId vocabulary are served to avoid; it is on
+    `IGNORED_BY_FORMAT` and the funcId vocabulary are served to avoid; it is on
     each served functionality now.
 
     A funcId this table does not name -- tdm, delphix, the account's others --

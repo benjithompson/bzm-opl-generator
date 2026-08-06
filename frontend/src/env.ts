@@ -33,7 +33,7 @@ const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** The served table: variable name -> the option that writes it, or null where
  *  no single option does. Empty means "not read yet", and everything is
- *  allowed -- the same direction as an empty docker-ignored table, and for the
+ *  allowed -- the same direction as an unread ignored-options table, and for the
  *  same reason: a row refused on a guess is worse than one the server refuses
  *  a moment later with the authoritative sentence. */
 export type Reserved = Record<string, string | null>;

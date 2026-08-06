@@ -253,23 +253,30 @@ def _quantity(o, key, default, parse, ignored=False):
 def ignored_options(o):
     """The options this bundle's format cannot carry, as {option: why}.
 
-    `DOCKER_IGNORED` for a docker bundle and nothing for the other two. One
-    reader for a rule that has to hold in three places, because remembered it
-    does not: **a format may not refuse what it says it ignores.** An ignored
-    option has no control on the configure page for that format, so a refusal
-    over its value is a blocker with nothing on screen to clear -- an imported
-    profile carrying an engine limit blocked the download exactly that way.
+    This format's entry of `IGNORED_BY_FORMAT`, which has one for every format
+    -- an entry that is `{}` is a format that ignores nothing, which is a read
+    answer rather than a missing one. One reader for a rule that has to hold in
+    three places, because remembered it does not: **a format may not refuse what
+    it says it ignores.** An ignored option has no control on the configure page
+    for that format, so a refusal over its value is a blocker with nothing on
+    screen to clear -- an imported profile carrying an engine limit blocked the
+    download exactly that way.
 
     Ignored is not discarded, and nothing here drops a value: it stays in the
     options, reaches `profile.json`, and the bundle's README names it (see
-    `_docker_ignored`). What this decides is only what may be *read* -- and so
-    what may be complained about.
+    `_set_but_not_carried`). What this decides is only what may be *read* -- and
+    so what may be complained about.
 
     `o.get` rather than `o[...]`: doctor, plan and livetest all call the
     validators below with option dicts of their own that were never merged over
     the defaults, and for those "no format stated" means the Kubernetes one.
+    A format the table does not name ignores nothing rather than raising here:
+    this runs before generate() checks the name against OUTPUT_FORMATS (see
+    fill_placeholders, which is above that check), and every option staying
+    readable is what lets that check be the one that names it.
     """
-    return DOCKER_IGNORED if o.get("output_format") == "docker" else {}
+    fmt = o.get("output_format") or DEFAULT_OPTIONS["output_format"]
+    return IGNORED_BY_FORMAT.get(fmt, {})
 
 
 # The text options a bundle is unusable without, and what makes each one apply
@@ -2496,44 +2503,59 @@ DOCKER_PORT_RANGE = "6000-7000"
 DOCKER_WORKDIR = "/usr/src/app/"
 DOCKER_ENTRYPOINT = "python agent/agent.py"
 
-# Options whose value a docker bundle cannot carry, with what each one is for.
-# Every one of them is Kubernetes vocabulary; the docker agent's equivalents are
-# either the daemon's own configuration or nothing at all.
+# What each output format cannot carry, as {format: {option: why}}, with what
+# each ignored option is for. Every format in OUTPUT_FORMATS has an entry --
+# `tests/test_generate.py::test_every_format_has_an_ignored_entry` is what makes
+# a fourth impossible to add without deciding -- and an entry that is `{}` is a
+# format that ignores nothing, which is an answer rather than a gap. Only the
+# whole table being absent means nobody has read one, and that is a state only a
+# reader over the wire can be in (see core.ignored_options).
 #
-# Served, as core.docker_ignored(): the configure page hides what a docker
-# bundle cannot carry, and a second copy of this table in TypeScript is exactly
+# Docker's is the whole of it today, and every one of its keys is Kubernetes
+# vocabulary; the docker agent's equivalents are either the daemon's own
+# configuration or nothing at all. The two Kubernetes formats ignore nothing
+# yet, and the entries are here rather than derived because this is where the
+# reason for each key goes -- an option a cluster bundle reaches nothing with
+# gets its sentence beside docker's.
+#
+# Served, as core.ignored_options(): the configure page hides what the chosen
+# format cannot carry, and a second copy of this table in TypeScript is exactly
 # the drift the SV funcId list already cost once. So a key added here stops
 # being offered there, and nothing has to remember to remove it.
-DOCKER_IGNORED = {
-    "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
-    "openshift_cluster": "there is no cluster, so no oc and no Route",
-    "namespace": "containers are not namespaced",
-    "service_account_name": "there is no ServiceAccount to run as",
-    "service_account_create": "there is no ServiceAccount to create",
-    "cluster_rbac": "there is no RBAC",
-    "service_type": "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
-    "pull_secret": "the host's own docker login is what authenticates a pull",
-    "run_as_user": "the container runs as root (-u 0) because that is what "
-                   "opens the docker socket it starts engines through",
-    "restrict_engines": "engine security context is a pod field",
-    "tolerations": "scheduling is a Kubernetes concern",
-    "node_selector": "scheduling is a Kubernetes concern",
-    "engine_tolerations": "scheduling is a Kubernetes concern",
-    "engine_node_selector": "scheduling is a Kubernetes concern",
-    "engine_cpu_limit": "KUBERNETES_RESOURCES_LIMITS_CPU is a Kubernetes variable",
-    "engine_mem_limit": "KUBERNETES_RESOURCES_LIMITS_MEMORY is a Kubernetes variable",
-    "engine_ephemeral_request_mb": "ephemeral storage is a pod field",
-    "engine_ephemeral_limit_mb": "ephemeral storage is a pod field",
-    "crane_ephemeral_storage": "ephemeral storage is a pod field",
-    "ca_existing_configmap": "there is no ConfigMap; the bundle mounts a file",
-    "ca_configmap_key": "there is no ConfigMap; the bundle mounts a file",
-    "ca_openshift_inject": "nothing injects a trust bundle into a container",
-    "engines_per_node": "there is one host, and it is this one",
-    # The last two were found by hiding this table's keys on the configure
-    # page: both were still offered there, and both reach nothing here.
-    "crane_hook": "crane-hook is a Pod, and there is no cluster to run it in",
-    "registry_auth": "the stubs are ConfigMap lines; a docker host authenticates "
-                     "with its own docker login",
+IGNORED_BY_FORMAT = {
+    "manifests": {},
+    "helm": {},
+    "docker": {
+        "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
+        "openshift_cluster": "there is no cluster, so no oc and no Route",
+        "namespace": "containers are not namespaced",
+        "service_account_name": "there is no ServiceAccount to run as",
+        "service_account_create": "there is no ServiceAccount to create",
+        "cluster_rbac": "there is no RBAC",
+        "service_type": "KUBERNETES_SERVICE_USE_TYPE is a Kubernetes variable",
+        "pull_secret": "the host's own docker login is what authenticates a pull",
+        "run_as_user": "the container runs as root (-u 0) because that is what "
+                       "opens the docker socket it starts engines through",
+        "restrict_engines": "engine security context is a pod field",
+        "tolerations": "scheduling is a Kubernetes concern",
+        "node_selector": "scheduling is a Kubernetes concern",
+        "engine_tolerations": "scheduling is a Kubernetes concern",
+        "engine_node_selector": "scheduling is a Kubernetes concern",
+        "engine_cpu_limit": "KUBERNETES_RESOURCES_LIMITS_CPU is a Kubernetes variable",
+        "engine_mem_limit": "KUBERNETES_RESOURCES_LIMITS_MEMORY is a Kubernetes variable",
+        "engine_ephemeral_request_mb": "ephemeral storage is a pod field",
+        "engine_ephemeral_limit_mb": "ephemeral storage is a pod field",
+        "crane_ephemeral_storage": "ephemeral storage is a pod field",
+        "ca_existing_configmap": "there is no ConfigMap; the bundle mounts a file",
+        "ca_configmap_key": "there is no ConfigMap; the bundle mounts a file",
+        "ca_openshift_inject": "nothing injects a trust bundle into a container",
+        "engines_per_node": "there is one host, and it is this one",
+        # The last two were found by hiding this table's keys on the configure
+        # page: both were still offered there, and both reach nothing here.
+        "crane_hook": "crane-hook is a Pod, and there is no cluster to run it in",
+        "registry_auth": "the stubs are ConfigMap lines; a docker host authenticates "
+                         "with its own docker login",
+    },
 }
 
 
@@ -2634,7 +2656,7 @@ def _docker_run_lines(facts, o):
              # do not mention it, and that is how it came to be missing.
              #
              # Not `run_as_user`: that option is a pod securityContext field
-             # (see DOCKER_IGNORED), and this is not a preference -- an agent
+             # (see IGNORED_BY_FORMAT), and this is not a preference -- an agent
              # that cannot open the socket cannot do the one thing it is for.
              "  -u 0 \\"]
     if secret:
@@ -2664,15 +2686,20 @@ def _sh_value(value):
     return "'" + text.replace("'", "'\\''") + "'"
 
 
-def _docker_ignored(o):
-    """The options this bundle set that a docker agent cannot carry, as
-    (name, why) pairs.
+def _set_but_not_carried(o):
+    """The options this bundle set that its own format cannot carry, as
+    (name, why) pairs -- the README table of that name.
+
+    Asks ignored_options() rather than one format's table: the question is the
+    format's, and the day a second format ignores anything this is the half that
+    has to be per-format already. Nothing about it is docker-specific except
+    which README prints it today.
 
     Compared against the defaults rather than listed wholesale: a note that
     named every one of them every time would be read as boilerplate, and the one
     line that matters -- "you asked for a node selector and it is not here" --
     would be in the middle of it."""
-    return [(k, why) for k, why in sorted(DOCKER_IGNORED.items())
+    return [(k, why) for k, why in sorted(ignored_options(o).items())
             if o.get(k) != DEFAULT_OPTIONS[k]]
 
 
@@ -2740,7 +2767,7 @@ def _docker_env_file(facts, o):
 
 
 def _docker_readme(facts, o):
-    ignored = _docker_ignored(o)
+    ignored = _set_but_not_carried(o)
     # The credential and the command are in different files here, so the block
     # names the one to edit. It replaces a paragraph that said the same thing
     # about the AUTH_TOKEN alone: this format can leave a proxy URL, a registry
@@ -2900,7 +2927,7 @@ def generate(facts, options):
             out[DOCKER_ENV_FILE] = env_file
         if o["ca_bundle"]:
             # The inline PEM, as the file the command mounts. The other two CA
-            # modes name a ConfigMap, which is why they are in DOCKER_IGNORED:
+            # modes name a ConfigMap, which is why they are in IGNORED_BY_FORMAT:
             # there is nothing here to read one out of.
             out[DOCKER_CA_FILE] = o["ca_bundle"]
         if o["private_registry"]:

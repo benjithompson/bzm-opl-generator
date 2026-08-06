@@ -39,7 +39,7 @@ describe("slotRule", () => {
 
   it("refuses nothing while the table has not been read", () => {
     // Empty is "not asked yet", never "no rules" -- the same direction the
-    // docker-ignored table goes. A create the account then rejects beats a
+    // ignored-options table goes. A create the account then rejects beats a
     // form refusing on a guess.
     expect(slotRule(["functionalGui"], {})).toBeNull();
   });

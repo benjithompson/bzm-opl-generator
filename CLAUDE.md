@@ -214,7 +214,7 @@ missing tools. The rest is what it cannot fix for you.
   document drops it from Worth knowing, having already made it an assumption).
   Don't fill the None in, and don't reuse the performance ratio for it. The card
   renders the models from `/api/sizing-models` rather than from three field
-  groups in TypeScript — same rule as `DOCKER_IGNORED`, same single
+  groups in TypeScript — same rule as `IGNORED_BY_FORMAT`, same single
   `fixtures.ts` copy held equal by `test_server.py`.
 
 - **`slots` is engines per *agent*, not per location.** BlazeMeter's own UI
@@ -348,7 +348,7 @@ missing tools. The rest is what it cannot fix for you.
   rather than restated, so a variable added to a template fails there instead of
   becoming quietly overridable. It is served (`/api/reserved-env`) with the
   owner per name, and the page never keeps its own copy — same rule as
-  `DOCKER_IGNORED`, with the same `fixtures.ts` single copy held equal by
+  `IGNORED_BY_FORMAT`, with the same `fixtures.ts` single copy held equal by
   `test_server.py`.
 
 - **...and the *offered* set is the same table read the other way.**
@@ -423,17 +423,23 @@ missing tools. The rest is what it cannot fix for you.
   Configure asked
   for a namespace, a ServiceAccount, node selectors and engine limits, none of
   which a docker bundle carries. What is on screen now derives from
-  `formats.optionApplies` over the generator's own `DOCKER_IGNORED`, **served**
-  as `/api/docker-ignored`. Never restate that table in TypeScript, or a key
+  `formats.optionApplies` over the generator's own `IGNORED_BY_FORMAT`,
+  **served** as `/api/ignored-options` and keyed by format (#176). Never
+  restate that table in TypeScript, or a key
   added to the generator goes on being offered for a format that drops it; the
   one copy that has to exist is `fixtures.ts`, for tests that run without a
   server, held equal by a Python test. `optionGroups.groupsFor` drops a group
   whose every declared key is ignored; one with some keeps its row and hides the
   rest inside its body, so a group body takes the `Applies` predicate rather
   than a format string, and a section that is not a group (placement, Advanced)
-  uses `keysApply` over the keys it owns. An **empty** table means "not read
-  yet" and everything applies: a field too many beats hiding a required one on a
-  guess. Hiding is never a refusal — the value is kept, sent and named in the
+  uses `keysApply` over the keys it owns. **There are two empties here and they
+  are different facts**: a format with no entry is one nothing has been read for
+  — the fetch has not landed, or failed — while an entry that is `{}` has been
+  read and drops nothing. `formats.ignoredFor` is the one reader and returns
+  `null` for the first, so the distinction is structural rather than
+  remembered; indexing the record would hand back `undefined` typed as an
+  object and lose which it was. Both show every field, because a field too many
+  beats hiding a required one on a guess. Hiding is never a refusal — the value is kept, sent and named in the
   bundle's README, which is `generate.ignored_options()` on that side. Where a
   hidden field needs explaining, render the served reason (`whyIgnored`) rather
   than writing a second copy of the generator's sentence.
@@ -502,8 +508,10 @@ missing tools. The rest is what it cannot fix for you.
   bundle" and "not enabled on this location" are separate answers and the card
   gives only the true one. Don't generalise it into a served "which
   functionalities does a format refuse" table: helm and docker refuse *one* and
-  nothing else refuses any, and `DOCKER_IGNORED` is docker-only precisely
-  because helm ignores nothing — it refuses. **A format's refusal clears no
+  nothing else refuses any, and `IGNORED_BY_FORMAT` keeps helm's entry empty
+  precisely because helm does not *ignore* service virtualization — it refuses
+  it. Ignoring and refusing are different answers, and a format that refuses
+  says so in `generate()` rather than in that table. **A format's refusal clears no
   options**; the *format*
   gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
   configuration somebody wrote outranks a segment, and only `notRunPatch` — the
@@ -793,7 +801,8 @@ stale list can cost a credential nothing can read back.
 - **`--format docker` is a different platform, not a third rendering.** One
   agent as one container; there is no namespace, no ServiceAccount, no pod, and
   around two dozen options reach nothing. They are *named* rather than refused
-  -- `DOCKER_IGNORED`, listed in the bundle's README and only where set away
+  -- docker's entry in `IGNORED_BY_FORMAT`, listed in the bundle's README (the
+  "Set here, but not carried" table, `_set_but_not_carried`) and only where set away
   from their default, because the failure is silent otherwise (a bundle handed
   over and believed to have applied a node selector). The page hides the same
   keys, off the same served table (see the UI bullet above); the two halves

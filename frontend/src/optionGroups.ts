@@ -831,7 +831,7 @@ export function functionalitiesOf(
  *  **With the baseline, nothing is unclaimed.** It holds the three covered
  *  funcIds and no pins, so it cannot tell `tdm` from `chrome:default` from
  *  something retired, and an answer is not a guess: empty means "not read yet",
- *  which is the direction `DOCKER_IGNORED` and the reserved-env table already
+ *  which is the direction `IGNORED_BY_FORMAT` and the reserved-env table already
  *  take. It used to fall back to the raw funcId, which is defensible for `tdm`
  *  and is how a GUI Functional location got 41 lines of browser. */
 export type UnclaimedFuncIds = {
