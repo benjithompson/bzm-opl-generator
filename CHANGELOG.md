@@ -67,12 +67,20 @@ anything that breaks.
 
 ### Changed
 
-- **A pull request can no longer reach a self-hosted runner.** `runs-on` reads
-  the trigger as well as the `RUNNER_LABELS` variable, and a `pull_request`
-  always lands on `ubuntu-latest`. On a public repo the old form would have run
-  a stranger's `conftest.py`, build backend and npm lifecycle scripts on the
+- **A pull request on a public repo can no longer reach a self-hosted runner.**
+  `runs-on` reads the trigger and `github.event.repository.private` as well as
+  the `RUNNER_LABELS` variable. Without it, a fork PR would have run a
+  stranger's `conftest.py`, build backend and npm lifecycle scripts on the
   maintainer's own machine -- on runners that are reused rather than ephemeral,
   so the next thing that host does is build the release wheel.
+
+  It is keyed on `private` rather than refusing every PR, because a private repo
+  cannot be forked by a stranger and so has nothing to defend against yet, while
+  its hosted minutes are metered: a blanket rule left three of four jobs queued
+  until their allocation timeout cancelled them. Now the same commit runs
+  self-hosted while private and hosted the moment the repo is flipped, with no
+  edit. It fails safe -- an absent `private` reads as public, which forces
+  `ubuntu-latest`.
 
 - **An MCP session can size all three functionalities, and is told so.**
   `opl_plan capacity` required `users` and described virtual users alone, which

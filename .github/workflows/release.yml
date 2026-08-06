@@ -21,7 +21,7 @@ jobs:
     # should not have to work out whether the difference is meaningful.
     # Worth knowing it *is* your machine when RUNNER_LABELS is set: this job
     # builds the wheel and creates the Release.
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
+    runs-on: ${{ (github.event_name == 'pull_request' && !github.event.repository.private) && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
     permissions:
       contents: write        # required to create the Release
     steps:
