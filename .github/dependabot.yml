@@ -1,0 +1,34 @@
+version: 2
+
+# Three ecosystems, because this repo builds three things: a Python package, the
+# React bundle committed under bzm_opl_gen/ui_dist, and the workflows themselves.
+# The actions one matters most -- they run with `contents: write` on a tag push,
+# and they are pinned to mutable major tags today.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ci"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["dependencies"]
+    # The CLI itself declares no dependencies at all; everything here is an
+    # optional extra or a test tool, so a bump is never a change to what a
+    # `pipx install bzm-opl-gen` pulls in.
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ui"]
+    # A bump here changes the committed bundle only once somebody runs
+    # `npm run build`, so these PRs are reviewed and then rebuilt, never merged
+    # on the lockfile alone.
+    groups:
+      dev-dependencies:
+        dependency-type: development

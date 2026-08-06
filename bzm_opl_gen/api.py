@@ -171,8 +171,8 @@ class BzmClient:
         a loop rather than a bigger number. (`private-locations` cannot: it
         ignores `offset`, which is why that one asks for 1000 and stops.)
 
-        The limit was 100, which is a real account's *middle*: SE Demo has 166
-        and the missing 66 held 105,270 rated VUs -- 40% of the account. It
+        The limit was 100, which is a real account's *middle*: one measured at
+        166, and the missing 66 held 105,270 rated VUs -- 40% of it. It
         cost nothing visible for a long time because a truncated list only
         looks short, and the workspace you wanted was usually in it. What
         showed it was the account-capacity bar, which draws segments that have

@@ -865,7 +865,7 @@ stale list can cost a credential nothing can read back.
 - `doctor` measures capacity against node **allocatable**, deliberately: what is
   actually free needs every pod's requests summed per node, a much bigger read
   for a preflight. Say "upper bound" in any detail string you add.
-- **List calls ask for one big page.** `/workspaces` asked for 100, SE Demo has
+- **List calls ask for one big page.** `/workspaces` asked for 100, one account has
   166, and the missing 66 held 40% of the account's rated VUs — attributed on
   screen to no workspace at all. A truncated list only looks short.
 

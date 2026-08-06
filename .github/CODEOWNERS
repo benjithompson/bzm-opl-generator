@@ -1,0 +1,3 @@
+# Everything, for now -- a single maintainer, so this buys review-on-PR rather
+# than routing. Split it by path the day that stops being true.
+* @benjithompson

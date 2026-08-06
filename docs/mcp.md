@@ -15,13 +15,13 @@ those three does not exist as far as it is concerned.
 ## Install and configure
 
 ```
-gh auth login && gh auth setup-git          # once, if gh isn't set up
-pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
+pipx install "bzm-opl-gen[mcp]"
 ```
 
-The repo is private and there is no PyPI package, so `pip` clones it over https
-and `gh auth setup-git` is what leaves a credential where `git` will find it —
-see the [README](../README.md#install), which has the rest of that story,
+`[mcp]` rather than `[ui]`: the extras are independent, and `[ui,mcp]` installs
+both. To track `main` or a tag PyPI has not seen, install from git instead —
+`pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"`
+— and see the [README](../README.md#install) for the rest of that story,
 including the release-wheel route if you would rather install an artifact.
 
 Then add it to your client. The API key goes in the server's environment — never

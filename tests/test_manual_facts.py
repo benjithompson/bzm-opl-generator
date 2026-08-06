@@ -24,7 +24,7 @@ from test_generate import FACTS  # noqa: E402
 from versions_fixtures import (VERSIONS_GUI, VERSIONS_PERFORMANCE,  # noqa: E402
                                VERSIONS_SV)
 
-H, S = "6a63a79dcc45dccca90bf440", "6a679d3445115b6651011715"
+H, S = "0a1b2c3d4e5f60718293a4b5", "6c5b4a39281706f5e4d3c2b1"
 
 
 def _cm(files):

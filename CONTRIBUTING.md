@@ -94,22 +94,38 @@ What each rig flag proves, and the environment trap behind it, is in
 [CLAUDE.md](CLAUDE.md). Read that before your first live run; several of the
 behaviours look like bugs and are not.
 
-## Working against the BlazeMeter account
+## Working against a BlazeMeter account
 
-Live runs touch a real account, so:
+**You need no account to contribute.** `examples/facts.example.json` drives the
+generator, the offline suite, the helm parity check and the frontend tests, and
+CI runs all four without one. Only `bzm-opl-gen livetest` needs an account, and
+only because deploying to a real cluster and waiting for the agent to come
+online is the whole of what it does.
 
-- **Creating or starting anything is a real write.** Agree on the artifact
-  first rather than discovering a colleague's location repurposed.
-- **Create scratch locations**; don't reuse someone else's harbor.
+If you do run the rig, run it against **your own** account, and treat it as
+production, because it is somebody's:
+
+- **Creating or starting anything is a real write.** Decide which artifact a run
+  is allowed to touch before it starts, rather than discovering afterwards that
+  it repurposed one somebody depended on.
+- **Create a scratch private location for it**, rather than pointing it at one
+  that already has a job.
 - If a run repoints an existing test, it must restore the original
   `executions` — the code does this in a `finally` and prints the original
   first. Verify afterwards; CLAUDE.md has the one-liner.
 - Leave the account clean: check for stray namespaces, containers, and
   minikube profiles when a run is interrupted.
 
+Never put an account name, an account id, a harbor or ship id, or an AUTH_TOKEN
+in a commit, a test fixture, a comment or an issue. `examples/facts.example.json`
+holds the obviously-fake vocabulary to reach for instead.
+
 ## Pull requests
 
-Everything lands on `main` through a PR. Enable the guard once per clone:
+Everything lands on `main` through a PR. **Fork it, branch, open the PR** —
+that is the whole flow, and nothing here needs write access to this repo.
+
+Working from a clone you can push to instead? Enable the guard once:
 
 ```
 git config core.hooksPath .githooks
@@ -118,7 +134,8 @@ git config core.hooksPath .githooks
 `.githooks/pre-push` then refuses a push whose target is `main` and tells you
 what to do instead. It is client-side, so it catches the reflex `git push` from
 a branch you forgot you were on — not a determined `--no-verify`. Treat it as a
-seatbelt, not a lock.
+seatbelt, not a lock. Contributors working from a fork can skip it: pushing to
+your own fork's `main` costs nobody anything.
 
 - Comments explain **why**, especially where a non-obvious environment fact
   drove the code. Match the surrounding density; don't narrate the obvious.

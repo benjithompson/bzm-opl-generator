@@ -483,9 +483,9 @@ test("a functionality a manually entered identity was not declared to run has "
     fireEvent.click(await screen.findByRole(
       "radio", { name: /Enter values manually/ }));
     fireEvent.change(screen.getByLabelText(/^Harbor ID/),
-                     { target: { value: "6a63a79dcc45dccca90bf440" } });
+                     { target: { value: "0a1b2c3d4e5f60718293a4b5" } });
     fireEvent.change(screen.getByLabelText(/^Ship ID/),
-                     { target: { value: "6a679d3445115b6651011715" } });
+                     { target: { value: "6c5b4a39281706f5e4d3c2b1" } });
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 
     // Declared performance -- the first served functionality, which is what a manual
@@ -2148,8 +2148,8 @@ test("an id the account no longer has is written away once the account has said 
 
 /** A well-formed harbor id and ship id: manualComplete checks the shape, and
  *  nothing is requested for values that are not one. */
-const TYPED = { harbor: "6a63a79dcc45dccca90bf440",
-                ship: "6a679d3445115b6651011715" };
+const TYPED = { harbor: "0a1b2c3d4e5f60718293a4b5",
+                ship: "6c5b4a39281706f5e4d3c2b1" };
 
 /** The manual-entry page: no key at all -- manual entry is for an account
  *  nobody here can reach -- with both functionalities and the two funcIds that pick

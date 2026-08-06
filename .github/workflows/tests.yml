@@ -5,33 +5,34 @@ on:
     branches: [main]
   pull_request:
 
-# Where every job in this file runs, and in release.yml too. A repository
-# variable rather than a literal, because which runner is right is an account
-# fact rather than a property of the tests: GitHub-hosted jobs stopped starting
-# altogether ("recent account payments have failed or your spending limit needs
-# to be increased"), and self-hosted minutes are free and unmetered.
+# Where every job in this file runs, and in release.yml too. Two inputs decide
+# it, and the trigger outranks the variable:
 #
-#   unset            -> ubuntu-latest, i.e. exactly what this did before
-#   RUNNER_LABELS=self-hosted -> a runner registered to this repo
+#   pull_request              -> always ubuntu-latest, whatever RUNNER_LABELS says
+#   push / tag, unset         -> ubuntu-latest
+#   push / tag, RUNNER_LABELS -> a runner registered to this repo
 #
-# Set it under Settings -> Secrets and variables -> Actions -> Variables. Flipping
-# back is deleting the variable; neither direction needs a commit, which matters
-# while it is unknown whether self-hosted jobs dispatch at all on this account.
+# **On a public repo a pull_request must never reach a self-hosted runner.**
+# A fork PR carries its own workflow, its own `conftest.py`, its own
+# `package.json` lifecycle scripts and its own build backend, so `pip install
+# -e .`, `pytest` and `npm ci` are each arbitrary code execution by whoever
+# opened it. The runners here are long-lived rather than ephemeral, so one
+# poisoned job does not end with that job -- it sits on the host that later
+# builds the release wheel. The variable alone could not express this: it is set
+# per repository, and the danger is per event.
 #
-# `benjithompson` is a User, not an Organization, so a runner cannot be shared
-# across repositories -- org-level runners need an org. One registration per
-# repo, though several can sit on one machine.
-#
-# One label only in this form. Several needs the array:
-#   runs-on: ${{ vars.RUNNER_LABELS && fromJSON(vars.RUNNER_LABELS) || 'ubuntu-latest' }}
+# RUNNER_LABELS lives under Settings -> Secrets and variables -> Actions ->
+# Variables, and deleting it is how you go back; neither direction needs a
+# commit. One label only in this form. Several needs the array:
+#   ${{ vars.RUNNER_LABELS && fromJSON(vars.RUNNER_LABELS) || 'ubuntu-latest' }}
 # with RUNNER_LABELS set to a JSON array, e.g. ["self-hosted","linux","arm64"].
 #
-# Note the failure mode this buys: a self-hosted job with no runner online does
-# not fail, it queues, so a green tick can be a job that never ran. Check
-# Settings -> Actions -> Runners shows Idle before trusting a quiet PR.
+# Note the failure mode self-hosted buys: a job with no runner online does not
+# fail, it queues, so a green tick can be a job that never ran. Check
+# Settings -> Actions -> Runners shows Idle before trusting a quiet push.
 jobs:
   offline:
-    runs-on: ${{ vars.RUNNER_LABELS || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +80,7 @@ jobs:
   # suite must not: a suite that skips when a tool is missing reports a clean
   # pass having tested nothing (the fastapi lesson, one job up).
   helm:
-    runs-on: ${{ vars.RUNNER_LABELS || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -103,7 +104,7 @@ jobs:
   # lifecycle -- plain data in, data out -- which is the part of the form that
   # used to drift silently between the fields and the wipe list.
   ui:
-    runs-on: ${{ vars.RUNNER_LABELS || 'ubuntu-latest' }}
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
     defaults:
       run:
         working-directory: frontend
