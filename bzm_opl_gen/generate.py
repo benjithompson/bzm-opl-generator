@@ -988,8 +988,8 @@ def _configmap(facts, o):
     if o["private_registry"]:
         overrides = _image_overrides(facts, o["private_registry"])
         lines += [
-            "  # Private registry: images resolved from the account's live agent",
-            f"  # inventory ({facts.get('images_source', 'unknown')}).",
+            "  # Private registry: images resolved from the account, not from a",
+            f"  # table here ({facts.get('images_source', 'unknown')}).",
             f"  DOCKER_REGISTRY: {o['private_registry']}",
             f"  IMAGE_OVERRIDES: '{json.dumps(overrides)}'",
         ]
@@ -2216,7 +2216,7 @@ def _helm_values(facts, o):
         overrides = _image_overrides(facts, o["private_registry"])
         lines += [
             f"privateRegistry: {_yq(o['private_registry'])}",
-            "# Resolved from the account's live agent inventory "
+            "# Resolved from the account, not from a table here "
             f"({facts.get('images_source', 'unknown')}).",
             "# A key crane cannot find falls back to the public registry without",
             "# logging anything, so re-generate rather than editing this by hand.",
