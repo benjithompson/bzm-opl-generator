@@ -274,6 +274,29 @@ export interface TokenReport {
  *  a plan cannot ask for a bundle at all. */
 export interface TokenRequest { rotate_token: boolean }
 
+/** A refusal this API wrote, with the status it wrote it as.
+ *
+ *  The status is carried because one of them means something no sentence can be
+ *  relied on to say: 404 is the location or agent being *gone*, which is the one
+ *  failure a retry cannot fix and the one with a remedy the page can offer
+ *  (Refresh). Everything else -- an expired key, an account that restricts an
+ *  endpoint, BlazeMeter being down -- is a failure that may come right on its
+ *  own, and telling somebody their location has been deleted because their VPN
+ *  dropped is the pair this codebase keeps apart everywhere else. Parsing the
+ *  code back out of the message would be that same fact stated twice, in the
+ *  place least able to be right about it (see api.BzmApiError, which makes the
+ *  argument on the Python side).
+ *
+ *  Callers that do not care read it as an ordinary Error, which is all it was
+ *  before. The rule about which status means what lives in `stale.ts`, not
+ *  here: this is transport. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
     method,
@@ -297,7 +320,11 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
         + `launchctl kickstart -k gui/$UID/com.blazemeter.bzm-opl-gen.ui, `
         + `or stop and re-run \`bzm-opl-gen ui\``);
     }
-    throw new Error(detail ?? r.statusText);
+    // ...and a 404 that *does* carry a detail is a route that answered: the
+    // branch above is the only other thing a 404 can be here, so having taken
+    // it first, the status is safe to hand on as a refusal about what was
+    // asked for rather than about which routes exist.
+    throw new ApiError(detail ?? r.statusText, r.status);
   }
   return r.json();
 }
@@ -322,6 +349,12 @@ export const api = {
     req<Workspace[]>("GET", `/api/workspaces?account_id=${accountId}`),
   locations: (workspaceId: number) =>
     req<Location[]>("GET", `/api/locations?workspace_id=${workspaceId}`),
+  /** Drop what the server remembers of BlazeMeter, so the next read is a real
+   *  one. Answers nothing: what to re-read afterwards is the caller's, and the
+   *  one caller re-reads the location list. Without it the Refresh button would
+   *  be served from the same cache for up to a minute — a click that changes
+   *  nothing and looks exactly like one that worked. */
+  refresh: () => req<null>("POST", "/api/refresh"),
   createLocation: (body: {
     name: string; account_id: number; workspace_id: number;
     func_ids: string[]; slots: number; threads_per_engine: number;

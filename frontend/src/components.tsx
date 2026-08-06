@@ -338,6 +338,14 @@ export function SubSection(props: {
    *  section that says nothing is a section you have to open to find out
    *  whether you needed to. */
   summary?: string;
+  /** A control on the header row, beside the title rather than inside it.
+   *
+   *  Beside, and that is structural: a collapsible header *is* a `<button>`,
+   *  so anything interactive rendered into it would be a button inside a
+   *  button -- invalid, and in practice a click that toggles the section
+   *  instead of doing what it says. The toggle keeps the row's whole width
+   *  minus this, so the target does not shrink to the words in it. */
+  action?: ReactNode;
 }) {
   const collapsible = props.open !== undefined && !!props.onToggle;
   const open = !collapsible || props.open;
@@ -364,15 +372,21 @@ export function SubSection(props: {
   return (
     <section className="border border-slate-200 rounded-lg overflow-hidden bg-white">
       {collapsible ? (
-        <button type="button" onClick={props.onToggle} aria-expanded={open}
-          className={"w-full flex items-center gap-2 px-3 py-2.5 text-left "
-            + "bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer "
-            + (open ? "border-b border-slate-200" : "")}>
-          {heading}
-        </button>
+        <div className={"flex items-stretch bg-slate-50 "
+          + (open ? "border-b border-slate-200" : "")}>
+          <button type="button" onClick={props.onToggle} aria-expanded={open}
+            className={"flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 "
+              + "text-left hover:bg-slate-100 transition-colors cursor-pointer"}>
+            {heading}
+          </button>
+          {props.action && (
+            <div className="flex items-center pr-3 pl-2">{props.action}</div>
+          )}
+        </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2.5 bg-slate-50 border-b border-slate-200">
           {heading}
+          {props.action && <div className="ml-auto">{props.action}</div>}
         </div>
       )}
       {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the

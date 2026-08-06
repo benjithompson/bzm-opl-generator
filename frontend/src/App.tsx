@@ -54,6 +54,10 @@ import { exclusiveWith, SV_FUNCTIONALITY, svState } from "./sv";
 import { slotsBlockedBy } from "./slots";
 // What survives a refresh, and the one thing that must not.
 import * as session from "./session";
+// A location or agent that has been deleted, told apart from one nothing could
+// be read about. Applied at every call that names one, because a 404 is the one
+// failure here that a retry cannot fix and Refresh can.
+import { goneNotice } from "./stale";
 // Whether an agent is reporting. One statement of the rule, with its own tests
 // -- it used to be a closure here, handed to step 1 as a predicate.
 import { shipOnline } from "./heartbeat";
@@ -731,7 +735,10 @@ export default function App({ api }: { api: Api }) {
     forgetToken();
     if (!harborId) return;
     setFactsBusy(true);
-    api.facts(harborId).then(setFacts).catch((e) => setShipErr(e.message))
+    api.facts(harborId).then(setFacts)
+      // A 404 here is the location itself, and it says so rather than relaying
+      // BlazeMeter's sentence about a harbor id nobody typed.
+      .catch((e) => setShipErr(goneNotice(e, "location") ?? e.message))
       .finally(() => setFactsBusy(false));
   }, [harborId]);
 
@@ -865,7 +872,9 @@ export default function App({ api }: { api: Api }) {
       // below is the copy to keep.
       setOptions((o) => ({ ...o, auth_token: r.auth_token }));
       setShipTokenNotice(r.token_error);
-    } catch (e) { setShipErr(String((e as Error).message)); }
+    } catch (e) {
+      setShipErr(goneNotice(e, "location") ?? String((e as Error).message));
+    }
   };
 
   // The debounced live preview is further down, with the rest of what depends
@@ -895,7 +904,19 @@ export default function App({ api }: { api: Api }) {
       // failing), which on a 10s poll would otherwise hold the heartbeat behind
       // a hung cluster. Failures keep the last good value, as before.
       api.status(harborId, shipId)
-        .then((s) => { if (live) setStatus(s); }).catch(() => {});
+        .then((s) => { if (live) setStatus(s); })
+        // Transient failures stay swallowed -- the last good status stands, and
+        // a dropped tick is not news. 404 is the exception and is let through,
+        // because it is the one answer the next tick cannot improve on: the
+        // agent is gone, and without this the page shows its last heartbeat as
+        // a live one indefinitely. Watching stops with it; there is nothing
+        // left to watch, and 6 requests a minute against a deleted agent is
+        // just a way of not saying so.
+        .catch((e) => {
+          if (!live) return;
+          const gone = goneNotice(e, "agent");
+          if (gone) { setShipErr(gone); setPolling(false); }
+        });
       if (on && ns) {
         api.svMocks(ns, dom)
           .then((m) => { if (live) setSvMocks({ ns, read: m }); }).catch(() => {});
@@ -1476,6 +1497,55 @@ export default function App({ api }: { api: Api }) {
     setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, ...loc } : l)));
   }, []);
 
+  // -- Refresh ----------------------------------------------------------------
+  // The list ages while the page is open: an agent a colleague created, a
+  // location deleted in BlazeMeter's own UI, an agent that has gone quiet since
+  // the workspace was read. There is no poll -- the staleness is rare and a
+  // button is a hint that it is possible at all, which a silent background
+  // refresh is not.
+  //
+  // Its own path rather than re-firing the workspace effect above, and that is
+  // the whole reason it is written out here. That effect is the *initial* load:
+  // it clears the list, resolves the harbor id held by a restored session and
+  // calls `release()`. Re-running it as a refresh would re-run the session
+  // handover against a page that is already configured, and blank the list on
+  // the way past for a read that usually returns the same thing.
+  //
+  // So this writes `locations` and nothing else -- not the selection, not the
+  // options, not the declared functionalities, not facts. Facts in particular:
+  // they carry the image list into the bundle, and re-reading them would
+  // re-enter the path that seeds bundle options from a location. The cache is
+  // dropped for them too, so picking the location again is what re-reads them.
+  const [refreshing, setRefreshing] = useState(false);
+  // The workspace as of now, for a reply that lands after the drawer moved on.
+  // Assigned in render, like svWatchRef: `workspaceId` closed over below is the
+  // value the callback was built with, and a slow answer for the workspace you
+  // just left would otherwise overwrite the one you are looking at.
+  const workspaceRef = useRef(workspaceId);
+  workspaceRef.current = workspaceId;
+  const refreshLocations = useCallback(async () => {
+    const ws = workspaceRef.current;
+    if (ws == null) return;
+    setRefreshing(true);
+    setLocErr(null);
+    try {
+      // Two calls, in this order and never one. The server holds a location
+      // list for CACHE_TTL_S, so a re-read on its own would be served from the
+      // same cache the button exists to get past -- a click that changes
+      // nothing for up to a minute and looks exactly like one that worked.
+      await api.refresh();
+      const ls = await api.locations(ws);
+      if (workspaceRef.current === ws) setLocations(ls);
+    } catch (e) {
+      // The list stays on screen. A refresh that failed has said nothing about
+      // what the account holds, and blanking it here would answer "could not
+      // read" with "there is nothing there".
+      if (workspaceRef.current === ws) setLocErr((e as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [api]);
+
   // What Create is waiting for, as the sentence it shows rather than as a
   // silently greyed button.
   //
@@ -1620,6 +1690,7 @@ export default function App({ api }: { api: Api }) {
                 list: locations, filter: locFilter, setFilter: setLocFilter,
                 selectedId: harborId, pick: setHarborId,
                 busy: locBusy, error: locErr, updated: locationUpdated,
+                refresh: refreshLocations, refreshing,
                 create: {
                   open: showCreateLoc,
                   // Opening or closing the form drops the last refusal with it:

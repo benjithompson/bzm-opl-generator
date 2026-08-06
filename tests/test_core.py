@@ -368,6 +368,38 @@ def test_an_unclassified_failure_does_not_blame_the_caller():
                for e in (core.BadRequest, core.NotFound, core.UpstreamError))
 
 
+def test_a_deleted_location_is_not_the_same_failure_as_an_unreachable_one():
+    """404 is the one upstream status that becomes a different type.
+
+    Both used to be a 502 carrying whatever sentence BlazeMeter wrote, so the
+    only remedy either could offer was "something went wrong" -- while the two
+    remedies are opposites: re-read the account, or wait. It is the same pair
+    this package keeps apart everywhere else, arriving from the other side.
+    """
+    def deleted():
+        raise api.BzmApiError("GET /private-locations/h1 -> HTTP 404: gone",
+                              status=404)
+    with pytest.raises(core.NotFound) as caught:
+        core._upstream(deleted)
+    assert "404" in str(caught.value)
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 502, None])
+def test_only_404_says_the_thing_asked_for_is_gone(status):
+    """A key the account has stopped accepting, an endpoint it restricts, a rate
+    limit, BlazeMeter broken -- none of them is evidence that anything was
+    deleted, and reporting one as a deletion would send somebody to press
+    Refresh at a problem no re-read can fix. `None` is the failure that is not a
+    status at all (see api.BzmApiError), which a reader must not judge as a code.
+    """
+    def refuse():
+        raise api.BzmApiError("nope", status=status)
+    with pytest.raises(core.UpstreamError) as caught:
+        core._upstream(refuse)
+    assert not isinstance(caught.value, core.NotFound)
+    assert caught.value.status == 502
+
+
 # -- where a bundle's AUTH_TOKEN comes from -----------------------------------
 # Four branches, one rule, and only one of them mints. Minting *rotates*: the
 # previous token dies and the agent holding it sits at 0/1 Running, so a bundle

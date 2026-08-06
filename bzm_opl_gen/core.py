@@ -126,9 +126,25 @@ class TokenRefused(UpstreamError):
 
 
 def _upstream(fn, *args, **kw):
+    """A BlazeMeter call, with its refusal turned into one of ours.
+
+    404 is the one status that becomes a different type, and the reason is the
+    rule this package keeps everywhere else: a location somebody deleted and a
+    BlazeMeter nobody can reach must not share a representation. Both used to
+    arrive as a 502 carrying whatever sentence the API wrote, so the only
+    remedy either could offer was "something went wrong" -- while the two
+    remedies are opposites (re-read the account, versus wait and try again).
+    `api.BzmApiError` has carried the code all along; it was thrown away here.
+
+    Only 404. A 401 is an expired key and a 403 is an account that restricts
+    the endpoint: neither says the thing asked for is gone, and both are what
+    they always were.
+    """
     try:
         return fn(*args, **kw)
     except api.BzmApiError as e:
+        if e.status == 404:
+            raise NotFound(str(e))
         raise UpstreamError(str(e))
 
 

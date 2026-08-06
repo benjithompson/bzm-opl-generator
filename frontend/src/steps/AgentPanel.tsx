@@ -43,6 +43,10 @@ import { ManualSource } from "../groups/ManualSource";
 // the state on an agent's -- and they were the same call twice.
 import { onlineCount, shipOnline } from "../heartbeat";
 import { useOpenRow } from "../openRow";
+// A location or agent that is gone, told apart from one nothing could be read
+// about. Two ways in: a 404 from something acted on (goneNotice, at the call
+// sites in App) and a Refresh that came back without it (here).
+import { goneNotice, vanishedNotice } from "../stale";
 import { rotateHazard } from "../token";
 // What the profile card above this panel is sizing, on its way to the one
 // location panel that measures itself against it.
@@ -129,6 +133,14 @@ export interface LocationHandover {
   pick: (id: string) => void;
   busy: boolean;
   error: string | null;
+  /** Re-read this workspace's locations from BlazeMeter, past the server's own
+   *  cache. Writes the list and nothing else -- see App.refreshLocations, which
+   *  is a separate path from the initial load for exactly that reason. */
+  refresh: () => void;
+  /** ...and whether that read is in flight. Its own flag rather than `busy`:
+   *  that one blanks the list behind a "reading this workspace" line, and a
+   *  refresh is the case where what is on screen stays on screen. */
+  refreshing: boolean;
   /** The location came back changed: App owns the list and the selection, so
    *  it is App that puts it back. */
   updated: (loc: Location) => void;
@@ -271,8 +283,19 @@ export function AgentPanel({
   // three folded. Three states rather than two, because "closed everything" is
   // a choice and re-opening the current step over it would fight the click.
   const [pinned, setPinned] = useState<Fold | "none" | null>(null);
+  // A location that was chosen and is no longer in the list: a Refresh has been
+  // pressed and the account no longer has it. The selection is deliberately not
+  // cleared for us -- App writes the list and nothing else -- so this is what
+  // the panel does about it, and it is a view decision like every other fold
+  // here. Guarded on `busy`, because the initial load has an empty list and a
+  // restored id for a moment, which is not the same thing at all.
+  const vanished = !!locations.selectedId && !location && !locations.busy;
   const reached: Fold = !locations.selectedId ? "location" : "agent";
-  const section = pinned ?? reached;
+  // `vanished` outranks the pin, which nothing else here does. The rule against
+  // re-folding under a click is about sections whose *contents* changed; this
+  // is the one state where what is pinned open describes a location that is not
+  // there, and the only control that can resolve it is in the other section.
+  const section = vanished ? "location" : (pinned ?? reached);
   const fold = (id: Fold) => ({
     open: section === id,
     onToggle: () => setPinned(section === id ? "none" : id),
@@ -344,7 +367,10 @@ export function AgentPanel({
       // The account's own refusal, which names the ship and says a token read
       // off the BlazeMeter UI works just as well. Back to idle: nothing was
       // issued, so nothing was lost, and the button has to be pressable again.
-      setIssueErr(String((e as Error).message));
+      // Unless the agent is simply gone, which is not a refusal to say anything
+      // about a credential -- see stale.ts on why "agent" is right here even
+      // where it was the location that went.
+      setIssueErr(goneNotice(e, "agent") ?? String((e as Error).message));
       setArm("idle");
     } finally { setIssuing(false); }
   };
@@ -387,6 +413,17 @@ export function AgentPanel({
               disconnects. */}
           <SubSection title="Private location" done={!!locations.selectedId}
             {...fold("location")}
+            action={
+              /* One word, and what it costs is said under the list rather than
+                 on the button -- the rule this page keeps for every label. It
+                 is shown only in connect mode for free, by being here: manual
+                 entry renders none of this branch, and has no account to
+                 re-read. Disabled until there is a key, for the same reason the
+                 list below is empty then. */
+              <Button kind="ghost" onClick={locations.refresh}
+                busy={locations.refreshing} disabled={!source.who}>
+                Refresh
+              </Button>}
             summary={location
               ? `${location.name} · ${location.slots ?? "?"} engine(s)/agent`
               : "none selected"}
@@ -410,6 +447,10 @@ export function AgentPanel({
                   </span>
                 )}
               </p>
+              {/* The selection survived a Refresh that its location did not.
+                  A notice and not an error: nothing failed, and the remedy is
+                  one row down rather than a retry. */}
+              <NoticeMsg msg={vanished ? vanishedNotice("location") : null} />
               {/* Outside the form rather than only beside the button that opens
                   it: a refused create leaves the form open, so an error shown
                   only in the closed state is an error nobody sees. */}
