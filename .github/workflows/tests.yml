@@ -1,6 +1,6 @@
 name: tests
 
-# `workflow_dispatch` runs the same three jobs on any ref, started by hand:
+# `workflow_dispatch` runs the same four jobs on any ref, started by hand:
 #
 #   gh workflow run tests.yml --ref main
 #
@@ -126,6 +126,79 @@ jobs:
 
       - name: helm and manifests render the same objects
         run: python tests/helm_parity.py
+
+  # `compose.yaml` is a file compose will actually take. Its own job for the
+  # reason the helm one has: it needs a binary, and the offline suite must not
+  # depend on one -- a suite that skips when a tool is missing reports a clean
+  # pass having tested nothing.
+  #
+  # The pair with tests/test_generate.py is deliberate, and neither half covers
+  # the other. That suite holds the compose file against the `docker run` beside
+  # it -- same image, same environment, same mounts, same user, network, restart
+  # policy, workdir and command (#178) -- and cannot know whether compose parses
+  # either file: two python dicts agree perfectly about a document compose
+  # refuses. This job parses it and knows nothing about the container it
+  # describes.
+  #
+  # `docker compose version` first, because a runner without the plugin has to
+  # fail here rather than somewhere that reads as a pass. ubuntu-latest carries
+  # both; a self-hosted runner is where that could stop being true.
+  docker:
+    runs-on: ${{ (github.event_name == 'pull_request' && !github.event.repository.private) && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # The CLI is the whole of what this needs -- no test extras, and nothing
+      # here imports the suite.
+      - run: pip install -e .
+
+      - run: docker compose version
+
+      # The default shape: the credential split into bzm-opl-agent.env, which
+      # compose reads through `env_file:`, and a proxy URL carrying a password.
+      - name: the generated compose file is one compose accepts
+        run: |
+          python -m bzm_opl_gen generate --format docker \
+              --facts examples/facts.example.json \
+              --auth-token 0123456789abcdef0123456789abcdef \
+              --proxy-http http://px:3128 --proxy-user u --proxy-pass 'p$ss w' \
+              -o "$RUNNER_TEMP/docker"
+          cd "$RUNNER_TEMP/docker" && docker compose config -q
+
+      # The other branches of the file: the token inline (no env_file), the CA
+      # bind mount with its `${CA_BUNDLE:-./ca-bundle.crt}` default, and an
+      # image from a private registry.
+      - name: ...in the branches the default one does not render
+        run: |
+          printf -- '-----BEGIN CERTIFICATE-----\nMIIfake\n-----END CERTIFICATE-----\n' \
+              > "$RUNNER_TEMP/ca.pem"
+          python -m bzm_opl_gen generate --format docker \
+              --facts examples/facts.example.json \
+              --auth-token 0123456789abcdef0123456789abcdef --no-secret \
+              --ca-bundle "$RUNNER_TEMP/ca.pem" \
+              --private-registry reg.example.com/bzm \
+              -o "$RUNNER_TEMP/docker-inline"
+          cd "$RUNNER_TEMP/docker-inline" && docker compose config -q
+
+      # ...and the negative half. A required value left blank is written as
+      # compose's own `${X:?message}` (#183), so `up -d` aborts before anything
+      # is created. Accepting an unfinished bundle here would be compose
+      # starting an agent the script beside it refuses -- the two routes
+      # disagreeing about whether the bundle is finished.
+      - name: a field left blank is refused by compose itself
+        run: |
+          python -m bzm_opl_gen generate --format docker \
+              --facts examples/facts.example.json -o "$RUNNER_TEMP/docker-blank"
+          cd "$RUNNER_TEMP/docker-blank"
+          if docker compose config -q 2>"$RUNNER_TEMP/blank.err"; then
+            echo "compose accepted a bundle with a blank AUTH_TOKEN" >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/blank.err"
+          grep -q 'BZM_OPL_UNSET_AUTH_TOKEN' "$RUNNER_TEMP/blank.err"
 
   # The web UI. Separate from the python job rather than bolted onto its
   # matrix: it shares no toolchain with it, and running it twice over two

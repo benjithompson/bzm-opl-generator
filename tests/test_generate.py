@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import sys
 
 import pytest
@@ -1645,8 +1646,14 @@ def test_docker_scripts_are_valid_shell():
     invisible until somebody runs that branch on a customer's host."""
     import itertools
     import subprocess
-    for secret, ca, proxy, reg in itertools.product([True, False], repeat=4):
+    for secret, ca, proxy, reg, blank in itertools.product([True, False], repeat=5):
         o = dict(DOCKER, use_secret=secret)
+        if blank:
+            # A field left blank adds a refusal per variable, in whichever of
+            # the two files holds it -- and the pattern it greps for carries
+            # `<PLACEHOLDER>` and the message carries quotes, which is exactly
+            # the shape a quoting mistake hides in.
+            o["auth_token"] = gen.PLACEHOLDER
         if ca:
             o["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nx\n"
         if proxy:
@@ -1659,7 +1666,92 @@ def test_docker_scripts_are_valid_shell():
         sh = gen.generate(FACTS, o)["bzm-opl-agent.sh"]
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
-        assert r.returncode == 0, (secret, ca, proxy, reg, r.stderr)
+        assert r.returncode == 0, (secret, ca, proxy, reg, blank, r.stderr)
+
+
+def _run_bundle(tmp_path, files=None):
+    """Write a docker bundle out and run its script against a stub docker.
+    Called with no files, it re-runs whatever is in the directory now, which is
+    how the fill-it-in half of these tests is expressed.
+
+    A stub rather than a daemon, and it is the point of the test: what is being
+    checked is that the script refuses *before* it reaches `docker run`, so the
+    thing that has to be observable is the argument list docker was never given.
+    `docker ps` printing nothing is a host with no such container, which is the
+    branch every other check here is downstream of."""
+    import subprocess
+    for name, text in (files or {}).items():
+        (tmp_path / name).write_text(text)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    calls = tmp_path / "docker-calls"
+    (bin_dir / "docker").write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$1" >> "{calls}"\nexit 0\n')
+    (bin_dir / "docker").chmod(0o755)
+    r = subprocess.run(["sh", "bzm-opl-agent.sh"], cwd=tmp_path, text=True,
+                       capture_output=True,
+                       env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    made = calls.read_text().split() if calls.exists() else []
+    return r, made
+
+
+def test_docker_script_refuses_a_placeholder_before_starting_anything(tmp_path):
+    """The hole this covers is `auth_token`'s and it predates compose.
+
+    On Kubernetes the angle brackets are the guard -- the API server refuses the
+    object and names the field -- and that is what makes a blank field safe to
+    allow at all. `docker run` has no such opinion: an environment variable is a
+    string to it, so the marker used to reach crane, which answers 404 and logs
+    `Sleeping for 300` while looking like a slow boot. There is no API server on
+    this platform, so the check is in the artefact."""
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 1
+    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    # ...and the file to edit, which is the half a refusal without it leaves the
+    # reader to guess -- the credential is not in the script.
+    assert "Set it in bzm-opl-agent.env" in r.stderr
+    assert made == ["ps"], made           # nothing was started
+
+    # Filled in, the same bundle runs. The check reads the files as they stand
+    # rather than what was blank when this was generated, so there is no second
+    # step and nothing to delete: a guard that outlived its own fix would be a
+    # bundle that could never be finished by hand.
+    (tmp_path / "bzm-opl-agent.env").write_text("AUTH_TOKEN=" + "ab" * 32 + "\n")
+    r, made = _run_bundle(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "ps", "run"], made
+
+
+def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
+    """With `use_secret` off the value is in the script itself, so the check is
+    over its own run line -- anchored there, which is also what stops it
+    matching the marker in its own message two lines below."""
+    files = gen.generate(FACTS, {**DOCKER, "use_secret": False,
+                                 "auth_token": "", "private_registry": gen.PLACEHOLDER})
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 1
+    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    # Both files, because inline means the value is in both of the two that
+    # start this container and naming one sends somebody to fix half of it.
+    assert "Set it in bzm-opl-agent.sh and compose.yaml" in r.stderr
+    assert made == ["ps"], made
+    # The crane image carries it too and is deliberately not checked: a
+    # reference with `<` in it is refused by docker itself, from either route.
+    assert "<PLACEHOLDER>/crane" in files["bzm-opl-agent.sh"]
+
+
+def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
+    """Nothing is stated about a field nobody left blank. The check is emitted
+    per variable that carries the marker, so the ordinary bundle is the script
+    it was before this existed."""
+    files = gen.generate(FACTS, DOCKER)
+    assert gen.PLACEHOLDER not in files["bzm-opl-agent.sh"]
+    assert gen.PLACEHOLDER not in files[gen.DOCKER_COMPOSE_FILE]
+    assert "BZM_OPL_UNSET" not in files[gen.DOCKER_ENV_FILE]
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "run"], made
 
 
 def test_docker_use_secret_keeps_the_token_out_of_the_process_list():
@@ -1736,6 +1828,11 @@ COMPOSE_CASES = [
     {"proxy": {"http": "http://p:1", "https": "http://p:1",
                "username": "o'brien", "password": "a b"}},
     {"extra_env": {"PREFERRED_INTERFACE": "eth1"}},
+    # A field left blank, in each of the two files it can land in: the guard is
+    # a `${...:?}` carrying a sentence with punctuation in it, which is the
+    # shape a YAML quoting mistake hides in.
+    {"auth_token": gen.PLACEHOLDER},
+    {"auth_token": gen.PLACEHOLDER, "use_secret": False},
 ]
 
 
@@ -1848,8 +1945,9 @@ def test_compose_restates_the_fixed_half_of_the_command():
     """user, network, restart, mounts, workdir and entrypoint are the same fact
     stated twice, so both sides read the constant rather than a literal of their
     own -- `-u 0` is the flag that already went missing once, and it would go
-    missing here first. Issue #178 holds the two equal properly; this is the
-    shape."""
+    missing here first. This is the shape, one side at a time;
+    test_compose_and_docker_run_describe_the_same_container holds the two
+    against each other over the whole option matrix."""
     svc = yaml.safe_load(docker_compose())["services"]["crane"]
     assert svc["user"] == gen.DOCKER_USER
     assert svc["restart"] == gen.DOCKER_RESTART
@@ -1864,6 +1962,307 @@ def test_compose_restates_the_fixed_half_of_the_command():
     with_ca = yaml.safe_load(docker_compose(ca_bundle="PEM\n"))["services"]["crane"]
     assert with_ca["volumes"][-1] == (
         f"${{CA_BUNDLE:-./{gen.DOCKER_CA_FILE}}}:{gen.DOCKER_CA_PATH}:ro")
+
+
+def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
+    """The other half of the refusal, and the reason it is not a README note.
+
+    Compose has no pre-flight and no shell of its own: a check inside the
+    container is one `docker compose up -d` never prints. What it does have is
+    interpolation, and `${X:?message}` aborts the command before anything is
+    created, naming the field's path in the file and then this message.
+    Verified live against a real compose (5.1.4):
+
+        error while interpolating services.crane.environment.AUTH_TOKEN:
+        required variable BZM_OPL_UNSET_AUTH_TOKEN is missing a value:
+        AUTH_TOKEN carries <PLACEHOLDER> -- ...
+
+    One wording for both routes, so a customer reads the same sentence about the
+    same variable and the same file whichever file they started from."""
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE)
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
+    # Split out, the credential is in the one file both routes read -- so that
+    # is where the guard sits. Compose interpolates env_file values; docker's
+    # own --env-file does not, and the script refuses the marker inside the
+    # message before that literal could reach a container.
+    env = files[gen.DOCKER_ENV_FILE]
+    assert env.startswith("# Read by docker --env-file")
+    assert f"AUTH_TOKEN=${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}" in env
+    for line in (wrong, todo):
+        assert line in files[gen.DOCKER_RUN_FILE]
+    # A guard in compose.yaml over a value living in the env file would go on
+    # refusing after somebody had filled it in -- nothing in that file can see
+    # that they had, and a check that outlives its own fix is worse than none.
+    assert "AUTH_TOKEN" not in yaml.safe_load(
+        files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]["environment"]
+
+
+def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
+    """Inline, the value is compose's own, so the guard is the value -- and both
+    files name both files, because an inline value is in both of the two that
+    start this container."""
+    where = f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}"
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where)
+    files = gen.generate(FACTS, {**DOCKER, "auth_token": "", "use_secret": False})
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["environment"]["AUTH_TOKEN"] == (
+        f"${{BZM_OPL_UNSET_AUTH_TOKEN:?{wrong} {todo}}}")
+    for line in (wrong, todo):
+        assert line in files[gen.DOCKER_RUN_FILE]
+    # The guard's variable is one nobody has. `${AUTH_TOKEN:?...}` would read the
+    # ambient environment, and `${HTTP_PROXY:?...}` would resolve itself away on
+    # the host most likely to have one -- leaving compose starting a bundle the
+    # script beside it refuses, which is the two routes disagreeing about
+    # whether the bundle is finished.
+    proxy = gen.generate(FACTS, {**DOCKER, "use_secret": False,
+                                 "proxy": {"http": gen.PLACEHOLDER}})
+    svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
+
+
+# -- ...and the two files are held equal, over the whole option matrix --------
+#
+# This is helm_parity.py's problem in miniature (#178). Every judgement in
+# templates/*.yaml is restated in Go templates and nothing but that script
+# notices one drifting; here `-u 0`, `--net=host`, the two mounts, the restart
+# policy, the workdir and the entrypoint are restated in two languages, and the
+# checks above assert each side against a constant rather than against the other
+# side. A constant both renderers read is what makes the comparison cheap -- it
+# is not what performs it, and a value written into one file alone would never
+# have a constant to be caught by.
+#
+# It is pytest rather than a script beside helm_parity.py, and that is the whole
+# of the difference between the two: helm parity shells out to `helm`, and a
+# suite that skips when a binary is missing reports a clean pass having tested
+# nothing (the fastapi lesson). Both sides here are built in Python from one
+# call to generate(), so there is nothing to be missing, and a check that can
+# run in the offline suite belongs in it.
+#
+# What CI adds instead is the question this cannot answer: `docker compose
+# config -q` over a generated bundle proves compose *accepts* the file. Two
+# python dicts can agree perfectly about a document compose refuses to parse.
+
+# What a compose service may say about this container, compared as a *set*
+# rather than read key by key. The failure this exists for is a judgement made
+# in one file alone, and a key added here that nothing below holds against the
+# script is exactly that -- it would pass a field-by-field comparison by never
+# being looked at. `env_file` is separate because it is use_secret's answer
+# rather than a fixed part of the shape.
+COMPOSE_SERVICE_KEYS = {"image", "container_name", "user", "restart",
+                        "network_mode", "working_dir", "environment",
+                        "volumes", "command"}
+# Compose's own required-variable expression, which is how a blank value is
+# written in the file that has no shell to check it in (see _compose_required).
+COMPOSE_GUARD = "${BZM_OPL_UNSET_"
+
+
+def _env_file_env(files):
+    """The credential file as {name: value}. Docker parses it itself -- one
+    NAME=value per line, no quoting and no shell -- and compose reads the same
+    file through `env_file:`, so this half is one text read twice."""
+    text = files.get(gen.DOCKER_ENV_FILE)
+    return dict(line.split("=", 1) for line in (text or "").splitlines()
+                if line and not line.startswith("#"))
+
+
+def _script_paths(sh):
+    """The sibling files the script names, as `$VAR` -> bundle-relative path.
+
+    Both routes resolve them against their own file's directory -- `$DIR` in the
+    script, the compose file's directory for a relative bind mount -- so
+    stripping that prefix from each side is what makes them comparable rather
+    than a normalisation that hides a difference. CA_BUNDLE keeps its default
+    because that is the value the container gets when nobody overrides it, which
+    is the same thing `${CA_BUNDLE:-./ca-bundle.crt}` says next door.
+    """
+    out = {}
+    for name, raw in re.findall(r"^(NAME|ENV_FILE|CA_BUNDLE)=(.*)$", sh, re.M):
+        value = raw.strip('"')
+        default = re.fullmatch(r"\$\{CA_BUNDLE:-(.*)\}", value)
+        out["$" + name] = (default.group(1) if default else value).replace("$DIR/", "")
+    return out
+
+
+def _container_from_script(files):
+    """The container `bzm-opl-agent.sh` starts, as fields.
+
+    Read out of the generated file rather than from `_docker_run_lines`
+    directly: the file is what a customer runs, and the command reaching it
+    intact is part of what the two files agreeing is worth.
+
+    An argument this does not know about ends up as the image, so a flag added
+    to one side fails loudly on `image` rather than being skipped -- the same
+    rule the compose key set above states from the other direction.
+    """
+    sh = files[gen.DOCKER_RUN_FILE]
+    lines = sh.splitlines()
+    i = lines.index("docker run -d \\")
+    text = ""
+    while True:
+        text += lines[i].rstrip("\\") + " "
+        if not lines[i].endswith("\\"):
+            break
+        i += 1
+    paths = _script_paths(sh)
+    words = []
+    for word in shlex.split(text):          # _sh_value's quoting, undone
+        for var, value in paths.items():
+            word = word.replace(var, value)
+        words.append(word)
+
+    c = {"inline": {}, "mounts": [], "env_files": []}
+    rest = iter(words[2:])                  # past `docker run`
+    image_on = []
+    for word in rest:
+        if word == "-d":
+            continue
+        elif word == "--name":
+            c["name"] = next(rest)
+        elif word == "--restart":
+            c["restart"] = next(rest)
+        elif word == "-u":
+            c["user"] = next(rest)
+        elif word == "--env-file":
+            c["env_files"].append(next(rest))
+        elif word == "--env":
+            k, _, v = next(rest).partition("=")
+            c["inline"][k] = v
+        elif word == "-v":
+            c["mounts"].append(next(rest))
+        elif word == "-w":
+            c["workdir"] = next(rest)
+        elif word.startswith("--net="):
+            c["network"] = word.split("=", 1)[1]
+        else:
+            image_on = [word] + list(rest)
+    c["image"] = image_on[0]
+    c["command"] = " ".join(image_on[1:])
+    c["env"] = {**_env_file_env(files), **c["inline"]}
+    return c
+
+
+def _container_from_compose(files):
+    """The same container as compose describes it.
+
+    Two differences here are representation rather than substance, and both are
+    undone: compose interpolates its own values, so every `$` is written `$$`
+    where `--env` passes the string through untouched; and a relative host path
+    is resolved against this file's directory, which is what `$DIR` means in the
+    script. A guarded value is left as it stands -- it is not a value at all,
+    and comparing it is the caller's business below.
+    """
+    doc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])
+    assert set(doc) == {"name", "services"}, sorted(doc)
+    svc = doc["services"][gen.DOCKER_COMPOSE_SERVICE]
+    assert set(svc) - {"env_file"} == COMPOSE_SERVICE_KEYS, (
+        f"compose says {sorted(set(svc) - COMPOSE_SERVICE_KEYS - {'env_file'})} "
+        f"about this container and nothing holds it against {gen.DOCKER_RUN_FILE}")
+    inline = {k: v if v.startswith(COMPOSE_GUARD) else v.replace("$$", "$")
+              for k, v in svc["environment"].items()}
+    c = {"name": svc["container_name"], "image": svc["image"],
+         "user": svc["user"], "restart": svc["restart"],
+         "network": svc["network_mode"], "workdir": svc["working_dir"],
+         "command": svc["command"],
+         "env_files": [re.sub(r"^\./", "", f) for f in svc.get("env_file", [])],
+         "mounts": [re.sub(r"^\$\{CA_BUNDLE:-\./(.*?)\}", r"\1", m)
+                    for m in svc["volumes"]],
+         "inline": inline}
+    c["env"] = {**_env_file_env(files), **inline}
+    return c
+
+
+def _container_diffs(files):
+    """Every way the bundle's two files describe different containers."""
+    run, comp = _container_from_script(files), _container_from_compose(files)
+    diffs = [f"{f}: {gen.DOCKER_RUN_FILE}={run.get(f)!r} "
+             f"{gen.DOCKER_COMPOSE_FILE}={comp.get(f)!r}"
+             for f in ("image", "name", "user", "restart", "network", "workdir",
+                       "command", "mounts", "env_files")
+             if run.get(f) != comp.get(f)]
+    for k in sorted(set(run["env"]) | set(comp["env"])):
+        rv, cv = run["env"].get(k), comp["env"].get(k)
+        # The one licensed difference, and it is checked in both directions
+        # rather than skipped: a value nobody supplied is the marker to the
+        # script, which greps for it, and compose's `${...:?}` to compose, which
+        # has no shell to check anything in (#183). Both refuse; the container
+        # they describe once it is filled in is the same container, and a file
+        # that stopped refusing while the other went on doing so is exactly the
+        # one-sided change this walks the matrix for.
+        blank_here = k in comp["inline"] and str(cv).startswith(COMPOSE_GUARD)
+        blank_there = k in run["inline"] and gen.PLACEHOLDER in str(rv)
+        if blank_here or blank_there:
+            if not (blank_here and blank_there):
+                diffs.append(
+                    f"env {k}: left blank, and only "
+                    f"{gen.DOCKER_COMPOSE_FILE if blank_here else gen.DOCKER_RUN_FILE}"
+                    f" refuses it")
+        elif rv != cv:
+            diffs.append(f"env {k}: {gen.DOCKER_RUN_FILE}={rv!r} "
+                         f"{gen.DOCKER_COMPOSE_FILE}={cv!r}")
+    return diffs
+
+
+def test_compose_and_docker_run_describe_the_same_container():
+    """#178. Same image, same environment, same mounts, same user, network,
+    restart policy, working directory and command -- over the whole option
+    matrix rather than over one default bundle, because a parity check that only
+    ever sees defaults is the drift it exists to catch, one release later.
+
+    The matrix is helm_parity.py's own CASES plus COMPOSE_CASES above. Most of
+    helm's entries are Kubernetes vocabulary this format ignores and render the
+    same bundle twice, which is worth nothing here and costs nothing either --
+    what they buy is that the day one of them stops being ignored, it is already
+    generated both ways. COMPOSE_CASES carries what only this format has: the
+    credential split, the CA mount, a `$` in a proxy password, and a field left
+    blank in each of the two files it can land in.
+
+    Imported inside the test rather than at the top of this module, because
+    helm_parity imports FACTS from *here* -- at module level the two would be a
+    circular import, and running `python tests/helm_parity.py` would load it
+    twice.
+    """
+    from helm_parity import CASES, COMMON
+
+    cases = [(f"helm:{n}", e) for n, e in CASES.items()]
+    cases += [(f"compose:{i}", e) for i, e in enumerate(COMPOSE_CASES)]
+    failures = []
+    for name, extra in cases:
+        files = gen.generate(FACTS, {**DOCKER, **COMMON, **extra})
+        failures += [f"{name}: {d}" for d in _container_diffs(files)]
+    assert not failures, "\n".join(
+        ["the two files in the docker bundle describe different containers:"]
+        + failures)
+
+
+def test_the_parity_check_reads_both_files_rather_than_agreeing_vacuously():
+    """Parity is worth exactly what its two parsers read, and both of them
+    normalise -- shell quoting on one side, `$$` and a bundle-relative path on
+    the other. So this is what says the fields come out as the constants
+    themselves rather than as two agreeing mistakes; without it, a rule that
+    flattened both sides to nothing would pass every case above.
+
+    Every field here is one renderer could stop writing without the other
+    noticing, which is the whole of #178.
+    """
+    files = gen.generate(FACTS, {**DOCKER, "ca_bundle": "PEM\n",
+                                 "proxy": {"http": "http://p:1"}})
+    run = _container_from_script(files)
+    assert run["image"] == FACTS["crane_image"]
+    assert run["name"] == gen.docker_container_name("bbb222")
+    assert run["user"] == gen.DOCKER_USER
+    assert run["restart"] == gen.DOCKER_RESTART
+    assert run["network"] == gen.DOCKER_NETWORK
+    assert run["workdir"] == gen.DOCKER_WORKDIR
+    assert run["command"] == gen.DOCKER_ENTRYPOINT
+    assert run["mounts"] == gen.DOCKER_MOUNTS + [
+        f"{gen.DOCKER_CA_FILE}:{gen.DOCKER_CA_PATH}:ro"]
+    assert run["env_files"] == [gen.DOCKER_ENV_FILE]
+    # The credential is in the file both routes read and in neither inline set,
+    # and the environment the container ends up with is the union.
+    assert "AUTH_TOKEN" not in run["inline"]
+    assert run["env"]["AUTH_TOKEN"] == "de" * 32
+    assert run["env"]["HTTP_PROXY"] == "http://p:1"
+    assert _container_from_compose(files)["env"] == run["env"]
 
 
 def test_docker_readme_offers_both_routes_and_says_to_pick_one():

@@ -1695,17 +1695,21 @@ def _placeholder_block(o, where=()):
                else "1 field was left blank and carries")
     # What stops it, per format -- and they genuinely differ, so one sentence
     # for all three would be wrong twice. The Kubernetes formats are refused by
-    # something (the API server, then the chart's own validation); a docker
-    # agent is not, because `docker run` has no opinion about the value of an
-    # environment variable. Saying "this will be rejected" there would be a
-    # promise the format cannot keep, and the failure it actually gets -- crane
-    # answering 404 and logging `Sleeping for 300`, which reads as a slow boot
-    # -- is exactly the one worth naming instead.
+    # something outside the bundle (the API server, then the chart's own
+    # validation for the values the API server never sees as names); the docker
+    # platform has no API server at all, so the refusal is in the artefacts and
+    # this names them. Naming the failure the bundle stops instead of the stop
+    # itself would be the older wording, from when nothing stopped it: docker
+    # has no opinion about the value of an environment variable, so an agent
+    # started with one answers 404 and logs `Sleeping for 300` while looking
+    # exactly like a slow boot.
     if o["output_format"] == "docker":
-        stops = ("The agent will start and fail to register: crane answers "
-                 "`404`, logs `Sleeping for 300` and never starts its health "
-                 "service, so the container sits there looking like a slow "
-                 "boot.")
+        stops = (f"Both routes refuse to start it: `{DOCKER_RUN_FILE}` checks "
+                 "the files as they stand, and `docker compose up` is stopped "
+                 "by compose's own required-variable check on the same value. "
+                 "Nothing else would -- an environment variable is a string to "
+                 "docker, so an agent started with one answers `404`, logs "
+                 "`Sleeping for 300` and sits there looking like a slow boot.")
     else:
         stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
                  "Kubernetes name, so the API server rejects the object and "
@@ -1713,12 +1717,14 @@ def _placeholder_block(o, where=()):
                  "in this bundle.")
     # Wrapped rather than hand-broken: the sentence differs per format and by
     # how many fields there are, so fixed line breaks land wherever the shorter
-    # wording leaves them.
+    # wording leaves them. Never inside a hyphenated word, though -- a wrap
+    # through `bzm-opl-agent.sh` renders as two words in the Markdown, and the
+    # sentence names files.
     quote = textwrap.fill(
         f"**This bundle is not finished.** {subject} `{PLACEHOLDER}` instead of "
         f"a value. {stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
         f"with {'them' if n > 1 else 'it'} set.",
-        width=76)
+        width=76, break_on_hyphens=False)
     quoted = "\n".join("> " + ln for ln in quote.splitlines())
     return f"""
 {quoted}
@@ -2723,6 +2729,102 @@ def _set_but_not_carried(o):
             if o.get(k) != DEFAULT_OPTIONS[k]]
 
 
+# A required field left blank resolves to <PLACEHOLDER>, and on Kubernetes the
+# angle brackets are the guard: no RFC 1123 name may contain one, so the API
+# server refuses the object and names the field, and the chart repeats that
+# check (bzm-opl.validate) for the values the API server never sees as names.
+# **The docker platform has no API server at all**, so the check has to be in
+# the artefacts -- `docker run` has no opinion whatever about the value of an
+# environment variable, and a blank AUTH_TOKEN gives a container that starts,
+# answers 404, logs `Sleeping for 300` and reads as a slow boot.
+#
+# The four below are that check, once: what is blank, where it has to be filled
+# in, what both routes say about it, and the one expression compose can be
+# refused by.
+
+def _docker_where(in_env_file):
+    """Which file a value has to be filled in in, said the one way.
+
+    The split credential has one file. An inline value is in *both* of the files
+    that start this container, and naming one of the two sends somebody to fix
+    half of the bundle -- which is the answer the README's placeholder table
+    already gives for the token, and this is that answer, once."""
+    return (DOCKER_ENV_FILE if in_env_file
+            else f"{DOCKER_RUN_FILE} and {DOCKER_COMPOSE_FILE}")
+
+
+def _docker_blank_env(facts, o):
+    """Every environment variable this bundle renders with the marker still in
+    it, as (name, where-to-fill-it-in) pairs.
+
+    Read off the *rendered* values rather than off REQUIRED_TEXT or
+    placeholder_options, which stay the option-level answer the README prints.
+    Two reasons, and both are about the artefact being a different question from
+    the form: a value can carry the marker without being one (a proxy URL is
+    `user:pass@<PLACEHOLDER>`, assembled by proxy_url from a blank host), and
+    what a running script can check is a variable rather than an option.
+
+    It also settles **a format may not refuse what it says it ignores**
+    structurally rather than by calling _reportable per key: docker_env writes
+    no option in ignored_options(), so an option with no control on this
+    format's page cannot reach this list to be complained about.
+
+    The crane image is deliberately not here, though private_registry poisons it
+    too. A reference carrying `<` is refused by docker itself -- `invalid
+    reference format`, before anything is created, from both routes -- which is
+    the same guard the Kubernetes formats get from the API server. What this
+    covers is the half that nothing refuses.
+    """
+    cmd, secret = docker_split_env(facts, o)
+    found = [(k, _docker_where(False)) for k, v in cmd.items()
+             if PLACEHOLDER in str(v)]
+    found += [(k, _docker_where(True)) for k, v in secret.items()
+              if PLACEHOLDER in str(v)]
+    return found
+
+
+def _docker_blank_lines(name, where):
+    """What a bundle says about a variable left blank: what is wrong, then what
+    to do -- the voice the script's other two refusals already have.
+
+    One wording for both routes, because there is one bundle. The shell echoes
+    the two lines and the compose expression carries them joined, so whichever
+    route a customer is on names the same variable and the same file."""
+    return (f"{name} carries {PLACEHOLDER} -- a required value was left blank "
+            f"when this bundle was generated.",
+            f"Set it in {where}, or re-generate the bundle with it filled in.")
+
+
+def _compose_required(name, where):
+    """The blank value, as Compose's own required-variable expression.
+
+    Compose has no pre-flight of its own and no shell to put one in: `command`
+    and `entrypoint` are ours, but a check that runs inside the container is one
+    whose message `docker compose up -d` never prints. What is left is
+    interpolation -- `${X:?message}` aborts the command before anything is
+    created, printing the field's path in this file and then this message. So
+    the refusal is compose's own idiom rather than a warning in a README nobody
+    reads, and it changes nothing about the container: only the value nobody
+    supplied is written differently, and neither file can start an agent while
+    it is.
+
+    The variable is one nobody has. `${AUTH_TOKEN:?...}` would read the ambient
+    environment, and `${HTTP_PROXY:?...}` would resolve itself away on exactly
+    the host most likely to have one -- leaving compose starting an unfinished
+    bundle that the script beside it refuses, which is the two routes disagreeing
+    about whether the bundle is finished.
+
+    Interpolation reaches `env_file` values too, and that is what lets the split
+    credential be guarded in the one file both routes read. Guarding it from
+    *here* instead -- an `environment:` entry overriding the env file -- would go
+    on refusing after somebody had filled the credential in, because nothing in
+    this file can see that they had. A guard that survives its own fix is worse
+    than none.
+    """
+    return "${BZM_OPL_UNSET_%s:?%s}" % (
+        name, " ".join(_docker_blank_lines(name, where)))
+
+
 def _docker_run_sh(facts, o):
     ca = _ca_cfg(o)
     name = docker_container_name(o["ship_id"])
@@ -2747,6 +2849,26 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 ''') if o["use_secret"] else ""
     env_line = f'ENV_FILE="$DIR/{DOCKER_ENV_FILE}"\n' if o["use_secret"] else ""
+    # One refusal per variable left blank, over the files **as they stand**
+    # rather than over what was blank when this was generated -- so filling the
+    # value in is the whole of the fix, and nobody has to delete a check that
+    # goes on being right about a bundle that has changed. Each pattern is
+    # anchored to the line that carries the value (`NAME=` in the env file, the
+    # run line's `  --env NAME=` here), which is also why grepping this script
+    # does not match the check's own echo of the marker below it.
+    blank_check = ""
+    for var, where in _docker_blank_env(facts, o):
+        target, anchor = (('"$ENV_FILE"', f"^{var}=")
+                          if where == DOCKER_ENV_FILE
+                          else ('"$0"', f"^  --env {var}="))
+        wrong, todo = _docker_blank_lines(var, where)
+        blank_check += f'''
+if grep -q '{anchor}.*{PLACEHOLDER}' {target}; then
+  echo "{wrong}" >&2
+  echo "{todo}" >&2
+  exit 1
+fi
+'''
     return f'''#!/bin/sh
 # The BlazeMeter agent for private location {facts.get("harbor_name") or facts["harbor_id"]},
 # as one container on this host. Generated by bzm-opl-gen; see README.md.
@@ -2767,7 +2889,7 @@ if docker ps -a --format '{{{{.Names}}}}' | grep -qx "$NAME"; then
   echo "Remove it first if it is the old agent: docker rm -f $NAME" >&2
   exit 1
 fi
-{env_check}{ca_check}
+{env_check}{ca_check}{blank_check}
 {_docker_run_lines(facts, o)}
 
 echo "started $NAME -- follow it with: docker logs -f $NAME"
@@ -2777,13 +2899,28 @@ echo "started $NAME -- follow it with: docker logs -f $NAME"
 def _docker_env_file(facts, o):
     """The credential half, for --env-file. Docker parses this itself: one
     NAME=value per line, no quoting and no shell -- a quoted value arrives with
-    the quotes in it."""
+    the quotes in it.
+
+    ...with one exception, and it is the only file in the bundle two different
+    parsers read: a value left blank is written as compose's required-variable
+    expression, because this is the file compose gets the credential from and
+    the only place a guard over it can sit without outliving its own fix (see
+    _compose_required). docker --env-file does not expand it, so the script
+    beside it refuses the marker inside the message before that literal could
+    reach a container."""
     _, secret = docker_split_env(facts, o)
     if not secret:
         return None
+    blank = dict(_docker_blank_env(facts, o))
+    lines = "".join(
+        f"{k}={_compose_required(k, blank[k]) if k in blank else v}\n"
+        for k, v in secret.items())
+    note = ("# A line below is compose's own `${...:?}` -- that value was left\n"
+            "# blank, and this is what refuses it. Replace the whole line.\n"
+            if blank else "")
     return ("# Read by docker --env-file, not by a shell: no quotes, no export.\n"
             "# Anyone holding this token can register as this agent. chmod 600.\n"
-            + "".join(f"{k}={v}\n" for k, v in secret.items()))
+            + note + lines)
 
 
 def _compose_value(value):
@@ -2855,7 +2992,15 @@ def _docker_compose_yaml(facts, o):
         # Relative to this file, which is where compose resolves it from.
         body += ["    env_file:", f"      - ./{DOCKER_ENV_FILE}"]
     body.append("    environment:")
-    body += [f"      {k}: {_compose_value(v)}" for k, v in cmd.items()]
+    # A value left blank is written as the guard rather than as the marker: this
+    # file is the one route with nothing else to refuse it, and the marker here
+    # would be a string compose is perfectly happy to hand to crane. The two
+    # files therefore differ at exactly the values nobody supplied, and at
+    # nothing else -- both refuse, and the container they describe once it is
+    # finished is the same container.
+    blank = dict(_docker_blank_env(facts, o))
+    body += [f'      {k}: "{_compose_required(k, blank[k])}"' if k in blank
+             else f"      {k}: {_compose_value(v)}" for k, v in cmd.items()]
     body.append("    volumes:")
     body += [f"      - {m}" for m in DOCKER_MOUNTS]
     if _ca_cfg(o):
@@ -2911,9 +3056,8 @@ def _docker_readme(facts, o):
     # With the credential split out there is one file to edit; inline, it is in
     # both of the two files that start this container, and naming only the
     # script would send somebody to fix half of the bundle.
-    token_file = (DOCKER_ENV_FILE if o["use_secret"]
-                  else f"{DOCKER_RUN_FILE} and {DOCKER_COMPOSE_FILE}")
-    placeholders = _placeholder_block(o, {"auth_token": token_file})
+    placeholders = _placeholder_block(
+        o, {"auth_token": _docker_where(o["use_secret"])})
     ignored_block = ""
     if ignored:
         rows = "\n".join(f"| `{k}` | {why} |" for k, why in ignored)

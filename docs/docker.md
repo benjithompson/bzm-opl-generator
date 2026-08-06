@@ -150,6 +150,39 @@ it honest instead is parity with the script beside it: `user`, `network_mode`,
 constants, read by both renderers, and the environment comes from
 `docker_split_env()` for both.
 
+### Two checks, and neither covers the other
+
+A constant both renderers read makes the comparison cheap; it is not what
+performs it, and a value written into one file alone would have no constant to
+be caught by. So the bundle's two files are checked twice, and the questions are
+different:
+
+| check | where | what it answers |
+|---|---|---|
+| **parity** | `tests/test_generate.py::test_compose_and_docker_run_describe_the_same_container` | do the two files describe the *same container*? |
+| **validity** | the `docker` job in `.github/workflows/tests.yml` | is `compose.yaml` a file *compose will accept*? |
+
+Parity parses `compose.yaml` and the generated `bzm-opl-agent.sh` and holds them
+against each other — same image, same environment by name and by value, same
+mounts, same user, network mode, restart policy, working directory and command —
+over `helm_parity.py`'s own option matrix plus every branch this format has of
+its own. It is pytest rather than a script beside `helm_parity.py` because both
+sides are built in Python from one call to `generate()`: there is no binary to
+be missing, so nothing can skip. Two differences are representation rather than
+substance and are undone before comparing: compose doubles every `$` in its own
+values, and the split credential is in neither file's inline set. The one
+licensed difference is a value nobody supplied — the marker to the script, which
+greps for it, and `${...:?}` to compose, which has no shell to check anything in
+— and that is asserted in both directions rather than skipped.
+
+Validity is `docker compose config -q` over generated bundles, in CI. Parity
+cannot answer it: two python dicts can agree perfectly about a document compose
+refuses to parse. The job runs it over the default shape, over the branches the
+default does not render (token inline, CA mount, private registry), and once in
+the negative — a bundle with a field left blank has to be *refused*, naming the
+variable and the file, or compose would start an agent the script beside it
+refuses.
+
 ### Either/or, and docker enforces it
 
 Both files start one agent for one `ship_id`, and running both would put two
