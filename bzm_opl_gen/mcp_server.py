@@ -64,8 +64,8 @@ The path through it:
   0. opl_plan capacity          -- how much cluster a load target needs. Before
                                    everything else, and needs none of it: no
                                    key, no account, no cluster.
-  1. opl_location list          -- find the location, then `show` for its ship
-                                   (agent). Accounts hold hundreds of
+  1. opl_location list          -- find the location, then `show` for its
+                                   agents. Accounts hold hundreds of
                                    locations, so `list` is one line each and
                                    capped: narrow it with name_contains, and
                                    read the omitted counts it comes back with
@@ -98,10 +98,11 @@ Neither a location nor an agent needs a cluster to exist -- both can be created
 in BlazeMeter first, and an agent that has never sent a heartbeat is the normal
 state until its manifests are applied.
 
-Facts without an account: `opl_facts manual` builds the same structure from a
-harbor id and ship id read off the BlazeMeter UI, so you can produce a bundle
-for a customer whose account you cannot reach. It cannot know which browser
-image a GUI location uses -- only a live agent reports that -- and says so
+Facts without an account: `opl_facts manual` builds the same structure from the
+harbor_id and ship_id read off the BlazeMeter UI (BlazeMeter's own field names
+for a private location and one agent in it), so you can produce a bundle for a
+customer whose account you cannot reach. It cannot know which browser image a
+GUI location uses -- only the account names the pinned build -- and says so
 rather than guessing.
 
 Preflight without a cluster: `opl_preflight doctor` reads a cluster *evidence*
@@ -138,7 +139,7 @@ Two things about credentials. The API key comes from this server's environment
 ({core.KEY_FILE_ENV}, or {core.KEY_ID_ENV} and {core.KEY_SECRET_ENV}) -- never
 pass a secret as a tool argument. And issuing an agent's AUTH_TOKEN *rotates*
 it: the previous token stops working, and an agent already running on it sits at
-0/1 logging 404 on its status endpoint, which reads like a deleted ship. That is
+0/1 logging 404 on its status endpoint, which reads like a deleted agent. That is
 why the token is written into the bundle and never returned to you, and why the
 two actions that can issue one -- `opl_bundle generate` with rotate_token=true,
 and `opl_location reveal_token` -- have to be asked for by name. Generating
@@ -318,31 +319,49 @@ def _client(args):
 
 # -- opl_location --------------------------------------------------------------
 
-LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_ship",
-                    "reveal_token", "delete")
+# An older spelling, kept working. One deployment inside a private location is
+# an **agent**; `ship` is the account's own field name and lives in `ship_id`
+# and nowhere else (CONTEXT.md). A session reads the current action name out of
+# the description at call time, so nothing stored goes stale by this rename --
+# but a person's saved prompt does, and an action name costs nothing to keep,
+# which is the trade `bzm-opl-gen create-ship` already made as an argparse
+# alias. Declared as a table rather than as a second branch in the dispatch, so
+# that "an old name" is distinguishable from "a name still spelling the wrong
+# vocabulary" without anybody keeping a list of exceptions.
+LOCATION_ALIASES = {"create_ship": "create_agent"}
+
+LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_agent",
+                    "reveal_token", "delete") + tuple(LOCATION_ALIASES)
 
 DESCRIPTIONS["opl_location"] = (
-    "BlazeMeter private locations (harbors) and their agents (ships).\n"
+    "BlazeMeter private locations (harbors) and their agents.\n"
     "  list         -- one line per location {account_id?, workspace_id?, "
     "name_contains?, limit?}. Defaults to this key's own account and to the "
     f"first {core.DEFAULT_LOCATION_LIMIT}; accounts hold hundreds, so narrow "
     "with name_contains rather than raising limit. Whatever it leaves out is "
     "counted in the response.\n"
-    "  show         -- one location with its ships in full {harbor_id}\n"
+    "  show         -- one location with its agents in full {harbor_id}\n"
     "  whoami       -- who this API key is, and its default account\n"
     "  create       -- a new private location {name, account_id, "
     "workspace_id, func_ids?, slots?, threads_per_engine?}\n"
-    "  create_ship  -- a new agent in a location {harbor_id, name}\n"
-    "  reveal_token -- the ship's AUTH_TOKEN {harbor_id, ship_id}. "
+    "  create_agent -- a new agent in a location {harbor_id, name}"
+    + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
+    "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "
     "ROTATES it: the previous token stops working and any agent "
     "running on it goes to 0/1. Use only when re-applying that agent.\n"
-    "  delete       -- delete a location and every ship in it "
+    "  delete       -- delete a location and every agent in it "
     "{harbor_id}. Off unless " + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
-    "create/create_ship/delete change a real customer account -- "
-    "confirm with the person before calling them.")
+    "create/create_agent/delete change a real customer account -- "
+    "confirm with the person before calling them.\n"
+    "`ship_id` is BlazeMeter's own name for an agent's id, spelled as the "
+    "account spells it, so what you read here matches what its API answers.")
 
 
 def _location(action, args):
+    # An old spelling reaches the action it was renamed from, rather than a
+    # branch of its own: two branches is two behaviours waiting to differ.
+    action = LOCATION_ALIASES.get(action, action)
+
     if action == "whoami":
         u = core.user(_client(args))
         return {"email": u.get("email"), "display_name": u.get("displayName"),
@@ -403,8 +422,8 @@ def _location(action, args):
                                         core.api.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
-                "next": [f"opl_location create_ship with harbor_id "
-                         f"{loc.get('id')!r} -- a location with no ship has "
+                "next": [f"opl_location create_agent with harbor_id "
+                         f"{loc.get('id')!r} -- a location with no agent has "
                          f"nothing to deploy"]}
         if made["warning"]:
             # Present only when it applies, like the listing's `note`: a
@@ -414,10 +433,13 @@ def _location(action, args):
             body["warning"] = made["warning"]
         return body
 
-    if action == "create_ship":
+    if action == "create_agent":
         harbor_id, name = _need(args, "harbor_id", "name")
-        ship = core.create_ship(_client(args), harbor_id, name)
-        return {"harbor_id": harbor_id, "ship": ship,
+        # core.create_ship keeps its name: it is the CLI's and the HTTP route's
+        # too, and BlazeMeter's endpoint is /ships. What this surface answers
+        # with is the word a session has to reason in.
+        agent = core.create_ship(_client(args), harbor_id, name)
+        return {"harbor_id": harbor_id, "agent": agent,
                 "next": [f"opl_facts gather with harbor_id {harbor_id!r}"],
                 # Not issued here on purpose: it would rotate a token on an
                 # action whose name says nothing about credentials. And nothing
@@ -440,8 +462,16 @@ def _location(action, args):
     if action == "delete":
         harbor_id, = _need(args, "harbor_id")
         _gate(ALLOW_DESTRUCTIVE_ENV,
-              "deleting a private location (and every ship in it)")
-        return dict(core.delete_location(_client(args), harbor_id),
+              "deleting a private location (and every agent in it)")
+        gone = dict(core.delete_location(_client(args), harbor_id))
+        # core's key stays `ships_deleted` -- it is what the CLI prints and what
+        # the HTTP route answers, both outside this rename. Renamed on the way
+        # out rather than left alone, because a session reading `agents`
+        # everywhere else has no reason to look for a ship here; `pop` rather
+        # than `get`, so a core that renames it fails loudly instead of
+        # answering with an empty list nobody deleted.
+        gone["agents_deleted"] = gone.pop("ships_deleted")
+        return dict(gone,
                     next=["any agent still deployed for it is now orphaned: "
                           "kubectl delete -f <its bundle>"])
 
@@ -453,48 +483,53 @@ def _location_summary(loc):
     fields that decide whether a bundle can be generated at all.
 
     One location's worth, for `show` and `create`. A listing uses
-    _location_brief -- per-ship detail on 171 locations is the size problem
+    _location_brief -- per-agent detail on 171 locations is the size problem
     this pair exists to separate.
+
+    `ship_id` keeps its name inside an agent, and is the only thing here that
+    does: it is BlazeMeter's own field, so a session that reads this and then
+    reads the account's own response should not have to translate.
     """
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "slots": loc.get("slots"), "func_ids": loc.get("funcIds"),
-            "ships": [{"ship_id": s.get("id"), "name": s.get("name"),
-                       "state": s.get("state"),
-                       # null where the payload carried no heartbeat -- see
-                       # core.ship_reporting. opl_agent status is the authority.
-                       "reporting": core.ship_reporting(s)}
-                      for s in loc.get("ships", [])]}
+            "agents": [{"ship_id": s.get("id"), "name": s.get("name"),
+                        "state": s.get("state"),
+                        # null where the payload carried no heartbeat -- see
+                        # core.ship_reporting. opl_agent status is the authority.
+                        "reporting": core.ship_reporting(s)}
+                       for s in loc.get("ships", [])]}
 
 
 def _location_brief(loc):
     """One location as a *listing* entry: enough to pick one and go on.
 
-    An account with 171 locations and 221 ships listed the long way came back
+    An account with 171 locations and 221 agents listed the long way came back
     at 84,779 characters, past the caller's result ceiling, so step 1 of the
-    path never completed. Almost all of it was per-ship detail about locations
+    path never completed. Almost all of it was per-agent detail about locations
     the caller was never going to choose -- and choosing needs only whether
     there is an agent there and whether anything is alive. `show` pays for the
     detail on the one that gets picked.
     """
-    ships = loc.get("ships") or []
-    reporting = [core.ship_reporting(s) for s in ships]
+    agents = loc.get("ships") or []
+    reporting = [core.ship_reporting(s) for s in agents]
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
-            "ship_count": len(ships),
-            # Two counts, because one cannot carry both facts. `ships_reporting`
-            # counts only agents the payload vouches for, so a location with one
-            # live agent and one heartbeat-less record still shows the live one
-            # -- reporting the pair as wholly unknown lost exactly the "one of
-            # two" signal a count exists to give. `ships_unknown` is how a
-            # reader tells 0-because-we-looked from 0-because-we-could-not, so
-            # nobody redeploys a working agent on the strength of a zero. Where
-            # nothing at all is vouched for, `ships_reporting` is null rather
-            # than 0: with every ship unknown there is no count to give, and a 0
-            # beside it would be read as "none alive".
-            "ships_reporting": (None if reporting and all(r is None
-                                                          for r in reporting)
-                                else sum(1 for r in reporting if r)),
-            "ships_unknown": sum(1 for r in reporting if r is None)}
+            "agent_count": len(agents),
+            # Two counts, because one cannot carry both facts.
+            # `agents_reporting` counts only agents the payload vouches for, so
+            # a location with one live agent and one heartbeat-less record still
+            # shows the live one -- reporting the pair as wholly unknown lost
+            # exactly the "one of two" signal a count exists to give.
+            # `agents_unknown` is how a reader tells 0-because-we-looked from
+            # 0-because-we-could-not, so nobody redeploys a working agent on the
+            # strength of a zero. Where nothing at all is vouched for,
+            # `agents_reporting` is null rather than 0: with every agent unknown
+            # there is no count to give, and a 0 beside it would be read as
+            # "none alive".
+            "agents_reporting": (None if reporting and all(r is None
+                                                           for r in reporting)
+                                 else sum(1 for r in reporting if r)),
+            "agents_unknown": sum(1 for r in reporting if r is None)}
 
 
 def _omission_note(sel, name_contains):
@@ -636,7 +671,7 @@ def _bundle(action, args):
         written = core.write_bundle(files, out_dir)
         return {"out_dir": out_dir, "files": written,
                 "profile": json.loads(files[gen_mod.PROFILE_FILE]),
-                # The branch and the ship, never the value: naming the agent
+                # The branch and the agent, never the value: naming the agent
                 # whose credential was just replaced is the whole point, and it
                 # is not a secret.
                 "token_source": source._asdict(),
@@ -670,7 +705,7 @@ def _bundle(action, args):
         # Not behind the destructive gate, unlike `delete`, and the difference
         # is what the two do: mirroring *adds* images to a registry the caller
         # named, and the worst case is repositories nobody wanted. Deleting a
-        # location destroys an agent and its ships with nothing to restore from.
+        # location destroys it and every agent in it, with nothing to restore.
         # The tool's destructiveHint is what makes a client confirm this one.
         return core.mirror_images(
             refs, mirror=args.get("mirror"),

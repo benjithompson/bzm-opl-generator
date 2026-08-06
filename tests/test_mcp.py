@@ -13,6 +13,7 @@ reports a clean pass having tested nothing.
 
 import json
 import os
+import re
 import time
 
 import anyio
@@ -438,9 +439,9 @@ def test_a_listing_entry_carries_what_choosing_a_location_needs(big_account):
     assert entry["harbor_id"].startswith("harbor-")
     assert entry["name"].startswith("acme-")
     assert entry["func_ids"] == ["performance"] and entry["slots"] == 10
-    assert entry["ship_count"] == 2
-    assert entry["ships_reporting"] == 0     # both heartbeats are from 2023
-    assert not isinstance(entry.get("ships"), list)
+    assert entry["agent_count"] == 2
+    assert entry["agents_reporting"] == 0     # both heartbeats are from 2023
+    assert not isinstance(entry.get("agents"), list)
 
 
 def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
@@ -448,7 +449,7 @@ def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
     """A listing payload without `lastHeartBeat` cannot say an agent is dead.
     Reported as null, so nobody redeploys an agent that was working."""
     entry = ok("opl_location", "list")["locations"][0]
-    assert entry["ship_count"] == 1 and entry["ships_reporting"] is None
+    assert entry["agent_count"] == 1 and entry["agents_reporting"] is None
 
 
 def test_an_explicit_null_limit_still_gets_the_default_cap(big_account):
@@ -473,7 +474,7 @@ def test_a_limit_that_is_not_a_number_is_refused_not_a_crash(big_account):
 
 
 def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
-    """`ships_reporting` went null if *any* ship lacked a heartbeat, so a
+    """`agents_reporting` went null if *any* agent lacked a heartbeat, so a
     location with a working agent and a heartbeat-less record reported wholly
     unknown -- losing the "one of two" signal the count exists to give."""
     c = FakeClient(locations=[{"id": "h9", "name": "mixed", "slots": 2,
@@ -482,9 +483,9 @@ def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
         {"id": "nohb", "state": "idle"}]}])
     monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
     entry = ok("opl_location", "list")["locations"][0]
-    assert entry["ship_count"] == 2
-    assert entry["ships_reporting"] == 1, "the live agent must still show"
-    assert entry["ships_unknown"] == 1, "and the one nobody can vouch for"
+    assert entry["agent_count"] == 2
+    assert entry["agents_reporting"] == 1, "the live agent must still show"
+    assert entry["agents_unknown"] == 1, "and the one nobody can vouch for"
 
 
 def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
@@ -537,8 +538,8 @@ def test_creating_a_location_still_answers_in_full(fake_account):
     loc = body["location"]
     assert loc["harbor_id"] == "h9" and loc["name"] == "scratch"
     assert loc["func_ids"] == ["performance"] and loc["slots"] == 1
-    # The per-ship list itself, not a count of one.
-    assert loc["ships"] == [] and "ship_count" not in loc
+    # The per-agent list itself, not a count of one.
+    assert loc["agents"] == [] and "agent_count" not in loc
 
 
 def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
@@ -561,14 +562,139 @@ def test_the_listing_names_the_account_it_actually_listed(fake_account):
     assert ok("opl_location", "list")["account_id"] == 7
 
 
-def test_per_ship_detail_is_reachable_for_the_location_that_was_picked(
+def test_per_agent_detail_is_reachable_for_the_location_that_was_picked(
         fake_account):
     """What `list` stopped paying for on all 171. `show` is one location, so
     the detail costs what it is worth."""
     body = ok("opl_location", "show", {"harbor_id": "h1"})
-    ships = body["location"]["ships"]
-    assert [s["ship_id"] for s in ships] == ["s1"]
-    assert ships[0]["state"] == "idle"
+    agents = body["location"]["agents"]
+    assert [s["ship_id"] for s in agents] == ["s1"]
+    assert agents[0]["state"] == "idle"
+
+
+# -- the word for one deployment inside a location ----------------------------
+# It is an **agent**, and `ship` is the account's own field name -- `ship_id`,
+# `SHIP_ID` -- which CONTEXT.md keeps there and nowhere else. This surface is
+# where that matters most: the tool descriptions, the instructions block and
+# the served docs are the entire documentation a session gets, so one that reads
+# "a location with no ship has nothing to deploy to" has to guess what a ship is
+# before it can act, and nothing here will tell it (#156).
+
+
+@pytest.mark.parametrize("spelling", ["create_agent", "create_ship"])
+def test_creating_an_agent_answers_with_an_agent(fake_account, spelling):
+    """The action, the key it answers with, and the old spelling that still
+    reaches both.
+
+    `create_ship` stays accepted for the reason `bzm-opl-gen create-ship` does
+    after #155: a session reads the current action name out of the description
+    at call time, so nothing stored goes stale -- but a person's saved prompt
+    does, and it costs nothing to keep. Driven through the real client rather
+    than stopped at the dispatch, because what is under test is the answer as
+    well as the route to it.
+    """
+    body = ok("opl_location", spelling, {"harbor_id": "h1", "name": "agent1"})
+    assert body["agent"] == {"id": "s2", "name": "agent1"}
+    assert "ship" not in body
+    # And the rule the rename is likeliest to nudge: this action issues no
+    # credential, so there is none in the answer and none spent on the account.
+    # `reveal_token` is a whole action precisely so that cannot happen here.
+    assert "SECRET-TOKEN-VALUE" not in json.dumps(body)
+    assert fake_account.calls == []
+
+
+def test_the_alias_is_offered_as_an_action_a_client_may_send():
+    """An action a client's own schema validation refuses never reaches the
+    dispatch, so an alias missing from the Literal is not an alias at all."""
+    action = listing()["tools"]["opl_location"].input_schema["properties"]["action"]
+    assert set(mcp_server.LOCATION_ALIASES) <= set(action["enum"])
+
+
+def _ship_words(text):
+    """Every `ship` left in a string once the two names that may say it are out.
+
+    `ship_id` is BlazeMeter's own field name: this tool's word for a field must
+    not differ from the word in the response it was read out of. The alias is
+    the action name kept for a saved prompt. Both are declared in the module, so
+    a *new* name that says ship fails this rather than being exempted by a list
+    somebody has to maintain here.
+    """
+    for name in mcp_server.LOCATION_ALIASES:
+        # ...in the command line's spelling too: `create-ship` is the same
+        # kept name, and docs/mcp.md says so beside this one.
+        text = text.replace(name, "").replace(name.replace("_", "-"), "")
+    return re.findall(r"\bships?\b", text.replace("ship_id", ""), re.I)
+
+
+def test_nothing_this_server_tells_a_session_says_ship():
+    """Over the whole documentation surface, not a page of it.
+
+    The instructions, all six descriptions, the summary a session picks a doc
+    by, and `docs/mcp.md` read back through the resource a session actually
+    reads it through -- gathered from the module's own tables in the spirit of
+    `test_server.py::test_this_api_never_says_feature`, so a seventh tool or a
+    tenth doc is covered by existing.
+    """
+    async def served(name):
+        async with mcp.Client(_SERVER[0]) as c:
+            got = await c.read_resource(f"{mcp_server.RESOURCE_SCHEME}://docs/{name}")
+            return got.contents[0].text
+
+    surface = {"the instructions": mcp_server.INSTRUCTIONS,
+               "docs/mcp.md": anyio.run(served, "mcp.md")}
+    surface.update({f"{t}'s description": d
+                    for t, d in mcp_server.DESCRIPTIONS.items()})
+    surface.update({f"the summary of {n}": s
+                    for n, s in mcp_server.DOC_SUMMARIES.items()})
+
+    # Not vacuous: a surface that stopped being gathered would pass silently,
+    # which is the shape a moved table leaves behind.
+    assert set(mcp_server.DESCRIPTIONS) == set(EXPECTED_ANNOTATIONS)
+    assert len(surface["docs/mcp.md"]) > 2000, "the served page came back empty"
+
+    said = {where: _ship_words(text) for where, text in surface.items()}
+    assert not {w: s for w, s in said.items() if s}, said
+
+
+def _keys(body):
+    """Every key anywhere in a decoded response body."""
+    if isinstance(body, dict):
+        return set(body) | {k for v in body.values() for k in _keys(v)}
+    if isinstance(body, list):
+        return {k for v in body for k in _keys(v)}
+    return set()
+
+
+def test_no_answer_from_opl_location_calls_an_agent_a_ship(fake_account,
+                                                           monkeypatch):
+    """Every action this tool has, driven, and every key it answers with.
+
+    Scoped to `opl_location` because that is where the rename lands: `opl_facts`
+    hands back the facts document, whose shape is the bundle's and the CLI's,
+    and `ship_id` is the account's field name wherever it appears. The argument
+    table is checked against the action list rather than trusted, so an action
+    added later fails here instead of going undriven.
+    """
+    monkeypatch.setenv(mcp_server.ALLOW_DESTRUCTIVE_ENV, "1")
+    args = {
+        "whoami": {},
+        "list": {},
+        "show": {"harbor_id": "h1"},
+        "create": {"name": "scratch", "account_id": 7, "workspace_id": 99},
+        "create_agent": {"harbor_id": "h1", "name": "agent1"},
+        "reveal_token": {"harbor_id": "h1", "ship_id": "s1"},
+        "delete": {"harbor_id": "h1"},
+    }
+    assert sorted(args) == sorted(a for a in mcp_server.LOCATION_ACTIONS
+                                  if a not in mcp_server.LOCATION_ALIASES), \
+        "an action of this tool that nothing here drives"
+
+    keys = set()
+    for action, a in args.items():
+        keys |= _keys(ok("opl_location", action, a))
+    assert len(keys) > 15, f"only reached {sorted(keys)}"
+    assert not [k for k in keys if "ship" in k.lower() and k != "ship_id"], \
+        sorted(keys)
 
 
 # -- the bundle on disk -------------------------------------------------------
@@ -801,7 +927,7 @@ def test_deleting_a_location_is_refused_by_default(fake_account):
 def test_deleting_a_location_works_once_allowed(fake_account, monkeypatch):
     monkeypatch.setenv(mcp_server.ALLOW_DESTRUCTIVE_ENV, "1")
     body = ok("opl_location", "delete", {"harbor_id": "h1"})
-    assert body["deleted"] == "h1" and body["ships_deleted"] == ["s1"]
+    assert body["deleted"] == "h1" and body["agents_deleted"] == ["s1"]
 
 
 def test_livetest_is_refused_by_default():

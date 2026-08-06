@@ -54,6 +54,24 @@ anything that breaks.
 
 ### Changed
 
+- **The MCP server says agent, not ship.** One deployment inside a private
+  location is an *agent*, and for a session driving this server the tool
+  descriptions and the docs it serves are the whole documentation — so being
+  told "a location with no ship has nothing to deploy to" left it guessing what
+  a ship was, with nothing anywhere to check against.
+
+  `opl_location create_ship` is now **`create_agent`** and answers with an
+  `agent` key; a listing counts `agent_count`, `agents_reporting` and
+  `agents_unknown`; `show` returns `agents`; `delete` reports `agents_deleted`.
+  `create_ship` goes on working as an accepted alias, exactly as `bzm-opl-gen
+  create-agent` still answers to `create-ship` — an action name is read out of
+  the description at call time, but a saved prompt is not.
+
+  **`ship_id` is unchanged**, everywhere it appears, and so are `harbor_id`,
+  `SHIP_ID` and `HARBOR_ID`. Those are BlazeMeter's own field names, and this
+  tool's word for a field must not differ from the word in the response it was
+  read out of.
+
 - **A bundle's images come from the location itself, and no longer wait for an
   agent to be running.** BlazeMeter serves the image list a private location
   runs — the same list the agent asks for when it starts — so `bzm-opl-gen
