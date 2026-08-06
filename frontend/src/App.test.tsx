@@ -35,13 +35,14 @@ import {
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table, from the one copy of it.
 import {
-  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV,
+  AGENT_ENV, DOCKER_IGNORED, RESERVED_ENV, SIZING_MODELS,
 } from "./fixtures";
 // The snapshot writer the page itself uses. A literal forged here would be a
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
 import * as session from "./session";
 import { EMPTY_PLAN_INPUTS } from "./usePlan";
+import { DEFAULT_SIZINGS } from "./sizings";
 
 afterEach(cleanup);
 // The page writes its selections to sessionStorage, and one test's would
@@ -405,7 +406,7 @@ test("a restored profile's SV options for a location without mockServices are cl
       // its funcIds, which is what makes these options a state nobody chose.
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter", sv_ingress: "nginx" },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
     render(<App api={twoFunctionalityAccount(asked)} />);
@@ -449,7 +450,7 @@ test("a location that runs one functionality shows one card, with nothing config
       confirmed: { loc: "h-perf", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter" },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
     render(<App api={twoFunctionalityAccount(asked)} />);
@@ -509,7 +510,7 @@ test("a funcId this tool has no options for is named in the account's own words"
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter" },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     render(<App api={unclaimedAccount([])} />);
     fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
@@ -537,7 +538,7 @@ test("an SV configuration no location demanded still takes away the formats that
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
         sv_tls_secret: "wildcard",
       },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
     render(<App api={unclaimedAccount(asked)} />);
@@ -573,7 +574,7 @@ test("a functionality this bundle's format cannot serve is stated, not offered",
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter", output_format: "docker" },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
     render(<App api={unclaimedAccount(asked)} />);
@@ -1246,6 +1247,9 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
     // which is how a page test comes to assert against a table the unit test
     // would call incomplete).
     dockerIgnored: async () => DOCKER_IGNORED,
+    // plan.SIZING_MODELS, from the same one copy: the sizing card renders a
+    // field group per model, so a page with no table has no fields.
+    sizingModels: async () => SIZING_MODELS,
     generate: async () => ({
       files: [], token: { branch: "placeholder" as const, ship_id: null,
                           message: "" },
@@ -1676,7 +1680,7 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
       confirmed: { loc: "h-perf", ship },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "ns" }, step: 0, view: "flow" as const,
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
 
     session.save(snapshot("s-1"));
@@ -1707,7 +1711,7 @@ test("nothing is written back over a saved session until the restore has resolve
       confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
 
     // The key check is the last thing the mount effect waits on. Held open,
@@ -1763,7 +1767,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
       confirmed: { loc: "h-dublin", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "restored-ns" }, step: 1, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
 
     const listing = [
@@ -1823,7 +1827,7 @@ test("an id the account no longer has is written away once the account has said 
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       // Step 1, where the location list is, so the answer arriving is visible.
       options: { namespace: "restored-ns" }, step: 0, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     // The account answers, and the location the snapshot named is not in it.
     render(<App api={accountOf([loc("h-0", "Region 0")])} />);
@@ -1987,7 +1991,7 @@ test("a restored declaration waits for the vocabulary rather than being lost to 
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
       declaredFunctionalities: ["mockServices"],
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     render(<App api={manualPage(asked, [], {
       functionalities: () => served.promise,
@@ -2019,7 +2023,7 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
       declaredFunctionalities: ["mockServices"],
       options: { namespace: "blazemeter-sv" }, step: 1, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     render(<App api={manualPage(asked, [], {
       // The vocabulary this page is served no longer carries what the snapshot
@@ -2111,7 +2115,7 @@ test("a restored declaration keeps the members the vocabulary still offers",
       manual: { harbor_id: TYPED.harbor, ship_id: TYPED.ship },
       declaredFunctionalities: ["performance", "functionalGui"],
       options: { namespace: "blazemeter" }, step: 1, view: "flow",
-      plan: EMPTY_PLAN_INPUTS,
+      plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     render(<App api={manualPage(asked, [], {
       // GUI functional is not in this build's vocabulary -- withdrawn, or a tab
@@ -2189,7 +2193,7 @@ test("a location that already mixes the two is warned about, never blocked",
       confirmed: { loc: "h-both", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: { namespace: "blazemeter" },
-      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS,
+      step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
     render(<App api={twoFunctionalityAccount(asked, {
@@ -2368,15 +2372,28 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
  *  there; what these two need is an answer that divides by the agents it was
  *  asked with, because that division is the whole reason a location re-asks. */
 function planFor(body: {
-  users: string; agents?: string; vus_per_engine?: string;
+  users?: string; agents?: string; vus_per_engine?: string;
+  sizings?: { functionality: string; target: string; figure?: string }[];
 }): CapacityPlan {
   const agents = Math.max(Number(body.agents) || 1, 1);
-  const vus = Number(body.vus_per_engine) || 500;
-  const engines = Math.ceil(Number(body.users) / vus);
+  // The card sends rows and the location panel sends `users`, and the route
+  // takes both -- so the fake does too, or one of the two callers would be
+  // testing a shape the server never sees.
+  const perf = body.sizings?.find((s) => s.functionality === "performance");
+  const users = Number(perf?.target ?? body.users);
+  const vus = Number(perf?.figure || body.vus_per_engine) || 500;
+  const engines = Math.ceil(users / vus);
   const perAgent = Math.ceil(engines / agents);
   return {
-    users: Number(body.users), vus_per_engine: vus,
-    vus_per_engine_assumed: !body.vus_per_engine,
+    users, vus_per_engine: vus,
+    vus_per_engine_assumed: !(perf?.figure || body.vus_per_engine),
+    sizings: [{ functionality: "performance", unit: "virtual users",
+                target: users, per_pod: vus,
+                per_pod_unit: "virtual users per engine",
+                per_pod_source: perf?.figure || body.vus_per_engine
+                  ? "supplied" : "assumed",
+                pods: engines, pods_label: "engines" }],
+    driven_by: "performance",
     engines, agents, engines_per_agent: perAgent, engines_per_node: 1,
     nodes_per_agent: perAgent, nodes: perAgent * agents,
     engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
@@ -2396,19 +2413,24 @@ function planFor(body: {
   };
 }
 
+/** The four routes the unconnected page reads at mount, plus the two the
+ *  sizing card needs. Everything else rejects by naming itself, so a card that
+ *  had come to need an account could not pass any of these. */
+const unconnected = (extra: Partial<Api>) => fakeApi({
+  keyDetect: async () => ({ candidates: [], active_key_id: null }),
+  keyStatus: async () => ({ connected: false }),
+  optionDefaults: async () => ({ namespace: "blazemeter" }),
+  funcIdChoices: async () => [],
+  functionalities: async () => [],
+  svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+  engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+  sizingModels: async () => SIZING_MODELS,
+  ...extra,
+});
+
 test("with no key connected, step 1 still makes a sizing", async () => {
-  const asked: { users: string; agents?: string }[] = [];
-  // Not connected, and nothing account-shaped is stubbed: every route but the
-  // four the page reads at mount rejects by naming itself, so a profile that
-  // had come to need an account could not pass this.
-  const api = fakeApi({
-    keyDetect: async () => ({ candidates: [], active_key_id: null }),
-    keyStatus: async () => ({ connected: false }),
-    optionDefaults: async () => ({ namespace: "blazemeter" }),
-    funcIdChoices: async () => [],
-    functionalities: async () => [],
-    svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
-    engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+  const asked: Parameters<Api["plan"]>[0][] = [];
+  const api = unconnected({
     plan: async (body) => { asked.push(body); return planFor(body); },
   });
   render(<App api={api} />);
@@ -2417,11 +2439,12 @@ test("with no key connected, step 1 still makes a sizing", async () => {
   // answer yet rather than hiding until it does.
   expect(await screen.findByText("not sized yet")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-  fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+  fireEvent.change(await screen.findByLabelText(/^Virtual users\*/),
                    { target: { value: "5000" } });
 
   // The summary is the answer, on the row that is visible with the editor shut.
-  const summary = await screen.findByText(/5,000 VUs · 10 engines × 2 CPU/);
+  const summary = await screen.findByText(
+    /5,000 virtual users · 10 engines × 2 CPU/);
   // Every step, because the total is node capacity: 10 engines at 2 CPU is 20
   // and the answer is 30, and the node line is where the difference enters. A
   // summary that skipped it read as arithmetic that does not work. Read off
@@ -2439,9 +2462,87 @@ test("with no key connected, step 1 still makes a sizing", async () => {
   await waitFor(() => expect(download.disabled).toBe(false));
 });
 
+test("each functionality is asked for in its own unit, and one has no figure",
+  async () => {
+    // The three models are served, so this is the page rendering a table
+    // rather than a form somebody wrote three times. What it must get right is
+    // the third: service virtualization has no measured figure, so there is no
+    // box to type one into and the gap is stated instead of being an empty
+    // field that reads as "not filled in yet".
+    render(<App api={unconnected({ plan: async (b) => planFor(b) })} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+
+    // Performance is ticked on a fresh page; the other two are offered.
+    fireEvent.click(await screen.findByLabelText(/GUI Functional/));
+    fireEvent.click(screen.getByLabelText(/Service Virtualization/));
+
+    // A target each, in three units. (The asterisk is the required marker,
+    // which is what tells a target apart from the per-pod figure beside it.)
+    expect(screen.getByLabelText(/^Virtual users\*/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Browser instances\*/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Requests per second\*/)).toBeTruthy();
+
+    // A figure box for the two that have a figure, and none for the one that
+    // does not.
+    expect(screen.getByLabelText(/^Virtual users per engine/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Browser instances per engine/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Requests per second per core/)).toBeNull();
+    expect(screen.getByText(
+      /No measured figure for requests per second per core/)).toBeTruthy();
+  });
+
+test("a sizing nothing can size is the server's reason, never a node count",
+  async () => {
+    // The refusal is the explanation, and it is the server's sentence: this
+    // page must not carry a second copy of why there is no figure. What it
+    // owns is showing it where a plan would have gone.
+    render(<App api={unconnected({
+      plan: async () => { throw new Error("nothing measured here"); },
+    })} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByLabelText(/Service Virtualization/));
+    fireEvent.change(screen.getByLabelText(/^Requests per second\*/),
+                     { target: { value: "2000" } });
+
+    expect(await screen.findByText("nothing measured here")).toBeTruthy();
+    // ...and the header still says there is no answer, rather than an old one.
+    expect(screen.getByText("not sized yet")).toBeTruthy();
+  });
+
+test("a sizing saved under a name survives a refresh, and picking it fills the fields",
+  async () => {
+    const api = unconnected({ plan: async (b) => planFor(b) });
+    const { unmount } = render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(await screen.findByLabelText(/^Virtual users\*/),
+                     { target: { value: "7000" } });
+    fireEvent.change(screen.getByLabelText(/^Save this as/),
+                     { target: { value: "Black Friday" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Written to the session snapshot by the page's own writer, which is what
+    // the next render reads.
+    await waitFor(() => expect(
+      session.load()?.sizings.some((s) => s.name === "Black Friday")).toBe(true));
+    unmount();
+
+    // The refresh.
+    render(<App api={api} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    const target = await screen.findByLabelText<HTMLInputElement>(
+      /^Virtual users\*/);
+    fireEvent.change(target, { target: { value: "100" } });
+
+    const picker = screen.getByLabelText<HTMLSelectElement>(/^Saved sizings/);
+    expect([...picker.options].map((o) => o.value)).toContain("Black Friday");
+    fireEvent.change(picker, { target: { value: "Black Friday" } });
+    // Picking is the only thing here that could be called "apply", and all it
+    // does is fill the fields -- which *are* the sizing.
+    await waitFor(() => expect(target.value).toBe("7000"));
+  });
+
 test("the profile fills a location's settings, and Save is the only write",
   async () => {
-    const asked: { users: string; agents?: string }[] = [];
+    const asked: Parameters<Api["plan"]>[0][] = [];
     const sent: Record<string, string>[] = [];
     // What the account holds, moved only by a request that reaches it -- so
     // "before" on the second save is what the first one actually did.
@@ -2484,7 +2585,7 @@ test("the profile fills a location's settings, and Save is the only write",
     })} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    fireEvent.change(screen.getByLabelText(/^Virtual user target/),
+    fireEvent.change(await screen.findByLabelText(/^Virtual users\*/),
                      { target: { value: "5000" } });
     fireEvent.click(await screen.findByText("Perf"));
 

@@ -1793,6 +1793,26 @@ def test_sizing_models_are_served_with_the_account_s_own_label():
     assert by_id["mockServices"]["figure_unit"] == "requests per second per core"
 
 
+def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
+    """As with DOCKER_IGNORED and RESERVED_ENV: the page's tests run without a
+    server, so the fixture is a second copy, and this is what keeps it from
+    drifting. `measured` most of all -- the card branches on it, and a fixture
+    that quietly gave service virtualization a figure would let a test pass over
+    the exact case the card exists to get right."""
+    src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const SIZING_MODELS: SizingModel\[\] = \[(.*?)\n\];",
+                     text, re.S)
+    assert body, "SIZING_MODELS not found -- was it renamed or moved?"
+    served = client.get("/api/sizing-models").json()
+    assert re.findall(r'functionality: "(\w+)"', body.group(1)) \
+        == [m["functionality"] for m in served]
+    assert re.findall(r"measured: (true|false)", body.group(1)) \
+        == ["true" if m["measured"] else "false" for m in served]
+    assert re.findall(r'unit: "([^"]+)"', body.group(1)) \
+        == [v for m in served for v in (m["unit"], m["figure_unit"])]
+
+
 def test_every_sizing_model_is_a_functionality_the_page_configures():
     """A model for a funcId with no card is a unit nothing can be asked for."""
     from bzm_opl_gen import plan as plan_mod

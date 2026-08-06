@@ -10,7 +10,30 @@
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
-import { AgentEnvVar } from "./api";
+import { AgentEnvVar, SizingModel } from "./api";
+
+/** plan.SIZING_MODELS as the page receives it from /api/sizing-models.
+ *
+ *  A copy, and the only one, held equal to the planner's table by
+ *  `tests/test_server.py::test_the_pages_copy_of_the_sizing_models_is_the_planner_s`.
+ *  It cannot be derived: the authority is Python and the page's tests run
+ *  without a server.
+ *
+ *  `measured: false` is the one the card branches on, and the reason this is a
+ *  copy rather than a sample: a model with no measured figure offers no
+ *  per-pod box, and a fixture that quietly gave service virtualization one
+ *  would let a test pass over the exact case the card exists to get right. */
+export const SIZING_MODELS: SizingModel[] = [
+  { functionality: "performance", label: "Performance",
+    unit: "virtual users", figure_unit: "virtual users per engine",
+    pods: "engines", measured: true },
+  { functionality: "functionalGui", label: "GUI Functional",
+    unit: "browser instances", figure_unit: "browser instances per engine",
+    pods: "engines", measured: true },
+  { functionality: "mockServices", label: "Service Virtualization",
+    unit: "requests per second", figure_unit: "requests per second per core",
+    pods: "mock pods", measured: false },
+];
 
 /** generate.DOCKER_IGNORED, as the page receives it from /api/docker-ignored.
  *

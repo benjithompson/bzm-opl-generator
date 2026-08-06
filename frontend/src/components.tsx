@@ -203,22 +203,41 @@ export function PlanCaveats(props: {
   vusPerEngine: number;
   warnings: string[];
   compact?: boolean;
+  /** Every model the plan was asked for, where the caller has them. Each
+   *  assumed figure gets its own note in its own unit — "4 browser instances
+   *  per engine is assumed" is a different sentence about a different workload,
+   *  and one note about virtual users standing in for both would be a figure
+   *  attributed to the wrong thing. Without it, `assumed`/`vusPerEngine` are
+   *  the performance-only pair the location panel has (it sizes nothing else).
+   *
+   *  A model with **no** measured figure is not here: it has no note to make,
+   *  because the sentence explaining it is the server's and arrives in
+   *  `warnings` beside these. */
+  sizings?: { per_pod: number | null; per_pod_unit: string;
+              per_pod_source: string }[];
 }) {
   const small = props.compact;
+  const assumed = props.sizings
+    ? props.sizings.filter((s) => s.per_pod_source === "assumed")
+      .map((s) => ({ figure: s.per_pod ?? 0, unit: s.per_pod_unit }))
+    : props.assumed
+      ? [{ figure: props.vusPerEngine, unit: "virtual users per engine" }]
+      : [];
   return (
     <>
-      {props.assumed && (
-        <div className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
+      {assumed.map((a) => (
+        <div key={a.unit}
+          className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
           <p className={small ? "text-[11px] text-amber-700" : "text-xs text-amber-900"}>
-            <b>{props.vusPerEngine.toLocaleString()} virtual users per engine is
-            assumed</b>, not measured — it is what an engine of this size is
-            rated for. How many virtual users one engine really carries depends
-            on what your script does between requests, and every number above is
-            that figure multiplied out. Run the real script against one engine,
+            <b>{a.figure.toLocaleString()} {a.unit} is
+            assumed</b>, not measured — it is what a pod of this size is
+            rated for. How much one pod really carries depends
+            on what your test does, and every number above is
+            that figure multiplied out. Run the real thing against one pod,
             find where it saturates, and put that number in the field above.
           </p>
         </div>
-      )}
+      ))}
       {props.warnings.map((w) => (
         <div key={w}
           className={small ? "" : "border border-slate-200 bg-slate-50 rounded-lg p-3"}>

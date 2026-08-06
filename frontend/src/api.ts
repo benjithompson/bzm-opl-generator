@@ -68,11 +68,58 @@ export interface Options { [k: string]: unknown }
  *
  *  `vus_per_engine_assumed` is the field the panel must never drop: the whole
  *  plan is that number multiplied out, and nothing here can measure it. */
+/** One functionality's sizing model, from /api/sizing-models.
+ *
+ *  `measured` false is the field this list exists for: no figure for that unit
+ *  has ever been measured, so there is no per-pod box to offer and nothing to
+ *  default. That is a different answer from a figure nobody has supplied yet,
+ *  and the two must not share a control any more than they share a value. */
+export interface SizingModel {
+  /** The funcId, so it joins to `Functionality.id` and to a location's
+   *  `func_ids` by equality. */
+  functionality: string;
+  /** BlazeMeter's own display name, joined on in core. */
+  label: string;
+  /** What the target counts: "virtual users", "browser instances". */
+  unit: string;
+  /** What one pod carries, in that unit: "virtual users per engine". */
+  figure_unit: string;
+  /** What the plan calls the pods this model needs — "engines", "mock pods".
+   *  Never assume they are engines: a service-virtualization location carries
+   *  no taurus engine at all. */
+  pods: string;
+  measured: boolean;
+}
+
+/** One model's answer inside a plan: its target, what a pod carries, and how
+ *  many pods that is. */
+export interface PlanSizing {
+  functionality: string;
+  unit: string;
+  target: number;
+  /** Null where no figure has been measured, which is also `pods` null: the
+   *  model was asked for and could not be answered, which is not the same as
+   *  a model that needs nothing. */
+  per_pod: number | null;
+  per_pod_unit: string;
+  /** Three answers, and they stay three. "assumed" is a figure this tool chose
+   *  from the pod size; "unmeasured" is one nobody has ever measured. */
+  per_pod_source: "supplied" | "assumed" | "unmeasured";
+  pods: number | null;
+  pods_label: string;
+}
+
 export interface CapacityPlan {
-  /** Virtual users: the load target. A location holds agents, an agent runs
-   *  engines, and each engine drives virtual users -- that hierarchy is the
-   *  vocabulary this whole panel speaks. */
-  users: number;
+  /** Virtual users: the performance model's target, and **null** when no load
+   *  test was sized. A location holds agents, an agent runs engines, and each
+   *  engine drives virtual users -- that hierarchy is the vocabulary this
+   *  whole panel speaks, but it is only one of the three sizings. */
+  users: number | null;
+  /** Every model asked for, in the server's own order. */
+  sizings: PlanSizing[];
+  /** The funcId of the model the pod count came from: where several were
+   *  sized, the largest decides and this says which it was. */
+  driven_by: string;
   vus_per_engine: number;
   vus_per_engine_assumed: boolean;
   engines: number;
@@ -320,9 +367,18 @@ export const api = {
    *  planner panel works with nothing connected -- see core.capacity_plan.
    *  Blank fields are sent as typed; the server reads "" as "not given". */
   plan: (body: {
-    users: string; vus_per_engine?: string; engine_cpu?: string;
+    users?: string; vus_per_engine?: string; engine_cpu?: string;
     engine_mem?: string; engines_per_node?: string; agents?: string;
+    /** One row per functionality being sized, each in that model's own unit.
+     *  `users` is the performance model's shorthand and still taken; a caller
+     *  sizing more than one thing sends rows and nothing else. */
+    sizings?: { functionality: string; target: string; figure?: string }[];
   }) => req<CapacityPlan>("POST", "/api/plan", body),
+  /** What each functionality is sized in — plan.SIZING_MODELS with the
+   *  account's label joined on. Served for the reason `functionalities` is: the
+   *  card renders a field group per model, and a fourth model has to reach it
+   *  by being added to the table rather than by an edit here. */
+  sizingModels: () => req<SizingModel[]>("GET", "/api/sizing-models"),
   /** What an engine of this size is rated for, so a field can suggest it. The
    *  ratio stays on the server -- doctor judges locations against the same one,
    *  and a second copy here is how the two come to disagree. */

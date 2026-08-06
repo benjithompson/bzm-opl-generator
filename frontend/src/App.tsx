@@ -3,7 +3,7 @@ import {
   Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Functionality,
   GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdChoice, Location, Options, Ship, SvCheckOut,
-  SvConstants, SvMocksOut, Workspace,
+  SizingModel, SvConstants, SvMocksOut, Workspace,
 } from "./api";
 // What the last download or save did, as one record with one owner -- see
 // attempt.ts for why the four it replaced could not stay four.
@@ -63,6 +63,9 @@ import { CapacityView } from "./CapacityView";
 // snapshot and this page share one declaration of it. `PlanAsk` is what a
 // profile asks for, assembled once here and read by two panels.
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
+// Sizings saved under a name, and the ones the page ships with. Plain data,
+// like the session snapshot it is stored in.
+import { DEFAULT_SIZINGS, SavedSizing } from "./sizings";
 import { AgentPanel } from "./steps/AgentPanel";
 // The sizing: step 1's first card, and the planner that used to be a view of
 // its own. See Sizing for why it moved.
@@ -319,6 +322,15 @@ export default function App({ api }: { api: Api }) {
   }, [view, accountId]);
   useEffect(() => { setCap(null); }, [accountId]);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
+  // The three sizing models, served: what each functionality is asked for in,
+  // and which of them has a measured per-pod figure at all. Read on mount with
+  // the other keyless vocabularies, because sizing is the question somebody
+  // opens this page with before they have an account to connect it to.
+  const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
+  // Sizings saved under a name. The defaults are seeded here rather than merged
+  // in wherever they are read, so deleting one stays deleted -- a default that
+  // came back on the next load would be a list nobody could edit.
+  const [savedSizings, setSavedSizings] = useState<SavedSizing[]>(DEFAULT_SIZINGS);
   // What the preview's bundle currently does for a credential, straight from
   // core: the preview never rotates, so its answer is a free look at what a
   // download would carry. Read rather than re-derived here -- the rule has four
@@ -353,6 +365,7 @@ export default function App({ api }: { api: Api }) {
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.funcIdChoices().then(setFuncIdChoices).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
+    api.sizingModels().then(setSizingModels).catch(() => {});
 
     // The key lives in the server process, so a refresh never disconnected
     // anything -- the page just forgot. Ask, and put back what it was pointed
@@ -367,6 +380,7 @@ export default function App({ api }: { api: Api }) {
       setStep(saved.step);
       setView(saved.view);
       setPlanInputs(saved.plan);
+      setSavedSizings(saved.sizings);
       setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
       // Manual entry's declaration, and only manual entry's: connected, the
@@ -488,9 +502,10 @@ export default function App({ api }: { api: Api }) {
                    declaredFunctionalities:
                      sourceMode === "manual" ? declared : [],
                    manual, options, step, view, plan: planInputs,
-                   confirmed });
+                   sizings: savedSizings, confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
-      declared, manual, options, step, view, planInputs, confirmed]);
+      declared, manual, options, step, view, planInputs, savedSizings,
+      confirmed]);
 
   /** Hand the key back. The server forgets the client; the page forgets
    *  everything that was read with it, because a stale account tree is worse
@@ -861,19 +876,31 @@ export default function App({ api }: { api: Api }) {
 
   /** What the sizing card states.
    *
-   *  Assembled once, read twice: by the profile card at the top of step 1, and
+   *  Assembled once, read twice: by the sizing card at the top of step 1, and
    *  by whichever location is open below it -- which re-asks with its own agent
-   *  count, since `slots` is engines per agent. Two of the five are the
-   *  planner's own (they are what was typed at a target); three are bundle
-   *  options, because the profile is sized for the engine the bundle asks for
-   *  and a second copy of that size is how the two came to disagree.
+   *  count, since `slots` is engines per agent. The rows are the planner's own
+   *  (they are what was typed at a target); the rest are bundle options,
+   *  because the sizing is for the engine the bundle asks for and a second copy
+   *  of that size is how the two came to disagree.
+   *
+   *  A row per ticked functionality, in the served table's order rather than in
+   *  the order they were ticked: the plan comes back in that order too, so the
+   *  card and the document list them the same way whatever was picked first.
+   *  A model with no measured figure carries no `figure`, and the ask cannot
+   *  invent one for it -- there is no box that could have filled it.
    *
    *  There is nothing to "apply". The four location settings the plan implies
    *  are a write to the customer's account, and that write is made in one place
    *  -- the location's own panel, beside the sentence saying what it costs. */
   const profileAsk: PlanAsk = {
-    users: planInputs.users,
-    vusPerEngine: planInputs.vusPerEngine,
+    sizings: sizingModels
+      .filter((m) => planInputs.functionalities.includes(m.functionality))
+      .map((m) => ({
+        functionality: m.functionality,
+        target: planInputs.targets[m.functionality] ?? "",
+        ...(m.measured
+          ? { figure: planInputs.figures[m.functionality] ?? "" } : {}),
+      })),
     engineCpu: raw("engine_cpu_limit"),
     engineMem: raw("engine_mem_limit"),
     enginesPerNode: raw("engines_per_node"),
@@ -1519,7 +1546,9 @@ export default function App({ api }: { api: Api }) {
             hint="Size the run, then the location and agent it is generated for.">
             <div className="space-y-3">
             <Sizing
-              api={api} ask={profileAsk} setInputs={setPlanInputs}
+              api={api} ask={profileAsk} models={sizingModels}
+              inputs={planInputs} setInputs={setPlanInputs}
+              saved={savedSizings} setSaved={setSavedSizings}
               /* The engine size and the engines per node are the bundle's own
                  options, edited here as well as in the Configure step's Sizing
                  group: the profile is sized for the engine the manifests ask

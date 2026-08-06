@@ -31,9 +31,17 @@ const BASE = {
   options: { namespace: "ns1", auth_token: "SECRET-TOKEN" },
   step: 1,
   view: "flow" as const,
-  // The two figures the sizing owns. Its engine size is a bundle
-  // option and is remembered with the rest of them.
-  plan: { users: "5000", vusPerEngine: "750" },
+  // What the sizing owns: which functionalities are being sized and what each
+  // was asked for, in its own unit. Its engine size is a bundle option and is
+  // remembered with the rest of them.
+  plan: { functionalities: ["performance", "functionalGui"],
+          targets: { performance: "5000", functionalGui: "20" },
+          figures: { performance: "750" } },
+  // ...and the sizings saved under a name, defaults included: they are edited
+  // here and nowhere else, so nothing else could put them back.
+  sizings: [{ name: "Black Friday",
+              inputs: { functionalities: ["performance"],
+                        targets: { performance: "40000" }, figures: {} } }],
 };
 
 beforeEach(() => {
@@ -80,8 +88,13 @@ describe("what is remembered", () => {
     save({ ...BASE, view: "capacity" });
     const back = load();
     expect(back?.view).toBe("capacity");
-    expect(back?.plan.users).toBe("5000");
-    expect(back?.plan.vusPerEngine).toBe("750");
+    expect(back?.plan.targets.performance).toBe("5000");
+    expect(back?.plan.figures.performance).toBe("750");
+    expect(back?.plan.functionalities).toEqual(["performance", "functionalGui"]);
+    // A saved sizing survives a refresh whole: its name, and everything the
+    // fields would be filled with by picking it.
+    expect(back?.sizings[0].name).toBe("Black Friday");
+    expect(back?.sizings[0].inputs.targets.performance).toBe("40000");
   });
 
   it("drops a snapshot from a build that shaped it differently", () => {

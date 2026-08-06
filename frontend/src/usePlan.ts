@@ -18,19 +18,32 @@ import { useEffect, useRef, useState } from "react";
 
 import { Api, CapacityPlan } from "./api";
 
-/** The two figures the profile owns outright: what the load is, and what one
- *  engine is assumed to carry.
+/** What the sizing owns outright: which functionalities are being sized, what
+ *  each is being asked for in its own unit, and what one pod is supplied as
+ *  carrying where the figure is not left to the model.
+ *
+ *  Keyed by funcId rather than a field per model, because the models are
+ *  **served** (`/api/sizing-models`) for the reason the functionalities are: a
+ *  fourth has to reach the card by being added to plan.py's table. Named fields
+ *  here would be the second declaration that a served table exists to avoid.
  *
  *  The engine size and the engines-per-node are deliberately *not* here. They
  *  are bundle options (`engine_cpu_limit`, `engine_mem_limit`,
- *  `engines_per_node`) and the profile is sized for the engine the bundle asks
+ *  `engines_per_node`) and the sizing is for the engine the bundle asks
  *  for -- one value with one owner. Held here as well they were two, and the
  *  planner's copy reached the options only when somebody pressed the button
  *  that copied it across, so a plan sized for a Large engine could generate a
  *  bundle asking for a standard one. */
 export interface PlanInputs {
-  users: string;
-  vusPerEngine: string;
+  /** funcIds, and the card shows a field group for each. Empty is the state a
+   *  fresh page is in, not a sizing of nothing. */
+  functionalities: string[];
+  /** funcId -> the target, in that model's unit. Blank is "not typed yet". */
+  targets: Record<string, string>;
+  /** funcId -> the per-pod figure supplied for that model. A model whose
+   *  figure has never been measured has no entry here and no box to make one:
+   *  see `SizingModel.measured`. */
+  figures: Record<string, string>;
 }
 
 // There is deliberately no `agents` here. A location's concurrency is
@@ -42,13 +55,25 @@ export interface PlanInputs {
 // location, where it is a fact; `plan.capacity_plan` still takes `agents`, and
 // that is who passes it.
 
-export const EMPTY_PLAN_INPUTS: PlanInputs = { users: "", vusPerEngine: "" };
+// A fresh page sizes performance: it is what most locations run, and a card
+// that opened on no functionality at all would open on no fields either. One
+// tick, never a target -- nothing here guesses how big somebody's run is.
+export const EMPTY_PLAN_INPUTS: PlanInputs = {
+  functionalities: ["performance"], targets: {}, figures: {} };
 
+
+/** One functionality being sized, as the route takes it. */
+export interface SizingAsk {
+  functionality: string;
+  target: string;
+  /** Absent where the model has no measured figure to override. */
+  figure?: string;
+}
 
 export interface PlanAsk {
-  /** Blank means "nothing to size yet", which clears rather than refuses. */
-  users: string;
-  vusPerEngine?: string;
+  /** Every model being sized. Empty, or every target blank, means "nothing to
+   *  size yet", which clears rather than refuses. */
+  sizings: SizingAsk[];
   engineCpu?: string;
   engineMem?: string;
   enginesPerNode?: string;
@@ -71,20 +96,31 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   const [plan, setPlan] = useState<CapacityPlan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const { users, vusPerEngine, engineCpu, engineMem, enginesPerNode, agents } = ask;
+  const { engineCpu, engineMem, enginesPerNode, agents } = ask;
+  // The rows, as one string. `ask.sizings` is rebuilt every render by whoever
+  // assembles it, so a dependency on the array itself would re-POST on every
+  // keystroke anywhere on the page; the primitives below cannot express a list.
+  const rows = JSON.stringify(
+    ask.sizings.filter((s) => s.target.trim()));
 
   // Debounced, because every keystroke in a number field is a plan: typing
   // "5000" passes through 5, 50 and 500, and three answers nobody wanted
   // arrive before the one they did.
   const timer = useRef<number>();
   useEffect(() => {
-    if (!users.trim()) { setPlan(null); setErr(null); setBusy(false); return; }
+    const sizings: SizingAsk[] = JSON.parse(rows);
+    if (!sizings.length) { setPlan(null); setErr(null); setBusy(false); return; }
     window.clearTimeout(timer.current);
     setBusy(true);
     timer.current = window.setTimeout(() => {
-      api.plan({ users, vus_per_engine: vusPerEngine, engine_cpu: engineCpu,
-                 engine_mem: engineMem, engines_per_node: enginesPerNode,
-                 agents })
+      // Every model as a row, including performance: the route takes `users`
+      // as the performance shorthand too, and sending one thing two ways is
+      // how the two come to disagree about which was meant.
+      api.plan({ sizings: sizings.map((s) => ({
+        functionality: s.functionality, target: s.target,
+        figure: s.figure ?? "" })),
+        engine_cpu: engineCpu, engine_mem: engineMem,
+        engines_per_node: enginesPerNode, agents })
         .then((p) => { setPlan(p); setErr(null); })
         .catch((e: Error) => { setErr(e.message); setPlan(null); })
         .finally(() => setBusy(false));
@@ -92,7 +128,7 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
     return () => window.clearTimeout(timer.current);
     // Primitives, so a caller rebuilding its `ask` object every render does not
     // re-POST for a plan nothing changed about.
-  }, [users, vusPerEngine, engineCpu, engineMem, enginesPerNode, agents]);
+  }, [rows, engineCpu, engineMem, enginesPerNode, agents]);
 
   return { plan, err, busy };
 }

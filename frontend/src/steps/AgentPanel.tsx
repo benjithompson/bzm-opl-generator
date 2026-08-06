@@ -375,8 +375,8 @@ export function AgentPanel({
             summary={location
               ? `${location.name} · ${location.slots ?? "?"} engine(s)/agent`
               : "none selected"}
-            hint="A location holds agents. Open one to see what the capacity
-                  profile would change about it, and to save that change.">
+            hint="A location holds agents. Open one to see what the sizing
+                  above would change about it, and to save that change.">
             <div className="space-y-3">
               {/* Neither picker is here any more: both are at the foot of the
                   nav drawer with the key, because the account decides what

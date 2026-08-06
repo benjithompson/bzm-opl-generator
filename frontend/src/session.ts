@@ -18,6 +18,8 @@ import { Options } from "./api";
 // The planner's form, as the planner declares it. A second copy of the
 // shape here is a field that gets added to one and not the other.
 import type { PlanInputs } from "./usePlan";
+// ...and the saved ones, as `sizings` declares them, for the same reason.
+import type { SavedSizing } from "./sizings";
 
 /** Bumped when the shape changes. A snapshot from an older build is dropped
  *  rather than half-read: the fields are ids and options that other code
@@ -70,7 +72,14 @@ import type { PlanInputs } from "./usePlan";
 // null on a version it does not know, and a migration is a second shape of the
 // snapshot to keep right forever so that one refresh keeps a namespace. Dropped
 // whole, as 10 and 11 were.
-export const VERSION = 12;
+// 13: the sizing grew from two figures to three models (#154). A v12 snapshot
+// holds `plan: {users, vusPerEngine}` where this build reads which
+// functionalities are being sized and a target per unit, and it holds no saved
+// sizings at all. Read half, the card would come back sizing nothing with a
+// target nothing renders -- and a session whose whole subject is a number
+// somebody typed must not come back holding it somewhere invisible. Dropped
+// whole, as 10, 11 and 12 were.
+export const VERSION = 13;
 const KEY = "bzm-opl-gen.session";
 
 export interface Session {
@@ -126,6 +135,16 @@ export interface Session {
    *  and somebody who refreshes while sizing a run must not come back to an
    *  empty target. */
   plan: PlanInputs;
+  /** The sizings saved under a name, defaults included.
+   *
+   *  Here rather than in localStorage, and that is the issue's choice as much
+   *  as this file's: a sizing belongs to the session that is sizing, in the way
+   *  the account, the location and the typed target do, and this is where all
+   *  of those live. It survives a refresh and not a closed tab. The defaults
+   *  are stored alongside the saved ones rather than merged in on read, so
+   *  removing one stays removed -- a default that came back on the next load
+   *  would be a list nobody could edit. */
+  sizings: SavedSizing[];
 }
 
 
