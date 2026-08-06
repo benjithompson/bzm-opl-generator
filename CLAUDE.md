@@ -239,15 +239,50 @@ missing tools. The rest is what it cannot fix for you.
   what a location can be *created* with needs no rule naming it, while reading
   it off a location that has one is untouched. `account_id` is optional because
   the page fetches this on mount with no key and manual entry never has an
-  account, and the answer with none is `COVERED_FUNC_IDS`: the three this tool
-  configures, under the names the account would give them, so nothing on screen
-  changes wording when the real list lands. **An account that refuses the read
-  raises** — answering "this account offers exactly the three we cover" to a
-  401 is could-not-read wearing there-is-nothing-else, one layer up from the
+  account, and the answer with none is `core.covered_func_ids()`: the three this
+  tool configures, under the names the account would give them, so nothing on
+  screen changes wording when the real list lands. **An account that refuses the
+  read raises** — answering "this account offers exactly the three we cover"
+  to a 401 is could-not-read wearing there-is-nothing-else, one layer up from
+  the
   evidence rule below. Every row carries `covered`, because a page listing
   `delphix` beside `performance` with nothing to tell them apart is offering to
   configure something no bundle can; an uncovered funcId is *named*, never
   dropped, since silence there reads as coverage.
+
+- **A functionality *is* a funcId — one entry, `id` equal to it** (#149). It
+  was two entries and `performance` claimed four (`performance`, `functionalApi`,
+  `functionalGui`, `proxyRecorder`), so its label had to name all of them:
+  "Performance & functional testing", printed over a location whose only funcId
+  is `performance`. Everything joins by equality now — a location's funcIds to
+  the cards, `OptionGroup.functionalities` to the served ids, manual entry's
+  declaration to the funcId its facts are gathered for — and a
+  per-functionality list of funcIds would be exactly the translation table the
+  1:1 mapping exists
+  instead of. `covered_func_ids()` is that same list read as a vocabulary rather
+  than a second table beside it, so `covered` on a funcId row and having a card
+  are one fact. The two funcIds that lost their card are not lost:
+  `functionalApi` (retired) and `proxyRecorder` (no options here) are
+  *unclaimed*, named on the configure step like `tdm` — and a location carrying
+  only those claims nothing, which is read one level up as nobody having
+  answered.
+
+- **The engine limits belong to no functionality, and are never cleared for
+  one.** BlazeMeter defines `KUBERNETES_RESOURCES_LIMITS_CPU`/`_MEMORY` as the
+  limits for *resources created by agent* — one pair, reaching engines,
+  browser pods and mock-service pods alike, with no `KUBERNETES_MOCK_RESOURCES_*`
+  beside
+  it. `notRunPatch` used to clear them for a location that ran no performance,
+  which left an SV-only or GUI-only agent's pods on crane's 250m/256Mi defaults:
+  the LimitRange note's silent failure, reached from the page. What survives is
+  `ENGINE_FUNCTIONALITIES`, and it decides **placement of the statement only**.
+  Read off single-functionality locations' `/versions`: performance carries
+  apm/crane/v4, functionalGui adds doduo and a pinned browser to the same three,
+  and **an SV-only agent carries no taurus engine at all** (crane,
+  group-gateway, service-mock). Its limits are still emitted and still reach its
+  mock pods; what they *mean* there is a sizing model that does not exist yet
+  (#154), so that card states nothing rather than an engine size that is not
+  there. Don't reintroduce a clearing rule for them.
 
 - **A required field left blank is a `<PLACEHOLDER>`, not an empty string and
   not a refusal.** Every one of these had a plausible-looking failure when
@@ -483,8 +518,12 @@ missing tools. The rest is what it cannot fix for you.
   gathering facts for nothing with no radio on to say so. Manual mode never
   reads a functionality back off
   `facts.func_ids` for the same reason — those funcIds *are* the declaration, so
-  reading them can only restate it, or lose it while `/api/func-ids` is still
-  outstanding.
+  reading them can only restate it, or lose it while `/api/functionalities` is
+  still outstanding. Since #149 the declaration *is* the funcId, so that one
+  list is the only thing it waits on: it used to be turned into a funcId through
+  `/api/func-ids`' `changes_images` as well, and an identity gathered for
+  nothing while the *second* vocabulary was outstanding is a wait that reads as
+  an answer.
 
   **An AUTH_TOKEN this app minted survives a refresh; one that was typed does
   not** (#123). It is seen at exactly two moments, both this page's own writes —

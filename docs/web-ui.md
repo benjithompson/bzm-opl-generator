@@ -197,9 +197,12 @@ back to it, until you pick one again. A configuration somebody wrote outranks a
 segment.
 
 **Two kinds of option — a functionality's own, and every deployment's — and
-nothing is hidden between them.** *Deployment functionalities* is one card each,
-marked `Enabled` or `Not enabled` from the location's own funcIds, holding the
-options only that functionality has. *Placement* is the
+nothing is hidden between them.** *Deployment functionalities* is one card per
+funcId this tool configures — Performance, GUI Functional and Service
+Virtualization, under BlazeMeter's own names — marked `Enabled` or `Not
+enabled` from the location's own funcIds, holding the options only that
+functionality has. Anything else the location runs is named underneath, because a page that
+said nothing about it would read as covering it. *Placement* is the
 namespace and the service account — its own section because it is the part a
 docker bundle does not have at all, and a section that comes and goes has to be
 one. *Agent settings* is everything every deployment gets: registry, proxy, CA
@@ -240,9 +243,10 @@ kept apart, because they have different remedies.
 
 **In manual entry the functionality is not a view of the options, it is the
 declaration.** With no account to read funcIds off, that card's radio is what
-says whether the typed identity is a performance agent or a
-service-virtualization one, which decides the funcId, the images the bundle
-carries and the namespace suggested for it. It is in the session snapshot for
+says which of the three the typed identity is — a performance agent, a GUI
+functional one or a service-virtualization one. The card *is* the funcId, so
+that one answer decides the images the bundle carries and the namespace
+suggested for it. It is in the session snapshot for
 that reason: a refresh used to bring an SV identity back as a performance one,
 clearing its options on the way and rewriting the namespace generated into every
 manifest.

@@ -11,6 +11,36 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A card on the configure step is one functionality, under BlazeMeter's own
+  name.** A performance-only location was given a card labelled "Performance &
+  functional testing", because one entry stood for four funcIds at once and its
+  label had to name all of them. There are now three cards — **Performance**,
+  **GUI Functional** and **Service Virtualization**, the words your own location
+  settings use — and a location opens on the one it actually runs, so a GUI
+  Functional location no longer opens on Performance.
+
+  Two consequences worth knowing. `functionalApi` and `proxyRecorder` no longer
+  belong to the Performance card; they are named beside the cards, with the note
+  that nothing here generates or removes them, the same as `tdm` and Delphix
+  already were. Nothing about what the bundle carries changes — which images a
+  location needs is still read from its funcIds. And a browser tab left open on
+  the configure step starts over: the saved page state names a functionality by
+  its funcId now, and a snapshot from before this release is dropped rather than
+  half-read.
+
+- **A bundle for a location that runs no load tests keeps its pod limits.** The
+  engine CPU and memory limits were cleared for any location not running
+  Performance, on the reading that they size an engine. They do not: BlazeMeter
+  applies one pair to *every* pod the agent creates, so a Service Virtualization
+  or GUI Functional bundle was losing them and its pods were landing on the
+  agent's 250m/256Mi defaults — enough capacity to look healthy and not enough
+  to run on. The limits are always carried now. The engine-size statement on the
+  configure step is still shown only where the agent runs an engine: a Service
+  Virtualization agent carries no engine at all, and what those limits should be
+  for a mock is not a figure this tool can state yet.
+
 ### Changed
 
 - **The funcIds on screen are your account's, with BlazeMeter's own names.**
