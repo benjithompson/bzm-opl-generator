@@ -57,7 +57,8 @@ carried into the request and stated, and a sizing with nothing else in it comes
 back as the reason rather than as a node count.
 
 **Saved sizings** sit at the top: pick one to fill the fields, or name what is
-in them now and save it. Three ship as starting points, one per functionality.
+in them now and save it. One ships as a starting point for each sizing model
+the server serves, carrying that model's own example target.
 They last as long as the browser session does, like everything else this page
 remembers, and picking one applies nothing — it fills the fields, and the fields
 *are* the sizing.
