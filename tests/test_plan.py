@@ -315,6 +315,85 @@ def _row(p, functionality):
     return [r for r in p["sizings"] if r["functionality"] == functionality][0]
 
 
+# -- the document, once there is more than one model to write it about -------
+
+def _three():
+    return plan.capacity_plan(5000, sizings=[
+        {"functionality": "functionalGui", "target": 20},
+        {"functionality": "mockServices", "target": 2000}])
+
+
+def test_the_document_states_every_sizing_in_its_own_unit():
+    """The reader provisions for all of it, so all of it has to be in the ask.
+    A browser suite stated in virtual users is a number about somebody else's
+    workload."""
+    # Whitespace collapsed: the ask is one wrapped sentence whose length
+    # follows how many models were sized, so a line break can fall anywhere in
+    # it. What is asserted is the words.
+    doc = " ".join(plan.plan_document(_three()).split())
+    assert "performance tests of up to **5,000 virtual users**" in doc
+    assert "browser tests of up to **20 browser instances**" in doc
+    assert "virtual services of up to **2,000 requests per second**" in doc
+
+
+def test_the_document_shows_each_model_s_own_division():
+    doc = plan.plan_document(_three())
+    assert "5,000 / 500, rounded up" in doc
+    assert "20 / 4, rounded up" in doc
+
+
+def test_the_document_names_the_sizing_the_pool_came_from():
+    """Which workload the node count was reached from is the first thing a
+    reader of it needs, and with three sizings on the page it is not obvious."""
+    doc = plan.plan_document(_three())
+    assert "the largest of these, from the performance sizing" in doc
+
+
+def test_a_browser_only_request_asks_for_browser_testing():
+    """The title is what the ticket is called, and "load testing" on a request
+    for a Selenium grid is the first thing that gets it sent back."""
+    doc = plan.plan_document(plan.capacity_plan(
+        sizings=[{"functionality": "functionalGui", "target": 20}]))
+    assert doc.splitlines()[0] == "# Infrastructure request: browser testing"
+    assert "20 / 4, rounded up" in doc
+
+
+def test_the_document_says_where_the_browser_figure_came_from():
+    """Roughly 4, from the account owner. An assumption, and one this tool can
+    measure even less than it can measure virtual users per engine."""
+    doc = plan.plan_document(plan.capacity_plan(
+        sizings=[{"functionality": "functionalGui", "target": 20}]))
+    assert "4 browser instances per engine" in doc
+    assert "account owner" in doc
+    assert "not a measurement" in doc
+
+
+def test_the_document_says_service_virtualization_is_not_sized_here():
+    """Absent and stated, in the one place a platform team reads. A request
+    that quietly dropped the mocks would be provisioned as if they were free."""
+    doc = plan.plan_document(_three())
+    assert "has not been measured" in doc
+    assert "Worth knowing" in doc
+
+
+def test_a_request_with_no_load_target_still_states_threads_per_engine():
+    """It is a location setting, and a location that runs any test at all needs
+    it. What changes is where the figure came from, which the row says."""
+    doc = plan.plan_document(plan.capacity_plan(
+        sizings=[{"functionality": "functionalGui", "target": 20}]))
+    assert "threadsPerEngine" in doc
+    assert "No load test was sized here" in doc
+
+
+def test_a_one_model_document_is_the_one_model_document():
+    """The common case stays the simple case: nothing about largest, nothing
+    about other workloads, and the plural heading only when there is one."""
+    doc = plan.plan_document(plan.capacity_plan(5000))
+    assert "## The assumption in this plan" in doc
+    assert "largest of these" not in doc
+    assert plan.plan_document(_three()).count("## The assumptions in this plan") == 1
+
+
 # -- what the plan refuses ---------------------------------------------------
 
 @pytest.mark.parametrize("kwargs", [

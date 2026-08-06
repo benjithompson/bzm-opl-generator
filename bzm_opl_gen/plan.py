@@ -31,6 +31,7 @@ by a factor of three, so every returned plan carries
 """
 
 import math
+import textwrap
 
 from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
                   ENGINE_UPLOAD_HOSTS)
@@ -93,8 +94,15 @@ PERFORMANCE, GUI, SV = "performance", "functionalGui", "mockServices"
 # `target_field` and `figure_field` are the names every surface above calls
 # these by -- the CLI flag, the JSON key, the label on the card -- so a refusal
 # names the field somebody typed into rather than the model it belongs to.
+#
+# `name`, `runs` and `asks` are this module's own prose and not the account's
+# display names: a planner that reached core.FUNCTIONALITIES for a word in a
+# sentence would reach an account vocabulary, and reaching nothing is the
+# requirement here. core.sizing_models() joins BlazeMeter's label on where a
+# surface has one.
 SIZING_MODELS = {
     PERFORMANCE: {
+        "name": "performance",
         "unit": "virtual users",
         "target_field": "users",
         "figure_field": "vus_per_engine",
@@ -105,6 +113,7 @@ SIZING_MODELS = {
         "asks": "load testing",
     },
     GUI: {
+        "name": "GUI functional",
         "unit": "browser instances",
         "target_field": "browsers",
         "figure_field": "browsers_per_engine",
@@ -115,6 +124,7 @@ SIZING_MODELS = {
         "asks": "browser testing",
     },
     SV: {
+        "name": "service virtualization",
         "unit": "requests per second",
         "target_field": "requests_per_second",
         # No figure field, and that is the absence rather than an omission: see
@@ -569,15 +579,24 @@ def plan_document(plan):
     """
     p = plan
     eng, node, peak = p["engine"], p["node"], p["peak"]
-    assumed = p["vus_per_engine_assumed"]
+    rows = p["sizings"]
+    models = [SIZING_MODELS[r["functionality"]] for r in rows]
 
     lines = [
-        "# Infrastructure request: load testing",
+        # What the ticket is called, and it follows what was sized: "load
+        # testing" on a request for a Selenium grid is the first thing that
+        # gets one sent back.
+        f"# Infrastructure request: {_join(m['asks'] for m in models)}",
         "",
-        f"To run performance tests of up to **{p['users']:,} virtual users** from "
-        f"our own",
-        "Kubernetes cluster, using a BlazeMeter private location — the load",
-        "generators run here, and only results leave.",
+        # Each sizing paired with its own unit rather than two lists the reader
+        # has to line up: "performance tests and browser tests of up to 5,000
+        # virtual users and 20 browser instances" is a sentence nobody should
+        # have to parse. Wrapped rather than hand-broken, because how long it
+        # is now depends on how many models were sized.
+        *_wrap("To run " + _join(_ask_phrase(r) for r in rows)
+               + " from our own Kubernetes cluster, using a BlazeMeter private "
+                 "location — the load generators run here, and only results "
+                 "leave."),
         "",
         "## What is being asked for",
         "",
@@ -609,26 +628,11 @@ def plan_document(plan):
         "## How that number was reached",
         "",
         "BlazeMeter runs a test from **engines** — one pod each — and each engine",
-        "drives a share of the virtual users:",
+        "carries a share of the work:",
         "",
-        "```",
-        f"{p['users']:>7,} virtual users",
-        f"{p['vus_per_engine']:>7,} virtual users per engine"
-        + ("   (assumed -- see below)" if assumed else "   (supplied)"),
-        f"{'-' * 7}",
-        f"{p['engines']:>7} engines, running at the same time"
-        f"   ({p['users']:,} / {p['vus_per_engine']:,}, rounded up)",
-        f"{p['agents']:>7} agent(s) to run them",
-        f"{'-' * 7}",
-        f"{p['engines_per_agent']:>7} engines per agent"
-        + ("   (the location's `slots`)" if p["agents"] == 1
-           else f"   ({p['engines']} / {p['agents']}, rounded up -- the "
-                f"location's `slots`)"),
-        f"{p['engines_per_node']:>7} engine(s) per node",
-        f"{'-' * 7}",
-        f"{p['nodes_per_agent']:>7} nodes per agent"
-        + ("" if p["agents"] == 1 else f", {p['nodes']} in total"),
-        "```",
+    ]
+    lines += _arithmetic_block(p)
+    lines += [
         "",
         f"Each engine is one pod, sized **{eng['cpu']} CPU / {eng['memory']} / "
         f"{eng['disk_gb']}GB disk**",
@@ -649,9 +653,17 @@ def plan_document(plan):
     lines += _assumption_section(p)
     lines += _blazemeter_section(p)
 
-    if p["warnings"]:
+    # Everything the warnings say that the document has not already said. The
+    # unmeasured note is a warning *and* an assumption paragraph, because the
+    # web panel has no assumptions section and the document has no warning list
+    # the reader meets first -- one wording, and the surface that has already
+    # shown it does not show it twice.
+    stated = {_unmeasured_note(r) for r in rows
+              if r["per_pod_source"] == "unmeasured"}
+    worth = [w for w in p["warnings"] if w not in stated]
+    if worth:
         lines += ["## Worth knowing", ""]
-        for w in p["warnings"]:
+        for w in worth:
             lines += [f"- {w}", ""]
 
     lines += [
@@ -668,31 +680,168 @@ def plan_document(plan):
     return "\n".join(lines)
 
 
-def _size_vs_baseline(p):
+def _join(parts):
+    """"a", "a and b", "a, b and c". Every sentence in this document that lists
+    the sizings uses it, so the three cases are decided once."""
+    parts = list(parts)
+    if len(parts) < 3:
+        return " and ".join(parts)
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _wrap(text, width=78):
+    """Prose wrapped to the width the rest of this document is hand-wrapped to.
+
+    For the sentences whose length depends on how many models were sized: a
+    hand-broken line is right for exactly one number of sizings.
+    """
+    return textwrap.wrap(text, width)
+
+
+def _ask_phrase(row):
+    """One sizing as the ask reads it, its unit beside its own workload.
+
+    Paired here rather than as two lists, because "performance tests and browser
+    tests of up to 5,000 virtual users and 20 browser instances" asks the reader
+    to line them up themselves.
+    """
+    m = SIZING_MODELS[row["functionality"]]
+    return f"{m['runs']} of up to **{row['target']:,} {row['unit']}**"
+
+
+def _arithmetic_block(p):
+    """Every model's own division, then the one the pool came from.
+
+    One model is the ordinary case and stays the ordinary shape -- its division
+    is on the line that carries the pod count, exactly as it always was.
+    With several, each gets its own block first and the pool line says which one
+    it took, because a reader who cannot see where a node count came from
+    cannot check it, and this document exists to be checked.
+    """
+    rows = p["sizings"]
+    driver = next(r for r in rows if r["functionality"] == p["driven_by"])
+    many = len(rows) > 1
+    out = ["```"]
+    for r in rows:
+        out.append(f"{r['target']:>7,} {r['unit']}")
+        if r["per_pod"] is None:
+            # Stated and left there: no divisor, so no division and no pod
+            # count. A zero on this line would read as a workload that needs
+            # nothing.
+            out += [f"{'':>7} no measured figure for {r['per_pod_unit']} "
+                    f"-- see below", ""]
+            continue
+        out.append(
+            f"{r['per_pod']:>7,} {r['per_pod_unit']}"
+            + ("   (assumed -- see below)"
+               if r["per_pod_source"] == "assumed" else "   (supplied)"))
+        out.append("-" * 7)
+        if many:
+            out += [f"{r['pods']:>7} {r['pods_label']}"
+                    f"   ({r['target']:,} / {r['per_pod']:,}, rounded up)", ""]
+    if many:
+        out.append(
+            f"{p['engines']:>7} {driver['pods_label']}, running at the same time"
+            f"   (the largest of these, from the "
+            f"{SIZING_MODELS[driver['functionality']]['name']} sizing)")
+    else:
+        out.append(
+            f"{p['engines']:>7} {driver['pods_label']}, running at the same time"
+            f"   ({driver['target']:,} / {driver['per_pod']:,}, rounded up)")
+    out += [
+        f"{p['agents']:>7} agent(s) to run them",
+        "-" * 7,
+        f"{p['engines_per_agent']:>7} engines per agent"
+        + ("   (the location's `slots`)" if p["agents"] == 1
+           else f"   ({p['engines']} / {p['agents']}, rounded up -- the "
+                f"location's `slots`)"),
+        f"{p['engines_per_node']:>7} engine(s) per node",
+        "-" * 7,
+        f"{p['nodes_per_agent']:>7} nodes per agent"
+        + ("" if p["agents"] == 1 else f", {p['nodes']} in total"),
+        "```",
+    ]
+    return out
+
+
+def _size_vs_baseline(row):
     """This engine against the baseline one, as words rather than a decimal.
 
     "half" and "twice" are what a reader checks the arithmetic with; "0.5x"
     invites them to wonder what was rounded.
     """
-    r = p["vus_per_engine"] / BASELINE_VUS
+    r = row["per_pod"] / SIZING_MODELS[row["functionality"]]["baseline"]
     return {0.25: "a quarter of that size", 0.5: "half that size",
             2.0: "twice that size", 4.0: "four times that size"}.get(
         r, f"{r:g}x that size")
 
 
 def _assumption_section(p):
-    """The users-per-engine assumption, stated where it cannot be read past.
+    """Where each model's figure came from, stated where it cannot be read past.
 
-    It is the one input the whole document multiplies by, and the only one
-    nothing here can verify. A reader who takes the node count and skips this
-    is the failure mode; a reader who disagrees with the figure and re-runs the
-    plan is the success.
+    These are the inputs the whole document multiplies by and the only ones
+    nothing here can verify. A reader who takes the node count and skips this is
+    the failure mode; a reader who disagrees with a figure and re-runs the plan
+    is the success.
+
+    One paragraph per sizing, and three shapes rather than two: supplied,
+    assumed, and -- for service virtualization -- no figure at all. The third is
+    the one this section exists to keep visible, because a workload that is in
+    the ask and not in the arithmetic is exactly what a platform team would
+    otherwise provision as free.
     """
-    threads = p["vus_per_engine"]
-    if not p["vus_per_engine_assumed"]:
+    rows = p["sizings"]
+    out = ["## The assumption in this plan" if len(rows) == 1
+           else "## The assumptions in this plan", ""]
+    for r in rows:
+        out += _assumption_for(r, p)
+    return out
+
+
+def _assumption_for(row, p):
+    if row["per_pod_source"] == "unmeasured":
+        return _wrap(f"**There is no figure here for {row['per_pod_unit']}.** "
+                     + _unmeasured_note(row)) + [""]
+    if row["functionality"] == GUI:
+        return _browser_assumption(row)
+    return _vus_assumption(row, p)
+
+
+def _browser_assumption(row):
+    """Roughly 4, from the account owner.
+
+    Weaker than the performance figure and said so: 500 is BlazeMeter's own
+    published pairing, and this is one person's estimate of a workload that
+    varies with the page under test more than a script does.
+    """
+    if row["per_pod_source"] == "supplied":
         return [
-            "## The assumption in this plan",
+            f"**{row['per_pod']:,} browser instances per engine was supplied "
+            f"rather than measured",
+            "here.** The engine count above is that number divided out, so if it "
+            "turns out",
+            "to be wrong the node count moves with it.",
             "",
+        ]
+    return [
+        f"**{row['per_pod']:,} browser instances per engine is an estimate from "
+        f"the account owner,",
+        "not a measurement of our suite.** How many browsers one engine carries",
+        "depends on what the pages under test do — a single-page application "
+        "holding a",
+        "large DOM open costs far more than a form submission — and nothing here "
+        "reaches",
+        "that. Run the real suite against one engine, raise the parallel count "
+        "until it",
+        "saturates, and re-plan with the number that comes out.",
+        "",
+    ]
+
+
+def _vus_assumption(row, p):
+    threads = row["per_pod"]
+    if row["per_pod_source"] == "supplied":
+        return [
             f"**{threads:,} users per engine was supplied rather than measured "
             f"here.** Everything",
             "above is that number multiplied out, so if it turns out to be wrong "
@@ -703,17 +852,15 @@ def _assumption_section(p):
             "",
         ]
     return [
-        "## The assumption in this plan",
-        "",
         f"**{threads:,} users per engine is what an engine of this size is rated "
         f"for, not a",
         f"measurement of our test.**"
         + (f" {BASELINE_VUS:,} is BlazeMeter's figure for a"
-           if p["vus_per_engine"] != BASELINE_VUS
+           if threads != BASELINE_VUS
            else " It is BlazeMeter's own figure for that size."),
         (f"{ENGINE_DEFAULT_CPU} CPU / {ENGINE_DEFAULT_MEM} engine, and this one "
-         f"is {_size_vs_baseline(p)}."
-         if p["vus_per_engine"] != BASELINE_VUS else ""),
+         f"is {_size_vs_baseline(row)}."
+         if threads != BASELINE_VUS else ""),
         f"How many users one engine really",
         "carries depends on what the script does between requests — a chatty API "
         "test",
@@ -746,6 +893,17 @@ def _blazemeter_section(p):
     was sized, bought and approved for one engine each.
     """
     loc = p["location"]
+    # The pool was sized from one of the models, so "cannot reach X" is that
+    # model's own target and unit: on a browser-driven plan the reader is
+    # checking `slots` against a browser count, not against virtual users.
+    driver = next(r for r in p["sizings"] if r["functionality"] == p["driven_by"])
+    reach = f"{driver['target']:,} {driver['unit']}"
+    # Where no load test was sized, `threadsPerEngine` still has to be set --
+    # a location that runs any test at all fails to start one without it -- but
+    # the figure came from the engine's rating rather than from anything asked
+    # for here, and a row that did not say so would read as a number somebody
+    # chose.
+    perf = any(r["functionality"] == PERFORMANCE for r in p["sizings"])
     return [
         "## The BlazeMeter side, so the cluster is actually used",
         "",
@@ -768,14 +926,17 @@ def _blazemeter_section(p):
         (f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
          f"may run at once. Add agents to this location and its total is "
          f"agents x this — below `{loc['slots']}` a single agent cannot reach "
-         f"{p['users']:,} virtual users |" if p["agents"] == 1 else
+         f"{reach} |" if p["agents"] == 1 else
          f"| Engines per agent (`slots`) | `{loc['slots']}` | what **one** agent "
          f"may run at once, so this location's total is "
          f"{p['agents']} x {loc['slots']} = {p['agents'] * loc['slots']} engines "
-         f"— below that the test cannot reach {p['users']:,} virtual users |"),
+         f"— below that the test cannot reach {reach} |"),
         f"| Virtual users per engine (`threadsPerEngine`) | "
         f"`{loc['threads_per_engine']}` | unset, every test start fails with 403 "
-        f"*Not enough available resources* |",
+        f"*Not enough available resources*"
+        + ("" if perf else ". No load test was sized here, so this is what an "
+                          "engine of the size above is rated for")
+        + " |",
         # None means this engine is not a whole number of cores, which the
         # field cannot express -- said as that rather than printed as "None".
         (f"| overrideCPU | `{loc['override_cpu']}` | the engine pod's CPU "
