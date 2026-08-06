@@ -114,11 +114,13 @@ export function Sizing(props: {
     (s) => s.cpu === ask.engineCpu && s.mem === ask.engineMem)?.id
     ?? (ask.engineCpu || ask.engineMem ? "custom" : "standard"));
   const size = ENGINE_SIZES.find((s) => s.id === preset);
-  // What the chosen size is rated for, whether or not a target has been typed:
-  // the figure is most use *before* one is, since that is when the size is
-  // being chosen.
+  // What the chosen size is rated for, per model, whether or not a target has
+  // been typed: the figure is most use *before* one is, since that is when the
+  // size is being chosen. Keyed by funcId, so each row reads its own -- the
+  // card asks nothing about which model it is drawing.
   const rated = useEngineRating(ask.engineCpu || size?.cpu,
                                 ask.engineMem || size?.mem, props.api);
+  const ratedFor = (fid: string) => rated?.[fid] ?? null;
 
   const download = () => {
     if (!plan) return;
@@ -233,11 +235,10 @@ export function Sizing(props: {
                         refusal in its place. */}
                     {m.measured ? (
                       <Field label={_cap(m.figure_unit)}
-                        hint={_figureHint(m, rated)}>
+                        hint={_figureHint(ratedFor(m.functionality))}>
                         <NumberInput
                           placeholder={String(answer(m.functionality)?.per_pod
-                            ?? (m.functionality === "performance"
-                              ? rated ?? "" : ""))}
+                            ?? ratedFor(m.functionality) ?? "")}
                           value={inputs.figures[m.functionality] ?? ""}
                           onChange={(v) => setFigure(m.functionality, v)} />
                       </Field>
@@ -385,16 +386,18 @@ function _cap(s: string) {
 
 /** What blank does in this model's figure box.
  *
- *  The performance one can say the number, because the engine rating is asked
- *  for as soon as a size is chosen (useEngineRating) and is most use before a
- *  target is typed -- that is when the size is being picked. The others say
- *  what blank *means* rather than inventing the figure a second time on this
- *  side. */
-function _figureHint(m: SizingModel, rated: number | null) {
-  if (m.functionality === "performance" && rated) {
-    return `blank uses ${rated.toLocaleString()}, what this engine size is rated for`;
-  }
-  return "blank uses what a pod of this size is rated for";
+ *  One sentence with the number in it wherever the number is known, which since
+ *  the rating is served per model is every model with a measured figure. It was
+ *  two wordings and a branch on `functionality === "performance"`: the route
+ *  answered in virtual users alone, so a browser field could only say what
+ *  blank *meant* about a figure the server could already have given it.
+ *
+ *  Null is still a real answer -- the rating has not arrived, or the size does
+ *  not parse -- and the general sentence is what it says. */
+function _figureHint(rated: number | null) {
+  return rated
+    ? `blank uses ${rated.toLocaleString()}, what this engine size is rated for`
+    : "blank uses what a pod of this size is rated for";
 }
 
 

@@ -142,22 +142,28 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   return { plan, err, busy };
 }
 
-/** What an engine of this size is rated for, asked as soon as the size changes
- *  rather than waiting for a plan.
+/** What a pod of this size is rated for in each model's unit, asked as soon as
+ *  the size changes rather than waiting for a plan.
  *
  *  The suggestion is most use *before* a target is typed -- that is when you
  *  are choosing the size -- and 500 is only right for the standard engine, so a
- *  placeholder that waited for a plan showed 500 beside a Large one. The ratio
- *  stays on the server for the reason api.engineVus gives: doctor judges
- *  locations against the same one. */
+ *  placeholder that waited for a plan showed 500 beside a Large one. The ratios
+ *  stay on the server for the reason api.engineVus gives: doctor judges
+ *  locations against the same one.
+ *
+ *  Every model, not the performance one: the route answers per funcId, so a
+ *  field renders what its own row is rated for instead of the card testing
+ *  which model it is drawing. `null` here is the whole answer being absent (no
+ *  size yet, or the read failed); a null *inside* it is a model with no
+ *  measured figure, which is a different thing and stays a different thing. */
 export function useEngineRating(cpu: string | undefined, mem: string | undefined,
-                                api: Api): number | null {
-  const [rated, setRated] = useState<number | null>(null);
+                                api: Api): Record<string, number | null> | null {
+  const [rated, setRated] = useState<Record<string, number | null> | null>(null);
   useEffect(() => {
     if (!cpu || !mem) { setRated(null); return; }
     let live = true;
     api.engineVus(cpu, mem)
-      .then((r) => { if (live) setRated(r.supported_vus); })
+      .then((r) => { if (live) setRated(r.rated); })
       .catch(() => { if (live) setRated(null); });
     return () => { live = false; };
   }, [cpu, mem]);

@@ -91,6 +91,26 @@ export interface SizingModel {
   measured: boolean;
 }
 
+/** What one pod of a given engine size is rated for, from /api/engine-vus.
+ *
+ *  Asked as soon as the size changes rather than waiting for a plan: the figure
+ *  is most use *before* a target is typed, because that is when the size is
+ *  being chosen.
+ *
+ *  `rated` is per model and **null** where that model has no measured per-pod
+ *  figure -- the same absence `SizingModel.measured` reports, arriving as the
+ *  value rather than as a rule the page has to know. It is why no field here
+ *  has to ask which model is the performance one. */
+export interface EngineRating {
+  cpu: string;
+  memory: string;
+  /** The performance model under the name doctor and `threadsPerEngine` call
+   *  it by. `rated.performance` is the same number; this is the one the
+   *  location settings speak in. */
+  supported_vus: number;
+  rated: Record<string, number | null>;
+}
+
 /** One model's answer inside a plan: its target, what a pod carries, and how
  *  many pods that is. */
 export interface PlanSizing {
@@ -379,11 +399,11 @@ export const api = {
    *  card renders a field group per model, and a fourth model has to reach it
    *  by being added to the table rather than by an edit here. */
   sizingModels: () => req<SizingModel[]>("GET", "/api/sizing-models"),
-  /** What an engine of this size is rated for, so a field can suggest it. The
-   *  ratio stays on the server -- doctor judges locations against the same one,
-   *  and a second copy here is how the two come to disagree. */
+  /** What a pod of this size is rated for, per model, so a field can suggest
+   *  it. The ratios stay on the server -- doctor judges locations against the
+   *  same one, and a second copy here is how the two come to disagree. */
   engineVus: (cpu: string, mem: string) =>
-    req<{ cpu: string; memory: string; supported_vus: number }>(
+    req<EngineRating>(
       "GET", `/api/engine-vus?cpu=${encodeURIComponent(cpu)}&mem=${encodeURIComponent(mem)}`),
   /** What the account can generate, by workspace. See core.account_capacity
    *  for what "rated" means and why a shared location is counted once. */

@@ -2432,7 +2432,12 @@ const unconnected = (extra: Partial<Api>) => fakeApi({
   funcIdChoices: async () => [],
   functionalities: async () => [],
   svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
-  engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+  // Per model, as the route answers: the card reads each row's own rating,
+  // and the one with no measured figure is null rather than absent.
+  engineVus: async () => ({
+    cpu: "2", memory: "8Gi", supported_vus: 500,
+    rated: { performance: 500, functionalGui: 4, mockServices: null },
+  }),
   sizingModels: async () => SIZING_MODELS,
   ...extra,
 });
@@ -2569,7 +2574,11 @@ test("the profile fills a location's settings, and Save is the only write",
       // The list is re-read on nothing here, so the fixture hands back what it
       // holds now rather than the array it was built from.
       locations: async () => [held],
-      engineVus: async () => ({ cpu: "2", memory: "8Gi", supported_vus: 500 }),
+      // Per model, as the route answers.
+      engineVus: async () => ({
+        cpu: "2", memory: "8Gi", supported_vus: 500,
+        rated: { performance: 500, functionalGui: 4, mockServices: null },
+      }),
       plan: async (body) => { asked.push(body); return planFor(body); },
       updateLocation: async (body) => {
         const { harbor_id: _h, ...fields } = body;

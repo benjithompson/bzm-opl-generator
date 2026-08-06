@@ -1818,6 +1818,23 @@ def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
         == [v for m in served for v in (m["unit"], m["figure_unit"])]
 
 
+def test_the_engine_rating_is_answered_for_every_sizing_model():
+    """The card suggests a per-pod figure beside each model's box, and had one
+    number to do it with -- so it branched on `functionality === "performance"`
+    and told a browser field only what blank *meant*. The route answers per
+    model, and the model with no measured figure is null rather than missing:
+    that absence is the value, not a rule the page has to know."""
+    from bzm_opl_gen import plan as plan_mod
+    body = client.get("/api/engine-vus",
+                      params={"cpu": "4", "mem": "16Gi"}).json()
+    assert set(body["rated"]) == set(plan_mod.SIZING_MODELS)
+    # Twice the standard engine, so twice what it is rated for -- and
+    # `supported_vus` is the same figure under the name doctor calls it by.
+    assert body["rated"]["performance"] == 1000 == body["supported_vus"]
+    assert body["rated"]["functionalGui"] == 8
+    assert body["rated"]["mockServices"] is None
+
+
 def test_a_functionality_says_whether_its_agent_carries_an_engine():
     """`runs_engine` was a two-id literal in the frontend
     (`ENGINE_FUNCTIONALITIES`), which is the copy DOCKER_IGNORED and the funcId

@@ -1173,13 +1173,24 @@ def sizing_models():
 
 
 def engine_vus(engine_cpu=None, engine_mem=None):
-    """How many virtual users an engine of this size is rated for.
+    """What a pod of this size is rated for, in each model's own unit.
 
-    The same ratio capacity_plan assumes from and doctor judges against, asked
-    on its own so a form can *suggest* the figure beside the field rather than
+    The same ratios capacity_plan assumes from and doctor judges against, asked
+    on their own so a form can *suggest* the figure beside the field rather than
     leaving "virtual users per engine" as a number the user has to know. 500 is
     only right for the 2 CPU / 8Gi engine, which is exactly the mistake the
     planner's own default used to make.
+
+    `rated` is per functionality, and **None** where that model has no measured
+    per-pod figure -- which is service virtualization, and is why the card can
+    render this answer beside any model rather than branching on which one is
+    performance. The card did branch, having only the one number to render, so
+    a GUI Functional field said "blank uses what a pod of this size is rated
+    for" about a figure this route could already have given it.
+
+    `supported_vus` stays beside it: it is the performance model under the name
+    `doctor` and `threadsPerEngine` call it by, which is a different question
+    from "what may this field suggest".
     """
     try:
         cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
@@ -1188,7 +1199,9 @@ def engine_vus(engine_cpu=None, engine_mem=None):
         raise BadRequest(str(e))
     return {"cpu": gen_mod.format_cpu(cpu),
             "memory": gen_mod.format_memory(mem),
-            "supported_vus": plan.supported_vus(cpu, mem)}
+            "supported_vus": plan.supported_vus(cpu, mem),
+            "rated": {fid: plan.per_pod_capacity(fid, cpu, mem)
+                      for fid in plan.SIZING_MODELS}}
 
 
 def account_capacity(client, account_id):
