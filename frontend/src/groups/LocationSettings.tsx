@@ -353,9 +353,7 @@ function ProfileLine({ plan, agents, busy, touched }: {
         {plan.nodes_per_agent} node{plan.nodes_per_agent === 1 ? "" : "s"} each.
         {touched && " The fields below were edited by hand and no longer follow it."}
       </p>
-      <PlanCaveats compact assumed={plan.vus_per_engine_assumed}
-        vusPerEngine={plan.vus_per_engine} sizings={plan.sizings}
-        warnings={plan.warnings} />
+      <PlanCaveats compact sizings={plan.sizings} warnings={plan.warnings} />
     </div>
   );
 }

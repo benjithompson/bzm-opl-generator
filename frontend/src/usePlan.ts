@@ -14,7 +14,7 @@
 //
 // The arithmetic itself is not here and must not be: it is plan.py's, and
 // doctor judges live locations against the same ratio. This is only the asking.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Api, CapacityPlan } from "./api";
 
@@ -97,18 +97,27 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const { engineCpu, engineMem, enginesPerNode, agents } = ask;
-  // The rows, as one string. `ask.sizings` is rebuilt every render by whoever
-  // assembles it, so a dependency on the array itself would re-POST on every
-  // keystroke anywhere on the page; the primitives below cannot express a list.
-  const rows = JSON.stringify(
-    ask.sizings.filter((s) => s.target.trim()));
+  // The rows, and the same rows as one string. `ask.sizings` is rebuilt every
+  // render by whoever assembles it, so a dependency on the array itself would
+  // re-POST on every keystroke anywhere on the page; the primitives below
+  // cannot express a list, so the string is what the effect depends on.
+  //
+  // The memo is keyed by that string and hands back the array the string was
+  // made of. It used to be parsed back out of it inside the effect, which is a
+  // round trip through JSON to recover a value already in scope -- and one
+  // that would quietly retype `SizingAsk` as whatever JSON.parse returns.
+  const sized = ask.sizings.filter((s) => s.target.trim());
+  const rows = JSON.stringify(sized);
+  // `rows` and not `sized` in the dependency list, deliberately: the string is
+  // what says whether these are the same rows, and the array is a new object
+  // every render.
+  const sizings = useMemo(() => sized, [rows]);
 
   // Debounced, because every keystroke in a number field is a plan: typing
   // "5000" passes through 5, 50 and 500, and three answers nobody wanted
   // arrive before the one they did.
   const timer = useRef<number>();
   useEffect(() => {
-    const sizings: SizingAsk[] = JSON.parse(rows);
     if (!sizings.length) { setPlan(null); setErr(null); setBusy(false); return; }
     window.clearTimeout(timer.current);
     setBusy(true);
@@ -126,9 +135,9 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
         .finally(() => setBusy(false));
     }, 250);
     return () => window.clearTimeout(timer.current);
-    // Primitives, so a caller rebuilding its `ask` object every render does not
-    // re-POST for a plan nothing changed about.
-  }, [rows, engineCpu, engineMem, enginesPerNode, agents]);
+    // Primitives and the memo above, so a caller rebuilding its `ask` object
+    // every render does not re-POST for a plan nothing changed about.
+  }, [sizings, engineCpu, engineMem, enginesPerNode, agents]);
 
   return { plan, err, busy };
 }

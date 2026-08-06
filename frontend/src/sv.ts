@@ -266,7 +266,7 @@ export function svState(
   // In that gap the two writers fought: `notRunPatch` cleared `sv_ingress`
   // because the declaration no longer carries mockServices, and `correction`
   // re-seeded it from a demand read off the stale facts -- an effect loop that
-  // never settled, so untickng Service virtualization hung the page. Each
+  // never settled, so unticking Service virtualization hung the page. Each
   // write was individually right; what was wrong is that they answered the same
   // question from two sources. This makes it one.
   const required = runs && location && !declined;

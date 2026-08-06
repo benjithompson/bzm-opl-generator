@@ -327,9 +327,7 @@ export function Sizing(props: {
                   tick a functionality and give it a target to size this run
                 </p>
               )}
-              <PlanCaveats assumed={!!plan?.vus_per_engine_assumed}
-                vusPerEngine={plan?.vus_per_engine ?? 0}
-                sizings={plan?.sizings}
+              <PlanCaveats sizings={plan?.sizings ?? []}
                 warnings={plan?.warnings ?? []} />
             </div>
 

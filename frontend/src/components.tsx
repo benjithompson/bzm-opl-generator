@@ -199,30 +199,31 @@ export function Figure(props: {
  *
  *  The warnings themselves are plan.py's prose, rendered as it wrote them. */
 export function PlanCaveats(props: {
-  assumed: boolean;
-  vusPerEngine: number;
   warnings: string[];
   compact?: boolean;
-  /** Every model the plan was asked for, where the caller has them. Each
-   *  assumed figure gets its own note in its own unit — "4 browser instances
-   *  per engine is assumed" is a different sentence about a different workload,
-   *  and one note about virtual users standing in for both would be a figure
-   *  attributed to the wrong thing. Without it, `assumed`/`vusPerEngine` are
-   *  the performance-only pair the location panel has (it sizes nothing else).
+  /** Every model the plan was asked for. Each assumed figure gets its own note
+   *  in its own unit — "4 browser instances per engine is assumed" is a
+   *  different sentence about a different workload, and one note about virtual
+   *  users standing in for both would be a figure attributed to the wrong
+   *  thing.
+   *
+   *  Required, and one shape. There was a second — an `assumed`/`vusPerEngine`
+   *  pair for a caller with only the performance figure — and both callers had
+   *  the rows all along, so nothing ever reached it: with no plan `assumed` is
+   *  false, which is the same empty list the rows give, and with one the rows
+   *  are there. What it did carry was "virtual users per engine" hardcoded for
+   *  whatever model the figure belonged to.
    *
    *  A model with **no** measured figure is not here: it has no note to make,
    *  because the sentence explaining it is the server's and arrives in
    *  `warnings` beside these. */
-  sizings?: { per_pod: number | null; per_pod_unit: string;
-              per_pod_source: string }[];
+  sizings: { per_pod: number | null; per_pod_unit: string;
+             per_pod_source: string }[];
 }) {
   const small = props.compact;
   const assumed = props.sizings
-    ? props.sizings.filter((s) => s.per_pod_source === "assumed")
-      .map((s) => ({ figure: s.per_pod ?? 0, unit: s.per_pod_unit }))
-    : props.assumed
-      ? [{ figure: props.vusPerEngine, unit: "virtual users per engine" }]
-      : [];
+    .filter((s) => s.per_pod_source === "assumed")
+    .map((s) => ({ figure: s.per_pod ?? 0, unit: s.per_pod_unit }));
   return (
     <>
       {assumed.map((a) => (
