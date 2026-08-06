@@ -1288,10 +1288,10 @@ export default function App({ api }: { api: Api }) {
   // them. This is the funcIds the location carries that the tool has no options
   // for: locations already run tdm/dataPublisher/delphix, and naming them is
   // the honest version of a page that quietly models three funcIds. Named with
-  // the served vocabulary, so where an account has been read they carry
-  // BlazeMeter's own words rather than a camelCase id.
-  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities,
-                                        funcIds.choices);
+  // the served vocabulary, so they carry BlazeMeter's own words rather than a
+  // camelCase id -- and split by whether the account still serves them, which
+  // is why the whole vocabulary goes in and not its `choices` (#160).
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities, funcIds);
   // The second and last place an option is written without anyone pressing
   // anything, and the same shape as the SV correction above: what has to change
   // is a value optionGroups decides, this only applies it. A profile, a

@@ -488,15 +488,20 @@ test("a location that runs one functionality shows one card, with nothing config
 
 /** ...that account, with such a location. Its funcId vocabulary answers the way
  *  the server does: the covered baseline with no account, and the account's own
- *  nine -- names and all -- once one is named (#148). */
-const unclaimedAccount = (record: Options[]) =>
+ *  nine -- names, pins and all -- once one is named (#148, #160).
+ *
+ *  `funcIds` is what the location carries, `["tdm"]` unless a test says
+ *  otherwise: a funcId no functionality claims, which is the state the
+ *  format-refusal tests below need (nobody has said what this location runs).
+ *  A test about what gets *named* passes its own. */
+const unclaimedAccount = (record: Options[], funcIds = ["tdm"]) =>
   twoFunctionalityAccount(record, {
     locations: async () => [{
-      id: "h-tdm", name: "Tdm", funcIds: ["tdm"], slots: 1,
+      id: "h-tdm", name: "Tdm", funcIds, slots: 1,
       ships: [{ id: "s-1", name: "agent-1", state: "IDLE" }],
     }],
     facts: async () => ({
-      harbor_id: "h-tdm", func_ids: ["tdm"],
+      harbor_id: "h-tdm", func_ids: funcIds,
       ships: [{ id: "s-1", name: "agent-1" }], images: [],
     }),
     funcIdVocabulary: async (accountId?: number) => accountId ? vocabulary([
@@ -504,8 +509,16 @@ const unclaimedAccount = (record: Options[]) =>
         covered: true, sub_func_ids: [] },
       { id: "mockServices", label: "Service Virtualization",
         changes_images: true, covered: true, sub_func_ids: [] },
+      // Three of the 117 pins the account serves under this one. They are not
+      // rows of their own anywhere: not here, and not in a location's funcIds
+      // where they arrive beside the parent.
+      { id: "functionalGui", label: "GUI Functional", changes_images: true,
+        covered: true,
+        sub_func_ids: ["chrome:default", "firefox:139", "safari:15"] },
       { id: "tdm", label: "TDM Integration", changes_images: false,
         covered: false, sub_func_ids: [] },
+      // `functionalApi` and `sv-bridge` are deliberately absent, as they are
+      // from the real account: 43 and 62 of its 171 locations still carry one.
     ], "account") : vocabulary([
       { id: "performance", label: "Performance", changes_images: true,
         covered: true, sub_func_ids: [] },
@@ -535,6 +548,40 @@ test("a funcId this tool has no options for is named in the account's own words"
     // vocabulary arriving and nothing reading it.
     expect(screen.queryByText(/\btdm\b/)).toBeNull();
   });
+
+test("a browser pin is not a funcId this tool has no options for", async () => {
+  // #160, end to end. This location is the shape 43% of one account's are: the
+  // parent beside the browsers it is pinned to, plus a funcId the account
+  // retired years ago. Every pin used to be named on the configure step as
+  // something this tool has no options for -- 41 of them on the worst location
+  // -- which is a true sentence about nothing and buried the one funcId the
+  // sentence exists for.
+  session.save({
+    sourceMode: "connect", accountId: 1, workspaceId: 10,
+    harborId: "h-tdm", shipId: "s-1",
+    confirmed: { loc: "h-tdm", ship: "s-1" },
+    manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
+    options: { namespace: "blazemeter" },
+    step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
+  });
+  render(<App api={unclaimedAccount([], [
+    "functionalGui", "chrome:default", "firefox:139", "safari:15", "sv-bridge",
+  ])} />);
+  fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
+
+  // The retired one, and it is the whole of that sentence: the account does not
+  // serve `sv-bridge`, so this location was created before the removal.
+  expect(await screen.findByText(/no longer offers/)).toBeTruthy();
+  expect(screen.getByText("sv-bridge")).toBeTruthy();
+  // Not one pin anywhere on the page. `functionalGui` is uncovered here -- this
+  // account's served functionalities are performance and SV -- so this is also
+  // the case where the parent is named and its pins still are not: what a pin
+  // is a parameter *of* does not depend on whether that is configurable.
+  for (const pin of ["chrome:default", "firefox:139", "safari:15"]) {
+    expect(screen.queryByText(new RegExp(pin))).toBeNull();
+  }
+  expect(screen.getByText(/GUI Functional/)).toBeTruthy();
+});
 
 test("an SV configuration no location demanded still takes away the formats that refuse it",
   async () => {

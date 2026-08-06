@@ -33,7 +33,7 @@ import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
   engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
-  runsFunctionality, SHARED_GROUPS,
+  runsFunctionality, SHARED_GROUPS, UnclaimedFuncIds,
 } from "../optionGroups";
 import { placeholderWarning } from "../placeholder";
 // The two sentences about crane's one pod-limit pair, and the predicate for the
@@ -50,8 +50,11 @@ export interface ConfigurePanelProps {
    *  (#113). */
   declare: (id: string, on: boolean) => void;
   sourceMode: "connect" | "manual";
-  /** The funcIds this location carries that no functionality claims. */
-  locUnclaimed: string[];
+  /** The funcIds this location carries that no card claims, split by why: ones
+   *  the account serves and nothing here configures, and ones the account
+   *  retired and the location predates. Two sentences, because they are two
+   *  answers (#160). */
+  locUnclaimed: UnclaimedFuncIds;
   /** Which functionalities this location runs, or null while nobody has answered --
    *  see optionGroups.enabledFunctionalities. A functionality not in it is stated by its
    *  card and configured nowhere. */
@@ -581,7 +584,8 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
               nothing is what the filter above would produce if that ever
               stopped being true, and it would read as a section that failed to
               load. */}
-          {(functionalities.length > 0 || p.locUnclaimed.length > 0) && (
+          {(functionalities.length > 0 || p.locUnclaimed.uncovered.length > 0
+            || p.locUnclaimed.retired.length > 0) && (
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
               Deployment functionalities
@@ -635,17 +639,33 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 Tick what it runs above.
               </p>
             )}
-            {/* Names, not ids: the account's own display names where one has
-                been read, and the raw funcId only where none has -- so this
-                sentence reads as BlazeMeter's UI reads. Not mono for that
-                reason; "Data Orchestration" set in a code face reads as
-                something to type. */}
-            {p.locUnclaimed.length > 0 && (
+            {/* Names, not ids: BlazeMeter's own display names, so this sentence
+                reads as BlazeMeter's UI reads. Not mono for that reason; "Data
+                Orchestration" set in a code face reads as something to type. */}
+            {p.locUnclaimed.uncovered.length > 0 && (
               <p className="text-[11px] text-slate-500 mt-1.5">
                 Also runs{" "}
-                <span className="text-slate-600">{p.locUnclaimed.join(", ")}</span> —
+                <span className="text-slate-600">
+                  {p.locUnclaimed.uncovered.join(", ")}</span> —
                 no options here for those; nothing about them is generated or
                 removed.
+              </p>
+            )}
+            {/* ...and the other answer, which is not the one above (#160). The
+                account does not serve these at all, so the location was created
+                before they were retired -- and mono here, because a raw funcId
+                is what it is: the account has no display name left to read one
+                off. Same closing promise as above; a location is not changed by
+                being read. */}
+            {p.locUnclaimed.retired.length > 0 && (
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Also carries{" "}
+                <span className="font-mono text-slate-600">
+                  {p.locUnclaimed.retired.join(", ")}</span> —
+                the account no longer offers{" "}
+                {p.locUnclaimed.retired.length > 1 ? "those funcIds" : "that funcId"},
+                so this location predates the removal. Nothing here generates or
+                removes {p.locUnclaimed.retired.length > 1 ? "them" : "it"}.
               </p>
             )}
           </section>
