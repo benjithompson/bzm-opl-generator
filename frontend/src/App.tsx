@@ -22,7 +22,7 @@ import { downloadPlan, Recall, recalled, recallNote } from "./token";
 // which of them a functionality puts on screen, lives in optionGroups.ts.
 import {
   allGroupsOff, blockingGroups, caModeOf, caModePatch, CaMode,
-  configureBlockedBy, detectGroups, enabledFunctionalities,
+  configureBlockedBy, detectGroups, enabledFunctionalities, engineFunctionalities,
   functionalitiesOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
   notRunPatch,
   runsFunctionality, serviceAccountOk, startFunctionality, suggestNamespace,
@@ -200,6 +200,12 @@ export default function App({ api }: { api: Api }) {
   // functionality is a backend entry plus a tag on the groups it owns; empty
   // until it lands, which hides nothing.
   const [functionalities, setFunctionalities] = useState<Functionality[]>([]);
+  // ...and which of them run a taurus engine, off the served `runs_engine`.
+  // Read once here with the rest of the domain state rather than by each of the
+  // three consumers, and empty until the vocabulary lands -- which is the same
+  // "nothing excludes anything yet" an empty list has always meant here.
+  const engineFuncIds = useMemo(
+    () => engineFunctionalities(functionalities), [functionalities]);
   const [declared, setDeclared] = useState<string[]>([]);
   // One way to read a text option. Written out per-site, the `.trim()` was
   // getting forgotten -- an ingress name pasted with a trailing space missed
@@ -1124,10 +1130,11 @@ export default function App({ api }: { api: Api }) {
    *  location already exists. */
   const declareFunctionality = useCallback((id: string, on: boolean) => {
     const next = toggleDeclared(declared, id, on,
-                                functionalities.map((f) => f.id), exclusiveWith);
+                                functionalities.map((f) => f.id),
+                                exclusiveWith(engineFuncIds));
     setDeclared(next);
     suggestNsFor(next);
-  }, [declared, functionalities, suggestNsFor]);
+  }, [declared, engineFuncIds, functionalities, suggestNsFor]);
 
   // Which functionality a location opens on, from its funcIds. Keyed on the harbor
   // rather than on `facts`, which is refetched after creating an agent: that
@@ -1588,7 +1595,8 @@ export default function App({ api }: { api: Api }) {
                   // The draft the panel edits is four of the five fields; the
                   // workspace id is the drawer's and is merged back here.
                   setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
-                  choices: funcIdChoices, blockedBy: createLocBlockedBy,
+                  choices: funcIdChoices, engines: engineFuncIds,
+                  blockedBy: createLocBlockedBy,
                   submit: createLocationNow,
                 },
                 confirmed: locConfirmed,

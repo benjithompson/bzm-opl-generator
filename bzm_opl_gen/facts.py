@@ -81,6 +81,30 @@ def image_distinct_funcs():
     return out
 
 
+# The category the taurus engine is in, so "does this functionality's agent
+# carry an engine?" is a lookup rather than a second list of funcIds.
+ENGINE_CATEGORY = "performance"
+
+
+def runs_engine(func_id):
+    """Does this functionality's agent carry a taurus engine?
+
+    Read off CATEGORY_BY_FUNC, which is where the answer already is: the table
+    above was read off real single-functionality locations' /versions --
+    performance and functionalGui both carry v4, and a mockServices agent
+    carries crane, group-gateway and service-mock and no engine at all. The
+    frontend kept the same two ids as a literal of its own, which is the copy
+    `DOCKER_IGNORED` and the funcId vocabulary are served to avoid; it is on
+    each served functionality now.
+
+    A funcId this table does not name -- tdm, delphix, the account's others --
+    answers False rather than defaulting, unlike `needed_categories`: this asks
+    what an agent carries, and "nothing here knows" is not "it carries an
+    engine".
+    """
+    return ENGINE_CATEGORY in CATEGORY_BY_FUNC.get(func_id, set())
+
+
 def needed_categories(func_ids):
     needed = set()
     for f in func_ids or []:

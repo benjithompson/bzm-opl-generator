@@ -171,8 +171,16 @@ export const ENGINE_SIZES = [
  *  copy of the 2/8Gi figure. engineSize.ts renders it. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The functionalities whose agent carries a taurus engine, so that "engine
+/** The funcIds among these whose agent carries a taurus engine, so that "engine
  *  size" is a true statement about its pod limits.
+ *
+ *  The rows' own `runs_engine`, filtered -- not a list here. It was two ids
+ *  written out (`ENGINE_FUNCTIONALITIES`), which is a served table restated in
+ *  TypeScript: the answer is `facts.CATEGORY_BY_FUNC`'s, read off real
+ *  single-functionality locations' /versions, where performance carries
+ *  apm/crane/v4, functionalGui adds doduo and a browser to the same three, and
+ *  an SV-only agent carries crane, group-gateway and service-mock and **no
+ *  taurus engine at all**.
  *
  *  Placement only, and that is the whole of what survives #149. It was
  *  `SIZING_FUNCTIONALITY`, one id doing two jobs: where the statement renders,
@@ -180,16 +188,14 @@ export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
  *  from under them. The second job was wrong. Crane applies
  *  KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to **every pod it creates** -- one
  *  pair, with no per-functionality second one -- so the limits belong to no
- *  functionality and are never cleared for one; see notRunPatch.
- *
- *  Read off real single-functionality locations' /versions rather than assumed:
- *  performance carries apm/crane/v4 and functionalGui adds doduo and a browser
- *  to the same three, while an SV-only agent carries crane, group-gateway and
- *  service-mock -- **no taurus engine at all**. Its limits still reach its mock
- *  pods and are still emitted; what they mean there is a sizing model that does
- *  not exist yet (#154), and stating an engine size over it would be inventing
- *  one. So it gets no statement rather than a wrong one. */
-export const ENGINE_FUNCTIONALITIES = ["performance", "functionalGui"];
+ *  functionality and are never cleared for one; see notRunPatch. An SV
+ *  location's limits still reach its mock pods and are still emitted; what they
+ *  mean there is a sizing model that does not exist yet (#154), and stating an
+ *  engine size over it would be inventing one. So it gets no statement rather
+ *  than a wrong one. */
+export function engineFunctionalities(fs: Functionality[]): string[] {
+  return fs.filter((f) => f.runs_engine).map((f) => f.id);
+}
 
 // -- service account ---------------------------------------------------------
 // Deliberately not a group. A group is a switch that hides its fields when it is

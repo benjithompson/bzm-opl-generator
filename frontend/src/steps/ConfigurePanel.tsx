@@ -32,7 +32,7 @@ import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  ENGINE_FUNCTIONALITIES, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
+  engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
   runsFunctionality, SHARED_GROUPS,
 } from "../optionGroups";
 import { placeholderWarning } from "../placeholder";
@@ -447,8 +447,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   // SV-only location): the limits are still carried and still sent, and what
   // they mean for a mock pod is a sizing model that does not exist yet (#154),
   // so nothing is stated rather than an engine size that is not there.
-  const engineSizeOn = functionalities
-    .find((f) => ENGINE_FUNCTIONALITIES.includes(f.id))?.id;
+  const engineSizeOn = functionalities.find((f) => f.runs_engine)?.id;
   const secs = [
     ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
@@ -617,7 +616,8 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 page that refused to generate for one would be refusing the only
                 bundle that location can have. */}
             {p.sourceMode === "connect"
-              && svMixedWithEngines(p.enabled ?? []) && (
+              && svMixedWithEngines(p.enabled ?? [],
+                                    engineFunctionalities(p.functionalities)) && (
               <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                 {SV_MIXED}
               </p>

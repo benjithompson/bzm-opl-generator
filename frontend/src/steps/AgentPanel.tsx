@@ -93,6 +93,12 @@ export interface NewLocationHandover {
   /** What a location may be for. Served (facts.CATEGORY_BY_FUNC), never spelled
    *  in the frontend -- the copy that used to be here lost sv-bridge. */
   choices: FuncIdChoice[];
+  /** Which of those funcIds run a taurus engine, from the served `runs_engine`
+   *  -- what `exclusiveWith` applies its one rule against. Handed down rather
+   *  than derived here for the reason `choices` is: the answer is a Python
+   *  table, and this form offers the account's whole vocabulary rather than the
+   *  three functionalities the page configures. */
+  engines: string[];
   /** What Create is waiting for, as the sentence it shows; "" when ready. */
   blockedBy: string;
   submit: () => Promise<void>;
@@ -782,7 +788,7 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
                 ...d,
                 func_ids: toggleDeclared(d.func_ids, c.id, on,
                                          create.choices.map((x) => x.id),
-                                         exclusiveWith),
+                                         exclusiveWith(create.engines)),
               }))} />
           ))}
           {/* Said whether or not it has happened yet: a rule that only speaks

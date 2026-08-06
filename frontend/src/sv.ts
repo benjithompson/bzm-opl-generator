@@ -17,7 +17,7 @@
 // what keeps "adding a functionality needs no frontend change" true.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
 import {
-  ENGINE_FUNCTIONALITIES, GroupFlags, isOpenshift, OptionPatch, SV_NONE,
+  GroupFlags, isOpenshift, OptionPatch, SV_NONE,
   svConfigured, svIncomplete, svNodePortConflict,
 } from "./optionGroups";
 import { SvCtx } from "./SvPrereqs";
@@ -62,18 +62,25 @@ export const SV_FUNCTIONALITY = "mockServices";
 //    changing what a location *is* belongs in BlazeMeter's own UI. So a mixed
 //    location generates normally and is warned about, never blocked.
 
-/** What declaring `id` takes away with it, for the surfaces that are deciding.
+/** What declaring one funcId takes away with it, for the surfaces that are
+ *  deciding.
  *
- *  ENGINE_FUNCTIONALITIES rather than a second list of the same ids: it is
- *  already this repo's record of which agents carry an engine, read off those
- *  /versions responses, so it is the same evidence stated once. A funcId
- *  neither it nor SV names -- tdm, dataPublisher, delphix, the account's other
- *  six -- excludes nothing and is excluded by nothing, because nothing here
- *  knows what those cost; the create-location form offers the account's whole
- *  vocabulary and must not edit what it cannot judge. */
-export function exclusiveWith(id: string): string[] {
-  if (id === SV_FUNCTIONALITY) return ENGINE_FUNCTIONALITIES;
-  return ENGINE_FUNCTIONALITIES.includes(id) ? [SV_FUNCTIONALITY] : [];
+ *  Takes `engines` -- the funcIds whose agent carries one, off the served
+ *  `runs_engine` -- rather than knowing them: that is this repo's record of
+ *  which agents carry an engine, read off those /versions responses, and it is
+ *  a Python table. A funcId neither it nor SV names -- tdm, dataPublisher,
+ *  delphix, the account's other six -- excludes nothing and is excluded by
+ *  nothing, because nothing here knows what those cost; the create-location
+ *  form offers the account's whole vocabulary and must not edit what it cannot
+ *  judge.
+ *
+ *  Curried, because both callers hand the result to `toggleDeclared` as the
+ *  rule it applies per box. */
+export function exclusiveWith(engines: string[]): (id: string) => string[] {
+  return (id) => {
+    if (id === SV_FUNCTIONALITY) return engines;
+    return engines.includes(id) ? [SV_FUNCTIONALITY] : [];
+  };
 }
 
 /** ...and why, in the one sentence both deciding surfaces say it in. Prose
@@ -91,9 +98,8 @@ export const SV_ALONE =
  *  Deliberately not `!runsFunctionality(...)` machinery and deliberately not a
  *  blocker: it is one true sentence about a location that exists, and the only
  *  place it can be acted on is BlazeMeter's own location settings. */
-export function svMixedWithEngines(ids: string[]): boolean {
-  return ids.includes(SV_FUNCTIONALITY)
-    && ids.some((f) => ENGINE_FUNCTIONALITIES.includes(f));
+export function svMixedWithEngines(ids: string[], engines: string[]): boolean {
+  return ids.includes(SV_FUNCTIONALITY) && ids.some((f) => engines.includes(f));
 }
 
 /** ...said. Names where it can be acted on, because this page cannot. */

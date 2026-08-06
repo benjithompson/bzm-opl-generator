@@ -421,8 +421,13 @@ describe("the option patch", () => {
 
 describe("service virtualization on a location of its own", () => {
   const ORDER = ["performance", "functionalGui", "mockServices"];
+  // The funcIds whose agent carries a taurus engine, as /api/functionalities
+  // serves them (`runs_engine`). The rule takes them rather than knowing them:
+  // the answer is facts.CATEGORY_BY_FUNC's, and test_server.py holds the served
+  // pair to the planner's own table.
+  const ENGINES = ["performance", "functionalGui"];
   const tick = (d: string[], id: string, on: boolean) =>
-    toggleDeclared(d, id, on, ORDER, exclusiveWith);
+    toggleDeclared(d, id, on, ORDER, exclusiveWith(ENGINES));
 
   it("clears the engine functionalities when it is declared", () => {
     expect(tick(["performance", "functionalGui"], "mockServices", true))
@@ -450,18 +455,18 @@ describe("service virtualization on a location of its own", () => {
     // clears anything for them -- the create-location form offers the account's
     // whole vocabulary and must not edit what it cannot judge.
     expect(tick(["mockServices"], "tdm", true)).toEqual(["mockServices", "tdm"]);
-    expect(exclusiveWith("tdm")).toEqual([]);
+    expect(exclusiveWith(ENGINES)("tdm")).toEqual([]);
   });
 
   it("names a location that already mixes the two, and only such a one", () => {
     // Connect mode's answer. A location that exists is BlazeMeter's own UI's to
     // change -- #113 removed the one route here that did -- so this is a
     // sentence, never a refusal, and it is only true of the mixture.
-    expect(svMixedWithEngines(["performance", "mockServices"])).toBe(true);
-    expect(svMixedWithEngines(["functionalGui", "mockServices"])).toBe(true);
-    expect(svMixedWithEngines(["mockServices"])).toBe(false);
-    expect(svMixedWithEngines(["performance", "functionalGui"])).toBe(false);
+    expect(svMixedWithEngines(["performance", "mockServices"], ENGINES)).toBe(true);
+    expect(svMixedWithEngines(["functionalGui", "mockServices"], ENGINES)).toBe(true);
+    expect(svMixedWithEngines(["mockServices"], ENGINES)).toBe(false);
+    expect(svMixedWithEngines(["performance", "functionalGui"], ENGINES)).toBe(false);
     // ...and an unclaimed funcId beside it is not an engine.
-    expect(svMixedWithEngines(["tdm", "mockServices"])).toBe(false);
+    expect(svMixedWithEngines(["tdm", "mockServices"], ENGINES)).toBe(false);
   });
 });

@@ -29,8 +29,8 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import App from "./App";
 import {
-  AgentStatus, Api, Capacity, CapacityPlan, Facts, Location, Options,
-  Ship, TokenRequest,
+  AgentStatus, Api, Capacity, CapacityPlan, Facts, Functionality, Location,
+  Options, Ship, TokenRequest,
 } from "./api";
 import { deferred, fakeApi } from "./fakeApi";
 // The served docker-ignored table, from the one copy of it.
@@ -202,7 +202,7 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
     funcIdChoices: async () => [],
     functionalities: async () => [{
       id: "mockServices", label: "Service Virtualization",
-      namespace: "blazemeter-sv",
+      namespace: "blazemeter-sv", runs_engine: false,
     }],
     // Two joins, and only one of them is free to be spelled differently here.
     // A functionality id *is* the funcId (#149), and the sv option group tags
@@ -326,9 +326,10 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
     }),
     funcIdChoices: async () => [],
     functionalities: async () => [
-      { id: "performance", label: "Performance", namespace: "blazemeter" },
+      { id: "performance", label: "Performance", namespace: "blazemeter",
+        runs_engine: true },
       { id: "mockServices", label: "Service Virtualization",
-        namespace: "blazemeter-sv" },
+        namespace: "blazemeter-sv", runs_engine: false },
     ],
     svConstants: async () => ({
       func_ids: ["mockServices"], ingress_types: ["nginx"],
@@ -769,6 +770,7 @@ function perfAccount(extra: Partial<Api> = {}) {
     funcIdChoices: async () => [],
     functionalities: async () => [{
       id: "performance", label: "Performance", namespace: "blazemeter",
+      runs_engine: true,
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
     generate: async () => ({
@@ -1116,9 +1118,10 @@ test("a location running two engine functionalities states the engine size once"
         ships: [], images: [],
       }),
       functionalities: async () => [
-        { id: "performance", label: "Performance", namespace: "blazemeter" },
+        { id: "performance", label: "Performance", namespace: "blazemeter",
+        runs_engine: true },
         { id: "functionalGui", label: "GUI Functional",
-          namespace: "blazemeter-gui" },
+          namespace: "blazemeter-gui", runs_engine: true },
       ],
     })} />);
 
@@ -1147,9 +1150,10 @@ test("a GUI Functional location is told its engine size on its own card",
         harbor_id: harborId, func_ids: ["functionalGui"], ships: [], images: [],
       }),
       functionalities: async () => [
-        { id: "performance", label: "Performance", namespace: "blazemeter" },
+        { id: "performance", label: "Performance", namespace: "blazemeter",
+        runs_engine: true },
         { id: "functionalGui", label: "GUI Functional",
-          namespace: "blazemeter-gui" },
+          namespace: "blazemeter-gui", runs_engine: true },
       ],
     })} />);
 
@@ -1234,6 +1238,7 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
     ],
     functionalities: async () => [{
       id: "performance", label: "Performance", namespace: "blazemeter",
+      runs_engine: true,
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
     // An account whose agents were all made somewhere else, which is the
@@ -2002,9 +2007,10 @@ test("a restored declaration waits for the vocabulary rather than being lost to 
     // about what was declared.
     await waitFor(() => expect(asked[asked.length - 1]).toEqual([]));
     served.settle([
-      { id: "performance", label: "Performance", namespace: "blazemeter" },
+      { id: "performance", label: "Performance", namespace: "blazemeter",
+        runs_engine: true },
       { id: "mockServices", label: "Service Virtualization",
-        namespace: "blazemeter-sv" },
+        namespace: "blazemeter-sv", runs_engine: false },
     ]);
 
     await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
@@ -2029,7 +2035,8 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       // The vocabulary this page is served no longer carries what the snapshot
       // named -- a functionality withdrawn, or a tab reloaded against a newer server.
       functionalities: async () => [
-        { id: "performance", label: "Performance", namespace: "blazemeter" },
+        { id: "performance", label: "Performance", namespace: "blazemeter",
+        runs_engine: true },
       ],
     })} />);
 
@@ -2058,11 +2065,13 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
 // refresh -- #118 exists because "the declaration is restored" was false once.
 
 /** The three covered functionalities, as the server serves them. */
-const THREE = [
-  { id: "performance", label: "Performance", namespace: "blazemeter" },
-  { id: "functionalGui", label: "GUI Functional", namespace: "blazemeter-gui" },
+const THREE: Functionality[] = [
+  { id: "performance", label: "Performance", namespace: "blazemeter",
+    runs_engine: true },
+  { id: "functionalGui", label: "GUI Functional", namespace: "blazemeter-gui",
+    runs_engine: true },
   { id: "mockServices", label: "Service Virtualization",
-    namespace: "blazemeter-sv" },
+    namespace: "blazemeter-sv", runs_engine: false },
 ];
 
 test("a declaration of two functionalities is what the facts are gathered for "

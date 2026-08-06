@@ -556,6 +556,16 @@ export interface Functionality {
    *  holds a namespace some functionality suggested. Served with the label so the
    *  suggestion extends with the vocabulary. */
   namespace: string;
+  /** Does this functionality's agent carry a taurus engine? Which is what makes
+   *  "engine size" a true statement about its pod limits, and what service
+   *  virtualization is declared apart from.
+   *
+   *  Served (facts.CATEGORY_BY_FUNC, read off real single-functionality
+   *  locations' /versions) rather than kept here: it was
+   *  `ENGINE_FUNCTIONALITIES`, two funcIds written out in optionGroups.ts, and
+   *  a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED` and
+   *  the funcId vocabulary are served to avoid. */
+  runs_engine: boolean;
 }
 
 /** One agent variable the environment area offers, from /api/agent-env --

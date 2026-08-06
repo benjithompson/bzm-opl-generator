@@ -1740,8 +1740,23 @@ FUNCTIONALITIES = [
 
 
 def functionalities():
-    """The functionalities the configure step offers, in card order."""
-    return FUNCTIONALITIES
+    """The functionalities the configure step offers, in card order.
+
+    `runs_engine` says whether this functionality's agent carries a taurus
+    engine, which is what makes "engine size" a true statement about its pod
+    limits. Derived from `facts.CATEGORY_BY_FUNC` rather than declared beside
+    the rows: that table already holds the answer, read off real
+    single-functionality locations' /versions. It is served for the reason the
+    list itself is -- the page kept the same two ids as a literal of its own,
+    and a copy in TypeScript of a table Python owns is what `DOCKER_IGNORED`
+    exists to keep from happening again.
+
+    Derived here rather than stored on FUNCTIONALITIES so the two cannot fall
+    out of step, and so a test that monkeypatches the list is followed --
+    `covered_func_ids` is a function for the same reason.
+    """
+    return [{**f, "runs_engine": facts_mod.runs_engine(f["id"])}
+            for f in FUNCTIONALITIES]
 
 
 def covered_func_ids():

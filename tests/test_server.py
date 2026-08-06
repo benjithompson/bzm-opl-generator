@@ -1126,7 +1126,12 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
     assert body[-1] == {"id": "secretsPrivateVault",
                         "label": "Secrets Private Vault",
                         "hint": "secrets from a vault",
-                        "namespace": "blazemeter-vault"}
+                        "namespace": "blazemeter-vault",
+                        # False rather than absent, and it follows from the
+                        # entry rather than needing a second edit: nothing in
+                        # facts.CATEGORY_BY_FUNC says this agent carries an
+                        # engine, so it does not claim one.
+                        "runs_engine": False}
     # ...and it is a covered funcId by the same act, because `covered` is that
     # list read as a vocabulary rather than a second table beside it.
     assert next(r for r in client.get("/api/func-ids").json()
@@ -1811,6 +1816,26 @@ def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
         == ["true" if m["measured"] else "false" for m in served]
     assert re.findall(r'unit: "([^"]+)"', body.group(1)) \
         == [v for m in served for v in (m["unit"], m["figure_unit"])]
+
+
+def test_a_functionality_says_whether_its_agent_carries_an_engine():
+    """`runs_engine` was a two-id literal in the frontend
+    (`ENGINE_FUNCTIONALITIES`), which is the copy DOCKER_IGNORED and the funcId
+    vocabulary are served to avoid: an id renamed here left the page deciding
+    where the engine-size statement goes, and what service virtualization is
+    exclusive with, from a list nothing could correct.
+
+    Held against the planner's own table, which knows the same fact under
+    another name: a model whose pods are engines is a functionality whose agent
+    carries one. Two tables, one answer, and this is where they have to agree.
+    """
+    from bzm_opl_gen import plan as plan_mod
+    served = {f["id"]: f["runs_engine"]
+              for f in client.get("/api/functionalities").json()}
+    assert served == {"performance": True, "functionalGui": True,
+                      "mockServices": False}
+    for fid, m in plan_mod.SIZING_MODELS.items():
+        assert served[fid] == (m["pod"] == "engine"), fid
 
 
 def test_every_sizing_model_is_a_functionality_the_page_configures():

@@ -292,15 +292,17 @@ describe("switching a group on", () => {
 // location's funcIds join to these by equality, with no table in between.
 const PERF: Functionality = {
   id: "performance", label: "Performance",
-  hint: "load tests", namespace: "blazemeter",
+  hint: "load tests", namespace: "blazemeter", runs_engine: true,
 };
 const GUI: Functionality = {
   id: "functionalGui", label: "GUI Functional",
-  hint: "browser tests", namespace: "blazemeter-gui",
+  hint: "browser tests", namespace: "blazemeter-gui", runs_engine: true,
 };
 const SV: Functionality = {
   id: "mockServices", label: "Service Virtualization",
-  hint: "virtual services", namespace: "blazemeter-sv",
+  // No taurus engine at all: crane, group-gateway and service-mock. The one
+  // false in the served vocabulary, and what `engineFunctionalities` filters on.
+  hint: "virtual services", namespace: "blazemeter-sv", runs_engine: false,
 };
 const FUNCTIONALITIES = [PERF, GUI, SV];
 /** Added the way a real new functionality is: one entry in the served vocabulary, and
@@ -308,6 +310,7 @@ const FUNCTIONALITIES = [PERF, GUI, SV];
 const SECRETS: Functionality = {
   id: "secretsPrivateVault", label: "Secrets Private Vault",
   hint: "secrets from a vault", namespace: "blazemeter-vault",
+  runs_engine: false,
 };
 /** funcIds the tool does not model. Real locations carry them today. */
 const UNMODELLED = ["tdm", "dataPublisher", "delphix"];
