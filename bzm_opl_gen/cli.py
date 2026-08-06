@@ -778,8 +778,16 @@ def main():
     cl.add_argument("--workspace-name", help="case-insensitive substring, must match one")
     cl.add_argument("--name", required=True)
     cl.add_argument("--func-ids", nargs="+", default=["performance"])
+    # The minimums are read out of core rather than written here: BlazeMeter
+    # refuses the create outright below one (#159), and the flag is where
+    # somebody reads what to type before typing it. Generated from the table so
+    # a second entry reaches the terminal with no edit here.
     cl.add_argument("--slots", type=int, default=1,
-                    help="concurrent engines the location may run (default 1)")
+                    help="concurrent engines this location's agent may run "
+                         "(default 1); "
+                         + "; ".join(
+                             f"{r['label']} needs at least {r['minimum']}"
+                             for r in core.SLOT_MINIMUMS.values()))
     cl.add_argument("--threads-per-engine", type=int,
                     default=api.DEFAULT_THREADS_PER_ENGINE,
                     help=f"max threads per engine (default "

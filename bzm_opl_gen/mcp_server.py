@@ -349,7 +349,12 @@ DESCRIPTIONS["opl_location"] = (
     f"BlazeMeter's own, and the ones this tool configures a bundle for are "
     f"{', '.join(core.covered_func_ids())} (default performance). An account "
     "carries others -- proxyRecorder, tdm, delphix -- which a location may "
-    "hold and nothing here generates for.\n"
+    "hold and nothing here generates for. `slots` is engines per agent and "
+    "defaults to 1; "
+    + "; ".join(f"{r['label']} is refused below {r['minimum']}"
+                for r in core.SLOT_MINIMUMS.values())
+    + ", by BlazeMeter rather than by this tool, so ask for the number rather "
+    "than raising it for them (#159).\n"
     "  create_agent -- a new agent in a location {harbor_id, name}"
     + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
     "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "

@@ -210,6 +210,79 @@ def test_a_location_created_without_slots_is_unrunnable_too():
     assert made["runnable"] is False and made["warning"]
 
 
+# -- the slots a functionality needs before BlazeMeter will make the location --
+#
+# #159. Found on a live POST, because nothing offline could have found it: the
+# rule is not in BlazeMeter's private-location documentation, and every fixture
+# here answers a create the account never saw.
+
+def test_gui_functional_cannot_be_created_at_the_default_one_slot():
+    """The POST 400s, so the refusal is here -- before the write, on every
+    surface at once, rather than three renderings of BlazeMeter's error."""
+    client = FakeClient()
+    with pytest.raises(core.BadRequest) as e:
+        core.create_location(client, "loc", 7, 2,
+                             func_ids=["performance", "functionalGui"])
+    assert "Parallel engine runs must be greater than 1" in str(e.value)
+    assert "GUI Functional" in str(e.value)
+    # Nothing reached the account: a refusal that POSTs first is the 400 with
+    # extra steps.
+    assert not [c for c in client.calls if c[0] == "create_private_location"]
+
+
+def test_the_refusal_says_which_number_to_type():
+    """BlazeMeter's own sentence says what is wrong and not what to do about
+    it, and "greater than 1" is one reading away from 1.5."""
+    with pytest.raises(core.BadRequest) as e:
+        core.create_location(FakeClient(), "loc", 7, 2,
+                             func_ids=["functionalGui"], slots=1)
+    assert "slots=2" in str(e.value)
+
+
+def test_gui_functional_is_created_at_two_slots():
+    """Verified live: the same funcIds that 400 at 1 succeed at 2. So the
+    minimum is a minimum and not a ban."""
+    made = core.create_location(_RunnableClient(), "loc", 7, 2,
+                                func_ids=["functionalGui"], slots=2,
+                                threads_per_engine=500)
+    assert made["location"]["slots"] == 2
+
+
+def test_a_location_without_gui_functional_is_still_created_at_one_slot():
+    """`slots` is engines per agent and a real cost -- accounts run 17 agents
+    at slots=1 -- so the rule reaches exactly the funcId it was found on."""
+    made = core.create_location(_RunnableClient(), "loc", 7, 2,
+                                func_ids=["performance"], slots=1,
+                                threads_per_engine=500)
+    assert made["location"]["slots"] == 1
+
+
+def test_nobody_s_slots_are_raised_for_them():
+    """The failure this is not allowed to become: a location that quietly asks
+    for twice the concurrency somebody chose."""
+    with pytest.raises(core.BadRequest):
+        core.create_location(_RunnableClient(), "loc", 7, 2,
+                             func_ids=["functionalGui"], slots=1,
+                             threads_per_engine=500)
+
+
+def test_the_minimum_is_a_table_the_page_can_be_told():
+    """Served rather than restated, so the form can say it before the account
+    does -- the DOCKER_IGNORED rule, one vocabulary along."""
+    mins = core.slot_minimums()
+    assert mins["functionalGui"]["minimum"] == 2
+    assert mins["functionalGui"]["label"] == "GUI Functional"
+    assert "Parallel engine runs must be greater than 1" in (
+        mins["functionalGui"]["message"])
+
+
+def test_slots_refusal_is_none_for_what_the_account_would_accept():
+    assert core.slots_refusal(["performance"], 1) is None
+    assert core.slots_refusal(["functionalGui"], 2) is None
+    assert core.slots_refusal(["functionalGui"], 9) is None
+    assert core.slots_refusal([], 1) is None
+
+
 def test_issue_auth_token_mints_for_the_ship_it_was_given():
     client = FakeClient()
     assert core.issue_auth_token(client, "h1", "s1") == "TOKEN-FROM-API"

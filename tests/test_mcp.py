@@ -554,6 +554,30 @@ def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
     assert "Not enough available resources" in body["warning"]
 
 
+def test_a_gui_functional_location_is_refused_at_the_default_slots(
+        fake_account):
+    """#159. `slots` defaults to 1 here as it does everywhere, and BlazeMeter
+    400s a GUI Functional location at 1 -- so a session that took the default
+    got the account's error after the write was attempted, rather than an
+    argument to change."""
+    text = err("opl_location", "create",
+               {"name": "scratch", "account_id": 7, "workspace_id": 99,
+                "func_ids": ["functionalGui"]})
+    assert "Parallel engine runs must be greater than 1" in text
+    assert "slots=2" in text
+    assert not [c for c in fake_account.calls
+                if c[0] == "create_private_location"]
+
+
+def test_the_create_action_says_the_minimum_before_it_is_called():
+    """The tool description is the whole documentation a session gets, so the
+    rule has to be readable without making the call -- and it is read out of
+    core.SLOT_MINIMUMS, not written beside it."""
+    desc = listing()["tools"]["opl_location"].description
+    for rule in core.SLOT_MINIMUMS.values():
+        assert rule["label"] in desc and str(rule["minimum"]) in desc
+
+
 def test_the_listing_names_the_account_it_actually_listed(fake_account):
     """Neither id given means the key's default account, and that default is
     easy to be wrong about -- the key to hand defaults to a two-location

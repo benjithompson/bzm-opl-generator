@@ -10,7 +10,24 @@
 // Not in fakeApi.ts: that file deliberately holds no payloads (an invented
 // answer lets a test pass while proving nothing). This is a payload, and it is
 // only ever handed to a route a test chose to stub.
-import { AgentEnvVar, SizingModel } from "./api";
+import { AgentEnvVar, SizingModel, SlotMinimum } from "./api";
+
+/** core.SLOT_MINIMUMS as the page receives it from /api/slot-minimums — the
+ *  slots a functionality needs before BlazeMeter will create the location.
+ *
+ *  A copy, and the only one, held equal to core's by
+ *  `tests/test_server.py::test_the_pages_copy_of_the_slot_minimums_is_cores`.
+ *  `message` is transcribed rather than paraphrased on purpose: it is
+ *  BlazeMeter's own sentence, which is what a customer meeting this rule in
+ *  BlazeMeter's UI reads. */
+export const SLOT_MINIMUMS: Record<string, SlotMinimum> = {
+  functionalGui: {
+    label: "GUI Functional",
+    minimum: 2,
+    message: "The option Parallel engine runs must be greater than 1 for a "
+      + "Private Location with the GUI Functional Functionality enabled.",
+  },
+};
 
 /** plan.SIZING_MODELS as the page receives it from /api/sizing-models.
  *

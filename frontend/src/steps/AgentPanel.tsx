@@ -23,7 +23,7 @@
 //     markup, which is the half that belongs beside the agent form it is a pair
 //     with.
 import { useEffect, useMemo, useState } from "react";
-import { Api, Facts, FuncIdChoice, Location, Ship } from "../api";
+import { Api, Facts, FuncIdChoice, Location, Ship, SlotMinimum } from "../api";
 import {
   Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
   SecretInput, SegmentedControl, Spinner, SubSection, TextInput,
@@ -34,6 +34,9 @@ import { LocationSettings } from "../groups/LocationSettings";
 // sv.exclusiveWith for why service virtualization is created on its own.
 import { toggleDeclared } from "../optionGroups";
 import { exclusiveWith, SV_ALONE } from "../sv";
+// What BlazeMeter requires of `slots` before it will make the location at all
+// (#159) -- read here so the field can say it, and in App so Create is held.
+import { slotRule } from "../slots";
 import { ManualSource } from "../groups/ManualSource";
 // Whether an agent is reporting, from one module rather than from a function
 // this panel is handed. Two readers here -- the count on a location's row and
@@ -99,6 +102,12 @@ export interface NewLocationHandover {
    *  table, and this form offers the account's whole vocabulary rather than the
    *  three functionalities the page configures. */
   engines: string[];
+  /** The slots each funcId needs before BlazeMeter will make the location, from
+   *  /api/slot-minimums. Handed down for the reason `choices` is: the number
+   *  was found on a live POST and the sentence is BlazeMeter's own, so core is
+   *  where both live. Empty until the fetch lands, which states nothing and
+   *  refuses nothing -- see slots.slotRule. */
+  minimums: Record<string, SlotMinimum>;
   /** What Create is waiting for, as the sentence it shows; "" when ready. */
   blockedBy: string;
   submit: () => Promise<void>;
@@ -758,6 +767,7 @@ export function AgentPanel({
 function NewLocation({ create }: { create: NewLocationHandover }) {
   const [busy, setBusy] = useState(false);
   const { draft, setDraft } = create;
+  const rule = slotRule(draft.func_ids, create.minimums);
   const submit = async () => {
     setBusy(true);
     try { await create.submit(); } finally { setBusy(false); }
@@ -795,7 +805,14 @@ function NewLocation({ create }: { create: NewLocationHandover }) {
               up after it has taken a tick away reads as the form losing one. */}
           <p className="basis-full text-[11px] text-slate-500">{SV_ALONE}</p>
         </div>
-        <Field label="Slots" hint="concurrent engines">
+        {/* The minimum is on the field, and it is there from the moment the
+            box is ticked rather than from the moment Create is refused: what
+            the amber sentence below carries is BlazeMeter's own words, which
+            say what is wrong and not what to type. Nothing raises the number
+            here -- slots is engines per agent and a real cost. */}
+        <Field label="Slots"
+          hint={rule ? `${rule.label} needs at least ${rule.minimum}`
+                     : "concurrent engines"}>
           <NumberInput className="w-20" value={String(draft.slots)}
             onChange={(v) => setDraft((d) => ({ ...d, slots: Number(v) }))} />
         </Field>

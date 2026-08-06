@@ -819,6 +819,11 @@ def sv_constants():
     return core.sv_constants()
 
 
+@app.get("/api/slot-minimums", description=core.slot_minimums.__doc__)
+def slot_minimums():
+    return core.slot_minimums()
+
+
 @app.get("/api/docker-ignored", description=core.docker_ignored.__doc__)
 def docker_ignored():
     return core.docker_ignored()

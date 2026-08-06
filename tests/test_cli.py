@@ -985,6 +985,49 @@ def test_create_location_says_nothing_extra_when_the_location_is_runnable(
     assert capsys.readouterr().err == ""
 
 
+# -- the location BlazeMeter would not have made -------------------------------
+#
+# #159. `--slots` defaults to 1, and a GUI Functional location at 1 is a 400.
+
+def test_create_location_refuses_gui_functional_at_the_default_slots(
+        monkeypatch, capsys):
+    """core's refusal, reaching the terminal through `main`'s one exit --
+    ahead of the POST, so the account is untouched and nothing is printed as
+    though it had been created."""
+    client = FakeClient()
+    _account(monkeypatch, client)
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "create-location", "--api-key", KEY, "--name",
+             "loc1", "--account-id", "7", "--workspace-id", "2",
+             "--func-ids", "performance", "functionalGui")
+    assert "Parallel engine runs must be greater than 1" in str(caught.value)
+    assert "slots=2" in str(caught.value)
+    assert "created location" not in capsys.readouterr().out
+    assert not [c for c in client.calls if c[0] == "create_private_location"]
+
+
+def test_create_location_makes_a_gui_functional_location_at_two_slots(
+        monkeypatch, capsys):
+    from test_core import _RunnableClient
+    _account(monkeypatch, _RunnableClient())
+    _run(monkeypatch, "create-location", "--api-key", KEY, "--name", "loc1",
+         "--account-id", "7", "--workspace-id", "2", "--func-ids",
+         "functionalGui", "--slots", "2")
+    assert "created location" in capsys.readouterr().out
+
+
+def test_the_slots_flag_says_which_functionality_needs_more_than_one(
+        monkeypatch, capsys):
+    """On the flag, not only in the refusal: `--help` is where somebody reads
+    what to type before typing it. Built from core.SLOT_MINIMUMS rather than
+    written out, so a second entry reaches the terminal without an edit."""
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "create-location", "--help")
+    out = capsys.readouterr().out
+    for rule in core.SLOT_MINIMUMS.values():
+        assert rule["label"] in out and str(rule["minimum"]) in out
+
+
 # -- which namespace a preflight is about --------------------------------------
 #
 # One rule, in `core.preflight_cluster`, rather than the copy this command used
