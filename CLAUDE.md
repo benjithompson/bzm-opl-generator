@@ -229,6 +229,26 @@ missing tools. The rest is what it cannot fix for you.
   **`frontend/src/optionGroups.ts` is out of scope for it** — it holds
   `detect`/`enable`/`disable` *functions*, which a Python registry cannot carry.
 
+- **The funcId vocabulary is the account's, and the hardcoded three are the
+  *keyless* answer rather than a fallback.** `core.func_ids()` reads
+  `GET /accounts/{id}/functionalities` (#148), which carries BlazeMeter's own
+  display names and settles what a hand-written table got wrong in both
+  directions: it never listed the five real locations carry (tdm,
+  dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle) and it
+  offered `functionalApi`, which the account retired — so dropping that from
+  what a location can be *created* with needs no rule naming it, while reading
+  it off a location that has one is untouched. `account_id` is optional because
+  the page fetches this on mount with no key and manual entry never has an
+  account, and the answer with none is `COVERED_FUNC_IDS`: the three this tool
+  configures, under the names the account would give them, so nothing on screen
+  changes wording when the real list lands. **An account that refuses the read
+  raises** — answering "this account offers exactly the three we cover" to a
+  401 is could-not-read wearing there-is-nothing-else, one layer up from the
+  evidence rule below. Every row carries `covered`, because a page listing
+  `delphix` beside `performance` with nothing to tell them apart is offering to
+  configure something no bundle can; an uncovered funcId is *named*, never
+  dropped, since silence there reads as coverage.
+
 - **A required field left blank is a `<PLACEHOLDER>`, not an empty string and
   not a refusal.** Every one of these had a plausible-looking failure when
   empty: an unnamed service account becomes the namespace's `default` (binding

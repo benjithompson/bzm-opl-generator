@@ -11,6 +11,24 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Changed
+
+- **The funcIds on screen are your account's, with BlazeMeter's own names.**
+  The list of what a private location can be enabled for was written into this
+  tool by hand, five entries long, and it disagreed with real accounts in both
+  directions. It now comes from your account, so a location that runs TDM
+  Integration, Data Orchestration or Delphix Integration is described in the
+  words your own BlazeMeter UI uses instead of a raw `tdm`, and the
+  create-location form offers exactly what the account offers.
+
+  Two consequences worth knowing. `functionalApi` is no longer offered when you
+  create a location — BlazeMeter has retired it — but one that already carries
+  it still reads, generates and selects its images as before. And with
+  no API key connected (manual entry, or before you connect) the list is the
+  three this tool actually configures: Performance, GUI Functional and Service
+  Virtualization. Anything else your location runs is still named on the
+  configure step, with the note that nothing here generates or removes it.
+
 ## [0.3.1] — 2026-08-05
 
 Environment variables the options do not cover, a marker in every field left
