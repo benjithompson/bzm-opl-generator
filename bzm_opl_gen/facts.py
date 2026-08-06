@@ -17,11 +17,22 @@ import json
 
 from .api import BzmApiError
 
+# The one directory under the project that holds browser images. Every one of
+# them is version-pinned (`charmander/chrome_136.0.7103.113`), which is why no
+# catalogue can carry a default for them.
+#
+# Declared here because it is the key `IMAGE_CATEGORY` classifies browsers by,
+# and `browser_images()` picks them out with. It was written twice, and a
+# rename on one side left `browser_images()` and `gui_images_incomplete()`
+# answering empty while `image_category()` still said `gui` -- a bundle that
+# names no browser image and does not flag it.
+BROWSER_DIR = "charmander"
+
 # Image classification: substring -> functional category. Anything unmatched
 # is a core performance/engine image.
 IMAGE_CATEGORY = {
     "doduo": "gui",            # grid proxy (GUI functional / Selenium)
-    "charmander": "gui",       # browser image (GUI functional)
+    BROWSER_DIR: "gui",        # browser image (GUI functional)
     "service-mock": "mock",
     "mock-pc-service": "mock",
     "group-gateway": "mock",   # mock services gateway
@@ -498,12 +509,6 @@ def image_refs(facts, all_images=False):
     """
     return [facts["crane_image"]] + [
         f"{i['repo']}:{i['tag']}" for i in select_images(facts, all_images=all_images)]
-
-
-# The one directory under the project that holds browser images. Every one of
-# them is version-pinned (`charmander/chrome_136.0.7103.113`), which is why no
-# catalogue can carry a default for them.
-BROWSER_DIR = "charmander"
 
 
 def browser_images(facts):
