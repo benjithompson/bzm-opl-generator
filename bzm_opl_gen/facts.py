@@ -271,6 +271,20 @@ def _image_list_entries(body):
     return out
 
 
+# Statuses that settle the image list for the whole location, so the next agent
+# is not asked. The route is per agent but the answer is not: a token that may
+# not read this location is refused for every agent in it, and a location or a
+# key that is gone is gone for all of them. Retried per agent, a dead key costs
+# one sequential round trip per agent before the same `unread` comes back --
+# and 17-agent locations are ordinary while one real account holds 221 agents,
+# which is where per-agent work over a location stops completing at all.
+#
+# Anything else -- a 5xx, an `{"error": ...}` body with no status behind it --
+# is left retryable, because those are the ones a second agent could plausibly
+# answer differently.
+IMAGE_LIST_SETTLED_BY = (401, 403, 404)
+
+
 def _read_image_list(client, harbor_id, ships):
     """(entries, state, detail) for the location's own image list.
 
@@ -281,8 +295,9 @@ def _read_image_list(client, harbor_id, ships):
 
     Asked of the first agent that answers: every agent in a location answered
     identically, because the set follows the location's funcIds. A refusal from
-    one is worth retrying on the next -- and a refusal from all of them is a
-    note, never a failure, since the location itself was read fine.
+    all of them is a note, never a failure, since the location itself was read
+    fine -- and a refusal that answers for the location (IMAGE_LIST_SETTLED_BY)
+    is not re-asked of the rest.
     """
     if not ships:
         return None, IMAGE_LIST_NO_AGENT, ("the image list is served per agent "
@@ -293,6 +308,8 @@ def _read_image_list(client, harbor_id, ships):
             body = client.ship_versions(harbor_id, ship["id"])
         except BzmApiError as e:
             refusal = str(e)
+            if e.status in IMAGE_LIST_SETTLED_BY:
+                break
             continue
         return _image_list_entries(body), IMAGE_LIST_READ, None
     return None, IMAGE_LIST_UNREAD, refusal

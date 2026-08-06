@@ -24,7 +24,21 @@ ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
 
 
 class BzmApiError(RuntimeError):
-    pass
+    """A call BlazeMeter refused, with the HTTP status where there was one.
+
+    `status` is None for the failures that are not a status at all -- an
+    `{"error": ...}` body, a command with no token in it -- and a reader must
+    not read that as a code it can judge. It exists because a caller deciding
+    whether the *next* call could go differently needs the code rather than the
+    sentence: 401/403/404 are properties of the token or of what was asked for,
+    and re-issuing per item is a loop that cannot succeed. Parsing "HTTP 403"
+    back out of the message would be the same fact stated twice, in the place
+    least able to be right about it.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 def parse_auth_token(docker_command):
@@ -98,7 +112,9 @@ class BzmClient:
             with urllib.request.urlopen(req, timeout=30) as r:
                 raw = r.read()
         except urllib.error.HTTPError as e:
-            raise BzmApiError(f"{method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:300]}") from e
+            raise BzmApiError(
+                f"{method} {path} -> HTTP {e.code}: "
+                f"{e.read().decode(errors='replace')[:300]}", status=e.code) from e
         if not raw:
             return None  # e.g. DELETE returns an empty body
         parsed = json.loads(raw)
@@ -122,7 +138,8 @@ class BzmClient:
                 parsed = json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
             raise BzmApiError(f"POST {path} -> HTTP {e.code}: "
-                              f"{e.read().decode(errors='replace')[:300]}") from e
+                              f"{e.read().decode(errors='replace')[:300]}",
+                              status=e.code) from e
         if parsed.get("error"):
             raise BzmApiError(f"POST {path} -> API error: {parsed['error']}")
         return parsed.get("result")

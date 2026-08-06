@@ -293,7 +293,8 @@ class _FakeClient:
     def __init__(self, ships, versions=None, func_ids=("performance",)):
         self._ships = ships
         self._versions = versions if versions is not None else api.BzmApiError(
-            "GET /private-locations/H1/ships/S1/versions -> HTTP 404: not found")
+            "GET /private-locations/H1/ships/S1/versions -> HTTP 404: not found",
+            status=404)
         self._func_ids = list(func_ids)
         self.versions_calls = []
 
@@ -425,6 +426,36 @@ def test_the_image_list_is_asked_once_per_location():
                     VERSIONS_PERFORMANCE)
     facts_mod.gather(c, "H1")
     assert c.versions_calls == [("H1", "S1")]
+
+
+def test_a_refusal_that_answers_for_the_location_is_asked_once():
+    """A 403 is about the token and this location, not about the agent it was
+    asked through, so the remaining agents are not asked.
+
+    The loop used to re-issue it per agent: one real account holds 221 agents
+    and 17-agent locations are ordinary, so a dead key or a location this key
+    may not read cost a sequential round trip each before the same `unread`
+    came back."""
+    c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(5)],
+                    api.BzmApiError("GET /private-locations/H1/ships/S0/"
+                                    "versions -> HTTP 403: forbidden",
+                                    status=403))
+    f = facts_mod.gather(c, "H1")
+    assert c.versions_calls == [("H1", "S0")]
+    # ...and it is still a denied read rather than an empty location.
+    assert facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD
+    assert "403" in f["image_list"]["detail"]
+
+
+def test_a_refusal_that_could_be_this_agents_is_worth_the_next():
+    """A 5xx is not an answer about the location, so the next agent is asked.
+    Keeping the retry for these is why the rule is on the status rather than on
+    "a refusal ends it"."""
+    c = _FakeClient([{"id": f"S{i}", "state": "idle"} for i in range(3)],
+                    api.BzmApiError("GET ... -> HTTP 502: bad gateway",
+                                    status=502))
+    facts_mod.gather(c, "H1")
+    assert len(c.versions_calls) == 3
 
 
 def test_a_service_virtualization_location_carries_no_engine():
