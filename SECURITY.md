@@ -13,8 +13,8 @@ expected, and what happened. A proof of concept helps; a `profile.json` with the
 `auth_token` removed helps more. Expect a first response within a week.
 
 If the problem is in **BlazeMeter itself** — the agent, crane, the API — rather
-than in this generator, report it to BlazeMeter/Perforce support. This project
-only generates manifests; it cannot fix the platform they deploy.
+than in this generator, report it to BlazeMeter support. This project only
+generates manifests; it cannot fix the platform they deploy.
 
 ## What this tool handles that is worth your attention
 

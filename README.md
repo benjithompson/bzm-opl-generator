@@ -241,9 +241,9 @@ Bugs and feature requests go to
 don't report a security problem there — [SECURITY.md](SECURITY.md) says where
 instead.
 
-This is a community project, not a Perforce/BlazeMeter product: it generates
-manifests *for* BlazeMeter private locations but carries no BlazeMeter support
-commitment. For the platform itself, go to BlazeMeter support.
+This is an independent project, not a BlazeMeter product: it generates manifests
+*for* BlazeMeter private locations but carries no BlazeMeter support commitment.
+For the platform itself — the agent, crane, the API — go to BlazeMeter support.
 
 ## License
 
