@@ -1,9 +1,23 @@
 name: tests
 
+# `workflow_dispatch` runs the same three jobs on any ref, started by hand:
+#
+#   gh workflow run tests.yml --ref main
+#
+# Both triggers above are webhooks, and a webhook can be dropped: GitHub's
+# Actions incident on 2026-08-06 throttled processing to ~15%, and pushes and
+# merges stopped producing runs at all -- not queued ones, not failed ones,
+# nothing to retry. Pushing again does not help, because an unchanged ref emits
+# no event. `gh workflow run` goes through the REST API and needs none of that.
+#
+# Unlike release.yml's, this one takes any ref happily: these jobs read the
+# checkout and nothing about the ref's name, so running them on a branch is
+# exactly what you would want.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Where every job in this file runs, and in release.yml too. Three inputs decide
 # it, and a public pull_request outranks the other two:
