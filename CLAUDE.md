@@ -809,8 +809,13 @@ an empty list it reads as "this location runs nothing".
   Issue #2 was filed assuming it helped — don't re-add it. `livetest
   --run-test` prints the live gap as `ENGINE SIZING:`.
 - `doctor` still *reads* a LimitRange the customer already has: an existing
-  `max` below the engine size, or below crane's own 1 CPU / 2Gi, rejects the
-  respective pod at admission.
+  `max` below the engine size, or below crane's own 1 CPU / 2Gi **limit**,
+  rejects the respective pod at admission.
+- **Crane's request and its limit are 250m/512Mi and 1 CPU/2Gi, and which one
+  you want depends on the question.** A LimitRange judges the limit; the
+  *scheduler* places on the request, so "how many agents fit on this node" is
+  answered by 250m, not by 1 CPU. Quoting the limit as a scheduling floor sized
+  a kind cluster for two agents that comfortably held three.
 - `doctor` measures capacity against node **allocatable**, deliberately: what is
   actually free needs every pod's requests summed per node, a much bigger read
   for a preflight. Say "upper bound" in any detail string you add.
