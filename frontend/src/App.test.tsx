@@ -2641,7 +2641,7 @@ test("a sizing saved under a name survives a refresh, and picking it fills the f
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     fireEvent.change(await screen.findByLabelText(/^Virtual users\*/),
                      { target: { value: "7000" } });
-    fireEvent.change(screen.getByLabelText(/^Save this as/),
+    fireEvent.change(screen.getByLabelText(/^Save as/),
                      { target: { value: "Black Friday" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     // Written to the session snapshot by the page's own writer, which is what
