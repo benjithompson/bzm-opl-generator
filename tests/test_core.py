@@ -28,10 +28,14 @@ from test_generate import FACTS
 
 # What a real account answers to GET /accounts/{id}/functionalities, trimmed to
 # the entries that decide something here and otherwise verbatim: the display
-# names are BlazeMeter's, `functionalApi` is absent because the account no
-# longer serves it, and `subFunctionalities` is present so a reader that starts
-# consuming it (#152) has something to consume rather than a shape invented on
-# the day.
+# names are BlazeMeter's, and `functionalApi` is absent because the account no
+# longer serves it while locations created before its removal still carry it.
+#
+# `functionalGui` carries three of its 117 `subFunctionalities` -- a parent with
+# several of its pins is the shape #160 is about, and one pin would not show a
+# reader keeping them in a list. They are the browser a GUI Functional location
+# is pinned to, which is a *parameter* of that funcId rather than a funcId of
+# its own; a location carrying one carries the parent beside it.
 ACCOUNT_FUNCTIONALITIES = {
     "additionalSpace": 50,
     "functionalities": [
@@ -48,6 +52,7 @@ ACCOUNT_FUNCTIONALITIES = {
              {"id": "chrome:default", "size": 2, "displayName": "Chrome Default",
               "default": True},
              {"id": "firefox:139", "size": 2, "displayName": "Firefox 139"},
+             {"id": "safari:15", "size": 2, "displayName": "Safari 15"},
          ]},
         {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
         {"funcId": "dataPublisher", "size": 1, "displayName": "Data Orchestration"},
