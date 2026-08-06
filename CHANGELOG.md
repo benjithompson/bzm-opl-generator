@@ -13,6 +13,19 @@ anything that breaks.
 
 ### Added
 
+- **This is an open-source project now: Apache-2.0, and on PyPI.** `pipx install
+  "bzm-opl-gen[ui]"` is the install — no `gh auth`, no git URL, no access to ask
+  for. The git spec and the release wheel still work and are still documented,
+  as the way to run `main` or a tag PyPI has not seen. Releases publish to PyPI
+  through trusted publishing, so no API token exists to leak, and that job is
+  pinned to a GitHub-hosted runner because it is where the publishing identity
+  is minted.
+- **A LICENSE, a NOTICE, and the metadata a package needs to describe itself.**
+  The wheel carried no license, no README and no project URLs, so its PyPI page
+  would have rendered blank. Also `SECURITY.md` — which is where an AUTH_TOKEN
+  problem goes rather than into a public issue — a code of conduct, issue and PR
+  templates, and Dependabot over all three ecosystems this repo builds from.
+
 - **The planner sizes all three covered functionalities, each in its own unit.**
   It only ever spoke virtual users, and two of the three are not asked for in
   virtual users at all. `bzm-opl-gen plan` now takes `--browsers` and
@@ -53,6 +66,21 @@ anything that breaks.
   fields are the sizing.
 
 ### Changed
+
+- **A pull request on a public repo can no longer reach a self-hosted runner.**
+  `runs-on` reads the trigger and `github.event.repository.private` as well as
+  the `RUNNER_LABELS` variable. Without it, a fork PR would have run a
+  stranger's `conftest.py`, build backend and npm lifecycle scripts on the
+  maintainer's own machine -- on runners that are reused rather than ephemeral,
+  so the next thing that host does is build the release wheel.
+
+  It is keyed on `private` rather than refusing every PR, because a private repo
+  cannot be forked by a stranger and so has nothing to defend against yet, while
+  its hosted minutes are metered: a blanket rule left three of four jobs queued
+  until their allocation timeout cancelled them. Now the same commit runs
+  self-hosted while private and hosted the moment the repo is flipped, with no
+  edit. It fails safe -- an absent `private` reads as public, which forces
+  `ubuntu-latest`.
 
 - **An MCP session can size all three functionalities, and is told so.**
   `opl_plan capacity` required `users` and described virtual users alone, which
@@ -120,6 +148,19 @@ anything that breaks.
   count alone never said so.
 
 ### Fixed
+
+- **The wheel no longer carries stale UI bundles.** setuptools stages into
+  `build/lib` and does not clear what it finds there, and `ui_dist` filenames
+  carry a content hash -- so a rebuilt bundle never overwrote the old one and
+  the wheel shipped both. `index.html` names only the live pair, so this was
+  ~300KB of dead weight per install rather than a wrong UI. Invisible on a
+  GitHub-hosted runner, which starts clean; a self-hosted one reuses its
+  workspace.
+- **Placeholder ids in the web UI and the tests are obviously fake.** The Harbor
+  ID placeholder was a real private location's id, compiled into the shipped
+  bundle; the auth-token placeholder was a 32-hex string of unclear provenance
+  sitting on a credential field. Both now come from the same made-up vocabulary
+  `examples/facts.example.json` uses.
 
 - **A GUI Functional private location could not be created at all.** BlazeMeter
   refuses one whose "Parallel engine runs" is 1 — `The option Parallel engine
@@ -708,7 +749,7 @@ below if you script it.
 
 - **The account listing was truncated at 100 workspaces, and two fifths of a
   real account went missing with it.** `/workspaces` was asked for the first
-  100; BlazeMeter SE Demo has 166, and the 66 that fell off held 105,270 rated
+  100; the account it was measured against has 166, and the 66 that fell off held 105,270 rated
   virtual users across 52 locations — including the account's largest workspace,
   which had no card on the Account capacity page at all. Locations were already
   asking for 1,000; workspaces do now.
@@ -1435,3 +1476,9 @@ First packaged release.
 - **Service virtualization** — ingress configuration for istio, contour, nginx
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
+
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/benjithompson/bzm-opl-generator/releases/tag/v0.1.0

@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/benjithompson/bzm-opl-generator/security/advisories/new
+    about: >
+      Report privately instead. Anything involving an AUTH_TOKEN, an API key or
+      a bundle that is less safe than the options asked for.
+  - name: BlazeMeter itself
+    url: https://help.blazemeter.com
+    about: >
+      The agent, crane, the API or the platform. This project only generates the
+      manifests that deploy them.

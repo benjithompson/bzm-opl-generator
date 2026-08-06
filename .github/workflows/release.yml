@@ -1,27 +1,29 @@
 name: release
 
 # Cut a release by pushing a version tag:  git tag v0.3.1 && git push --tags
-# The tag is what users install -- `pipx install "bzm-opl-gen[ui] @
-# git+https://...@vX.Y.Z"` resolves it out of the repo, so pushing the tag is
-# the release. This job builds the wheel and attaches it as the alternative
-# route, and carries the notes, which is where the command people paste comes
-# from: `.github/release-footer.md`, VERSION substituted below.
+# The tag is the release, and it fans out to three places people install from:
+# PyPI (`pipx install "bzm-opl-gen[ui]"`, the front door), the wheel attached
+# below, and the git URL at that tag. The notes carry the command people paste
+# -- `.github/release-footer.md`, VERSION substituted below.
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write        # required to create the Release
+# Declared per job rather than here: the two jobs need different things, and the
+# publishing one must not inherit write access to the repository.
+permissions: {}
 
 jobs:
   release:
-    # Same RUNNER_LABELS switch as tests.yml, where it is explained. It applies
-    # here too rather than pinning releases to GitHub-hosted, because the account
-    # problem that motivated it blocks this workflow just as completely -- a
-    # release that cannot run is not safer than one that runs on your own
-    # machine. Worth knowing that it *is* your machine, though: this job builds
-    # the wheel and creates the Release.
-    runs-on: ${{ vars.RUNNER_LABELS || 'ubuntu-latest' }}
+    # Same switch as tests.yml, where it is explained. Only a tag push reaches
+    # this workflow, so the pull_request half can never fire here -- it is
+    # written the same way regardless, because a reader comparing the two files
+    # should not have to work out whether the difference is meaningful.
+    # Worth knowing it *is* your machine when RUNNER_LABELS is set: this job
+    # builds the wheel and creates the Release.
+    runs-on: ${{ (github.event_name == 'pull_request' && !github.event.repository.private) && 'ubuntu-latest' || (vars.RUNNER_LABELS || 'ubuntu-latest') }}
+    permissions:
+      contents: write        # required to create the Release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,6 +49,15 @@ jobs:
         run: python -c "import fastapi, yaml, httpx, mcp"
       - run: pytest tests -q
 
+      # setuptools stages into `build/lib` and does not remove what it finds
+      # there, so a leftover from an earlier build is copied into the wheel as
+      # if it were current. `ui_dist` is the one that bites: its filenames carry
+      # a content hash, so a rebuilt bundle never overwrites the old one and the
+      # wheel ends up carrying both. `index.html` names only the live pair, so
+      # this is dead weight rather than a wrong UI -- but it is ~300KB of it in
+      # every install. A GitHub-hosted runner starts clean and would never show
+      # this; a self-hosted one reuses its workspace and does.
+      - run: rm -rf build dist
       - run: python -m build
 
       # The UI bundle and templates are package data; a wheel missing them
@@ -107,7 +118,13 @@ jobs:
           import os, re, sys
           version = os.environ["GITHUB_REF_NAME"].lstrip("v")
           text = open("CHANGELOG.md").read()
-          m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+          # Stops at the next release heading, or at the block of link
+          # reference definitions Keep a Changelog puts at the foot of the file
+          # (`[0.2.0]: https://...`). Without the second alternative the oldest
+          # section runs to `\Z` and publishes those links as part of its notes
+          # -- which only the *oldest* section can hit, so it would sit here
+          # unnoticed until somebody re-cut the first release.
+          m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|^\[[^\]]+\]:|\Z)",
                         text, re.M | re.S)
           if not m or not m.group(1).strip():
               sys.exit(f"CHANGELOG.md has no entry for {version} -- add one before tagging")
@@ -161,3 +178,37 @@ jobs:
               core.info(`uploaded ${name} (${data.length} bytes)`);
             }
             core.info(`published ${release.html_url}`);
+
+      # Handed to the PyPI job rather than rebuilt there: the artifacts people
+      # install must be the ones this job tested and asserted the contents of.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # PyPI is the front door -- `pipx install "bzm-opl-gen[ui]"` with no URL and
+  # no auth -- and the GitHub Release stays as the alternative route.
+  #
+  # **This job is pinned to ubuntu-latest and must stay there.** It is the one
+  # place an OIDC identity that can publish under this project's name is minted,
+  # and minting it on a long-lived self-hosted runner would put that identity on
+  # the same host every other job has touched. `id-token: write` and nothing
+  # else: it neither needs nor gets write access to the repository.
+  pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/p/bzm-opl-gen
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      # Trusted publishing: no API token exists to leak or rotate. PyPI has to
+      # know about this repo, this workflow filename and this environment name
+      # first -- configure the publisher there before the first tag, or this
+      # step fails with a 403 that reads like a permissions bug in the job.
+      - uses: pypa/gh-action-pypi-publish@release/v1

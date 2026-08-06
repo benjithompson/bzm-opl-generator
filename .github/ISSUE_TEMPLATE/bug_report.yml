@@ -1,0 +1,89 @@
+name: Bug report
+description: Something the generator, the rig, the web UI or the MCP server got wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Redact before you paste.** AUTH_TOKENs, API keys, harbor and ship ids,
+        account names and internal hostnames all turn up in the output this tool
+        produces. A `profile.json` never carries the token, so it is usually the
+        safest single thing to attach.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >
+        The command, ideally against `examples/facts.example.json` — that needs
+        no account and no cluster, so anyone can run it.
+      placeholder: |
+        bzm-opl-gen generate --facts examples/facts.example.json \
+            --namespace demo -o out/
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: format
+    attributes:
+      label: Which bundle format
+      options:
+        - manifests (the default)
+        - helm
+        - docker
+        - not about a bundle
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where you hit it
+      options:
+        - CLI
+        - web UI (bzm-opl-gen ui)
+        - MCP server (bzm-opl-gen mcp)
+        - live rig (bzm-opl-gen livetest)
+        - doctor / suggest / plan
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`bzm-opl-gen --version`, or the commit if you run from a checkout."
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Python and OS
+      placeholder: "Python 3.12 on macOS 15 (arm64)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: cluster
+    attributes:
+      label: Target cluster, if the problem needs one
+      description: >
+        Distribution and version — OpenShift 4.16, GKE 1.30, kind, minikube.
+        `bzm-opl-gen doctor` output is useful here if you have it.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output
+      description: The error, the manifest, or the relevant part of the log.
+      render: shell

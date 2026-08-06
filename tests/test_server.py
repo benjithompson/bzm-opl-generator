@@ -731,7 +731,7 @@ def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
     TypeScript."""
     connect(monkeypatch, FakeClient())
     by_id = {r["id"]: r for r in
-             client.get("/api/func-ids?account_id=291446").json()["choices"]}
+             client.get("/api/func-ids?account_id=123456").json()["choices"]}
     for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
     # A funcId whose images no bundle selects on. Offered, because the location
@@ -1041,7 +1041,7 @@ def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
     it. The account is the vocabulary, so a funcId it adds is selectable with no
     edit here and one it retires leaves the form on its own."""
     connect(monkeypatch, FakeClient())
-    body = client.get("/api/func-ids?account_id=291446").json()["choices"]
+    body = client.get("/api/func-ids?account_id=123456").json()["choices"]
     ids = [c["id"] for c in body]
 
     assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
@@ -1080,7 +1080,7 @@ def test_the_pages_type_for_the_vocabulary_is_the_shape_this_route_serves(monkey
     connect(monkeypatch, FakeClient())
     text = (pathlib.Path(__file__).resolve().parent.parent
             / "frontend" / "src" / "api.ts").read_text()
-    body = client.get("/api/func-ids?account_id=291446").json()
+    body = client.get("/api/func-ids?account_id=123456").json()
 
     assert _ts_type_fields(text, "FuncIdVocabulary") == set(body)
     assert _ts_type_fields(text, "FuncIdChoice") == set(body["choices"][0])
@@ -1125,10 +1125,10 @@ def test_reading_the_vocabulary_is_not_a_write(monkeypatch):
     every time the page reconnected."""
     fake = connect(monkeypatch, FakeClient())
     server._cache.clear()
-    client.get("/api/func-ids?account_id=291446")
-    client.get("/api/func-ids?account_id=291446")
+    client.get("/api/func-ids?account_id=123456")
+    client.get("/api/func-ids?account_id=123456")
     assert [c for c in fake.calls if c[0] == "functionalities"] == [
-        ("functionalities", 291446)]
+        ("functionalities", 123456)]
 
 
 def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():

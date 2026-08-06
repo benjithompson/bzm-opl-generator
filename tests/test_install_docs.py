@@ -46,6 +46,12 @@ SPEC = re.compile(
     r"bzm-opl-gen\[(?P<extras>[a-z,]+)\]\s*@\s*"
     rf"(?P<url>{re.escape(REPO_URL)})(?:@(?P<ref>\S+?))?[\"']")
 
+# The plain PyPI form: `bzm-opl-gen[ui]`, optionally pinned, and specifically
+# *not* followed by ` @ ` -- that is the git spec above, which contains this as
+# a prefix and would otherwise match here too.
+PYPI_SPEC = re.compile(
+    r"bzm-opl-gen\[[a-z,]+\](?:==[\w.]+|VERSION_NUMBER)?[\"'\s](?!\s*@)")
+
 
 def read(name):
     with open(os.path.join(ROOT, name), encoding="utf-8") as fh:
@@ -102,18 +108,31 @@ def test_the_pinned_tag_is_this_version():
                 "bump the pin with the version, and push the tag")
 
 
-def test_setup_git_is_stated_wherever_the_git_url_is():
-    """`gh auth login` alone leaves no credential where `git` looks, so a
-    private-repo `pip install git+https://...` fails on authentication with an
-    error about the URL. `gh auth setup-git` is the command that fixes it and
-    it is one word away from being forgotten, so it travels with the spec."""
-    for name in INSTALL_DOCS:
-        text = read(name)
-        if REPO_URL not in text:
-            continue
-        assert "gh auth setup-git" in text, (
-            f"{name} installs from the private git URL without telling anyone "
-            "to run `gh auth setup-git` first")
+@pytest.mark.parametrize("name", INSTALL_DOCS)
+def test_the_pypi_spec_is_stated_before_the_git_one(name):
+    """PyPI is the front door and the git URL is the alternative, so every page
+    that states both has to state them in that order.
+
+    This replaces a rule that ran the other way. While the repo was private the
+    git URL was the *only* install, and it needed `gh auth setup-git` beside it
+    or `pip` failed on authentication with an error about the URL -- so a test
+    held that sentence next to every spec. Going public deleted the failure, and
+    an install page whose first command is a four-step `gh` dance now costs a
+    first-time reader more than the missing sentence ever did.
+
+    What survives is the ordering. Both forms work, they are not equivalent
+    (`pipx install bzm-opl-gen` needs no git, no auth and no network round-trip
+    to GitHub), and a page leading with the fallback teaches the harder one."""
+    text = read(name)
+    pypi = PYPI_SPEC.search(text)
+    assert pypi, (
+        f"{name} states no PyPI install -- `pipx install \"bzm-opl-gen[ui]\"` "
+        "is the documented front door, and this page skips it")
+    git = SPEC.search(text)
+    if git:
+        assert pypi.start() < git.start(), (
+            f"{name} states the git URL before the PyPI spec, which teaches the "
+            "fallback as if it were the way in")
 
 
 def test_every_footer_placeholder_is_one_the_release_workflow_substitutes():

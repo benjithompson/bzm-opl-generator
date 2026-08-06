@@ -1,0 +1,55 @@
+name: Feature request
+description: Something this should do, or do differently
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >
+        The situation rather than the fix — a cluster shape, an account fact, a
+        deployment that needs something this cannot express yet.
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: >
+        Hand-editing the generated ConfigMap, a wrapper script, a second tool.
+        This is the most useful box on the form: it says what the gap costs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you think it should do
+      description: >
+        A new option, a different default, another format. If it is a `generate`
+        option, `docs/options.md` lists the existing ones.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Roughly where this lands
+      options:
+        - a generate option or bundle content
+        - the web UI
+        - preflight (doctor / suggest)
+        - capacity planning (plan)
+        - the MCP server
+        - the live rig
+        - documentation
+        - not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: account
+    attributes:
+      label: Anything about the account or cluster that matters
+      description: >
+        Functionality (performance, GUI functional, service virtualization),
+        distribution, air-gapped or not. **No account names, ids or tokens.**

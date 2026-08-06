@@ -3,8 +3,8 @@ import {
   checkId, HARBOR, manualComplete, SHIP, tidy, TOKEN,
 } from "./manualIds";
 
-const id = "6a63a79dcc45dccca90bf440";        // 24 hex, as an account issues them
-const tok = "af1736ce6c96ec3ecd2c3838ad20ed3c".repeat(2);   // 64 hex
+const id = "0a1b2c3d4e5f60718293a4b5";        // 24 hex, as an account issues them
+const tok = "1a2b3c4d5e6f708192a3b4c5d6e7f809".repeat(2);   // 64 hex
 
 describe("checkId", () => {
   it("accepts what BlazeMeter actually issues", () => {
@@ -47,8 +47,8 @@ describe("checkId", () => {
 
 describe("tidy", () => {
   it("removes the newline a wrapped install command pastes in", () => {
-    expect(tidy("6a63a79dcc45\ndccca90bf440")).toBe(id);
-    expect(tidy("  6a63a79dcc45 dccca90bf440 ")).toBe(id);
+    expect(tidy("0a1b2c3d4e5f\n60718293a4b5")).toBe(id);
+    expect(tidy("  0a1b2c3d4e5f 60718293a4b5 ")).toBe(id);
   });
 });
 

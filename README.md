@@ -1,5 +1,10 @@
 # bzm-opl-gen
 
+[![tests](https://github.com/benjithompson/bzm-opl-generator/actions/workflows/tests.yml/badge.svg)](https://github.com/benjithompson/bzm-opl-generator/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/bzm-opl-gen)](https://pypi.org/project/bzm-opl-gen/)
+[![Python](https://img.shields.io/pypi/pyversions/bzm-opl-gen)](https://pypi.org/project/bzm-opl-gen/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Generate — and **live-test** — BlazeMeter OPL (On-Premise/Private Location)
 Kubernetes & OpenShift deployments for customers, driven by **facts from their
 actual BlazeMeter account** instead of hand-edited templates.
@@ -26,40 +31,46 @@ get wrong by hand. Ship id, crane version and heartbeat are read, not typed.
 
 ## Install
 
-Needs Python 3.10+ and access to this repo. The UI bundle is committed, so
-there's no npm step whichever way you install.
+Needs Python 3.10+ and nothing else. The UI bundle is committed, so there is no
+npm step whichever way you install.
 
 ```
-brew install pipx gh && pipx ensurepath     # once, if you don't have them
-gh auth login && gh auth setup-git          # once, if gh isn't set up
-
-pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
+pipx install "bzm-opl-gen[ui]"
 bzm-opl-gen ui                              # opens the web UI
 ```
 
+`brew install pipx && pipx ensurepath` first if you don't have pipx;
+`uv tool install "bzm-opl-gen[ui]"` works identically. Upgrade with
+`pipx upgrade bzm-opl-gen`, and pin with `"bzm-opl-gen[ui]==0.3.1"`.
+
 `[ui]` is the web page; `[mcp]` is the MCP server for an AI session
 ([docs/mcp.md](docs/mcp.md)), and `[ui,mcp]` installs both. Neither extra changes
-what the CLI does.
+what the CLI does. Drop the extras entirely if you only want the CLI — it has no
+dependencies at all.
 
-**`gh auth setup-git` is the load-bearing half** — this repo is private, and
-that command is what teaches plain `git` (and so `pip`) to use the token `gh
-auth login` just stored. Without it the install fails on authentication, not on
-anything about the spec.
+<details>
+<summary>Installing from git, or from a release wheel</summary>
 
-`@v0.3.1` pins a release; drop it to track `main`. Upgrade with the same line
-plus `--force`. Drop `[ui]` if you only want the CLI — it has no dependencies at
-all. `uv tool install "<the same spec>"` works identically if you have `uv`.
+To track `main`, or to run a tag PyPI has not seen:
 
-**"repository not found" means you don't have access to the repo** — GitHub
-reports private repos as missing rather than forbidden. Ask for access; it isn't
-a typo in the command.
+```
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.1"
+```
 
-Prefer a release artifact? Every release attaches the built wheel. Download it
-from the Releases page (or `gh release download --repo
-benjithompson/bzm-opl-generator --pattern '*.whl'`) and install the file by its
-real name — `pipx install './bzm_opl_gen-0.3.1-py3-none-any.whl[ui]'`. Don't
-paste a `*` into that: neither the shell (inside quotes) nor pipx expands it,
-and the error is `Unable to parse package spec`.
+Drop `@v0.3.1` to track `main`; add `--force` to reinstall over an existing copy.
+
+Every release also attaches the built wheel. Download it from the Releases page,
+or with `gh release download --repo benjithompson/bzm-opl-generator`, then
+install the file by its real name:
+
+```
+pipx install './bzm_opl_gen-0.3.1-py3-none-any.whl[ui]'
+```
+
+Name the version rather than globbing it. Neither the shell (inside quotes) nor
+pipx expands a `*` there, and the error is `Unable to parse package spec`.
+
+</details>
 
 ### From a checkout
 
@@ -208,8 +219,8 @@ behind it and whether it settles the option or only narrows it
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns, and which images have been observed running under it |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |
 | [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh) | read-only script a customer runs to send you their cluster's facts, which `doctor` and `suggest` then read with `--cluster-evidence` |
+| [CONTEXT.md](CONTEXT.md) | the glossary — what *functionality*, *funcId*, *slot*, *bundle*, *sizing* and *agent* mean here, and which word wins where two were doing one job |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | setup, the test layers, PR flow, cutting a release |
-| [CLAUDE.md](CLAUDE.md) | live-rig internals and the environment trap behind each flag |
 
 ## Contributing
 
@@ -220,7 +231,25 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 You need no BlazeMeter account to work on the generator — `examples/facts.example.json`
 drives it. Everything lands on `main` through a PR. Full guide in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md), and [CONTEXT.md](CONTEXT.md) is the glossary
+to read before naming anything new.
+
+## Support
+
+Bugs and feature requests go to
+[Issues](https://github.com/benjithompson/bzm-opl-generator/issues). Please
+don't report a security problem there — [SECURITY.md](SECURITY.md) says where
+instead.
+
+This is an independent project, not a BlazeMeter product: it generates manifests
+*for* BlazeMeter private locations but carries no BlazeMeter support commitment.
+For the platform itself — the agent, crane, the API — go to BlazeMeter support.
+
+## License
+
+[Apache-2.0](LICENSE). See [NOTICE](NOTICE) for attribution; container images
+the generated manifests reference are published by BlazeMeter under their own
+terms and are not redistributed here.
 
 ## Not yet covered
 

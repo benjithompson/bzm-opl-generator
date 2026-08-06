@@ -4,23 +4,23 @@
 ## Install
 
 ```
-gh auth login && gh auth setup-git          # once, if gh isn't set up
-pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@VERSION"
+pipx install "bzm-opl-gen[ui]==VERSION_NUMBER"
 ```
 
-Needs Python 3.10+ and read access to this repo. This repo is private, so
-`gh auth setup-git` is the load-bearing half: it leaves the token where plain
-`git` — and so `pip` — will find it. **"repository not found" means access, not
-a typo.**
+Needs Python 3.10+ and nothing else. Drop the `==VERSION_NUMBER` for the latest,
+or `pipx upgrade bzm-opl-gen` if you already have it. Drop `[ui]` for the CLI
+alone — it has no dependencies. The web UI is committed prebuilt, so there is no
+npm step either way.
 
-Upgrading from an earlier version? Same line plus `--force`. Drop `[ui]` for the
-CLI alone — it has no dependencies. The web UI is committed prebuilt, so there
-is no npm step either way.
+Would rather install from git, or from the artifact? Either of:
 
-Would rather install the artifact? The wheel is in the Assets below. Install it
-by its real filename — `pipx install './bzm_opl_gen-VERSION_NUMBER-py3-none-any.whl[ui]'`
-— and not with a `*` in place of the version, which neither the shell nor pipx
-expands.
+```
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@VERSION"
+pipx install './bzm_opl_gen-VERSION_NUMBER-py3-none-any.whl[ui]'
+```
+
+The wheel is in the Assets below; install it by its real filename, and not with
+a `*` in place of the version, which neither the shell nor pipx expands.
 
 ## Get a deployable bundle
 

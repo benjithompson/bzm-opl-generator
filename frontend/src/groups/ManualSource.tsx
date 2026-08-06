@@ -38,14 +38,14 @@ export function ManualSource(props: {
         {/* Whitespace is removed rather than complained about: the install
             command wraps, so a copy off it arrives with a newline in the
             middle, and that is a paste artefact rather than a typo. */}
-        <TextInput mono placeholder="6a63a79dcc45dccca90bf440"
+        <TextInput mono placeholder="0a1b2c3d4e5f60718293a4b5"
           value={props.harborId} onChange={(v) => props.onHarborId(tidy(v))} />
         <Complaint rule={HARBOR} value={props.harborId} />
       </Field>
 
       <Field label="Ship ID (agent)" required
         hint="SHIP_ID — this agent's own identity, and part of the Deployment's selector">
-        <TextInput mono placeholder="6a679d3445115b6651011715"
+        <TextInput mono placeholder="6c5b4a39281706f5e4d3c2b1"
           value={props.shipId} onChange={(v) => props.onShipId(tidy(v))} />
         <Complaint rule={SHIP} value={props.shipId} />
       </Field>
@@ -56,7 +56,7 @@ export function ManualSource(props: {
           this one is not marked required. */}
       <Field label="Auth token"
         hint="AUTH_TOKEN — goes into the Secret. Anyone holding it can register as this agent.">
-        <SecretInput placeholder="af1736ce6c96ec3ecd2c3838ad20ed3c…"
+        <SecretInput placeholder="1a2b3c4d5e6f708192a3b4c5d6e7f809…"
           value={props.authToken} onChange={(v) => props.onAuthToken(tidy(v))} />
         <Complaint rule={TOKEN} value={props.authToken} />
       </Field>

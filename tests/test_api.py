@@ -43,16 +43,16 @@ def test_create_location_threads_per_engine_override():
 def test_list_calls_ask_for_more_than_one_page():
     """A truncated list only looks short.
 
-    The workspace limit was 100, and SE Demo has 166: the 66 that fell off held
+    The workspace limit was 100, and one real account has 166: the 66 that fell off held
     40% of the account's rated VUs, attributed on screen to no workspace at all.
     Locations were already asking for 1000 for the same reason.
     """
     c = FakeClient({})
-    c.workspaces(291446)
-    c.private_locations(account_id=291446)
+    c.workspaces(123456)
+    c.private_locations(account_id=123456)
 
     paths = [p for _, p, _ in c.calls]
-    assert paths[0] == "/workspaces?accountId=291446&limit=1000"
+    assert paths[0] == "/workspaces?accountId=123456&limit=1000"
     assert "limit=1000" in paths[1]
 
 
@@ -63,15 +63,15 @@ def test_the_account_is_asked_what_its_functionalities_are_called():
     answers with: BlazeMeter's own display names, five funcIds this repo never
     listed, and no `functionalApi` -- which core.FUNC_ID_LABELS used to offer.
     """
-    c = FakeClient({("GET", "/accounts/291446/functionalities"): {
+    c = FakeClient({("GET", "/accounts/123456/functionalities"): {
         "additionalSpace": 50,
         "functionalities": [
             {"funcId": "performance", "size": 5, "displayName": "Performance"},
             {"funcId": "tdm", "size": 1, "displayName": "TDM Integration"},
         ]}})
-    body = c.functionalities(291446)
+    body = c.functionalities(123456)
 
-    assert c.calls == [("GET", "/accounts/291446/functionalities", None)]
+    assert c.calls == [("GET", "/accounts/123456/functionalities", None)]
     assert [f["displayName"] for f in body["functionalities"]] == [
         "Performance", "TDM Integration"]
 

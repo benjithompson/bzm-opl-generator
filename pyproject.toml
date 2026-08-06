@@ -2,11 +2,39 @@
 name = "bzm-opl-gen"
 version = "0.3.1"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
+# Without this the PyPI page renders with no body at all -- the description
+# above is the one-liner, not the page.
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ben Thompson" }]
+keywords = ["blazemeter", "kubernetes", "openshift", "helm", "load-testing",
+            "private-location", "performance-testing", "mcp"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Testing :: Traffic Generation",
+    "Topic :: System :: Systems Administration",
+]
 # 3.10 because the `mcp` SDK requires it. 3.9 has been end-of-life since
 # October 2025, and the generator itself still uses nothing newer -- the floor
 # is the SDK's, not ours.
 requires-python = ">=3.10"
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/benjithompson/bzm-opl-generator"
+Repository = "https://github.com/benjithompson/bzm-opl-generator"
+Issues = "https://github.com/benjithompson/bzm-opl-generator/issues"
+Changelog = "https://github.com/benjithompson/bzm-opl-generator/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/benjithompson/bzm-opl-generator#documentation"
 
 [project.optional-dependencies]
 # fastapi belongs in `test`, not just `ui`: tests/test_server.py importorskips
@@ -22,7 +50,10 @@ dev = ["pyyaml", "pytest", "httpx", "fastapi>=0.110", "uvicorn>=0.27", "mcp>=2"]
 bzm-opl-gen = "bzm_opl_gen.cli:main"
 
 [build-system]
-requires = ["setuptools>=61"]
+# 77 rather than 61 for PEP 639: `license = "Apache-2.0"` as a plain string and
+# `license-files` are only understood from there on. An older setuptools does
+# not warn about them, it fails the build.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 # An explicit list rather than `find`, because docs/ is mapped in below and
