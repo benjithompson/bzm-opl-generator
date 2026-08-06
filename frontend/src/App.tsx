@@ -915,7 +915,7 @@ export default function App({ api }: { api: Api }) {
   // The debounced live preview is further down, with the rest of what depends
   // on `sentOptions` -- it has to send what the download sends, and the blank
   // fields that go into that are not known until the group switches are.
-  const previewTimer = useRef<number>();
+  const previewTimer = useRef<number | undefined>(undefined);
 
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
@@ -1031,7 +1031,7 @@ export default function App({ api }: { api: Api }) {
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
   // Debounced for the same reason the preview is: this runs on every keystroke.
-  const manualTimer = useRef<number>();
+  const manualTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (sourceMode !== "manual") return;
     // Nothing is built from a value that is not the shape an id comes in. The

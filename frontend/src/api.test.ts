@@ -36,7 +36,7 @@ function stubFetch(res: () => Response) {
   return calls;
 }
 
-const zip = () => new Response(new Blob(["PK"]), {
+const zip = () => new Response("PK", {
   headers: {
     "X-Bzm-Token-Branch": "rotated",
     "X-Bzm-Token-Message": "a NEW AUTH_TOKEN was issued",
@@ -66,7 +66,7 @@ test("downloadZip sends the credential request as the server names it", async ()
 
 test("a zip with no credential headers reads as the placeholder, not as nothing",
   async () => {
-    stubFetch(() => new Response(new Blob(["PK"])));
+    stubFetch(() => new Response("PK"));
     const token = await api.downloadZip(facts, {}, { rotate_token: false });
     // The understating branch: a bundle claimed to carry a token it may not
     // have is the failure worth avoiding, and "" is a message, not a token.
@@ -79,7 +79,7 @@ test("the file is saved under the server's name, which is the folder it extracts
     // (core.zip_stem). Built here instead, a namespace the server sanitised out
     // of the folder stays in the filename and the two disagree again.
     const saved: string[] = [];
-    stubFetch(() => new Response(new Blob(["PK"]), {
+    stubFetch(() => new Response("PK", {
       headers: {
         "Content-Disposition": 'attachment; filename="bzm-opl-ns1.zip"',
       },
@@ -95,7 +95,7 @@ test("the file is saved under the server's name, which is the folder it extracts
 
 test("a download with no name header still saves under one", async () => {
   const saved: string[] = [];
-  stubFetch(() => new Response(new Blob(["PK"])));
+  stubFetch(() => new Response("PK"));
   vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
     function (this: HTMLAnchorElement) { saved.push(this.download); });
 

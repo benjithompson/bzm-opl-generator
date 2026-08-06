@@ -42,8 +42,8 @@ jobs:
     permissions:
       contents: write        # required to create the Release
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -176,7 +176,7 @@ jobs:
       # it. `github-script` runs on the node the runner already uses for
       # checkout and setup-python, so it needs nothing installed.
       - name: publish
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -209,7 +209,7 @@ jobs:
 
       # Handed to the PyPI job rather than rebuilt there: the artifacts people
       # install must be the ones this job tested and asserted the contents of.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -231,7 +231,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/bzm-opl-gen
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist/
