@@ -455,7 +455,7 @@ def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
             "override_memory": mem // (1024 ** 2),
         },
         "egress": [API_HOST, *ENGINE_UPLOAD_HOSTS, PUBLIC_REGISTRY.split("/")[0]],
-        "warnings": _warnings(rows, sized, driver, cpu, mem, per_node, engines),
+        "warnings": _warnings(rows, driver, cpu, mem, per_node, supported),
     }
 
 
@@ -479,8 +479,15 @@ def _positive(value, name):
     return n
 
 
-def _warnings(rows, sized, driver, cpu, mem, per_node, engines):
+def _warnings(rows, driver, cpu, mem, per_node, supported):
     """Everything true of this plan that a node count cannot express.
+
+    `rows` and `driver` say all of it: the models that were sized are the rows
+    with a pod count, and the pod count this cluster was built from is the
+    driver's own. They were passed in beside it, which is two callers' worth of
+    chances to hand this one plan's warnings another plan's numbers.
+    `supported` is what an engine of this size carries, which the caller has
+    already worked out.
 
     Warnings, never refusals: each describes a plan that runs and reports
     numbers somebody will act on, which is more dangerous than one that does
@@ -502,11 +509,11 @@ def _warnings(rows, sized, driver, cpu, mem, per_node, engines):
     # once is a plan this one is not; saying so is cheaper than a customer
     # discovering it when the browser suite and the load test are scheduled
     # together.
-    if len(sized) > 1:
+    if sum(1 for r in rows if r["pods"]) > 1:
         m = SIZING_MODELS[driver["functionality"]]
         out.append(
             f"This cluster is sized for the largest of the workloads above on "
-            f"its own, which is {engines} {driver['pods_label']} for "
+            f"its own, which is {driver['pods']} {driver['pods_label']} for "
             f"{m['runs']}, and not for all of them at once. Crane gives every "
             f"pod it creates the same limits, so the sizes cannot be told "
             f"apart, but the counts can: if these workloads are expected to "
@@ -522,12 +529,14 @@ def _warnings(rows, sized, driver, cpu, mem, per_node, engines):
             f"account owner's rather than a measurement, so a higher figure may "
             f"well be right, but a browser that runs out of memory fails the "
             f"test it was running rather than reporting a slow one.")
+    # `if perf and ...`, never a 0 standing in for "no performance sizing":
+    # this is the module whose whole subject is that a figure nobody has must
+    # not arrive as a number, and a sentinel here is that mistake in the
+    # comparison that decides whether a warning is printed at all.
     perf = next((r for r in rows if r["functionality"] == PERFORMANCE), None)
-    vus = perf["per_pod"] if perf else 0
-    supported = per_pod_capacity(PERFORMANCE, cpu, mem)
-    if vus > supported:
+    if perf and perf["per_pod"] > supported:
         out.append(
-            f"{vus} virtual users on a {format_cpu(cpu)} CPU / "
+            f"{perf['per_pod']} virtual users on a {format_cpu(cpu)} CPU / "
             f"{format_memory(mem)} engine is more than that size carries, which is "
             f"about {supported} ({BASELINE_VUS} per {ENGINE_DEFAULT_CPU} CPU / "
             f"{ENGINE_DEFAULT_MEM}). The engines will throttle or OOM part-way up "
@@ -544,7 +553,7 @@ def _warnings(rows, sized, driver, cpu, mem, per_node, engines):
             f"one node contend for CPU, NIC and cache in ways that surface as "
             f"latency the load generator invented.")
     gke_engines = max(GKE_MIN_MAX_PODS - TYPICAL_SYSTEM_PODS, 1)
-    if per_node < gke_engines and engines > 1:
+    if per_node < gke_engines and driver["pods"] > 1:
         out.append(
             f"On GKE a node pool cannot be told to hold fewer than "
             f"{GKE_MIN_MAX_PODS} pods, so after about {TYPICAL_SYSTEM_PODS} "
