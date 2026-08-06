@@ -416,33 +416,41 @@ function SavedSizings(props: {
   const { saved, name } = props;
   const exists = saved.some((s) => s.name === name.trim());
   return (
-    <div className="flex flex-wrap items-end gap-2">
-      <Field label="Saved sizings"
-        hint="starting points, not recommendations — picking one fills the fields below">
-        <select className={inputCls} value=""
-          onChange={(e) => {
-            const picked = sizingNamed(saved, e.target.value);
-            if (picked) { props.setInputs(picked); props.setName(e.target.value); }
-          }}>
-          <option value="">Pick a sizing…</option>
-          {saved.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
-        </select>
-      </Field>
-      <Field label="Save this as">
-        <TextInput placeholder="Black Friday" value={name}
-          onChange={props.setName} />
-      </Field>
-      <div className="flex gap-2 pb-0.5">
-        <Button kind="ghost" disabled={!name.trim()}
-          onClick={() => props.setSaved(save(saved, name, props.inputs))}>
-          Save
-        </Button>
-        <Button kind="ghost" disabled={!exists}
-          onClick={() => { props.setSaved(remove(saved, name.trim()));
-                           props.setName(""); }}>
-          Delete
-        </Button>
+    <div className="space-y-1">
+      {/* The hint sits under the whole row rather than under the picker: a
+          `Field` renders its hint below its own control, so a hint on one of two
+          side-by-side fields pushes that one taller and `items-end` then lands
+          the select a line above the input beside it. */}
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label="Saved sizings">
+          <select className={inputCls} value=""
+            onChange={(e) => {
+              const picked = sizingNamed(saved, e.target.value);
+              if (picked) { props.setInputs(picked); props.setName(e.target.value); }
+            }}>
+            <option value="">Pick a sizing…</option>
+            {saved.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Save as">
+          <TextInput placeholder="Staging" value={name}
+            onChange={props.setName} />
+        </Field>
+        <div className="flex gap-2 pb-0.5">
+          <Button kind="ghost" disabled={!name.trim()}
+            onClick={() => props.setSaved(save(saved, name, props.inputs))}>
+            Save
+          </Button>
+          <Button kind="ghost" disabled={!exists}
+            onClick={() => { props.setSaved(remove(saved, name.trim()));
+                             props.setName(""); }}>
+            Delete
+          </Button>
+        </div>
       </div>
+      <p className="text-[11px] text-slate-400">
+        Starting points, not recommendations — picking one fills the fields below.
+      </p>
     </div>
   );
 }
