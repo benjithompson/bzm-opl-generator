@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts, Functionality,
+  Api, Account, AgentEnvVar, AgentStatus, BuildState, Capacity, Facts,
+  Functionality,
   GeneratedFile, ManualFactsOut, TokenReport,
   FuncIdVocabulary, Location, Options, Ship, SvCheckOut,
   SizingModel, SlotMinimum, SvConstants, SvMocksOut, Workspace,
@@ -340,6 +341,10 @@ export default function App({ api }: { api: Api }) {
   // an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
+  // Null until the read lands, and a wheel answers `stale: null` -- so the
+  // banner keys on `=== true` and nothing else. Absent means unasked, which is
+  // exactly the state this whole thing exists to stop being invisible.
+  const [build, setBuild] = useState<BuildState | null>(null);
   const [cap, setCap] = useState<Capacity | null>(null);
   const [capErr, setCapErr] = useState<string | null>(null);
   useEffect(() => {
@@ -443,6 +448,11 @@ export default function App({ api }: { api: Api }) {
     }).catch(() => {});
     api.svConstants().then(setSvConst).catch(() => {});
     api.ignoredOptions().then(setIgnored).catch(() => {});
+    // Asked beside the other served tables, and for their sake: a page built
+    // before the code behind it makes every one of them answer 404, which this
+    // page correctly reads as "not read yet" and responds to by showing fields
+    // the format hides. That looked like four generator defects once (#224).
+    api.build?.().then(setBuild).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
     api.slotMinimums().then(setSlotMinimums).catch(() => {});
     api.funcIdVocabulary().then(setFuncIds).catch(() => {});
@@ -1885,6 +1895,16 @@ export default function App({ api }: { api: Api }) {
           </span>
         </div>
       </header>
+
+      {build?.stale === true && (
+        <div role="alert" className="bg-amber-100 text-amber-900 border-b
+          border-amber-300 px-4 py-2 text-sm">
+          <strong>This page is older than the code serving it.</strong>{" "}
+          Options a format hides may still be shown, and a bundle downloaded
+          here may be missing files. Rebuild it with{" "}
+          <code className="font-mono">cd frontend &amp;&amp; npm run build</code>.
+        </div>
+      )}
 
       {/* The shell: the drawer picks the view, the view fills what is left, and
           the preview slides over the top of it from the right. */}

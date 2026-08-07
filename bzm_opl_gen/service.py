@@ -42,8 +42,18 @@ def build_plist(port=8765, host="127.0.0.1", api_key_path=None):
     --no-browser always: launchd starts this at login and on every crash, and
     each start popping a browser tab would turn a restart loop into a tab
     storm.
+
+    --dev always, which is the whole point of a *local* install (#224). This
+    process serves the checkout that installed it, and without reload it serves
+    whatever that checkout was at login -- for days, silently. One service ran a
+    day behind a route the page depends on: the fetch 404'd, the page read that
+    as "not read yet" and showed every option for a docker bundle, and three
+    generator defects were suspected before the server was. Releases are the
+    distribution; a local install is for testing this repo, so it tracks the
+    working tree. `ui_dist` is the half reload cannot fix -- see
+    server.build_state.
     """
-    args = [sys.executable, "-m", "bzm_opl_gen", "ui", "--no-browser",
+    args = [sys.executable, "-m", "bzm_opl_gen", "ui", "--no-browser", "--dev",
             "--port", str(port), "--host", host]
     if api_key_path:
         # Absolute for the same reason core refuses relative out_dirs: launchd

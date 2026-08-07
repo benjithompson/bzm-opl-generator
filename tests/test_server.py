@@ -2300,3 +2300,42 @@ def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
     for _ in range(3):
         client.get("/api/status?harbor_id=h1&ship_id=s1")
     assert [x[0] for x in c.calls].count("private_location") == 3
+
+
+def test_build_route_says_what_is_being_served(monkeypatch, tmp_path):
+    """#224. A local service serves the checkout that installed it, and nothing
+    rebuilds ui_dist -- so the page can be older than the code behind it for
+    days. The symptom is a route answering 404, which the page correctly reads
+    as "not read yet" and responds to by showing every field. The server was
+    the last thing suspected, so it now says."""
+    body = client.get("/api/build").json()
+    assert set(body) == {"version", "built", "stale", "commit"}
+
+    dist = tmp_path / "ui_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html></html>")
+    src = tmp_path / "frontend" / "src"
+    src.mkdir(parents=True)
+    monkeypatch.setattr(server, "UI_DIST", str(dist))
+    monkeypatch.setattr(server, "_FRONTEND_SRC", str(src))
+
+    (src / "App.tsx").write_text("x")
+    os.utime(dist / "index.html", (1000, 1000))
+    os.utime(src / "App.tsx", (2000, 2000))
+    assert server.build_state()["stale"] is True
+
+    os.utime(dist / "index.html", (3000, 3000))
+    assert server.build_state()["stale"] is False
+
+
+def test_a_wheel_has_no_source_to_be_stale_against(monkeypatch, tmp_path):
+    """`stale` is None off a checkout, never False. An installed wheel ships a
+    built ui_dist and no frontend/src, so nothing can be compared -- and False
+    there would claim the page had been checked and found current. Same rule as
+    every other unread in this codebase."""
+    dist = tmp_path / "ui_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html></html>")
+    monkeypatch.setattr(server, "UI_DIST", str(dist))
+    monkeypatch.setattr(server, "_FRONTEND_SRC", str(tmp_path / "nope"))
+    assert server.build_state()["stale"] is None

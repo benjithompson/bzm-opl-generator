@@ -157,3 +157,25 @@ def test_the_footer_substitutes_the_longer_placeholder_first():
     assert workflow.index("s/VERSION_NUMBER/") < workflow.index("s/VERSION/"), (
         "release.yml substitutes VERSION before VERSION_NUMBER, which leaves "
         "the tag glued to a stray `_NUMBER` in the published notes")
+
+
+def test_the_version_the_code_reports_is_the_one_the_project_declares():
+    """`/api/build` serves `importlib.metadata.version`, and that is the
+    *install's* metadata rather than pyproject's -- an editable install made at
+    0.2.0 goes on saying 0.2.0 for as long as nobody reinstalls it.
+
+    Which answer you get depended on the working directory: a stale
+    `bzm_opl_gen-0.2.0.dist-info` in site-packages against a current
+    `bzm_opl_gen.egg-info` in the repo root, so a shell in the checkout said
+    0.3.2 and the LaunchAgent, started elsewhere, said 0.2.0 about the same
+    code. One question, two answers, decided by cwd.
+
+    Fails on a stale editable install, which is the point -- the fix is
+    `pip install -e ".[dev]"`, and CI installs fresh so it only ever bites the
+    machine that has drifted."""
+    from importlib.metadata import version
+    declared = re.search(r'^version = "([^"]+)"', read("pyproject.toml"), re.M)
+    assert declared, "pyproject.toml states no version"
+    assert version("bzm-opl-gen") == declared.group(1), (
+        f'installed metadata says {version("bzm-opl-gen")} and pyproject says '
+        f'{declared.group(1)} -- reinstall with: pip install -e ".[dev]"')

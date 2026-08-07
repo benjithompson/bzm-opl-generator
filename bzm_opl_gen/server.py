@@ -872,9 +872,71 @@ def agent_env(func_ids: Optional[str] = None):
         None if func_ids is None else [f for f in func_ids.split(",") if f])
 
 
-# -- SPA ----------------------------------------------------------------------
+# -- what is actually being served --------------------------------------------
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_FRONTEND_SRC = os.path.join(_REPO, "frontend", "src")
+
+
+def build_state():
+    """What this process is serving, as the page can check it (#224).
+
+    Three fields, and `stale` is the one worth the route. A local service serves
+    the checkout that installed it. `--dev` reloads the backend, but nothing
+    rebuilds `ui_dist`, so the page can be older than the code behind it for
+    days with nothing on screen to say so. One was, and the symptom was a route
+    404 that the page correctly reads as "not read yet" -- so it showed every
+    option for a docker bundle, and the *server* was the last thing suspected.
+
+    `stale` is **None** where the question does not apply: an installed wheel
+    has no `frontend/src` to be older than, and its `ui_dist` is whatever
+    shipped. Not False -- that would say "checked, and it is current" about a
+    thing nobody can check. The page shows a banner on True alone.
+    """
+    dist = os.path.join(UI_DIST, "index.html")
+    built = os.path.getmtime(dist) if os.path.exists(dist) else None
+    stale = None
+    if built is not None and os.path.isdir(_FRONTEND_SRC):
+        newest = max((os.path.getmtime(os.path.join(root, f))
+                      for root, _, files in os.walk(_FRONTEND_SRC)
+                      for f in files), default=0)
+        stale = newest > built
+    return {"version": _version(), "built": built, "stale": stale,
+            "commit": _commit()}
+
+
+def _version():
+    try:
+        from importlib.metadata import version
+        return version("bzm-opl-gen")
+    except Exception:
+        return None
+
+
+def _commit():
+    """The checkout's HEAD, or None off a checkout. Read from .git by hand
+    rather than by running git: this is answered on a route, and a subprocess
+    per request is a cost the answer does not justify."""
+    head = os.path.join(_REPO, ".git", "HEAD")
+    try:
+        with open(head) as fh:
+            ref = fh.read().strip()
+        if ref.startswith("ref: "):
+            with open(os.path.join(_REPO, ".git", ref[5:])) as fh:
+                return fh.read().strip()[:12]
+        return ref[:12]
+    except OSError:
+        return None
+
+
+@app.get("/api/build", description=build_state.__doc__)
+def build():
+    return build_state()
+
+
+# -- SPA ----------------------------------------------------------------------
+
 if os.path.isdir(UI_DIST):
     app.mount("/", StaticFiles(directory=UI_DIST, html=True), name="ui")
 else:
@@ -902,6 +964,14 @@ EXPOSED_WARNING = """\
 !!   ssh -L {port}:127.0.0.1:{port} <this-machine>
 """
 
+STALE_UI_WARNING = """\
+!! The built page is older than frontend/src, so this serves a UI that does not
+!! match the code behind it. A route the page needs may answer 404, which the
+!! page reads as "not read yet" rather than as an error -- it then shows fields
+!! a format hides, and bundles it builds may be missing files.
+!!   cd frontend && npm run build
+"""
+
 
 def main(port=8765, open_browser=True, api_key_path=None, dev=False,
          host="127.0.0.1"):
@@ -911,6 +981,11 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False,
         # materialises when the process exits is no warning at all -- this is
         # the one line that has to arrive before the port is open.
         print(EXPOSED_WARNING.format(host=host, port=port), flush=True)
+    # Same reasoning as the exposed-host warning above, and the same flush: a
+    # page built before the code behind it looks like a defect in the code, and
+    # the log is read after the page rather than before it (#224).
+    if build_state()["stale"]:
+        print(STALE_UI_WARNING, flush=True)
     if api_key_path:
         # Same construction as the route, for the same reason, plus one of its
         # own: the page this serves has a connect form on it, so a flag pointing
