@@ -59,6 +59,24 @@ anything that breaks.
   reach the agent. For the same reason every inline value is written with `$`
   doubled.
 
+### Fixed
+
+- **A `--format docker` bundle for a location that serves virtual services now
+  names the images to pre-pull.** Crane does not pull on a Docker agent: it
+  composes the image name and asks the daemon to *create* the container, so an
+  image the host does not already hold makes the first virtual service retry for
+  about ninety seconds and end `FAILED` — `Failed to find a deployed container`
+  in BlazeMeter and `No such image` only in `docker logs`, neither of which
+  mentions a pull. The README's **Worth knowing** section now carries the exact
+  `docker pull` commands, and says what to do on a host that cannot reach the
+  registry.
+
+  The tags are the **`:latest`** forms under the configured `DOCKER_REGISTRY`,
+  not the versions the location pins: crane prefixes that registry onto
+  BlazeMeter's own unqualified image name, which carries `latest` whatever
+  `/versions` says. Only the mock images are named — that is what a live run
+  measured — so a performance-only docker bundle says nothing about pre-pulling.
+
 ## [0.3.2] — 2026-08-06
 
 ### Added

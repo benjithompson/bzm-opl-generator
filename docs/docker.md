@@ -237,6 +237,16 @@ the trust bundle its platform team maintains.
   BlazeMeter names it, and neither route replaces an existing one — that
   container may be the agent currently serving this location. `docker rm -f` it
   deliberately.
+- **Crane does not pull here.** It composes the image name and asks the daemon
+  to *create* the container, so an image the host does not already hold ends the
+  deploy `FAILED` about ninety seconds later, with no message on either side
+  mentioning a pull. A bundle for a location that serves virtual services names
+  the exact `docker pull` commands in its README — the `:latest` forms under
+  `DOCKER_REGISTRY`, which are not the tags the location pins. What was seen
+  live, and why the tag differs, is in
+  [Service virtualization](service-virtualization.md#what-a-live-run-showed).
+  Only the mock images have been measured; a performance bundle says nothing
+  about pre-pulling because nobody has tested that half.
 - **Docker Desktop for Mac 4.3.0+** additionally needs `--privileged -v
   /sys/fs/cgroup:/sys/fs/cgroup:rw`, per BlazeMeter's installation page. The
   generated script does not add them: they are a property of that one runtime,
