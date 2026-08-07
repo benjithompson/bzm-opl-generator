@@ -2069,6 +2069,53 @@ def _deploy_steps(o, verb):
     return f"{body}**{len(steps) + 1}. {verb}**\n\n"
 
 
+def docker_mock_targets(facts, o):
+    """The virtual-service images a docker agent's crane will ask the daemon for,
+    as {the pinned public ref: the reference crane composes}. Empty for a bundle
+    carrying none, and for the two cluster formats.
+
+    One function because **two files in one bundle name these** -- the README's
+    pre-pull list (#206) and the mirror script's push targets (#209) -- and a
+    bundle whose two halves name different references is the whole of #209: the
+    mirror ran, reported success, and the first virtual service failed on an
+    image nothing had pushed under the name crane went on to ask for. Held equal
+    by construction rather than by two renderers agreeing.
+
+    The value is what crane composes on this platform: `DOCKER_REGISTRY`, then
+    BlazeMeter's own unqualified image name -- which is the crane *key* without
+    its tag, `blazemeter/` and all -- and always `latest`, whatever /versions
+    pins. **There is no `IMAGE_OVERRIDES` on this format**, which is what makes
+    the last-segment reduction `_image_overrides` performs correct on Kubernetes
+    and wrong here: there, crane resolves the key through that map and pulls
+    exactly what was mirrored; here nothing maps anything and crane's own
+    composition is the only name that matters.
+
+    The key is the pinned public ref and stays pinned: it is the *source*, the
+    content whose version is known, and it is the one record of which version
+    the `:latest` in the customer's registry actually is -- on the same line, in
+    the file that performed the push. That is why nothing pushes the pinned tag
+    beside `:latest` as well. It would be cheap in layers, but it would put a
+    reference in the mirror script that the README's pull list does not name,
+    which is the disagreement between two files of one bundle this exists to
+    remove; and on a docker host it is a tag nothing ever asks for.
+
+    Only the mock images, and for #206's reason rather than by oversight: the
+    composed name was read off a live virtual-service deploy, and whether crane
+    composes an engine's name the same way on a docker *performance* agent has
+    not been tested here. Extending a measured shape to unmeasured images would
+    present the two as one fact, so the engine images keep the mirror's ordinary
+    last-segment destination and this says nothing about them -- which honestly
+    means nobody looked, not that they are right.
+    """
+    if o.get("output_format") != "docker":
+        return {}
+    categories = needed_categories(SV_FUNC_IDS)
+    registry = (o["private_registry"] or PUBLIC_REGISTRY).rstrip("/")
+    return {f"{i['repo']}:{i['tag']}": f"{registry}/{key_base(i['key'])}:latest"
+            for i in select_images(facts)
+            if image_category(i["repo"]) in categories}
+
+
 def _mirror_script(facts, o):
     """Pull BlazeMeter's images and push them into the customer's registry.
 
@@ -2085,6 +2132,10 @@ def _mirror_script(facts, o):
     is local-only, so every run left the probe tag behind in the customer's
     registry -- and zero-layer images are rejected outright by some registries,
     which would abort a mirror that would otherwise have worked.
+
+    The destination is per image and per format rather than one shape for the
+    lot -- see docker_mock_targets, and the emitted comment below, which is what
+    the person comparing this file with the README's pull list reads.
     """
     refs = image_refs(facts)
     # The hook's image is not in the location's inventory -- it is not an image
@@ -2131,9 +2182,42 @@ def _mirror_script(facts, o):
         "}",
         "",
     ]
+    # Where crane composes the name itself, that name is the destination. On a
+    # docker host it does so for the virtual-service images and nothing maps one
+    # to the other, so a mirror pushing anything else pushes to a path nothing
+    # reads -- #209, which the mirror reported as a success and the first deploy
+    # as a missing image.
+    composed = docker_mock_targets(facts, o)
+    if composed:
+        # Emitted only where the two shapes are actually both present, so an
+        # ordinary bundle's script is the one it has always been. This is what a
+        # reader holding this file beside README.md's `docker pull` list needs:
+        # the two lists differ on purpose in one place and agree exactly in the
+        # other, and without this the difference reads as a bug in one of them.
+        lines += [
+            "# Two shapes of destination below, and the difference is deliberate:",
+            "#",
+            "#   crane's own image  ->  <registry>/crane:<version>",
+            "#     This bundle's own bzm-opl-agent.sh and compose.yaml name that",
+            "#     reference, so the two agree by construction and it can be any",
+            "#     shape at all.",
+            "#",
+            "#   virtual-service images  ->  <registry>/blazemeter/<name>:latest",
+            "#     Crane composes these itself, from DOCKER_REGISTRY and",
+            "#     BlazeMeter's own unqualified image name, and nothing on a",
+            "#     docker host maps one name to another. The tag is `latest`",
+            "#     whichever version this location pins -- the pinned version is",
+            "#     the source on each line below, and pushing it as a second tag",
+            "#     would only add one nothing asks for.",
+            "#",
+            "#     These are exactly the references README.md tells you to",
+            "#     `docker pull` on the agent host once this has run.",
+            "",
+        ]
     for ref in refs:
         name = ref.rsplit("/", 1)[-1]
-        lines.append(f"mirror {shlex.quote(ref)} {shlex.quote(f'{reg}/{name}')}")
+        dest = composed.get(ref, f"{reg}/{name}")
+        lines.append(f"mirror {shlex.quote(ref)} {shlex.quote(dest)}")
     lines += ["", f'echo "done -- {len(refs)} images in {reg}"']
     return "\n".join(lines) + "\n"
 
@@ -3602,16 +3686,14 @@ def _docker_prepull_block(facts, o):
 
     The categories come from `mockServices`' own row rather than from a "mock"
     literal, so the funcId that decides an SV location and the images this names
-    stay one fact.
+    stay one fact -- and the references themselves come from
+    `docker_mock_targets`, which the mirror script pushes to, so a bundle
+    carrying both files cannot name two different sets (#209).
     """
-    categories = needed_categories(SV_FUNC_IDS)
-    mocks = [i for i in select_images(facts)
-             if image_category(i["repo"]) in categories]
-    if not mocks:
+    targets = docker_mock_targets(facts, o)
+    if not targets:
         return ""
-    registry = (o["private_registry"] or PUBLIC_REGISTRY).rstrip("/")
-    pulls = "\n".join(f"  docker pull {registry}/{key_base(i['key'])}:latest"
-                      for i in mocks)
+    pulls = "\n".join(f"  docker pull {ref}" for ref in targets.values())
     return f"""
 - **Pull the virtual-service images onto this host first.** Crane does not pull
   here: it composes the image name and asks the docker daemon to *create* the

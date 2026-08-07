@@ -77,6 +77,21 @@ anything that breaks.
   `/versions` says. Only the mock images are named — that is what a live run
   measured — so a performance-only docker bundle says nothing about pre-pulling.
 
+- **...and `--private-registry` now mirrors those images to the name crane
+  actually asks for.** A `--format docker` bundle for a virtual-service location
+  used to push `<registry>/service-mock:<pinned version>` while crane went on to
+  create `<registry>/blazemeter/service-mock:latest` — both the path and the tag
+  differed, so the mirror ran, reported success, and the first virtual service
+  failed on a missing image anyway. The mirror script's push list and the
+  README's `docker pull` list are now one set.
+
+  The last-segment path is right on Kubernetes, where `IMAGE_OVERRIDES` maps
+  each key onto it, and there is no such variable on a docker host. **Nothing
+  about the Kubernetes formats changes**, and crane's own image keeps the short
+  name on docker too — the bundle's `bzm-opl-agent.sh` and `compose.yaml` name
+  that reference themselves. The script now says which of its two destination
+  shapes is which, for whoever is reading it beside the README.
+
 ## [0.3.2] — 2026-08-06
 
 ### Added
