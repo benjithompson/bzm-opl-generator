@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -655,6 +656,268 @@ def test_run_refuses_before_it_builds_anything(monkeypatch, tmp_path):
     with pytest.raises(livetest.BundleMismatch) as caught:
         livetest.run(None, d, "ns1", "aaa111", "ccc333", cluster="minikube")
     assert "bbb222" in str(caught.value) and "ccc333" in str(caught.value)
+
+
+# -- the compose rig ----------------------------------------------------------
+#
+# The offline counterpart to `livetest` on a docker bundle: the daemon is a
+# recorded command list and BlazeMeter is a dict. Every live check has one of
+# these, and this rig is the *only* live proof --format docker has, so its
+# guards are the half that has to hold without a daemon at all.
+
+def _docker_bundle(tmp_path, facts=FACTS, **opts):
+    gen.write(gen.generate(facts, {"output_format": "docker",
+                                   "ship_id": "bbb222", "auth_token": "tok",
+                                   **opts}), str(tmp_path))
+    return str(tmp_path)
+
+
+class _FakeBzm:
+    """BlazeMeter, as wait_online asks it: one location, one ship, heartbeating
+    now. `state` is what makes the difference between online and not."""
+
+    def __init__(self, state="idle", ship="bbb222"):
+        self.state, self.ship, self.calls = state, ship, 0
+
+    def private_location(self, harbor_id):
+        self.calls += 1
+        return {"ships": [{"id": self.ship, "state": self.state,
+                           "lastHeartBeat": time.time()}]}
+
+
+def _fake_daemon(monkeypatch, *, present=(), compose=True):
+    """Stand in for the docker daemon. Returns the recorded command list.
+
+    `present` is what `docker ps -aq` reports still existing, which is how the
+    teardown's own check is driven; `compose=False` is a host with no Compose
+    v2 plugin, which raises exactly as subprocess does.
+    """
+    cmds = []
+
+    def run(cmd, *a, **kw):
+        cmds.append(cmd)
+        if cmd[:3] == livetest.COMPOSE_TOOL + ["version"]:
+            if not compose:
+                raise FileNotFoundError("docker")
+            return subprocess.CompletedProcess(cmd, 0, "Docker Compose v2.29.0", "")
+        if cmd[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(cmd, 0, "\n".join(present), "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(livetest.subprocess, "run", run)
+    return cmds
+
+
+def test_bundle_platform_reads_the_profile(tmp_path):
+    """The bundle already knows what it is, and profile.json is where it says
+    so -- no flag, so there is no second place to get it wrong."""
+    assert livetest.bundle_platform(
+        str(tmp_path), {"output_format": "docker"}) == livetest.PLATFORM_COMPOSE
+    assert livetest.bundle_platform(
+        str(tmp_path), {"output_format": "manifests"}) == livetest.PLATFORM_MANIFESTS
+
+
+def test_bundle_platform_reads_the_directory_when_there_is_no_profile(tmp_path):
+    """A directory with no profile still says which it is: nothing but a docker
+    bundle carries a compose file. The wrong answer here is the silent run this
+    whole check exists to prevent, so it is read rather than defaulted."""
+    d = _docker_bundle(tmp_path)
+    os.remove(os.path.join(d, gen.PROFILE_FILE))
+    assert livetest.bundle_platform(d) == livetest.PLATFORM_COMPOSE
+    assert livetest.bundle_platform(str(tmp_path / "empty")) == \
+        livetest.PLATFORM_MANIFESTS
+
+
+def test_bundle_platform_does_not_let_a_stray_compose_file_win(tmp_path):
+    """A manifests bundle with a compose file in it is a directory holding two
+    versions' output, and the manifests branch already names it -- as an
+    unknown *.yaml, which is the refusal that fits. Routing it to compose
+    instead would deploy one file out of a bundle of nine."""
+    d = _bundle(tmp_path)
+    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write("services: {}\n")
+    prof = gen.load_profile(d)
+    assert livetest.bundle_platform(d, prof) == livetest.PLATFORM_MANIFESTS
+    refusals = livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals
+    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+
+
+def test_compose_bundle_check_passes_this_generators_own_output(tmp_path):
+    d = _docker_bundle(tmp_path)
+    check = livetest.bundle_check(d, "aaa111", "bbb222", gen.load_profile(d))
+    assert check == livetest.BundleCheck([], [])
+
+
+def test_compose_bundle_check_refuses_another_agents_container(tmp_path):
+    """#107 on the other platform. The container name carries the ship id, so a
+    directory left over from a different agent is refused before anything is
+    started -- otherwise crane comes up with an identity BlazeMeter will not
+    register and the run waits out its whole timeout saying only that."""
+    d = _docker_bundle(tmp_path)
+    refusals = livetest.bundle_check(d, "aaa111", "ccc333").refusals
+    assert any(gen.docker_container_name("bbb222") in r
+               and gen.docker_container_name("ccc333") in r for r in refusals)
+
+
+def test_compose_bundle_check_refuses_another_locations_harbor(tmp_path):
+    d = _docker_bundle(tmp_path)
+    refusals = livetest.bundle_check(d, "zzz999", "bbb222").refusals
+    assert any("HARBOR_ID" in r and "aaa111" in r and "zzz999" in r
+               for r in refusals)
+
+
+def test_compose_bundle_check_refuses_a_directory_with_no_compose_file(tmp_path):
+    """Reachable one way: profile.json says docker and the compose file is gone
+    -- a bundle from before #177, or one somebody tidied. There is nothing for
+    `compose up` to start, and it would say so several layers into a run."""
+    d = _docker_bundle(tmp_path)
+    os.remove(os.path.join(d, gen.DOCKER_COMPOSE_FILE))
+    refusals = livetest.bundle_check(d, "aaa111", "bbb222",
+                                     gen.load_profile(d)).refusals
+    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+
+
+def test_compose_bundle_check_refuses_a_bundle_nobody_finished(tmp_path):
+    """The credential is the value most often left blank and the one
+    profile.json can never carry, so this is read off the files. `compose up`
+    refuses it too -- but as a non-zero exit partway through a run, with a
+    container already created against a real account."""
+    d = _docker_bundle(tmp_path, auth_token=None)
+    refusals = livetest.bundle_check(d, "aaa111", "bbb222",
+                                     gen.load_profile(d)).refusals
+    assert any("AUTH_TOKEN" in r for r in refusals)
+
+
+def test_compose_bundle_check_notes_an_identity_it_could_not_read(tmp_path):
+    """Unreadable and mismatched must not share a representation here either: a
+    hand-assembled compose file that names no container is a note, and the run
+    goes ahead."""
+    d = str(tmp_path)
+    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write(
+        "services:\n  crane:\n    image: x\n")
+    check = livetest.bundle_check(d, "aaa111", "bbb222")
+    assert check.refusals == []
+    assert any("container_name" in n for n in check.notes)
+    assert any("HARBOR_ID" in n for n in check.notes)
+
+
+def test_run_compose_refuses_before_it_starts_anything(monkeypatch, tmp_path):
+    """The spirit of test_run_refuses_before_it_builds_anything, on the platform
+    where the cost is not a cluster build but a container registering against a
+    real account under somebody else's identity."""
+    d = _docker_bundle(tmp_path)
+    for name in ("compose_up", "compose_down", "compose_tool"):
+        monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
+            f"{name} ran on a bundle built for another agent"))
+    with pytest.raises(livetest.BundleMismatch) as caught:
+        livetest.run_compose(None, d, "aaa111", "ccc333")
+    assert gen.docker_container_name("ccc333") in str(caught.value)
+
+
+def test_run_refuses_a_compose_bundle_rather_than_deploying_nothing(
+        monkeypatch, tmp_path):
+    """run() is the cluster rig, and the MCP server calls it directly. Without
+    this the *.yaml glob comes back empty, every object "applies", nothing is
+    created, and the run waits out its whole timeout."""
+    d = _docker_bundle(tmp_path)
+    for name in ("ensure_cluster", "deploy", "teardown"):
+        monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
+            f"{name} ran on a docker bundle"))
+    with pytest.raises(livetest.BundleMismatch) as caught:
+        livetest.run(None, d, "ns1", "aaa111", "bbb222",
+                     opts=gen.load_profile(d), cluster="minikube")
+    assert "docker" in str(caught.value) and "livetest" in str(caught.value)
+
+
+def test_run_compose_brings_it_up_waits_and_takes_it_down(monkeypatch, tmp_path):
+    """Up, online, down -- the whole of what this rig is. The daemon is faked
+    and BlazeMeter is a dict; what is asserted is the three commands and that
+    the answer comes from the account rather than from the daemon."""
+    d = _docker_bundle(tmp_path)
+    cmds = _fake_daemon(monkeypatch)
+    client = _FakeBzm()
+    assert livetest.run_compose(client, d, "aaa111", "bbb222",
+                                opts=gen.load_profile(d)) is True
+    assert client.calls == 1
+    assert cmds[0] == livetest.COMPOSE_TOOL + ["version"]
+    # Everything after `-f <the bundle's compose file>`.
+    verbs = [c[4:] for c in cmds if c[:3] == livetest.COMPOSE_TOOL + ["-f"]]
+    assert ["up", "-d"] in verbs
+    # Down after up, and not before: a finally that ran on a run which never
+    # started would stop whatever else holds that project name.
+    assert verbs.index(["up", "-d"]) < verbs.index(["down", "--remove-orphans"])
+
+
+def test_run_compose_fails_when_the_account_never_sees_the_agent(monkeypatch,
+                                                                 tmp_path):
+    """A container that is up is not an agent that is online -- the claim is
+    BlazeMeter's, exactly as it is on the cluster path. And a failure prints the
+    container's own log, because `up -d` returns before crane says anything and
+    a crash-looper is otherwise indistinguishable from a slow boot."""
+    d = _docker_bundle(tmp_path)
+    cmds = _fake_daemon(monkeypatch)
+    assert livetest.run_compose(_FakeBzm(state="offline"), d, "aaa111",
+                               "bbb222", timeout=0) is False
+    assert any(c[4:6] == ["logs", "--tail"] for c in cmds)
+
+
+def test_run_compose_takes_it_down_even_when_the_wait_raises(monkeypatch,
+                                                             tmp_path):
+    """The finally is the whole of the promise that the daemon is left as it was
+    found."""
+    d = _docker_bundle(tmp_path)
+    cmds = _fake_daemon(monkeypatch)
+    monkeypatch.setattr(livetest, "wait_online", lambda *a, **kw: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        livetest.run_compose(_FakeBzm(), d, "aaa111", "bbb222")
+    assert any(c[4:] == ["down", "--remove-orphans"] for c in cmds)
+
+
+def test_run_compose_keeps_it_up_when_asked(monkeypatch, tmp_path):
+    d = _docker_bundle(tmp_path)
+    cmds = _fake_daemon(monkeypatch)
+    livetest.run_compose(_FakeBzm(), d, "aaa111", "bbb222", keep=True)
+    assert not any("down" in c for c in cmds)
+
+
+def test_teardown_removes_a_container_compose_down_left_behind(monkeypatch,
+                                                               tmp_path):
+    """`down` is a no-op for a container whose compose file has been rewritten
+    out from under it, and the leftover then holds the name the next run needs.
+    Named leftovers are the one thing this rig promises not to leave."""
+    d = _docker_bundle(tmp_path)
+    name = gen.docker_container_name("bbb222")
+    cmds = _fake_daemon(monkeypatch, present=[name])
+    livetest.compose_down(d, name)
+    assert ["docker", "rm", "-f", name] in cmds
+
+
+def test_teardown_removes_nothing_by_name_when_down_worked(monkeypatch,
+                                                           tmp_path):
+    d = _docker_bundle(tmp_path)
+    cmds = _fake_daemon(monkeypatch, present=[])
+    livetest.compose_down(d, gen.docker_container_name("bbb222"))
+    assert not any(c[:3] == ["docker", "rm", "-f"] for c in cmds)
+
+
+def test_compose_tool_says_so_when_the_plugin_is_missing(monkeypatch):
+    """`docker-compose` (the v1 script) is a different command with a different
+    file precedence, and a host with neither cannot start anything -- so it is
+    one sentence up front rather than a failure partway in."""
+    _fake_daemon(monkeypatch, compose=False)
+    with pytest.raises(RuntimeError) as caught:
+        livetest.compose_tool()
+    assert "Compose v2" in str(caught.value)
+
+
+def test_compose_file_relative_paths_resolve_against_the_bundle(monkeypatch,
+                                                                tmp_path):
+    """-f rather than a cwd change, and the bundle's own directory is what
+    compose resolves `env_file:` and every relative bind against."""
+    d = _docker_bundle(tmp_path, ca_bundle=CA_PEM)
+    cmds = _fake_daemon(monkeypatch)
+    livetest.run_compose(_FakeBzm(), d, "aaa111", "bbb222")
+    up = next(c for c in cmds if c[-2:] == ["up", "-d"])
+    assert up[2] == "-f" and up[3] == os.path.join(d, gen.DOCKER_COMPOSE_FILE)
 
 
 def test_profile_json_roundtrip(tmp_path):

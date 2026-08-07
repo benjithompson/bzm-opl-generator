@@ -2674,6 +2674,13 @@ DOCKER_COMPOSE_FILE = "compose.yaml"
 # Crane is BlazeMeter's own name for the agent process, and the container is
 # named after it too (docker_container_name).
 DOCKER_COMPOSE_SERVICE = "crane"
+# The variable name a blank value is written under, prefixed so it is one
+# nobody's environment holds -- see _compose_required for why the guard may not
+# be spelled `${AUTH_TOKEN:?...}`. A constant because livetest reads it back:
+# the rig has to refuse an unfinished bundle before it starts anything, and the
+# thing it looks for must be the thing this writes rather than a second spelling
+# of it.
+COMPOSE_UNSET_PREFIX = "BZM_OPL_UNSET_"
 DOCKER_ENV_FILE = "bzm-opl-agent.env"
 DOCKER_CA_FILE = "ca-bundle.crt"
 # Where BlazeMeter's Docker documentation says the trust bundle has to land, and
@@ -3091,8 +3098,8 @@ def _compose_required(name, where):
     this file can see that they had. A guard that survives its own fix is worse
     than none.
     """
-    return "${BZM_OPL_UNSET_%s:?%s}" % (
-        name, " ".join(_docker_blank_lines(name, where)))
+    return "${%s%s:?%s}" % (COMPOSE_UNSET_PREFIX, name,
+                            " ".join(_docker_blank_lines(name, where)))
 
 
 def _docker_blank_file_lines(m):

@@ -18,8 +18,9 @@ actual BlazeMeter account** instead of hand-edited templates.
           facts.json  ---->  bzm-opl-gen generate  ---->  out/*.yaml + README
                                                              |
                                               bzm-opl-gen livetest
-                                        (apply to kind / current cluster,
-                                         poll API until agent is ONLINE)
+                                     (apply to a cluster, or compose up
+                                      a docker bundle on this host, and
+                                      poll the API until agent is ONLINE)
 ```
 
 **Why account facts matter.** `funcIds: ["performance"]` tells the generator that
@@ -133,8 +134,10 @@ is the resolved options minus the token, replayed with `generate --profile`.
 Also: `--format helm` for a chart ([docs/helm.md](docs/helm.md)),
 `--format docker` for one agent as one container
 ([docs/docker.md](docs/docker.md)), `--private-registry` plus `images --pull
---mirror` for an air-gapped cluster, and `livetest` to deploy to a local cluster
-and wait for the agent to come online ([docs/live-test.md](docs/live-test.md)).
+--mirror` for an air-gapped cluster, and `livetest` to start a bundle for real
+and wait for the agent to come online -- a cluster for the manifests, `docker
+compose` on this host for a docker bundle
+([docs/live-test.md](docs/live-test.md)).
 
 > **Re-generating against a live agent is safe.** `generate` never mints an
 > AUTH_TOKEN as a side effect — it takes `--auth-token`, reads back the token

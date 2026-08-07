@@ -1,9 +1,18 @@
-"""Live deployment test: apply generated manifests to a real cluster and verify
-the agent comes online in the customer's BlazeMeter account.
+"""Live deployment test: start a generated bundle for real and verify the agent
+comes online in the customer's BlazeMeter account.
+
+Two rigs, picked off the bundle rather than off a flag (bundle_platform):
+`run()` applies manifests to a cluster, and `run_compose()` starts a docker
+bundle with `docker compose up -d` on this host's daemon. They share
+wait_online, because the success criterion is a fact about the account rather
+than about either platform, and nothing else -- everything below the account is
+cluster-shaped.
 
 Success criterion = BlazeMeter API reports the ship with a fresh heartbeat
 (state idle/running). That proves the whole chain: image pull, RBAC, SCC,
-egress to *.blazemeter.com, and credentials.
+egress to *.blazemeter.com, and credentials. On the compose path it proves the
+image pull, the egress and the credential; there is no RBAC, no SCC and no
+engine (see docs/live-test.md for what that leaves unproven).
 
 Two optional local rigs reproduce the hard customer environments end to end:
   --local-registry  registry:2 container + mirrored images (private registry)
@@ -1020,12 +1029,126 @@ def bundle_yaml(manifest_dir):
                   glob.glob(os.path.join(manifest_dir, "*.yaml")))
 
 
+# -- which of the two rigs a directory needs ----------------------------------
+#
+# There are two, and they share only wait_online: one applies manifests to a
+# cluster, the other starts one container on this host with docker compose.
+# Nothing on the command line says which, and a flag saying it would be a second
+# place to get it wrong -- a --compose left off a docker bundle, or left on a
+# manifests one, is exactly the silent run this rig's guards exist to prevent
+# (the *.yaml glob comes back empty, every object "applies", and the run waits
+# out its whole timeout having created nothing).
+#
+# So it is read off the bundle, which already knows what it is, and read from
+# two places rather than one because they answer at different times:
+# profile.json's output_format is the generator's own record, and the compose
+# file's presence is what a directory with no profile still says. A directory
+# that the two disagree about does not arise from this generator -- a docker
+# bundle always carries both -- and where they would, the refusals below name
+# what was found rather than picking a winner.
+
+PLATFORM_MANIFESTS = "manifests"
+PLATFORM_COMPOSE = "compose"
+
+
+def bundle_platform(manifest_dir, profile=None):
+    """PLATFORM_COMPOSE or PLATFORM_MANIFESTS: which rig this directory needs.
+
+    The profile is the answer where there is one. Where there is not -- a
+    hand-assembled directory, or one a `generate` never wrote a profile into --
+    the compose file's presence is the answer, because a directory holding one
+    is a docker bundle whatever nobody recorded about it.
+    """
+    if (profile or {}).get("output_format") == "docker":
+        return PLATFORM_COMPOSE
+    if profile:
+        # It said something else -- manifests or helm, and helm is refused by
+        # name before this. Not overridden by a stray compose file: a directory
+        # holding both is judged by the manifests branch, whose unknown-*.yaml
+        # refusal names compose.yaml as the leftover it is.
+        return PLATFORM_MANIFESTS
+    return (PLATFORM_COMPOSE if os.path.exists(compose_path(manifest_dir))
+            else PLATFORM_MANIFESTS)
+
+
+def compose_path(manifest_dir):
+    return os.path.join(manifest_dir, generate.DOCKER_COMPOSE_FILE)
+
+
+# container_name, as _docker_compose_yaml writes it (_compose_value quotes every
+# scalar). A regex for the reason _IDENTITY_RE is one: PyYAML would be a second
+# runtime dependency, to read three fields out of a file this generator wrote.
+_COMPOSE_NAME_RE = re.compile(r'^\s*container_name:\s*"?([^"\s]+)"?\s*$', re.M)
+# A value nobody supplied, as _compose_required writes it. The name is captured
+# rather than the whole expression -- the message beside it is a sentence with
+# spaces in, and what a refusal here has to name is the variable.
+_COMPOSE_UNSET_RE = re.compile(
+    r'\$\{' + re.escape(generate.COMPOSE_UNSET_PREFIX) + r'([A-Za-z0-9_]+):\?')
+
+
+def _file_text(path):
+    """The file's text, or None where it could not be read. Absent and empty
+    must not share a representation here either: an empty compose file names no
+    container, which is a refusal, while a missing one is a different refusal
+    and an unreadable one is neither."""
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def compose_identity(manifest_dir):
+    """{"HARBOR_ID", "SHIP_ID", "container_name"} as compose.yaml names them.
+
+    A key is absent where the file does not carry it, on the same rule
+    manifest_identity keeps: "the file does not say" is a note and "the file
+    says something else" is a refusal.
+    """
+    text = _file_text(compose_path(manifest_dir))
+    if text is None:
+        return {}
+    # The environment block writes HARBOR_ID/SHIP_ID in the ConfigMap's own
+    # shape -- `NAME: "value"` -- so _IDENTITY_RE reads this file too, and the
+    # two platforms cannot drift about what an identity looks like.
+    found = {m.group(1): m.group(2) for m in _IDENTITY_RE.finditer(text)}
+    name = _COMPOSE_NAME_RE.search(text)
+    if name:
+        found["container_name"] = name.group(1)
+    return found
+
+
+def compose_unset(manifest_dir):
+    """The variables this bundle still carries compose's required-variable guard
+    for, sorted. Both files, because which one holds the credential is
+    use_secret's decision and interpolation reaches an env_file value too.
+
+    Read off the files rather than off profile.json, which carries no
+    auth_token: the credential is the value most often left blank, and it is the
+    one a profile can never report.
+    """
+    names = set()
+    for name in (generate.DOCKER_COMPOSE_FILE, generate.DOCKER_ENV_FILE):
+        text = _file_text(os.path.join(manifest_dir, name)) or ""
+        names.update(m.group(1) for m in _COMPOSE_UNSET_RE.finditer(text))
+    return sorted(names)
+
+
 def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
     """Is this directory the bundle this run was told to test?
 
     Returns refusals (deploy nothing) and notes (what could not be checked).
-    Costs two file reads, and is worth making before the cluster exists.
+    Costs two file reads, and is worth making before the cluster exists -- or,
+    on the compose path, before a container is started against a real account.
+
+    Both platforms are judged here, because the question is the same one and the
+    incident behind it (#107) is about a directory rather than about kubectl.
+    What differs is where a bundle records its identity: a manifests bundle in
+    its ConfigMap, a compose bundle in the compose file's environment block and
+    in the container name the two docker routes share.
     """
+    if bundle_platform(manifest_dir, profile) == PLATFORM_COMPOSE:
+        return _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile)
     refusals, notes = [], []
     path = os.path.join(manifest_dir, CONFIGMAP_FILE)
     claimed = manifest_identity(manifest_dir)
@@ -1048,31 +1171,7 @@ def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
                 f"the cluster would be deleted with nothing left to read. "
                 f"Re-generate into {manifest_dir}/, or point --manifests at the "
                 f"bundle built for {want}")
-    # profile.json is what the re-rendering paths merge their overlay onto, and
-    # _regenerator prefers the ship_id it finds there over the one on the command
-    # line -- so a stale profile deploys the wrong agent even on a path that does
-    # re-render, which is why re-rendering could never have been this guard.
-    prof_ship = (profile or {}).get("ship_id")
-    if prof_ship and ship_id and prof_ship != ship_id:
-        refusals.append(
-            f"{os.path.join(manifest_dir, generate.PROFILE_FILE)} was generated "
-            f"for ship {prof_ship}, not the {ship_id} this run was told to "
-            f"test, and every re-render this run makes would merge onto it")
-    # A field somebody left blank. The API server would refuse the object
-    # anyway -- <PLACEHOLDER> is not a legal name -- but it refuses it *after*
-    # this rig has built a cluster, and the run then spends its whole 12-20
-    # minutes reporting that the agent never came online. The same shape as the
-    # three guards around it, and cheaper than all of them: it is one read of a
-    # file already open.
-    blank = generate.placeholder_options(profile or {})
-    if blank:
-        refusals.append(
-            f"{os.path.join(manifest_dir, generate.PROFILE_FILE)} was generated "
-            f"with {', '.join(blank)} left blank, so the bundle carries "
-            f"{generate.PLACEHOLDER} instead of "
-            f"{'those values' if len(blank) > 1 else 'that value'}. Nothing "
-            f"here can guess {'them' if len(blank) > 1 else 'it'}: re-generate "
-            f"the bundle with {'them' if len(blank) > 1 else 'it'} set")
+    refusals += _profile_refusals(manifest_dir, ship_id, profile)
     unknown = [n for n in bundle_yaml(manifest_dir)
                if n not in emitted_yaml_files()]
     if unknown:
@@ -1095,6 +1194,107 @@ def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
             f"directory, so an older version's leftovers are deployed as part "
             f"of the run and the run stops being a test of generator output. "
             f"Delete them, or generate into an empty directory")
+    return BundleCheck(refusals, notes)
+
+
+def _profile_refusals(manifest_dir, ship_id, profile):
+    """What profile.json alone says is wrong, on either platform. Shared because
+    the file is the same file and neither question is about kubectl."""
+    refusals = []
+    path = os.path.join(manifest_dir, generate.PROFILE_FILE)
+    # profile.json is what the re-rendering paths merge their overlay onto, and
+    # _regenerator prefers the ship_id it finds there over the one on the command
+    # line -- so a stale profile deploys the wrong agent even on a path that does
+    # re-render, which is why re-rendering could never have been this guard.
+    prof_ship = (profile or {}).get("ship_id")
+    if prof_ship and ship_id and prof_ship != ship_id:
+        refusals.append(
+            f"{path} was generated for ship {prof_ship}, not the {ship_id} "
+            f"this run was told to test -- the directory is another agent's "
+            f"bundle, and a re-render would merge onto it rather than "
+            f"correct it")
+    # A field somebody left blank. The API server would refuse the object
+    # anyway -- <PLACEHOLDER> is not a legal name -- but it refuses it *after*
+    # this rig has built a cluster, and the run then spends its whole 12-20
+    # minutes reporting that the agent never came online. The same shape as the
+    # three guards around it, and cheaper than all of them: it is one read of a
+    # file already open.
+    blank = generate.placeholder_options(profile or {})
+    if blank:
+        refusals.append(
+            f"{path} was generated with {', '.join(blank)} left blank, so the "
+            f"bundle carries {generate.PLACEHOLDER} instead of "
+            f"{'those values' if len(blank) > 1 else 'that value'}. Nothing "
+            f"here can guess {'them' if len(blank) > 1 else 'it'}: re-generate "
+            f"the bundle with {'them' if len(blank) > 1 else 'it'} set")
+    return refusals
+
+
+def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
+    """The same question about a docker bundle, asked of the files a docker
+    bundle actually has.
+
+    Two of these are new rather than translated, because a compose bundle has no
+    *.yaml to validate and no ConfigMap to read an identity out of. Both failures
+    they cover are silent from the daemon's end: compose given a directory with
+    no compose file reports only that, several layers into a run, and a bundle
+    for another agent starts a container that reports to an identity BlazeMeter
+    will not register -- which from here looks exactly like an agent that is
+    slow to come online, and the run waits out its whole timeout to say so.
+    """
+    refusals, notes = [], []
+    path = compose_path(manifest_dir)
+    if not os.path.exists(path):
+        # Reachable one way: profile.json says output_format=docker and the
+        # compose file is not there -- an older bundle (compose arrived in
+        # #177), or a directory somebody tidied. There is nothing to start.
+        return BundleCheck([
+            f"{manifest_dir}/ is a docker bundle with no "
+            f"{generate.DOCKER_COMPOSE_FILE} in it, and this run starts a "
+            f"docker bundle with `docker compose up`. Re-generate it: "
+            f"{generate.DOCKER_RUN_FILE} on its own is the other route, and "
+            f"the two are either/or rather than interchangeable here"], [])
+    claimed = compose_identity(manifest_dir)
+    want_name = generate.docker_container_name(ship_id) if ship_id else None
+    got_name = claimed.get("container_name")
+    if got_name is None:
+        notes.append(f"{path} names no container_name, so it was not checked "
+                     f"against {want_name}")
+    elif want_name and got_name != want_name:
+        refusals.append(
+            f"{path} starts a container called {got_name}, but this run was "
+            f"told to test ship {ship_id}, whose container is {want_name}. The "
+            f"directory holds the bundle for a different agent: crane would "
+            f"come up with an identity BlazeMeter will not register, and this "
+            f"run would wait out its whole timeout reporting only that the "
+            f"agent never came online. Re-generate into {manifest_dir}/, or "
+            f"point --manifests at the bundle built for {ship_id}")
+    for field, want in (("HARBOR_ID", harbor_id), ("SHIP_ID", ship_id)):
+        got = claimed.get(field)
+        if got is None:
+            notes.append(f"{path} names no {field}, so it was not checked "
+                         f"against {want}")
+        elif got and want and got != want:
+            refusals.append(
+                f"{path} names {field} {got}, but this run was told to test "
+                f"{want}. Re-generate into {manifest_dir}/, or point "
+                f"--manifests at the bundle built for {want}")
+    # The credential is the value most often left blank and the one profile.json
+    # can never report (SECRET_OPTIONS keeps it out), so this reads the files.
+    # `compose up` would refuse it too -- that is what the expression is for --
+    # but it would do so as a non-zero exit in the middle of a run rather than
+    # as a sentence before one, and a container started for a half-finished
+    # bundle is a write against a real account.
+    unset = compose_unset(manifest_dir)
+    if unset:
+        refusals.append(
+            f"{manifest_dir}/ still carries compose's required-variable guard "
+            f"for {', '.join(unset)}, which is what this generator writes where "
+            f"a required value was left blank. `docker compose up` refuses it "
+            f"and so does this: fill "
+            f"{'them' if len(unset) > 1 else 'it'} in, or re-generate the "
+            f"bundle with {'them' if len(unset) > 1 else 'it'} set")
+    refusals += _profile_refusals(manifest_dir, ship_id, profile)
     return BundleCheck(refusals, notes)
 
 
@@ -1148,6 +1348,124 @@ def teardown(manifest_dir, namespace, cluster="current"):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
 
 
+# -- the compose rig ----------------------------------------------------------
+#
+# `--format docker` had never been live-tested at all: the rig applies YAML to a
+# cluster, so a docker bundle was refused outright rather than run. Compose is
+# the cheapest live proof this repo can have -- a docker daemon and nothing
+# else, where the Kubernetes rig costs a cluster build and 12 to 20 minutes.
+#
+# Up, online, down, and deliberately nothing more. There is no compose analogue
+# of --local-registry, --local-proxy, --contain-egress or the negative control
+# here: each of those is cluster-shaped (a registry blackholed on a node, a
+# NetworkPolicy an unenforced CNI silently ignores), and reimplementing them for
+# one container is another afternoon each. What this does not reach is stated in
+# docs/live-test.md rather than left to be discovered -- most of all `-u 0` and
+# DOCKER_PORT_RANGE, which only matter once crane starts something, and which
+# #184 covers by starting a virtual service rather than an engine.
+
+COMPOSE_TOOL = ["docker", "compose"]
+# What a failed run prints of the container's own account of itself. `up -d`
+# returns as soon as the container is created, so a crash-looping crane and a
+# slow one look identical from here -- and the Kubernetes path gets this for
+# free from `rollout status`, which fails loudly. Without it the run reports
+# "never came online" over a log nobody read.
+COMPOSE_LOG_LINES = 40
+
+
+def compose_tool():
+    """`docker compose`, checked to be there and to be v2.
+
+    Raised rather than discovered halfway: `docker-compose` (the v1 python
+    script) is a different command with a different file precedence, and a host
+    with neither is a run that cannot start anything.
+    """
+    try:
+        out = subprocess.run(COMPOSE_TOOL + ["version"], capture_output=True,
+                             text=True, check=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        raise RuntimeError(
+            "`docker compose version` does not work here, so this bundle "
+            "cannot be started: a docker daemon with the Compose v2 plugin is "
+            "the whole of what the compose path needs") from e
+    return out.stdout.strip()
+
+
+def _compose(manifest_dir, *args, check=True):
+    # -f rather than a cwd change: compose resolves `env_file:` and every
+    # relative bind (the CA bundle, the virtual-service certificate) against the
+    # directory of the first -f, which is where those files are.
+    return _run(COMPOSE_TOOL + ["-f", compose_path(manifest_dir), *args],
+                check=check)
+
+
+def compose_up(manifest_dir):
+    print(f"docker compose: {compose_tool()}")
+    _compose(manifest_dir, "up", "-d")
+
+
+def compose_logs(manifest_dir, lines=COMPOSE_LOG_LINES):
+    _compose(manifest_dir, "logs", "--tail", str(lines), check=False)
+
+
+def compose_down(manifest_dir, container_name=None):
+    """`down`, and then a check that it worked.
+
+    --remove-orphans because a bundle re-generated between runs can leave a
+    service under the old project's name, and this rig's promise is that it
+    leaves the daemon as it found it. The rm afterwards is not belt and braces:
+    `down` is a no-op for a container whose compose file has since been
+    rewritten out from under it, and the leftover then holds the very name the
+    next run needs.
+    """
+    _compose(manifest_dir, "down", "--remove-orphans", check=False)
+    if not container_name:
+        return
+    left = subprocess.run(["docker", "ps", "-aq", "--filter",
+                           f"name=^{container_name}$"],
+                          capture_output=True, text=True)
+    if left.stdout.strip():
+        print(f"note: {container_name} survived `compose down` -- removing it "
+              f"by name so it does not hold the name for the next run")
+        _run(["docker", "rm", "-f", container_name], check=False, capture=True)
+
+
+def run_compose(client, manifest_dir, harbor_id, ship_id, timeout=600,
+                keep=False, opts=None):
+    """Start the docker bundle in `manifest_dir` on this host's daemon, wait for
+    the agent to report online in BlazeMeter, and stop it again.
+
+    Success is the same claim wait_online makes for the cluster rig -- a fresh
+    heartbeat in a real account -- because it is the same question about the
+    same agent. What it proves is narrower and stated in docs/live-test.md.
+    """
+    # Before the container exists, and outside the try below, whose finally
+    # would `compose down` a project this run never started. Same reasoning and
+    # the same exception as the Kubernetes path: "this is somebody else's
+    # bundle" must not arrive looking like "the agent did not come online".
+    check = bundle_check(manifest_dir, harbor_id, ship_id, opts)
+    for note in check.notes:
+        print("note: " + note)
+    if check.refusals:
+        raise BundleMismatch("\n".join(check.refusals))
+    name = generate.docker_container_name(ship_id)
+    ok = False
+    try:
+        compose_up(manifest_dir)
+        print(f"waiting up to {timeout}s for agent to report online in "
+              f"BlazeMeter...")
+        ok = wait_online(client, harbor_id, ship_id, timeout)
+        if not ok:
+            compose_logs(manifest_dir)
+        why = ("agent online in BlazeMeter" if ok else
+               "agent never reported online")
+        print(f"LIVE TEST {'PASSED' if ok else 'FAILED'}: {why}")
+    finally:
+        if not keep:
+            compose_down(manifest_dir, name)
+    return ok
+
+
 def run(client, manifest_dir, namespace, harbor_id, ship_id,
         cluster="current", timeout=600, keep=False,
         facts=None, local_registry=None,
@@ -1160,6 +1478,21 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
 
     opts -- the generate() options the manifests were built from; enables the
     read-back assertions in assert_live_config()."""
+    # This function is the cluster rig; run_compose is the other one. Refused
+    # rather than dispatched, and here rather than only in the CLI, because the
+    # MCP server calls run() directly: every argument below is cluster-shaped,
+    # so a caller who handed a docker bundle to this one asked for something
+    # that does not exist rather than for the same run on another platform.
+    # Without it the *.yaml glob comes back empty, nothing is created, and the
+    # run waits out its whole timeout to report that the agent never appeared.
+    if bundle_platform(manifest_dir, opts) == PLATFORM_COMPOSE:
+        raise BundleMismatch(
+            f"{manifest_dir}/ is a docker bundle -- one container on a host, "
+            f"not a cluster deployment -- and this is the rig that applies "
+            f"manifests with kubectl. Start it with `bzm-opl-gen livetest "
+            f"--manifests {manifest_dir}` (no --namespace, no --cluster), "
+            f"which brings it up with docker compose, waits for the agent, and "
+            f"takes it down again")
     # Before anything is created, and outside the try below -- whose finally
     # would tear down a cluster this run never touched. Raised rather than
     # returned False: "the manifests are somebody else's" must not arrive

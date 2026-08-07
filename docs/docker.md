@@ -260,7 +260,12 @@ Two things differ from the Kubernetes formats, both deliberate:
   and the bundle names it under **Set here, but not carried**, like every other
   ignored option. `--format helm` is now the only format that refuses a virtual
   service, and that is a limit of *our chart*.
-- **`livetest` does not take a docker bundle.** The rig applies YAML to a
-  cluster; this bundle is a shell script and no cluster is involved. It exits
-  with that message rather than globbing an empty directory and waiting out its
-  timeout.
+- **`livetest` takes a docker bundle, through the compose file.** It used to
+  refuse one outright — the rig applies YAML to a cluster, and this bundle is a
+  container on a host — which left `--format docker` the one format never live
+  tested at all. It now brings the bundle up with `docker compose up -d`, waits
+  for the agent to report online in the account, and takes it down again: no
+  namespace, no cluster, no `--local-registry`/`--local-proxy`/`--contain-egress`
+  /`--run-test` (each of those is cluster-shaped and is refused rather than
+  ignored). It never starts an engine, so `-u 0` and `DOCKER_PORT_RANGE` are
+  still unproven there — see [Live test](live-test.md#what-the-compose-path-does-not-prove).
