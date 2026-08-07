@@ -554,12 +554,10 @@ def _livetest_compose(a, client, facts, ship_id, opts):
     # bundle at all? Here as well as inside run_compose, so the CLI reports it
     # as a sentence rather than as the traceback of an exception the MCP server
     # needs run_compose to raise.
-    check = livetest.bundle_check(a.manifests, facts["harbor_id"], ship_id,
-                                  opts)
-    for note in check.notes:
-        print("note: " + note)
-    if check.refusals:
-        sys.exit("\n".join(check.refusals))
+    bad = livetest.bundle_check(a.manifests, facts["harbor_id"], ship_id,
+                                opts).report()
+    if bad:
+        sys.exit(bad)
     unusable = _cluster_shaped(a)
     if unusable:
         sys.exit(
@@ -634,11 +632,10 @@ def cmd_livetest(a):
     # every *.yaml in it. First of the bundle guards and before the mint below,
     # because a run that is about to be refused must not rotate a credential
     # some other agent is holding. See livetest.bundle_check for the incident.
-    check = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id, opts)
-    for note in check.notes:
-        print("note: " + note)
-    if check.refusals:
-        sys.exit("\n".join(check.refusals))
+    bad = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id,
+                                opts).report()
+    if bad:
+        sys.exit(bad)
     # Same shape of guard, for the same reason. The rig deploys into a namespace
     # it creates itself, so a ServiceAccount the bundle does not create is never
     # there: every object applies, no pod is ever created, and the run burns its

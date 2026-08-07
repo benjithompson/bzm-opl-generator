@@ -981,7 +981,24 @@ CONFIGMAP_FILE = "bzm_configmap.yaml"
 # its own field back the same way for.
 _IDENTITY_RE = re.compile(r'^\s*(HARBOR_ID|SHIP_ID):\s*"?([^"\s]+)"?\s*$', re.M)
 
-BundleCheck = collections.namedtuple("BundleCheck", "refusals notes")
+class BundleCheck(collections.namedtuple("BundleCheck", "refusals notes")):
+    """What a directory said about itself: what stops the run, and what could
+    not be looked at."""
+
+    def report(self):
+        """Print the notes, and hand back the refusals as one message -- or None
+        where there are none.
+
+        Only the *reporting* is shared. What a refusal costs the caller is not
+        the same on both sides of it: the CLI exits with the message, and
+        livetest raises BundleMismatch, which the MCP server catches and which
+        must not arrive looking like "the agent did not come online". Four sites
+        printed these two lines each; collapsing the disposition into them too
+        would flatten a difference that is load-bearing at one of the four.
+        """
+        for note in self.notes:
+            print("note: " + note)
+        return "\n".join(self.refusals) or None
 
 
 class BundleMismatch(RuntimeError):
@@ -989,18 +1006,20 @@ class BundleMismatch(RuntimeError):
 
 
 def manifest_identity(manifest_dir):
-    """{"HARBOR_ID": ..., "SHIP_ID": ...} as the bundle on disk names them.
+    """{"HARBOR_ID": ..., "SHIP_ID": ...} as the bundle on disk names them, or
+    None where the ConfigMap could not be read at all.
 
-    A key is absent when the file is missing or does not carry it. "The
-    directory does not say" and "the directory says something else" must not
-    share a representation: only the second is a refusal, and a hand-assembled
-    directory legitimately answers the first.
+    Three answers, not two, and the third is this module's central rule: a file
+    nobody could read (absent, or there and unreadable) is None, a file that is
+    there and names neither field is `{}`, and a key is absent from a `{}`-or-
+    bigger answer where the file does not carry it. "The directory does not say"
+    and "the directory says something else" must not share a representation --
+    only the second is a refusal -- and neither may share one with "nothing here
+    read the directory".
     """
-    try:
-        with open(os.path.join(manifest_dir, CONFIGMAP_FILE)) as fh:
-            text = fh.read()
-    except OSError:
-        return {}
+    text = _file_text(os.path.join(manifest_dir, CONFIGMAP_FILE))
+    if text is None:
+        return None
     return {m.group(1): m.group(2) for m in _IDENTITY_RE.finditer(text)}
 
 
@@ -1090,24 +1109,36 @@ def _file_text(path):
     """The file's text, or None where it could not be read. Absent and empty
     must not share a representation here either: an empty compose file names no
     container, which is a refusal, while a missing one is a different refusal
-    and an unreadable one is neither."""
+    and an unreadable one is neither. Every caller of this hands the None
+    straight on rather than folding it into an empty answer -- see
+    manifest_identity and compose_identity, which is where that was got wrong.
+
+    UnicodeDecodeError beside OSError because "could not be read" is the whole
+    of what this function answers and bytes that are not text are one way of it:
+    a DER certificate saved over sv-tls.key is a file this rig has to have an
+    answer about, and a traceback out of a guard is not one.
+    """
     try:
         with open(path) as fh:
             return fh.read()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
 def compose_identity(manifest_dir):
-    """{"HARBOR_ID", "SHIP_ID", "container_name"} as compose.yaml names them.
+    """{"HARBOR_ID", "SHIP_ID", "container_name"} as compose.yaml names them, or
+    None where the file could not be read.
 
-    A key is absent where the file does not carry it, on the same rule
-    manifest_identity keeps: "the file does not say" is a note and "the file
-    says something else" is a refusal.
+    Same three answers as manifest_identity, for the same reason: a key is
+    absent where the file does not carry it, `{}` is a file that carries none of
+    the three, and None is a file nothing could look at. "The file does not say"
+    is a note, "the file says something else" is a refusal, and "nobody read the
+    file" is a third note that names no field, because there is no field it
+    could honestly name.
     """
     text = _file_text(compose_path(manifest_dir))
     if text is None:
-        return {}
+        return None
     # The environment block writes HARBOR_ID/SHIP_ID in the ConfigMap's own
     # shape -- `NAME: "value"` -- so _IDENTITY_RE reads this file too, and the
     # two platforms cannot drift about what an identity looks like.
@@ -1134,6 +1165,50 @@ def compose_unset(manifest_dir):
     return sorted(names)
 
 
+BlankMounts = collections.namedtuple("BlankMounts", "blank unread")
+
+
+def compose_blank_mounts(manifest_dir):
+    """The bundle's mounted files that still carry the marker, and the ones that
+    could not be read -- two lists, because they are two answers. Each entry is
+    the generator's own mount beside the path that was actually looked at, which
+    is not always the bundle's copy (see below).
+
+    The guard above cannot see these, and neither can `placeholder_options`. A
+    blank *variable* becomes `${BZM_OPL_UNSET_NAME:?...}` in a file this reads;
+    a blank *file* -- `sv_tls_key`, `sv_tls_cert`, `ca_bundle` -- puts the marker
+    in the file's own bytes, where `TLS_KEY` beside it holds a container path
+    that was never blank. profile.json cannot answer for the one most likely to
+    be blank either: `sv_tls_key` is in SECRET_OPTIONS and is deliberately not
+    in there. So the bundle's own files are what is read, off
+    `generate.DOCKER_FILE_MOUNTS` rather than off a list of names restated here.
+
+    **Resolved through the variable, exactly as `bzm-opl-agent.sh` does it.**
+    Every one of these mounts is overridable to a path the host already keeps,
+    that escape hatch is what the bundle's own refusal recommends first, and
+    `compose up` inherits this process's environment -- so a run with SV_TLS_KEY
+    set is one where compose mounts a real key and the marker in the bundle's
+    copy reaches nothing. Refusing it would be a guard that survives its own fix.
+
+    A file the directory does not have and no variable points at is not a mount
+    this bundle carries, and is skipped rather than reported as missing: which
+    of the three a bundle writes is its options' answer, and nothing here holds
+    them.
+    """
+    blank, unread = [], []
+    for m in generate.DOCKER_FILE_MOUNTS:
+        override = os.environ.get(m.var)
+        path = override or os.path.join(manifest_dir, m.file)
+        if not override and not os.path.exists(path):
+            continue
+        text = _file_text(path)
+        if text is None:
+            unread.append((m, path))
+        elif generate.PLACEHOLDER in text:
+            blank.append((m, path))
+    return BlankMounts(blank, unread)
+
+
 def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
     """Is this directory the bundle this run was told to test?
 
@@ -1152,11 +1227,18 @@ def bundle_check(manifest_dir, harbor_id, ship_id, profile=None):
     refusals, notes = [], []
     path = os.path.join(manifest_dir, CONFIGMAP_FILE)
     claimed = manifest_identity(manifest_dir)
-    if not claimed:
+    if claimed is None:
+        # Nothing read the file -- it is not there, or it is there and could not
+        # be opened. Said as that rather than as "carries no HARBOR_ID/SHIP_ID",
+        # which is the other note and is a claim about a file somebody read.
+        notes.append(
+            f"{path} could not be read, so this bundle's identity was not "
+            f"checked against harbor {harbor_id} / ship {ship_id}")
+        claimed = {}
+    elif not claimed:
         notes.append(
             f"{path} carries no HARBOR_ID/SHIP_ID, so this bundle's identity "
-            f"could not be read and was not checked against harbor {harbor_id} "
-            f"/ ship {ship_id}")
+            f"was not checked against harbor {harbor_id} / ship {ship_id}")
     for field, want in (("HARBOR_ID", harbor_id), ("SHIP_ID", ship_id)):
         got = claimed.get(field)
         if claimed and got is None:
@@ -1256,11 +1338,22 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
             f"the two are either/or rather than interchangeable here"], [])
     claimed = compose_identity(manifest_dir)
     want_name = generate.docker_container_name(ship_id) if ship_id else None
+    # The file is there -- the refusal above is the only answer to it not being
+    # -- so None here is a file nothing could open or decode. That is one note
+    # and no per-field ones: a file nobody read names no field, and saying it
+    # three times says the wrong thing three times.
+    read = claimed is not None
+    if not read:
+        notes.append(
+            f"{path} could not be read, so nothing in it was checked -- not the "
+            f"container name against {want_name}, and not the identity against "
+            f"harbor {harbor_id} / ship {ship_id}")
+        claimed = {}
     got_name = claimed.get("container_name")
-    if got_name is None:
+    if got_name is None and read:
         notes.append(f"{path} names no container_name, so it was not checked "
                      f"against {want_name}")
-    elif want_name and got_name != want_name:
+    elif want_name and got_name and got_name != want_name:
         refusals.append(
             f"{path} starts a container called {got_name}, but this run was "
             f"told to test ship {ship_id}, whose container is {want_name}. The "
@@ -1272,8 +1365,9 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
     for field, want in (("HARBOR_ID", harbor_id), ("SHIP_ID", ship_id)):
         got = claimed.get(field)
         if got is None:
-            notes.append(f"{path} names no {field}, so it was not checked "
-                         f"against {want}")
+            if read:
+                notes.append(f"{path} names no {field}, so it was not checked "
+                             f"against {want}")
         elif got and want and got != want:
             refusals.append(
                 f"{path} names {field} {got}, but this run was told to test "
@@ -1294,6 +1388,34 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
             f"and so does this: fill "
             f"{'them' if len(unset) > 1 else 'it'} in, or re-generate the "
             f"bundle with {'them' if len(unset) > 1 else 'it'} set")
+    # ...and the other half of the same question, which neither the guard above
+    # nor _profile_refusals can reach: a required value written as a *file*
+    # rather than as a variable. The marker sits in the file's own bytes, so
+    # nothing in compose.yaml carries it and profile.json carries neither the
+    # file nor -- for sv_tls_key, the likeliest of the three -- the option.
+    # Refused for the reason the credential is: `compose up` would refuse it
+    # too, as a non-zero exit partway through a run, and a virtual service
+    # published with a placeholder for a private key is a container started
+    # against a real account to prove a handshake that cannot happen.
+    mounts = compose_blank_mounts(manifest_dir)
+    for m, at in mounts.unread:
+        notes.append(f"{at} could not be read, so it was not checked for "
+                     f"{generate.PLACEHOLDER} -- the {m.what} this bundle "
+                     f"mounts is whatever that file holds")
+    if mounts.blank:
+        files = ", ".join(at for _m, at in mounts.blank)
+        opts = ", ".join(m.option for m, _at in mounts.blank)
+        names = ", ".join(m.var for m, _at in mounts.blank)
+        many = len(mounts.blank) > 1
+        refusals.append(
+            f"{files} carr{'y' if many else 'ies'} {generate.PLACEHOLDER}, "
+            f"which is what this generator writes into a mounted file whose "
+            f"option was left blank ({opts}). The container would come up and "
+            f"fail on it later -- a rejected handshake rather than an agent "
+            f"that never appears -- so the run would report the wrong thing "
+            f"about the wrong bundle. Set "
+            f"{names} to {'files' if many else 'a file'} this host already has, "
+            f"or re-generate the bundle with {opts} filled in")
     refusals += _profile_refusals(manifest_dir, ship_id, profile)
     return BundleCheck(refusals, notes)
 
@@ -1443,11 +1565,9 @@ def run_compose(client, manifest_dir, harbor_id, ship_id, timeout=600,
     # would `compose down` a project this run never started. Same reasoning and
     # the same exception as the Kubernetes path: "this is somebody else's
     # bundle" must not arrive looking like "the agent did not come online".
-    check = bundle_check(manifest_dir, harbor_id, ship_id, opts)
-    for note in check.notes:
-        print("note: " + note)
-    if check.refusals:
-        raise BundleMismatch("\n".join(check.refusals))
+    bad = bundle_check(manifest_dir, harbor_id, ship_id, opts).report()
+    if bad:
+        raise BundleMismatch(bad)
     name = generate.docker_container_name(ship_id)
     ok = False
     try:
@@ -1498,11 +1618,9 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     # returned False: "the manifests are somebody else's" must not arrive
     # looking like "the agent did not come online", which is the whole defect.
     # Here as well as in the CLI because the MCP server deploys through run().
-    check = bundle_check(manifest_dir, harbor_id, ship_id, opts)
-    for note in check.notes:
-        print("note: " + note)
-    if check.refusals:
-        raise BundleMismatch("\n".join(check.refusals))
+    bad = bundle_check(manifest_dir, harbor_id, ship_id, opts).report()
+    if bad:
+        raise BundleMismatch(bad)
     ok = False
     try:
         insecure = None

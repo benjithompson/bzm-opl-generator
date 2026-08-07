@@ -46,6 +46,15 @@ required-variable guard, which is what the generator writes where a required
 value was left blank. `compose up` would refuse that last one too, but only
 after creating a container against a real account.
 
+A required value this format writes as a **file** — `ca_bundle`, and the
+virtual-service TLS pair — is refused on the same rule and needs its own read:
+the marker is in the file's own bytes, so no variable carries it, and
+`profile.json` carries neither the file nor (for `sv_tls_key`, which is a secret)
+the option. The rig reads the file the container would actually mount, which is
+the one `CA_BUNDLE`/`SV_TLS_CERT`/`SV_TLS_KEY` resolves to — so a bundle finished
+the way its own README recommends, by pointing a variable at a file the host
+already keeps, passes. A file it cannot read is a note, not a refusal.
+
 ### What the compose path does **not** prove
 
 It is the first live proof `--format docker` has ever had, and it is a narrow

@@ -13,6 +13,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import generate as gen, livetest  # noqa: E402
 from tests.test_generate import FACTS  # noqa: E402
+from tests.tls_fixtures import SV_CERT, SV_HOST, SV_KEY  # noqa: E402
 
 CA_PEM = "-----BEGIN CERTIFICATE-----\nmitm\n-----END CERTIFICATE-----"
 
@@ -643,6 +644,23 @@ def test_bundle_check_does_not_invent_an_identity_it_could_not_read(tmp_path):
     check = livetest.bundle_check(str(tmp_path), "aaa111", "bbb222")
     assert check.refusals == []
     assert any("aaa111" in n and "bbb222" in n for n in check.notes)
+    assert livetest.manifest_identity(str(tmp_path)) is None
+
+
+def test_bundle_check_tells_an_unread_configmap_from_one_that_names_nothing(
+        tmp_path):
+    """The other half of the same rule, and the one the shape above could not
+    express: a ConfigMap that is *there* and carries neither id is a file
+    somebody read, and its note says so rather than "could not be read". Both
+    are notes and neither is a refusal -- what must not happen is the two
+    arriving as one sentence."""
+    d = _bundle(tmp_path)
+    open(os.path.join(d, livetest.CONFIGMAP_FILE), "w").write(
+        "kind: ConfigMap\ndata: {}\n")
+    assert livetest.manifest_identity(d) == {}          # read, and names none
+    notes = livetest.bundle_check(d, "aaa111", "bbb222").notes
+    assert any("carries no HARBOR_ID/SHIP_ID" in n for n in notes)
+    assert not any("could not be read" in n for n in notes)
 
 
 def test_run_refuses_before_it_builds_anything(monkeypatch, tmp_path):
@@ -794,10 +812,124 @@ def test_compose_bundle_check_notes_an_identity_it_could_not_read(tmp_path):
     d = str(tmp_path)
     open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write(
         "services:\n  crane:\n    image: x\n")
+    assert livetest.compose_identity(d) == {}           # read, and names none
     check = livetest.bundle_check(d, "aaa111", "bbb222")
     assert check.refusals == []
     assert any("container_name" in n for n in check.notes)
     assert any("HARBOR_ID" in n for n in check.notes)
+    # ...and it was *read*. The state below is the other one.
+    assert not any("could not be read" in n for n in check.notes)
+
+
+def test_compose_bundle_check_tells_an_unread_file_from_one_that_names_nothing(
+        tmp_path):
+    """The second of _file_text's three answers, which the check above cannot
+    reach: a compose file that is there and that nothing could read. It named no
+    container either, and for the opposite reason -- so it gets one note saying
+    so, and not the three per-field ones, which are claims about a file somebody
+    read.
+
+    Undecodable bytes rather than a chmod: it is a state every uid sees the same
+    way (a root CI runner reads a 0o000 file happily), and it is a real one --
+    a DER file saved over a PEM is exactly what the certificate check next door
+    exists to catch."""
+    d = str(tmp_path)
+    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "wb").write(b"\xff\xfe\x00x")
+    assert livetest.compose_identity(d) is None         # not {}: nobody read it
+    check = livetest.bundle_check(d, "aaa111", "bbb222")
+    assert check.refusals == []
+    assert len([n for n in check.notes if "could not be read" in n]) == 1
+    assert not any("names no" in n for n in check.notes)
+
+
+# -- a required value written as a file, not as a variable --------------------
+#
+# The guard #183 built reads the rendered *environment*, and #182 then added two
+# options the bundle writes as files: the marker lands in sv-tls.key's bytes,
+# where TLS_KEY beside it holds a container path that was never blank. So both
+# of the things this rig already read said the bundle was finished --
+# compose_unset sees no ${BZM_OPL_UNSET_...}, and placeholder_options cannot see
+# sv_tls_key at all, because SECRET_OPTIONS keeps it out of profile.json.
+
+def _sv_docker_bundle(tmp_path, **opts):
+    return _docker_bundle(tmp_path, **{"sv_hostname": SV_HOST,
+                                       "sv_tls_cert": SV_CERT,
+                                       "sv_tls_key": SV_KEY, **opts})
+
+
+def test_compose_bundle_check_refuses_a_mounted_file_left_blank(tmp_path):
+    """The finding. A blank private key gives a bundle whose compose file drops
+    the mount's default to `${SV_TLS_KEY:?...}` -- so `compose up` refuses it,
+    but only after this run has started building against a real account."""
+    d = _sv_docker_bundle(tmp_path, sv_tls_key="")
+    prof = gen.load_profile(d)
+    # Neither of the two things this check already read can see it.
+    assert gen.placeholder_options(prof) == [] and livetest.compose_unset(d) == []
+    refusals = livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals
+    assert any(gen.DOCKER_SV_KEY_FILE in r and gen.PLACEHOLDER in r
+               and "sv_tls_key" in r for r in refusals)
+
+
+def test_compose_bundle_check_passes_a_bundle_whose_files_are_filled_in(tmp_path):
+    """The other half, and the one that makes the refusal above worth having:
+    the same bundle with the pair supplied is silent."""
+    d = _sv_docker_bundle(tmp_path)
+    assert livetest.bundle_check(d, "aaa111", "bbb222",
+                                 gen.load_profile(d)) == livetest.BundleCheck([], [])
+
+
+def test_compose_bundle_check_takes_the_escape_hatch_the_bundle_offers(
+        tmp_path, monkeypatch):
+    """A guard that survives its own fix is the failure `_compose_required_file`
+    rules out, so this reads the file the container would actually mount. Set
+    SV_TLS_KEY and compose mounts that instead -- the marker in the bundle's own
+    copy reaches nothing, and the run is one this rig has no business refusing.
+    """
+    d = _sv_docker_bundle(tmp_path, sv_tls_key="")
+    real = tmp_path / "keys" / "host.key"
+    real.parent.mkdir()
+    real.write_text(SV_KEY)
+    monkeypatch.setenv("SV_TLS_KEY", str(real))
+    assert livetest.bundle_check(d, "aaa111", "bbb222",
+                                 gen.load_profile(d)).refusals == []
+
+
+def test_compose_bundle_check_notes_a_mounted_file_it_could_not_read(tmp_path):
+    """Same rule, one layer down: a mounted file nothing could read says nothing
+    about whether it carries the marker, and a run refused on that would be
+    "could not read" wearing "there is nothing there"."""
+    d = _docker_bundle(tmp_path, ca_bundle=CA_PEM)
+    open(os.path.join(d, gen.DOCKER_CA_FILE), "wb").write(b"\xff\xfe\x00x")
+    check = livetest.bundle_check(d, "aaa111", "bbb222", gen.load_profile(d))
+    assert check.refusals == []
+    assert any(gen.DOCKER_CA_FILE in n and "could not be read" in n
+               for n in check.notes)
+
+
+def test_run_compose_refuses_a_blank_mounted_file_before_it_starts_anything(
+        monkeypatch, tmp_path):
+    """The ordering that makes the whole check worth making: nothing is started,
+    and on this platform starting something is a container registering against a
+    real account."""
+    d = _sv_docker_bundle(tmp_path, sv_tls_key="")
+    for name in ("compose_up", "compose_down", "compose_tool"):
+        monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
+            f"{name} ran on a bundle with a blank {gen.DOCKER_SV_KEY_FILE}"))
+    with pytest.raises(livetest.BundleMismatch) as caught:
+        livetest.run_compose(None, d, "aaa111", "bbb222",
+                             opts=gen.load_profile(d))
+    assert gen.DOCKER_SV_KEY_FILE in str(caught.value)
+
+
+def test_bundle_check_reports_its_notes_and_hands_back_its_refusals(capsys):
+    """One method, four call sites, and the disposition is not in it: the CLI
+    exits with what this returns and livetest raises BundleMismatch with it,
+    which the MCP server depends on telling apart from an agent that never came
+    online."""
+    assert livetest.BundleCheck([], []).report() is None
+    assert livetest.BundleCheck([], ["only a note"]).report() is None
+    assert capsys.readouterr().out == "note: only a note\n"
+    assert livetest.BundleCheck(["a", "b"], []).report() == "a\nb"
 
 
 def test_run_compose_refuses_before_it_starts_anything(monkeypatch, tmp_path):
