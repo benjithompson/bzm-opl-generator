@@ -486,6 +486,13 @@ export const api = {
    *  landed. `formats.ignoredFor` is where the two are told apart. */
   ignoredOptions: () => req<Record<string, Record<string, string>>>(
     "GET", "/api/ignored-options"),
+  /** What this server is actually serving. `stale` true means the built page is
+   *  older than the code behind it, which is invisible otherwise: a route the
+   *  page needs answers 404, `formats.ignoredFor` honestly reads that as "not
+   *  read yet", and the form then shows fields the format hides. `null` is a
+   *  wheel, where there is no source to compare against — never false, which
+   *  would claim a check nobody could make. */
+  build: () => req<BuildState>("GET", "/api/build"),
   /** {funcId: the slots BlazeMeter needs before it will make the location} —
    *  core's SLOT_MINIMUMS. Served for the same reason as the table above: the
    *  new-location form states the rule before the account does, and the number
@@ -773,3 +780,13 @@ function tokenFromHeaders(r: Response): TokenReport {
   };
 }
 
+
+/** What the server is serving, from /api/build. `stale` is three-valued on
+ *  purpose: true is a page older than its code, false is a checkout that was
+ *  compared and is current, and null is a wheel with no source to compare. */
+export interface BuildState {
+  version: string | null;
+  built: number | null;
+  stale: boolean | null;
+  commit: string | null;
+}

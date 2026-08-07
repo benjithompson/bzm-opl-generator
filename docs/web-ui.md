@@ -445,6 +445,24 @@ means reinstalling the service. Not docker, deliberately: the point of a bundle
 is that `kubectl` on this machine can apply it, and a container puts a
 filesystem boundary exactly there.
 
+**A local install tracks your checkout; releases are the distribution.** The
+service runs with `--dev`, so backend changes take effect without a restart.
+The *built page* is the half reload cannot reach — nothing rebuilds
+`bzm_opl_gen/ui_dist/` for you, so after pulling frontend changes:
+
+```
+cd frontend && npm run build
+```
+
+You will not have to remember. When the built page is older than
+`frontend/src`, the page carries a banner saying so and the server prints the
+same warning at startup; `/api/build` is the underlying answer. That matters
+because staleness is otherwise invisible in the worst way: a route the page
+needs answers `404`, the page reads that as *not read yet* rather than as an
+error, and it then shows options a format hides and builds bundles missing
+files. A service left running for a day did exactly that, and four generator
+defects were suspected before the server was.
+
 Frontend dev: `cd frontend && npm install && npm run dev` (proxies /api to
 :8765); `npm run build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.
 CI runs `npm test` and `npm run typecheck` as its own job — the logic modules

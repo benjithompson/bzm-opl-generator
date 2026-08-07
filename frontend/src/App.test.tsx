@@ -3080,3 +3080,51 @@ test("a location with no agents is not a bundle request", async () => {
   await new Promise((r) => setTimeout(r, 400));
   expect(generated).toEqual([]);
 });
+
+// -- the page says when it is older than the code serving it (#224) ----------
+//
+// The failure this replaces was silent: a service that had run since the
+// previous morning served a page whose fetches 404'd, the page honestly read
+// that as "not read yet", and four generator defects were suspected before the
+// server was.
+
+const OFFLINE: Partial<Api> = {
+  keyDetect: async () => ({ candidates: [], active_key_id: null }),
+  keyStatus: async () => ({ connected: false }),
+  optionDefaults: async () => ({}),
+  funcIdVocabulary: async () => NO_VOCABULARY,
+  functionalities: async () => [],
+  svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
+  ignoredOptions: async () => IGNORED_BY_FORMAT,
+  reservedEnv: async () => ({}),
+  slotMinimums: async () => ({}),
+  sizingModels: async () => [],
+  agentEnv: async () => [],
+};
+
+test("warns when the built page is older than the server's source", async () => {
+  render(<App api={fakeApi({
+    ...OFFLINE,
+    build: async () => ({
+      version: "0.3.2", built: 1000, stale: true, commit: "abc123def456",
+    }),
+  })} />);
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toMatch(/older than the code serving it/i);
+  expect(alert.textContent).toMatch(/npm run build/);
+});
+
+test("says nothing where there is no source to be older than", async () => {
+  // A wheel answers `stale: null` -- nothing to compare against, which is not
+  // the same answer as compared-and-current. The banner keys on true alone.
+  render(<App api={fakeApi({
+    ...OFFLINE,
+    build: async () => ({
+      version: "0.3.2", built: 1000, stale: null, commit: null,
+    }),
+  })} />);
+
+  await screen.findByText(/Not connected/i);
+  expect(screen.queryByRole("alert")).toBeNull();
+});

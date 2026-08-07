@@ -52,6 +52,11 @@ def test_plist_serves_with_this_python_and_never_opens_a_browser():
     key = args[args.index("--api-key") + 1]
     assert os.path.isabs(key) and "~" not in key  # launchd's cwd is nobody's
     assert p["KeepAlive"] is True and p["RunAtLoad"] is True
+    # #224: this process serves the checkout that installed it, and without
+    # reload it serves whatever that checkout was at login -- for days, with
+    # nothing on the page to say so. Releases are the distribution; a local
+    # install exists to test the working tree.
+    assert "--dev" in args
 
 
 def test_install_writes_the_plist_and_boots_out_before_bootstrapping(rig):
