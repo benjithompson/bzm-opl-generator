@@ -183,6 +183,14 @@ Three things cost an afternoon each:
   leaves BlazeMeter refusing both `deploy` ("already running") and `stop` ("not
   running"). It drops to `FAILED` on its own after a few minutes; no API call
   forces it.
+- **A virtual service cannot be created until its location's agent has been
+  online**, so the order is deploy the bundle, wait for `idle`, *then* create it.
+  Against a location whose ship is still `empty` the create fails with `Location
+  with harbor id ... and ship id ... not found`, and `virtual_services_location
+  list` does not list the location either — the SV side learns a location from
+  the agent connecting rather than from the location existing. Both earlier live
+  runs only worked because the agent happened to be up first, so this reads as a
+  broken location rather than as a sequencing rule.
 
 ## Local environment
 
