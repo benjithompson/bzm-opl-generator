@@ -341,11 +341,17 @@ OPTIONS = [
             "from wherever the tests run, not just inside the cluster."),
     Option(
         "sv_tls_secret", "string", "Service virtualization",
-        summary="Wildcard TLS secret in the agent namespace. Required with sv_ingress, even for HTTP.",
-        doc="Wildcard TLS secret in the agent namespace; required with "
-            "`sv_ingress`, **even for HTTP** -- crane names it unconditionally, and "
-            "an ingress referencing a Secret that is not there is accepted and then "
-            "never serves."),
+        summary="Wildcard TLS secret in the agent's own namespace, not default. Required with sv_ingress, even for HTTP.",
+        doc="Wildcard TLS secret; required with `sv_ingress`, **even for HTTP** -- "
+            "crane names it unconditionally. It goes in the **agent's own "
+            "namespace**, which is where crane creates the object that references "
+            "it, and a Kubernetes Ingress resolves `tls.secretName` in its own "
+            "namespace: nothing reads one from another. BlazeMeter's page says "
+            "`default`, which is only where their walkthrough installs the agent. "
+            "An ingress referencing a Secret that is not there is accepted and "
+            "then **serves anyway** -- measured on ingress-nginx, the endpoint "
+            "answers 200 over the controller's own fake certificate, so the "
+            "failure lands on whoever verifies rather than at deploy time."),
     Option(
         "sv_istio_gateway", "string", "Service virtualization",
         summary="Existing istio Gateway to attach to; unset means crane creates one per virtual service.",

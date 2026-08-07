@@ -1246,6 +1246,39 @@ def test_sv_istio_adds_gateway_rbac_and_optional_gateway_name():
         "KUBERNETES_ISTIO_GATEWAY_NAME"] == "bzm-gateway"
 
 
+def test_sv_readme_names_the_tls_secret_and_the_namespace_it_goes_in():
+    """#185: the one prerequisite nothing in the bundle creates and nothing
+    reports missing. Measured against crane's own Ingress -- the secret is
+    resolved in the agent's namespace, and its absence still serves."""
+    md = gen.generate(SV_FACTS, dict(SV_OPTS, namespace="bzm-agent",
+                                     platform="kubernetes"))["README.md"]
+    assert "wildcard-tls" in md
+    assert "kubectl -n bzm-agent create secret tls wildcard-tls" in md
+    assert "`*.apps.example.com`" in md
+    # The bundle is read as one document, so this line follows whichever CLI the
+    # rest of it applies with -- see gen.cli().
+    oc = gen.generate(SV_FACTS, dict(SV_OPTS, namespace="bzm-agent",
+                                     platform="openshift"))["README.md"]
+    assert "oc -n bzm-agent create secret tls wildcard-tls" in oc
+    # BlazeMeter's page is contradicted by name, or a reader who has it open
+    # follows it instead.
+    assert "`default`" in md
+    # And the failure mode, which is the reason the bullet is worth the space.
+    assert "200" in md.split("wildcard-tls")[-1]
+
+
+@pytest.mark.parametrize("ingress", ["istio", "openshift"])
+def test_sv_readme_is_silent_where_the_backend_never_reads_the_secret(ingress):
+    """Naming a namespace for something nothing looks at is an instruction that
+    gets followed and then disbelieved. Both of these require the *name* --
+    crane crash-loops without it -- and neither references the Secret."""
+    o = dict(SV_OPTS, sv_ingress=ingress)
+    if ingress == "openshift":
+        o["platform"] = "openshift"
+    md = gen.generate(SV_FACTS, o)["README.md"]
+    assert "create secret tls" not in md
+
+
 def test_sv_contour_configmap_and_httpproxy_rbac():
     files = gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress="contour"))
     data = yaml.safe_load(files["bzm_configmap.yaml"])["data"]

@@ -51,9 +51,18 @@ bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
 per virtual service. It is rejected with any other `--sv-ingress`, because only
 crane's istio backend reads it — setting it elsewhere would silently do nothing.
 
-**Provided by you, not generated** — the agent namespace needs a wildcard TLS
-secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
-already exist (the generator names it, it does not create it).
+**Provided by you, not generated** — the **agent's own namespace** needs a
+wildcard TLS secret for `*.<subdomain>`, and with `--sv-istio-gateway` that
+Gateway must already exist (the generator names it, it does not create it).
+
+```
+kubectl -n <agent-namespace> create secret tls <name> --cert=<file> --key=<file>
+```
+
+Not `default`, which is what [Bring your own certificate][byoc] says — see
+[Which namespace the TLS secret goes in](#which-namespace-the-tls-secret-goes-in).
+
+[byoc]: https://help.blazemeter.com/docs/guide/private-locations-optional-installation-step-bring-your-own-certificate-mock-services.html
 
 ## Docker: a hostname and a certificate
 
@@ -252,7 +261,7 @@ below is the CLUSTERIP picture.
 | backend port | `8080` — **spec-wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct | `8080` — correct *for a Route* |
 | endpoint serves as-is | **depends on the controller** — see below | **yes** | **yes** | **yes** |
 | needs an `IngressClass` | yes, named `nginx` | no — none of these controllers registers one at all | no | no |
-| `--sv-tls-secret` | referenced | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
+| `--sv-tls-secret` | referenced; must exist in the agent namespace | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
 | Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
 | requires | – | – | – | an OpenShift cluster: `--platform openshift` and not `--not-openshift` |
 
@@ -305,6 +314,68 @@ valid — but crane still refuses to start without the *name*, so you must pass
 it. It also means an **HTTPS** virtual service on istio terminates TLS in the
 mock pod itself, not at the gateway. Contour is the opposite: its HTTPProxy
 carries `tls.secretName`, and Contour validates it.
+
+### Which namespace the TLS secret goes in
+
+The **agent's own**, and BlazeMeter's page disagrees. [Bring your own
+certificate][byoc] says `crane-tls` "must exist in default namespace unless
+ingress configuration is modified", and its step is a `kubectl create secret tls`
+with no `-n` at all. Settled live on 2026-08-07 against crane 3.7.56 and
+ingress-nginx v1.11.3 (k8s 1.32, minikube), reading crane's *own* Ingress rather
+than a reconstruction of it:
+
+```yaml
+kind: Ingress
+metadata:
+  name: ing-vs345759svc445708-8080
+  namespace: bzm-agent185            # <- the agent's namespace
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [vs345759svc445708-8080-bzm-agent185.apps.bzm-opl.test]
+      secretName: wildcard-credential
+```
+
+An Ingress resolves `tls.secretName` **in its own namespace** — that is the API,
+not a controller's choice — and crane creates its Ingress where it runs, because
+the only grant it has is a namespaced Role. So the two namespaces are the same
+one, and there is nothing to configure that would make `default` work:
+
+| where `wildcard-credential` was | certificate the endpoint served |
+|---|---|
+| nowhere | `CN=Kubernetes Ingress Controller Fake Certificate` |
+| `default` only — BlazeMeter's step, verbatim | unchanged: the fake certificate |
+| the agent's namespace | **ours**, `ssl_verify=0`, transaction body returned |
+
+with the controller naming the namespace it looked in, once per sync:
+
+```
+Error getting SSL certificate "bzm-agent185/wildcard-credential": local SSL
+certificate bzm-agent185/wildcard-credential was not found. Using default
+certificate
+```
+
+**The first two rows are the reason this matters**, and they are worse than the
+option's own documentation used to claim. A missing secret does not stop the
+endpoint serving: `curl -k` gets `200` and the right body, the mock sits `1/1`,
+the deploy reports `FINISHED` and BlazeMeter advertises the endpoint. Only a
+client that actually verifies ever finds out — which, for a virtual service, is
+the test that was the point of the exercise. So the bundle's README now names
+the secret and the namespace, and says this.
+
+**What their sentence is actually about.** "Unless ingress configuration is
+modified" is a real thing, and it is the controller-wide
+`--default-ssl-certificate=<namespace>/<name>` flag: one certificate served for
+every host whose per-Ingress secret is missing. Measured — with it pointed at
+`default/wildcard-credential` and nothing in the agent's namespace, our
+certificate came back. That flag takes any namespace, so `default` is a
+coincidence of where their walkthrough installs the agent, and it is a
+cluster-wide decision belonging to whoever runs the ingress controller rather
+than to a private location. There is no cross-namespace *lookup* to turn on.
+
+`kubectl apply -f docs/repro/sv-tls-secret-namespace.yaml` puts the question to
+another controller without BlazeMeter or crane; the file carries the commands and
+what was measured here.
 
 All three working paths were verified end to end with namespaced RBAC only and
 real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
