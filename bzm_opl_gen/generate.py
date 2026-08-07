@@ -3027,13 +3027,31 @@ def docker_env(facts, o):
     if o["private_registry"]:
         env["DOCKER_REGISTRY"] = o["private_registry"]
     # AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE: a different variable for a
-    # different mechanism, and this is the format where it belongs. Only emitted
-    # when the option was answered -- unlike the Kubernetes path, which forces
-    # it off. What it does here is pull a newer crane image for a container the
-    # operator started; there is no Deployment for it to fight over, which is
-    # the specific hazard auto_update() departs from BlazeMeter's default for.
-    if o["auto_update"] is not None:
-        env["AUTO_UPDATE"] = "true" if o["auto_update"] else "false"
+    # different mechanism, and this is the format where it belongs. **Off unless
+    # the option says otherwise**, which is what the Kubernetes path already does
+    # for its own variable (#222).
+    #
+    # This was written the other way, and the reasoning was that there is no
+    # Deployment here for crane to fight over. There is something else: the
+    # image tags on the host. Left at crane's default, a bundle started from the
+    # mirrored, pinned reference this generator writes
+    # (`gcr.io/.../blazemeter/crane:<version>`) tries to replace itself with the
+    # Docker Hub name its updater is built around -- it removes
+    # `blazemeter/crane:<version>`, retags `blazemeter/crane:old` as `latest`,
+    # renames the container, fails with `Failed to reload crane`, and retries
+    # forever. The agent stays `Up (healthy)` and `idle` while every test sits at
+    # BOOT_STARTING with no engine, which is the same signature as a revoked
+    # credential (#221) and just as slow to find.
+    #
+    # It reaches past its own container, too: a *separate* working agent on the
+    # same host, started from BlazeMeter's own command, was left `Exited (1)`
+    # because the tag it was created from had been removed and reassigned.
+    #
+    # Measured 2026-08-07 -- unset stalls twice, `false` runs the test (50
+    # samples, 0 failed). BlazeMeter's own command leaves it unset and works,
+    # because it runs the unpinned Docker Hub name; ours does not, so ours has
+    # to say so.
+    env["AUTO_UPDATE"] = "true" if o["auto_update"] else "false"
     sv = _sv_docker_cfg(o)
     if sv:
         # The hostname is what the Asset Catalog builds endpoint URLs from, and
