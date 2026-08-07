@@ -2484,6 +2484,40 @@ def test_a_format_never_refuses_what_it_says_it_ignores():
     assert both[gen.DOCKER_CA_FILE] == "-----BEGIN CERTIFICATE-----"
 
 
+@pytest.mark.parametrize("fmt", sorted(gen.IGNORED_BY_FORMAT))
+def test_a_format_never_lets_an_ignored_option_reach_a_generated_file(fmt):
+    """The other half of the promise above, and the half nothing was checking.
+
+    "Ignored" is a claim about the *bundle*, not only about the validators: an
+    option this format drops must change no file it emits. `_mirror_script` read
+    `crane_hook` directly, so a docker bundle mirrored `cranehook:latest` into a
+    customer's registry while its own README listed `crane_hook` under "Set
+    here, but not carried" -- one bundle saying both, and a push of an image
+    that format can never pull (#211). The refusal sweep beside this one could
+    not see it: nothing was refused, something was quietly carried.
+
+    Two files are exempt and both name the option by design -- README.md, whose
+    "Set here, but not carried" table exists to name it, and profile.json, which
+    records every resolved option so `generate --profile` replays a bundle
+    exactly. Everything else is what the customer applies, and an ignored option
+    must leave all of it byte-identical.
+
+    A private registry is set throughout so the mirror script is among the files
+    compared: without one it is not emitted at all, and the leak this test was
+    written for lived in a file the sweep would not have generated.
+    """
+    named_by_design = {"README.md", gen.PROFILE_FILE}
+    base = {**FORMAT_BASE[fmt], "private_registry": "reg.corp/bzm"}
+    plain = gen.generate(FACTS, base)
+    for key in gen.IGNORED_BY_FORMAT[fmt]:
+        out = gen.generate(FACTS, {**base, key: "nonsense"})
+        for name in sorted(set(plain) | set(out)):
+            if name in named_by_design:
+                continue
+            assert out.get(name) == plain.get(name), \
+                f"{fmt}: {key} is ignored, and it reached {name}"
+
+
 def test_the_other_formats_still_refuse_all_of_it():
     """The rule above is about a format that ignores an option, not a licence
     to stop checking. Kubernetes has every one of these fields, so each is

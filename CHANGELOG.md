@@ -92,6 +92,20 @@ anything that breaks.
   that reference themselves. The script now says which of its two destination
   shapes is which, for whoever is reading it beside the README.
 
+- **A docker bundle no longer mirrors the crane-hook image**, which that same
+  bundle's README lists under "Set here, but not carried" — the hook is a Pod
+  and there is no cluster to run it in. The mirror script read `crane_hook`
+  directly rather than through `ignored_options`, so one bundle said both
+  things, and a customer's registry took a push of an image that format can
+  never pull. Kubernetes and Helm bundles still mirror it, since that is where
+  it runs.
+
+  The rule now has a test that walks every format's ignored table and requires
+  the emitted files to be byte-identical whether the option is set or not —
+  `README.md` and `profile.json` excepted, both of which name it by design. The
+  refusal sweep beside it could not have caught this: nothing was refused,
+  something was quietly carried.
+
 ## [0.3.2] — 2026-08-06
 
 ### Added

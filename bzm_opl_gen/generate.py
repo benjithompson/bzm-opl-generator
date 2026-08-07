@@ -2142,7 +2142,13 @@ def _mirror_script(facts, o):
     # the agent runs -- so an air-gapped bundle that includes the check has to
     # be told to mirror it too, or the Pod is the one object in the bundle that
     # cannot pull.
-    if o["crane_hook"]:
+    # ...through ignored_options, because docker ignores crane_hook: the hook is
+    # a Pod and there is no cluster to run it in. Read directly, a docker bundle
+    # mirrored the hook image while its own README listed `crane_hook` under
+    # "Set here, but not carried" -- the bundle contradicting itself in writing,
+    # and a push into a customer's registry of an image that format can never
+    # pull (#211). Same rule engine_size() reads by, one file over.
+    if o["crane_hook"] and "crane_hook" not in ignored_options(o):
         refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
     reg = o["private_registry"].rstrip("/")
     host = reg.split("/")[0]
