@@ -203,8 +203,11 @@ format that drops it. Hiding is not refusing — the value is kept, sent, and na
 in the bundle's README — and where a hidden field needs explaining, the page
 renders the generator's reason rather than a second copy of it.
 
-A format the configuration rules out is disabled with the reason on it: helm and
-docker carry no ingress, so neither can serve service virtualization. And a
+A format the configuration rules out is disabled with the reason on it: helm is
+the one that cannot serve service virtualization, because our chart carries none
+of the ingress the upstream one does. Docker can, in its own vocabulary — a
+hostname and a TLS pair rather than an ingress — so the page offers that group
+for it and hides the Kubernetes four, and the reverse. And a
 format you picked is never replaced in silence — where a configuration forces
 Kubernetes manifests, the panel says which format it replaced, and how to get
 back to it, until you pick one again. A configuration somebody wrote outranks a

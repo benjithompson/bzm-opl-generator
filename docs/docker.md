@@ -74,6 +74,14 @@ did not get. A note that listed all of them every time would be read as
 boilerplate, and the one line that matters — "you asked for a node selector and
 it is not here" — would be buried in it.
 
+The table is the generator's own (`generate.IGNORED_BY_FORMAT`) and is **served
+as `/api/ignored-options`**, keyed by format, so the web UI hides what this
+format cannot carry without keeping a second copy of two dozen option names —
+a key added to the generator stops being offered there with no edit on either
+side. It is a table per format rather than docker's alone: `manifests` and
+`helm` ignore the three options a docker agent publishes virtual services with,
+which is the same rule read from the other end.
+
 Named rather than refused cuts the other way too, and the generator holds to it:
 **a format never rejects a value it says it ignores.** An unnamed service
 account, a malformed engine limit or a second CA mode all refuse a Kubernetes

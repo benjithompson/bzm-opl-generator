@@ -1672,12 +1672,30 @@ def test_docker_scripts_are_valid_shell():
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
         assert r.returncode == 0, (secret, ca, proxy, reg, blank, r.stderr)
+    # ...and the mounted-file branches, which the product above cannot reach:
+    # the guard over a file left blank is a second `if` inside the mount check,
+    # and its message names two files and a variable in one echo.
+    for extra in ({"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT,
+                   "sv_tls_key": SV_KEY},
+                  {"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT,
+                   "sv_tls_key": ""},
+                  {"sv_hostname": SV_HOST, "sv_tls_key": SV_KEY},
+                  {"ca_bundle": gen.PLACEHOLDER}):
+        sh = gen.generate(FACTS, {**DOCKER, **extra})["bzm-opl-agent.sh"]
+        r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
+                           capture_output=True)
+        assert r.returncode == 0, (extra, r.stderr)
 
 
-def _run_bundle(tmp_path, files=None):
+def _run_bundle(tmp_path, files=None, env=None):
     """Write a docker bundle out and run its script against a stub docker.
     Called with no files, it re-runs whatever is in the directory now, which is
     how the fill-it-in half of these tests is expressed.
+
+    `env` is the other way a bundle is finished, and the one only the mounted
+    files have: every one of them is overridable to a path the host already
+    keeps, so a run with `SV_TLS_KEY` set is a customer taking the escape hatch
+    rather than editing the bundle.
 
     A stub rather than a daemon, and it is the point of the test: what is being
     checked is that the script refuses *before* it reaches `docker run`, so the
@@ -1695,7 +1713,8 @@ def _run_bundle(tmp_path, files=None):
     (bin_dir / "docker").chmod(0o755)
     r = subprocess.run(["sh", "bzm-opl-agent.sh"], cwd=tmp_path, text=True,
                        capture_output=True,
-                       env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+                       env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                            **(env or {})})
     made = calls.read_text().split() if calls.exists() else []
     return r, made
 
@@ -1849,6 +1868,11 @@ COMPOSE_CASES = [
     # marker, so this is the guard in the *inline* file for a variable that is
     # not the token.
     {"sv_hostname": "", "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY},
+    # ...and a blank half of the TLS pair, which is the guard over a mounted
+    # *file* rather than over a variable. It is the case the two guards
+    # disagreed about: the marker is inside sv-tls.key, so no environment value
+    # carries it and the variable-level check saw a finished bundle.
+    {"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT, "sv_tls_key": ""},
 ]
 
 
@@ -2072,6 +2096,30 @@ COMPOSE_SERVICE_KEYS = {"image", "container_name", "user", "restart",
 COMPOSE_GUARD = "${BZM_OPL_UNSET_"
 
 
+def _blank_mount_vars(sh):
+    """The mounted files `bzm-opl-agent.sh` refuses as unfinished, by variable.
+
+    Matched on the whole line so it cannot pick up the *environment* guard,
+    which greps the marker too -- that one is anchored to a run line or an env
+    file (`"$0"`, `"$ENV_FILE"`) and this one names the mount's own variable,
+    which is exactly the difference between the two halves of the check."""
+    return set(re.findall(
+        r"^if grep -q '" + re.escape(gen.PLACEHOLDER)
+        + r"' \"\$([A-Z][A-Z0-9_]*)\"; then$", sh, re.M))
+
+
+def _blank_mount(var):
+    """One name for "this mount was left blank", written by both parsers.
+
+    The two files cannot say it the same way -- the script mounts the resolved
+    path and refuses on its *content*, compose drops the bind source's default
+    and refuses on the *variable* -- so comparing the strings would only ever
+    report the difference in mechanism. Reduced to this, a mount guarded on one
+    side and not the other is a plain mount diff, which is the thing worth
+    failing on."""
+    return f"<blank:{var}>"
+
+
 def _env_file_env(files):
     """The credential file as {name: value}. Docker parses it itself -- one
     NAME=value per line, no quoting and no shell -- and compose reads the same
@@ -2125,6 +2173,10 @@ def _container_from_script(files):
             break
         i += 1
     paths = _script_paths(sh)
+    # A mount the script refuses as unfinished resolves to the refusal rather
+    # than to the file, so it lines up with compose's own way of saying it.
+    for var in _blank_mount_vars(sh):
+        paths["$" + var] = _blank_mount(var)
     words = []
     for word in shlex.split(text):          # _sh_value's quoting, undone
         for var, value in paths.items():
@@ -2190,7 +2242,12 @@ def _container_from_compose(files):
          # itself. Any variable, not CA_BUNDLE by name: the TLS pair a docker
          # agent serves virtual services with is written the same way, and a
          # pattern naming one file cannot notice a second going missing.
-         "mounts": [re.sub(r"^\$\{[A-Z][A-Z0-9_]*:-\./(.*?)\}", r"\1", m)
+         # ...and `${VAR:?sentence}` is its spelling of the script's
+         # `grep -q '<PLACEHOLDER>' "$VAR"`, reduced to the same sentinel on
+         # both sides so a mount guarded in one file alone fails right here.
+         "mounts": [re.sub(r"^\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}",
+                           lambda g: _blank_mount(g.group(1)),
+                           re.sub(r"^\$\{[A-Z][A-Z0-9_]*:-\./(.*?)\}", r"\1", m))
                     for m in svc["volumes"]],
          "inline": inline}
     c["env"] = {**_env_file_env(files), **inline}
@@ -2615,6 +2672,99 @@ def test_half_a_tls_pair_is_a_blank_field_rather_than_a_refusal():
     assert "HOSTNAME_OVERRIDE" in dict(gen._docker_blank_env(FACTS, {
         **gen.DEFAULT_OPTIONS, **SV_DOCKER, "sv_hostname": gen.PLACEHOLDER}))
     assert "HOSTNAME_OVERRIDE carries" in blank_host[gen.DOCKER_RUN_FILE]
+
+
+def test_the_script_refuses_a_blank_mounted_file_before_starting_anything(tmp_path):
+    """#183 made both routes refuse a blank field; #182 then added two options
+    written as **files**, and the guard only ever looked at environment values.
+    `TLS_KEY` holds a container path, so no environment value carried the
+    marker, `sv-tls.key` was written containing it, and the README went on
+    saying both routes refused a bundle neither refused -- a claim of
+    verification, which is the worse failure of the two.
+
+    The existence check next to it is not the guard: the bundle wrote that file,
+    so `[ ! -f ]` passes over one whose whole content is `<PLACEHOLDER>`. What
+    is checked is the content of the **resolved** file, so both ways of
+    finishing the bundle clear it.
+    """
+    files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
+    assert files[gen.DOCKER_SV_KEY_FILE] == gen.PLACEHOLDER
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 1
+    assert "sv-tls.key carries <PLACEHOLDER>" in r.stderr
+    # The option to re-generate with, and the variable that fixes it here --
+    # "go and fill it in" without either is the half-answer the token's own
+    # refusal already avoids.
+    assert "sv_tls_key" in r.stderr and "Set SV_TLS_KEY" in r.stderr
+    assert made == ["ps"], made           # nothing was started
+
+    # Filled in, the same bundle runs: the check reads the file as it stands,
+    # so there is nothing to delete afterwards.
+    (tmp_path / gen.DOCKER_SV_KEY_FILE).write_text(SV_KEY)
+    r, made = _run_bundle(tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "ps", "run"], made
+
+
+def test_the_escape_hatch_finishes_a_blank_mounted_file_too(tmp_path):
+    """The judgement this guard makes, from the running end. `SV_TLS_KEY` is the
+    bundle's documented override -- a host whose platform team already keeps the
+    key points at it rather than copying it in -- so a run with it set is the
+    intended fix and not a guard defeated. The check follows the variable
+    because it reads the file the variable resolves to."""
+    files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
+    (tmp_path / "elsewhere.key").write_text(SV_KEY)
+    r, made = _run_bundle(tmp_path, files,
+                          env={"SV_TLS_KEY": str(tmp_path / "elsewhere.key")})
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "run"], made
+
+
+def test_compose_refuses_a_blank_mounted_file_in_the_same_words():
+    """Compose has no shell and cannot read a file, so its half is the bind
+    source's default dropped: `${SV_TLS_KEY:?...}` aborts `compose up` before
+    anything is created, printing the volume's path in the file and then the
+    same two sentences the script echoes.
+
+    The variable is the bundle's own, and that is deliberately **not** what
+    `_compose_required` does for an environment value -- there the guard is
+    `BZM_OPL_UNSET_<NAME>`, a name nobody has, because `${HTTP_PROXY:?}` would
+    resolve itself away on the host most likely to carry one. `SV_TLS_KEY`
+    exists only in this bundle and setting it is the documented fix, so guarding
+    a name nobody has would refuse a bundle finished the way its own README
+    asks.
+    """
+    m = [m for m in gen.docker_file_mounts({**gen.DEFAULT_OPTIONS, **SV_DOCKER,
+                                            "sv_tls_key": gen.PLACEHOLDER})
+         if m.var == "SV_TLS_KEY"][0]
+    wrong, todo = gen._docker_blank_file_lines(m)
+    files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["volumes"][-1] == (
+        f"${{SV_TLS_KEY:?{wrong} {todo}}}:{gen.DOCKER_SV_KEY_PATH}:ro")
+    assert "BZM_OPL_UNSET" not in files[gen.DOCKER_COMPOSE_FILE]
+    # One wording for both routes, so a customer reads the same sentence about
+    # the same file whichever of the two they started from.
+    for line in (wrong, todo):
+        assert line in files[gen.DOCKER_RUN_FILE]
+    # The certificate beside it was supplied, so it keeps its default and
+    # neither route says anything about it: the guard is per file left blank.
+    assert svc["volumes"][-2] == (
+        f"${{SV_TLS_CERT:-./{gen.DOCKER_SV_CERT_FILE}}}:"
+        f"{gen.DOCKER_SV_CERT_PATH}:ro")
+
+
+def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
+    """Nothing is stated about a file nobody left blank, which is the same rule
+    the variable-level guard follows: the ordinary bundle is the pair of files
+    it was before either check existed."""
+    files = gen.generate(FACTS, SV_DOCKER)
+    assert gen.PLACEHOLDER not in files[gen.DOCKER_RUN_FILE]
+    assert gen.PLACEHOLDER not in files[gen.DOCKER_COMPOSE_FILE]
+    assert ":?" not in files[gen.DOCKER_COMPOSE_FILE]
+    r, made = _run_bundle(tmp_path, files)
+    assert r.returncode == 0, r.stderr
+    assert made == ["ps", "run"], made
 
 
 def test_the_two_platforms_never_offer_each_other_s_vocabulary():

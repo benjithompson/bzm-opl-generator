@@ -1880,11 +1880,13 @@ def _placeholder_block(o, where=()):
     # exactly like a slow boot.
     if o["output_format"] == "docker":
         stops = (f"Both routes refuse to start it: `{DOCKER_RUN_FILE}` checks "
-                 "the files as they stand, and `docker compose up` is stopped "
-                 "by compose's own required-variable check on the same value. "
-                 "Nothing else would -- an environment variable is a string to "
-                 "docker, so an agent started with one answers `404`, logs "
-                 "`Sleeping for 300` and sits there looking like a slow boot.")
+                 "the files as they stand, the mounted ones included, and "
+                 "`docker compose up` is stopped by compose's own "
+                 "required-variable check on the same value. Nothing else "
+                 "would -- an environment variable is a string to docker and a "
+                 "mounted file is bytes, so an agent started with either comes "
+                 "up and fails later: `404` and `Sleeping for 300` on a blank "
+                 "credential, a rejected handshake on a blank certificate.")
     else:
         stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
                  "Kubernetes name, so the API server rejects the object and "
@@ -2903,15 +2905,26 @@ def docker_split_env(facts, o):
     return env, secret
 
 
-def docker_file_mounts(o):
-    """The files this bundle writes and mounts into the container, as
-    (script variable, bundle file, container path, what it is).
+# One mounted file, as everything that has to be said about it anywhere: the
+# script variable that overrides it, the file the bundle writes, where the
+# container reads it, what it is in a sentence, the option it came from and the
+# content itself. A namedtuple rather than a tuple because six positions read as
+# noise at the unpacking site, and the last two are what the file half of #183's
+# guard needs -- it reads the content, and the README's placeholder table needs
+# the option name to say which file to edit.
+DockerMount = collections.namedtuple(
+    "DockerMount", "var file path what option content")
 
-    One list, walked by all three renderers, because a mount is otherwise stated
-    in three places -- the script's overridable `VAR="${VAR:-$DIR/file}"` and
-    its existence check, the `-v` line beside it, and compose's `${VAR:-./file}`
-    bind. A file added to two of the three is exactly the one-sided change
-    #178's parity check exists to catch, and this is what makes it cheap.
+
+def docker_file_mounts(o):
+    """The files this bundle writes and mounts into the container.
+
+    One list, walked by all four renderers, because a mount is otherwise stated
+    in four places -- the script's overridable `VAR="${VAR:-$DIR/file}"` and its
+    existence check, the `-v` line beside it, compose's `${VAR:-./file}` bind,
+    and the file itself in the bundle. A file added to three of the four is
+    exactly the one-sided change #178's parity check exists to catch, and this
+    is what makes it cheap.
 
     Every one of them is overridable to a path the host already has, which is
     the escape hatch `CA_BUNDLE` established: a platform team may keep the trust
@@ -2920,13 +2933,16 @@ def docker_file_mounts(o):
     """
     out = []
     if _ca_cfg(o):
-        out.append(("CA_BUNDLE", DOCKER_CA_FILE, DOCKER_CA_PATH, "trust bundle"))
+        out.append(DockerMount("CA_BUNDLE", DOCKER_CA_FILE, DOCKER_CA_PATH,
+                               "trust bundle", "ca_bundle", o["ca_bundle"]))
     sv = _sv_docker_cfg(o)
     if sv and sv["cert"]:
-        out += [("SV_TLS_CERT", DOCKER_SV_CERT_FILE, DOCKER_SV_CERT_PATH,
-                 "virtual-service certificate"),
-                ("SV_TLS_KEY", DOCKER_SV_KEY_FILE, DOCKER_SV_KEY_PATH,
-                 "virtual-service private key")]
+        out += [DockerMount("SV_TLS_CERT", DOCKER_SV_CERT_FILE,
+                            DOCKER_SV_CERT_PATH, "virtual-service certificate",
+                            "sv_tls_cert", sv["cert"]),
+                DockerMount("SV_TLS_KEY", DOCKER_SV_KEY_FILE,
+                            DOCKER_SV_KEY_PATH, "virtual-service private key",
+                            "sv_tls_key", sv["key"])]
     return out
 
 
@@ -2947,8 +2963,8 @@ def _docker_run_lines(facts, o):
         lines.append('  --env-file "$ENV_FILE" \\')
     lines += [f"  --env {k}={_sh_value(v)} \\" for k, v in cmd.items()]
     lines += [f"  -v {m} \\" for m in DOCKER_MOUNTS]
-    lines += [f'  -v "${var}":{path}:ro \\'
-              for var, _file, path, _what in docker_file_mounts(o)]
+    lines += [f'  -v "${m.var}":{m.path}:ro \\'
+              for m in docker_file_mounts(o)]
     lines += [f"  -w {DOCKER_WORKDIR} \\",
               f"  --net={DOCKER_NETWORK} \\",
               f"  {_crane_image(facts, o)} {DOCKER_ENTRYPOINT}"]
@@ -3079,6 +3095,56 @@ def _compose_required(name, where):
         name, " ".join(_docker_blank_lines(name, where)))
 
 
+def _docker_blank_file_lines(m):
+    """What a bundle says about a *file* left blank: what is wrong, then what to
+    do -- the same two-sentence shape `_docker_blank_lines` gives a variable,
+    and one wording for both routes.
+
+    It names the file rather than the variable, because the file is what a
+    customer is looking at: a blank `sv_tls_key` is `sv-tls.key` sitting in the
+    bundle with the marker inside it, and `TLS_KEY` beside it holds a container
+    path that was never blank -- which is the whole reason the variable-level
+    guard could not see this: #183 refuses a blank *variable*, and #182 added
+    two options that are not variables.
+
+    The last sentence is the asymmetry, said where somebody meets it rather than
+    in a README. The script reads the file and compose cannot, so replacing the
+    file in place satisfies one route and not the other; setting the variable
+    satisfies both, and that is the fix this recommends first.
+    """
+    return (f"{m.file} carries {PLACEHOLDER} -- the {m.what} was left blank "
+            f"when this bundle was generated.",
+            f"Set {m.var} to a {m.what} this host already has, or re-generate "
+            f"the bundle with {m.option} filled in. Replacing {m.file} in place "
+            f"clears {DOCKER_RUN_FILE} and not {DOCKER_COMPOSE_FILE}, which has "
+            f"no way to read a file -- set {m.var} and both routes agree.")
+
+
+def _compose_required_file(m):
+    """A blank mounted file, as Compose's own required-variable expression --
+    the bind source, with its default dropped.
+
+    **The variable is the bundle's own, and that is the opposite judgement from
+    `_compose_required` next door.** There the guard is `BZM_OPL_UNSET_<NAME>`,
+    a name nobody has, precisely because `${AUTH_TOKEN:?}` or `${HTTP_PROXY:?}`
+    would read the ambient environment and resolve a guard away on the host most
+    likely to carry one. `SV_TLS_CERT`, `SV_TLS_KEY` and `CA_BUNDLE` are not
+    names a host carries by accident: they exist only in this bundle, they are
+    documented here as the escape hatch for a file the platform team already
+    keeps, and a customer who sets one is applying the intended fix rather than
+    defeating a check. Guarding a variable nobody has would refuse a bundle that
+    had been finished the way its own README asks -- a guard that survives its
+    own fix, which is the failure the sibling docstring rules out.
+
+    So both routes are keyed on the same answer: the script mounts what
+    `SV_TLS_KEY` resolves to and checks *that* file's content, and compose
+    mounts what `SV_TLS_KEY` says and refuses when it says nothing. Set it, and
+    neither refuses; leave it, and the bundle's own file is what each looks at
+    -- content on one side, absence on the other.
+    """
+    return "${%s:?%s}" % (m.var, " ".join(_docker_blank_file_lines(m)))
+
+
 def _docker_run_sh(facts, o):
     name = docker_container_name(o["ship_id"])
     # Every sibling file is resolved against the script rather than against the
@@ -3088,15 +3154,32 @@ def _docker_run_sh(facts, o):
     # directory. Each stays overridable -- a host may already keep the trust
     # bundle, or the certificate, that its platform team maintains.
     mounts = docker_file_mounts(o)
-    mount_lines = "".join(f'{var}="${{{var}:-$DIR/{file}}}"\n'
-                          for var, file, _path, _what in mounts)
-    mount_checks = "".join(f'''
-if [ ! -f "${var}" ]; then
-  echo "{what} not found: ${var}" >&2
-  echo "set {var}=/path/to/your/{file}, or put it beside this script" >&2
+    mount_lines = "".join(f'{m.var}="${{{m.var}:-$DIR/{m.file}}}"\n'
+                          for m in mounts)
+    mount_checks = ""
+    for m in mounts:
+        mount_checks += f'''
+if [ ! -f "${m.var}" ]; then
+  echo "{m.what} not found: ${m.var}" >&2
+  echo "set {m.var}=/path/to/your/{m.file}, or put it beside this script" >&2
   exit 1
 fi
-''' for var, file, _path, what in mounts)
+'''
+        # The existence check above is not the guard for a file left blank: the
+        # bundle wrote that file, so it is there, and `[ ! -f ]` passes over a
+        # certificate whose whole content is the marker. What the content
+        # is has to be looked at, and it is looked at in **the resolved file** --
+        # so setting the variable to a real one is the fix, exactly as it is for
+        # a file the bundle never carried.
+        if PLACEHOLDER in str(m.content):
+            wrong, todo = _docker_blank_file_lines(m)
+            mount_checks += f'''
+if grep -q '{PLACEHOLDER}' "${m.var}"; then
+  echo "{wrong}" >&2
+  echo "{todo}" >&2
+  exit 1
+fi
+'''
     env_check = (f'''
 if [ ! -f "$ENV_FILE" ]; then
   echo "{DOCKER_ENV_FILE} not found beside this script -- it holds the AUTH_TOKEN" >&2
@@ -3265,8 +3348,16 @@ def _docker_compose_yaml(facts, o):
     # compose resolves a relative host path against this file's directory, which
     # is what `$DIR` means in the script. Off the same list the script walks, so
     # a file cannot reach one route and not the other.
-    body += [f"      - ${{{var}:-./{file}}}:{path}:ro"
-             for var, file, path, _what in docker_file_mounts(o)]
+    # ...with one exception, and it is the file half of #183: a mount whose
+    # bundle file was left blank drops the default, so `${VAR:?...}` aborts the
+    # command instead of binding a file with the marker in it. Quoted, unlike
+    # its siblings, because the message is a sentence -- an unquoted `- a: b`
+    # in a block sequence is a mapping rather than a string.
+    for m in docker_file_mounts(o):
+        if PLACEHOLDER in str(m.content):
+            body.append(f'      - "{_compose_required_file(m)}:{m.path}:ro"')
+        else:
+            body.append(f"      - ${{{m.var}:-./{m.file}}}:{m.path}:ro")
     body.append(f"    command: {_compose_value(DOCKER_ENTRYPOINT)}")
     # The trap is the same either way and the file to warn about is not: with
     # the credential split out it is the one sitting here waiting to be tidied
@@ -3400,8 +3491,14 @@ def _docker_readme(facts, o):
     # With the credential split out there is one file to edit; inline, it is in
     # both of the two files that start this container, and naming only the
     # script would send somebody to fix half of the bundle.
+    # ...and an option this format writes as a *file* is filled in in that file,
+    # not in either of the two that start the container. The table said "no
+    # value was given" and left the reader to work out where sv_tls_key lands
+    # -- which is the same half-answer naming one of the two files would be for
+    # the token.
     placeholders = _placeholder_block(
-        o, {"auth_token": _docker_where(o["use_secret"])})
+        o, {"auth_token": _docker_where(o["use_secret"]),
+            **{m.option: m.file for m in docker_file_mounts(o)}})
     ignored_block = _ignored_block(o)
     # Only where the file exists to be renamed. It is the tidy-up somebody
     # reaches for on seeing a compose file beside a `.env`-shaped one, and it
@@ -3563,21 +3660,16 @@ def generate(facts, options):
         env_file = _docker_env_file(facts, o)
         if env_file:
             out[DOCKER_ENV_FILE] = env_file
-        if o["ca_bundle"]:
-            # The inline PEM, as the file the command mounts. The other two CA
-            # modes name a ConfigMap, which is why they are in IGNORED_BY_FORMAT:
-            # there is nothing here to read one out of.
-            out[DOCKER_CA_FILE] = o["ca_bundle"]
-        sv_docker = _sv_docker_cfg(o)
-        if sv_docker and sv_docker["cert"]:
-            # The same shape, for the same reason: the option carries the PEM
-            # because a bundle has to be generatable for a host nobody here can
-            # see, and the file it becomes is what the container mounts. Written
-            # as a pair or not at all -- REQUIRED_TEXT fills whichever half was
-            # left blank, so a bundle with one of them carries a marker in the
-            # other rather than a mount pointing at nothing.
-            out[DOCKER_SV_CERT_FILE] = sv_docker["cert"]
-            out[DOCKER_SV_KEY_FILE] = sv_docker["key"]
+        # The inline PEMs, as the files the command mounts: the CA bundle, and
+        # the pair a docker agent serves its virtual services with. Each option
+        # carries the content rather than a host path because a bundle has to be
+        # generatable for a host nobody here can see, and the file it becomes is
+        # what the container mounts. Written off `docker_file_mounts` rather than
+        # beside it -- that list is what the script, the compose file and the
+        # blank-file guard all walk, and a file written here and absent there is
+        # a mount pointing at nothing.
+        for m in docker_file_mounts(o):
+            out[m.file] = m.content
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         out["README.md"] = _docker_readme(facts, o)
