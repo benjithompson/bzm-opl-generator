@@ -190,7 +190,10 @@ Three things cost an afternoon each:
   list` does not list the location either — the SV side learns a location from
   the agent connecting rather than from the location existing. Both earlier live
   runs only worked because the agent happened to be up first, so this reads as a
-  broken location rather than as a sequencing rule.
+  broken location rather than as a sequencing rule. **The lag outlives the
+  agent's own**: a docker location was still absent at the moment its ship read
+  `idle` on the v4 API and appeared a minute or two later, so a create that
+  fails immediately after the agent comes up is a retry rather than a fault.
 
 ## Local environment
 
