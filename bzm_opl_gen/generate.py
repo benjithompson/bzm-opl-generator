@@ -2069,10 +2069,10 @@ def _deploy_steps(o, verb):
     return f"{body}**{len(steps) + 1}. {verb}**\n\n"
 
 
-def docker_mock_targets(facts, o):
-    """The virtual-service images a docker agent's crane will ask the daemon for,
-    as {the pinned public ref: the reference crane composes}. Empty for a bundle
-    carrying none, and for the two cluster formats.
+def docker_composed_targets(facts, o):
+    """Every image a docker agent's crane will ask the daemon to create, as
+    {the pinned public ref: the reference crane composes}. Empty for the two
+    cluster formats.
 
     One function because **two files in one bundle name these** -- the README's
     pre-pull list (#206) and the mirror script's push targets (#209) -- and a
@@ -2083,8 +2083,9 @@ def docker_mock_targets(facts, o):
 
     The value is what crane composes on this platform: `DOCKER_REGISTRY`, then
     BlazeMeter's own unqualified image name -- which is the crane *key* without
-    its tag, `blazemeter/` and all -- and always `latest`, whatever /versions
-    pins. **There is no `IMAGE_OVERRIDES` on this format**, which is what makes
+    its tag, org segment and all where the key has one -- and always `latest`,
+    whatever /versions pins. **There is no `IMAGE_OVERRIDES` on this format**,
+    which is what makes
     the last-segment reduction `_image_overrides` performs correct on Kubernetes
     and wrong here: there, crane resolves the key through that map and pulls
     exactly what was mirrored; here nothing maps anything and crane's own
@@ -2099,21 +2100,31 @@ def docker_mock_targets(facts, o):
     which is the disagreement between two files of one bundle this exists to
     remove; and on a docker host it is a tag nothing ever asks for.
 
-    Only the mock images, and for #206's reason rather than by oversight: the
-    composed name was read off a live virtual-service deploy, and whether crane
-    composes an engine's name the same way on a docker *performance* agent has
-    not been tested here. Extending a measured shape to unmeasured images would
-    present the two as one fact, so the engine images keep the mirror's ordinary
-    last-segment destination and this says nothing about them -- which honestly
-    means nobody looked, not that they are right.
+    **Every image, not only the mock ones** (#218). This was scoped to virtual
+    services while the engine half was unmeasured, which was the honest position
+    then and is not one now: a live docker performance agent asked for
+    `<registry>/taurus-cloud:latest` -- the same `<key_base>:latest` shape, with
+    no org because the engine *key* carries none. One rule, and the difference
+    between the two is a property of the keys rather than of the images.
+
+    Crane's own image is deliberately **not** here. The bundle names that
+    reference itself, in the run script and the compose file, so the two agree
+    whatever shape it takes and it is not crane's to compose.
+
+    **Empty where no registry was configured, and that is the point** (#217).
+    The composition is only knowable when this bundle is the thing that told
+    crane where to look; with `DOCKER_REGISTRY` absent the prefix is crane's own
+    default, which nothing here has measured. Returning the public mirror's
+    names anyway would print a list that looks like the others and is a guess --
+    exactly the "could not read" and "there is nothing there" collision this
+    codebase keeps structural everywhere else. The README says the honest
+    version instead.
     """
-    if o.get("output_format") != "docker":
+    if o.get("output_format") != "docker" or not o["private_registry"]:
         return {}
-    categories = needed_categories(SV_FUNC_IDS)
-    registry = (o["private_registry"] or PUBLIC_REGISTRY).rstrip("/")
+    registry = o["private_registry"].rstrip("/")
     return {f"{i['repo']}:{i['tag']}": f"{registry}/{key_base(i['key'])}:latest"
-            for i in select_images(facts)
-            if image_category(i["repo"]) in categories}
+            for i in select_images(facts)}
 
 
 def _mirror_script(facts, o):
@@ -2134,7 +2145,7 @@ def _mirror_script(facts, o):
     which would abort a mirror that would otherwise have worked.
 
     The destination is per image and per format rather than one shape for the
-    lot -- see docker_mock_targets, and the emitted comment below, which is what
+    lot -- see docker_composed_targets, and the emitted comment below, which is what
     the person comparing this file with the README's pull list reads.
     """
     refs = image_refs(facts)
@@ -2193,7 +2204,7 @@ def _mirror_script(facts, o):
     # to the other, so a mirror pushing anything else pushes to a path nothing
     # reads -- #209, which the mirror reported as a success and the first deploy
     # as a missing image.
-    composed = docker_mock_targets(facts, o)
+    composed = docker_composed_targets(facts, o)
     if composed:
         # Emitted only where the two shapes are actually both present, so an
         # ordinary bundle's script is the one it has always been. This is what a
@@ -2988,9 +2999,6 @@ def docker_env(facts, o):
         # ConfigMap states KUBERNETES: a file that says which manager it is for
         # can be read on its own.
         "CONTAINER_MANAGER_TYPE": "DOCKER",
-        # Where engine images come from. Always set, like the ConfigMap's, so
-        # the file names its registry rather than implying one.
-        "DOCKER_REGISTRY": o["private_registry"] or PUBLIC_REGISTRY,
         # The ports crane hands its engines. `--net=host` below means they are
         # the *host's* ports, so this is a range that has to be free on the
         # machine -- edit it in the script if something else there wants it.
@@ -2999,6 +3007,25 @@ def docker_env(facts, o):
         # leave to a default nobody here can see.
         "DOCKER_PORT_RANGE": DOCKER_PORT_RANGE,
     }
+    # ...and DOCKER_REGISTRY only where there is one to name (#217). It used to
+    # be written always, defaulting to BlazeMeter's public gcr mirror on the
+    # reasoning that a file naming its registry beats one implying it. That
+    # reasoning was sound and the value was not: crane composes
+    # `<DOCKER_REGISTRY>/<key_base>:latest` and the keys are **not uniform** --
+    # the mock ones carry the org (`blazemeter/service-mock`), the engine one
+    # does not (`taurus-cloud`) -- so no single prefix is right for both. Aimed
+    # at the mirror it asked for `gcr.io/verdant-bulwark-278/taurus-cloud:latest`,
+    # a path that exists with **zero tags**, and since crane does not pull (#206)
+    # the run sat at BOOT_STARTING with no engine container ever created and
+    # `No such image` only in `docker logs`.
+    #
+    # BlazeMeter's own generated command sets it only when mirroring, which is
+    # the shape followed here -- the rule this format keeps everywhere: check it
+    # against the command their API returns, not against the pages. Absent,
+    # crane uses its own default and every key resolves to something that
+    # exists.
+    if o["private_registry"]:
+        env["DOCKER_REGISTRY"] = o["private_registry"]
     # AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE: a different variable for a
     # different mechanism, and this is the format where it belongs. Only emitted
     # when the option was answered -- unlike the Kubernetes path, which forces
@@ -3681,29 +3708,41 @@ def _docker_prepull_block(facts, o):
     variable here. A command naming the pinned tag fetches an image nothing then
     starts -- the same failure this bullet exists to prevent, wearing the fix.
 
-    Only the mock images, and only where the bundle carries one. A virtual
-    service deploying on a docker agent is what was measured; whether crane
-    skips the pull for a taurus engine on a docker *performance* agent has not
-    been tested here, and naming the engine images too would present an untested
-    claim in the same sentence as a measured one -- the rule this repo keeps
-    everywhere else about a figure nobody has. A performance-only docker bundle
-    therefore says nothing about pre-pulling, which is what silence honestly
-    means: not that the pull happens, but that nobody here has looked.
+    **Every image this bundle's crane creates**, engines included (#218). It
+    covered only the mock ones while the engine half was unmeasured; a live
+    docker performance agent has since asked for
+    `<registry>/taurus-cloud:latest` and failed the same way, so a
+    performance-only docker bundle carries this bullet too rather than saying
+    nothing about the trap most likely to hit it.
 
-    The categories come from `mockServices`' own row rather than from a "mock"
-    literal, so the funcId that decides an SV location and the images this names
-    stay one fact -- and the references themselves come from
-    `docker_mock_targets`, which the mirror script pushes to, so a bundle
-    carrying both files cannot name two different sets (#209).
+    The references come from `docker_composed_targets`, which the mirror script
+    pushes to, so a bundle carrying both files cannot name two different sets
+    (#209).
     """
-    targets = docker_mock_targets(facts, o)
+    targets = docker_composed_targets(facts, o)
     if not targets:
-        return ""
+        # No registry was configured, so the names are crane's default and this
+        # bundle did not choose them. The trap is the same and worth saying; the
+        # list is not available to say it with, and inventing one would be worse
+        # than the silence -- it would be indistinguishable from a measured one.
+        keys = ", ".join(f"`{key_base(i['key'])}`" for i in select_images(facts))
+        return f"""
+- **Crane does not pull, and this bundle does not name what it will ask for.**
+  It composes each image name and asks the docker daemon to *create* the
+  container, so anything not already on this host makes the first engine or
+  virtual service retry for about ninety seconds and end `FAILED` -- `Failed to
+  find a deployed container` in BlazeMeter, `No such image` only in
+  `docker logs`, and neither message mentions a pull. The images it creates are
+  this location's own ({keys}), under whatever registry crane defaults to: no
+  `DOCKER_REGISTRY` is set here, so that prefix is crane's rather than ours and
+  is not written down. Generate with a private registry and the README lists the
+  exact `docker pull` commands, because then the bundle is what decided them.
+"""
     pulls = "\n".join(f"  docker pull {ref}" for ref in targets.values())
     return f"""
-- **Pull the virtual-service images onto this host first.** Crane does not pull
-  here: it composes the image name and asks the docker daemon to *create* the
-  container, so an image this host does not already have makes the first deploy
+- **Pull these onto this host first.** Crane does not pull here: it composes the
+  image name and asks the docker daemon to *create* the container, so an image
+  this host does not already have makes the first engine or virtual service
   retry for about ninety seconds and end `FAILED` -- `Failed to find a deployed
   container` in BlazeMeter, and `No such image` only in `docker logs`. Neither
   message mentions a pull, and the first reads like a broken agent.

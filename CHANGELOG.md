@@ -92,6 +92,25 @@ anything that breaks.
   that reference themselves. The script now says which of its two destination
   shapes is which, for whoever is reading it beside the README.
 
+- **A docker bundle no longer sets `DOCKER_REGISTRY` unless you mirror**, which
+  is what BlazeMeter's own generated command does. It was always written,
+  defaulting to BlazeMeter's public gcr mirror, and that made a default
+  performance bundle unable to run a test at all: crane composes
+  `<DOCKER_REGISTRY>/<key>:latest` and the keys are not uniform — the mock ones
+  carry the org, the engine one does not — so the engine resolved to
+  `gcr.io/verdant-bulwark-278/taurus-cloud:latest`, a path with **zero tags**.
+  Crane does not pull, so the run sat at `BOOT_STARTING` with no engine
+  container and `No such image` only in `docker logs`.
+
+- **...and where you do mirror, the mirror and the README's pre-pull list now
+  cover the engine images too.** Both were scoped to virtual services while the
+  engine half was unmeasured; a live docker performance agent has since asked
+  for `<registry>/taurus-cloud:latest`, the same rule with no org because the
+  key has none. A performance docker bundle now carries the pre-pull bullet
+  rather than saying nothing about the trap most likely to hit it. **With no
+  registry configured the bullet names the image keys and no commands** — the
+  prefix is then crane's own default, which nothing here has measured.
+
 - **A docker bundle no longer mirrors the crane-hook image**, which that same
   bundle's README lists under "Set here, but not carried" — the hook is a Pod
   and there is no cluster to run it in. The mirror script read `crane_hook`
