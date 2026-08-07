@@ -240,13 +240,20 @@ the trust bundle its platform team maintains.
 - **Crane does not pull here.** It composes the image name and asks the daemon
   to *create* the container, so an image the host does not already hold ends the
   deploy `FAILED` about ninety seconds later, with no message on either side
-  mentioning a pull. A bundle for a location that serves virtual services names
+  mentioning a pull. A bundle generated with `--private-registry` names
   the exact `docker pull` commands in its README — the `:latest` forms under
   `DOCKER_REGISTRY`, which are not the tags the location pins. What was seen
   live, and why the tag differs, is in
   [Service virtualization](service-virtualization.md#what-a-live-run-showed).
-  Only the mock images have been measured; a performance bundle says nothing
-  about pre-pulling because nobody has tested that half.
+  **Engines as well as mocks**: a docker performance agent was measured asking
+  for `<registry>/taurus-cloud:latest` and failing exactly the same way.
+- **A bundle with no registry configured carries the warning and not the list.**
+  `DOCKER_REGISTRY` is written only when you mirror, which is what BlazeMeter's
+  own generated command does — so without one the prefix crane composes with is
+  *its* default rather than this bundle's, and nothing here has read it. The
+  README names the image keys and says the registry is not ours to state: a
+  plausible-looking pull list would be indistinguishable from the measured one a
+  flag away.
 - **...and `--private-registry` mirrors them to that same composed name.** There
   is no `IMAGE_OVERRIDES` on this format — it is a Kubernetes variable — so
   nothing maps a mirrored path back to the name crane builds, and the mirror

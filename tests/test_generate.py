@@ -2850,8 +2850,8 @@ def test_a_docker_sv_bundle_names_the_images_crane_will_not_pull():
     `Failed to find a deployed container` in BlazeMeter and `No such image`
     only in `docker logs` -- neither of which mentions a pull, and the first of
     which reads like a broken agent. So the bundle names the commands."""
-    readme = gen.generate(MOCK_FACTS, DOCKER)["README.md"]
-    assert f"docker pull {MOCK_LATEST}" in readme
+    readme = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": REG})["README.md"]
+    assert f"docker pull {REG}/blazemeter/service-mock:latest" in readme
     assert "does not pull" in readme
     assert "No such image" in readme
     # A sealed host needs the list rather than an attempt.
@@ -2874,17 +2874,86 @@ def test_the_tag_to_pull_is_latest_and_never_the_one_the_location_pins():
         {**i, "key": "blazemeter/service-mock:6.0.30.4", "tag": "6.0.30.4"}
         if i["key"].startswith("blazemeter/service-mock") else i
         for i in FACTS["images"]]}
-    readme = gen.generate(pinned, DOCKER)["README.md"]
-    assert f"docker pull {MOCK_LATEST}" in readme
+    readme = gen.generate(pinned, {**DOCKER, "private_registry": REG})["README.md"]
+    assert f"docker pull {REG}/blazemeter/service-mock:latest" in readme
     assert "6.0.30.4" not in readme
     # ...and the repo's last segment is not the name either: that is how
     # IMAGE_OVERRIDES resolves a key on Kubernetes, and there is no such
     # variable here. Crane composes the key itself, `blazemeter/` and all.
-    assert f"{gen.PUBLIC_REGISTRY}/service-mock" not in readme
+    assert "{REG}/service-mock:" not in readme
 
 
-@pytest.mark.parametrize("registry", [None, "reg.corp/bzm"])
-def test_the_pull_command_names_the_registry_crane_is_actually_given(registry):
+def test_a_default_docker_bundle_names_no_registry_at_all():
+    """#217. Crane composes `<DOCKER_REGISTRY>/<key>:latest` and pulls nothing,
+    and the keys are not uniform: the mock ones carry the org
+    (`blazemeter/service-mock`) and the engine one does not (`taurus-cloud`).
+    So no value of that variable is right for both -- pointed at BlazeMeter's
+    own gcr mirror it asks for `.../taurus-cloud:latest`, a path with zero tags,
+    and the run sits at BOOT_STARTING with no engine ever created.
+
+    BlazeMeter's own generated command sets it only when you mirror, which is
+    the shape this follows. Absent, crane uses its own default and the engine
+    resolves to something that exists.
+    """
+    files = gen.generate(FACTS, DOCKER)
+    for name in ("bzm-opl-agent.sh", "compose.yaml", "bzm-opl-agent.env"):
+        body = files.get(name) or ""
+        assert "DOCKER_REGISTRY=" not in body, name
+        assert "DOCKER_REGISTRY:" not in body, name
+
+
+def test_a_mirrored_docker_bundle_still_names_its_registry():
+    """The other half of #217: the variable is how a mirrored bundle tells crane
+    where to look, so dropping it everywhere would break the case it exists
+    for."""
+    files = gen.generate(FACTS, {**DOCKER, "private_registry": "reg.corp/bzm"})
+    assert "DOCKER_REGISTRY=reg.corp/bzm" in files["bzm-opl-agent.sh"]
+    assert 'DOCKER_REGISTRY: "reg.corp/bzm"' in files["compose.yaml"]
+
+
+def test_the_docker_pre_pull_list_covers_the_engine_images_too():
+    """#218. The rule #209 established for mock images is the rule for every
+    image crane creates here -- measured live for an engine, which asked for
+    `<registry>/taurus-cloud:latest`, the same `<key_base>:latest` shape with no
+    org because the engine key carries none. So a performance docker bundle
+    carries the bullet as well; before this it said nothing at all."""
+    files = gen.generate(FACTS, {**DOCKER, "private_registry": "reg.corp/bzm"})
+    readme = files["README.md"]
+    assert "docker pull reg.corp/bzm/taurus-cloud:latest" in readme
+    # ...and the pinned tag is still not what to fetch.
+    assert "docker pull reg.corp/bzm/taurus-cloud:2.4.454-reduced" not in readme
+
+
+def test_the_docker_mirror_pushes_every_name_crane_composes():
+    """#218's other half, and the property that makes the pair honest: what the
+    mirror pushes and what the README says to pull are one set, for engines as
+    well as mocks. Crane's own image is the exception and stays -- the bundle
+    names that reference itself, so it is not crane's to compose."""
+    both = {**FACTS, "func_ids": ["performance", "mockServices"]}
+    files = gen.generate(both, {**DOCKER, "private_registry": "reg.corp/bzm"})
+    dests = {l.split()[-1] for l in files["bzm-opl-image-mirror.sh"].splitlines()
+             if l.startswith("mirror ")}
+    pulls = {l.split("docker pull ", 1)[1].strip()
+             for l in files["README.md"].splitlines() if "docker pull " in l}
+    crane = {d for d in dests if "/crane:" in d}
+    assert crane, "crane's own image is not in the mirror"
+    assert dests - crane == pulls, (dests - crane) ^ pulls
+
+
+def test_the_cluster_mirror_scripts_do_not_move():
+    """#218 is about a platform where nothing maps one name to another. On
+    Kubernetes IMAGE_OVERRIDES does, so the last-segment destination stays
+    right and this must not follow docker's change."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "auth_token": "de" * 32,
+                                 "private_registry": "reg.corp/bzm"})
+    mirror = files["bzm-opl-image-mirror.sh"]
+    assert "reg.corp/bzm/v4:2.4.444-reduced" in mirror
+    assert "taurus-cloud:latest" not in mirror
+
+
+def test_the_pull_command_names_the_registry_crane_is_actually_given():
+    registry = "reg.corp/bzm"
     """The README's registry and `DOCKER_REGISTRY` are resolved in two places
     from the same expression, and only one of them reaches crane. Drift there
     would print a pull for a registry nothing goes on to ask for -- which is
@@ -2903,15 +2972,21 @@ def test_the_pull_command_names_the_registry_crane_is_actually_given(registry):
         assert ref.startswith(given[0] + "/"), (ref, given[0])
 
 
-def test_a_docker_bundle_with_no_mock_image_says_nothing_about_pre_pulling():
-    """Only the mock images were measured. Whether crane also skips the pull
-    for a taurus engine on a docker performance agent has not been tested, so a
-    performance bundle is silent rather than carrying a claim nobody has
-    checked -- and silence here says nobody looked, not that the pull happens.
-    """
-    readme = gen.generate(FACTS, DOCKER)["README.md"]      # func_ids performance
-    assert "docker pull" not in readme
-    assert "does not pull" not in readme
+def test_a_docker_bundle_with_no_registry_warns_without_naming_names():
+    """#217 changed which half is unknown. The engine trap is measured now and
+    a performance bundle says so -- but with no `DOCKER_REGISTRY` set, the
+    prefix crane composes with is *its* default and nothing here has read it. So
+    the warning is carried and the list is not: a plausible-looking `docker
+    pull` block would be indistinguishable from the measured one two lines of
+    config away."""
+    readme = gen.generate(FACTS, DOCKER)["README.md"]      # no private registry
+    assert "does not pull" in readme
+    # No *command* -- the prose may well mention the phrase while explaining why
+    # there is nothing to run.
+    assert not [l for l in readme.splitlines() if l.strip().startswith("docker pull ")]
+    # The keys are still named -- what is unknown is the registry, not which
+    # images the location runs.
+    assert "`taurus-cloud`" in readme
 
 
 def test_the_cluster_formats_carry_no_pre_pull_note():
@@ -3002,18 +3077,17 @@ def test_the_kubernetes_mirror_keeps_the_last_segment_shape():
     assert f"{REG}/blazemeter/service-mock:latest" not in dests   # ...and only it
 
 
-def test_a_docker_bundle_with_no_mock_image_mirrors_as_it_always_did():
-    """A performance location's docker bundle is the script it was. Whether
-    crane composes an engine's name the same way has not been tested here, and
-    extending a shape read off a live virtual-service deploy to images nobody
-    has watched would put a guess and a measurement in one file."""
+def test_a_performance_docker_bundle_mirrors_what_crane_will_ask_for():
+    """#218: engines were the untested half and are not any more. A live docker
+    performance agent asked for `<registry>/taurus-cloud:latest`, so the mirror
+    pushes that rather than the last-segment pinned form it used to, and the
+    README's pull list names the same thing. Crane's own image is untouched --
+    the bundle chooses that reference itself."""
     files = gen.generate(FACTS, {**DOCKER, "private_registry": REG})
     dests = {d for _, d in _mirror_pairs(files)}
-    assert dests == {f"{REG}/crane:3.7.55", f"{REG}/v4:2.4.444-reduced",
-                     f"{REG}/apm:1.7.112"}
-    assert "docker pull" not in files["README.md"]
-    # ...and the two-shapes comment is only where two shapes are.
-    assert "deliberate" not in files[MIRROR]
+    assert dests == {f"{REG}/crane:3.7.55", f"{REG}/taurus-cloud:latest",
+                     f"{REG}/apm-image:latest"}
+    assert f"docker pull {REG}/taurus-cloud:latest" in files["README.md"]
 
 
 def test_the_docker_mirror_says_which_of_its_two_shapes_is_which():
