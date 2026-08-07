@@ -87,8 +87,13 @@ GROUPS = [
     ("Networking", None),
     ("Service virtualization",
      "Only meaningful for a location whose funcIds include `mockServices`, and "
-     "for such a location `sv_ingress` is **required** -- either a backend, or "
-     "`none` to generate it for performance testing alone; see "
+     "**two sets, one per platform**: the four `sv_ingress` options are "
+     "Kubernetes' `KUBERNETES_WEB_EXPOSE_*` and the three below them are the "
+     "docker agent's `HOSTNAME_OVERRIDE` and `TLS_CERT`/`TLS_KEY`. Each set is "
+     "the other format's ignored option, so only one of them is ever on the "
+     "page. For a `mockServices` location generated as manifests or a chart, "
+     "`sv_ingress` is **required** -- either a backend, or `none` to generate "
+     "it for performance testing alone; see "
      "[Service virtualization](service-virtualization.md)."),
     ("CA trust",
      "Pick **exactly one** of the three modes -- inline PEM, an existing "
@@ -343,6 +348,48 @@ OPTIONS = [
             "service. Rejected with any other `sv_ingress`, since only crane's istio "
             "backend reads it. A Gateway whose selector matches no pod fails exactly "
             "like a wrong port would -- crane hardcodes `istio: ingressgateway`."),
+
+    Option(
+        "sv_hostname", "string", "Service virtualization",
+        summary="Docker only: the hostname this agent advertises its virtual services under.",
+        doc="**Docker only** -- `HOSTNAME_OVERRIDE`, and the docker agent's "
+            "answer to the whole `sv_ingress` group above. BlazeMeter's Asset "
+            "Catalog builds endpoint URLs from the combination of hostname and "
+            "port; without it they are built from this host's IP address and "
+            "port, which works and is worse. No default and no format is "
+            "imposed -- BlazeMeter's own example value is `C123ABCXYZ` and "
+            "nothing they publish says what shape it has to be -- but it has "
+            "to resolve to this host from wherever the clients are, and with "
+            "`sv_tls_cert` set it is checked against that certificate at "
+            "generate time. Ignored by the Kubernetes formats: a Kubernetes "
+            "agent returns a DNS-based URL and needs no hostname override."),
+    Option(
+        "sv_tls_cert", "string", "Service virtualization",
+        summary="Docker only: inline PEM certificate the agent serves its virtual services with.",
+        doc="**Docker only** -- the X509 certificate, inline PEM, written into "
+            "the bundle as `sv-tls.crt`, mounted at `/etc/ssl/certs/public.pem` "
+            "and named there by `TLS_CERT`. Content rather than a path, exactly "
+            "as `ca_bundle` is, because a bundle has to be generatable for a "
+            "host nobody here can see; the script's `SV_TLS_CERT` still "
+            "overrides to a file the host already keeps. Optional: without the "
+            "pair the endpoints are plain HTTP. The hostname in `sv_hostname` "
+            "is checked against this certificate's Subject Alternative Name "
+            "and Common Name when it generates -- a mismatch is refused there, "
+            "because from the agent's end it looks like a healthy agent whose "
+            "endpoint every client rejects."),
+    Option(
+        "sv_tls_key", "string", "Service virtualization",
+        summary="Docker only: inline PEM private key for sv_tls_cert. PKCS#8 syntax, and never in profile.json.",
+        doc="**Docker only** -- the private key for `sv_tls_cert`, inline PEM, "
+            "written as `sv-tls.key` and mounted at "
+            "`/etc/ssl/certs/privatekey.pem` for `TLS_KEY`. BlazeMeter require "
+            "**PKCS#8 syntax** (`-----BEGIN PRIVATE KEY-----`); a PKCS#1 key "
+            "(`-----BEGIN RSA PRIVATE KEY-----`) is the common export and is "
+            "refused here, naming the conversion -- `openssl pkcs8 -topk8"
+            " -nocrypt`. It is a credential, so it is **not** written to "
+            "`profile.json`: `generate --profile` on such a bundle needs "
+            "`--auth-token` and `--sv-tls-key` supplied again. `sv_tls_cert` "
+            "beside it is not a credential and stays in the profile."),
 
     # ---- CA trust ------------------------------------------------------
     Option(

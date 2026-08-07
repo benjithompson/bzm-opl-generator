@@ -19,13 +19,27 @@ it("offers the three formats the generator has", () => {
   for (const f of OUTPUT_FORMATS) expect(f.hint.length).toBeGreaterThan(20);
 });
 
-it("hides nothing from the two cluster formats", () => {
+it("hides each platform's service-virtualization options from the other", () => {
+  // The table is symmetric (#182): a virtual service is published with
+  // disjoint variables per platform, so each set is the other's ignored
+  // options and exactly one of the two groups is ever on screen. Everything
+  // else docker drops is Kubernetes vocabulary and still reaches a cluster
+  // bundle, which is the other half of this.
+  const svDockerKeys = ["sv_hostname", "sv_tls_cert", "sv_tls_key"];
   for (const format of ["manifests", "helm"]) {
     expect(isDocker(format)).toBe(false);
     const applies = (k: string) => optionApplies(k, format, IGNORED);
+    // Everything docker drops still reaches a cluster bundle, the four
+    // KUBERNETES_WEB_EXPOSE_* ones included -- that is what makes them the
+    // *other* platform's rather than nobody's.
     for (const key of Object.keys(IGNORED.docker)) expect(applies(key)).toBe(true);
-    expect(groupsFor(OPTION_GROUPS, applies)).toEqual(OPTION_GROUPS);
+    for (const key of svDockerKeys) expect(applies(key)).toBe(false);
+    expect(groupsFor(OPTION_GROUPS, applies).map((g) => g.id))
+      .toEqual(OPTION_GROUPS.map((g) => g.id).filter((id) => id !== "svDocker"));
   }
+  const docker = (k: string) => optionApplies(k, "docker", IGNORED);
+  for (const key of svDockerKeys) expect(docker(key)).toBe(true);
+  expect(groupsFor(OPTION_GROUPS, docker).map((g) => g.id)).not.toContain("sv");
 });
 
 describe("read, and dropping nothing, is not the same as unread", () => {
@@ -35,9 +49,10 @@ describe("read, and dropping nothing, is not the same as unread", () => {
   // one that read "helm drops nothing".
 
   it("answers a format's own table, and null where there is none", () => {
-    // Read and empty. A fact, and the fixture states it rather than leaving
-    // helm out, because leaving it out is the other answer.
-    expect(ignoredFor("helm", IGNORED)).toEqual({});
+    // Read, and the fixture states every format rather than leaving one out,
+    // because leaving it out is the other answer. Both are non-empty since
+    // #182; what is asserted is that an answer came back at all.
+    expect(Object.keys(ignoredFor("helm", IGNORED) ?? {})).not.toEqual([]);
     expect(Object.keys(ignoredFor("docker", IGNORED) ?? {})).not.toEqual([]);
     // Nothing read: the mount state, the fetch that failed, and a format the
     // answer did not carry. All three are "nobody has said", and none of them
@@ -50,11 +65,15 @@ describe("read, and dropping nothing, is not the same as unread", () => {
   it("shows every option either way", () => {
     // The safe direction, and the same one for both: hiding a required field
     // on a guess is the mistake worth being wrong about the other way.
+    // Unread is the case: with no table at all, every option applies and every
+    // group is on screen -- including both service-virtualization groups,
+    // which is a field too many rather than a required one hidden on a guess.
+    const unread = (k: string) => optionApplies(k, "helm", {});
+    expect(groupsFor(OPTION_GROUPS, unread)).toEqual(OPTION_GROUPS);
     for (const table of [IGNORED, {}]) {
       const applies = (k: string) => optionApplies(k, "helm", table);
       expect(applies("namespace")).toBe(true);
       expect(applies("engine_cpu_limit")).toBe(true);
-      expect(groupsFor(OPTION_GROUPS, applies)).toEqual(OPTION_GROUPS);
     }
   });
 

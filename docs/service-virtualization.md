@@ -1,5 +1,31 @@
 # Service virtualization
 
+**Two publishing shapes, one per platform.** A virtual service is only useful
+once something outside the cluster — or outside the host — can reach it, and how
+the agent arranges that is entirely different on Kubernetes and on Docker.
+BlazeMeter say why themselves: *"Kubernetes agents automatically return DNS-based
+URLs. As an end-user, you do not have to set a hostname override for a
+Kubernetes agent."*
+
+| | Kubernetes (`--format manifests`) | Docker (`--format docker`) |
+|---|---|---|
+| how endpoints are published | crane creates an ingress object per virtual service | crane serves them itself, under a name you give it |
+| the options | [`--sv-ingress`, `--sv-subdomain`, `--sv-tls-secret`, `--sv-istio-gateway`](#kubernetes-an-ingress-per-virtual-service) | [`--sv-hostname`, `--sv-tls-cert`, `--sv-tls-key`](#docker-a-hostname-and-a-certificate) |
+| the variables | `KUBERNETES_WEB_EXPOSE_*` | `HOSTNAME_OVERRIDE`, `TLS_CERT`, `TLS_KEY` |
+| what you provide | an ingress controller, a wildcard DNS record, a wildcard TLS Secret | a DNS record for the hostname, and a certificate covering it |
+
+Each set is meaningless on the other platform, so each is in the other format's
+ignored-options table: the configure page shows exactly one of them, and a
+profile written for one platform and generated for the other keeps its values,
+carries them in `profile.json`, and has the bundle's README name what it could
+not apply. Nothing is silently dropped, and nothing is refused for being the
+wrong platform's.
+
+`--format helm` is the one that still cannot serve this at all — see
+[below](#the-chart-cannot-do-this).
+
+## Kubernetes: an ingress per virtual service
+
 A location whose funcIds include `mockServices` needs an ingress before any
 virtual service will work. The generator refuses to render without one, because
 the failure is otherwise invisible: the manifests apply cleanly, the agent goes
@@ -29,26 +55,86 @@ crane's istio backend reads it — setting it elsewhere would silently do nothin
 secret for `*.<subdomain>`, and with `--sv-istio-gateway` that Gateway must
 already exist (the generator names it, it does not create it).
 
-**Only `--format manifests` carries this today**, and the other two formats are
-refused for reasons that are not the same reason. Helm is a limit of *our
-chart*: it would emit one with no ingress, no SV RBAC and no TLS secret, which
-deploys, reports idle and stalls at `WAITING_FOR_DOMAIN`. Docker is a limit of
-*this generator* rather than of the agent — a docker agent serves virtual
-services perfectly well, publishing them with `HOSTNAME_OVERRIDE` and a
-`TLS_CERT`/`TLS_KEY` pair, and there is no option here for that shape, because
-every `sv_*` option this tool has writes a `KUBERNETES_WEB_EXPOSE_*` variable
-and a container agent reads none of them. Until
-[#182](https://github.com/benjithompson/bzm-opl-generator/issues/182) supplies
-those three, generate the docker bundle for performance and set
-`HOSTNAME_OVERRIDE`, `TLS_CERT` and `TLS_KEY` by hand on BlazeMeter's own
-`docker run` — their [bring your own certificate
-page](https://help.blazemeter.com/docs/guide/private-locations-optional-installation-step-bring-your-own-certificate-mock-services.html)
-carries a working one. Both refusals follow what is **configured**, never the
-location's funcIds — so a `mockServices` location
-generated `--sv-ingress none` is a performance bundle and both formats are
-available for it ([below](#not-using-it-on-a-location-that-offers-it)). Ask for
-either alongside an `sv_ingress` and `generate` refuses by name rather than
-quietly dropping the half it cannot express.
+## Docker: a hostname and a certificate
+
+A docker agent has no cluster to create an ingress in, so it serves the
+endpoints itself. What it needs is a name to advertise them under and,
+optionally, a certificate to serve them with:
+
+```
+bzm-opl-gen generate --facts facts.json --format docker \
+    --auth-token <AUTH_TOKEN> --sv-hostname mocks.example.com \
+    --sv-tls-cert cert.pem --sv-tls-key key.pk8.pem
+```
+
+| what | why |
+|---|---|
+| `--sv-hostname` | `HOSTNAME_OVERRIDE`. BlazeMeter's Asset Catalog builds endpoint URLs from *"the combination of hostname and port"*; without it they are built from this host's IP address and port instead, which works and is worse. It has to resolve to the host from wherever the clients are — that is a DNS record you own, and no bundle can make one. |
+| `--sv-tls-cert` | the X509 certificate, PEM. **Optional** — without the pair the endpoints are plain HTTP. |
+| `--sv-tls-key` | its private key, PEM with **PKCS#8** syntax. |
+
+Both are read as *content*, not as paths: the file you name on the command line
+is read and written into the bundle, as `sv-tls.crt` and `sv-tls.key`, and
+mounted at `/etc/ssl/certs/public.pem` and `/etc/ssl/certs/privatekey.pem` —
+BlazeMeter's own paths, which `TLS_CERT` and `TLS_KEY` then name. This is
+`--ca-bundle`'s shape, for `--ca-bundle`'s reason: a path-valued *option* could
+not produce a working bundle for a host nobody here can see, which is the whole
+premise of generating from typed-in facts. Both files stay overridable at run
+time — set `SV_TLS_CERT` / `SV_TLS_KEY` (or `CA_BUNDLE`) to a path the host
+already keeps, and the script and the compose file both use it.
+
+**Two things are checked when the bundle is generated**, because both fail
+silently on a running agent — it starts, reports online, publishes the endpoint,
+and every client rejects it:
+
+- **The key must be PKCS#8.** BlazeMeter: *"Base64 encoded private key in PEM
+  format with PKCS#8 syntax."* A PKCS#1 key (`-----BEGIN RSA PRIVATE KEY-----`)
+  is the common `openssl genrsa` export and is refused by name:
+  `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem`. So is an
+  encrypted key — nothing here can give the agent a passphrase.
+- **The hostname must match the certificate.** BlazeMeter: *"the hostname of the
+  request has to match ... one of the DNSName entries in the Subject Alternative
+  Name extension"* or *"the Common Name field"*. The certificate you supply is
+  parsed and the hostname checked against both; wildcards cover one label, as
+  they do for every client. A mismatch is refused, naming what the certificate
+  does carry.
+
+  **What is not checked:** expiry, who signed it, whether the chain is
+  complete, and whether the key beside it is that certificate's key. This is a
+  name check and nothing else. If the certificate cannot be parsed at all, the
+  hostname is **not checked** — that is not the same as passing, and the
+  bundle's README says which of the two happened, rather than going quiet and
+  reading like one that was verified.
+
+`--sv-hostname` gets no other format validation. BlazeMeter's own example value
+is `C123ABCXYZ` and nothing they publish says what shape it has to be, so
+nothing here invents one; a blank one left behind by the web UI becomes
+`<PLACEHOLDER>`, which the generated script and the compose file both refuse
+before they start a container.
+
+**The key is not written to `profile.json`.** A profile is the file people
+commit, diff and paste into tickets, so it carries every resolved option except
+credentials — and a private key is one. The certificate beside it is *not*
+excluded: it is what the agent hands to every client that connects, so dropping
+it would make a replay need two things supplied for no gain. The consequence:
+`generate --profile` on a docker bundle that serves HTTPS needs `--auth-token`
+**and** `--sv-tls-key`. Without the key the replayed bundle writes
+`<PLACEHOLDER>` into `sv-tls.key` and names it at the top of its README.
+
+## The chart cannot do this
+
+`--format helm` is refused for a bundle configured for service virtualization,
+and it is a limit of *our chart* rather than of anything else: it would emit one
+with no ingress, no SV RBAC and no wildcard TLS secret, which deploys, reports
+idle and stalls at `WAITING_FOR_DOMAIN`. The upstream Blazemeter/helm-crane
+chart carries all three; use that, or `--format manifests`.
+
+The refusal follows what is **configured**, never the location's funcIds — so a
+`mockServices` location generated `--sv-ingress none` is a performance bundle and
+the chart is available for it
+([below](#not-using-it-on-a-location-that-offers-it)). Ask for a chart alongside
+an `sv_ingress` and `generate` refuses by name rather than quietly dropping the
+half it cannot express.
 
 ## Not using it on a location that offers it
 
@@ -62,18 +148,20 @@ bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
 ```
 
 The bundle is then the performance one — no ingress, no SV RBAC, no TLS secret,
-and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and **`--format helm` and
-`--format docker` are both available again**, since neither is now being asked
-for the half it cannot express: our chart's absent ingress, RBAC and TLS secret,
-and this generator's absent `HOSTNAME_OVERRIDE`/`TLS_CERT`/`TLS_KEY`
-([#182](https://github.com/benjithompson/bzm-opl-generator/issues/182)), which
-is the docker agent's shape for the same job rather than anything the agent
-lacks. Both refusals are keyed on the *configuration* (an
-`sv_ingress` other than none), never on the location's funcIds, which is exactly
-why declining the functionality clears them. What
-you give up is what the refusal was protecting: deploy a virtual service to
-this location and it will stall at `WAITING_FOR_DOMAIN`, exactly as described
-above. Nothing else changes, including the images — which image set the agent
+and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — and **`--format helm` is
+available again**, since the chart is no longer being asked for the half it
+cannot express. The refusal is keyed on the *configuration* (an `sv_ingress`
+other than none), never on the location's funcIds, which is exactly why
+declining the functionality clears it. What you give up is what the refusal was
+protecting: deploy a virtual service to this location and it will stall at
+`WAITING_FOR_DOMAIN`, exactly as described above.
+
+`--sv-ingress none` says nothing about a docker bundle, and never did: that
+option is one of docker's ignored ones. A docker bundle for a `mockServices`
+location publishes virtual services if `--sv-hostname` is set and does not if it
+is not, and neither is refused — endpoints under this host's IP address are
+degraded rather than broken, which is BlazeMeter's own framing of the hostname
+override. Nothing else changes, including the images — which image set the agent
 runs is a fact about the location, so the mock image is still in
 `IMAGE_OVERRIDES`.
 

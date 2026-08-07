@@ -87,6 +87,7 @@ import { RegistryGroup } from "./groups/RegistryGroup";
 import { EnvVars } from "./groups/EnvVars";
 import { SchedGroup } from "./groups/SchedGroup";
 import { SecurityGroup } from "./groups/SecurityGroup";
+import { SvDockerGroup } from "./groups/SvDockerGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
@@ -261,13 +262,22 @@ export default function App({ api }: { api: Api }) {
   // them. Unanswered reads as yes, which is the direction that over-blocks
   // rather than letting a bundle the server refuses through.
   const svRuns = runsFunctionality(enabled, SV_FUNCTIONALITY);
-  const sv = useMemo(
-    () => svState(facts?.func_ids, options, svConst, svRuns),
-    [facts?.func_ids, options, svConst, svRuns]);
-  // What the bundle is. Declared here rather than beside the two predicates it
-  // feeds, because the SV correction below reads it to say which format it is
-  // replacing -- see the effect that applies sv.patch.
+  // What the bundle is, and what that leaves reaching anything. Declared here
+  // rather than beside the two predicates further down, because two readers up
+  // here need it: the SV correction reads `format` to say which one it is
+  // replacing, and `svState` reads `applies` -- the two platforms publish a
+  // virtual service with disjoint options (#182), so which set of them this
+  // record is about is the format's answer and not its own.
   const format = String(options.output_format ?? "manifests");
+  /** Does this option reach anything in the bundle being generated? What the
+   *  configure step hides by, and what the blockers below are judged against.
+   *  The table is the generator's; see formats.ts. */
+  const applies = useCallback(
+    (k: string) => optionApplies(k, format, ignored),
+    [format, ignored]);
+  const sv = useMemo(
+    () => svState(facts?.func_ids, options, svConst, svRuns, applies),
+    [facts?.func_ids, options, svConst, svRuns, applies]);
   // ...and the last format the correction took away, or null. Not derived: once
   // the patch is applied the options no longer hold what was replaced, so a
   // derivation would state it for exactly the render it is already too late to
@@ -1313,13 +1323,7 @@ export default function App({ api }: { api: Api }) {
   // refuses is sv.blockedFormats, with the sentence each is refused in, and the
   // mirror of it -- which functionalities this format refuses -- is
   // sv.functionalityBlocked.
-  // `format` itself is declared with `sv`, which reads it.
-  /** Does this option reach anything in the bundle being generated? What the
-   *  configure step hides by, and what the two blockers below are judged
-   *  against. The table is the generator's; see formats.ts. */
-  const applies = useCallback(
-    (k: string) => optionApplies(k, format, ignored),
-    [format, ignored]);
+  // `format` and `applies` are both declared with `sv`, which reads them.
   /** ...and, where a field's absence needs explaining, the generator's own
    *  sentence for it. Served with the keys for exactly this: the bundle's
    *  README prints these, and the form hiding the field should not have to
@@ -1366,13 +1370,17 @@ export default function App({ api }: { api: Api }) {
   }, [notRun]);
   // Which groups are in use but not finished. Each group declares its own rule,
   // so a functionality gaining required options later needs nothing here.
-  const incomplete = incompleteGroups(options, sv.groupRequired, svConst.backends);
+  // `applies` too: a group whose every key this format ignores has no row on
+  // this page, so it can never be what is in the way (see incompleteGroups).
+  const incomplete = incompleteGroups(
+    options, sv.groupRequired, svConst.backends, applies);
   // ...and what that leaves the configure step still needing, named. Empty is
   // "nothing", which is what ticks the step off -- see configureBlockedBy. The
   // blocking subset, not `incomplete`: a group with an empty required field is
   // unfinished on its row and no longer in the way of the step.
   const configureBlocked = configureBlockedBy(
-    options, blockingGroups(options, sv.groupRequired, svConst.backends));
+    options,
+    blockingGroups(options, sv.groupRequired, svConst.backends, applies));
   // The required fields left empty. One list, feeding three things that must
   // not be allowed to disagree: what is sent, what the configure step warns
   // about, and what the download step repeats. Memoised on the options identity
@@ -1522,6 +1530,19 @@ export default function App({ api }: { api: Api }) {
         onSubdomain={(v) => set("sv_subdomain", v)}
         onTlsSecret={(v) => set("sv_tls_secret", v)}
         onGateway={(v) => set("sv_istio_gateway", v)} />
+    ),
+    // The same functionality, the docker agent's way. No record to hand it:
+    // there is nothing here to derive -- no backend to look prose up by, no
+    // completeness rule the server does not already own -- so it takes the
+    // three values and the three writes, which is what every other group with
+    // nothing to decide takes.
+    svDocker: (
+      <SvDockerGroup
+        hostname={raw("sv_hostname")} cert={raw("sv_tls_cert")}
+        key_={raw("sv_tls_key")}
+        onHostname={(v) => set("sv_hostname", v)}
+        onCert={(v) => set("sv_tls_cert", v)}
+        onKey={(v) => set("sv_tls_key", v)} />
     ),
   };
 

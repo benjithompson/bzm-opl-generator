@@ -964,8 +964,12 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
 CONFIGMAP_FILE = "bzm_configmap.yaml"
 
 # HARBOR_ID / SHIP_ID as templates/configmap writes them. A regex rather than a
-# YAML parse because this package has no runtime dependencies --
-# generate.existing_auth_token reads its own field back the same way.
+# YAML parse, and the reason is no longer "this package has no runtime
+# dependencies": it has one now (cryptography, for the certificate check --
+# see pyproject.toml), and one that earned its place is not a licence to add
+# another. PyYAML would be a second dependency to read two fields out of a file
+# this generator wrote itself, which is what generate.existing_auth_token reads
+# its own field back the same way for.
 _IDENTITY_RE = re.compile(r'^\s*(HARBOR_ID|SHIP_ID):\s*"?([^"\s]+)"?\s*$', re.M)
 
 BundleCheck = collections.namedtuple("BundleCheck", "refusals notes")

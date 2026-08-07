@@ -62,9 +62,18 @@ def test_a_location_is_offered_only_the_variables_it_has_a_reader_for():
 
     sv = {v["name"] for v in core.agent_env(["mockServices"])}
     assert {"KUBERNETES_USE_APIPA", "KUBERNETES_SERVICES_BLOCKING_GET",
-            "KUBERNETES_WEB_EXPOSE_SHORT_URL", "HOSTNAME_OVERRIDE",
-            "TLS_CERT", "TLS_KEY"} <= sv
+            "KUBERNETES_WEB_EXPOSE_SHORT_URL"} <= sv
     assert "DODUO_PORT" not in sv
+    # ...and the docker trio is gone from the offer, which is the *other* rule
+    # doing its work rather than this one failing (#182): `core.agent_env`
+    # subtracts RESERVED_ENV, and since these three are written off the
+    # `sv_hostname`/`sv_tls_cert`/`sv_tls_key` options the bundle owns them. The
+    # form does not go quiet about them -- EnvVars states the whole reserved
+    # table beside the offered one, naming the option and the section that sets
+    # each. Asserted here because the two halves are far apart and a variable
+    # that stopped being offered without becoming reserved is a hole.
+    assert not sv & {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"}
+    assert {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"} <= generate.RESERVED_ENV
 
     # A location running both is offered both halves, rather than the
     # intersection: the tag is what reads the variable, not what claims it.

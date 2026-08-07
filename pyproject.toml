@@ -27,7 +27,23 @@ classifiers = [
 # October 2025, and the generator itself still uses nothing newer -- the floor
 # is the SDK's, not ours.
 requires-python = ">=3.10"
-dependencies = []
+# One, and it is a deliberate departure from having none (#182). A docker agent
+# serves its virtual services with a certificate this generator puts in the
+# bundle, and BlazeMeter require the advertised hostname to match a DNSName in
+# that certificate's SAN or its Common Name -- get it wrong and the agent
+# starts, reports online and is rejected by every client, with nothing in its
+# own log to say why. The standard library cannot parse a certificate that did
+# not arrive over a live connection (`getpeercert` needs a socket; the one
+# function that reads a file is `ssl._ssl._test_decode_cert`, private and
+# path-valued), so the alternatives were a hand-rolled DER walk or no check at
+# all. `bzm_opl_gen/cert.py` is the only module that imports it.
+#
+# 42.0.0 is a floor rather than a preference: the API used here (
+# `load_pem_x509_certificate`, the SAN extension, `NameOID.COMMON_NAME`) is far
+# older than that, and 42 is simply an abi3-wheeled release old enough to be
+# already installed nearly everywhere and new enough to resolve on every Python
+# this package supports -- verified by installing it under 3.10 and 3.13.
+dependencies = ["cryptography>=42.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/benjithompson/bzm-opl-generator"

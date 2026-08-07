@@ -168,6 +168,23 @@ missing tools. The rest is what it cannot fix for you.
 
 ## Architecture
 
+- **One runtime dependency, and it is `cryptography`** (#182). It was zero for a
+  long time and the property was load-bearing prose in several comments; what it
+  bought was an install that could not fail, and what it cost was the certificate
+  check. The standard library cannot parse a certificate that did not arrive over
+  a live connection -- `getpeercert()` needs a socket, and the one function that
+  reads a file is `ssl._ssl._test_decode_cert`, private, undocumented and
+  *path*-valued, so calling it would have `generate()` write a customer's
+  certificate to a temp file as a side effect of rendering a string. So the
+  dependency was taken deliberately, for one module. **`bzm_opl_gen/cert.py` is
+  the only importer**, and `generate` imports *it* inside `_sv_docker_cfg` --
+  the one function-level import in the module -- so `plan.py`, which is asserted
+  to reach nothing and has no certificate to read, does not pull a compiled
+  extension onto the path of the step that needs no cluster and no account.
+  **One that earned its place is not a licence to add another**: `livetest` and
+  `generate.existing_auth_token` still read two fields out of files this
+  generator wrote itself with a regex, and PyYAML stays a test extra.
+
 - **Orchestration in `core.py`, transport in `server.py`.** `core` imports no
   fastapi, no pydantic, nothing about requests — `tests/test_core.py` asserts it
   by parsing the imports, because a web framework reachable from there puts the
@@ -507,11 +524,15 @@ missing tools. The rest is what it cannot fix for you.
   functionality id, and it says so in its own sentence — "not possible in this
   bundle" and "not enabled on this location" are separate answers and the card
   gives only the true one. Don't generalise it into a served "which
-  functionalities does a format refuse" table: helm and docker refuse *one* and
-  nothing else refuses any, and `IGNORED_BY_FORMAT` keeps helm's entry empty
-  precisely because helm does not *ignore* service virtualization — it refuses
-  it. Ignoring and refusing are different answers, and a format that refuses
-  says so in `generate()` rather than in that table. **A format's refusal clears no
+  functionalities does a format refuse" table: **helm** refuses *one* and
+  nothing else refuses any. Helm's `IGNORED_BY_FORMAT` entry deliberately does
+  not carry the four `sv_ingress` options, because helm does not *ignore*
+  service virtualization — it refuses it. Ignoring and refusing are different
+  answers, and a format that refuses says so in `generate()` rather than in that
+  table. Docker was the second refuser until #182 and is now the case that
+  proves the distinction from the other side: it *publishes* virtual services,
+  so the Kubernetes four are genuinely ignored there and its `svDocker` three
+  are ignored by the two cluster formats. **A format's refusal clears no
   options**; the *format*
   gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
   configuration somebody wrote outranks a segment, and only `notRunPatch` — the
@@ -521,18 +542,32 @@ missing tools. The rest is what it cannot fix for you.
   until a format is picked.
 
   **`blockedFormats` follows what is configured, never what is demanded** (#115).
-  `generate()` refuses a helm or docker bundle on `_sv_cfg` returning a config,
-  and never reads the funcIds first. Read off the demand instead, the gap was a
+  `generate()` refuses a helm bundle on `_sv_cfg` returning a config, and never
+  reads the funcIds first. Read off the demand instead, the gap was a
   location whose funcIds carry no served functionality (real accounts have them:
   tdm, dataPublisher, delphix) — `enabledFunctionalities` answers null,
   `runsFunctionality` reads null as yes, every switch is offered, `notRunPatch`
   clears nothing, and a full
-  SV configuration generated as docker and was refused by the server with the
-  segment still enabled. `svState` therefore takes `runs` as a fourth input:
-  options on their way out must not take a format with them, or a docker choice
-  valid all along is lost on the way past. The formats the page blocks are held
-  to the ones `generate()` actually raises on, by `test_server.py`, because the
-  two refusals are far apart and easy to grow a third of.
+  SV configuration was generated on a refused format and refused by the server
+  with the segment still enabled. `svState` therefore takes `runs` as a fourth
+  input: options on their way out must not take a format with them, or a format
+  choice valid all along is lost on the way past. The formats the page blocks
+  are held to the ones `generate()` actually raises on, by `test_server.py`,
+  because the two are far apart and easy to grow a second of.
+
+  **`svState` takes `applies` as a fifth, and it is a different question from
+  `runs`** (#182). Service virtualization is published with disjoint options per
+  platform, so which set this record is about is the *format's* answer:
+  `applies("sv_ingress")` is false for a docker bundle, and everything about an
+  ingress — `required`, `groupRequired`, `groupDeclined`, the nginx seed, the
+  openshift rescue, `ok` — is gated on it, or the page would flag a row that is
+  not on screen and `correction` would write an ignored option nobody could see
+  a control for. **`carries` is deliberately not gated**: a docker bundle can
+  hold a stranded `sv_ingress`, and it goes live the moment somebody picks helm,
+  so what may be *picked* follows what the configuration would mean there.
+  `incompleteGroups`/`blockingGroups` take `applies` for the same reason — the
+  claim that a group is "never hidden, so never a blocker off screen" held only
+  while no functionality-tagged group was format-hidden, and now two are.
 
   **A functionality the location does not run is not on the configure step at
   all.** It was *stated* for a while (#113) — a card naming the funcId to add —
@@ -633,9 +668,15 @@ missing tools. The rest is what it cannot fix for you.
   not an option and is the one identity it records, so `generate --profile`
   replays a bundle exactly and `livetest` judges one. Three things are
   deliberately not in it, and each absence is load-bearing:
-  **the AUTH_TOKEN** (`SECRET_OPTIONS`), because a profile is the file people
-  commit, diff and paste into tickets, and the bundle beside it is where a
-  regenerate reads the token back from;
+  **the AUTH_TOKEN and `sv_tls_key`** (`SECRET_OPTIONS`), because a profile is
+  the file people commit, diff and paste into tickets, and the bundle beside it
+  is where a regenerate reads the token back from. `sv_tls_cert` is
+  deliberately **not** in that set and the asymmetry is the point: a public
+  certificate is what the agent hands every client that connects, so dropping it
+  would make a replay need two things supplied for no gain. The consequence is
+  documented rather than worked around -- `generate --profile` on a docker-SV
+  bundle needs `--auth-token` *and* `--sv-tls-key`, and without the key the
+  replayed bundle writes `<PLACEHOLDER>` into `sv-tls.key` and names it;
   **`harbor_id`**, which comes from facts rather than options — which is why
   `livetest.bundle_check` reads HARBOR_ID out of the ConfigMap rather than from
   here;
@@ -728,7 +769,19 @@ carries it structurally, returning `None` for the entries wherever the state is
 not `read`; a caller that iterates without looking gets a TypeError rather than
 an empty list it reads as "this location runs nothing".
 
-A fourth, arriving from BlazeMeter rather than from a file: **404 is the one
+A fourth, in `cert.dns_names` (#182), and it is the one that decides whether a
+refusal is honest. Three answers: the names a certificate carries; `[]`, a
+certificate that parsed and names no host at all, which a hostname genuinely
+cannot match and which *is* refused; and `None`, a PEM that would not load,
+which is **not read** and refuses nothing -- doing so would turn "we did not
+look" into "it is wrong" about a certificate that may be fine. `cryptography`
+makes the two easy to collapse and they must not be: `ExtensionNotFound` is the
+certificate *answering* (no SAN, fall through to the Common Name), while a load
+failure is not an answer at all. Silence is not available either -- a bundle
+that said nothing would read exactly like one that passed -- so the docker
+README states which of the two happened, in its own sentence.
+
+A fifth, arriving from BlazeMeter rather than from a file: **404 is the one
 upstream status that is a different type.** `core._upstream` had every
 `BzmApiError` become an `UpstreamError`/502, so a location somebody deleted and
 a BlazeMeter nobody could reach were the same failure carrying whatever sentence
@@ -831,6 +884,32 @@ stale list can cost a credential nothing can read back.
   pages, and the bundle did not start -- the container ran as the image's
   non-root user and died on the docker socket it exists to use.
 
+  **Service virtualization is the one subject `IGNORED_BY_FORMAT` is symmetric
+  about** (#182). A virtual service is published with disjoint variables per
+  platform -- `KUBERNETES_WEB_EXPOSE_*` against `HOSTNAME_OVERRIDE` plus a
+  `TLS_CERT`/`TLS_KEY` pair, and BlazeMeter say so themselves -- so each set is
+  the *other* format's ignored options and exactly one of the two `optionGroups`
+  groups (`sv`, `svDocker`) is ever on screen. Two consequences that are easy to
+  get wrong: `_sv_cfg` returns None where `sv_ingress` is ignored (its refusal
+  over a `mockServices` location names a field docker's page does not show --
+  the off-screen blocker again), and the two cluster READMEs grew the
+  "Set here, but not carried" table docker's already had, because
+  `test_a_format_never_refuses_what_it_says_it_ignores` walks every format.
+
+  **The two PEMs are content and the mounts come off one list.**
+  `docker_file_mounts()` is what the script's overridable `VAR="${VAR:-$DIR/f}"`,
+  its existence check, the `-v` line and compose's `${VAR:-./f}` all walk; a
+  file added to two of the four is exactly what #178's parity check exists to
+  catch, and a list is what makes that cheap. Both checks in `_sv_docker_cfg`
+  are there because both failures are silent from the agent's end -- it starts,
+  reports online, and every client rejects the endpoint: a key that is not
+  PKCS#8 (a **header** check -- `cryptography` loads PKCS#1 happily, so the
+  header is the only discriminator for the syntax BlazeMeter require), and a
+  hostname the certificate does not cover. **Nothing else about the certificate
+  is checked and the README says so** -- not expiry, not the chain, not whether
+  the key beside it is its key. See the `cert.dns_names` note below for the
+  third answer.
+
   **`compose.yaml` is that same container, and the two are either/or** (#177).
   Compose buys no capability for one container; it is a shape some customers
   require, so it ships *inside* the docker bundle rather than as a fourth
@@ -871,9 +950,15 @@ stale list can cost a credential nothing can read back.
   directory are named explicitly in `pyproject.toml`; the release workflow
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
-- `--format helm` and `--format docker` refuse a bundle *configured* for service
-  virtualization — never a location for carrying the funcId, which is #115's
+- **`--format helm` refuses a bundle *configured* for service virtualization**
+  — never a location for carrying the funcId, which is #115's
   whole point, and a location generated `--sv-ingress none` has the chart.
+  Docker refused one too until #182 and does not now: it publishes virtual
+  services with `HOSTNAME_OVERRIDE` and a `TLS_CERT`/`TLS_KEY` pair, which are
+  `sv_hostname`, `sv_tls_cert` and `sv_tls_key`. The two PEMs carry **content**,
+  not a path -- `ca_bundle`'s shape end to end, and for `ca_bundle`'s reason: a
+  path-valued option cannot produce a bundle for a host nobody here can see,
+  which is `facts.manual()`'s whole premise.
   `livetest` refuses a chart directory, a docker bundle, a profile
   with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
   re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart

@@ -60,14 +60,31 @@ export const SIZING_MODELS: SizingModel[] = [
  *  holds the route equal to the generator's table, and what is checked here is
  *  the half no Python test can see: what a page does with such a table.
  *
- *  **Every format is stated, including the two that drop nothing.** `{}` is the
- *  answer "this format drops nothing", and a fixture that left those formats
- *  out would be handing the page the one state that means "nothing has been
- *  read" -- so a test asserting that every field shows for a helm bundle would
- *  pass without the page ever having read an answer. */
+ *  **Every format is stated, `{}` included.** `{}` is the answer "this format
+ *  drops nothing", and a fixture leaving a format out would be handing the page
+ *  the one state that means "nothing has been read" -- so a test asserting that
+ *  every field shows for that bundle would pass without the page ever having
+ *  read an answer. The two cluster formats no longer *are* `{}`, since service
+ *  virtualization is published with disjoint variables per platform (#182), but
+ *  the rule is about the shape rather than about which formats happen to be
+ *  empty today. */
 export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
-  manifests: {},
-  helm: {},
+  manifests: {
+    sv_hostname: "HOSTNAME_OVERRIDE is a docker variable; a Kubernetes agent "
+      + "returns a DNS-based URL and needs no hostname override",
+    sv_tls_cert: "a Kubernetes agent serves its endpoints through the ingress, "
+      + "which reads the certificate from sv_tls_secret",
+    sv_tls_key: "a Kubernetes agent serves its endpoints through the ingress, "
+      + "which reads the key from sv_tls_secret",
+  },
+  helm: {
+    sv_hostname: "HOSTNAME_OVERRIDE is a docker variable; a Kubernetes agent "
+      + "returns a DNS-based URL and needs no hostname override",
+    sv_tls_cert: "a Kubernetes agent serves its endpoints through the ingress, "
+      + "which reads the certificate from sv_tls_secret",
+    sv_tls_key: "a Kubernetes agent serves its endpoints through the ingress, "
+      + "which reads the key from sv_tls_secret",
+  },
   docker: {
     platform: "there is no OpenShift/Kubernetes distinction on a docker host",
     openshift_cluster: "there is no cluster, so no oc and no Route",
@@ -93,6 +110,13 @@ export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
     ca_configmap_key: "there is no ConfigMap; the bundle mounts a file",
     ca_openshift_inject: "nothing injects a trust bundle into a container",
     engines_per_node: "there is one host, and it is this one",
+    sv_ingress: "KUBERNETES_WEB_EXPOSE_TYPE is a Kubernetes variable; a docker "
+      + "agent publishes under sv_hostname instead",
+    sv_subdomain: "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN is a Kubernetes variable; "
+      + "the docker agent's host is sv_hostname",
+    sv_tls_secret: "there is no Secret to name; this bundle mounts sv_tls_cert "
+      + "and sv_tls_key as files",
+    sv_istio_gateway: "istio is a Kubernetes service mesh",
     crane_hook: "crane-hook is a Pod, and there is no cluster to run it in",
     registry_auth: "the stubs are ConfigMap lines; a docker host authenticates "
       + "with its own docker login",
@@ -119,6 +143,7 @@ export const RESERVED_ENV: Record<string, string | null> = {
   DOCKER_REGISTRY_PASSWORD: "registry_auth",
   DOCKER_REGISTRY_USERNAME: "registry_auth",
   HARBOR_ID: null,
+  HOSTNAME_OVERRIDE: "sv_hostname",
   HTTPS_PROXY: "proxy",
   HTTP_PROXY: "proxy",
   IMAGE_OVERRIDES: "private_registry",
@@ -140,6 +165,8 @@ export const RESERVED_ENV: Record<string, string | null> = {
   REQUESTS_CA_BUNDLE: "ca_bundle | ca_existing_configmap",
   RUN_HEALTH_WEB_SERVICE: null,
   SHIP_ID: null,
+  TLS_CERT: "sv_tls_cert",
+  TLS_KEY: "sv_tls_key",
 };
 
 /** A few of the variables /api/agent-env offers, one per control the area can
@@ -157,7 +184,14 @@ export const RESERVED_ENV: Record<string, string | null> = {
  *  about a variable the server would no longer serve. Their `functionalities`
  *  are the real tags too, for the same reason and no stronger one: a test that
  *  serves this list scoped, as the server would, wants a row that really does
- *  drop out of a performance location's answer. */
+ *  drop out of a performance location's answer.
+ *
+ *  **There is no docker-only row, and there cannot be one.** BlazeMeter's
+ *  Docker-only column is `DOCKER_REGISTRY_*`, `AUTO_UPDATE`, and since #182
+ *  `HOSTNAME_OVERRIDE` / `TLS_CERT` / `TLS_KEY` -- every one of them now written
+ *  off an option, so every one is reserved and none is served. `HOSTNAME_OVERRIDE`
+ *  was the sample here until then. The platform filter is still exercised, from
+ *  the other side, by the `kubernetes`-only row below it. */
 export const AGENT_ENV: AgentEnvVar[] = [
   { name: "PREFERRED_INTERFACE", type: "string",
     platforms: ["kubernetes", "docker"], functionalities: [],
@@ -175,8 +209,8 @@ export const AGENT_ENV: AgentEnvVar[] = [
     functionalities: [],
     summary: "Labels added to every object the agent creates",
     default: null, example: '{"team": "perf"}' },
-  { name: "HOSTNAME_OVERRIDE", type: "string", platforms: ["docker"],
+  { name: "KUBERNETES_USE_APIPA", type: "bool", platforms: ["kubernetes"],
     functionalities: ["mockServices"],
-    summary: "Hostname for transactional virtual services on this agent",
-    default: null, example: null },
+    summary: "Publish endpoints on the node's IP address rather than 127.0.0.1",
+    default: "true", example: null },
 ];

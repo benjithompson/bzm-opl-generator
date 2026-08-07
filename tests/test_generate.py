@@ -9,8 +9,13 @@ import pytest
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+from bzm_opl_gen import cert  # noqa: E402
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
+from tls_fixtures import (  # noqa: E402
+    SV_CERT, SV_CERT_NO_NAMES, SV_HOST, SV_KEY, SV_KEY_PKCS1, SV_NAMES,
+    SV_WILDCARD_HOST, SV_WRONG_HOST)
 from bzm_opl_gen.api import BzmApiError, parse_auth_token  # noqa: E402
 from bzm_opl_gen.quantity import parse_memory  # noqa: E402
 
@@ -1833,6 +1838,17 @@ COMPOSE_CASES = [
     # shape a YAML quoting mistake hides in.
     {"auth_token": gen.PLACEHOLDER},
     {"auth_token": gen.PLACEHOLDER, "use_secret": False},
+    # Service virtualization, which is two more mounted files and three more
+    # variables -- the case #182 added and the one a parity check written
+    # before it would have passed vacuously.
+    {"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY},
+    # ...and the hostname alone, which is a real configuration (the endpoints
+    # are plain HTTP) and writes the variable without either mount.
+    {"sv_hostname": SV_HOST},
+    # A blank hostname beside a certificate: HOSTNAME_OVERRIDE carries the
+    # marker, so this is the guard in the *inline* file for a variable that is
+    # not the token.
+    {"sv_hostname": "", "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY},
 ]
 
 
@@ -2076,9 +2092,14 @@ def _script_paths(sh):
     is the same thing `${CA_BUNDLE:-./ca-bundle.crt}` says next door.
     """
     out = {}
-    for name, raw in re.findall(r"^(NAME|ENV_FILE|CA_BUNDLE)=(.*)$", sh, re.M):
+    # Every variable the script assigns at the top, rather than three named
+    # ones: each mounted file adds one (generate.docker_file_mounts), and a
+    # pattern that had to be extended per file is one that silently stops
+    # resolving the mount it was not told about -- which reads here as a
+    # difference between the two files rather than as a gap in this parser.
+    for name, raw in re.findall(r"^([A-Z][A-Z0-9_]*)=(.*)$", sh, re.M):
         value = raw.strip('"')
-        default = re.fullmatch(r"\$\{CA_BUNDLE:-(.*)\}", value)
+        default = re.fullmatch(r"\$\{" + name + r":-(.*)\}", value)
         out["$" + name] = (default.group(1) if default else value).replace("$DIR/", "")
     return out
 
@@ -2164,7 +2185,12 @@ def _container_from_compose(files):
          "network": svc["network_mode"], "workdir": svc["working_dir"],
          "command": svc["command"],
          "env_files": [re.sub(r"^\./", "", f) for f in svc.get("env_file", [])],
-         "mounts": [re.sub(r"^\$\{CA_BUNDLE:-\./(.*?)\}", r"\1", m)
+         # `${VAR:-./file}` is compose's spelling of the script's overridable
+         # `VAR="${VAR:-$DIR/file}"`, and both sides are stripped to the file
+         # itself. Any variable, not CA_BUNDLE by name: the TLS pair a docker
+         # agent serves virtual services with is written the same way, and a
+         # pattern naming one file cannot notice a second going missing.
+         "mounts": [re.sub(r"^\$\{[A-Z][A-Z0-9_]*:-\./(.*?)\}", r"\1", m)
                     for m in svc["volumes"]],
          "inline": inline}
     c["env"] = {**_env_file_env(files), **inline}
@@ -2331,9 +2357,12 @@ def test_every_format_has_an_ignored_entry():
     it, which is what would then walk it."""
     assert set(gen.IGNORED_BY_FORMAT) == set(gen.OUTPUT_FORMATS)
     assert set(FORMAT_BASE) == set(gen.OUTPUT_FORMATS)
-    # The one non-empty entry today, named so a table that silently emptied
-    # itself fails here rather than passing every rule below vacuously.
+    # Named so a table that silently emptied itself fails here rather than
+    # passing every rule below vacuously. Two of them now: since #182 the
+    # cluster formats drop the docker agent's own way of publishing a virtual
+    # service, which is what made this table symmetric for the first time.
     assert gen.IGNORED_BY_FORMAT["docker"]["namespace"]
+    assert gen.IGNORED_BY_FORMAT["manifests"]["sv_hostname"]
 
 
 def test_a_format_never_refuses_what_it_says_it_ignores():
@@ -2404,16 +2433,207 @@ def test_docker_readme_does_not_advertise_kubernetes_answers():
     assert "bzm-crane-bbb222" in head
 
 
-def test_docker_refuses_a_service_virtualization_location():
-    """The same refusal as helm's, for the same reason: a docker agent can serve
-    virtual services, but it publishes them with HOSTNAME_OVERRIDE and a TLS
-    pair, and every sv_* option here is a KUBERNETES_WEB_EXPOSE_* one."""
+def test_docker_no_longer_refuses_a_service_virtualization_location():
+    """It used to, and the refusal was always narrower than it read (#182): a
+    docker agent serves virtual services perfectly well, publishing them with
+    HOSTNAME_OVERRIDE and a TLS pair, and what was missing was options for that
+    shape rather than anything about the agent.
+
+    The four Kubernetes sv_* options are this format's ignored ones now, so a
+    profile written for a cluster and switched to docker generates -- carrying
+    them in profile.json and naming them in the README, which is what every
+    other ignored option does.
+    """
     sv_facts = {**FACTS, "func_ids": ["performance", "mockServices"]}
+    files = gen.generate(sv_facts, {**DOCKER, "sv_ingress": "nginx",
+                                    "sv_subdomain": "apps.example.com",
+                                    "sv_tls_secret": "wild"})
+    assert "`sv_ingress`" in files["README.md"]
+    assert "KUBERNETES_WEB_EXPOSE" not in files[gen.DOCKER_RUN_FILE]
+    # ...and a mockServices location with nothing configured is not refused
+    # either: the demand `_sv_cfg` raises on is a demand for an *ingress*, and
+    # this format has no field for one.
+    gen.generate(sv_facts, DOCKER)
+
+
+SV_DOCKER = {**DOCKER, "sv_hostname": SV_HOST,
+             "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY}
+
+
+def test_a_docker_agent_publishes_virtual_services_under_its_own_three():
+    """The shape from BlazeMeter's bring-your-own-certificate page, folded into
+    this bundle: the two PEMs become files, the files are mounted at the paths
+    their command uses, and the variables name those paths.
+
+    Content in the option and a file in the bundle, exactly as `ca_bundle` is:
+    a path-valued option would break facts.manual()'s whole premise, since a
+    bundle cannot be generated for a host nobody here can see if the option
+    names a file on it."""
+    files = gen.generate(FACTS, SV_DOCKER)
+    assert files[gen.DOCKER_SV_CERT_FILE] == SV_CERT
+    assert files[gen.DOCKER_SV_KEY_FILE] == SV_KEY
+    sh = files[gen.DOCKER_RUN_FILE]
+    assert f"--env HOSTNAME_OVERRIDE={SV_HOST}" in sh
+    assert f"--env TLS_CERT={gen.DOCKER_SV_CERT_PATH}" in sh
+    assert f"--env TLS_KEY={gen.DOCKER_SV_KEY_PATH}" in sh
+    assert f'-v "$SV_TLS_CERT":{gen.DOCKER_SV_CERT_PATH}:ro' in sh
+    assert f'-v "$SV_TLS_KEY":{gen.DOCKER_SV_KEY_PATH}:ro' in sh
+    # ...and each keeps `ca_bundle`'s escape hatch: a host may already have the
+    # certificate its platform team maintains.
+    assert f'SV_TLS_CERT="${{SV_TLS_CERT:-$DIR/{gen.DOCKER_SV_CERT_FILE}}}"' in sh
+    assert "virtual-service certificate not found" in sh
+    # The compose file mounts the same pair at the same paths -- held over the
+    # whole matrix by test_compose_and_docker_run_describe_the_same_container,
+    # and stated here so the two files can be read side by side.
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    assert svc["volumes"][-2:] == [
+        f"${{SV_TLS_CERT:-./{gen.DOCKER_SV_CERT_FILE}}}:{gen.DOCKER_SV_CERT_PATH}:ro",
+        f"${{SV_TLS_KEY:-./{gen.DOCKER_SV_KEY_FILE}}}:{gen.DOCKER_SV_KEY_PATH}:ro"]
+    assert svc["environment"]["HOSTNAME_OVERRIDE"] == SV_HOST
+
+
+def test_the_hostname_alone_is_a_configuration():
+    """BlazeMeter frame the pair as what you supply "to use HTTPS", so a
+    hostname with no certificate is a real bundle -- the endpoints are plain
+    HTTP under a name rather than under this host's IP address, which is the
+    whole of what HOSTNAME_OVERRIDE is for. Refusing it would be inventing a
+    requirement they do not state."""
+    files = gen.generate(FACTS, {**DOCKER, "sv_hostname": SV_HOST})
+    assert gen.DOCKER_SV_CERT_FILE not in files
+    sh = files[gen.DOCKER_RUN_FILE]
+    assert f"--env HOSTNAME_OVERRIDE={SV_HOST}" in sh
+    assert "TLS_CERT" not in sh
+    # ...and the README says which of the two it is, because "no certificate"
+    # is a decision somebody may not have realised they were making.
+    assert "plain HTTP" in files["README.md"]
+
+
+def test_a_pkcs1_key_is_refused_by_name_with_the_conversion():
+    """`-----BEGIN RSA PRIVATE KEY-----` is what `openssl genrsa` still writes
+    on many builds, so it is the common export rather than an exotic case, and
+    BlazeMeter require PKCS#8. Handed one the agent starts, reports online and
+    fails at the first TLS handshake -- so the refusal is here, and it names
+    the one command that fixes it."""
     with pytest.raises(ValueError) as e:
-        gen.generate(sv_facts, {**DOCKER, "sv_ingress": "nginx",
-                                "sv_subdomain": "apps.example.com",
-                                "sv_tls_secret": "wild"})
-    assert "HOSTNAME_OVERRIDE" in str(e.value)
+        gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": SV_KEY_PKCS1})
+    assert "PKCS#1" in str(e.value)
+    assert "openssl pkcs8 -topk8" in str(e.value)
+    # An encrypted key is refused too, and for its own reason: nothing in this
+    # bundle, in BlazeMeter's env reference or in their own docker command
+    # supplies a passphrase.
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {**SV_DOCKER,
+                             "sv_tls_key": "-----BEGIN ENCRYPTED PRIVATE KEY-----\nx\n"})
+    assert "passphrase" in str(e.value)
+    # ...and something that is not a key at all.
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": "hunter2"})
+    assert "sv_tls_key" in str(e.value)
+
+
+def test_a_certificate_that_does_not_cover_the_hostname_is_refused():
+    """The failure is invisible from the agent's end: crane starts, reports
+    online, publishes the endpoint, and every client rejects the certificate.
+    So it is checked at generate time against the certificate already in hand,
+    and the refusal states what the certificate does name."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": SV_WRONG_HOST})
+    assert SV_WRONG_HOST in str(e.value)
+    for name in SV_NAMES:
+        assert name in str(e.value)
+    # A wildcard covers one label, as it does everywhere else.
+    gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": SV_WILDCARD_HOST})
+    with pytest.raises(ValueError):
+        gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": "a.b." + SV_HOST})
+
+
+def test_a_certificate_naming_no_host_is_refused_in_its_own_words():
+    """Read, and it covers nothing -- which is a real answer about a real
+    certificate and not the same thing as the one below it."""
+    with pytest.raises(ValueError) as e:
+        gen.generate(FACTS, {**SV_DOCKER, "sv_tls_cert": SV_CERT_NO_NAMES})
+    assert "no DNS name at all" in str(e.value)
+
+
+def test_a_certificate_this_cannot_read_is_not_checked_and_says_so():
+    """The rule this repo keeps: a thing nobody has checked and a thing this
+    tool verified must not share a representation.
+
+    A PEM that will not parse is *not read*, so it is not refused -- refusing
+    would turn "we did not look" into "it is wrong" about a certificate that may
+    be fine. What is not allowed is silence, because a bundle that said nothing
+    would read exactly like one that had passed. So the README says which of the
+    two happened, in its own sentence, and points at the openssl command that
+    answers it.
+    """
+    corrupt = SV_CERT.replace(SV_CERT.splitlines()[3], "AAAA")
+    files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_cert": corrupt})
+    readme = files["README.md"]
+    assert "was not checked against the certificate" in readme
+    assert "openssl x509" in readme
+    # ...and the bundle a check did pass says that instead, naming what the
+    # certificate carries and what was *not* asked about it.
+    checked = gen.generate(FACTS, SV_DOCKER)["README.md"]
+    assert "was checked against it" in checked
+    assert "not its expiry" in checked
+    assert "not whether the key beside it is its key" in checked
+
+
+def test_the_private_key_is_never_in_the_profile_and_the_certificate_is():
+    """A profile is the file people commit, diff and paste into tickets. The
+    key is a credential; the certificate is what the agent hands to every client
+    that connects, so dropping it would make a replay need two things supplied
+    for no gain.
+
+    The consequence is documented rather than worked around: `generate
+    --profile` on such a bundle needs `--auth-token` and `--sv-tls-key`, and
+    without the key the replayed bundle carries a marker and says so.
+    """
+    files = gen.generate(FACTS, SV_DOCKER)
+    profile = json.loads(files[gen.PROFILE_FILE])
+    assert "sv_tls_key" not in profile
+    assert profile["sv_tls_cert"] == SV_CERT
+    assert profile["sv_hostname"] == SV_HOST
+    replayed = gen.generate(FACTS, {**profile, "auth_token": "de" * 32})
+    assert gen.PLACEHOLDER in replayed[gen.DOCKER_SV_KEY_FILE]
+    assert "`sv_tls_key`" in replayed["README.md"]
+
+
+def test_half_a_tls_pair_is_a_blank_field_rather_than_a_refusal():
+    """Each fills for the other, which is one rule read twice. A marker rather
+    than a refusal because a half-answered pair is a field somebody left empty,
+    and that is what `<PLACEHOLDER>` is for -- refusing would be a blocker on a
+    page that had already let the box be emptied.
+
+    A blank hostname beside a certificate is the same rule and lands in the
+    variable, where #183's guard is what refuses it before the agent starts."""
+    only_cert = gen.generate(FACTS, {**DOCKER, "sv_hostname": SV_HOST,
+                                     "sv_tls_cert": SV_CERT})
+    assert only_cert[gen.DOCKER_SV_KEY_FILE] == gen.PLACEHOLDER
+    assert "`sv_tls_key`" in only_cert["README.md"]
+    blank_host = gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": ""})
+    assert "HOSTNAME_OVERRIDE" in dict(gen._docker_blank_env(FACTS, {
+        **gen.DEFAULT_OPTIONS, **SV_DOCKER, "sv_hostname": gen.PLACEHOLDER}))
+    assert "HOSTNAME_OVERRIDE carries" in blank_host[gen.DOCKER_RUN_FILE]
+
+
+def test_the_two_platforms_never_offer_each_other_s_vocabulary():
+    """The symmetry #182 introduced, from both ends. A cluster bundle carries no
+    HOSTNAME_OVERRIDE and a docker bundle no KUBERNETES_WEB_EXPOSE_*, and each
+    set is in the other format's ignored table rather than refused -- so a
+    profile written for one platform generates for the other, keeping its values
+    and naming them."""
+    k8s = gen.generate(FACTS, {"ship_id": "bbb222", "auth_token": "de" * 32,
+                               "namespace": "ns1", "sv_hostname": SV_HOST,
+                               "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY})
+    cm = yaml.safe_load(k8s["bzm_configmap.yaml"])
+    assert not {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"} & set(cm["data"])
+    assert "sv-tls.crt" not in k8s
+    # Named, never dropped -- the promise every ignored option is under, and
+    # until #182 only docker's README kept it.
+    assert "## Set here, but not carried" in k8s["README.md"]
+    assert "`sv_hostname`" in k8s["README.md"]
+    assert gen.SV_DOCKER_IGNORED.keys() <= gen.IGNORED_BY_FORMAT["helm"].keys()
 
 
 def test_docker_profile_replays_and_carries_no_token():
@@ -2451,6 +2671,13 @@ ENV_COVERAGE = [
     (FACTS, {**DOCKER, "auto_update": False,
              "proxy": {"http": "http://px:3128"},
              "ca_bundle": "-----BEGIN CERTIFICATE-----"}),
+    # The docker agent's own way of publishing a virtual service -- the branch
+    # that writes HOSTNAME_OVERRIDE and the TLS pair, and the only one that
+    # does. Without it those three names would be in RESERVED_ENV with nothing
+    # emitting them, which is the half of this rule that refuses a variable the
+    # customer could have had.
+    (SV_FACTS, {**DOCKER, "sv_hostname": SV_HOST,
+                "sv_tls_cert": SV_CERT, "sv_tls_key": SV_KEY}),
 ]
 
 

@@ -192,7 +192,8 @@ def cmd_generate(a):
                 # read as "not given".
                 "auto_update",
                 "service_account_name",
-                "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"):
+                "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway",
+                "sv_hostname"):
         v = getattr(a, key, None)
         if v is not None:
             opts[key] = v
@@ -222,6 +223,18 @@ def cmd_generate(a):
     if a.ca_bundle:
         with open(a.ca_bundle) as fh:
             opts["ca_bundle"] = fh.read()
+    # A PEM is unpasteable on a command line, so these take a file and the
+    # option carries what was in it -- --ca-bundle's shape, and for the same
+    # reason. The key is not in profile.json (SECRET_OPTIONS), so replaying a
+    # profile means passing --sv-tls-key again; without it the bundle carries a
+    # <PLACEHOLDER> key file and the README says so, rather than a key file that
+    # silently is not one.
+    for flag, key in (("sv_tls_cert", "sv_tls_cert"),
+                      ("sv_tls_key", "sv_tls_key")):
+        path = getattr(a, flag, None)
+        if path:
+            with open(path) as fh:
+                opts[key] = fh.read()
     if a.ca_configmap:
         name, _, key = a.ca_configmap.partition(":")
         opts["ca_existing_configmap"] = name
@@ -908,6 +921,19 @@ def main():
                    help="wildcard TLS secret in the agent namespace; required even for HTTP")
     g.add_argument("--sv-istio-gateway", dest="sv_istio_gateway", metavar="NAME",
                    help="istio only, optional: reuse this Gateway instead of one per service")
+    # The docker agent's own way of publishing the same thing. The two PEMs are
+    # files here and content in the option, exactly as --ca-bundle is: a path on
+    # a command line is convenient, a path in the *option* would mean a bundle
+    # could not be generated for a host nobody here can see.
+    g.add_argument("--sv-hostname", dest="sv_hostname", metavar="HOST",
+                   help="docker only: HOSTNAME_OVERRIDE -- the hostname this "
+                        "agent advertises its virtual services under")
+    g.add_argument("--sv-tls-cert", dest="sv_tls_cert", metavar="PEM_FILE",
+                   help="docker only: PEM certificate the agent serves virtual "
+                        "services with; must cover --sv-hostname")
+    g.add_argument("--sv-tls-key", dest="sv_tls_key", metavar="PEM_FILE",
+                   help="docker only: its private key, PEM with PKCS#8 syntax "
+                        "(never recorded in profile.json)")
     g.add_argument("--no-secret", action="store_true", help="AUTH_TOKEN in ConfigMap")
     g.add_argument("--tolerations", help='crane pod (and engines, unless --engine-tolerations). JSON list, e.g. \'[{"key":"lifecycle","operator":"Equal","value":"spot","effect":"NoSchedule"}]\'')
     g.add_argument("--node-selector", dest="node_selector", help='crane pod (and engines, unless --engine-node-selector). JSON object, e.g. \'{"pool":"crane"}\'')

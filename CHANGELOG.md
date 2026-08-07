@@ -13,6 +13,35 @@ anything that breaks.
 
 ### Added
 
+- **`--format docker` can serve virtual services.** It used to refuse a bundle
+  configured for service virtualization, and the refusal was always narrower
+  than it read: a docker agent publishes them perfectly well, and the gap was in
+  this generator. Three new options are that shape — `--sv-hostname` writes
+  `HOSTNAME_OVERRIDE`, and `--sv-tls-cert` / `--sv-tls-key` are written into the
+  bundle as `sv-tls.crt` and `sv-tls.key`, mounted at BlazeMeter's own paths and
+  named by `TLS_CERT` and `TLS_KEY`. They take a PEM *file* and carry its
+  contents, exactly as `--ca-bundle` does, and both mounts stay overridable at
+  run time (`SV_TLS_CERT`, `SV_TLS_KEY`). The compose file mounts the same pair.
+
+  Two things are checked when the bundle is generated, because both fail
+  silently on a running agent: the key must be **PKCS#8** (a PKCS#1 export is
+  refused, naming `openssl pkcs8 -topk8`), and `--sv-hostname` must match a
+  DNSName in the certificate's SAN or its Common Name, wildcards included.
+  Nothing else about the certificate is checked — not expiry, not the chain, not
+  whether the key beside it is its key — and where the certificate cannot be
+  parsed at all the bundle's README says the hostname was **not checked**,
+  rather than going quiet.
+
+  The four Kubernetes `sv_*` options are now *ignored* by `--format docker`
+  rather than refused, and the three above are ignored by the two cluster
+  formats: each set is the other platform's, so a profile written for one and
+  generated for the other keeps its values and the README names what it could
+  not apply. **`--format helm` is now the only format that refuses a virtual
+  service.** `sv_tls_key` is a credential, so it is not written to
+  `profile.json`: `generate --profile` on such a bundle needs `--auth-token`
+  *and* `--sv-tls-key`. See
+  [docs/service-virtualization.md](docs/service-virtualization.md).
+
 - **`--format docker` now emits `compose.yaml` beside `bzm-opl-agent.sh`.** Some
   customers install with Docker Compose and will not take a `docker run` script.
   It is not a fourth `--format`: a format is a platform, and these are two
@@ -67,6 +96,13 @@ anything that breaks.
   functionality. Picking one fills the fields and applies nothing else.
 
 ### Changed
+
+- **The CLI now has one dependency, `cryptography`.** It had none, and this is
+  a deliberate departure: checking `--sv-hostname` against the certificate above
+  needs an X509 parser, and the standard library has no public API for reading a
+  certificate that did not arrive over a live connection. `pipx install
+  bzm-opl-gen` pulls it in; `bzm_opl_gen/cert.py` is the only module that uses
+  it, and no other dependency was added with it.
 
 - **A pull request on a public repo can no longer reach a self-hosted runner.**
   `runs-on` reads the trigger and `github.event.repository.private` as well as
