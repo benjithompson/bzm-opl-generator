@@ -58,32 +58,79 @@ the typecheck rather than accumulating.
 
 ## Account facts
 
-Live runs need a real account. Nothing identifying one is recorded here —
-gather it at the start of a session and keep it there:
+Live runs need a real account, and **there is a standing testbed for it** —
+locations, a test and a virtual service that exist to be reused rather than
+recreated. Nothing identifying them is in this file, or anywhere else that is
+committed: they live in **`testbed.local.md`** in the repo root, gitignored,
+because they are one person's account and not a property of this project.
 
 ```
-bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
+# start of a session that will touch the account
+cat testbed.local.md
 ```
+
+**Absent that file, you are not on the machine it describes.** Fall back to
+gathering the account (`bzm-opl-gen locations --api-key api-key.json
+--account-name "<ACCOUNT NAME>"`) and creating your own scratch fixtures — and
+do that rather than reaching for a colleague's harbor, which is what the old
+rule here was protecting and still is. Read the file if it is there; do not
+reconstruct it from a previous session's ids, which is how a run ends up
+pointed at a location somebody deleted.
 
 | what | where it comes from |
 |---|---|
-| account / workspace / project | `locations`, or the account owner |
-| scratch private location + agent | create your own (`create-location`, `create-agent`) |
-| smoke test for `--run-test` | an existing Taurus test that makes **real HTTP requests** |
+| account / workspace / project | `testbed.local.md`, else `locations` or the account owner |
+| private location + agent | the standing ones; create a scratch pair only if there is no testbed file |
+| smoke test for `--run-test` | the standing test — a Taurus test that makes **real HTTP requests** |
+| virtual service for SV work | the standing service + virtual service |
 | API key | `api-key.json` in the repo root (gitignored) |
 
 `--run-test` only means something with a test whose samplers hit the network: a
 dummy-sampler test reports hundreds of plausible samples while issuing no
-requests, so engine validation passes without proving anything.
+requests, so engine validation passes without proving anything. That is the one
+property the standing test has to keep.
 
-Create scratch locations rather than reusing colleagues' harbors. If the rig
-repoints an existing customer test it must restore the original `executions` (it
-does, in a `finally`, printing the original first). Verify after any live run:
+**Standing fixtures are reused, so leave them as you found them.** The rules
+that mattered when everything was scratch have not gone away, they have
+inverted: what used to be "delete it afterwards" is now "do not delete it", and
+three of them cost real time to learn.
+
+- **Never delete a Service, Route or Deployment crane created**, including a
+  mock Deployment sitting at 0 replicas after a virtual service is stopped —
+  crane holds a pool, and removing one desynchronises the agent. The exception
+  is a teardown you have already decided to finish (below).
+- **One run at a time against one agent.** Two cranes on one agent identity
+  makes BlazeMeter report **duplicated results rather than an error**, so a
+  second run started while the first is up is silently wrong rather than
+  refused. That includes a rig run overlapping a container you left up.
+- **Do not regenerate the AUTH_TOKEN casually.** Minting revokes the one
+  anything already deployed is running on, including the standing agent.
+
+If the rig repoints an existing test it must restore the original `executions`
+(it does, in a `finally`, printing the original first). Verify after any live
+run:
 
 ```
 python -c "from bzm_opl_gen import core; print(core.client_from_key('api-key.json').test(<id>).get('executions'))"
 kubectl get ns | grep bzm-livetest ; docker ps -a | grep bzm-opl ; minikube status -p bzm-opl-test
 ```
+
+That last line is not housekeeping. **A deleted location does not stop its
+agent**: a crane container pointing at a harbor that no longer exists keeps
+running, keeps reporting, and nothing on the BlazeMeter side can tell you it is
+there — one survived an hour past a run that had reported itself clean.
+
+**Recovering a ship BlazeMeter will not release.** `Cannot remove harbor with
+active ships` → `Cannot remove ship with active containers` means it still
+believes a container exists, and the answer is always to let a *running* crane
+report zero rather than to force anything. On Kubernetes, stopping a virtual
+service scales its mock Deployment to 0 and **leaves it**, so the ship stays
+`running`: delete that Deployment with crane still up, wait for `idle`, then
+remove crane, the ship and the location, in that order. On docker, start any
+crane on that harbor/ship id with its AUTH_TOKEN and it clears in about thirty
+seconds. Deleting crane first is what wedges it, because BlazeMeter then has
+nobody to hear the count from. This is also the one case where deleting an
+object crane created is correct — the location is going away regardless.
 
 ## What the rig proves, and the trap behind each part
 

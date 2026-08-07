@@ -1,5 +1,10 @@
 # credentials -- never commit
 api-key*.json
+# One person's standing BlazeMeter fixtures -- location, agent, test, virtual
+# service ids. Not secret, but not a property of this project either: they name
+# somebody's account, and a committed copy is an id everyone else's run would
+# point at. CLAUDE.md says what a session does when this is absent.
+testbed.local.md
 # ...except the placeholder. Exact path, so a real key dropped next to it
 # (examples/api-key.json) is still ignored.
 !examples/api-key.example.json
