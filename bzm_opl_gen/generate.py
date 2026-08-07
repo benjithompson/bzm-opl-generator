@@ -9,7 +9,8 @@ import textwrap
 from string import Template
 from urllib.parse import quote
 
-from .facts import image_refs, select_images
+from .facts import (image_category, image_refs, key_base, needed_categories,
+                    select_images)
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -3566,6 +3567,73 @@ def _docker_sv_block(facts, o):
     return "".join(lines) + "\n"
 
 
+def _docker_prepull_block(facts, o):
+    """The images that have to be on this host before the first virtual service
+    is deployed, as the commands that put them there. "" for a bundle carrying
+    none.
+
+    Crane does not pull on a Docker agent (#206, found by #184's live run). It
+    composes the image name and calls the daemon's *create* directly; an image
+    the host does not already hold makes the deploy retry for about ninety
+    seconds and end FAILED, with `Failed to find a deployed container` on the
+    BlazeMeter side and `No such image` only in `docker logs`. Neither message
+    names a pull and the first reads like a broken agent, so this is the bundle
+    saying it up front -- the whole of option 1 in that issue.
+
+    **The tag is `latest` and it is not this location's pinned one.** Crane
+    prefixes DOCKER_REGISTRY onto BlazeMeter's own unqualified image name, which
+    is the crane *key* without its tag, and BlazeMeter's deploy command carries
+    `latest` whatever /versions pins: a location pinning 6.0.30.4 had
+    `.../blazemeter/service-mock:latest` asked for at deploy time. So this is
+    built from `key_base`, not from `img["tag"]`, and not from
+    `_image_overrides`' last-segment repo name -- that one resolves the key on
+    Kubernetes, where IMAGE_OVERRIDES is what crane reads, and there is no such
+    variable here. A command naming the pinned tag fetches an image nothing then
+    starts -- the same failure this bullet exists to prevent, wearing the fix.
+
+    Only the mock images, and only where the bundle carries one. A virtual
+    service deploying on a docker agent is what was measured; whether crane
+    skips the pull for a taurus engine on a docker *performance* agent has not
+    been tested here, and naming the engine images too would present an untested
+    claim in the same sentence as a measured one -- the rule this repo keeps
+    everywhere else about a figure nobody has. A performance-only docker bundle
+    therefore says nothing about pre-pulling, which is what silence honestly
+    means: not that the pull happens, but that nobody here has looked.
+
+    The categories come from `mockServices`' own row rather than from a "mock"
+    literal, so the funcId that decides an SV location and the images this names
+    stay one fact.
+    """
+    categories = needed_categories(SV_FUNC_IDS)
+    mocks = [i for i in select_images(facts)
+             if image_category(i["repo"]) in categories]
+    if not mocks:
+        return ""
+    registry = (o["private_registry"] or PUBLIC_REGISTRY).rstrip("/")
+    pulls = "\n".join(f"  docker pull {registry}/{key_base(i['key'])}:latest"
+                      for i in mocks)
+    return f"""
+- **Pull the virtual-service images onto this host first.** Crane does not pull
+  here: it composes the image name and asks the docker daemon to *create* the
+  container, so an image this host does not already have makes the first deploy
+  retry for about ninety seconds and end `FAILED` -- `Failed to find a deployed
+  container` in BlazeMeter, and `No such image` only in `docker logs`. Neither
+  message mentions a pull, and the first reads like a broken agent.
+
+  ```
+{pulls}
+  ```
+
+  `latest` there is deliberate and is **not** the tag this location pins: crane
+  prefixes `DOCKER_REGISTRY` onto BlazeMeter's own unqualified image name, and
+  that name carries `latest` whichever version the location is on -- so pulling
+  the pinned tag fetches an image nothing goes on to start. On a host that
+  cannot reach the registry, the list above is what to carry in rather than
+  something to attempt: fetch them somewhere that can, `docker save` them, and
+  `docker load` them here under exactly these names.
+"""
+
+
 def _docker_readme(facts, o):
     # The credential and the command are in different files here, so the block
     # names the one to edit. It replaces a paragraph that said the same thing
@@ -3633,7 +3701,7 @@ run pulls crane and can take considerably longer. Watch it with
   error. Neither replaces an existing container: it may be the agent serving
   this location right now.{env_note}
 - **Engines run beside it, not inside it.** Size the host for the whole
-  location, not for crane: every engine is another container here.{ca_block}{_docker_sv_block(facts, o)}
+  location, not for crane: every engine is another container here.{ca_block}{_docker_sv_block(facts, o)}{_docker_prepull_block(facts, o)}
 - BlazeMeter's Docker Command tab generates the same command without this
   bundle's settings. This one is that command with them folded in; the identity
   (`HARBOR_ID`, `SHIP_ID`) is the same either way.

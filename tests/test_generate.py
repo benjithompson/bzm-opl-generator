@@ -2800,6 +2800,100 @@ def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
     assert made == ["ps", "run"], made
 
 
+# -- the images crane will not pull (#206) ------------------------------------
+#
+# A docker agent's crane composes the image name and calls the daemon's
+# *create*; nothing pulls. The location decides whether the bundle says so --
+# the mock images come off its funcIds, not off the sv_* options -- so these
+# facts carry mockServices and the options mostly do not.
+
+MOCK_FACTS = {**FACTS, "func_ids": ["mockServices"]}
+MOCK_LATEST = f"{gen.PUBLIC_REGISTRY}/blazemeter/service-mock:latest"
+
+
+def test_a_docker_sv_bundle_names_the_images_crane_will_not_pull():
+    """The first deploy fails otherwise, ninety seconds later, with
+    `Failed to find a deployed container` in BlazeMeter and `No such image`
+    only in `docker logs` -- neither of which mentions a pull, and the first of
+    which reads like a broken agent. So the bundle names the commands."""
+    readme = gen.generate(MOCK_FACTS, DOCKER)["README.md"]
+    assert f"docker pull {MOCK_LATEST}" in readme
+    assert "does not pull" in readme
+    assert "No such image" in readme
+    # A sealed host needs the list rather than an attempt.
+    assert "docker load" in readme
+    # The registry is the configured one, because that is what crane prefixes.
+    mirrored = gen.generate(MOCK_FACTS, {**DOCKER,
+                                         "private_registry": "reg.corp/bzm"})
+    assert ("docker pull reg.corp/bzm/blazemeter/service-mock:latest"
+            in mirrored["README.md"])
+
+
+def test_the_tag_to_pull_is_latest_and_never_the_one_the_location_pins():
+    """The whole of the bug. BlazeMeter's deploy command names the image
+    unqualified and `latest`, whatever the location's own /versions pins, and
+    crane prefixes DOCKER_REGISTRY onto that -- so the pinned tag beside it is
+    the one thing that is *not* worth fetching. Live: the pull target was
+    `.../blazemeter/service-mock:latest` while the location pinned 6.0.30.4.
+    """
+    pinned = {**MOCK_FACTS, "images": [
+        {**i, "key": "blazemeter/service-mock:6.0.30.4", "tag": "6.0.30.4"}
+        if i["key"].startswith("blazemeter/service-mock") else i
+        for i in FACTS["images"]]}
+    readme = gen.generate(pinned, DOCKER)["README.md"]
+    assert f"docker pull {MOCK_LATEST}" in readme
+    assert "6.0.30.4" not in readme
+    # ...and the repo's last segment is not the name either: that is how
+    # IMAGE_OVERRIDES resolves a key on Kubernetes, and there is no such
+    # variable here. Crane composes the key itself, `blazemeter/` and all.
+    assert f"{gen.PUBLIC_REGISTRY}/service-mock" not in readme
+
+
+@pytest.mark.parametrize("registry", [None, "reg.corp/bzm"])
+def test_the_pull_command_names_the_registry_crane_is_actually_given(registry):
+    """The README's registry and `DOCKER_REGISTRY` are resolved in two places
+    from the same expression, and only one of them reaches crane. Drift there
+    would print a pull for a registry nothing goes on to ask for -- which is
+    this bug again, wearing the fix -- so the two are held equal rather than
+    left to agree."""
+    files = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": registry})
+    given = [l.split("=", 1)[1].strip().rstrip("\\").strip().strip('"')
+             for l in files["bzm-opl-agent.sh"].splitlines()
+             if "DOCKER_REGISTRY=" in l and "USERNAME" not in l
+             and "PASSWORD" not in l and "EMAIL" not in l]
+    assert given, "the script names no DOCKER_REGISTRY"
+    pulls = [l.split("docker pull ", 1)[1].strip()
+             for l in files["README.md"].splitlines() if "docker pull " in l]
+    assert pulls
+    for ref in pulls:
+        assert ref.startswith(given[0] + "/"), (ref, given[0])
+
+
+def test_a_docker_bundle_with_no_mock_image_says_nothing_about_pre_pulling():
+    """Only the mock images were measured. Whether crane also skips the pull
+    for a taurus engine on a docker performance agent has not been tested, so a
+    performance bundle is silent rather than carrying a claim nobody has
+    checked -- and silence here says nobody looked, not that the pull happens.
+    """
+    readme = gen.generate(FACTS, DOCKER)["README.md"]      # func_ids performance
+    assert "docker pull" not in readme
+    assert "does not pull" not in readme
+
+
+def test_the_cluster_formats_carry_no_pre_pull_note():
+    """Kubernetes pulls images the way Kubernetes does, and the bullet is about
+    a docker daemon crane talks to directly."""
+    manifests = gen.generate(MOCK_FACTS, dict(SV_OPTS, namespace="ns1"))
+    helm = gen.generate(MOCK_FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                     "auth_token": "de" * 32,
+                                     "output_format": "helm",
+                                     "sv_ingress": gen.SV_INGRESS_NONE})
+    for files in (manifests, helm):
+        for name, body in files.items():
+            if name.endswith(".md"):
+                assert "docker pull" not in body, name
+
+
 def test_the_two_platforms_never_offer_each_other_s_vocabulary():
     """The symmetry #182 introduced, from both ends. A cluster bundle carries no
     HOSTNAME_OVERRIDE and a docker bundle no KUBERNETES_WEB_EXPOSE_*, and each
