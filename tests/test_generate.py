@@ -1857,12 +1857,18 @@ def test_docker_ca_bundle_is_mounted_where_the_variables_point():
     assert "--env AWS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in sh
 
 
-def test_docker_auto_update_is_the_docker_variable_and_only_when_answered():
+def test_docker_auto_update_is_the_docker_variable_and_off_unless_asked_for():
     """AUTO_UPDATE, not AUTO_KUBERNETES_UPDATE -- a different variable for a
-    different mechanism. Unanswered it is left out: there is no Deployment here
-    for a self-update to fight over, which is the hazard the Kubernetes path
-    forces its own off for."""
-    assert "AUTO_UPDATE" not in docker_sh()
+    different mechanism, and **off by default** like the Kubernetes one (#222).
+
+    It was left out unless answered, on the reasoning that there is no
+    Deployment here for a self-update to fight over. There is something else:
+    the image tags on the host. From the pinned mirror reference this generator
+    writes, crane's updater removes `blazemeter/crane:<version>`, retags,
+    renames, fails with `Failed to reload crane` and retries forever -- the
+    agent stays healthy and idle while every test stalls at BOOT_STARTING with
+    no engine. Measured: unset stalls, `false` runs the test."""
+    assert "--env AUTO_UPDATE=false" in docker_sh()
     assert "--env AUTO_UPDATE=true" in docker_sh(auto_update=True)
     assert "--env AUTO_UPDATE=false" in docker_sh(auto_update=False)
     assert "AUTO_KUBERNETES_UPDATE" not in docker_sh(auto_update=True)
