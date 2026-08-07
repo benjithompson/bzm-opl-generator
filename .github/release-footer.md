@@ -7,10 +7,10 @@
 pipx install "bzm-opl-gen[ui]==VERSION_NUMBER"
 ```
 
-Needs Python 3.10+ and nothing else. Drop the `==VERSION_NUMBER` for the latest,
-or `pipx upgrade bzm-opl-gen` if you already have it. Drop `[ui]` for the CLI
-alone — it has no dependencies. The web UI is committed prebuilt, so there is no
-npm step either way.
+Needs Python 3.10+. Drop the `==VERSION_NUMBER` for the latest, or
+`pipx upgrade bzm-opl-gen` if you already have it. Drop `[ui]` for the CLI
+alone — its only dependency is `cryptography`. The web UI is committed prebuilt,
+so there is no npm step either way.
 
 Would rather install from git, or from the artifact? Either of:
 

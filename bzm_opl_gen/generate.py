@@ -96,6 +96,21 @@ DEFAULT_OPTIONS = {
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
     "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
     "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
+    # ...and the same job on a docker host, where the vocabulary is the agent's
+    # own rather than Kubernetes'. BlazeMeter say why the two cannot be one set:
+    # "Kubernetes agents automatically return DNS-based URLs; hostname override
+    # is not needed for Kubernetes." Each set is therefore in the other
+    # platform's IGNORED_BY_FORMAT entry. See _sv_docker_cfg.
+    #
+    # The two PEMs hold *content*, not a path, and that is load-bearing: a
+    # path-valued option would break facts.manual()'s whole premise, since a
+    # bundle cannot be generated for a host nobody here can see if the option
+    # names a file on it. They follow ca_bundle exactly -- written into the
+    # bundle, mounted at a fixed container path, with the script's variable
+    # still overridable to a file the host already keeps.
+    "sv_hostname": None,             # HOSTNAME_OVERRIDE -- what the agent advertises
+    "sv_tls_cert": None,             # inline PEM certificate -> sv-tls.crt, mounted
+    "sv_tls_key": None,              # inline PKCS#8 PEM key -> sv-tls.key, mounted
     # {"http", "https", "no_proxy", "username", "password"} -- credentials are
     # embedded in the proxy URL (user:pass@host, per BlazeMeter docs) and the
     # URL moves into the Secret when use_secret is on.
@@ -310,6 +325,23 @@ REQUIRED_TEXT = {
     # crane will not start without the TLS secret even for plain HTTP.
     "sv_subdomain": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
     "sv_tls_secret": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
+    # The docker half, and the asymmetry with the pair above is the point.
+    # HOSTNAME_OVERRIDE **alone** is a working configuration -- the endpoints
+    # BlazeMeter advertises are then a name rather than an IP, which is the
+    # whole of what it is for -- so nothing here makes it required by itself.
+    # What does is a certificate: the pair is a certificate *for* the domain in
+    # HOSTNAME_OVERRIDE, and one supplied with no hostname to serve is a bundle
+    # that certainly does not do what was intended.
+    #
+    # The pair fills for each other, which is the same rule read twice: a
+    # certificate crane cannot find the key for, or the reverse, is an agent
+    # that starts and serves the endpoint over a TLS handshake that fails.
+    # Marked rather than refused, because a half-answered pair is a blank field
+    # and not two answers that contradict -- and a marker is what the page's
+    # switch says about a group somebody turned on and did not finish.
+    "sv_hostname": lambda o: bool(o.get("sv_tls_cert") or o.get("sv_tls_key")),
+    "sv_tls_cert": lambda o: bool(o.get("sv_tls_key")),
+    "sv_tls_key": lambda o: bool(o.get("sv_tls_cert")),
 }
 
 
@@ -612,6 +644,14 @@ def _sv_cfg(facts, o):
     before someone has spent an afternoon on it, so the errors name the fix
     rather than restating the rule.
     """
+    # A format with no KUBERNETES_WEB_EXPOSE_* to write has none of these
+    # fields on its own configure page, so every refusal below would be a
+    # blocker with nothing on screen to clear -- including the one over a
+    # location that advertises mockServices, whose fix is to pick an ingress
+    # that format does not offer. The docker agent answers the same demand with
+    # its own three options; see _sv_docker_cfg.
+    if "sv_ingress" in ignored_options(o):
+        return None
     ingress = o["sv_ingress"]
     sv_funcs = [f for f in (facts.get("func_ids") or []) if f in SV_FUNC_IDS]
     if ingress == SV_INGRESS_NONE:
@@ -677,6 +717,129 @@ def _sv_cfg(facts, o):
     return {"type": ingress, "subdomain": o["sv_subdomain"],
             "tls_secret": o["sv_tls_secret"],
             "istio_gateway": o["sv_istio_gateway"]}
+
+
+# -- the same job, on a docker host ------------------------------------------
+#
+# BlazeMeter's PKCS#8 requirement, transcribed: "Base64 encoded private key in
+# PEM format with PKCS#8 syntax." The other two headers below are what a key
+# actually arrives as -- `openssl genrsa` still writes PKCS#1 by default on many
+# builds, and `openssl ecparam -genkey` writes SEC1 -- so they are the common
+# export rather than an exotic case, and each is refused by name with the one
+# command that converts it. Crane reads the file with a library that wants
+# PKCS#8; handed either of the others it starts, reports online, and fails at
+# the first TLS handshake.
+PKCS8_HEADER = "-----BEGIN PRIVATE KEY-----"
+_KEY_HEADERS = {
+    "-----BEGIN RSA PRIVATE KEY-----":
+        "a PKCS#1 RSA key. Convert it: openssl pkcs8 -topk8 -nocrypt "
+        "-in key.pem -out key.pk8.pem",
+    "-----BEGIN EC PRIVATE KEY-----":
+        "a SEC1 EC key. Convert it: openssl pkcs8 -topk8 -nocrypt "
+        "-in key.pem -out key.pk8.pem",
+    # Refused rather than passed through: nothing in this bundle, in
+    # BlazeMeter's environment reference or in their own docker command supplies
+    # a passphrase, so the agent has no way to open it.
+    "-----BEGIN ENCRYPTED PRIVATE KEY-----":
+        "an encrypted key, and nothing here can give the agent a passphrase. "
+        "Decrypt it: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem",
+}
+
+
+def _sv_tls_key(o):
+    """Refuse a private key the agent cannot read, by name."""
+    key = o["sv_tls_key"]
+    if not key or is_placeholder(key):
+        # A field left blank is the marker's, not a validator's: refusing here
+        # would be a refusal with nothing to satisfy it from a page that had
+        # already let the box be emptied.
+        return
+    if PKCS8_HEADER in key:
+        return
+    for header, what in _KEY_HEADERS.items():
+        if header in key:
+            raise ValueError(
+                f"sv_tls_key is {what}. BlazeMeter requires a private key in "
+                f"PEM format with PKCS#8 syntax ({PKCS8_HEADER}).")
+    raise ValueError(
+        f"sv_tls_key does not look like a PEM private key -- it must carry "
+        f"{PKCS8_HEADER}. BlazeMeter requires PKCS#8 syntax; convert a key of "
+        f"any other shape with openssl pkcs8 -topk8 -nocrypt.")
+
+
+def _sv_docker_cfg(o):
+    """Resolve how a docker agent publishes its virtual services, or None.
+
+    The peer of `_sv_cfg`, and deliberately not part of it: they answer the same
+    question in two vocabularies that share no variable, and each is the other
+    platform's ignored option. Crane on Kubernetes creates an ingress object;
+    crane on a docker host serves the endpoint itself, under the name in
+    HOSTNAME_OVERRIDE and with the TLS pair beside it, which is why there is a
+    certificate here at all where the cluster bundle only names a Secret.
+
+    Three states, and the hostname alone is one of them: without it the Asset
+    Catalog builds endpoint URLs from an IP address and a port, which works and
+    is worse. Without the pair the endpoints are plain HTTP, which is
+    BlazeMeter's own framing -- the pair is what you supply "to use HTTPS".
+
+    Returns the resolved fields plus what was and was not checked about them:
+    `names` is the certificate's own answer about which hosts it covers, and
+    None there means *not read*, never "covers nothing" (see cert.dns_names).
+    """
+    # Imported here rather than at the top of this module, and it is the one
+    # function-level import in it. `plan.py` imports this module for two
+    # constants -- the engine footprint and the node overhead -- and is asserted
+    # to reach nothing else, because it sizes a cluster for somebody who has no
+    # cluster, no account and no key. cryptography is this package's only
+    # runtime dependency and a compiled extension; there is no certificate to
+    # read on that path, and putting one on it would be the first step carrying
+    # a later step's weight. Every other caller of this module is generating a
+    # bundle and pays for it at the moment it has something to check.
+    from . import cert
+
+    if "sv_hostname" in ignored_options(o):
+        return None
+    hostname = str(o["sv_hostname"] or "").strip()
+    cert_pem = o["sv_tls_cert"] or ""
+    key_pem = o["sv_tls_key"] or ""
+    if not (hostname or cert_pem or key_pem):
+        return None
+    _sv_tls_key(o)
+    names = None
+    if cert_pem and not is_placeholder(cert_pem):
+        if not cert.is_certificate_pem(cert_pem):
+            raise ValueError(
+                "sv_tls_cert does not look like a PEM certificate -- it must "
+                "carry -----BEGIN CERTIFICATE-----. BlazeMeter requires an "
+                "X509 compatible public certificate in PEM format; a private "
+                "key or a DER file is refused here rather than mounted into an "
+                "agent that then serves nothing.")
+        names = cert.dns_names(cert_pem)
+        # Checked here rather than left to a customer's first client: the
+        # failure is silent from the agent's end -- it starts, reports online,
+        # publishes the endpoint, and every client rejects the certificate.
+        #
+        # `names is None` is the third answer and is NOT a match failure: it is
+        # this generator's own reader saying it could not walk that certificate,
+        # and refusing on it would be turning "we did not look" into "it is
+        # wrong". The bundle says so instead (see _docker_sv_block), because a
+        # bundle that stayed silent would read as one that had been checked.
+        if names is not None and hostname and not is_placeholder(hostname):
+            if not cert.matches(hostname, names):
+                raise ValueError(
+                    f"sv_hostname={hostname!r} is not covered by sv_tls_cert. "
+                    f"The certificate carries "
+                    + (f"{', '.join(names)}" if names
+                       else "no DNS name at all -- no dNSName in its Subject "
+                            "Alternative Name extension and no Common Name")
+                    + ". BlazeMeter requires the hostname to match a DNSName "
+                      "entry in the SAN extension or the Common Name field, so "
+                      "every client would reject the endpoint this agent "
+                      "publishes. Re-issue the certificate for that hostname, "
+                      "or set sv_hostname to a name it covers (a wildcard "
+                      "covers one label).")
+    return {"hostname": hostname, "cert": cert_pem, "key": key_pem,
+            "names": names}
 
 
 # The options that configure CA trust, and what each mode is called where
@@ -808,9 +971,11 @@ RESERVED_ENV = frozenset({
     # the engine security posture (restrict_engines)
     "INHERIT_RUNNING_USER_AND_GROUP", "KUBERNETES_SECURITY_CONTEXT_CAP_JSON",
     "KUBERNETES_SERVICE_USE_TYPE", "RUN_HEALTH_WEB_SERVICE",
-    # service virtualization
+    # service virtualization -- one set per platform, off one set of options
+    # each, and the union because extra_env is refused across formats
     "KUBERNETES_WEB_EXPOSE_TYPE", "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN",
     "KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME", "KUBERNETES_ISTIO_GATEWAY_NAME",
+    "HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY",
     # proxy
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     # engine placement and sizing
@@ -896,6 +1061,9 @@ ENV_OWNER = {
     "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN": "sv_subdomain",
     "KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME": "sv_tls_secret",
     "KUBERNETES_ISTIO_GATEWAY_NAME": "sv_istio_gateway",
+    "HOSTNAME_OVERRIDE": "sv_hostname",
+    "TLS_CERT": "sv_tls_cert",
+    "TLS_KEY": "sv_tls_key",
     "HTTP_PROXY": "proxy", "HTTPS_PROXY": "proxy", "NO_PROXY": "proxy",
     "KUBERNETES_TOLERATIONS_JSON": "engine_tolerations",
     "KUBERNETES_NODE_SELECTOR_JSON": "engine_node_selector",
@@ -1661,6 +1829,13 @@ PLACEHOLDER_SOURCE = {
                     "ingress",
     "sv_tls_secret": "a wildcard TLS secret in the agent namespace; required "
                      "even for HTTP virtual services",
+    "sv_hostname": "the hostname this agent advertises its virtual services "
+                   "under -- it has to resolve to this host, and to match the "
+                   "certificate below",
+    "sv_tls_cert": "the X509 certificate for that hostname, in PEM",
+    "sv_tls_key": "its private key, in PEM with PKCS#8 syntax. Never recorded "
+                  "in `profile.json`, so a bundle regenerated from a profile "
+                  "asks for it again",
     "private_registry": "the registry the BlazeMeter images were mirrored into",
     "ca_existing_configmap": "the ConfigMap your platform team keeps the trust "
                              "bundle in",
@@ -1705,11 +1880,13 @@ def _placeholder_block(o, where=()):
     # exactly like a slow boot.
     if o["output_format"] == "docker":
         stops = (f"Both routes refuse to start it: `{DOCKER_RUN_FILE}` checks "
-                 "the files as they stand, and `docker compose up` is stopped "
-                 "by compose's own required-variable check on the same value. "
-                 "Nothing else would -- an environment variable is a string to "
-                 "docker, so an agent started with one answers `404`, logs "
-                 "`Sleeping for 300` and sits there looking like a slow boot.")
+                 "the files as they stand, the mounted ones included, and "
+                 "`docker compose up` is stopped by compose's own "
+                 "required-variable check on the same value. Nothing else "
+                 "would -- an environment variable is a string to docker and a "
+                 "mounted file is bytes, so an agent started with either comes "
+                 "up and fails later: `404` and `Sleeping for 300` on a blank "
+                 "credential, a rejected handshake on a blank certificate.")
     else:
         stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
                  "Kubernetes name, so the API server rejects the object and "
@@ -2461,7 +2638,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
-"""
+{_ignored_block(o)}"""
 
 
 # -- docker output ------------------------------------------------------------
@@ -2503,6 +2680,17 @@ DOCKER_CA_FILE = "ca-bundle.crt"
 # what the two variables below have to point at. Not ours to choose: the
 # container's own CA store is at this path and crane reads it from there.
 DOCKER_CA_PATH = "/etc/ssl/certs/ca-certificates.crt"
+# The certificate a docker agent serves its own virtual-service endpoints with,
+# and where TLS_CERT/TLS_KEY point at it. The bundle-side names are ours, in the
+# style of ca-bundle.crt beside them; the container-side paths are BlazeMeter's
+# own, from the `docker run` on their bring-your-own-certificate page, so an
+# agent installed from this bundle is the one their documentation describes.
+# Unlike the CA path above, nothing forces these -- the variables say where the
+# files are -- and they are theirs anyway, for the same reason `-u 0` is.
+DOCKER_SV_CERT_FILE = "sv-tls.crt"
+DOCKER_SV_KEY_FILE = "sv-tls.key"
+DOCKER_SV_CERT_PATH = "/etc/ssl/certs/public.pem"
+DOCKER_SV_KEY_PATH = "/etc/ssl/certs/privatekey.pem"
 # NO_PROXY for a docker host. The Kubernetes default names `kubernetes.default`,
 # which is the cluster's API service and resolves to nothing here; 127.0.0.1 and
 # localhost are required by BlazeMeter's proxy documentation, or transaction
@@ -2550,20 +2738,40 @@ DOCKER_NETWORK = "host"
 # whole table being absent means nobody has read one, and that is a state only a
 # reader over the wire can be in (see core.ignored_options).
 #
-# Docker's is the whole of it today, and every one of its keys is Kubernetes
-# vocabulary; the docker agent's equivalents are either the daemon's own
-# configuration or nothing at all. The two Kubernetes formats ignore nothing
-# yet, and the entries are here rather than derived because this is where the
-# reason for each key goes -- an option a cluster bundle reaches nothing with
-# gets its sentence beside docker's.
+# Most of docker's keys are Kubernetes vocabulary, and the docker agent's
+# equivalents are either the daemon's own configuration or nothing at all. The
+# entries are here rather than derived because this is where the reason for each
+# key goes -- an option a cluster bundle reaches nothing with gets its sentence
+# beside docker's.
+#
+# **Service virtualization is the one subject both directions carry**, and it is
+# what makes this table symmetric (#182). The two platforms publish a virtual
+# service with disjoint variables -- KUBERNETES_WEB_EXPOSE_* against
+# HOSTNAME_OVERRIDE plus a TLS_CERT/TLS_KEY pair -- and BlazeMeter say so
+# themselves: "Kubernetes agents automatically return DNS-based URLs; hostname
+# override is not needed for Kubernetes." So each set is the other's ignored
+# options, and the configure page shows exactly one of them.
 #
 # Served, as core.ignored_options(): the configure page hides what the chosen
 # format cannot carry, and a second copy of this table in TypeScript is exactly
 # the drift the SV funcId list already cost once. So a key added here stops
 # being offered there, and nothing has to remember to remove it.
+# What a cluster bundle has no such thing as: the docker agent's own way of
+# publishing a virtual service. One table, stated once and shared by the two
+# Kubernetes formats, because the reason is the platform rather than the
+# rendering -- a chart and a folder of manifests deploy the same crane.
+SV_DOCKER_IGNORED = {
+    "sv_hostname": "HOSTNAME_OVERRIDE is a docker variable; a Kubernetes agent "
+                   "returns a DNS-based URL and needs no hostname override",
+    "sv_tls_cert": "a Kubernetes agent serves its endpoints through the ingress, "
+                   "which reads the certificate from sv_tls_secret",
+    "sv_tls_key": "a Kubernetes agent serves its endpoints through the ingress, "
+                  "which reads the key from sv_tls_secret",
+}
+
 IGNORED_BY_FORMAT = {
-    "manifests": {},
-    "helm": {},
+    "manifests": dict(SV_DOCKER_IGNORED),
+    "helm": dict(SV_DOCKER_IGNORED),
     "docker": {
         "platform": "there is no OpenShift/Kubernetes distinction on a docker host",
         "openshift_cluster": "there is no cluster, so no oc and no Route",
@@ -2589,6 +2797,16 @@ IGNORED_BY_FORMAT = {
         "ca_configmap_key": "there is no ConfigMap; the bundle mounts a file",
         "ca_openshift_inject": "nothing injects a trust bundle into a container",
         "engines_per_node": "there is one host, and it is this one",
+        # The other half of the symmetry above. Not a gap: this format publishes
+        # virtual services with sv_hostname and the TLS pair beside it, which
+        # the two cluster formats ignore in their turn.
+        "sv_ingress": "KUBERNETES_WEB_EXPOSE_TYPE is a Kubernetes variable; a "
+                      "docker agent publishes under sv_hostname instead",
+        "sv_subdomain": "KUBERNETES_WEB_EXPOSE_SUB_DOMAIN is a Kubernetes "
+                        "variable; the docker agent's host is sv_hostname",
+        "sv_tls_secret": "there is no Secret to name; this bundle mounts "
+                         "sv_tls_cert and sv_tls_key as files",
+        "sv_istio_gateway": "istio is a Kubernetes service mesh",
         # The last two were found by hiding this table's keys on the configure
         # page: both were still offered there, and both reach nothing here.
         "crane_hook": "crane-hook is a Pod, and there is no cluster to run it in",
@@ -2637,6 +2855,17 @@ def docker_env(facts, o):
     # the specific hazard auto_update() departs from BlazeMeter's default for.
     if o["auto_update"] is not None:
         env["AUTO_UPDATE"] = "true" if o["auto_update"] else "false"
+    sv = _sv_docker_cfg(o)
+    if sv:
+        # The hostname is what the Asset Catalog builds endpoint URLs from, and
+        # the pair is only written where there is one -- a TLS_CERT pointing at
+        # a path this bundle mounts nothing at is an agent that fails to start
+        # its own listener rather than one serving plain HTTP.
+        if sv["hostname"]:
+            env["HOSTNAME_OVERRIDE"] = sv["hostname"]
+        if sv["cert"]:
+            env["TLS_CERT"] = DOCKER_SV_CERT_PATH
+            env["TLS_KEY"] = DOCKER_SV_KEY_PATH
     env.update(proxy_env(o, no_proxy=DOCKER_NO_PROXY))
     if _ca_cfg(o):
         # Both, per BlazeMeter's CA page: crane's own HTTP client reads the
@@ -2676,6 +2905,47 @@ def docker_split_env(facts, o):
     return env, secret
 
 
+# One mounted file, as everything that has to be said about it anywhere: the
+# script variable that overrides it, the file the bundle writes, where the
+# container reads it, what it is in a sentence, the option it came from and the
+# content itself. A namedtuple rather than a tuple because six positions read as
+# noise at the unpacking site, and the last two are what the file half of #183's
+# guard needs -- it reads the content, and the README's placeholder table needs
+# the option name to say which file to edit.
+DockerMount = collections.namedtuple(
+    "DockerMount", "var file path what option content")
+
+
+def docker_file_mounts(o):
+    """The files this bundle writes and mounts into the container.
+
+    One list, walked by all four renderers, because a mount is otherwise stated
+    in four places -- the script's overridable `VAR="${VAR:-$DIR/file}"` and its
+    existence check, the `-v` line beside it, compose's `${VAR:-./file}` bind,
+    and the file itself in the bundle. A file added to three of the four is
+    exactly the one-sided change #178's parity check exists to catch, and this
+    is what makes it cheap.
+
+    Every one of them is overridable to a path the host already has, which is
+    the escape hatch `CA_BUNDLE` established: a platform team may keep the trust
+    bundle, or the certificate for the domain these endpoints are published
+    under, somewhere of their own.
+    """
+    out = []
+    if _ca_cfg(o):
+        out.append(DockerMount("CA_BUNDLE", DOCKER_CA_FILE, DOCKER_CA_PATH,
+                               "trust bundle", "ca_bundle", o["ca_bundle"]))
+    sv = _sv_docker_cfg(o)
+    if sv and sv["cert"]:
+        out += [DockerMount("SV_TLS_CERT", DOCKER_SV_CERT_FILE,
+                            DOCKER_SV_CERT_PATH, "virtual-service certificate",
+                            "sv_tls_cert", sv["cert"]),
+                DockerMount("SV_TLS_KEY", DOCKER_SV_KEY_FILE,
+                            DOCKER_SV_KEY_PATH, "virtual-service private key",
+                            "sv_tls_key", sv["key"])]
+    return out
+
+
 def _docker_run_lines(facts, o):
     """The `docker run` invocation, one argument per line.
 
@@ -2693,8 +2963,8 @@ def _docker_run_lines(facts, o):
         lines.append('  --env-file "$ENV_FILE" \\')
     lines += [f"  --env {k}={_sh_value(v)} \\" for k, v in cmd.items()]
     lines += [f"  -v {m} \\" for m in DOCKER_MOUNTS]
-    if _ca_cfg(o):
-        lines.append(f'  -v "$CA_BUNDLE":{DOCKER_CA_PATH}:ro \\')
+    lines += [f'  -v "${m.var}":{m.path}:ro \\'
+              for m in docker_file_mounts(o)]
     lines += [f"  -w {DOCKER_WORKDIR} \\",
               f"  --net={DOCKER_NETWORK} \\",
               f"  {_crane_image(facts, o)} {DOCKER_ENTRYPOINT}"]
@@ -2825,23 +3095,91 @@ def _compose_required(name, where):
         name, " ".join(_docker_blank_lines(name, where)))
 
 
+def _docker_blank_file_lines(m):
+    """What a bundle says about a *file* left blank: what is wrong, then what to
+    do -- the same two-sentence shape `_docker_blank_lines` gives a variable,
+    and one wording for both routes.
+
+    It names the file rather than the variable, because the file is what a
+    customer is looking at: a blank `sv_tls_key` is `sv-tls.key` sitting in the
+    bundle with the marker inside it, and `TLS_KEY` beside it holds a container
+    path that was never blank -- which is the whole reason the variable-level
+    guard could not see this: #183 refuses a blank *variable*, and #182 added
+    two options that are not variables.
+
+    The last sentence is the asymmetry, said where somebody meets it rather than
+    in a README. The script reads the file and compose cannot, so replacing the
+    file in place satisfies one route and not the other; setting the variable
+    satisfies both, and that is the fix this recommends first.
+    """
+    return (f"{m.file} carries {PLACEHOLDER} -- the {m.what} was left blank "
+            f"when this bundle was generated.",
+            f"Set {m.var} to a {m.what} this host already has, or re-generate "
+            f"the bundle with {m.option} filled in. Replacing {m.file} in place "
+            f"clears {DOCKER_RUN_FILE} and not {DOCKER_COMPOSE_FILE}, which has "
+            f"no way to read a file -- set {m.var} and both routes agree.")
+
+
+def _compose_required_file(m):
+    """A blank mounted file, as Compose's own required-variable expression --
+    the bind source, with its default dropped.
+
+    **The variable is the bundle's own, and that is the opposite judgement from
+    `_compose_required` next door.** There the guard is `BZM_OPL_UNSET_<NAME>`,
+    a name nobody has, precisely because `${AUTH_TOKEN:?}` or `${HTTP_PROXY:?}`
+    would read the ambient environment and resolve a guard away on the host most
+    likely to carry one. `SV_TLS_CERT`, `SV_TLS_KEY` and `CA_BUNDLE` are not
+    names a host carries by accident: they exist only in this bundle, they are
+    documented here as the escape hatch for a file the platform team already
+    keeps, and a customer who sets one is applying the intended fix rather than
+    defeating a check. Guarding a variable nobody has would refuse a bundle that
+    had been finished the way its own README asks -- a guard that survives its
+    own fix, which is the failure the sibling docstring rules out.
+
+    So both routes are keyed on the same answer: the script mounts what
+    `SV_TLS_KEY` resolves to and checks *that* file's content, and compose
+    mounts what `SV_TLS_KEY` says and refuses when it says nothing. Set it, and
+    neither refuses; leave it, and the bundle's own file is what each looks at
+    -- content on one side, absence on the other.
+    """
+    return "${%s:?%s}" % (m.var, " ".join(_docker_blank_file_lines(m)))
+
+
 def _docker_run_sh(facts, o):
-    ca = _ca_cfg(o)
     name = docker_container_name(o["ship_id"])
-    # Both sibling files are resolved against the script rather than against the
+    # Every sibling file is resolved against the script rather than against the
     # working directory: this is a file people copy onto a host and run from
     # wherever they happen to be, and a relative --env-file that resolves to
     # nothing fails inside docker with a message about the file, not about the
-    # directory. CA_BUNDLE stays overridable -- a host may already have the
-    # trust bundle the platform team maintains.
-    ca_line = (f'CA_BUNDLE="${{CA_BUNDLE:-$DIR/{DOCKER_CA_FILE}}}"\n') if ca else ""
-    ca_check = ('''
-if [ ! -f "$CA_BUNDLE" ]; then
-  echo "trust bundle not found: $CA_BUNDLE" >&2
-  echo "set CA_BUNDLE=/path/to/your/bundle.crt, or put it beside this script" >&2
+    # directory. Each stays overridable -- a host may already keep the trust
+    # bundle, or the certificate, that its platform team maintains.
+    mounts = docker_file_mounts(o)
+    mount_lines = "".join(f'{m.var}="${{{m.var}:-$DIR/{m.file}}}"\n'
+                          for m in mounts)
+    mount_checks = ""
+    for m in mounts:
+        mount_checks += f'''
+if [ ! -f "${m.var}" ]; then
+  echo "{m.what} not found: ${m.var}" >&2
+  echo "set {m.var}=/path/to/your/{m.file}, or put it beside this script" >&2
   exit 1
 fi
-''') if ca else ""
+'''
+        # The existence check above is not the guard for a file left blank: the
+        # bundle wrote that file, so it is there, and `[ ! -f ]` passes over a
+        # certificate whose whole content is the marker. What the content
+        # is has to be looked at, and it is looked at in **the resolved file** --
+        # so setting the variable to a real one is the fix, exactly as it is for
+        # a file the bundle never carried.
+        if PLACEHOLDER in str(m.content):
+            wrong, todo = _docker_blank_file_lines(m)
+            mount_checks += f'''
+if grep -q '{PLACEHOLDER}' "${m.var}"; then
+  echo "{wrong}" >&2
+  echo "{todo}" >&2
+  exit 1
+fi
+'''
     env_check = (f'''
 if [ ! -f "$ENV_FILE" ]; then
   echo "{DOCKER_ENV_FILE} not found beside this script -- it holds the AUTH_TOKEN" >&2
@@ -2880,7 +3218,7 @@ set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 NAME={name}
-{env_line}{ca_line}
+{env_line}{mount_lines}
 if docker ps -a --format '{{{{.Names}}}}' | grep -qx "$NAME"; then
   # Not removed automatically: the container of this name may be the agent that
   # is currently serving this location, and taking it away is a decision rather
@@ -2889,7 +3227,7 @@ if docker ps -a --format '{{{{.Names}}}}' | grep -qx "$NAME"; then
   echo "Remove it first if it is the old agent: docker rm -f $NAME" >&2
   exit 1
 fi
-{env_check}{ca_check}{blank_check}
+{env_check}{mount_checks}{blank_check}
 {_docker_run_lines(facts, o)}
 
 echo "started $NAME -- follow it with: docker logs -f $NAME"
@@ -3003,15 +3341,23 @@ def _docker_compose_yaml(facts, o):
              else f"      {k}: {_compose_value(v)}" for k, v in cmd.items()]
     body.append("    volumes:")
     body += [f"      - {m}" for m in DOCKER_MOUNTS]
-    if _ca_cfg(o):
-        # The one deliberate interpolation in the file, and the counterpart of
-        # the script's `CA_BUNDLE="${CA_BUNDLE:-$DIR/ca-bundle.crt}"`: a host may
-        # already keep the trust bundle its platform team maintains. Unset, the
-        # default is the file beside this one -- compose resolves a relative
-        # host path against this file's directory, which is what `$DIR` means in
-        # the script.
-        body.append(
-            f"      - ${{CA_BUNDLE:-./{DOCKER_CA_FILE}}}:{DOCKER_CA_PATH}:ro")
+    # The only deliberate interpolations in the file, and the counterpart of the
+    # script's `CA_BUNDLE="${CA_BUNDLE:-$DIR/ca-bundle.crt}"` and its siblings: a
+    # host may already keep the trust bundle, or the certificate, that its
+    # platform team maintains. Unset, the default is the file beside this one --
+    # compose resolves a relative host path against this file's directory, which
+    # is what `$DIR` means in the script. Off the same list the script walks, so
+    # a file cannot reach one route and not the other.
+    # ...with one exception, and it is the file half of #183: a mount whose
+    # bundle file was left blank drops the default, so `${VAR:?...}` aborts the
+    # command instead of binding a file with the marker in it. Quoted, unlike
+    # its siblings, because the message is a sentence -- an unquoted `- a: b`
+    # in a block sequence is a mapping rather than a string.
+    for m in docker_file_mounts(o):
+        if PLACEHOLDER in str(m.content):
+            body.append(f'      - "{_compose_required_file(m)}:{m.path}:ro"')
+        else:
+            body.append(f"      - ${{{m.var}:-./{m.file}}}:{m.path}:ro")
     body.append(f"    command: {_compose_value(DOCKER_ENTRYPOINT)}")
     # The trap is the same either way and the file to warn about is not: with
     # the credential split out it is the one sitting here waiting to be tidied
@@ -3047,8 +3393,97 @@ def _docker_compose_yaml(facts, o):
     return head + "\n".join(body) + "\n"
 
 
-def _docker_readme(facts, o):
+def _ignored_block(o):
+    """The README's "Set here, but not carried" table, or "" where this bundle
+    set none of its format's ignored options.
+
+    Shared by all three READMEs rather than docker's alone: since the SV options
+    are split by platform, a cluster bundle can carry a value it drops too, and
+    the promise -- nothing is silently applied -- was only ever kept by the one
+    format that happened to have a table. `test_a_format_never_refuses_what_it
+    _says_it_ignores` walks every format and asserts it here.
+    """
     ignored = _set_but_not_carried(o)
+    if not ignored:
+        return ""
+    rows = "\n".join(f"| `{k}` | {why} |" for k, why in ignored)
+    return f"""
+## Set here, but not carried
+
+These were configured for this bundle and this format has nowhere to put them.
+Nothing is silently applied -- they are in `{PROFILE_FILE}` and are named here,
+so a bundle generated one way and handed over is never believed to have applied
+something it did not.
+
+| option | why |
+|---|---|
+{rows}
+"""
+
+
+def _docker_sv_block(facts, o):
+    """What this bundle publishes virtual services as, and what was checked
+    about it. "" when it publishes none.
+
+    The check that is worth saying out loud is the hostname against the
+    certificate: it is done here, at generate time, and the failure it catches
+    is invisible from the agent's end -- crane starts, reports online and serves
+    an endpoint every client rejects. So a bundle that *was* checked says so,
+    and a bundle whose certificate this could not read says **that**, in its own
+    sentence. Two states, two sentences, because a bundle silent about it would
+    read as one that had passed.
+    """
+    sv = _sv_docker_cfg(o)
+    if not sv:
+        return ""
+    if not sv["hostname"]:
+        return f"""
+- **Virtual services are served over TLS, under this host's own address.**
+  `{DOCKER_SV_CERT_FILE}` and `{DOCKER_SV_KEY_FILE}` are mounted at
+  `{DOCKER_SV_CERT_PATH}` and `{DOCKER_SV_KEY_PATH}`, where `TLS_CERT` and
+  `TLS_KEY` point. No `sv_hostname` was set, so BlazeMeter's Asset Catalog
+  builds the endpoint URLs from this machine's IP address and a port rather
+  than from a name -- which works, and means the certificate above is one
+  clients will reject unless it covers that address.
+"""
+    lines = [f"""
+- **Virtual services are published as `{sv["hostname"]}`.** That is
+  `HOSTNAME_OVERRIDE`, which is what BlazeMeter's Asset Catalog builds endpoint
+  URLs from -- so it has to resolve to this host from wherever the clients are,
+  and this bundle does nothing about that: it is a DNS record somebody has to
+  own."""]
+    if sv["cert"]:
+        names = sv["names"]
+        if names is None:
+            checked = (
+                f"\n  **The hostname was not checked against the certificate.** "
+                f"`{DOCKER_SV_CERT_FILE}` could not be read as an X509 "
+                f"certificate here, so nothing has confirmed that it covers "
+                f"`{sv['hostname']}` -- and if it does not, every client "
+                f"rejects the endpoint while the agent reports online. Check it "
+                f"yourself: `openssl x509 -in {DOCKER_SV_CERT_FILE} -noout "
+                f"-text | grep -A1 'Subject Alternative Name'`.")
+        else:
+            checked = (
+                f"\n  `{DOCKER_SV_CERT_FILE}` and `{DOCKER_SV_KEY_FILE}` are "
+                f"mounted at `{DOCKER_SV_CERT_PATH}` and "
+                f"`{DOCKER_SV_KEY_PATH}`, where `TLS_CERT` and `TLS_KEY` point. "
+                f"That certificate names {', '.join(f'`{n}`' for n in names)}, "
+                f"and the hostname above was checked against it when this "
+                f"bundle was generated. Nothing else about it was: not its "
+                f"expiry, not who signed it, not whether the key beside it is "
+                f"its key.")
+        lines.append(checked)
+    else:
+        lines.append(
+            "\n  No certificate was given, so the endpoints are plain HTTP. "
+            "Set `sv_tls_cert` and `sv_tls_key` to serve them over HTTPS -- "
+            "BlazeMeter's own requirement is a PEM certificate and a PEM key "
+            "in PKCS#8 syntax.")
+    return "".join(lines) + "\n"
+
+
+def _docker_readme(facts, o):
     # The credential and the command are in different files here, so the block
     # names the one to edit. It replaces a paragraph that said the same thing
     # about the AUTH_TOKEN alone: this format can leave a proxy URL, a registry
@@ -3056,22 +3491,15 @@ def _docker_readme(facts, o):
     # With the credential split out there is one file to edit; inline, it is in
     # both of the two files that start this container, and naming only the
     # script would send somebody to fix half of the bundle.
+    # ...and an option this format writes as a *file* is filled in in that file,
+    # not in either of the two that start the container. The table said "no
+    # value was given" and left the reader to work out where sv_tls_key lands
+    # -- which is the same half-answer naming one of the two files would be for
+    # the token.
     placeholders = _placeholder_block(
-        o, {"auth_token": _docker_where(o["use_secret"])})
-    ignored_block = ""
-    if ignored:
-        rows = "\n".join(f"| `{k}` | {why} |" for k, why in ignored)
-        ignored_block = f"""
-## Set here, but not carried
-
-These were configured for this bundle and a docker agent has nowhere to put
-them. Nothing is silently applied -- if you need them, the Kubernetes formats
-are where they mean something.
-
-| option | why |
-|---|---|
-{rows}
-"""
+        o, {"auth_token": _docker_where(o["use_secret"]),
+            **{m.option: m.file for m in docker_file_mounts(o)}})
+    ignored_block = _ignored_block(o)
     # Only where the file exists to be renamed. It is the tidy-up somebody
     # reaches for on seeing a compose file beside a `.env`-shaped one, and it
     # fails silently: compose reads `.env` for interpolation into compose.yaml
@@ -3122,7 +3550,7 @@ run pulls crane and can take considerably longer. Watch it with
   error. Neither replaces an existing container: it may be the agent serving
   this location right now.{env_note}
 - **Engines run beside it, not inside it.** Size the host for the whole
-  location, not for crane: every engine is another container here.{ca_block}
+  location, not for crane: every engine is another container here.{ca_block}{_docker_sv_block(facts, o)}
 - BlazeMeter's Docker Command tab generates the same command without this
   bundle's settings. This one is that command with them folded in; the identity
   (`HARBOR_ID`, `SHIP_ID`) is the same either way.
@@ -3148,7 +3576,8 @@ def preview_order(files):
         # container by the other route, and BlazeMeter's own shape leads, which
         # is the tie-break the README's "Run it" section uses too.
         lead = ([DOCKER_RUN_FILE, DOCKER_COMPOSE_FILE, DOCKER_ENV_FILE,
-                 DOCKER_CA_FILE] + PREVIEW_TAIL)
+                 DOCKER_CA_FILE, DOCKER_SV_CERT_FILE, DOCKER_SV_KEY_FILE]
+                + PREVIEW_TAIL)
     else:
         lead = APPLY_ORDER + PREVIEW_TAIL
     return [n for n in lead if n in files] + sorted(set(files) - set(lead))
@@ -3211,19 +3640,13 @@ def generate(facts, options):
             f"{sv['type']}). Generate it as --format manifests, or use the "
             "upstream Blazemeter/helm-crane chart, which supports both.")
 
-    if sv and o["output_format"] == "docker":
-        # The same refusal as helm's above, for the same reason: a docker agent
-        # can serve virtual services, but it publishes them with
-        # HOSTNAME_OVERRIDE and a TLS_CERT/TLS_KEY pair, and this generator has
-        # no options for that shape -- every sv_* option here is a
-        # KUBERNETES_WEB_EXPOSE_* one. A command that quietly dropped them would
-        # install, report idle, and never publish anything.
-        raise ValueError(
-            "output_format=docker covers performance testing only, and this "
-            f"location is configured for service virtualization (sv_ingress="
-            f"{sv['type']}). Generate it as --format manifests, or install the "
-            "docker agent from BlazeMeter's own Docker Command tab and set "
-            "HOSTNAME_OVERRIDE, TLS_CERT and TLS_KEY by hand.")
+    # There was a third refusal here, and docker's is gone (#182). It said this
+    # generator had no options for HOSTNAME_OVERRIDE and the TLS_CERT/TLS_KEY
+    # pair, which was true of the generator and never of the agent; the three
+    # options above are it, and `sv_ingress` is now one of docker's ignored
+    # options rather than something a docker bundle is refused over. Helm's
+    # stays: the gap there is in the chart, which is a different kind of thing
+    # from a missing option.
 
     if o["output_format"] == "docker":
         # Two descriptions of one container, and the bundle carries both because
@@ -3237,11 +3660,16 @@ def generate(facts, options):
         env_file = _docker_env_file(facts, o)
         if env_file:
             out[DOCKER_ENV_FILE] = env_file
-        if o["ca_bundle"]:
-            # The inline PEM, as the file the command mounts. The other two CA
-            # modes name a ConfigMap, which is why they are in IGNORED_BY_FORMAT:
-            # there is nothing here to read one out of.
-            out[DOCKER_CA_FILE] = o["ca_bundle"]
+        # The inline PEMs, as the files the command mounts: the CA bundle, and
+        # the pair a docker agent serves its virtual services with. Each option
+        # carries the content rather than a host path because a bundle has to be
+        # generatable for a host nobody here can see, and the file it becomes is
+        # what the container mounts. Written off `docker_file_mounts` rather than
+        # beside it -- that list is what the script, the compose file and the
+        # blank-file guard all walk, and a file written here and absent there is
+        # a mount pointing at nothing.
+        for m in docker_file_mounts(o):
+            out[m.file] = m.content
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         out["README.md"] = _docker_readme(facts, o)
@@ -3463,7 +3891,13 @@ PROFILE_FILE = "profile.json"
 # out, and the MCP layer refuses to echo them back. One name to add to if a
 # second credential ever becomes an option -- the failure mode of forgetting is
 # a token in a file people paste into tickets.
-SECRET_OPTIONS = frozenset({"auth_token"})
+# `sv_tls_cert` is deliberately NOT here, and the asymmetry is the whole point:
+# a public certificate is public -- it is what the agent hands to every client
+# that connects -- so leaving it out would make a replayed profile need two
+# things supplied instead of one, for nothing. The key is the credential, and
+# the consequence is documented rather than worked around: `generate --profile`
+# on a docker bundle that serves HTTPS needs `--auth-token` *and* `--sv-tls-key`.
+SECRET_OPTIONS = frozenset({"auth_token", "sv_tls_key"})
 
 
 def _profile_json(o):
@@ -3539,7 +3973,7 @@ def _readme(facts, o, files):
   {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set
   them to match the limits above, a run competes for CPU it never reserved.{pinned}{big_ca}
 - `bzm-opl-gen doctor` checks a cluster against all of the above before you apply.
-"""
+{_ignored_block(o)}"""
 
 
 def write(files, outdir):

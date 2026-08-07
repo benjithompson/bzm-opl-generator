@@ -16,9 +16,10 @@ updates:
     schedule:
       interval: weekly
     labels: ["dependencies"]
-    # The CLI itself declares no dependencies at all; everything here is an
-    # optional extra or a test tool, so a bump is never a change to what a
-    # `pipx install bzm-opl-gen` pulls in.
+    # The CLI declares one dependency (cryptography, for the certificate check
+    # -- see pyproject.toml); everything else here is an optional extra or a
+    # test tool, so a bump is a change to what a `pipx install bzm-opl-gen`
+    # pulls in only when it is that one.
     open-pull-requests-limit: 5
 
   - package-ecosystem: npm

@@ -68,6 +68,11 @@ Two things differ, both deliberate:
   carries no `sv_*` options and the chart is available again. Use
   `--format manifests`, or the upstream
   [Blazemeter/helm-crane](https://github.com/Blazemeter/helm-crane) chart.
+  Since [#182](https://github.com/benjithompson/bzm-opl-generator/issues/182)
+  this is the **only** format that refuses one: `--format docker` publishes
+  virtual services its own way, and the three options it does that with
+  (`sv_hostname`, `sv_tls_cert`, `sv_tls_key`) are ignored here rather than
+  refused, since a chart has nowhere to put them.
 - **`livetest` does not take a chart directory.** The rig applies YAML with
   kubectl and reads it back object by object; it exits with that message rather
   than globbing an empty top level. Re-generate as manifests to live-test, then

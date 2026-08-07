@@ -183,6 +183,30 @@ jobs:
               -o "$RUNNER_TEMP/docker-inline"
           cd "$RUNNER_TEMP/docker-inline" && docker compose config -q
 
+      # Service virtualization, which is two more bind mounts and three more
+      # variables (#182). The certificate is generated here rather than checked
+      # in, because generate() *parses* it -- the hostname is checked against
+      # its SAN -- so a fixture that only looked like PEM would prove the
+      # refusal path rather than this one.
+      - name: ...and in the one that publishes virtual services
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+              -keyout "$RUNNER_TEMP/sv.key" -out "$RUNNER_TEMP/sv.crt" \
+              -subj "/CN=mocks.example.com" \
+              -addext "subjectAltName=DNS:mocks.example.com,DNS:*.mocks.example.com"
+          python -m bzm_opl_gen generate --format docker \
+              --facts examples/facts.example.json \
+              --auth-token 0123456789abcdef0123456789abcdef \
+              --sv-hostname mocks.example.com \
+              --sv-tls-cert "$RUNNER_TEMP/sv.crt" \
+              --sv-tls-key "$RUNNER_TEMP/sv.key" \
+              -o "$RUNNER_TEMP/docker-sv"
+          cd "$RUNNER_TEMP/docker-sv" && docker compose config -q
+          # The pair reaches the container, at the paths BlazeMeter's own
+          # command mounts them at.
+          docker compose config | grep -q 'TLS_CERT: /etc/ssl/certs/public.pem'
+          docker compose config | grep -q 'target: /etc/ssl/certs/privatekey.pem'
+
       # ...and the negative half. A required value left blank is written as
       # compose's own `${X:?message}` (#183), so `up -d` aborts before anything
       # is created. Accepting an unfinished bundle here would be compose

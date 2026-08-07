@@ -371,16 +371,20 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
-    // ...and both formats that cannot publish a virtual service are refused
-    // with their own sentence, rather than disappearing. On this step, because
-    // the format decides which of the questions above it are asked.
+    // ...and the format that cannot publish a virtual service is refused with
+    // its own sentence, rather than disappearing. On this step, because the
+    // format decides which of the questions above it are asked.
     const chart = await screen.findByRole<HTMLButtonElement>(
       "radio", { name: /Helm chart/ });
     expect(chart.disabled).toBe(true);
+    // Docker is not, since #182: it publishes virtual services with its own
+    // three options, and the segment being enabled here is what says so. The
+    // segment used to be disabled with a sentence about HOSTNAME_OVERRIDE
+    // "which this bundle does not carry" -- true of the bundle, never of the
+    // agent, and now true of neither.
     const docker = screen.getByRole<HTMLButtonElement>(
       "radio", { name: /Docker/ });
-    expect(docker.disabled).toBe(true);
-    expect(screen.getByText(/HOSTNAME_OVERRIDE/)).toBeTruthy();
+    expect(docker.disabled).toBe(false);
 
     // #115: the profile arrived asking for a chart and is being generated as
     // manifests instead, so the page says so. It used to happen in silence,
@@ -454,6 +458,12 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
                            resources: ["ingresses"], creates: "Ingress",
                            nodeport_ok: true } },
     }),
+    // The one copy of generate.IGNORED_BY_FORMAT (see fixtures.ts). Needed
+    // here since #182: the two service-virtualization groups hide each other by
+    // format, so a page with no table shows both -- the "not read" state, which
+    // is a field too many rather than a hidden one, but not what these tests
+    // are about.
+    ignoredOptions: async () => IGNORED_BY_FORMAT,
     generate: async (_facts: unknown, options: Options) => {
       record.push(options);
       return { files: [], token: { branch: "placeholder" as const,
@@ -699,16 +709,20 @@ test("an SV configuration no location demanded still takes away the formats that
   async () => {
     // A restored session is one of the three ways these options arrive without
     // anyone pressing anything, and the only one that needs no account to
-    // reproduce. Docker plus a complete SV configuration: generate() refuses
+    // reproduce. A chart plus a complete SV configuration: generate() refuses
     // the pair outright, and nothing on the page used to say so -- the segment
     // was enabled, the rail was green and the download was not blocked.
+    //
+    // Docker until #182, which is the point: the state is "a configuration
+    // nobody demanded, on a format that refuses it", and which format that is
+    // moved when the docker agent gained options of its own.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
       options: {
-        namespace: "blazemeter", output_format: "docker",
+        namespace: "blazemeter", output_format: "helm",
         sv_ingress: "nginx", sv_subdomain: "apps.example.com",
         sv_tls_secret: "wildcard",
       },
@@ -722,7 +736,7 @@ test("an SV configuration no location demanded still takes away the formats that
     // reaches generate() at all.
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 400));
-    expect(asked.filter((o) => o.output_format === "docker" && o.sv_ingress
+    expect(asked.filter((o) => o.output_format === "helm" && o.sv_ingress
       && o.sv_ingress !== "none")).toEqual([]);
     // The SV options are what survive; the format is what gives way. Nothing
     // here wipes a configuration somebody wrote in order to keep a format.
@@ -731,23 +745,29 @@ test("an SV configuration no location demanded still takes away the formats that
 
     // ...and the page said so rather than swapping the segment in silence.
     expect(await screen.findByText(/Switched to/)).toBeTruthy();
-    const docker = screen.getByRole<HTMLButtonElement>(
-      "radio", { name: /Docker/ });
-    expect(docker.disabled).toBe(true);
+    const chart = screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Helm chart/ });
+    expect(chart.disabled).toBe(true);
+    // The docker segment beside it stays available, because this configuration
+    // is not what that format is refused over any more -- the ingress options
+    // are simply ones it ignores, kept and named like every other.
+    expect(screen.getByRole<HTMLButtonElement>(
+      "radio", { name: /Docker/ }).disabled).toBe(false);
   });
 
 test("a functionality this bundle's format cannot serve is stated, not offered",
   async () => {
     // The same card as #113's, for the other reason it can carry no switches --
     // and the two must not be confused. This location's funcIds say nothing, so
-    // "not enabled here" is false; what is true is that no docker bundle can
-    // publish a virtual service whatever the location runs.
+    // "not enabled here" is false; what is true is that no *chart* this
+    // generator emits can publish a virtual service, whatever the location
+    // runs. Docker was the second such format until #182 and is not one now.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
       confirmed: { loc: "h-tdm", ship: "s-1" },
       manual: { harbor_id: "", ship_id: "" }, declaredFunctionalities: [],
-      options: { namespace: "blazemeter", output_format: "docker" },
+      options: { namespace: "blazemeter", output_format: "helm" },
       step: 1, view: "flow", plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
     const asked: Options[] = [];
@@ -769,6 +789,13 @@ test("a functionality this bundle's format cannot serve is stated, not offered",
     fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
     await waitFor(() =>
       expect(card("mockServices").queryByRole("switch")).not.toBeNull());
+    // Docker serves it too, and with its own group rather than the ingress
+    // one: the card is the functionality, and which of the two sets of options
+    // is under it is the format's answer (#182).
+    fireEvent.click(screen.getByRole("radio", { name: /Docker/ }));
+    await waitFor(() => expect(
+      card("mockServices").getByRole("switch").getAttribute("aria-label"))
+      .toBe("Virtual service endpoints"));
   });
 
 test("the docker format is a third bundle, and it is what gets generated",

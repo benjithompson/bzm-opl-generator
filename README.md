@@ -42,7 +42,9 @@ bzm-opl-gen ui                              # opens the web UI
 with `"bzm-opl-gen[ui]==0.3.2"`.
 
 `[ui]` is the web page, `[mcp]` the MCP server ([docs/mcp.md](docs/mcp.md)),
-`[ui,mcp]` both. The bare CLI has no dependencies at all.
+`[ui,mcp]` both. The bare CLI pulls in one package, `cryptography` — it reads
+the certificate a docker agent serves its virtual services with, to check the
+hostname against it.
 
 <details>
 <summary>Installing from git, or from a release wheel</summary>

@@ -20,6 +20,7 @@ The bundle is:
 | `compose.yaml` | the same container for Docker Compose — see below |
 | `bzm-opl-agent.env` | the `AUTH_TOKEN`, when `use_secret` is on (the default) |
 | `ca-bundle.crt` | the inline PEM, when one was given |
+| `sv-tls.crt`, `sv-tls.key` | the certificate this agent serves its virtual services with, when one was given |
 | `bzm-opl-image-mirror.sh` | when `--private-registry` was given |
 | `README.md`, `profile.json` | as every format |
 
@@ -72,6 +73,14 @@ ones set away from their default, so it says what *this* bundle asked for and
 did not get. A note that listed all of them every time would be read as
 boilerplate, and the one line that matters — "you asked for a node selector and
 it is not here" — would be buried in it.
+
+The table is the generator's own (`generate.IGNORED_BY_FORMAT`) and is **served
+as `/api/ignored-options`**, keyed by format, so the web UI hides what this
+format cannot carry without keeping a second copy of two dozen option names —
+a key added to the generator stops being offered there with no edit on either
+side. It is a table per format rather than docker's alone: `manifests` and
+`helm` ignore the three options a docker agent publishes virtual services with,
+which is the same rule read from the other end.
 
 Named rather than refused cuts the other way too, and the generator holds to it:
 **a format never rejects a value it says it ignores.** An unnamed service
@@ -235,24 +244,22 @@ the trust bundle its platform team maintains.
 
 Two things differ from the Kubernetes formats, both deliberate:
 
-- **Service virtualization is not in this bundle yet, and the gap is this
-  generator's rather than the agent's.** A docker agent serves virtual services
-  perfectly well: it publishes them with `HOSTNAME_OVERRIDE` and a
-  `TLS_CERT`/`TLS_KEY` pair, which nothing here has an option for, because every
-  `sv_*` option this tool has writes a `KUBERNETES_WEB_EXPOSE_*` variable that a
-  container agent never reads.
-  [#182](https://github.com/benjithompson/bzm-opl-generator/issues/182) is the
-  work that adds those three; until it lands, take the `docker run` from
-  BlazeMeter's own Docker Command tab — their [bring your own certificate
-  page](https://help.blazemeter.com/docs/guide/private-locations-optional-installation-step-bring-your-own-certificate-mock-services.html)
-  carries a working one — and set them by hand. `--format docker` refuses a
-  bundle *configured* for service virtualization — an `sv_ingress` other than
-  none — rather than emitting a command that would install, report idle, and
-  publish nothing. The
-  test is the configuration, not the location: a location that offers mocks but
-  is being generated for performance alone ([declining the
-  functionality](service-virtualization.md#not-using-it-on-a-location-that-offers-it))
-  carries no `sv_*` options and docker is available again.
+- **Service virtualization is published a different way here, not left out.**
+  This bundle used to refuse an SV configuration outright, and the refusal was
+  always narrower than it read: a docker agent serves virtual services perfectly
+  well, and the gap was in this generator rather than in the agent. It is closed
+  ([#182](https://github.com/benjithompson/bzm-opl-generator/issues/182)) —
+  `--sv-hostname`, `--sv-tls-cert` and `--sv-tls-key` write `HOSTNAME_OVERRIDE`,
+  `TLS_CERT` and `TLS_KEY`, and the two PEMs are written into the bundle and
+  mounted the way `ca-bundle.crt` is. The full shape, and the two checks that
+  run when the bundle is generated, are in
+  [Service virtualization](service-virtualization.md#docker-a-hostname-and-a-certificate).
+
+  The four Kubernetes `sv_*` options are ignored here rather than refused: they
+  write `KUBERNETES_WEB_EXPOSE_*`, which a container agent never reads. Set one
+  and the bundle names it under **Set here, but not carried**, like every other
+  ignored option. `--format helm` is now the only format that refuses a virtual
+  service, and that is a limit of *our chart*.
 - **`livetest` does not take a docker bundle.** The rig applies YAML to a
   cluster; this bundle is a shell script and no cluster is involved. It exits
   with that message rather than globbing an empty directory and waiting out its

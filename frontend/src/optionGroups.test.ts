@@ -53,6 +53,13 @@ const DETECTS: [GroupId, string, unknown][] = [
   // auto-update alongside a mirror showing a closed group.
   ["security", "auto_update", true],
   ["sv", "sv_ingress", "nginx"],
+  // All three of the docker half detect: unlike the ingress group there is no
+  // one field that "is" the group -- a hostname with no certificate is a real
+  // configuration (plain HTTP endpoints under a name), and so is a certificate
+  // being pasted before the hostname is typed.
+  ["svDocker", "sv_hostname", "C123ABCXYZ"],
+  ["svDocker", "sv_tls_cert", "-----BEGIN CERTIFICATE-----"],
+  ["svDocker", "sv_tls_key", "-----BEGIN PRIVATE KEY-----"],
 ];
 
 /** Owned and written, but never a reason to open the group on its own. Listed
@@ -80,6 +87,9 @@ const FULL: Options = {
   ca_configmap_key: "ca-bundle.crt",
   ca_bundle: "-----BEGIN CERTIFICATE-----",
   ca_openshift_inject: true,
+  sv_hostname: "C123ABCXYZ",
+  sv_tls_cert: "-----BEGIN CERTIFICATE-----",
+  sv_tls_key: "-----BEGIN PRIVATE KEY-----",
   tolerations: [{ key: "lifecycle" }],
   node_selector: { pool: "loadtest" },
   engine_cpu_limit: "4",
@@ -219,6 +229,10 @@ describe("switching a group off", () => {
         sv_ingress: null, sv_subdomain: null, sv_tls_secret: null,
         sv_istio_gateway: null,
       },
+      // The docker half of the same functionality. Nothing conditional here:
+      // `required` is the ingress group's, since generate() refuses nothing
+      // over an empty hostname, so there is no SV_NONE to record.
+      svDocker: { sv_hostname: null, sv_tls_cert: null, sv_tls_key: null },
     };
     for (const g of OPTION_GROUPS) expect(g.disable(FULL, false)).toEqual(wipes[g.id]);
   });
@@ -359,7 +373,11 @@ describe("the split the configure step is built on", () => {
     // `sv` is still the *group* id -- what the row is called on the page -- and
     // the two no longer coincide, which is the point: one is a bundle's
     // options, the other is a thing the account enables.
-    expect(groupsOf("mockServices").map((g) => g.id)).toEqual(["sv"]);
+    // Two groups, one per platform, and they are never on screen together --
+    // each one's keys are the other format's ignored options, so `groupsFor`
+    // drops whichever this bundle cannot carry (#182). The card is the
+    // functionality; which of the two is under it is the format's answer.
+    expect(groupsOf("mockServices").map((g) => g.id)).toEqual(["sv", "svDocker"]);
     // Performance owns no group any more: the engine size stopped being one
     // (#132) -- it derives from the location, and the panel states it.
     expect(groupsOf("performance")).toEqual([]);

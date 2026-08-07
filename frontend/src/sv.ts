@@ -16,6 +16,9 @@
 // (optionGroups.svIncomplete), because a group declaring when it is finished is
 // what keeps "adding a functionality needs no frontend change" true.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
+// The one predicate this module takes from the format: whether the ingress
+// options reach anything in a bundle of it. Never `isDocker` -- see svState.
+import { Applies } from "./formats";
 import {
   GroupFlags, isOpenshift, OptionPatch, SV_NONE,
   svConfigured, svIncomplete, svNodePortConflict,
@@ -113,29 +116,29 @@ export const SV_MIXED =
 
 /** Why a format cannot carry service virtualization, by format.
  *
- *  Both refusals are generate()'s, and both are about the same missing thing:
- *  publishing a virtual service needs an ingress, its RBAC and a TLS secret.
- *  A chart without them stalls at WAITING_FOR_DOMAIN and a docker agent
- *  publishes nothing at all, so each segment says so rather than disappearing
- *  -- a format that vanishes leaves the page unable to explain the error the
- *  server would have given.
+ *  The refusal is generate()'s, and it is about a missing thing: publishing a
+ *  virtual service needs an ingress, its RBAC and a wildcard TLS secret, and
+ *  the chart carries none of them, so one emitted anyway would deploy, report
+ *  idle and stall at WAITING_FOR_DOMAIN. The segment says so rather than
+ *  disappearing -- a format that vanishes leaves the page unable to explain the
+ *  error the server would have given.
  *
- *  Keyed by format because there are two of them now and there is one segmented
- *  control: the panel looks each segment up rather than testing for helm and
- *  then for docker.
+ *  **Docker was here and is not** (#182). Its entry read "a docker agent
+ *  publishes virtual services with HOSTNAME_OVERRIDE and a TLS pair, which this
+ *  bundle does not carry", and that was true of the bundle rather than of the
+ *  agent: the three options are here now, so a docker bundle publishes virtual
+ *  services and this refuses nothing about it. What is left is one format, and
+ *  the record stays a table because `test_server.py` derives the set by calling
+ *  generate() per format and holds this equal to it -- a second one growing, or
+ *  this one losing its last entry, both have to fail somewhere.
  *
  *  A clause, lower case and unpunctuated, as IGNORED_BY_FORMAT's reasons are and
- *  for the same reason: three places say it now -- the disabled segment, the
+ *  for the same reason: three places say it -- the disabled segment, the
  *  functionality card that offers no switches, and the notice when the
- *  correction moves a format -- and each needs its own lead-in. Written as one finished
- *  sentence it read "Not for this location" in all three, which had stopped
- *  being true of any of them: what a format is refused over is the
- *  configuration, not the location (see `blockedFormats`). */
+ *  correction moves a format -- and each needs its own lead-in. */
 const BLOCKED_FORMATS: Record<string, string> = {
   helm: "service virtualization needs an ingress, its RBAC and a TLS secret, "
     + "which this chart does not carry",
-  docker: "a docker agent publishes virtual services with HOSTNAME_OVERRIDE "
-    + "and a TLS pair, which this bundle does not carry",
 };
 
 /** Everything the page, the group and the download step ask about service
@@ -260,8 +263,20 @@ const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
  *  a server refusal with nothing on screen to clear. */
 export function svState(
     funcIds: string[] | undefined, o: Options,
-    constants: SvConstants, runs = true): Sv {
+    constants: SvConstants, runs = true, applies: Applies = () => true): Sv {
   const location = (funcIds ?? []).some((f) => constants.func_ids.includes(f));
+  // Does this bundle's format have these options at all? Since #182 a docker
+  // bundle publishes virtual services with its own three (`sv_hostname` and the
+  // TLS pair), and every option below is one of its ignored ones -- so a
+  // location's demand is answered over there, and everything this record says
+  // about an ingress would otherwise be said about a row that is not on screen.
+  //
+  // Asked as "does `sv_ingress` apply", never as "is this docker": that is the
+  // question the served table answers, and it is the same predicate the form
+  // hides the fields with, so the two cannot disagree. Absent means the table
+  // has not been read, which is every field applying -- one field too many for
+  // a moment, which is formats.ts's own choice of which way to be wrong.
+  const k8s = applies("sv_ingress");
   const declined = o.sv_ingress === SV_NONE;
   // `runs` is a conjunct, and it has to be. The comment below used to say
   // `required` implies `runs` because a demand comes from the funcIds a served
@@ -275,16 +290,29 @@ export function svState(
   // never settled, so unticking Service virtualization hung the page. Each
   // write was individually right; what was wrong is that they answered the same
   // question from two sources. This makes it one.
-  const required = runs && location && !declined;
-  // What a helm or docker bundle is refused over: an SV configuration this
-  // bundle carries, or a demand that is one render from becoming one (the seed
-  // below chooses nginx for it).
+  // The location's demand, and what this *form* can do about it, are two
+  // things now. `demand` is the location asking for virtual services to be
+  // published somehow; `required` is the ingress group being the place this
+  // bundle answers it, which a docker bundle's is not -- there the answer is
+  // the `svDocker` group beside it, and generate() refuses nothing when it is
+  // left empty (endpoints published under an IP address are degraded, not
+  // broken, which is BlazeMeter's own framing of HOSTNAME_OVERRIDE).
+  const demand = runs && location && !declined;
+  const required = k8s && demand;
+  // What a helm bundle is refused over: an SV configuration this bundle
+  // carries, or a demand that is one render from becoming one (the seed below
+  // chooses nginx for it).
+  //
+  // Read off the options rather than off `required`, and deliberately *not*
+  // gated by `k8s`: a docker bundle can hold a stranded `sv_ingress`, and it
+  // becomes live the moment somebody picks helm. What may be picked has to
+  // follow what the configuration would mean there, not what it means here.
   //
   // One value because the two readers must not disagree: the control disables
   // a segment with it and `correction` moves off a selected one with it, and a
   // segment shown enabled that resets itself the moment it is picked is worse
   // than either mistake alone. It is what caught the split when they were two.
-  const carries = (runs && svConfigured(o.sv_ingress)) || required;
+  const carries = (runs && svConfigured(o.sv_ingress)) || demand;
   const blockedHere = BLOCKED_FORMATS[String(o.output_format ?? "")];
 
   // Everything below reads the options as they are, never as the patch will
@@ -299,8 +327,12 @@ export function svState(
     declined,
     required,
     configured: svConfigured(o.sv_ingress),
-    ok: !svIncomplete(o, required, constants.backends),
-    nodePortConflict: svNodePortConflict(o, constants.backends),
+    // Both are about the ingress fields, so both are answered `true` / `false`
+    // for a bundle that has none: nothing is unfinished about a form that does
+    // not ask, and a stranded value behind it is an ignored option like any
+    // other -- kept, sent, and named in the bundle's README.
+    ok: !k8s || !svIncomplete(o, required, constants.backends),
+    nodePortConflict: k8s && svNodePortConflict(o, constants.backends),
     ingress: o.sv_ingress == null ? null : String(o.sv_ingress),
     ingressTypes: constants.ingress_types.filter(
       (t) => t !== "openshift" || openshift),
@@ -324,8 +356,12 @@ export function svState(
     functionalityBlocked:
       runs && blockedHere ? { [SV_FUNCTIONALITY]: blockedHere } : {},
     groupRequired: { sv: required },
-    groupDeclined: { sv: location && declined },
-    patch: correction(o, required, carries),
+    // Both keyed to the ingress group alone, because both are sentences about
+    // it: `svDocker` has no "required" state -- there is nothing generate()
+    // refuses over it -- and "declined" is `sv_ingress: none`, a value only
+    // the group above can hold.
+    groupDeclined: { sv: k8s && location && declined },
+    patch: correction(o, required, carries, k8s),
   };
 }
 
@@ -341,13 +377,19 @@ export function svState(
  *  CLUSTERIP whenever an ingress was configured; #60 showed the pairing works,
  *  so an imported profile keeps the value it arrived with. */
 function correction(
-    o: Options, required: boolean, carries: boolean): OptionPatch | null {
+    o: Options, required: boolean, carries: boolean,
+    k8s: boolean): OptionPatch | null {
   // The openshift backend publishes a route.openshift.io Route, so switching
   // the platform away from OpenShift strands sv_ingress on a value generate()
   // now refuses -- and the option itself disappears from the select, leaving
   // nothing on screen to explain the error. Fall back to nginx, which works
   // anywhere.
-  const stranded = o.sv_ingress === "openshift" && !isOpenshift(o);
+  //
+  // `k8s` gates it because a bundle whose format has no ingress field refuses
+  // nothing here: `platform` is one of docker's ignored options too, so this
+  // would be rewriting one ignored option on the strength of another, off a
+  // control neither of which has on that page.
+  const stranded = k8s && o.sv_ingress === "openshift" && !isOpenshift(o);
   // An imported profile sets the SV options without ever calling the group's
   // enable(), and a row opened by `required` goes through detectGroups, so
   // neither path would otherwise seed sv_ingress -- leaving the select showing

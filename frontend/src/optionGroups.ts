@@ -22,7 +22,7 @@ import { envIncomplete } from "./env";
 import { Applies, isDocker, keysApply } from "./formats";
 
 export type GroupId =
-  "registry" | "proxy" | "ca" | "sched" | "security" | "sv";
+  "registry" | "proxy" | "ca" | "sched" | "security" | "sv" | "svDocker";
 
 /** Merged over the current options. `null` clears a key that has a default --
  *  A key with no default must be REMOVED rather than nulled -- generate()
@@ -465,6 +465,41 @@ export const OPTION_GROUPS: OptionGroup[] = [
     disable: (_o, required) => ({ sv_ingress: required ? SV_NONE : null,
       sv_subdomain: null, sv_tls_secret: null, sv_istio_gateway: null }),
   },
+  {
+    // The same functionality, published the docker agent's way -- and the two
+    // are never on screen together: each group's keys are the other format's
+    // ignored options, so `groupsFor` drops whichever one this bundle cannot
+    // carry (#182). Titled for what it configures rather than for the
+    // functionality, which is the card above it.
+    id: "svDocker",
+    title: "Virtual service endpoints",
+    hint: "the hostname this agent advertises, and the certificate it serves them with",
+    functionalities: ["mockServices"],
+    keys: ["sv_hostname", "sv_tls_cert", "sv_tls_key"],
+    // The hostname is what the group *is*: BlazeMeter's Asset Catalog builds
+    // endpoint URLs from it, and without one they are built from this host's IP
+    // address. Required while the group is on, therefore, even though the
+    // generator does not require it on its own -- that asymmetry is the whole
+    // split between REQUIRED_TEXT and this: blank and "not using one" are the
+    // same options dict on the server, and the switch that tells them apart is
+    // here. The pair joins it only once one of the two has a value, which is
+    // the generator's rule and the same one read from the page's side.
+    requires: (o) => ["sv_hostname",
+      ...(o.sv_tls_cert || o.sv_tls_key ? ["sv_tls_cert", "sv_tls_key"] : [])],
+    detect: (o) => !!(o.sv_hostname || o.sv_tls_cert || o.sv_tls_key),
+    // Nothing to seed. There is no vocabulary to pick from as `sv_ingress` has
+    // -- BlazeMeter's own example value is `C123ABCXYZ`, unexplained anywhere,
+    // so a default here would be this page inventing a shape for a name only
+    // the customer's DNS can settle.
+    enable: () => ({}),
+    disable: () => ({ sv_hostname: null, sv_tls_cert: null, sv_tls_key: null }),
+    // No `incomplete`. A blank field here carries the marker and the step warns
+    // about it, exactly as it does for a private registry or an inline PEM --
+    // and the two things generate() still refuses outright, a key the agent
+    // cannot read and a hostname the certificate does not cover, are values
+    // that were typed rather than boxes left empty. A marker cannot stand in
+    // for either, and neither is something this file can judge.
+  },
 ];
 
 export const GROUP_BY_ID = Object.fromEntries(
@@ -705,11 +740,23 @@ export function groupsFor(gs: OptionGroup[], applies: Applies): OptionGroup[] {
 
 /** Groups in use but not finished, so the download is blocked. Derived from the
  *  declarations rather than passed in: the caller knowing which groups can be
- *  incomplete is the coupling this exists to remove. */
+ *  incomplete is the coupling this exists to remove.
+ *
+ *  `applies` is the format's, and it is what keeps the claim at the top of this
+ *  file true -- "such a group is never hidden, so it can never be the reason a
+ *  download is blocked off screen". That held only while every group a format
+ *  could hide was untagged and unblocking. Since #182 the two service
+ *  virtualization groups hide each other by format, so a walk over all of them
+ *  could report one that has no row on this page: the off-screen blocker, from
+ *  the one direction the rule had not been asked about. Absent means the table
+ *  has not been read, which is every field applying -- formats.ts's own answer,
+ *  and the safe direction here too. */
 export function incompleteGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
-    backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
-  return OPTION_GROUPS.filter((g) => g.incomplete?.(o, !!required[g.id], backends));
+    backends?: Record<string, { nodeport_ok: boolean }>,
+    applies: Applies = () => true): OptionGroup[] {
+  return groupsFor(OPTION_GROUPS, applies)
+    .filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
 /** Groups whose state the step genuinely cannot go past, which since blank
@@ -717,9 +764,10 @@ export function incompleteGroups(
  *  group that draws no distinction needs no second declaration. */
 export function blockingGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
-    backends?: Record<string, { nodeport_ok: boolean }>): OptionGroup[] {
-  return OPTION_GROUPS.filter(
-    (g) => (g.blocks ?? g.incomplete)?.(o, !!required[g.id], backends));
+    backends?: Record<string, { nodeport_ok: boolean }>,
+    applies: Applies = () => true): OptionGroup[] {
+  return groupsFor(OPTION_GROUPS, applies)
+    .filter((g) => (g.blocks ?? g.incomplete)?.(o, !!required[g.id], backends));
 }
 
 /** What is stopping the configure step being finished, as the sentence that

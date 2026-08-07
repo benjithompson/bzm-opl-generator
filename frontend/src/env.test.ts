@@ -107,15 +107,20 @@ describe("what blocks the download", () => {
 
 describe("the offered variables", () => {
   it("shows one side of BlazeMeter's two tables", () => {
-    // Two tables, not one: TLS_CERT and HOSTNAME_OVERRIDE are the container
-    // agent's and the KUBERNETES_* half is crane's, so offering all of them
-    // would offer a setting the agent under this bundle has no reader for.
+    // Two tables, not one: the KUBERNETES_* half is crane's and the rest are
+    // the container agent's, so offering all of them would offer a setting the
+    // agent under this bundle has no reader for.
+    //
+    // The docker side of the fixture has no row of its own, and that is a fact
+    // rather than a gap: every variable in BlazeMeter's Docker-only column is
+    // written off an option now -- HOSTNAME_OVERRIDE, TLS_CERT and TLS_KEY
+    // since #182 -- so all of them are reserved and none is served. What the
+    // predicate is exercised on is the kubernetes-only row, in both directions.
     expect(offeredVars(AGENT_ENV, true).map((v) => v.name))
       .toEqual(["PREFERRED_INTERFACE", "VERIFY_SSL", "DODUO_PORT",
-                "KUBERNETES_LABELS"]);
+                "KUBERNETES_LABELS", "KUBERNETES_USE_APIPA"]);
     expect(offeredVars(AGENT_ENV, false).map((v) => v.name))
-      .toEqual(["PREFERRED_INTERFACE", "VERIFY_SSL", "DODUO_PORT",
-                "HOSTNAME_OVERRIDE"]);
+      .toEqual(["PREFERRED_INTERFACE", "VERIFY_SSL", "DODUO_PORT"]);
   });
 
   it("offers nothing before the list has landed", () => {

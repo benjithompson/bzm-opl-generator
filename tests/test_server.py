@@ -765,9 +765,13 @@ def test_option_docs_describe_every_option():
     assert body["sv_ingress"]["choices"] == (
         list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE])
     assert body["private_registry"]["nullable"] is True
-    # The UI must be able to tell which field not to echo back into a form it
-    # might save; only the credential is marked.
-    assert [k for k, e in body.items() if e["secret"]] == ["auth_token"]
+    # The UI must be able to tell which fields not to echo back into a form it
+    # might save. Two now, and the pairing is the point: `sv_tls_key` is a
+    # private key and is marked, while `sv_tls_cert` beside it is the
+    # certificate the agent hands to every client that connects and is not.
+    assert [k for k, e in body.items() if e["secret"]] \
+        == ["auth_token", "sv_tls_key"]
+    assert body["sv_tls_cert"]["secret"] is False
 
 
 def test_generate_invalid_options_400():
@@ -813,11 +817,20 @@ def test_ignored_options_are_served_from_the_generator():
     body = client.get("/api/ignored-options").json()
     assert body == gen_mod.IGNORED_BY_FORMAT
     assert set(body) == set(gen_mod.OUTPUT_FORMATS)
-    assert body["helm"] == {} and body["manifests"] == {}
     # The four the page hides whole sections for.
     for key in ("namespace", "service_account_name", "node_selector",
                 "engine_cpu_limit"):
         assert body["docker"][key]
+    # ...and the table is symmetric now (#182): service virtualization is
+    # published with disjoint variables per platform, so each set is the
+    # other's ignored options and the two cluster formats have an entry that is
+    # no longer empty. The same table, read from both ends.
+    assert body["helm"] == body["manifests"]
+    for key in ("sv_hostname", "sv_tls_cert", "sv_tls_key"):
+        assert body["helm"][key] and key not in body["docker"]
+    for key in ("sv_ingress", "sv_subdomain", "sv_tls_secret",
+                "sv_istio_gateway"):
+        assert body["docker"][key] and key not in body["helm"]
     # Every key is a real option: a name that matched nothing would hide
     # nothing, and would say so nowhere.
     options = set(client.get("/api/option-defaults").json())
