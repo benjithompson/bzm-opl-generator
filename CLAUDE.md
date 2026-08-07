@@ -990,8 +990,12 @@ stale list can cost a credential nothing can read back.
   cluster-shaped set (`--cluster`, `--local-registry`, `--local-proxy`,
   `--contain-egress`, `--run-test`) — ignoring one would have a pass claim
   something the run never tested. **Up-online-down never starts an engine**, so
-  `-u 0` and `DOCKER_PORT_RANGE` stay unproven; that is #184's, and
-  `docs/live-test.md` says so rather than leaving it to be discovered. Nothing
+  `-u 0` stays unproven — #184 was expected to settle it and did not, since the
+  mock it deployed came up through the socket under the uid the bundle had
+  already asked for, so #214 carries it. `DOCKER_PORT_RANGE` is settled the
+  other way: it does not reach virtual services at all, BlazeMeter publishing
+  them on its own 10000-32000 regardless, so no mock could have exercised it.
+  `docs/live-test.md` says both rather than leaving them to be discovered. Nothing
   re-renders on this path, so no credential is minted: the bundle deployed is
   the bundle on disk, and a value nobody filled in is refused by reading
   compose's own `${BZM_OPL_UNSET_*:?}` guard out of the files — the credential
