@@ -94,7 +94,7 @@ DEFAULT_OPTIONS = {
     # is "answered: performance only".
     "sv_ingress": None,              # None, SV_INGRESS_NONE, or an SV_INGRESS_TYPE
     "sv_subdomain": None,            # e.g. apps.example.com -- endpoint host suffix
-    "sv_tls_secret": None,           # wildcard TLS secret, in the agent namespace
+    "sv_tls_secret": None,           # wildcard TLS secret, in the agent's own namespace
     "sv_istio_gateway": None,        # optional; unset -> a Gateway per virtual service
     # ...and the same job on a docker host, where the vocabulary is the agent's
     # own rather than Kubernetes'. BlazeMeter say why the two cannot be one set:
@@ -552,7 +552,8 @@ SV_FUNC_IDS = ("mockServices",)
 
 
 class SvBackend(collections.namedtuple(
-        "SvBackend", "group resources creates via_ingress_class nodeport_ok")):
+        "SvBackend",
+        "group resources creates via_ingress_class nodeport_ok tls_secret_read")):
     """One crane web-expose backend: the object it publishes, and so the single
     API group the Role has to grant.
 
@@ -577,6 +578,16 @@ class SvBackend(collections.namedtuple(
     four were deployed live to settle it (#60); see docs/service-virtualization.md
     for what each one did.
 
+    `tls_secret_read` records whether the published object references
+    sv_tls_secret at all, which decides what the bundle's README can tell
+    somebody about *where to put it*. Every backend requires the name -- crane
+    validates it at startup whatever it then does with it -- so "required" says
+    nothing about "read", and only two of the four read it. Where one does, the
+    secret has to be in the **agent's** namespace: crane creates the object
+    there, an Ingress resolves `tls.secretName` in its own namespace, and no
+    controller reads one from another (#185, measured on ingress-nginx against
+    crane's own Ingress). Where one does not, the secret need not exist at all.
+
     One case under `istio` is refused without having been measured, and
     deliberately: with sv_istio_gateway set crane reuses a Gateway the customer
     already owns instead of creating one, and the Gateway is the object that
@@ -592,20 +603,25 @@ class SvBackend(collections.namedtuple(
 
 SV_INGRESS_BACKENDS = {
     "nginx": SvBackend("networking.k8s.io", ["ingresses"], "Ingress", True,
-                       nodeport_ok=True),
+                       nodeport_ok=True, tls_secret_read=True),
+    # PASSTHROUGH on the :443 server, with no credentialName -- nothing loads a
+    # certificate, so an HTTPS virtual service terminates TLS in the mock pod.
     "istio": SvBackend("networking.istio.io", ["gateways", "virtualservices"],
-                       "Gateway + VirtualService", False, nodeport_ok=False),
+                       "Gateway + VirtualService", False, nodeport_ok=False,
+                       tls_secret_read=False),
     "contour": SvBackend("projectcontour.io", ["httpproxies"],
-                         "HTTPProxy", False, nodeport_ok=False),
+                         "HTTPProxy", False, nodeport_ok=False,
+                         tls_secret_read=True),
     # routes/custom-host is not padding: OpenShift gates spec.host behind its
     # own create, and crane sets spec.host. Without it the create comes back 422
     # "you do not have permission to set the host field of the route", no Route
     # appears, and the virtual service stalls with the mock pod healthy at 1/1.
     # Proven by A/B on a live cluster -- and note `auth can-i create
     # routes/custom-host` answers yes either way, so it cannot be used to check.
+    # edge/Allow, which the router terminates with its own default certificate.
     "openshift": SvBackend("route.openshift.io",
                            ["routes", "routes/custom-host"], "Route", False,
-                           nodeport_ok=True),
+                           nodeport_ok=True, tls_secret_read=False),
 }
 # Derived, not a second list to keep in step. Crane's binary names five
 # implementations -- kubernetes_{base,contour,istio,nginx,openshift}_web_expose
@@ -1827,8 +1843,8 @@ PLACEHOLDER_SOURCE = {
     "sv_subdomain": "the DNS suffix virtual-service endpoints are published "
                     "under, e.g. `apps.example.com` -- it must resolve to your "
                     "ingress",
-    "sv_tls_secret": "a wildcard TLS secret in the agent namespace; required "
-                     "even for HTTP virtual services",
+    "sv_tls_secret": "a wildcard TLS secret in the *agent's* namespace, not "
+                     "`default`; required even for HTTP virtual services",
     "sv_hostname": "the hostname this agent advertises its virtual services "
                    "under -- it has to resolve to this host, and to match the "
                    "certificate below",
@@ -1980,6 +1996,44 @@ def _sa_bullet(o):
             f"`{o['namespace']}` -- this bundle\n  references it and does not "
             f"create it. Nothing fails at apply time if it is\n  missing; the "
             f"agent pod is simply never created.")
+
+
+def _sv_bullet(facts, o):
+    """Where the wildcard TLS secret goes, on a bundle that publishes virtual
+    services -- the one prerequisite here that nothing in the bundle creates and
+    nothing anywhere reports missing (#185).
+
+    The docker README has named its own TLS pair since #182; the cluster one
+    named neither the secret nor its namespace, which is the asymmetry this
+    closes. Both halves of the sentence were measured against crane's own
+    Ingress on ingress-nginx: the namespace crane's object resolves the secret
+    in is the *agent's*, and with the secret absent the endpoint still answers
+    200 over the controller's fake certificate. That second half is why this is
+    worth the space -- there is no failed deploy, no unready pod and no BlazeMeter
+    status to notice, only a client that will not verify.
+
+    Silent on a backend that never reads it: saying where to put something
+    nothing looks at is the kind of instruction that gets followed and then
+    disbelieved.
+    """
+    cfg = _sv_cfg(facts, o)
+    if not cfg or not SV_INGRESS_BACKENDS[cfg["type"]].tls_secret_read:
+        return ""
+    return (
+        f"\n- **The wildcard TLS secret `{cfg['tls_secret']}` has to be in "
+        f"`{o['namespace']}`, and this\n  bundle does not create it.** Crane "
+        f"creates its {SV_INGRESS_BACKENDS[cfg['type']].creates} in the agent's "
+        f"own namespace and\n  resolves the secret name there; nothing reads one "
+        f"from another namespace.\n  BlazeMeter's *Bring your own certificate* "
+        f"page says `default` -- that is where\n  their walkthrough happens to "
+        f"install the agent, not a rule. It has to cover\n  `*.{cfg['subdomain']}`.\n"
+        f"  ```\n"
+        f"  {cli(o)} -n {o['namespace']} create secret tls {cfg['tls_secret']} "
+        f"--cert=<file> --key=<file>\n"
+        f"  ```\n"
+        f"  Leave it out and nothing fails: the endpoint answers `200` over the "
+        f"ingress\n  controller's own certificate, and only a client that "
+        f"verifies ever finds out.")
 
 
 def _deploy_steps(o, verb):
@@ -3996,7 +4050,7 @@ def _readme(facts, o, files):
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}
+{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}{_sv_bullet(facts, o)}
 - Engine *requests* come from the location, not this bundle: `overrideCPU` and
   `overrideMemory` under Settings -> Private Locations, defaulting to
   {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set

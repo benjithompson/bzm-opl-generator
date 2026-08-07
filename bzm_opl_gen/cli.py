@@ -987,7 +987,8 @@ def main():
     g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",
                    help="wildcard domain your ingress controller serves, e.g. apps.example.com")
     g.add_argument("--sv-tls-secret", dest="sv_tls_secret", metavar="NAME",
-                   help="wildcard TLS secret in the agent namespace; required even for HTTP")
+                   help="wildcard TLS secret in the agent's own namespace, not "
+                        "default; required even for HTTP")
     g.add_argument("--sv-istio-gateway", dest="sv_istio_gateway", metavar="NAME",
                    help="istio only, optional: reuse this Gateway instead of one per service")
     # The docker agent's own way of publishing the same thing. The two PEMs are
