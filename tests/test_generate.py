@@ -2894,6 +2894,104 @@ def test_the_cluster_formats_carry_no_pre_pull_note():
                 assert "docker pull" not in body, name
 
 
+# -- and the registry they are mirrored into (#209) ---------------------------
+#
+# The other half of the same fact. #206 made the README name what crane asks
+# for; the mirror script beside it went on pushing somewhere else, so a bundle
+# with a private registry shipped two files that disagreed in writing and the
+# mirror reported success over a path nothing reads.
+
+MIRROR = "bzm-opl-image-mirror.sh"
+REG = "reg.corp/bzm"
+
+
+def _mirror_pairs(files):
+    """Every (source, destination) the mirror script pushes."""
+    return [tuple(shlex.split(l)[1:3]) for l in files[MIRROR].splitlines()
+            if l.startswith("mirror ")]
+
+
+def _readme_pulls(files):
+    return [l.split("docker pull ", 1)[1].strip()
+            for l in files["README.md"].splitlines() if "docker pull " in l]
+
+
+def test_the_docker_mirror_pushes_exactly_what_the_readme_says_to_pull():
+    """The property option 1 of #209 exists to buy, and the only one worth
+    having: the mock references in the two files are one set, whichever way you
+    read them. Both sides are collected off the generated bundle rather than
+    written out here, so a shape changed in one renderer fails against the
+    other and not against a literal that would have to be edited to match.
+
+    `blazemeter/` and `latest` are what crane composes -- DOCKER_REGISTRY plus
+    BlazeMeter's own unqualified image name -- and this format has no
+    IMAGE_OVERRIDES to map anything else onto it.
+    """
+    files = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": REG})
+    pushed = {d for _, d in _mirror_pairs(files) if "/blazemeter/" in d}
+    pulled = set(_readme_pulls(files))
+    assert pushed == pulled, (pushed, pulled)
+    assert f"{REG}/blazemeter/service-mock:latest" in pushed
+    # The source stays the pinned public ref: it is the content whose version is
+    # known, and the line that pushed `:latest` is the one record of which
+    # version that is. Nothing pushes the pinned tag as a second destination --
+    # that would be a reference in this file the pull list does not name.
+    sources = {s for s, d in _mirror_pairs(files) if "/blazemeter/" in d}
+    assert f"{gen.PUBLIC_REGISTRY}/blazemeter/service-mock:1.0" in sources
+    assert not [d for _, d in _mirror_pairs(files) if d.endswith(":1.0")]
+
+
+def test_cranes_own_mirror_target_is_the_reference_the_bundle_runs():
+    """The trap in the fix. Crane's image keeps the last-segment destination and
+    must: this bundle's own two files name that reference themselves, so the
+    shape is free as long as the three agree. Only the images crane *composes*
+    the name for -- the ones the bundle gets no say in -- were wrong."""
+    files = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": REG})
+    crane = f"{REG}/crane:3.7.55"
+    assert crane in files["bzm-opl-agent.sh"]
+    assert crane in files[gen.DOCKER_COMPOSE_FILE]
+    assert crane in [d for _, d in _mirror_pairs(files)]
+
+
+def test_the_kubernetes_mirror_keeps_the_last_segment_shape():
+    """Untouched, and structurally so. There the reduction is not a guess: the
+    bundle emits IMAGE_OVERRIDES, crane resolves every key through it, and what
+    is mirrored is exactly what it then pulls. So the destinations are that map
+    read out, plus crane's own."""
+    files = gen.generate(MOCK_FACTS, dict(SV_OPTS, namespace="ns1",
+                                          private_registry=REG))
+    overrides = json.loads(yaml.safe_load(
+        files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    dests = {d for _, d in _mirror_pairs(files)}
+    assert dests == set(overrides.values()) | {f"{REG}/crane:3.7.55"}
+    assert f"{REG}/service-mock:1.0" in dests      # the repo's last segment...
+    assert f"{REG}/blazemeter/service-mock:latest" not in dests   # ...and only it
+
+
+def test_a_docker_bundle_with_no_mock_image_mirrors_as_it_always_did():
+    """A performance location's docker bundle is the script it was. Whether
+    crane composes an engine's name the same way has not been tested here, and
+    extending a shape read off a live virtual-service deploy to images nobody
+    has watched would put a guess and a measurement in one file."""
+    files = gen.generate(FACTS, {**DOCKER, "private_registry": REG})
+    dests = {d for _, d in _mirror_pairs(files)}
+    assert dests == {f"{REG}/crane:3.7.55", f"{REG}/v4:2.4.444-reduced",
+                     f"{REG}/apm:1.7.112"}
+    assert "docker pull" not in files["README.md"]
+    # ...and the two-shapes comment is only where two shapes are.
+    assert "deliberate" not in files[MIRROR]
+
+
+def test_the_docker_mirror_says_which_of_its_two_shapes_is_which():
+    """The reader this issue is about is holding this file beside the README's
+    pull list. The lists differ on purpose in one place and agree exactly in the
+    other, and an unexplained difference reads as a bug in one of them."""
+    sh = gen.generate(MOCK_FACTS, {**DOCKER, "private_registry": REG})[MIRROR]
+    assert "Two shapes of destination" in sh
+    assert "README.md" in sh
+    assert "DOCKER_REGISTRY" in sh
+
+
 def test_the_two_platforms_never_offer_each_other_s_vocabulary():
     """The symmetry #182 introduced, from both ends. A cluster bundle carries no
     HOSTNAME_OVERRIDE and a docker bundle no KUBERNETES_WEB_EXPOSE_*, and each

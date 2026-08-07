@@ -247,6 +247,16 @@ the trust bundle its platform team maintains.
   [Service virtualization](service-virtualization.md#what-a-live-run-showed).
   Only the mock images have been measured; a performance bundle says nothing
   about pre-pulling because nobody has tested that half.
+- **...and `--private-registry` mirrors them to that same composed name.** There
+  is no `IMAGE_OVERRIDES` on this format — it is a Kubernetes variable — so
+  nothing maps a mirrored path back to the name crane builds, and the mirror
+  script pushes the virtual-service images to
+  `<registry>/blazemeter/<name>:latest` rather than to the repo's last segment.
+  The script says which of its two destination shapes is which, because crane's
+  own image keeps the short one: this bundle's `bzm-opl-agent.sh` and
+  `compose.yaml` name that reference themselves, so there the two agree by
+  construction. The mirror's push list and the README's pull list are one set,
+  built from one function rather than by two renderers agreeing.
 - **Docker Desktop for Mac 4.3.0+** additionally needs `--privileged -v
   /sys/fs/cgroup:/sys/fs/cgroup:rw`, per BlazeMeter's installation page. The
   generated script does not add them: they are a property of that one runtime,
