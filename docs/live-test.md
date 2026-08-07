@@ -65,10 +65,14 @@ one. It never starts an engine, so:
   command their API returns, and they are the two that broke the bundle the last
   time this was guessed — the container ran as the image's non-root user and
   died on the docker socket it exists to use. Crane only reaches for the socket
-  and the port range once it starts something. **Issue #184** covers them, by
-  deploying a real virtual service on a docker agent: a mock is a sibling
-  container started through the same socket, so it exercises both without an
-  engine.
+  and the port range once it starts something. **Issue #214** covers `-u 0`,
+  which #184 was expected to settle and did not: deploying a real virtual
+  service exercised the socket, but under the uid this bundle had already asked
+  for, so what happens without the flag is still untested.
+  `DOCKER_PORT_RANGE` is settled and the answer was that it does not apply —
+  BlazeMeter publishes virtual services on its own `10000-32000` whatever that
+  variable says, so nothing about a mock could ever have exercised it. See
+  [Service virtualization](service-virtualization.md#what-a-live-run-showed).
 - There is no private-registry mirror, no proxy interception, no CA trust check,
   no egress containment and no negative control. Every one of those is
   cluster-shaped in the Kubernetes rig (a registry blackholed on a node, a
