@@ -121,7 +121,66 @@ it would make a replay need two things supplied for no gain. The consequence:
 **and** `--sv-tls-key`. Without the key the replayed bundle writes
 `<PLACEHOLDER>` into `sv-tls.key` and names it at the top of its README.
 
-## The chart cannot do this
+### What a live run showed
+
+Run once, end to end (#184): a scratch `mockServices` location, a docker bundle
+installed with `docker compose up -d` on a host with a docker daemon and no
+cluster, and a real virtual service deployed onto it. It serves — 200 and the
+transaction's body at `https://sv.bzm-opl.test:10001/hello`, over TLS whose
+certificate is byte-for-byte the one the bundle supplied (SHA-256 fingerprints
+compared), 404 on an unmatched path, and a verification failure under any other
+hostname. So the pair works, and the shape below is what it works *by*. Four of
+these contradict what was assumed when the options were written, and one of them
+will stop a first install.
+
+- **Crane does not pull.** It composes the image name and calls the docker
+  daemon's *create* directly; if the image is not already on the host it retries
+  for about ninety seconds and the deploy ends `FAILED`, with
+  `Failed to find a deployed container` on the BlazeMeter side and
+  `No such image` only in `docker logs`. Neither message names a pull. This
+  bites hardest with a private `DOCKER_REGISTRY`, because crane prefixes it onto
+  BlazeMeter's own unqualified image name and the result is a tag the host has
+  never seen — the tag exists and `docker pull` fetches it in seconds, but
+  nothing asks. **Pre-pull the mock images on any host that will serve virtual
+  services**, or the first deploy fails for a reason that reads like a broken
+  agent.
+- **The image a docker agent runs is `:latest`, not the pinned tag.**
+  BlazeMeter's deploy command names `blazemeter/service-mock:latest` even where
+  the location's own `/versions` pins `6.0.30.4`. `DOCKER_REGISTRY` is applied to
+  that name as a prefix, so what actually runs is
+  `<registry>/blazemeter/service-mock:latest`. That is the tag to pre-pull; the
+  pinned one from the image list is not what gets started.
+- **`DOCKER_PORT_RANGE` does not reach virtual services.** The agent reports
+  `10000-32000` to BlazeMeter as its port range whatever that variable says, and
+  BlazeMeter's deploy command carries the same figure; the mock in this run
+  landed on 10001. The variable governs engines. Do not size a firewall rule
+  from it.
+- **The mock is a bridge container with a published port**, not a host-networked
+  one. Only crane runs with `--net=host`. So the endpoint's port is a
+  *published* port on the host, and the range above is the range to open.
+- **Crane replicates its own bind mounts onto the mock.** The mock container
+  gets `TLS_CERT` and `TLS_KEY` in its environment pointing at
+  `/etc/ssl/certs/public.pem` and `/etc/ssl/certs/privatekey.pem`, and the two
+  files arrive by crane re-mounting *its own* host paths onto the new container.
+  This is why the pair have to be real files at a path on the host rather than
+  content crane holds in memory, and it is what the bundle's volume lines exist
+  to provide.
+- **`HOSTNAME_OVERRIDE` never reaches the mock.** It stays crane-side, and is
+  used to compose the advertised endpoint and to set the mock's
+  `BZM_ACCESS_HOSTNAME_OVERRIDE` label. The endpoint BlazeMeter published was
+  exactly the hostname and the published port — *"the combination of hostname
+  and port"*, as their page says. Without the override that same field is the
+  host's own address, and in this run that was a docker bridge IP: routable from
+  nowhere.
+
+**Two things this run did not settle**, and neither should be written up as
+though it had. Whether BlazeMeter itself refuses a PKCS#1 key is still only
+their documentation's word — the key supplied here was PKCS#8, so their
+requirement was met rather than tested, and the generator's own refusal is what
+stands between a customer and finding out. And nothing here ran the container as
+a non-root user: `-u 0` came from BlazeMeter's generated command, the socket
+path it exists for did run for the first time in this test, but the failure mode
+without it remains untested.
 
 `--format helm` is refused for a bundle configured for service virtualization,
 and it is a limit of *our chart* rather than of anything else: it would emit one
