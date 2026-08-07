@@ -664,6 +664,144 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()
 
 
+# -- livetest on a docker bundle ----------------------------------------------
+# `--format docker` had never been live-tested at all: the rig applies YAML to a
+# cluster, so a docker bundle was refused outright. #179 gave it the cheapest
+# live proof this repo can have -- up, online, down, on a docker daemon. Which
+# rig a run gets is read off the bundle rather than asked for, and these are
+# what hold that: a wrong answer either way is the silent run (nothing created,
+# the whole timeout waited out) that every guard on this command is about.
+
+def _compose_bundle(tmp_path, **opts):
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    out = tmp_path / "out"
+    out.mkdir()
+    gen.write(gen.generate(facts, {"output_format": "docker",
+                                   "auth_token": "REAL", **opts}), str(out))
+    return facts, out
+
+
+def _compose_livetest(monkeypatch, tmp_path, *extra, ok=True):
+    """`livetest` over a docker bundle with the compose rig faked. The cluster
+    rig fails the test if it is reached at all -- that is the whole question."""
+    _facts, out = _compose_bundle(tmp_path)
+    seen = {}
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "a docker bundle was handed to the cluster rig"))
+
+    def fake(client, manifests, harbor_id, ship_id, **kw):
+        seen.update(manifests=manifests, harbor_id=harbor_id,
+                    ship_id=ship_id, **kw)
+        return ok
+
+    monkeypatch.setattr(cli.livetest, "run_compose", fake)
+    client = _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(out), *extra)
+    return seen, client, caught.value
+
+
+def test_livetest_reads_the_platform_off_the_bundle(monkeypatch, tmp_path):
+    """No --namespace and no --cluster, and no flag saying which rig either: the
+    bundle already knows what it is, and a flag would be a second place to get
+    it wrong."""
+    seen, _client, exit = _compose_livetest(monkeypatch, tmp_path)
+    assert exit.code == 0
+    assert seen["ship_id"] == SHIP and seen["harbor_id"]
+
+
+def test_livetest_compose_reports_a_failure_as_a_non_zero_exit(monkeypatch,
+                                                               tmp_path):
+    _seen, _client, exit = _compose_livetest(monkeypatch, tmp_path, ok=False)
+    assert exit.code == 1
+
+
+def test_livetest_compose_mints_no_credential(monkeypatch, tmp_path):
+    """Nothing re-renders on this path, so the bundle deployed is the bundle on
+    disk -- and minting would revoke the credential it is carrying while
+    deploying it anyway."""
+    _seen, client, _exit = _compose_livetest(monkeypatch, tmp_path)
+    assert client.calls == []
+
+
+def test_livetest_compose_says_a_namespace_reaches_nothing(monkeypatch,
+                                                           tmp_path, capsys):
+    """Named rather than refused -- it is somebody's habit from the other rig,
+    not a claim about this run."""
+    _compose_livetest(monkeypatch, tmp_path, "--namespace", "ns1")
+    assert "--namespace ns1 reaches nothing" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("flags, named", [
+    (["--cluster", "minikube"], "--cluster minikube"),
+    (["--local-registry", "5001"], "--local-registry"),
+    (["--local-proxy"], "--local-proxy"),
+    (["--run-test", "12345"], "--run-test"),
+])
+def test_livetest_compose_refuses_the_cluster_shaped_flags(monkeypatch,
+                                                           tmp_path, flags,
+                                                           named):
+    """Refused, not ignored: these are the flags whose absence makes a pass mean
+    less than the person reading it thinks, so a run that quietly dropped one
+    would claim something it never tested."""
+    _facts, out = _compose_bundle(tmp_path)
+    monkeypatch.setattr(cli.livetest, "run_compose", lambda *a, **kw: pytest.fail(
+        "it ran with a flag that reaches nothing on this platform"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(out), *flags)
+    assert named in str(caught.value)
+
+
+def test_livetest_compose_refuses_a_bundle_for_another_agent(monkeypatch,
+                                                             tmp_path):
+    """#107 on the other platform, and the container name is what carries the
+    identity there. Before anything is started, because what would otherwise
+    happen is a container registering against a real account under somebody
+    else's ship id."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    out = tmp_path / "out"
+    out.mkdir()
+    gen.write(gen.generate(facts, {"output_format": "docker",
+                                   "ship_id": "6a6f7270aaaabbbbccccdddd",
+                                   "auth_token": "REAL"}), str(out))
+    monkeypatch.setattr(cli.livetest, "run_compose", lambda *a, **kw: pytest.fail(
+        "it started a bundle built for a different agent"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(out), "--ship-id", SHIP)
+    assert gen.docker_container_name(SHIP) in str(caught.value)
+
+
+def test_livetest_still_requires_a_namespace_for_a_manifests_bundle(monkeypatch,
+                                                                    tmp_path):
+    """--namespace stopped being argparse-required so a compose run is not asked
+    for a value it has no use for. The cluster rig still creates one and deploys
+    into it, so it is required here instead -- never defaulted, or the rig
+    creates a namespace nobody chose."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    out = tmp_path / "out"
+    out.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(out))
+    monkeypatch.setattr(cli.livetest, "run", lambda *a, **kw: pytest.fail(
+        "it deployed with no namespace to deploy into"))
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"), "--manifests", str(out))
+    assert "--namespace" in str(caught.value)
+
+
 # -- plan ---------------------------------------------------------------------
 # The one command that takes neither an API key nor a facts file. What these
 # defend is that it stays that way: a flag that made either mandatory would put

@@ -968,7 +968,10 @@ DESCRIPTIONS["opl_agent"] = (
     "  livetest -- deploy a bundle to a cluster and wait for the agent "
     "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
     "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
-    "the full rig is the `bzm-opl-gen livetest` command.\n"
+    "the full rig is the `bzm-opl-gen livetest` command. Manifests only: "
+    "a --format docker bundle is refused here and started with "
+    "`bzm-opl-gen livetest --manifests <dir>`, which brings it up with "
+    "docker compose on the host and needs no namespace and no cluster.\n"
     "An online agent is not proof a test runs: for that, run one "
     "through the blazemeter_execution MCP server if this session has "
     "it.")

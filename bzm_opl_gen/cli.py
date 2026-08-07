@@ -12,7 +12,8 @@ Subcommands:
   suggest      what a cluster's evidence implies about the generate options
   sv-expose    emit a working Service+Ingress per deployed virtual service
   images       list / pull / mirror the images the location actually needs
-  livetest     apply manifests to a cluster and verify the agent comes online
+  livetest     start a bundle for real (a cluster, or docker compose) and
+               verify the agent comes online
 """
 
 import argparse
@@ -523,6 +524,69 @@ def _regenerator(facts, a, ship_id, auth_token):
     return regenerate
 
 
+# Everything on `livetest` that only a cluster has, as (what to call it in the
+# refusal, is it on). Named individually rather than counted, because "some of
+# your flags do not apply here" is a message somebody has to guess at -- and the
+# guess is expensive: these are the flags whose absence makes a pass mean less
+# than the person reading it thinks. Refused rather than ignored for that
+# reason: a run that quietly dropped --contain-egress would report a pass that
+# proved nothing about containment.
+def _cluster_shaped(a):
+    return [name for name, on in (
+        (f"--cluster {a.cluster}", a.cluster != "current"),
+        ("--local-registry", a.local_registry),
+        ("--local-proxy", a.local_proxy),
+        ("--contain-egress", a.contain_egress),
+        ("--run-test", a.run_test),
+    ) if on]
+
+
+def _livetest_compose(a, client, facts, ship_id, opts):
+    """`livetest` for a docker bundle: up, online, down. Exits; never returns.
+
+    The one live proof `--format docker` has. It is the cheap end of this
+    command -- a docker daemon, no cluster build, minutes rather than tens of
+    minutes -- and it is deliberately the plain shape: no re-render, so no
+    credential is minted and the bundle deployed is the bundle on disk, byte for
+    byte. What it does not prove is in docs/live-test.md.
+    """
+    # First, exactly as on the cluster path: is this directory this agent's
+    # bundle at all? Here as well as inside run_compose, so the CLI reports it
+    # as a sentence rather than as the traceback of an exception the MCP server
+    # needs run_compose to raise.
+    bad = livetest.bundle_check(a.manifests, facts["harbor_id"], ship_id,
+                                opts).report()
+    if bad:
+        sys.exit(bad)
+    unusable = _cluster_shaped(a)
+    if unusable:
+        sys.exit(
+            f"{a.manifests}/ is a docker bundle, which this command starts with "
+            f"`docker compose up -d` on this host -- there is no cluster and no "
+            f"node here, so {', '.join(unusable)} would reach nothing. Every one "
+            f"of them is cluster-shaped (a registry blackholed on a node, a "
+            f"NetworkPolicy, an engine pod), and a run that accepted them and "
+            f"passed would be claiming things it never tested. Drop "
+            f"{'them' if len(unusable) > 1 else 'it'}, or run the cluster rig "
+            f"against a --format manifests bundle. Engines on docker are "
+            f"issue #184.")
+    if a.namespace:
+        # Named rather than refused, which is the rule the docker bundle's own
+        # ignored options already keep: the value is somebody's habit from the
+        # other rig, not a claim about this run.
+        print(f"note: --namespace {a.namespace} reaches nothing here -- a "
+              f"docker bundle is one container on this host and has no "
+              f"namespace")
+    # No mint, and so nothing above this had to be ordered around one: a compose
+    # run re-renders nothing, so issuing a token would revoke the one the bundle
+    # is carrying and deploy the bundle anyway. The credential this run uses is
+    # whatever `generate` wrote, and bundle_check refuses one still carrying the
+    # blank-value guard before the container exists.
+    ok = livetest.run_compose(client, a.manifests, facts["harbor_id"], ship_id,
+                              timeout=a.timeout, keep=a.keep, opts=opts)
+    sys.exit(0 if ok else 1)
+
+
 def cmd_livetest(a):
     f = facts_mod.load(a.facts)
     client = _client(a)
@@ -545,28 +609,33 @@ def cmd_livetest(a):
             f"{a.manifests}/ holds a Helm chart, and livetest deploys manifests "
             f"with kubectl. Re-generate that directory with --format manifests "
             f"(the two render the same objects), or install the chart yourself "
-            f"and watch it with: bzm-opl-gen doctor / kubectl -n {a.namespace} "
-            f"logs -l role=role-crane -f")
-    # Same guard, other platform: a docker bundle is a shell script and no
-    # cluster is involved at all. Without this the *.yaml glob comes back empty,
-    # every object "applies", no pod is created, and the run waits out its
-    # timeout -- 12 to 20 minutes and a deleted cluster.
-    if opts and opts.get("output_format") == "docker":
-        sys.exit(
-            f"{a.manifests}/ holds a docker bundle -- one container on a host, "
-            f"not a cluster deployment -- and livetest deploys manifests with "
-            f"kubectl. Run ./{gen_mod.DOCKER_RUN_FILE} on the host itself, or "
-            f"re-generate that directory with --format manifests.")
+            f"and watch it with: bzm-opl-gen doctor / kubectl -n "
+            f"{a.namespace or '<namespace>'} logs -l role=role-crane -f")
+    # A docker bundle used to be refused here for the same reason the chart is
+    # -- no cluster, so the *.yaml glob came back empty, every object "applied",
+    # no pod was created and the run waited out its timeout. It has its own rig
+    # now (#179): one container, started with docker compose on this host. Which
+    # rig a run gets is read off the bundle rather than asked for, because a
+    # flag saying it is a second place to get it wrong and both wrong answers
+    # are that same silent run. See livetest.bundle_platform.
+    if livetest.bundle_platform(a.manifests, opts) == livetest.PLATFORM_COMPOSE:
+        _livetest_compose(a, client, f, ship_id, opts)
+    if not a.namespace:
+        # argparse used to require it, which was right for the one rig there was
+        # and asks a compose run for a value that reaches nothing. Required here
+        # instead, once the platform is known -- and not defaulted, because a
+        # namespace nobody chose is a namespace this rig would then create.
+        sys.exit("--namespace is required for a manifests bundle: livetest "
+                 "creates it and deploys into it")
     # Is the directory this agent's bundle at all? --manifests defaults to out/,
     # which holds whatever the last `generate` left there, and the rig applies
     # every *.yaml in it. First of the bundle guards and before the mint below,
     # because a run that is about to be refused must not rotate a credential
     # some other agent is holding. See livetest.bundle_check for the incident.
-    check = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id, opts)
-    for note in check.notes:
-        print("note: " + note)
-    if check.refusals:
-        sys.exit("\n".join(check.refusals))
+    bad = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id,
+                                opts).report()
+    if bad:
+        sys.exit(bad)
     # Same shape of guard, for the same reason. The rig deploys into a namespace
     # it creates itself, so a ServiceAccount the bundle does not create is never
     # there: every object applies, no pod is ever created, and the run burns its
@@ -1067,11 +1136,17 @@ def main():
     i.add_argument("--dry-run", action="store_true")
     i.set_defaults(fn=cmd_images)
 
-    t = sub.add_parser("livetest", help="deploy to a cluster, verify agent online")
+    t = sub.add_parser("livetest", help="start a bundle for real, verify the "
+                                        "agent comes online")
     t.add_argument("--api-key", required=True)
     t.add_argument("--facts", default="facts.json")
     t.add_argument("--manifests", default="out")
-    t.add_argument("--namespace", required=True)
+    t.add_argument("--namespace",
+                   help="required for a manifests bundle: the namespace the rig "
+                        "creates and deploys into. A --format docker bundle is "
+                        "one container on this host and has none, so it is "
+                        "started with docker compose and takes neither this nor "
+                        "--cluster")
     t.add_argument("--ship-id", dest="ship_id")
     t.add_argument("--auth-token", dest="auth_token",
                    help="the agent's AUTH_TOKEN, if you are holding the one "

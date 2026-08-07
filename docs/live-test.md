@@ -7,10 +7,86 @@ pull, egress to `*.blazemeter.com`, and credentials. `--keep` skips teardown;
 comes online; engines won't fit laptop resources — use `--cluster current`
 against a real cluster for full engine validation).
 
+There are **two rigs**, and which one a run gets is read off the bundle rather
+than asked for — a manifests bundle is applied to a cluster, a `--format docker`
+bundle is started with Docker Compose on the host you are sitting at. Nothing on
+the command line selects it: the bundle already records what it is, and a flag
+saying so would be a second place to get it wrong, where both wrong answers look
+identical (nothing is created and the run waits out its whole timeout). They
+share the success criterion and nothing below it.
+
+## The compose path (`--format docker` bundles)
+
+Up, online, down:
+
+```
+bzm-opl-gen livetest --api-key api-key.json --facts facts.json \
+    --manifests out --ship-id <SHIP_ID> --timeout 300
+```
+
+No `--namespace` and no `--cluster` — a docker bundle is one container on this
+host and has neither. Pass a namespace anyway and the run says it reaches
+nothing rather than refusing; pass `--cluster`, `--local-registry`,
+`--local-proxy`, `--contain-egress` or `--run-test` and it **refuses**, because
+each of them is cluster-shaped and a run that quietly dropped one would report a
+pass that proved none of it.
+
+The run needs a docker daemon with the Compose v2 plugin and nothing else — no
+minikube, no kind, none of the 12–20 minute cluster build. It re-renders
+nothing, so it mints no credential and deploys the bundle exactly as it sits on
+disk; `docker compose down --remove-orphans` runs in a `finally`, and a
+container that survives it is removed by name so it cannot hold the name the
+next run needs.
+
+Before the container exists it refuses a directory with **no compose file**, one
+whose **`container_name` is not the agent under test** (the container name
+carries the ship id — #107 on this platform), one whose `HARBOR_ID`/`SHIP_ID`
+name another location, and one still carrying compose's `${…:?}`
+required-variable guard, which is what the generator writes where a required
+value was left blank. `compose up` would refuse that last one too, but only
+after creating a container against a real account.
+
+A required value this format writes as a **file** — `ca_bundle`, and the
+virtual-service TLS pair — is refused on the same rule and needs its own read:
+the marker is in the file's own bytes, so no variable carries it, and
+`profile.json` carries neither the file nor (for `sv_tls_key`, which is a secret)
+the option. The rig reads the file the container would actually mount, which is
+the one `CA_BUNDLE`/`SV_TLS_CERT`/`SV_TLS_KEY` resolves to — so a bundle finished
+the way its own README recommends, by pointing a variable at a file the host
+already keeps, passes. A file it cannot read is a note, not a refusal.
+
+### What the compose path does **not** prove
+
+It is the first live proof `--format docker` has ever had, and it is a narrow
+one. It never starts an engine, so:
+
+- **`-u 0` and `DOCKER_PORT_RANGE` are not exercised.** These are the two flags
+  in the docker format that came from BlazeMeter's *pages* rather than from the
+  command their API returns, and they are the two that broke the bundle the last
+  time this was guessed — the container ran as the image's non-root user and
+  died on the docker socket it exists to use. Crane only reaches for the socket
+  and the port range once it starts something. **Issue #184** covers them, by
+  deploying a real virtual service on a docker agent: a mock is a sibling
+  container started through the same socket, so it exercises both without an
+  engine.
+- There is no private-registry mirror, no proxy interception, no CA trust check,
+  no egress containment and no negative control. Every one of those is
+  cluster-shaped in the Kubernetes rig (a registry blackholed on a node, a
+  NetworkPolicy an unenforced CNI silently ignores) and none of them has a
+  compose analogue here.
+- Nothing is read back off the running container. The Kubernetes rig's
+  `assert_live_config` checks the deployed objects against the options; the
+  compose path checks the *bundle* before it starts and the *account* after.
+
+What it does prove is the chain BlazeMeter can see: the image pulled, the
+container started, the agent reached `*.blazemeter.com`, and the credential in
+the bundle was accepted.
+
 ## Reproducing the hard customer environments locally
 
-Two optional rigs turn a laptop into the awkward network a customer has, and
-are torn down with the cluster.
+Everything from here down is the **cluster** rig. Two optional local
+environments turn a laptop into the awkward network a customer has, and are torn
+down with the cluster.
 
 | flag | container | what it proves |
 |---|---|---|
@@ -73,6 +149,10 @@ identity survives. Instead the rig refuses, before the cluster exists, a
 the run was told to test, naming both values — and refuses any `*.yaml` the
 generator does not emit, which is how a leftover from an older version is
 caught. An identity it cannot *read* is a note, not a refusal.
+
+The compose path makes the same refusal off the files a docker bundle has: the
+`container_name` both docker routes share, and the `HARBOR_ID`/`SHIP_ID` in the
+compose file's environment block.
 
 ## What a pass actually proves
 

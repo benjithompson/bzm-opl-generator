@@ -959,13 +959,43 @@ stale list can cost a credential nothing can read back.
   not a path -- `ca_bundle`'s shape end to end, and for `ca_bundle`'s reason: a
   path-valued option cannot produce a bundle for a host nobody here can see,
   which is `facts.manual()`'s whole premise.
-  `livetest` refuses a chart directory, a docker bundle, a profile
+  `livetest` refuses a chart directory, a profile
   with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
   re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart
   without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob
   comes back empty, and a namespace the rig was told already exists never gets
   created, so every object applies, no pod is created, and the run waits out its
   timeout. Each of these is 12–20 minutes and a deleted cluster otherwise.
+
+- **`livetest` is two rigs now, and the bundle picks (#179).** `run()` applies
+  manifests to a cluster; `run_compose()` starts a docker bundle with
+  `docker compose up -d` on the host, waits for the same heartbeat and takes it
+  down — which is the first live proof `--format docker` has ever had, and it
+  costs a daemon rather than a cluster build. **`bundle_platform` reads it off
+  the bundle, never off a flag**: profile.json's `output_format` where there is
+  a profile, the presence of `compose.yaml` where there is not. A `--compose`
+  flag would be a second place to get it wrong and *both* wrong answers are the
+  same silent run — the glob comes back empty, nothing is created, and the
+  timeout is waited out — so the two directions are made loud instead: a
+  compose bundle handed to `run()` raises (the MCP server calls it directly), a
+  stray compose file in a manifests bundle is the unknown-`*.yaml` refusal it
+  already was. `bundle_check` judges both platforms because it is one question
+  about one directory; what differs is where a bundle records its identity, and
+  the compose half adds the two refusals a directory with no manifests needs —
+  **no compose file**, and a **`container_name` that is not the agent under
+  test**. `--namespace` stopped being argparse-required for the same reason a
+  docker README names its ignored options rather than refusing them: a compose
+  run has no namespace, so it is required once the platform is known and a
+  namespace passed anyway is *named*. What is refused there is the
+  cluster-shaped set (`--cluster`, `--local-registry`, `--local-proxy`,
+  `--contain-egress`, `--run-test`) — ignoring one would have a pass claim
+  something the run never tested. **Up-online-down never starts an engine**, so
+  `-u 0` and `DOCKER_PORT_RANGE` stay unproven; that is #184's, and
+  `docs/live-test.md` says so rather than leaving it to be discovered. Nothing
+  re-renders on this path, so no credential is minted: the bundle deployed is
+  the bundle on disk, and a value nobody filled in is refused by reading
+  compose's own `${BZM_OPL_UNSET_*:?}` guard out of the files — the credential
+  is the value most often left blank and the one `profile.json` can never carry.
 - CA bundles exceed the 256KB cap on kubectl's last-applied-configuration
   annotation — manifests over 200KB apply `--server-side`.
 - A taurus-script test keeps its locations in the uploaded YAML;

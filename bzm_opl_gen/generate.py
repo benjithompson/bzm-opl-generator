@@ -2674,6 +2674,13 @@ DOCKER_COMPOSE_FILE = "compose.yaml"
 # Crane is BlazeMeter's own name for the agent process, and the container is
 # named after it too (docker_container_name).
 DOCKER_COMPOSE_SERVICE = "crane"
+# The variable name a blank value is written under, prefixed so it is one
+# nobody's environment holds -- see _compose_required for why the guard may not
+# be spelled `${AUTH_TOKEN:?...}`. A constant because livetest reads it back:
+# the rig has to refuse an unfinished bundle before it starts anything, and the
+# thing it looks for must be the thing this writes rather than a second spelling
+# of it.
+COMPOSE_UNSET_PREFIX = "BZM_OPL_UNSET_"
 DOCKER_ENV_FILE = "bzm-opl-agent.env"
 DOCKER_CA_FILE = "ca-bundle.crt"
 # Where BlazeMeter's Docker documentation says the trust bundle has to land, and
@@ -2915,6 +2922,31 @@ def docker_split_env(facts, o):
 DockerMount = collections.namedtuple(
     "DockerMount", "var file path what option content")
 
+# Every file a docker bundle can mount, as the mount without its content.
+# Which of them a given bundle carries is a question about its options and is
+# `docker_file_mounts` below; *what the files are called* is not a question
+# about options at all, and a reader that only needs the names should not have
+# to supply a bundle's worth of them to get one.
+#
+# livetest is that reader, and it is why this is separate rather than inlined:
+# the rig has to look for the marker in a bundle's mounted files, and it cannot
+# ask `docker_file_mounts` because the only options dict it holds is
+# profile.json's -- which carries no `sv_tls_key` (SECRET_OPTIONS), the file
+# most likely to be the blank one. A table of filenames restated over there is
+# the drift this repo keeps rules about, so it reads this.
+#
+# `content` is None here, and that is the field's honest answer rather than a
+# blank: nothing but an option supplies it, and there is no option in sight.
+DOCKER_FILE_MOUNTS = (
+    DockerMount("CA_BUNDLE", DOCKER_CA_FILE, DOCKER_CA_PATH, "trust bundle",
+                "ca_bundle", None),
+    DockerMount("SV_TLS_CERT", DOCKER_SV_CERT_FILE, DOCKER_SV_CERT_PATH,
+                "virtual-service certificate", "sv_tls_cert", None),
+    DockerMount("SV_TLS_KEY", DOCKER_SV_KEY_FILE, DOCKER_SV_KEY_PATH,
+                "virtual-service private key", "sv_tls_key", None),
+)
+_MOUNT_BY_OPTION = {m.option: m for m in DOCKER_FILE_MOUNTS}
+
 
 def docker_file_mounts(o):
     """The files this bundle writes and mounts into the container.
@@ -2931,18 +2963,15 @@ def docker_file_mounts(o):
     bundle, or the certificate for the domain these endpoints are published
     under, somewhere of their own.
     """
+    def mount(option, content):
+        return _MOUNT_BY_OPTION[option]._replace(content=content)
+
     out = []
     if _ca_cfg(o):
-        out.append(DockerMount("CA_BUNDLE", DOCKER_CA_FILE, DOCKER_CA_PATH,
-                               "trust bundle", "ca_bundle", o["ca_bundle"]))
+        out.append(mount("ca_bundle", o["ca_bundle"]))
     sv = _sv_docker_cfg(o)
     if sv and sv["cert"]:
-        out += [DockerMount("SV_TLS_CERT", DOCKER_SV_CERT_FILE,
-                            DOCKER_SV_CERT_PATH, "virtual-service certificate",
-                            "sv_tls_cert", sv["cert"]),
-                DockerMount("SV_TLS_KEY", DOCKER_SV_KEY_FILE,
-                            DOCKER_SV_KEY_PATH, "virtual-service private key",
-                            "sv_tls_key", sv["key"])]
+        out += [mount("sv_tls_cert", sv["cert"]), mount("sv_tls_key", sv["key"])]
     return out
 
 
@@ -3091,8 +3120,8 @@ def _compose_required(name, where):
     this file can see that they had. A guard that survives its own fix is worse
     than none.
     """
-    return "${BZM_OPL_UNSET_%s:?%s}" % (
-        name, " ".join(_docker_blank_lines(name, where)))
+    return "${%s%s:?%s}" % (COMPOSE_UNSET_PREFIX, name,
+                            " ".join(_docker_blank_lines(name, where)))
 
 
 def _docker_blank_file_lines(m):
