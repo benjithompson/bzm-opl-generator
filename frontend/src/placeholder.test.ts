@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { MARKER_EXAMPLES } from "./fixtures";
 import { GroupFlags } from "./optionGroups";
 import {
-  blankRequired, PLACEHOLDER, placeholderWarning, withPlaceholders,
+  blankRequired, marker, placeholderWarning, withPlaceholders,
 } from "./placeholder";
 
 /** Every option applies: a Kubernetes bundle. */
@@ -92,17 +93,30 @@ describe("blankRequired, for a group that is switched on", () => {
   });
 });
 
+describe("marker", () => {
+  it("follows the rule the generator follows", () => {
+    // The examples are in fixtures.ts, and test_server.py asserts
+    // generate.marker against the same entries -- so this side and that side
+    // cannot drift apart without one of the two failing.
+    for (const [key, want] of Object.entries(MARKER_EXAMPLES)) {
+      expect(marker(key)).toBe(want);
+    }
+  });
+});
+
 describe("withPlaceholders", () => {
   it("fills exactly what it was given", () => {
     const o = { namespace: "", service_account_name: "crane" };
     expect(withPlaceholders(o, ["namespace"]))
-      .toEqual({ namespace: PLACEHOLDER, service_account_name: "crane" });
+      .toEqual({ namespace: "<NAMESPACE>", service_account_name: "crane" });
   });
 
   it("reaches into a nested key", () => {
+    // The marker is the whole dotted key's, not the sub-key's: the generator
+    // reports `proxy.https` back and the two have to be one name for one field.
     const o = { proxy: { no_proxy: "localhost" } };
     expect(withPlaceholders(o, ["proxy.https"]).proxy)
-      .toEqual({ no_proxy: "localhost", https: PLACEHOLDER });
+      .toEqual({ no_proxy: "localhost", https: "<PROXY_HTTPS>" });
   });
 
   it("returns the same object when there is nothing to fill", () => {
@@ -127,14 +141,22 @@ describe("placeholderWarning", () => {
   });
 
   it("agrees with itself about number", () => {
-    expect(placeholderWarning(["namespace"])).toContain("namespace is empty");
-    expect(placeholderWarning(["namespace"])).toContain("until it is filled in");
+    const one = placeholderWarning(["namespace"]);
+    expect(one).toContain("namespace (<NAMESPACE>) is empty");
+    expect(one).toContain("until it is filled in");
     const two = placeholderWarning(["namespace", "service_account_name"]);
-    expect(two).toContain("namespace and service_account_name are empty");
+    expect(two).toContain("namespace (<NAMESPACE>) and "
+      + "service_account_name (<SERVICE_ACCOUNT_NAME>) are empty");
     expect(two).toContain("until they are filled in");
   });
 
-  it("names the marker, so the sentence and the file are one search", () => {
-    expect(placeholderWarning(["namespace"])).toContain(PLACEHOLDER);
+  it("names each field's own marker, so the sentence and the file are one "
+     + "search", () => {
+    // Paired with the field rather than listed after it: a reader who greps
+    // the bundle for <PROXY_HTTPS> must not have to line two lists up by
+    // position to learn which box that came from.
+    const w = placeholderWarning(["proxy.http", "proxy.https"]);
+    expect(w).toContain("proxy.http (<PROXY_HTTP>)");
+    expect(w).toContain("proxy.https (<PROXY_HTTPS>)");
   });
 });

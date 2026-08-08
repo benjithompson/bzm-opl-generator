@@ -301,11 +301,12 @@ def test_unnamed_service_account_becomes_a_placeholder(name):
     pod in the namespace. What changed is only *where* that is stopped: this
     used to raise, which a page that had already let the field be emptied could
     not act on. The marker keeps the refusal and moves it to apply time, where
-    `<PLACEHOLDER>` is not a legal name and the API server names the field."""
+    `<SERVICE_ACCOUNT_NAME>` is not a legal name and the API server names the
+    field."""
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "service_account_name": name,
                                  "service_account_create": False})
-    assert set(_sa_refs(files).values()) == {gen.PLACEHOLDER}
+    assert set(_sa_refs(files).values()) == {gen.marker("service_account_name")}
     # ...and the person handed the bundle is told, rather than finding out from
     # a rejected apply.
     assert "service_account_name" in files["README.md"]
@@ -1012,7 +1013,7 @@ def test_the_cluster_decides_oc_or_kubectl_not_the_posture():
 
 # -- blank required fields ----------------------------------------------------
 #
-# A field somebody left empty resolves to gen.PLACEHOLDER rather than to an
+# A field somebody left empty resolves to its own marker rather than to an
 # empty string or a refusal. The empty string is what these are really about:
 # every one of them had a plausible-looking failure ("" namespace -> the
 # manifests apply into whatever namespace the command names, "" service account
@@ -1023,20 +1024,26 @@ def test_the_cluster_decides_oc_or_kubectl_not_the_posture():
 def test_a_finished_bundle_carries_no_marker():
     files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "de" * 32})
     assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
-    assert gen.PLACEHOLDER not in "".join(files.values())
+    assert not gen.MARKER_RE.search("".join(files.values()))
 
 
 def test_the_marker_reaches_the_objects_that_name_the_field():
-    """Not only the README: the point is that applying it fails. `<PLACEHOLDER>`
+    """Not only the README: the point is that applying it fails. `<NAMESPACE>`
     is not a legal RFC 1123 name, so each of these is rejected by the API server
-    with the field named."""
+    with the field named -- and it names the field twice over, since the marker
+    is the field's own key."""
     files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
     assert yaml.safe_load(
-        files["bzm_deployment.yaml"])["metadata"]["namespace"] == gen.PLACEHOLDER
+        files["bzm_deployment.yaml"])["metadata"]["namespace"] \
+        == gen.marker("namespace")
     assert "apply -f" in files["README.md"]
 
 
-@pytest.mark.parametrize("given", ["<PLACEHOLDER>", "  <PLACEHOLDER>  "])
+# The third is the marker every field carried before #245. A profile written
+# by an older version of this generator still holds it, and reading it back as
+# a value somebody meant is the failure this whole mechanism exists to prevent.
+@pytest.mark.parametrize("given",
+                         ["<NAMESPACE>", "  <NAMESPACE>  ", "<PLACEHOLDER>"])
 def test_the_marker_is_recognised_around_whitespace(given):
     """A form hands back what was pasted, spaces included. A marker that stopped
     being one on a stray space would be carried into the bundle as a value
@@ -1064,8 +1071,9 @@ def test_a_marker_the_page_supplied_is_reported_too():
     marker itself. Found by reading the value, not by consulting REQUIRED_TEXT,
     which is what lets the two halves share one report."""
     o = {"namespace": "ns1", "auth_token": "de" * 32,
-         "private_registry": gen.PLACEHOLDER,
-         "proxy": {"https": gen.PLACEHOLDER, "no_proxy": "localhost"}}
+         "private_registry": gen.marker("private_registry"),
+         "proxy": {"https": gen.marker("proxy.https"),
+                   "no_proxy": "localhost"}}
     files = gen.generate(FACTS, o)
     assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == [
         "private_registry", "proxy.https"]
@@ -1094,10 +1102,11 @@ def test_a_marker_survives_a_profile_round_trip():
     profile, and the marker is precisely the value nobody chose."""
     files = gen.generate(FACTS, {"namespace": "", "ship_id": "bbb222"})
     prof = json.loads(files[gen.PROFILE_FILE])
-    assert prof["namespace"] == gen.PLACEHOLDER
+    assert prof["namespace"] == gen.marker("namespace")
     replayed = gen.generate(FACTS, prof)
     assert yaml.safe_load(
-        replayed["bzm_deployment.yaml"])["metadata"]["namespace"] == gen.PLACEHOLDER
+        replayed["bzm_deployment.yaml"])["metadata"]["namespace"] \
+        == gen.marker("namespace")
 
 
 def test_no_limitrange_is_emitted():
@@ -1781,9 +1790,10 @@ def test_docker_scripts_are_valid_shell():
         if blank:
             # A field left blank adds a refusal per variable, in whichever of
             # the two files holds it -- and the pattern it greps for carries
-            # `<PLACEHOLDER>` and the message carries quotes, which is exactly
+            # a character class while the message carries quotes, which is
+            # exactly
             # the shape a quoting mistake hides in.
-            o["auth_token"] = gen.PLACEHOLDER
+            o["auth_token"] = gen.marker("auth_token")
         if ca:
             o["ca_bundle"] = "-----BEGIN CERTIFICATE-----\nx\n"
         if proxy:
@@ -1805,7 +1815,7 @@ def test_docker_scripts_are_valid_shell():
                   {"sv_hostname": SV_HOST, "sv_tls_cert": SV_CERT,
                    "sv_tls_key": ""},
                   {"sv_hostname": SV_HOST, "sv_tls_key": SV_KEY},
-                  {"ca_bundle": gen.PLACEHOLDER}):
+                  {"ca_bundle": gen.marker("ca_bundle")}):
         sh = gen.generate(FACTS, {**DOCKER, **extra})["bzm-opl-agent.sh"]
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
@@ -1856,7 +1866,7 @@ def test_docker_script_refuses_a_placeholder_before_starting_anything(tmp_path):
     files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 1
-    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    assert "AUTH_TOKEN carries <AUTH_TOKEN>" in r.stderr
     # ...and the file to edit, which is the half a refusal without it leaves the
     # reader to guess -- the credential is not in the script.
     assert "Set it in bzm-opl-agent.env" in r.stderr
@@ -1877,17 +1887,19 @@ def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
     over its own run line -- anchored there, which is also what stops it
     matching the marker in its own message two lines below."""
     files = gen.generate(FACTS, {**DOCKER, "use_secret": False,
-                                 "auth_token": "", "private_registry": gen.PLACEHOLDER})
+                                 "auth_token": "",
+                                 "private_registry":
+                                     gen.marker("private_registry")})
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 1
-    assert "AUTH_TOKEN carries <PLACEHOLDER>" in r.stderr
+    assert "AUTH_TOKEN carries <AUTH_TOKEN>" in r.stderr
     # Both files, because inline means the value is in both of the two that
     # start this container and naming one sends somebody to fix half of it.
     assert "Set it in bzm-opl-agent.sh and compose.yaml" in r.stderr
     assert made == ["ps"], made
     # The crane image carries it too and is deliberately not checked: a
     # reference with `<` in it is refused by docker itself, from either route.
-    assert "<PLACEHOLDER>/crane" in files["bzm-opl-agent.sh"]
+    assert "<PRIVATE_REGISTRY>/crane" in files["bzm-opl-agent.sh"]
 
 
 def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
@@ -1895,8 +1907,8 @@ def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
     per variable that carries the marker, so the ordinary bundle is the script
     it was before this existed."""
     files = gen.generate(FACTS, DOCKER)
-    assert gen.PLACEHOLDER not in files["bzm-opl-agent.sh"]
-    assert gen.PLACEHOLDER not in files[gen.DOCKER_COMPOSE_FILE]
+    assert not gen.MARKER_RE.search(files["bzm-opl-agent.sh"])
+    assert not gen.MARKER_RE.search(files[gen.DOCKER_COMPOSE_FILE])
     assert "BZM_OPL_UNSET" not in files[gen.DOCKER_ENV_FILE]
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 0, r.stderr
@@ -1986,8 +1998,8 @@ COMPOSE_CASES = [
     # A field left blank, in each of the two files it can land in: the guard is
     # a `${...:?}` carrying a sentence with punctuation in it, which is the
     # shape a YAML quoting mistake hides in.
-    {"auth_token": gen.PLACEHOLDER},
-    {"auth_token": gen.PLACEHOLDER, "use_secret": False},
+    {"auth_token": gen.marker("auth_token")},
+    {"auth_token": gen.marker("auth_token"), "use_secret": False},
     # Service virtualization, which is two more mounted files and three more
     # variables -- the case #182 added and the one a parity check written
     # before it would have passed vacuously.
@@ -2146,11 +2158,12 @@ def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
 
         error while interpolating services.crane.environment.AUTH_TOKEN:
         required variable BZM_OPL_UNSET_AUTH_TOKEN is missing a value:
-        AUTH_TOKEN carries <PLACEHOLDER> -- ...
+        AUTH_TOKEN carries <AUTH_TOKEN> -- ...
 
     One wording for both routes, so a customer reads the same sentence about the
     same variable and the same file whichever file they started from."""
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE)
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE,
+                                          gen.marker("auth_token"))
     files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
     # Split out, the credential is in the one file both routes read -- so that
     # is where the guard sits. Compose interpolates env_file values; docker's
@@ -2173,7 +2186,8 @@ def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
     files name both files, because an inline value is in both of the two that
     start this container."""
     where = f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}"
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where)
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where,
+                                          gen.marker("auth_token"))
     files = gen.generate(FACTS, {**DOCKER, "auth_token": "", "use_secret": False})
     svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["AUTH_TOKEN"] == (
@@ -2186,7 +2200,7 @@ def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
     # script beside it refuses, which is the two routes disagreeing about
     # whether the bundle is finished.
     proxy = gen.generate(FACTS, {**DOCKER, "use_secret": False,
-                                 "proxy": {"http": gen.PLACEHOLDER}})
+                                 "proxy": {"http": gen.marker("proxy.http")}})
     svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
 
@@ -2235,7 +2249,7 @@ def _blank_mount_vars(sh):
     file (`"$0"`, `"$ENV_FILE"`) and this one names the mount's own variable,
     which is exactly the difference between the two halves of the check."""
     return set(re.findall(
-        r"^if grep -q '" + re.escape(gen.PLACEHOLDER)
+        r"^if grep -q '" + re.escape(gen.MARKER_PATTERN)
         + r"' \"\$([A-Z][A-Z0-9_]*)\"; then$", sh, re.M))
 
 
@@ -2374,7 +2388,7 @@ def _container_from_compose(files):
          # agent serves virtual services with is written the same way, and a
          # pattern naming one file cannot notice a second going missing.
          # ...and `${VAR:?sentence}` is its spelling of the script's
-         # `grep -q '<PLACEHOLDER>' "$VAR"`, reduced to the same sentinel on
+         # `grep -q '<[A-Z][A-Z0-9_]*>' "$VAR"`, reduced to the same sentinel
          # both sides so a mount guarded in one file alone fails right here.
          "mounts": [re.sub(r"^\$\{([A-Z][A-Z0-9_]*):\?[^}]*\}",
                            lambda g: _blank_mount(g.group(1)),
@@ -2403,7 +2417,7 @@ def _container_diffs(files):
         # that stopped refusing while the other went on doing so is exactly the
         # one-sided change this walks the matrix for.
         blank_here = k in comp["inline"] and str(cv).startswith(COMPOSE_GUARD)
-        blank_there = k in run["inline"] and gen.PLACEHOLDER in str(rv)
+        blank_there = k in run["inline"] and gen.marker_in(rv) is not None
         if blank_here or blank_there:
             if not (blank_here and blank_there):
                 diffs.append(
@@ -2623,7 +2637,7 @@ def test_the_other_formats_still_refuse_all_of_it():
     blocker back as a bad manifest."""
     k8s = {"ship_id": "bbb222", "auth_token": "de" * 32}
     # A malformed value and two modes chosen at once -- neither is a blank
-    # field, so neither is something the marker can stand in for. `<PLACEHOLDER>`
+    # field, so neither is something the marker can stand in for. A marker
     # says "nobody filled this in"; it cannot say "this says 4 gigglebytes" or
     # "you asked for two CA modes", and a bundle that carried it for those would
     # be reporting the wrong thing about itself.
@@ -2817,25 +2831,26 @@ def test_the_private_key_is_never_in_the_profile_and_the_certificate_is():
     assert profile["sv_tls_cert"] == SV_CERT
     assert profile["sv_hostname"] == SV_HOST
     replayed = gen.generate(FACTS, {**profile, "auth_token": "de" * 32})
-    assert gen.PLACEHOLDER in replayed[gen.DOCKER_SV_KEY_FILE]
+    assert replayed[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
     assert "`sv_tls_key`" in replayed["README.md"]
 
 
 def test_half_a_tls_pair_is_a_blank_field_rather_than_a_refusal():
     """Each fills for the other, which is one rule read twice. A marker rather
     than a refusal because a half-answered pair is a field somebody left empty,
-    and that is what `<PLACEHOLDER>` is for -- refusing would be a blocker on a
+    and that is what the marker is for -- refusing would be a blocker on a
     page that had already let the box be emptied.
 
     A blank hostname beside a certificate is the same rule and lands in the
     variable, where #183's guard is what refuses it before the agent starts."""
     only_cert = gen.generate(FACTS, {**DOCKER, "sv_hostname": SV_HOST,
                                      "sv_tls_cert": SV_CERT})
-    assert only_cert[gen.DOCKER_SV_KEY_FILE] == gen.PLACEHOLDER
+    assert only_cert[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
     assert "`sv_tls_key`" in only_cert["README.md"]
     blank_host = gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": ""})
-    assert "HOSTNAME_OVERRIDE" in dict(gen._docker_blank_env(FACTS, {
-        **gen.DEFAULT_OPTIONS, **SV_DOCKER, "sv_hostname": gen.PLACEHOLDER}))
+    assert "HOSTNAME_OVERRIDE" in gen._blank_env_by_name(FACTS, {
+        **gen.DEFAULT_OPTIONS, **SV_DOCKER,
+        "sv_hostname": gen.marker("sv_hostname")})
     assert "HOSTNAME_OVERRIDE carries" in blank_host[gen.DOCKER_RUN_FILE]
 
 
@@ -2848,15 +2863,15 @@ def test_the_script_refuses_a_blank_mounted_file_before_starting_anything(tmp_pa
     verification, which is the worse failure of the two.
 
     The existence check next to it is not the guard: the bundle wrote that file,
-    so `[ ! -f ]` passes over one whose whole content is `<PLACEHOLDER>`. What
+    so `[ ! -f ]` passes over one whose whole content is `<SV_TLS_KEY>`. What
     is checked is the content of the **resolved** file, so both ways of
     finishing the bundle clear it.
     """
     files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
-    assert files[gen.DOCKER_SV_KEY_FILE] == gen.PLACEHOLDER
+    assert files[gen.DOCKER_SV_KEY_FILE] == gen.marker("sv_tls_key")
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 1
-    assert "sv-tls.key carries <PLACEHOLDER>" in r.stderr
+    assert "sv-tls.key carries <SV_TLS_KEY>" in r.stderr
     # The option to re-generate with, and the variable that fixes it here --
     # "go and fill it in" without either is the half-answer the token's own
     # refusal already avoids.
@@ -2900,7 +2915,8 @@ def test_compose_refuses_a_blank_mounted_file_in_the_same_words():
     asks.
     """
     m = [m for m in gen.docker_file_mounts({**gen.DEFAULT_OPTIONS, **SV_DOCKER,
-                                            "sv_tls_key": gen.PLACEHOLDER})
+                                            "sv_tls_key":
+                                                gen.marker("sv_tls_key")})
          if m.var == "SV_TLS_KEY"][0]
     wrong, todo = gen._docker_blank_file_lines(m)
     files = gen.generate(FACTS, {**SV_DOCKER, "sv_tls_key": ""})
@@ -2924,8 +2940,8 @@ def test_a_finished_tls_pair_carries_no_file_guard(tmp_path):
     the variable-level guard follows: the ordinary bundle is the pair of files
     it was before either check existed."""
     files = gen.generate(FACTS, SV_DOCKER)
-    assert gen.PLACEHOLDER not in files[gen.DOCKER_RUN_FILE]
-    assert gen.PLACEHOLDER not in files[gen.DOCKER_COMPOSE_FILE]
+    assert not gen.MARKER_RE.search(files[gen.DOCKER_RUN_FILE])
+    assert not gen.MARKER_RE.search(files[gen.DOCKER_COMPOSE_FILE])
     assert ":?" not in files[gen.DOCKER_COMPOSE_FILE]
     r, made = _run_bundle(tmp_path, files)
     assert r.returncode == 0, r.stderr
@@ -3471,7 +3487,7 @@ def test_the_slot_emits_a_configmap_wired_like_any_other():
     _all_yaml_parse(files)
     assert "bzm_cacerts.yaml" in files
     cm = yaml.safe_load(files["bzm_cacerts.yaml"])
-    assert cm["data"][gen.CA_FILENAME].strip() == gen.PLACEHOLDER
+    assert cm["data"][gen.CA_FILENAME].strip() == gen.marker("ca_bundle")
     # ...and everything downstream is identical to a filled-in inline bundle:
     # the point is a bundle that needs one edit, not one that needs wiring.
     d = yaml.safe_load(files["bzm_deployment.yaml"])
@@ -3483,15 +3499,16 @@ def test_the_slot_emits_a_configmap_wired_like_any_other():
 
 
 def test_the_slot_is_findable_in_the_file_somebody_edits():
-    """The manifest is the artefact a human opens, and a bare `<PLACEHOLDER>`
-    says nothing about what belongs there. A YAML comment never reaches the
-    applied object, so it costs nothing at apply time."""
+    """The manifest is the artefact a human opens, and `<CA_BUNDLE>` says which
+    field is missing without saying what shape the value has. A YAML comment
+    never reaches the applied object, so it costs nothing at apply time."""
     files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True})
     text = files["bzm_cacerts.yaml"]
     assert "#" in text and "BEGIN CERTIFICATE" in text
     # It stays a comment: the ConfigMap still parses, and the data is the marker
     # alone rather than the marker plus prose.
-    assert yaml.safe_load(text)["data"][gen.CA_FILENAME].strip() == gen.PLACEHOLDER
+    assert yaml.safe_load(text)["data"][gen.CA_FILENAME].strip() \
+        == gen.marker("ca_bundle")
 
 
 def test_a_filled_bundle_carries_no_slot_comment():
@@ -3542,4 +3559,4 @@ def test_the_docker_bundle_gets_the_same_slot_in_its_own_shape():
     files = gen.generate(FACTS, {"output_format": "docker", "ship_id": "bbb222",
                                  "auth_token": "de" * 32,
                                  "ca_bundle_slot": True})
-    assert gen.PLACEHOLDER in files[gen.DOCKER_CA_FILE]
+    assert files[gen.DOCKER_CA_FILE] == gen.marker("ca_bundle")

@@ -104,8 +104,8 @@ export interface ConfigurePanelProps {
   /** Groups in use but unfinished. Some of these block the step and some only
    *  say so on their own row -- see blockingGroups. */
   incomplete: OptionGroup[];
-  /** Required fields left empty, which will carry `<PLACEHOLDER>` into the
-   *  bundle. Not a blocker: the step advances and the bundle says of itself
+  /** Required fields left empty, which will carry `<KEY>` for their own key
+   *  into the bundle. Not a blocker: the step advances and the bundle says of itself
    *  that it is unfinished. Named here so the person can fill them in while
    *  looking at them, which is the one place that is easy. */
   blanks: string[];

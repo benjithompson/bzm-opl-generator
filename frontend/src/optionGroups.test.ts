@@ -852,7 +852,7 @@ describe("serviceAccountOk", () => {
 // line saying why it has none.
 //
 // It used to name a namespace and a service account too, and those are gone:
-// an empty one is a `<PLACEHOLDER>` now, which the bundle carries and complains
+// an empty one is a `<NAMESPACE>` now, which the bundle carries and complains
 // about itself, so blocking the step as well would be the same answer twice and
 // the worse half of it. What is asserted here is what is *left* -- a group
 // whose state generate() genuinely refuses, and an environment variable with a

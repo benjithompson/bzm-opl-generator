@@ -617,15 +617,19 @@ def test_bundle_check_catches_a_stale_ship_in_the_profile(tmp_path):
 
 
 def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
-    """The API server would refuse `<PLACEHOLDER>` as a name anyway -- but only
+    """The API server would refuse `<SERVICE_ACCOUNT_NAME>` as a name anyway --
+    but only
     after this rig has built a cluster, which is 12-20 minutes and a teardown to
     learn something profile.json says on disk. Same shape as the identity
     guards above, and the same reason for being one."""
     d = _bundle(tmp_path, service_account_name="")
     prof = gen.load_profile(d)
-    assert prof["service_account_name"] == gen.PLACEHOLDER
+    assert prof["service_account_name"] == gen.marker("service_account_name")
     r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals)
-    assert "service_account_name" in r and gen.PLACEHOLDER in r
+    # Both halves: the field somebody has to fill in, and the string they will
+    # find in the bundle when they go looking.
+    assert "service_account_name" in r
+    assert gen.marker("service_account_name") in r
 
 
 def test_bundle_check_refuses_a_yaml_this_generator_does_not_emit(tmp_path):
@@ -893,7 +897,8 @@ def test_compose_bundle_check_refuses_a_mounted_file_left_blank(tmp_path):
     # Neither of the two things this check already read can see it.
     assert gen.placeholder_options(prof) == [] and livetest.compose_unset(d) == []
     refusals = livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals
-    assert any(gen.DOCKER_SV_KEY_FILE in r and gen.PLACEHOLDER in r
+    assert any(gen.DOCKER_SV_KEY_FILE in r
+               and gen.marker("sv_tls_key") in r
                and "sv_tls_key" in r for r in refusals)
 
 

@@ -4,7 +4,7 @@
 
 ```
 bzm-opl-gen generate --format helm --namespace my-project \
-    --auth-token <AUTH_TOKEN> -o out/
+    --auth-token <token> -o out/
 
 helm install crane ./out/helm -n my-project --create-namespace \
     -f out/bzm-opl-values.yaml

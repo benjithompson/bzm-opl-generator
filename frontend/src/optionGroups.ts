@@ -289,7 +289,7 @@ export function svIncomplete(
  *  Deliberately a second predicate rather than a narrowing of the first: the
  *  row must go on saying it is unfinished with an empty subdomain -- that is
  *  what `incomplete` is for and it is still true -- while the *step* lets you
- *  past, because the bundle now carries `<PLACEHOLDER>` and says so about
+ *  past, because the bundle now carries `<SV_SUBDOMAIN>` and says so about
  *  itself. What is left here is the two things a marker cannot stand in for and
  *  `generate()` still refuses outright: no ingress chosen at all on a location
  *  that runs mockServices, which is an unanswered question rather than an empty
@@ -808,9 +808,9 @@ export function configureBlockedBy(
     o: Options, blocking: OptionGroup[]): string {
   const needs = [
     // The namespace and the service account used to be here, and are not any
-    // more: an empty one carries `<PLACEHOLDER>` into the bundle, which says
-    // what it is and is refused by the API server at apply time with the field
-    // named. Blocking as well would be the same answer twice, and the worse
+    // more: an empty one carries `<NAMESPACE>` or `<SERVICE_ACCOUNT_NAME>`
+    // into the bundle -- the marker names the field it stands for -- and is
+    // refused by the API server at apply time with the field named. Blocking as well would be the same answer twice, and the worse
     // half of it -- a step that will not advance, on a page that had already
     // let the field be emptied. `blankRequired` warns instead.
     ...blocking.map((g) => g.title),

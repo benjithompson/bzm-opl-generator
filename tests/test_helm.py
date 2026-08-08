@@ -11,6 +11,7 @@ nothing skipped on a machine with no helm installed.
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -127,7 +128,7 @@ def test_crane_image_is_pinned_to_what_the_account_advertises():
 
 
 def test_unfetched_token_is_left_empty_not_placeholdered():
-    """The default auth_token is gen.PLACEHOLDER for the manifests. Carried into
+    """The default auth_token is `<AUTH_TOKEN>` for the manifests. Carried into
     values it would install an agent that authenticates with the literal string,
     so it becomes an empty value the chart rejects.
 
@@ -137,7 +138,7 @@ def test_unfetched_token_is_left_empty_not_placeholdered():
     See REQUIRED_TEXT."""
     v, plain = _values(auth_token=gen.DEFAULT_OPTIONS["auth_token"])
     assert v["authToken"] == ""
-    assert gen.PLACEHOLDER not in plain[gen.HELM_VALUES_FILE]
+    assert not gen.MARKER_RE.search(plain[gen.HELM_VALUES_FILE])
     assert "not finished" not in plain["README.md"]
 
 
@@ -412,9 +413,40 @@ def test_unnamed_service_account_is_marked_in_helm_format_too():
     bzm-opl.validate) -- that guard now covers a hand-edited values file, which
     is the only route left to an install with one in it."""
     v, plain = _values(service_account_name="", service_account_create=False)
-    assert v["serviceAccount"]["name"] == gen.PLACEHOLDER
+    assert v["serviceAccount"]["name"] == gen.marker("service_account_name")
     assert "service_account_name" in plain["README.md"]
     assert "not finished" in plain["README.md"]
+
+
+def test_the_charts_marker_test_is_the_generators_pattern():
+    """`bzm-opl.validate` is the only thing between a marked *value* and an
+    agent that installs and then fails, and it is written in Go templates, which
+    cannot import `generate.MARKER_PATTERN`. So the pattern is restated in the
+    chart and held equal here.
+
+    Restated in one direction only: what the chart has to recognise is every
+    marker this generator writes, so the shapes are asserted against the chart's
+    own regular expression through Python's engine. The two dialects agree on
+    this much of the syntax -- a character class, a star and two anchors -- and
+    a pattern that needed more than that is one no reader could hold in their
+    head across two languages.
+    """
+    tpl = os.path.join(os.path.dirname(__file__), "..", "bzm_opl_gen",
+                       "templates", "helm", "templates", "_helpers.tpl")
+    with open(tpl) as fh:
+        text = fh.read()
+    found = re.search(r'regexMatch "([^"]+)" \$held', text)
+    assert found, "the marker test is not where it was -- was it rewritten?"
+    assert found.group(1) == f"^{gen.MARKER_PATTERN}$"
+    chart_re = re.compile(found.group(1))
+    for key in ("auth_token", "service_account_name", "private_registry",
+                "ca_existing_configmap", "ca_bundle", "proxy.https"):
+        assert chart_re.fullmatch(gen.marker(key)), key
+    # ...and it takes nothing else. A value that merely carries an angle
+    # bracket is a value somebody supplied.
+    for held in ("", "TOKEN", "<not a marker>", "reg.example.com/bzm",
+                 "http://px:3128"):
+        assert not chart_re.fullmatch(held), held
 
 
 def test_service_virtualization_is_refused():
@@ -540,6 +572,25 @@ def test_readme_tells_you_to_pass_a_token_when_none_was_fetched():
     assert "--set-string authToken=" in files["README.md"]
     files = gen.generate(FACTS, BASE)
     assert "--set-string authToken=" not in files["README.md"]
+
+
+def test_the_token_sample_is_not_marker_shaped():
+    """A sample value and a marker are both `<...>` and a reader meets them on
+    the same page, so they are told apart by case: a sample is lower case, a
+    marker is upper case.
+
+    This line was `--set-string authToken=<AUTH_TOKEN>` as a fill-this-in, and
+    #245 made that same string the marker for `auth_token`. So a customer
+    greping an unfinished bundle for what was left blank matched the
+    instruction telling them to supply a value -- and `MARKER_PATTERN` matched
+    it too. The chart is the one format that does not mark a blank token (the
+    values file is committed, so an absent token is the recommended state), so
+    nothing else here would have caught the collision."""
+    readme = gen.generate(
+        FACTS, {**BASE, "auth_token": gen.DEFAULT_OPTIONS["auth_token"]})["README.md"]
+    line, = [ln for ln in readme.splitlines() if "--set-string authToken=" in ln]
+    assert "--set-string authToken=<token>" in line
+    assert not gen.MARKER_RE.search(line)
 
 
 def test_overlay_json_values_are_parseable_where_the_chart_re_encodes_them():

@@ -936,19 +936,40 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
                      for fmt, keys in gen_mod.IGNORED_BY_FORMAT.items()}
 
 
-def test_the_placeholder_marker_is_one_string_in_both_languages():
-    """The page writes it into what it sends and the generator recognises it
-    coming back, so a marker that differed by a character would be carried into
-    the bundle as a value somebody meant -- silently, and in the one field
-    nobody filled in. Not served like IGNORED_BY_FORMAT, because the page has to
-    write it before any response has arrived; held equal here instead, which is
-    what every other constant these two share does."""
+def test_the_marker_rule_is_one_rule_in_both_languages():
+    """The page writes a marker into what it sends and the generator recognises
+    it coming back, so a marker that differed by a character would be carried
+    into the bundle as a value somebody meant -- silently, and in the one field
+    nobody filled in.
+
+    A **rule**, not a string, since #244: the marker names its own field, so
+    there is nothing to compare unless both sides are asked the same question.
+    `fixtures.ts` carries the worked examples for exactly that -- the page's own
+    test asserts its `marker` against them and this asserts `generate.marker`
+    against the same ones, so neither side can change the rule alone. Not served
+    like IGNORED_BY_FORMAT, because the page has to write a marker before any
+    response has arrived.
+    """
     from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
-    text = (src / "placeholder.ts").read_text()
-    m = re.search(r'export const PLACEHOLDER = "([^"]+)";', text)
-    assert m, "PLACEHOLDER not found -- was it renamed or moved?"
-    assert m.group(1) == gen_mod.PLACEHOLDER
+    text = (src / "fixtures.ts").read_text()
+    body = re.search(r"export const MARKER_EXAMPLES: Record<string, string> "
+                     r"= \{(.*?)\n\};", text, re.S)
+    assert body, "MARKER_EXAMPLES not found -- was it renamed or moved?"
+    found = dict(re.findall(r'^  "?([\w.]+)"?: "([^"]+)",$',
+                            body.group(1), re.M))
+    # A fixture nobody kept up is the failure this pair exists to stop, so the
+    # examples have to cover every shape a key has: one word, several, a nested
+    # key and an extra_env name.
+    assert set(found) >= {"namespace", "auth_token", "service_account_name",
+                          "proxy.https", "extra_env.FOO"}
+    for key, want in found.items():
+        assert gen_mod.marker(key) == want, key
+    # ...and the recogniser takes every one of them, or the generator would
+    # write a marker it could not read back off a profile.
+    for want in found.values():
+        assert gen_mod.is_placeholder(want)
+        assert gen_mod.marker_in(f"user:pass@{want}:3128") == want
 
 
 def test_reserved_env_is_served_with_the_option_that_owns_each_name():

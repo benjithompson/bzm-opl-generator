@@ -1,7 +1,7 @@
 # BlazeMeter private location agent -- performance testing only.
 #
 # The three account facts at the top are the only required values. Get them with
-#   bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT>"
+#   bzm-opl-gen locations --api-key api-key.json --account-name "<account>"
 # and keep authToken out of git (--set-string, or a Secret you create yourself
 # and name in existingSecret).
 

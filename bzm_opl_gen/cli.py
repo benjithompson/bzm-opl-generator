@@ -228,7 +228,7 @@ def cmd_generate(a):
     # option carries what was in it -- --ca-bundle's shape, and for the same
     # reason. The key is not in profile.json (SECRET_OPTIONS), so replaying a
     # profile means passing --sv-tls-key again; without it the bundle carries a
-    # <PLACEHOLDER> key file and the README says so, rather than a key file that
+    # <SV_TLS_KEY> key file and the README says so, rather than a key file that
     # silently is not one.
     for flag, key in (("sv_tls_cert", "sv_tls_cert"),
                       ("sv_tls_key", "sv_tls_key")):

@@ -13,7 +13,7 @@ together and answers the question the manifests can't:
 ```
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 # or gather the location's facts live:
-bzm-opl-gen doctor --api-key api-key.json --harbor-id <HARBOR_ID> -n my-project
+bzm-opl-gen doctor --api-key api-key.json --harbor-id <harbor-id> -n my-project
 ```
 
 It measures against `out/profile.json` — engine size, nodeSelector/tolerations,
@@ -261,7 +261,7 @@ being true: the pool then grows by the number of nodes the run actually needs.
 Where the overrides cannot be set, the backstop is the pool's own `maxPods`,
 sized to the pods a node of that pool actually runs plus the engines you intend
 it to hold (`engines_per_node`). Measure it with `kubectl get pods -A
---field-selector spec.nodeName=<NODE>` — **not** with `kubectl get ds -A`, which
+--field-selector spec.nodeName=<node>` — **not** with `kubectl get ds -A`, which
 counts nodeAffinity-gated variants that never land (32 objects against 4 real
 pods on a stock GKE cluster). It is a node pool property on every distribution
 and a manifest property on none, which is why a bundle with split pools also

@@ -143,7 +143,7 @@ export function CaGroup(props: {
         <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2
                       text-[11px] text-slate-600">
           <code>bzm_cacerts.yaml</code> ships in the bundle, wired to the agent,
-          with <code>&lt;PLACEHOLDER&gt;</code> where the PEM goes. Paste the
+          with <code>&lt;CA_BUNDLE&gt;</code> where the PEM goes. Paste the
           certificate into it when your team sends it, then deploy as normal.
           Nothing else needs changing.
         </p>

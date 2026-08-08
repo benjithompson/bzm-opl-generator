@@ -35,7 +35,7 @@ of these options that cluster decides and which it only narrows —
 
 | Option | Default | Meaning |
 |---|---|---|
-| `auth_token` | `<PLACEHOLDER>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Resolved in four steps, and only the second one calls BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with `--api-key`) issues a **new** one; otherwise the token already written into the output directory is reused, provided that bundle's `profile.json` names the same ship; otherwise the placeholder stays and the command says where a real token comes from. It is the one option stripped from `out/profile.json`, and it stays stripped -- a profile is a file people commit and hand over. **Minting invalidates the previous token**, and an agent left holding a stale one does not report an auth error: crane answers `404`, logs `Sleeping for 300` and never starts its health service, so the pod sits `0/1 Running` and reads as a slow boot. Re-apply the whole bundle, Secret included, after any rotation. Supplying the token is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
+| `auth_token` | `<AUTH_TOKEN>` | The agent's `AUTH_TOKEN`, which is what identifies this deployment as that ship. Resolved in four steps, and only the second one calls BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with `--api-key`) issues a **new** one; otherwise the token already written into the output directory is reused, provided that bundle's `profile.json` names the same ship; otherwise the marker `<AUTH_TOKEN>` stays and the command says where a real token comes from. It is the one option stripped from `out/profile.json`, and it stays stripped -- a profile is a file people commit and hand over. **Minting invalidates the previous token**, and an agent left holding a stale one does not report an auth error: crane answers `404`, logs `Sleeping for 300` and never starts its health service, so the pod sits `0/1 Running` and reads as a slow boot. Re-apply the whole bundle, Secret included, after any rotation. Supplying the token is also the way past an account that refuses the fetch outright -- some allow the token endpoint only from BlazeMeter's own gateway, and the agent's install command in the BlazeMeter UI carries the same value. |
 | `use_secret` | `true` | AUTH_TOKEN in a Secret; `--no-secret` puts it in the ConfigMap (simplified). Proxy credentials follow it: with `use_secret` on, the credentialed proxy URLs live in the Secret too. |
 
 ### Private registry
@@ -90,7 +90,7 @@ Pick **exactly one** of the three modes -- inline PEM, an existing ConfigMap, or
 | Option | Default | Meaning |
 |---|---|---|
 | `ca_bundle` | -- | Inline PEM -- the generator creates the ConfigMap. The simplest mode and the one that goes stale: nothing rotates it for you. Bundles are large enough that the manifest crosses the 256KB cap on kubectl's last-applied-configuration annotation, which is why anything over 200KB applies `--server-side`. |
-| `ca_bundle_slot` | `false` | The bundle carries the CA ConfigMap wired to the agent, with `<PLACEHOLDER>` where the PEM goes. For the common moment: crane is failing TLS and the certificate is still with the platform team. One edit finishes it, and nothing else has to be wired. Refused beside `ca_bundle` -- supplying the PEM and leaving a slot for it are two answers to one question. The cluster formats are **not** stopped from applying it (a ConfigMap value is not a name), which is why the README prints the grep that catches it; the chart and the docker bundle both refuse it outright. |
+| `ca_bundle_slot` | `false` | The bundle carries the CA ConfigMap wired to the agent, with `<CA_BUNDLE>` where the PEM goes -- the marker names the option the PEM belongs to, so the file says what is missing on its own. For the common moment: crane is failing TLS and the certificate is still with the platform team. One edit finishes it, and nothing else has to be wired. Refused beside `ca_bundle` -- supplying the PEM and leaving a slot for it are two answers to one question. The cluster formats are **not** stopped from applying it (a ConfigMap value is not a name), which is why the README prints the grep that catches it; the chart and the docker bundle both refuse it outright. |
 | `ca_existing_configmap` | -- | Reference a platform-owned trust-bundle ConfigMap -- recommended, because they rotate it and an inline copy does not follow. The ConfigMap must already exist in the agent namespace, and the bundle's README prints the `create configmap` command for one that does not, keyed to match `ca_configmap_key`. |
 | `ca_configmap_key` | -- (unset -> ca-bundle.crt) | The bundle file key within `ca_existing_configmap`. Unset means `ca-bundle.crt`, which is the convention both OpenShift and most cert-manager setups follow. Set it when yours does not -- the mount path engines are given is built from it, so a wrong key mounts an empty file rather than failing. That is why the README's create command writes `--from-file=<key>=<path>` rather than the bare `--from-file=<path>` BlazeMeter document, which keys the entry on the file's own name. |
 | `ca_openshift_inject` | `false` | OpenShift's `inject-trusted-cabundle` labeled ConfigMap -- the cluster injects the bundle and rotates it. The generator emits the empty labeled ConfigMap; the content arrives from the cluster operator, so on anything that is not OpenShift it stays empty and the agent trusts nothing extra. |
@@ -137,10 +137,13 @@ The escape hatch. BlazeMeter's agent-environment reference is much wider than th
 
 ## Fields left blank
 
-A required text option with nothing in it resolves to the marker
-`<PLACEHOLDER>`, and the bundle says so about itself: its README opens with the
-list of fields carrying one and where each value comes from, and `profile.json`
-records them as the resolved options they are.
+A required text option with nothing in it resolves to a marker that names it:
+`<KEY>`, the option's own key in upper case, with a dotted key joined by an
+underscore. `auth_token` gives `<AUTH_TOKEN>`, `proxy.https` gives
+`<PROXY_HTTPS>`. So the file says which field is missing on its own, and the
+bundle says so about itself as well: its README opens with the list of fields
+carrying one, the marker beside each and where each value comes from, and
+`profile.json` records them as the resolved options they are.
 
 This is deliberately not an empty string. Every field below had a *plausible*
 failure when left empty — an unnamed service account silently becomes the
@@ -226,7 +229,7 @@ steps, says which one it took, and only the second reaches BlazeMeter:
    inside an agent already running on it. Say what this bundle's credential is —
    `--auth-token`, or `--rotate-token` for a fresh one — and neither reads the
    directory at all, so replacing it stays available to anyone who means to.
-4. **The placeholder**, `<PLACEHOLDER>` — with a message naming the two
+4. **The marker**, `<AUTH_TOKEN>` — with a message naming the two
    places a real one comes from: what `create-agent` printed, or an agent already
    deployed, `kubectl -n <ns> get secret blazemeter-secret -o
    jsonpath='{.data.AUTH_TOKEN}' | base64 -d`. That command is printed for you

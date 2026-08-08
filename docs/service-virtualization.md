@@ -34,7 +34,7 @@ the failure is otherwise invisible: the manifests apply cleanly, the agent goes
 the service.
 
 ```
-bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
+bzm-opl-gen generate --facts facts.json --auth-token <token> \
     --namespace my-sv --sv-ingress nginx \
     --sv-subdomain apps.example.com --sv-tls-secret wildcard-credential
 ```
@@ -72,7 +72,7 @@ optionally, a certificate to serve them with:
 
 ```
 bzm-opl-gen generate --facts facts.json --format docker \
-    --auth-token <AUTH_TOKEN> --sv-hostname mocks.example.com \
+    --auth-token <token> --sv-hostname mocks.example.com \
     --sv-tls-cert cert.pem --sv-tls-key key.pk8.pem
 ```
 
@@ -118,7 +118,7 @@ and every client rejects it:
 `--sv-hostname` gets no other format validation. BlazeMeter's own example value
 is `C123ABCXYZ` and nothing they publish says what shape it has to be, so
 nothing here invents one; a blank one left behind by the web UI becomes
-`<PLACEHOLDER>`, which the generated script and the compose file both refuse
+`<SV_HOSTNAME>`, which the generated script and the compose file both refuse
 before they start a container.
 
 **The key is not written to `profile.json`.** A profile is the file people
@@ -128,7 +128,7 @@ excluded: it is what the agent hands to every client that connects, so dropping
 it would make a replay need two things supplied for no gain. The consequence:
 `generate --profile` on a docker bundle that serves HTTPS needs `--auth-token`
 **and** `--sv-tls-key`. Without the key the replayed bundle writes
-`<PLACEHOLDER>` into `sv-tls.key` and names it at the top of its README.
+`<SV_TLS_KEY>` into `sv-tls.key` and names it at the top of its README.
 
 ### What a live run showed
 
@@ -211,7 +211,7 @@ Accounts routinely have locations carrying `mockServices` alongside
 then run nothing but tests on them. `--sv-ingress none` is that, said out loud:
 
 ```
-bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
+bzm-opl-gen generate --facts facts.json --auth-token <token> \
     --namespace blazemeter --sv-ingress none
 ```
 

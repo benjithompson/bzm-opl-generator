@@ -214,3 +214,30 @@ export const AGENT_ENV: AgentEnvVar[] = [
     summary: "Publish endpoints on the node's IP address rather than 127.0.0.1",
     default: "true", example: null },
 ];
+
+
+/** The marker rule, as worked examples: an option key beside what `marker`
+ *  must produce for it.
+ *
+ *  Not a copy of a table -- there is no table, only a rule -- and that is why
+ *  this shape. `placeholder.ts` and `generate.py` each implement the rule, and
+ *  neither can call the other: the page writes a marker into what it sends
+ *  before any response has arrived, so the rule cannot be served. Examples are
+ *  what both can be held to. `placeholder.test.ts` asserts the page's `marker`
+ *  against these, and
+ *  `tests/test_server.py::test_the_marker_rule_is_one_rule_in_both_languages`
+ *  asserts `generate.marker` against the same entries -- so a side that changes
+ *  the rule alone fails, and a side that changes the rule *and* these fails on
+ *  the other side.
+ *
+ *  The four cases are the four shapes a key has: one word, two words, a nested
+ *  key, and an `extra_env` name the customer supplied. */
+export const MARKER_EXAMPLES: Record<string, string> = {
+  namespace: "<NAMESPACE>",
+  auth_token: "<AUTH_TOKEN>",
+  service_account_name: "<SERVICE_ACCOUNT_NAME>",
+  ca_existing_configmap: "<CA_EXISTING_CONFIGMAP>",
+  "proxy.http": "<PROXY_HTTP>",
+  "proxy.https": "<PROXY_HTTPS>",
+  "extra_env.FOO": "<EXTRA_ENV_FOO>",
+};

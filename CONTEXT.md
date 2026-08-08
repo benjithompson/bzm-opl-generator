@@ -60,9 +60,12 @@ _Avoid_: preset, template, config file
 Which shape a bundle takes: manifests, a Helm chart, or a docker run script.
 A format may hide an option, and must then never refuse it.
 
-**Placeholder**:
-The marker a required field left blank resolves to, so the failure is loud and
-early rather than a plausible-looking default.
+**Marker**:
+What a required field left blank resolves to, so the failure is loud and early
+rather than a plausible-looking default. It is `<KEY>` — the option's own key in
+upper case, a dotted key joined by an underscore — so the file says which field
+is missing. _Avoid_: placeholder, except for `<PLACEHOLDER>` itself, which is
+the one marker every field carried before the key was in it.
 
 **Reserved variable**:
 An agent environment variable the generator writes itself, so it is refused

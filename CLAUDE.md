@@ -403,17 +403,52 @@ missing tools. The rest is what it cannot fix for you.
   (#154), so that card states nothing rather than an engine size that is not
   there. Don't reintroduce a clearing rule for them.
 
-- **A required field left blank is a `<PLACEHOLDER>`, not an empty string and
-  not a refusal.** Every one of these had a plausible-looking failure when
+- **A required field left blank is `<KEY>` for its own key, not an empty string
+  and not a refusal.** Every one of these had a plausible-looking failure when
   empty: an unnamed service account becomes the namespace's `default` (binding
   crane's Role to every pod there), an empty AUTH_TOKEN is a pod that reads as a
   slow boot, a blank `sv_subdomain` stalls at `WAITING_FOR_DOMAIN`. The marker
-  makes all of them one loud, early failure. **The angle brackets are the
+  makes all of them one loud, early failure. **The naming rule is stated once,
+  in `generate.marker`**: the option key in upper case, with a dotted key joined
+  by an underscore — `auth_token` → `<AUTH_TOKEN>`, `proxy.https` →
+  `<PROXY_HTTPS>`, `extra_env.FOO` → `<EXTRA_ENV_FOO>`. It was one shared
+  `<PLACEHOLDER>` until #245, and what the key buys is the artefact reading for
+  itself: a bundle is handed on, and the person who applies it is routinely not
+  the person who filled the form in, so `<SV_TLS_KEY>` sitting in `sv-tls.key`
+  is an answer the README table used to be the only source of. Nothing outside
+  `marker` builds one and nothing outside `is_placeholder` / `marker_in`
+  recognises one — the readers match **any** `<KEY>`, never this option's own,
+  because a profile written by an older version still holds the shared marker
+  and because half the fields are filled in by the page rather than by
+  `fill_placeholders`. `MARKER_PATTERN` is that shape for the readers that are
+  not Python: the chart's `regexMatch`, held equal by `tests/test_helm.py`, and
+  the generated `bzm-opl-agent.sh`'s `grep`. **The angle brackets are still the
   guard**: no Kubernetes name may contain them, so `kubectl apply` rejects the
   object and names the field — which is why a blank field may resolve to a value
-  at all. The chart's `bzm-opl.validate` refuses one for the values the API
+  at all, and `<AUTH_TOKEN>` is no more a legal RFC 1123 name than
+  `<PLACEHOLDER>` was, so `PLACEHOLDER_REFUSED_BY_NAME` did not change. The
+  chart's `bzm-opl.validate` refuses one for the values the API
   server never sees as names, and `livetest.bundle_check` refuses one before it
-  builds a cluster. Two halves decide what is required, and they are not the
+  builds a cluster. **Every message that quotes a marker quotes the one it is
+  about**, and the two exceptions are greps rather than sentences: the README's
+  `grep -rl` and the script's mount check ask "is any marker still here", over
+  files that may be another version's or the host's own.
+
+  **A sample value in the documentation is lower case in the brackets; a marker
+  is upper case.** Both are `<...>` and a reader meets them side by side, so
+  `--auth-token <token>` is an instruction to supply a value and `<AUTH_TOKEN>`
+  is what the generator wrote where nobody did. They were one string until this
+  rule: the chart's README and every `--auth-token` example said `<AUTH_TOKEN>`
+  as a fill-this-in, which `MARKER_PATTERN` matched and which sent a customer
+  greping for unfinished fields to the line telling them to fill one in. The
+  rule cannot be broken by accident, because the pattern is upper case only —
+  which is also why the samples that never collided (`<harbor-id>`, `<ship-id>`,
+  `<account>`) are lower case too: a rule followed by half the page is a rule
+  nobody can read off it. Prose that *quotes* a marker keeps the upper case,
+  because there it is the marker being talked about.
+
+  Two halves decide what
+  is required, and they are not the
   same question: `generate.REQUIRED_TEXT` fills what the *options* show is
   needed, and `optionGroups`' per-group `requires` fills what only a **switch on
   the page** shows — a registry, a proxy and a CA are configured by having a
@@ -757,7 +792,7 @@ missing tools. The rest is what it cannot fix for you.
   would make a replay need two things supplied for no gain. The consequence is
   documented rather than worked around -- `generate --profile` on a docker-SV
   bundle needs `--auth-token` *and* `--sv-tls-key`, and without the key the
-  replayed bundle writes `<PLACEHOLDER>` into `sv-tls.key` and names it;
+  replayed bundle writes `<SV_TLS_KEY>` into `sv-tls.key` and names it;
   **`harbor_id`**, which comes from facts rather than options — which is why
   `livetest.bundle_check` reads HARBOR_ID out of the ConfigMap rather than from
   here;
