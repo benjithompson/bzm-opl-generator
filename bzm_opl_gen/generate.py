@@ -2050,6 +2050,10 @@ def _deploy_steps(o, verb):
     object applies, crane comes online, the location reports healthy, and then
     every test sits Pending against a nodeSelector no node carries), where a
     missing image fails at the first pull.
+
+    The trust bundle is last of the three because it is the only one that is
+    routinely already done: the mode exists because a platform team owns that
+    ConfigMap, so the step is a no-op far more often than not.
     """
     steps = []
     if separate_pools(o):
@@ -2063,6 +2067,29 @@ def _deploy_steps(o, verb):
             "**{n}. Mirror the images** (needs push access to the registry; "
             "the pull side needs none):\n\n"
             "```\n./bzm-opl-image-mirror.sh\n```\n\n")
+    ca = _ca_cfg(o)
+    if ca and ca["mode"] == "existing":
+        # BlazeMeter's own documentation for this is `create configmap
+        # --from-file=<cert-file>`, which keys the entry on the file's own
+        # basename. Ours writes `--from-file=<key>=<path>` instead, and the
+        # difference is the whole of #227: a customer following the documented
+        # form with `corp-root.pem`, and leaving `ca_configmap_key` at its
+        # default, gets a ConfigMap whose only key is `corp-root.pem` while the
+        # manifests mount `ca-bundle.crt` -- an *empty* file rather than a
+        # missing one, so crane starts, trusts nothing extra, and fails at the
+        # first TLS handshake with nothing naming the cause. The explicit form
+        # makes the key this bundle mounts the key the command creates, whatever
+        # the customer's file happens to be called, so the two cannot be set
+        # into disagreement.
+        steps.append(
+            f"**{{n}}. Create the trust-bundle ConfigMap**, if your platform "
+            f"team has not\nalready -- this bundle references `{ca['cm']}`\nin "
+            f"`{o['namespace']}` and does not create it:\n\n"
+            f"```\n{cli(o)} -n {o['namespace']} create configmap {ca['cm']} "
+            f"--from-file={ca['key']}=/path/to/your-ca.pem\n```\n\n"
+            f"Keep the `{ca['key']}=` in front of the path. Without it the key "
+            f"is the file's own\nname, and a key these manifests do not mount "
+            f"gives crane an empty bundle rather\nthan an error.\n\n")
     if not steps:
         return ""
     body = "".join(s.format(n=i) for i, s in enumerate(steps, 1))

@@ -1,6 +1,8 @@
-import { Field, inputCls, TextInput } from "../components";
+import { useState } from "react";
+import { ErrorMsg, Field, inputCls, TextInput } from "../components";
 import { Applies } from "../formats";
 import { CaMode } from "../optionGroups";
+import { readCertFile } from "../pemFile";
 
 // Who owns the bundle, per mode -- the difference that decides which one to
 // pick, and the reason the modes are radios rather than three sets of fields.
@@ -67,6 +69,22 @@ export function CaGroup(props: {
   // field that reaches something.
   const single = modes.length === 1;
   const mode = single ? modes[0].mode : props.mode;
+  // What the last pick did. Local to this view, like every other busy flag on
+  // the page: nothing here reaches the server, and the option it fills is
+  // App's. Three outcomes and they are three sentences -- the file was read,
+  // the file could not be read at all, and the file was read and holds no
+  // certificate. Collapsing the last two would tell somebody to convert a file
+  // nothing ever opened.
+  const [note, setNote] = useState<{ ok: boolean; msg: string } | null>(null);
+  const pick = (f: File) => {
+    f.text().then((text) => {
+      const read = readCertFile(f.name, text);
+      if (!read.ok) { setNote({ ok: false, msg: read.why }); return; }
+      props.onBundle(read.pem);
+      setNote({ ok: true, msg: `${f.name} — ${read.certs} certificate`
+                                + (read.certs === 1 ? "" : "s") });
+    }).catch(() => setNote({ ok: false, msg: `${f.name} could not be read.` }));
+  };
   return (
     <>
       {!single && (
@@ -97,12 +115,44 @@ export function CaGroup(props: {
         </div>
       )}
       {mode === "inline" && (
-        <Field label="CA bundle (PEM)">
-          <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
-            placeholder="-----BEGIN CERTIFICATE-----"
-            value={props.bundle}
-            onChange={(e) => props.onBundle(e.target.value)} />
-        </Field>
+        <>
+          <Field label="CA bundle (PEM)">
+            <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
+              placeholder="-----BEGIN CERTIFICATE-----"
+              value={props.bundle}
+              onChange={(e) => props.onBundle(e.target.value)} />
+          </Field>
+          {/* Outside the Field, because Field is itself a <label> and a file
+              input inside one is a label wrapping a label. The customer has a
+              file (#227); asking them to open it in an editor and paste it was
+              the step that made this mode feel wrong for one. It fills the same
+              option -- `ca_bundle` is content and never a path, so the file is
+              read here and the server never learns it existed. */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="rounded-md px-3 py-1.5 text-sm font-medium border
+                              border-slate-300 text-slate-600 hover:bg-slate-50
+                              cursor-pointer">
+              Choose file
+              <input type="file" accept=".pem,.crt,.cer,.ca-bundle,.txt"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  // Cleared so picking the same file twice fires again -- the
+                  // second pick is what somebody does after converting it.
+                  e.target.value = "";
+                  if (f) pick(f);
+                }} />
+            </label>
+            <span className="text-[11px] text-slate-400">
+              read in your browser and pasted into the box above; the bundle
+              carries the text, never a path
+            </span>
+          </div>
+          {note?.ok && (
+            <p className="text-[11px] text-slate-500">{note.msg}</p>
+          )}
+          <ErrorMsg msg={note && !note.ok ? note.msg : null} />
+        </>
       )}
       {/* Where it ends up, which is the whole difference between the two
           platforms: a ConfigMap the pods mount, or a file beside the script the

@@ -574,6 +574,77 @@ def test_ca_modes_mutually_exclusive():
                              "ca_existing_configmap": "corp-trust"})
 
 
+# -- the create command for the recommended mode (#227) -----------------------
+#
+# The existing-ConfigMap mode is the one nearly every customer takes, and the
+# bundle referenced a ConfigMap without ever saying how to make one. BlazeMeter
+# document `kubectl create configmap <name> --from-file=<file>`, which keys the
+# entry on the *file's* basename -- so a customer following that literally with
+# `corp-root.pem` and leaving our key at its default gets a mount that is empty
+# rather than one that fails.
+
+
+def test_the_existing_configmap_mode_prints_the_create_command():
+    files = gen.generate(FACTS, {"namespace": "ns1", "openshift_cluster": False,
+                                 "ca_existing_configmap": "corp-trust",
+                                 "ca_configmap_key": "trust.pem"})
+    assert ("kubectl -n ns1 create configmap corp-trust "
+            "--from-file=trust.pem=" in files["README.md"])
+
+
+def test_the_create_command_carries_the_default_key_when_none_was_set():
+    """`ca_configmap_key` unset means `ca-bundle.crt`, so the command has to say
+    so -- the whole trap is a key nobody typed disagreeing with a file name."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "openshift_cluster": False,
+                                 "ca_existing_configmap": "corp-trust"})
+    assert ("kubectl -n ns1 create configmap corp-trust "
+            "--from-file=ca-bundle.crt=" in files["README.md"])
+
+
+def test_the_key_and_the_file_name_cannot_disagree():
+    """`--from-file=KEY=PATH` is the explicit form, and it is what closes the
+    trap: whatever the customer's file is called, the entry lands under the key
+    the manifests mount. The bare form BlazeMeter document does not, so the
+    bundle must not print it."""
+    readme = gen.generate(FACTS, {"namespace": "ns1",
+                                  "ca_existing_configmap": "corp-trust",
+                                  "ca_configmap_key": "trust.pem"})["README.md"]
+    line, = [ln for ln in readme.splitlines() if "create configmap" in ln]
+    _, _, from_file = line.partition("--from-file=")
+    assert from_file.startswith("trust.pem=")
+
+
+@pytest.mark.parametrize("opts", [
+    {},
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"},
+    {"ca_openshift_inject": True},
+])
+def test_no_create_command_where_the_bundle_makes_its_own_configmap(opts):
+    """Inline and injection both emit `bzm_cacerts.yaml`, so a command telling
+    somebody to create one names an object this bundle already carries."""
+    files = gen.generate(FACTS, dict(opts, namespace="ns1"))
+    assert "create configmap" not in files["README.md"]
+
+
+def test_the_create_command_is_in_the_helm_bundle_too():
+    """The chart references the ConfigMap the same way, so the prerequisite is
+    the same one. Both READMEs get it from `_deploy_steps`, which is why."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "output_format": "helm",
+                                 "ca_existing_configmap": "corp-trust"})
+    assert "create configmap corp-trust" in files["README.md"]
+
+
+def test_the_create_command_follows_the_cluster_not_the_posture():
+    """Same rule as every other emitted command: `openshift_cluster` says which
+    binary the person deploying has."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "ca_existing_configmap": "corp-trust"})
+    assert "oc -n ns1 create configmap corp-trust" in _commands(files)
+    plain = gen.generate(FACTS, {"namespace": "ns1", "openshift_cluster": False,
+                                 "ca_existing_configmap": "corp-trust"})
+    assert "kubectl -n ns1 create configmap corp-trust" in _commands(plain)
+
+
 def test_proxy_plain_in_configmap():
     files = gen.generate(FACTS, {"namespace": "ns1",
                                  "proxy": {"http": "http://proxy:3128",
