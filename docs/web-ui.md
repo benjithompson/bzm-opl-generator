@@ -246,6 +246,35 @@ filling a labeled ConfigMap, and anywhere else it emits an empty one nothing
 ever fills, leaving a bundle that reads as configured while the agent trusts
 nothing extra.
 
+**The PEM mode takes a file, and the file is read in the browser.** A customer
+configuring CA trust has a certificate file, so *Custom CA trust* → *Paste PEM*
+carries a **Choose file** control beside the box. It fills the same option:
+`ca_bundle` is content and never a path, so the file is read where it sits and
+the server never learns it existed. It states the file name and how many
+certificates arrived, and it refuses rather than filling the box with whatever
+the bytes decode to — a `.crt` is often DER, and DER read as text mounts
+cleanly and is trusted by nothing. Three answers, three sentences: the file
+holds nothing, the file could not be read, and the file was read and carries no
+certificate — the last one names `openssl x509` because that is the way out.
+
+The other mode does not need one. **Reference an existing ConfigMap** is the
+recommended path and the one nearly every customer takes, and the bundle's
+README now prints the command that creates it, in `oc` or `kubectl` off the
+same cluster control:
+
+```
+kubectl -n <namespace> create configmap <name> --from-file=<key>=/path/to/your-ca.pem
+```
+
+The `<key>=` is the point. BlazeMeter document the bare `--from-file=<path>`,
+which keys the entry on the file's own basename: a customer who follows that
+literally with `corp-root.pem`, and leaves the bundle key at its default
+`ca-bundle.crt`, gets a mount that is **empty rather than missing**. The agent
+starts, reports online, and fails every TLS handshake with nothing naming the
+cause. The explicit form makes the key the manifests mount the key the command
+creates, whatever the file is called, so the two cannot be set into
+disagreement.
+
 **A functionality the location does not run is not on the step at all.** It was
 stated for a while — a card naming the funcId to add in BlazeMeter (Settings →
 Private Locations) — which is a true sentence about the location and nothing the

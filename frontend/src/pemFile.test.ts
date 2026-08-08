@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+import { certCount, readCertFile } from "./pemFile";
+
+const one = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+const two = `${one}\n${one}`;
+
+describe("certCount", () => {
+  it("counts the certificate blocks", () => {
+    expect(certCount("")).toBe(0);
+    expect(certCount(one)).toBe(1);
+    expect(certCount(two)).toBe(2);
+  });
+
+  it("counts certificates and nothing else", () => {
+    expect(certCount("-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----"))
+      .toBe(0);
+  });
+});
+
+describe("readCertFile", () => {
+  it("takes the file's own text as the bundle", () => {
+    const r = readCertFile("corp-root.pem", one);
+    expect(r).toEqual({ ok: true, pem: one, certs: 1 });
+  });
+
+  it("keeps everything a bundle carries, blocks and text alike", () => {
+    /** `kubectl create configmap --from-file` copies the file whole, and so
+     *  does this: what a customer's bundle contains is theirs, and extracting
+     *  only the blocks would be this page editing it. */
+    const commented = `subject=/CN=Corp Root\n${two}\n`;
+    const r = readCertFile("bundle.pem", commented);
+    expect(r).toEqual({ ok: true, pem: commented.trim(), certs: 2 });
+  });
+
+  it("normalises CRLF, so a Windows bundle is not a different bundle", () => {
+    const crlf = one.replace(/\n/g, "\r\n");
+    const r = readCertFile("corp-root.pem", crlf);
+    expect(r).toEqual({ ok: true, pem: one, certs: 1 });
+  });
+
+  it("refuses a file with no certificate in it, and says which file", () => {
+    const r = readCertFile("corp-root.crt", "\u0000\u0002\u0003 binary");
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.why).toContain("corp-root.crt");
+    // The common cause is DER rather than damage, so the sentence has to carry
+    // the way out: openssl converts it, and nothing on this page can.
+    expect(r.why).toContain("openssl x509");
+  });
+
+  it("separates an empty file from one that is not PEM", () => {
+    /** The house rule, in the smallest place it turns up: a file holding
+     *  nothing and a file holding bytes we cannot read are different answers,
+     *  and telling somebody to convert an empty file with openssl is the wrong
+     *  one. */
+    const empty = readCertFile("corp-root.pem", "   \n ");
+    expect(empty.ok).toBe(false);
+    if (empty.ok) throw new Error("unreachable");
+    expect(empty.why).toContain("empty");
+    expect(empty.why).not.toContain("openssl");
+  });
+});

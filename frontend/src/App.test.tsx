@@ -909,6 +909,64 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
     expect(asked[asked.length - 1]?.platform).toBe("openshift");
   });
 
+test("a chosen certificate file fills the CA option, and one that is not PEM is refused",
+  async () => {
+    /** #227: the customer has a file, and pasting it into a textarea was the
+     *  step that made the inline mode feel wrong for one. `pemFile.test.ts`
+     *  holds the decision; this holds the wiring -- that a pick reaches
+     *  `ca_bundle` and a refusal reaches nobody. */
+    const asked: Options[] = [];
+    render(<App api={accountOf([loc("h-0", "Dublin",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      generate: async (_facts: unknown, options: Options) => {
+        asked.push(options);
+        return { files: [], token: { branch: "placeholder" as const,
+                                     ship_id: "s-1", message: "" } };
+      },
+    })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(await screen.findByRole("switch", { name: "Custom CA trust" }));
+    fireEvent.click(await screen.findByLabelText(/Paste PEM/));
+
+    const input = () => document.querySelector(
+      'input[type="file"][accept^=".pem"]') as HTMLInputElement;
+    const pick = async (name: string, body: string) => {
+      const file = Object.assign(new File([body], name),
+                                 { text: async () => body });
+      await act(async () => {
+        fireEvent.change(input(), { target: { files: [file] } });
+      });
+    };
+
+    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    await pick("corp-root.pem", `${pem}\n${pem}\n`);
+    // The option carries the file's text, and the count is stated: the mount
+    // replaces the trust store rather than adding to it, so how many
+    // certificates arrived is the one thing worth reading back.
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.ca_bundle).toBe(`${pem}\n${pem}`));
+    expect(screen.getByText(/corp-root\.pem — 2 certificates/)).toBeTruthy();
+
+    // A DER file reads as text and holds no block. Filling the box with what
+    // the bytes decoded to would mount cleanly and be trusted by nothing, so it
+    // is refused -- and the option keeps what it already had.
+    await pick("corp-root.crt", "\u0000\u0002 binary");
+    expect(screen.getByText(/openssl x509/)).toBeTruthy();
+    expect(asked[asked.length - 1]?.ca_bundle).toBe(`${pem}\n${pem}`);
+
+    // ...and the refusal goes when the box stops being what it is about. A
+    // sentence describing a value that has gone is the same fault either way
+    // round: an `openssl` refusal under a bundle that is now fine, or the green
+    // count above a box the mode switch emptied.
+    fireEvent.change(screen.getByPlaceholderText("-----BEGIN CERTIFICATE-----"),
+                     { target: { value: pem } });
+    await waitFor(() => expect(screen.queryByText(/openssl x509/)).toBeNull());
+    expect(screen.queryByText(/corp-root\.pem — 2 certificates/)).toBeNull();
+  });
+
 // -- the download step, through the page -------------------------------------
 // The two requests this step exists to make now go through the same seam as
 // every other route (#104), so what is asserted here is what the page handed

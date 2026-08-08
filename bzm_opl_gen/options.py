@@ -416,7 +416,9 @@ OPTIONS = [
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",
         doc="Reference a platform-owned trust-bundle ConfigMap -- recommended, "
             "because they rotate it and an inline copy does not follow. The "
-            "ConfigMap must already exist in the agent namespace."),
+            "ConfigMap must already exist in the agent namespace, and the "
+            "bundle's README prints the `create configmap` command for one that "
+            "does not, keyed to match `ca_configmap_key`."),
     Option(
         "ca_configmap_key", "string", "CA trust",
         default_note="unset -> ca-bundle.crt",
@@ -425,7 +427,10 @@ OPTIONS = [
             "`ca-bundle.crt`, which is the convention both OpenShift and most "
             "cert-manager setups follow. Set it when yours does not -- the mount "
             "path engines are given is built from it, so a wrong key mounts an "
-            "empty file rather than failing."),
+            "empty file rather than failing. That is why the README's create "
+            "command writes `--from-file=<key>=<path>` rather than the bare "
+            "`--from-file=<path>` BlazeMeter document, which keys the entry on "
+            "the file's own name."),
     Option(
         "ca_openshift_inject", "boolean", "CA trust",
         summary="Emit a labeled empty ConfigMap; OpenShift injects and rotates the cluster trust bundle.",
