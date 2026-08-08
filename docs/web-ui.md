@@ -483,14 +483,35 @@ The *built page* is the half reload cannot reach — nothing rebuilds
 cd frontend && npm run build
 ```
 
-You will not have to remember. When the built page is older than
-`frontend/src`, the page carries a banner saying so and the server prints the
-same warning at startup; `/api/build` is the underlying answer. That matters
-because staleness is otherwise invisible in the worst way: a route the page
-needs answers `404`, the page reads that as *not read yet* rather than as an
-error, and it then shows options a format hides and builds bundles missing
+You will not have to remember. When the built page was not built from the
+sources beside it, the page carries a banner saying so and the server prints
+the same warning at startup; `/api/build` is the underlying answer. That
+matters because staleness is otherwise invisible in the worst way: a route the
+page needs answers `404`, the page reads that as *not read yet* rather than as
+an error, and it then shows options a format hides and builds bundles missing
 files. A service left running for a day did exactly that, and four generator
 defects were suspected before the server was.
+
+**It is a content answer, not a clock.** A build records a fingerprint of its
+sources beside the page it wrote, and `/api/build` compares that with the
+sources on disk. The rule was the newest mtime under `frontend/src` against the
+built page's until then, and `git pull`, `git checkout` and a branch switch all
+rewrite the files they touch: a fast-forward through two merged pull requests
+raised the flag with the built output byte-identical. A banner that cries wolf
+after every pull is one people learn to ignore.
+
+`stale` has **four** values, and each one is a different sentence:
+
+| `/api/build` | what it means | what you see |
+|---|---|---|
+| `true` | the page was not built from these sources | an amber banner, and `!!` lines at startup |
+| `false` | compared, and it matches | nothing |
+| `"unrecorded"` | there is a page and there are sources, and the page records nothing about what it was built from — it predates that record, so this **was not checked** | a plain note, and a neutral line at startup, both naming the rebuild |
+| `null` | no `frontend/` at all — an installed wheel, where the question is not about anything | nothing |
+
+The two that are not a stale page are not warnings, and they are not each
+other: a rebuild answers `"unrecorded"`, and nothing anybody does to a wheel
+answers `null`.
 
 Frontend dev: `cd frontend && npm install && npm run dev` (proxies /api to
 :8765); `npm run build` refreshes the shipped bundle in `bzm_opl_gen/ui_dist/`.

@@ -28,8 +28,8 @@ refreshes what the wheel carries ([docs/web-ui.md](docs/web-ui.md)). **Commit
 the rebuild with the source change.** A build records a fingerprint of the
 sources it was built from, and `tests/test_ui_build.py` recomputes it — so a
 `frontend/src` edit committed without a rebuilt `ui_dist` fails the offline
-suite and names the command, rather than shipping a page older than the code
-behind it.
+suite and names the command, rather than shipping a page that was not built
+from the code behind it.
 
 ## Layout
 

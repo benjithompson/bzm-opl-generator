@@ -29,6 +29,19 @@ import os
 #: somebody wondering what these files came from.
 FINGERPRINT_FILE = "source-fingerprint.json"
 
+#: The document vite writes beside the fingerprint, and the page the server
+#: serves. Named here because both facts about a built page -- when it was
+#: written and what it was written from -- are read out of the same directory,
+#: and a second spelling of it in `server` is one of them going missing.
+BUILT_PAGE = "index.html"
+
+#: The answer where there are sources and a built page, but the page records
+#: nothing this version can read. **Not read**, and a string rather than a third
+#: boolean-ish value so that no caller can reach it by accident: `is True` and
+#: `is False` both miss it, which is what makes the four states structural
+#: rather than remembered.
+UNRECORDED = "unrecorded"
+
 #: Written into the file and checked when it is read. A page fingerprinted by
 #: an older rule cannot be compared with one computed by this one, and the
 #: honest answer to that is "not recorded" rather than a mismatch reported as a
@@ -114,3 +127,43 @@ def recorded_fingerprint(ui_dist):
         return None
     found = doc.get("fingerprint")
     return found if isinstance(found, str) and found else None
+
+
+def staleness(frontend, ui_dist):
+    """Whether the built page in `ui_dist` was built from `frontend`. Four
+    answers, and each one is a different sentence (#238).
+
+    ``True``
+        The sources on disk are not the sources the page was built from. The
+        only one of the four that is a warning: this is the failure #224 was,
+        where a route the page needs answers 404, the page reads that as "not
+        read yet", and it shows fields a format hides.
+    ``False``
+        Compared, and they match.
+    ``UNRECORDED``
+        There are sources and there is a built page, and the page records
+        nothing about what it came from -- it was built before #237, or the
+        record was written by a rule this version cannot read. **Not read.**
+        Answering False here would claim a check nobody performed; answering
+        True would warn about every checkout until somebody rebuilds, which is
+        the crying-wolf defect this whole change is about; folding it into None
+        would make "can never be checked" and "rebuild and it can be" one
+        answer.
+    ``None``
+        The question does not apply. An installed wheel ships a built `ui_dist`
+        and no `frontend`, so there is nothing to compare it against; a
+        checkout with no built page at all has nothing to be stale, and says so
+        far more loudly by serving no page.
+
+    The order matters: sources first, because the wheel's answer must not
+    depend on what a directory it does not have happens to contain.
+    """
+    sources = source_fingerprint(frontend)
+    if sources is None:
+        return None
+    if not os.path.isfile(os.path.join(ui_dist, BUILT_PAGE)):
+        return None
+    recorded = recorded_fingerprint(ui_dist)
+    if recorded is None:
+        return UNRECORDED
+    return recorded != sources

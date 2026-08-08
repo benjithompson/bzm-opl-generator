@@ -3142,12 +3142,16 @@ test("a location with no agents is not a bundle request", async () => {
   expect(generated).toEqual([]);
 });
 
-// -- the page says when it is older than the code serving it (#224) ----------
+// -- the page says how it stands against the code serving it (#224, #238) ----
 //
 // The failure this replaces was silent: a service that had run since the
 // previous morning served a page whose fetches 404'd, the page honestly read
 // that as "not read yet", and four generator defects were suspected before the
 // server was.
+//
+// Four answers, and what the rendering owes them is here; which sentence each
+// one gets is build.ts, with its own tests. What needs a page is that only one
+// of the four interrupts, and that the other three do not borrow its wording.
 
 const OFFLINE: Partial<Api> = {
   keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -3163,7 +3167,7 @@ const OFFLINE: Partial<Api> = {
   agentEnv: async () => [],
 };
 
-test("warns when the built page is older than the server's source", async () => {
+test("warns when the built page was not built from the server's source", async () => {
   render(<App api={fakeApi({
     ...OFFLINE,
     build: async () => ({
@@ -3172,13 +3176,31 @@ test("warns when the built page is older than the server's source", async () => 
   })} />);
 
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toMatch(/older than the code serving it/i);
+  expect(alert.textContent).toMatch(/not built from the code serving it/i);
   expect(alert.textContent).toMatch(/npm run build/);
 });
 
-test("says nothing where there is no source to be older than", async () => {
+test("a page recording nothing says so, and is not an alert", async () => {
+  // The fourth answer (#238): built before the fingerprint existed, so nothing
+  // is known to be wrong with it. It says which of the four it is -- silence
+  // would read as compared-and-current -- and it does not interrupt.
+  render(<App api={fakeApi({
+    ...OFFLINE,
+    build: async () => ({
+      version: "0.3.2", built: 1000, stale: "unrecorded", commit: "abc123",
+    }),
+  })} />);
+
+  const note = await screen.findByRole("status");
+  expect(note.textContent).toMatch(/records nothing about what it was built/i);
+  expect(note.textContent).toMatch(/has not been checked/i);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("says nothing where there is no source to compare against", async () => {
   // A wheel answers `stale: null` -- nothing to compare against, which is not
-  // the same answer as compared-and-current. The banner keys on true alone.
+  // the same answer as compared-and-current and not the same as unrecorded.
+  // Both of those two are silence here, and only those two.
   render(<App api={fakeApi({
     ...OFFLINE,
     build: async () => ({
@@ -3188,4 +3210,18 @@ test("says nothing where there is no source to be older than", async () => {
 
   await screen.findByText(/Not connected/i);
   expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+test("says nothing about a page that was compared and matches", async () => {
+  render(<App api={fakeApi({
+    ...OFFLINE,
+    build: async () => ({
+      version: "0.3.2", built: 1000, stale: false, commit: "abc123",
+    }),
+  })} />);
+
+  await screen.findByText(/Not connected/i);
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status")).toBeNull();
 });

@@ -61,6 +61,9 @@ import * as session from "./session";
 // be read about. Applied at every call that names one, because a 404 is the one
 // failure here that a retry cannot fix and Refresh can.
 import { goneNotice } from "./stale";
+// What to say about the built page against the code serving it. Four answers
+// from one route, and only one of them is a warning (#238).
+import { buildNotice } from "./build";
 // Whether an agent is reporting. One statement of the rule, with its own tests
 // -- it used to be a closure here, handed to step 1 as a predicate.
 import { shipOnline } from "./heartbeat";
@@ -341,9 +344,10 @@ export default function App({ api }: { api: Api }) {
   // an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
-  // Null until the read lands, and a wheel answers `stale: null` -- so the
-  // banner keys on `=== true` and nothing else. Absent means unasked, which is
-  // exactly the state this whole thing exists to stop being invisible.
+  // Null until the read lands, and a wheel answers `stale: null` -- two ways of
+  // having nothing to say, which is why `buildNotice` is what decides and not a
+  // truthiness test here. Absent means unasked, which is exactly the state this
+  // whole thing exists to stop being invisible.
   const [build, setBuild] = useState<BuildState | null>(null);
   const [cap, setCap] = useState<Capacity | null>(null);
   const [capErr, setCapErr] = useState<string | null>(null);
@@ -1867,6 +1871,11 @@ export default function App({ api }: { api: Api }) {
     </>
   );
 
+  // What to say about the page this server is serving, or null for the two
+  // answers that need no sentence. `?? null` because *unasked* -- the read has
+  // not landed -- is the wheel's silence too: neither is anything to act on.
+  const notice = buildNotice(build?.stale ?? null);
+
   return (
     // The window's height, not a minimum of it, and the overflow is the inner
     // pane's. `min-h-screen` let the *document* grow to whatever the view
@@ -1896,13 +1905,20 @@ export default function App({ api }: { api: Api }) {
         </div>
       </header>
 
-      {build?.stale === true && (
-        <div role="alert" className="bg-amber-100 text-amber-900 border-b
-          border-amber-300 px-4 py-2 text-sm">
-          <strong>This page is older than the code serving it.</strong>{" "}
-          Options a format hides may still be shown, and a bundle downloaded
-          here may be missing files. Rebuild it with{" "}
-          <code className="font-mono">cd frontend &amp;&amp; npm run build</code>.
+      {/* Which of /api/build's four answers deserves a sentence, and how loud
+          it is, is build.ts -- here is only where it goes. The alert role is
+          for the stale page alone: an unrecorded one is nothing known to be
+          wrong, and interrupting a screen reader about it would be the same
+          crying wolf in another medium. */}
+      {notice && (
+        <div role={notice.tone === "warning" ? "alert" : "status"}
+          className={"border-b px-4 py-2 text-sm "
+            + (notice.tone === "warning"
+              ? "bg-amber-100 text-amber-900 border-amber-300"
+              : "bg-slate-100 text-slate-700 border-slate-300")}>
+          <strong>{notice.heading}</strong>{" "}
+          {notice.detail}{" "}
+          <code className="font-mono">{notice.command}</code>
         </div>
       )}
 

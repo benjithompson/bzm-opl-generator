@@ -131,6 +131,86 @@ def test_a_page_that_records_nothing_says_nothing(tmp_path):
     assert ui_build.recorded_fingerprint(str(tmp_path)) == "abc"
 
 
+def _built(tmp_path, fingerprint=None, page=True):
+    """A `ui_dist` directory, optionally recording a fingerprint."""
+    dist = tmp_path / "ui_dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    if page:
+        (dist / ui_build.BUILT_PAGE).write_text("<html></html>")
+    if fingerprint is not None:
+        (dist / ui_build.FINGERPRINT_FILE).write_text(json.dumps(
+            {"algorithm": ui_build.ALGORITHM, "fingerprint": fingerprint}))
+    return str(dist)
+
+
+def test_staleness_is_four_answers_and_not_three(tmp_path):
+    """#238, all four in one place, because what the change is about is that
+    none of them may be read as another. The two that are not a stale page are
+    the ones a shortcut collapses: `"unrecorded"` answered False claims a check
+    nobody performed, answered True warns about every checkout until somebody
+    rebuilds, and folded into None makes "can never be checked" and "rebuild
+    and it can be" one sentence."""
+    frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
+    matching = ui_build.source_fingerprint(frontend)
+
+    # Compared, and they match.
+    assert ui_build.staleness(
+        frontend, _built(tmp_path / "current", matching)) is False
+
+    # Compared, and they do not: the one answer that is a warning.
+    assert ui_build.staleness(
+        frontend, _built(tmp_path / "old", "0" * 64)) is True
+
+    # A page built before #237. There are sources and there is a page, and the
+    # page says nothing about which sources it came from.
+    assert ui_build.staleness(
+        frontend, _built(tmp_path / "mute")) == ui_build.UNRECORDED
+
+    # The installed wheel: no frontend at all, so the question is not about
+    # anything. Read before the dist deliberately -- the wheel's answer must
+    # not depend on what a directory it does not have happens to hold.
+    assert ui_build.staleness(
+        str(tmp_path / "nope"), _built(tmp_path / "wheel", matching)) is None
+
+
+def test_the_unrecorded_answer_cannot_be_reached_by_a_boolean_test(tmp_path):
+    """It is a string on purpose. `is True` and `is False` both miss it, so a
+    caller written for three states fails visibly instead of taking the one
+    branch it should not -- and a plain `if` is the trap, since a non-empty
+    string is true. That trap is live in `server.main`, which prints a `!!`
+    warning on one of the four."""
+    frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
+    answer = ui_build.staleness(frontend, _built(tmp_path / "mute"))
+    assert answer is not True and answer is not False and answer is not None
+    assert answer == ui_build.UNRECORDED
+
+
+def test_a_checkout_with_no_built_page_has_nothing_to_be_stale(tmp_path):
+    """Sources and no `ui_dist`: there is no page, which the server says far
+    more loudly by serving none. Not `"unrecorded"` -- that is about a page
+    that exists and records nothing, and a missing page is not a page whose
+    record is missing."""
+    frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
+    empty = _built(tmp_path / "unbuilt", page=False)
+    assert ui_build.staleness(frontend, empty) is None
+
+
+def test_staleness_moves_with_content_and_not_with_a_clock(tmp_path):
+    """The acceptance criterion of #238 at this layer: a `git` operation that
+    rewrites a source without changing it reports not stale, and a real edit
+    still reports stale."""
+    frontend = _frontend(tmp_path / "frontend", **{"src/App.tsx": "x"})
+    dist = _built(tmp_path / "dist", ui_build.source_fingerprint(frontend))
+    assert ui_build.staleness(frontend, dist) is False
+
+    # What `git pull` does to a file it rewrites byte for byte.
+    os.utime(os.path.join(frontend, "src", "App.tsx"), (10 ** 10, 10 ** 10))
+    assert ui_build.staleness(frontend, dist) is False
+
+    (tmp_path / "frontend" / "src" / "App.tsx").write_text("y")
+    assert ui_build.staleness(frontend, dist) is True
+
+
 def test_the_writer_and_the_reader_agree_about_the_algorithm():
     """Two implementations of one rule, so the name that travels with the
     number is stated twice as well. A build writing `sha256-paths-v2` while

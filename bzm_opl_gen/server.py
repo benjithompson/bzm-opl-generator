@@ -33,7 +33,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, BeforeValidator
 
-from . import api, core
+from . import api, core, ui_build
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -876,7 +876,10 @@ def agent_env(func_ids: Optional[str] = None):
 
 UI_DIST = os.path.join(os.path.dirname(__file__), "ui_dist")
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_FRONTEND_SRC = os.path.join(_REPO, "frontend", "src")
+# The whole directory rather than its `src`, because the fingerprint covers
+# `index.html` and `vite.config.ts` beside it -- and because one name here is
+# one thing for a test to point somewhere else.
+_FRONTEND = os.path.join(_REPO, "frontend")
 
 
 def build_state():
@@ -884,25 +887,31 @@ def build_state():
 
     Three fields, and `stale` is the one worth the route. A local service serves
     the checkout that installed it. `--dev` reloads the backend, but nothing
-    rebuilds `ui_dist`, so the page can be older than the code behind it for
-    days with nothing on screen to say so. One was, and the symptom was a route
+    rebuilds `ui_dist`, so the page can stop matching the code behind it for
+    days with nothing on screen to say so. One did, and the symptom was a route
     404 that the page correctly reads as "not read yet" -- so it showed every
     option for a docker bundle, and the *server* was the last thing suspected.
 
-    `stale` is **None** where the question does not apply: an installed wheel
-    has no `frontend/src` to be older than, and its `ui_dist` is whatever
-    shipped. Not False -- that would say "checked, and it is current" about a
-    thing nobody can check. The page shows a banner on True alone.
+    `stale` has **four** values, and `ui_build.staleness` is where each one is
+    argued: True is a page not built from these sources, False is one that was
+    compared and matches, `"unrecorded"` is a page that records nothing about
+    what it was built from, and None is the question not applying at all -- an
+    installed wheel, which has no `frontend` to compare against. The two that
+    are not a stale page are not the same answer as each other and neither is
+    False, which would claim a check nobody performed.
+
+    It is **content**, never a clock (#238). It was the newest mtime under
+    `frontend/src` against `index.html`'s, and a timestamp answers a different
+    question: `git pull`, `git checkout` and a branch switch all rewrite the
+    files they touch, so a fast-forward through two merged pull requests raised
+    the flag with the built output byte-identical. A banner that cries wolf
+    after every pull is one people learn to ignore, which is exactly what the
+    failure it exists for cannot afford.
     """
-    dist = os.path.join(UI_DIST, "index.html")
+    dist = os.path.join(UI_DIST, ui_build.BUILT_PAGE)
     built = os.path.getmtime(dist) if os.path.exists(dist) else None
-    stale = None
-    if built is not None and os.path.isdir(_FRONTEND_SRC):
-        newest = max((os.path.getmtime(os.path.join(root, f))
-                      for root, _, files in os.walk(_FRONTEND_SRC)
-                      for f in files), default=0)
-        stale = newest > built
-    return {"version": _version(), "built": built, "stale": stale,
+    return {"version": _version(), "built": built,
+            "stale": ui_build.staleness(_FRONTEND, UI_DIST),
             "commit": _commit()}
 
 
@@ -965,11 +974,23 @@ EXPOSED_WARNING = """\
 """
 
 STALE_UI_WARNING = """\
-!! The built page is older than frontend/src, so this serves a UI that does not
-!! match the code behind it. A route the page needs may answer 404, which the
-!! page reads as "not read yet" rather than as an error -- it then shows fields
-!! a format hides, and bundles it builds may be missing files.
+!! The built page was not built from the current frontend/, so this serves a UI
+!! that does not match the code behind it. A route the page needs may answer
+!! 404, which the page reads as "not read yet" rather than as an error -- it
+!! then shows fields a format hides, and bundles it builds may be missing files.
 !!   cd frontend && npm run build
+"""
+
+# The other half of #238, and deliberately not a `!!` line. Nothing is known to
+# be wrong here: the page records nothing about the sources it was built from,
+# so it has not been checked either way. Wearing the warning's clothes would
+# reintroduce the crying-wolf defect on every checkout carrying a page built
+# before #237, which is the exact thing the fingerprint replaced mtimes to stop.
+UNRECORDED_UI_NOTICE = """\
+The built page records nothing about the sources it was built from, so whether
+it matches the code behind it has not been checked. It predates that record.
+A rebuild answers the question:
+  cd frontend && npm run build
 """
 
 
@@ -982,10 +1003,15 @@ def main(port=8765, open_browser=True, api_key_path=None, dev=False,
         # the one line that has to arrive before the port is open.
         print(EXPOSED_WARNING.format(host=host, port=port), flush=True)
     # Same reasoning as the exposed-host warning above, and the same flush: a
-    # page built before the code behind it looks like a defect in the code, and
-    # the log is read after the page rather than before it (#224).
-    if build_state()["stale"]:
+    # page built from other code than this looks like a defect in the code, and
+    # the log is read after the page rather than before it (#224). Compared by
+    # identity rather than for truth: `"unrecorded"` is a true string, so a
+    # plain `if` would print the warning for the one state that is not one.
+    stale = build_state()["stale"]
+    if stale is True:
         print(STALE_UI_WARNING, flush=True)
+    elif stale == ui_build.UNRECORDED:
+        print(UNRECORDED_UI_NOTICE, flush=True)
     if api_key_path:
         # Same construction as the route, for the same reason, plus one of its
         # own: the page this serves has a connect form on it, so a flag pointing

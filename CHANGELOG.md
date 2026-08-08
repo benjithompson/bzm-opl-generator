@@ -61,6 +61,25 @@ anything that breaks.
 
 ### Fixed
 
+- **The stale-page banner no longer fires after a `git pull` that changed
+  nothing.** `bzm-opl-gen ui` decided whether its built page matched the code
+  serving it by comparing timestamps — the newest file under `frontend/src`
+  against the built page's. `git pull`, `git checkout` and a branch switch all
+  rewrite the files they touch, so a fast-forward through two merged pull
+  requests raised the banner with the built output byte-identical. It now
+  compares content: a build records a fingerprint of its sources beside the
+  page, and `/api/build` compares that with the sources on disk.
+
+  `/api/build`'s `stale` gained a fourth value with it, and each of the four is
+  worded as itself. `true` is a page not built from these sources and is the
+  only one shown as a warning; `false` is compared and current; `"unrecorded"`
+  is a page built before the fingerprint existed, which says so plainly and
+  names the rebuild that answers it — it is **not checked**, not a warning, and
+  not the wheel's answer; `null` stays the installed wheel, which has no
+  sources for the question to be about. A page and a startup line that cry wolf
+  after every pull are ones people learn to ignore, which is exactly what the
+  failure they exist for cannot afford.
+
 - **A Kubernetes bundle now mirrors every image to the reference crane actually
   pulls.** With `--private-registry`, `IMAGE_OVERRIDES` mapped
   `taurus-cloud:<tag>` to `<registry>/v4:<tag>` and the mirror script pushed
