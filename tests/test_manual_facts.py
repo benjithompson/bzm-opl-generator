@@ -241,9 +241,11 @@ def test_a_gui_bundle_names_the_browser_the_location_pins():
         _cm(_gen(f, private_registry="reg.io/bzm"))["IMAGE_OVERRIDES"])
 
     assert (overrides["blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
-            == "reg.io/bzm/chrome_136.0.7103.113:2.10.45")
-    assert overrides["blazemeter/doduo:0.0.144"] == "reg.io/bzm/doduo:0.0.144"
-    assert overrides["taurus-cloud:2.4.454-reduced"] == "reg.io/bzm/v4:2.4.454-reduced"
+            == "reg.io/bzm/blazemeter/charmander/chrome_136.0.7103.113:2.10.45")
+    assert (overrides["blazemeter/doduo:0.0.144"]
+            == "reg.io/bzm/blazemeter/doduo:0.0.144")
+    assert (overrides["taurus-cloud:2.4.454-reduced"]
+            == "reg.io/bzm/blazemeter/v4:2.4.454-reduced")
 
 
 def test_fallback_catalogue_repos_are_all_under_the_blazemeter_project():

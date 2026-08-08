@@ -212,7 +212,12 @@ OPTIONS = [
             "rewrites the crane image. Every image the location needs must already "
             "be mirrored under this prefix -- a key missing from `IMAGE_OVERRIDES` "
             "does not fail, it silently falls back to the public registry, which is "
-            "the failure `livetest --local-registry` exists to make loud."),
+            "the failure `livetest --local-registry` exists to make loud. Run the "
+            "bundle's own `bzm-opl-image-mirror.sh` to fill it: on Kubernetes crane "
+            "composes an engine's reference as `<registry>/<repo path>:<tag>` and "
+            "does not resolve the override for it, so an image mirrored to any "
+            "other path is an ImagePullBackOff on the first test, long after the "
+            "agent reports online."),
     Option(
         "pull_secret", "string", "Private registry",
         summary="Name of an existing docker-registry Secret used to pull the crane image.",

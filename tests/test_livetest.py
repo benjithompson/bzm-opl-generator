@@ -84,6 +84,33 @@ def test_apply_switches_to_server_side_for_big_manifests(tmp_path, monkeypatch):
     assert cmds[1][-2:] == ["--server-side", "--force-conflicts"]
 
 
+def test_the_rig_mirrors_where_the_bundle_it_deploys_will_look(monkeypatch):
+    """#234's other half. The rig had its own copy of the destination rule, so
+    it pushed the engine where the bundle's IMAGE_OVERRIDES pointed and crane
+    asked somewhere else -- which is how `--local-registry` passed for months
+    while proving only that the agent comes online.
+
+    The registry differs by host on purpose: the rig pushes to `localhost:<port>`
+    and the node reaches the same registry through `host.minikube.internal`. So
+    the paths below the two are what must agree, and they are compared here off
+    a real bundle rather than restated.
+    """
+    port = 5001
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    livetest.mirror_images(FACTS, port)
+    pushed = {c[2] for c in cmds if c[:2] == ["docker", "push"]}
+
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "private_registry": f"host.minikube.internal:{port}"})
+    overrides = json.loads(yaml.safe_load(
+        files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    wanted = {r.split("/", 1)[1] for r in overrides.values()}
+    wanted.add(gen._crane_image(FACTS, {
+        "private_registry": f"host.minikube.internal:{port}"}).split("/", 1)[1])
+    assert {p.split("/", 1)[1] for p in pushed} == wanted
+
+
 def _live(monkeypatch, cm_data, images=(), ca_certs="2"):
     """Stand in for a deployed cluster: ConfigMap contents, running images, and
     what the crane pod sees at the CA path."""

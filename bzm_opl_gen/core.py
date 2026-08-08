@@ -1154,15 +1154,24 @@ def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
 
     Returns what it ran, so a dry run is a plan somebody can read and then run
     by hand -- which is what the bundle's own mirror script is for.
+
+    The destinations are the **Kubernetes** ones (#234): crane composes an
+    engine's reference from DOCKER_REGISTRY and the image's repo path rather
+    than reading IMAGE_OVERRIDES, so a mirror that drops the path pushes where
+    nothing looks. This is handed references and not facts, so it cannot build
+    docker's composed names -- those come from the crane *key*, which a
+    reference does not carry -- and a docker agent's mirror is the bundle's own
+    `bzm-opl-image-mirror.sh`. Crane's own image keeps the short form, which is
+    the reference every bundle writes into its Deployment, chart or run script.
     """
     ran = []
     for ref in refs:
         ran.append(_docker(["pull", "--platform", platform, ref], dry_run))
         if mirror:
-            # Last path segment only: the target registry has its own
-            # namespace, and carrying the source project into it produces
-            # repositories nobody asked for.
-            target = f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
+            repo, _, tag = ref.rpartition(":")
+            target = (f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
+                      if repo == facts_mod.CRANE_REPO else
+                      gen_mod.composed_image_ref(repo, tag, mirror))
             ran.append(_docker(["tag", ref, target], dry_run))
             ran.append(_docker(["push", target], dry_run))
     return {"mirror": mirror, "platform": platform, "dry_run": bool(dry_run),

@@ -88,8 +88,8 @@ def test_private_registry_overrides_from_facts():
     _all_yaml_parse(files)
     cm = yaml.safe_load(files["bzm_configmap.yaml"])
     ov = json.loads(cm["data"]["IMAGE_OVERRIDES"])
-    assert ov == {"taurus-cloud:latest": "reg.local/bzm/v4:2.4.444-reduced",
-                  "apm-image:latest": "reg.local/bzm/apm:1.7.112"}  # mock excluded
+    assert ov == {"taurus-cloud:latest": "reg.local/bzm/blazemeter/v4:2.4.444-reduced",
+                  "apm-image:latest": "reg.local/bzm/blazemeter/apm:1.7.112"}  # mock excluded
     assert cm["data"]["AUTO_KUBERNETES_UPDATE"] == "false"
     d = files["bzm_deployment.yaml"]
     assert "reg.local/bzm/crane:3.7.55" in d
@@ -1137,10 +1137,10 @@ def test_mirror_script_with_private_registry():
 
 def test_a_browser_repo_mirrors_to_exactly_what_the_override_names():
     """Browser repos are the only ones with a directory inside them
-    (`.../blazemeter/charmander/chrome_136...`), and both sides flatten a repo
-    to its last segment independently. They have to agree: if they drift, the
-    mirror pushes one name while IMAGE_OVERRIDES tells crane to pull another,
-    and nothing between here and a run says so."""
+    (`.../blazemeter/charmander/chrome_136...`), so they are where a rule that
+    reduces the path shows first. The map and the mirror have to agree: if they
+    drift, the mirror pushes one name while IMAGE_OVERRIDES tells crane to pull
+    another, and nothing between here and a run says so."""
     facts = dict(FACTS, func_ids=["performance", "functionalGui"],
                  images=FACTS["images"] + [{
                      "key": "blazemeter/charmander/chrome_136.0.7103.113:2.10.45",
@@ -1152,7 +1152,8 @@ def test_a_browser_repo_mirrors_to_exactly_what_the_override_names():
     cm = yaml.safe_load(files["bzm_configmap.yaml"])
     target = json.loads(cm["data"]["IMAGE_OVERRIDES"])[
         "blazemeter/charmander/chrome_136.0.7103.113:2.10.45"]
-    assert target == "reg.corp.com/bzm/chrome_136.0.7103.113:2.10.45"
+    assert target == ("reg.corp.com/bzm/blazemeter/charmander/"
+                      "chrome_136.0.7103.113:2.10.45")
     assert (f"mirror gcr.io/verdant-bulwark-278/blazemeter/charmander/"
             f"chrome_136.0.7103.113:2.10.45 {target}"
             in files["bzm-opl-image-mirror.sh"])
@@ -3037,15 +3038,17 @@ def test_the_docker_mirror_pushes_every_name_crane_composes():
     assert dests - crane == pulls, (dests - crane) ^ pulls
 
 
-def test_the_cluster_mirror_scripts_do_not_move():
-    """#218 is about a platform where nothing maps one name to another. On
-    Kubernetes IMAGE_OVERRIDES does, so the last-segment destination stays
-    right and this must not follow docker's change."""
+def test_the_cluster_mirror_does_not_take_dockers_shape():
+    """Both platforms compose, and they compose differently: docker builds the
+    name from the crane *key* and `latest`, Kubernetes from the repo path and
+    the tag IMAGE_OVERRIDES pins. So this must not follow docker's change --
+    the key never appears in a cluster script, and the pinned tag always
+    does."""
     files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
                                  "auth_token": "de" * 32,
                                  "private_registry": "reg.corp/bzm"})
     mirror = files["bzm-opl-image-mirror.sh"]
-    assert "reg.corp/bzm/v4:2.4.444-reduced" in mirror
+    assert "reg.corp/bzm/blazemeter/v4:2.4.444-reduced" in mirror
     assert "taurus-cloud:latest" not in mirror
 
 
@@ -3159,19 +3162,80 @@ def test_cranes_own_mirror_target_is_the_reference_the_bundle_runs():
     assert crane in [d for _, d in _mirror_pairs(files)]
 
 
-def test_the_kubernetes_mirror_keeps_the_last_segment_shape():
-    """Untouched, and structurally so. There the reduction is not a guess: the
-    bundle emits IMAGE_OVERRIDES, crane resolves every key through it, and what
-    is mirrored is exactly what it then pulls. So the destinations are that map
-    read out, plus crane's own."""
-    files = gen.generate(MOCK_FACTS, dict(SV_OPTS, namespace="ns1",
-                                          private_registry=REG))
-    overrides = json.loads(yaml.safe_load(
-        files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
-    dests = {d for _, d in _mirror_pairs(files)}
-    assert dests == set(overrides.values()) | {f"{REG}/crane:3.7.55"}
-    assert f"{REG}/service-mock:1.0" in dests      # the repo's last segment...
-    assert f"{REG}/blazemeter/service-mock:latest" not in dests   # ...and only it
+def _cluster_overrides(files):
+    """IMAGE_OVERRIDES as the bundle wrote it, whichever cluster format it is:
+    the ConfigMap on manifests, `imageOverrides` in the chart's values."""
+    if "bzm_configmap.yaml" in files:
+        return json.loads(yaml.safe_load(
+            files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    return yaml.safe_load(files[gen.HELM_VALUES_FILE])["imageOverrides"]
+
+
+CLUSTER_FORMATS = ("manifests", "helm")
+
+
+def _cluster_bundle(fmt, facts=FACTS, **over):
+    return gen.generate(facts, {"namespace": "ns1", "ship_id": "bbb222",
+                                "auth_token": "de" * 32, "output_format": fmt,
+                                "private_registry": REG, **over})
+
+
+def test_the_cluster_map_and_its_mirror_name_one_set():
+    """#234, and #209 one platform over. Crane composes the engine's reference
+    from DOCKER_REGISTRY and the repo path and does not read IMAGE_OVERRIDES
+    for it -- measured live -- so the map's value and the mirror's push target
+    have to be the same string. They come from one function; this is the proof
+    that both callers still use it, for both cluster formats.
+
+    Collected off the generated bundle rather than written out here: a shape
+    changed in one renderer then fails against the other, not against a literal
+    somebody edits to match. Crane's own image is the one exception and is
+    named as one -- the bundle chooses that reference itself, in the Deployment
+    and in the chart's `image.repository`.
+    """
+    for fmt in CLUSTER_FORMATS:
+        # A mockServices location declining an ingress: the widest image set
+        # both formats will generate, since helm refuses a bundle configured
+        # for a virtual service and the images follow the location either way.
+        files = _cluster_bundle(fmt, MOCK_FACTS, sv_ingress=gen.SV_INGRESS_NONE)
+        dests = {d for _, d in _mirror_pairs(files)}
+        overrides = set(_cluster_overrides(files).values())
+        crane = {d for d in dests if "/crane:" in d}
+        assert crane, f"crane's own image is not in the mirror ({fmt})"
+        assert dests - crane == overrides, (fmt, (dests - crane) ^ overrides)
+
+
+def test_the_engine_is_mirrored_where_crane_composes_it():
+    """The one reference that was observed live, pinned so the reduction cannot
+    come back. `taurus-cloud` resolves to the repo `blazemeter/v4`, and crane
+    asked a private registry for `<registry>/blazemeter/v4:<tag>` while the
+    bundle had mirrored `<registry>/v4:<tag>` -- `manifest unknown`, on the
+    first test, with the agent already online.
+
+    The other images are the same rule and were not observed under one shape;
+    what this pins is the engine.
+    """
+    for fmt in CLUSTER_FORMATS:
+        files = _cluster_bundle(fmt)
+        want = f"{REG}/blazemeter/v4:2.4.444-reduced"
+        assert _cluster_overrides(files)["taurus-cloud:latest"] == want, fmt
+        assert want in {d for _, d in _mirror_pairs(files)}, fmt
+
+
+def test_cranes_cluster_mirror_target_is_the_reference_the_bundle_runs():
+    """The other half of the exception above: crane's destination is free only
+    because the bundle names it, so the Deployment and the chart's values have
+    to carry exactly what the mirror pushed. Unchanged by #234 -- which is why
+    crane pulled fine through the whole of it -- and held rather than assumed.
+    """
+    crane = f"{REG}/crane:3.7.55"
+    manifests = _cluster_bundle("manifests")
+    assert crane in manifests["bzm_deployment.yaml"]
+    assert crane in [d for _, d in _mirror_pairs(manifests)]
+    helm = _cluster_bundle("helm")
+    values = yaml.safe_load(helm[gen.HELM_VALUES_FILE])
+    assert f"{values['image']['repository']}:{values['image']['tag']}" == crane
+    assert crane in [d for _, d in _mirror_pairs(helm)]
 
 
 def test_a_performance_docker_bundle_mirrors_what_crane_will_ask_for():

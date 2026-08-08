@@ -61,6 +61,38 @@ anything that breaks.
 
 ### Fixed
 
+- **A Kubernetes bundle now mirrors every image to the reference crane actually
+  pulls.** With `--private-registry`, `IMAGE_OVERRIDES` mapped
+  `taurus-cloud:<tag>` to `<registry>/v4:<tag>` and the mirror script pushed
+  exactly that — while crane created the engine pod asking for
+  `<registry>/blazemeter/v4:<tag>`. So an air-gapped cluster took the whole
+  bundle, brought the agent online, and failed the **first test** with
+  `ImagePullBackOff: manifest unknown`. Measured live on 2026-08-08; pushing the
+  images a second time under the composed shape made the same run pass.
+
+  The destination now keeps the image's whole repository path below BlazeMeter's
+  public registry — `<registry>/blazemeter/v4:<tag>`,
+  `<registry>/blazemeter/charmander/<browser>:<tag>` — for `--format manifests`
+  and `--format helm` alike, and the `IMAGE_OVERRIDES` value and the mirror
+  script's push target come from one function, so the two cannot name different
+  references. **Re-generate and re-run `bzm-opl-image-mirror.sh` for any
+  existing private-registry bundle**: the images already in your registry stay
+  where they are, and the run adds them under the path crane asks for.
+
+  Crane's own image is unchanged and still `<registry>/crane:<version>` — the
+  bundle names that reference itself, in the Deployment and in the chart's
+  `image.repository`, which is why crane pulled correctly throughout. Two other
+  copies of the destination rule followed the same correction:
+  `bzm-opl-gen images --mirror` (and the MCP tool behind it) and the live rig's
+  own `--local-registry` mirror.
+
+  **Only the engine reference was observed live.** The location's other images
+  were pushed under both shapes rather than tested under one, so which reference
+  crane asks for them by is inferred from the engine and not measured. It is
+  also unknown whether crane ignores `IMAGE_OVERRIDES` for engines or looks the
+  entry up under a key the map does not carry; the fix does not depend on which
+  is true, because the map's value is now the composed name either way.
+
 - **A `--format docker` bundle for a location that serves virtual services now
   names the images to pre-pull.** Crane does not pull on a Docker agent: it
   composes the image name and asks the daemon to *create* the container, so an
@@ -85,9 +117,9 @@ anything that breaks.
   failed on a missing image anyway. The mirror script's push list and the
   README's `docker pull` list are now one set.
 
-  The last-segment path is right on Kubernetes, where `IMAGE_OVERRIDES` maps
-  each key onto it, and there is no such variable on a docker host. **Nothing
-  about the Kubernetes formats changes**, and crane's own image keeps the short
+  This shape is the docker one, composed from the crane key; the Kubernetes
+  formats compose from the repo path instead, and the entry below is where that
+  half was put right. Crane's own image keeps the short
   name on docker too — the bundle's `bzm-opl-agent.sh` and `compose.yaml` name
   that reference themselves. The script now says which of its two destination
   shapes is which, for whoever is reading it beside the README.

@@ -61,10 +61,14 @@ restricted-v2 SCC assigns an in-range UID) and engines are told to inherit
 crane's UID:GID so the pods it spawns also pass the SCC.
 
 **Private / air-gapped registry** — set `privateRegistry` *and* `imageOverrides`.
-Both, always: crane resolves engine images per key, and a key it cannot find
-falls back to the public registry without logging anything, so a partial map
-looks like it works until the cluster is genuinely sealed. The chart refuses to
-render one without the other. Generate the map rather than writing it:
+Both, always: a key crane cannot find falls back to the public registry without
+logging anything, so a partial map looks like it works until the cluster is
+genuinely sealed. The chart refuses to render one without the other. Generate
+the map rather than writing it — and mirror to the value it carries, which is
+the reference crane composes from `privateRegistry` and the image's own
+repository path. A live run showed crane building an engine's reference that way
+without reading this map at all, so an image pushed anywhere else is an
+`ImagePullBackOff` on the first test, with the agent already online:
 
 ```
 bzm-opl-gen generate --api-key api-key.json --harbor-id <H> \

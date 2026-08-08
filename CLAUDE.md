@@ -136,7 +136,13 @@ object crane created is correct — the location is going away regardless.
 
 - **`--local-registry`** mirrors the location's images into a `registry:2` and
   blackholes public registries on the node, so a missing `IMAGE_OVERRIDES` key
-  fails here instead of silently falling back to the public registry.
+  fails here instead of silently falling back to the public registry. **Pair it
+  with `--run-test` or it proves half of what it looks like it proves**: the
+  two had never run together, a crane-only run pulls no engine image, and the
+  engine pull was wrong for months while every private-registry run passed
+  (#234). The rig's own mirror is `livetest.mirror_images`, and it reads the
+  generator's destinations rather than keeping a rule of its own — it had one,
+  and it was the same wrong one.
 - **`--local-proxy`** runs mitmproxy **on the cluster's docker network**, never
   published to a host port. Publishing makes the rig silently wrong whenever
   something else owns that port (8080 is popular): the node reaches *that*
@@ -903,6 +909,31 @@ survive one (#123), so sending somebody to the browser's reload button to fix a
 stale list can cost a credential nothing can read back.
 
 ## Generator details that bite
+
+- **Every platform composes the image name, and the mirror pushes what that
+  platform composes** (#234). On Kubernetes crane pulls
+  `${DOCKER_REGISTRY}/<repo path>:<tag>` and does **not** resolve
+  `IMAGE_OVERRIDES` for the engine. Measured live: the bundle mapped
+  `taurus-cloud:2.4.454-reduced` to `<reg>/v4:2.4.454-reduced`, the mirror
+  pushed exactly that, and the engine pod asked for
+  `<reg>/blazemeter/v4:2.4.454-reduced` — `manifest unknown`, on the first
+  test, with the agent already online. So the destination keeps the whole repo
+  path below `PUBLIC_REGISTRY`, and the map's value **is** the composed name,
+  which is right whether crane ignores the map or looks the entry up under a
+  key the map lacks; that run does not distinguish the two, and this does not
+  depend on which is true. **Only the engine reference was observed** — the
+  location's other images were pushed under both shapes rather than tested
+  under one — so do not write prose claiming more. One helper,
+  `generate.cluster_composed_targets`, so the `IMAGE_OVERRIDES` value and the
+  mirror's push target are equal by construction rather than by two renderers
+  agreeing; `docker_composed_targets` beside it is the same idea for the other
+  platform, where the name is composed from the crane *key* and `latest`
+  instead. Crane's own image is outside both, and that is why it pulled fine
+  throughout: the bundle names that reference itself (`_crane_image`, reaching
+  the Deployment and the chart's `image.repository`). **Three copies of the
+  destination rule is what it cost** — `livetest.mirror_images` and
+  `core.mirror_images` (the `images --mirror` CLI and the MCP tool) each had
+  their own, and both now read the generator's.
 
 - **`livetest` deploys the directory, and only sometimes re-renders it.**
   `generate` writes `out/profile.json` (resolved options minus `auth_token`), and
