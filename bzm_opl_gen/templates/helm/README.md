@@ -33,22 +33,22 @@ The three account facts are the only required values:
 
 ```
 helm install crane ./helm -n blazemeter --create-namespace \
-  --set harborId=<HARBOR_ID> \
-  --set shipId=<SHIP_ID> \
-  --set-string authToken=<AUTH_TOKEN>
+  --set harborId=<harbor-id> \
+  --set shipId=<ship-id> \
+  --set-string authToken=<token>
 ```
 
 Get the ids with `bzm-opl-gen locations --api-key api-key.json --account-name
-"<ACCOUNT>"`, or from the private location's page in the BlazeMeter UI. Generate
+"<account>"`, or from the private location's page in the BlazeMeter UI. Generate
 the token on the location itself.
 
 Keep the token out of git. Either pass it with `--set-string` at install time, or
 create the Secret yourself and name it:
 
 ```
-kubectl -n blazemeter create secret generic bzm-auth --from-literal=AUTH_TOKEN=<TOKEN>
+kubectl -n blazemeter create secret generic bzm-auth --from-literal=AUTH_TOKEN=<token>
 helm install crane ./helm -n blazemeter \
-  --set harborId=<H> --set shipId=<S> --set existingSecret=bzm-auth
+  --set harborId=<h> --set shipId=<s> --set existingSecret=bzm-auth
 ```
 
 Then confirm the agent shows **online** in BlazeMeter under Settings → Private
@@ -71,7 +71,7 @@ without reading this map at all, so an image pushed anywhere else is an
 `ImagePullBackOff` on the first test, with the agent already online:
 
 ```
-bzm-opl-gen generate --api-key api-key.json --harbor-id <H> \
+bzm-opl-gen generate --api-key api-key.json --harbor-id <h> \
     --private-registry registry.example.com/blazemeter --out out
 # copy IMAGE_OVERRIDES out of out/bzm_configmap.yaml, and run the emitted
 # out/bzm-opl-image-mirror.sh to mirror the images first

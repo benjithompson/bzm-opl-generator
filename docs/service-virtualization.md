@@ -34,7 +34,7 @@ the failure is otherwise invisible: the manifests apply cleanly, the agent goes
 the service.
 
 ```
-bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
+bzm-opl-gen generate --facts facts.json --auth-token <token> \
     --namespace my-sv --sv-ingress nginx \
     --sv-subdomain apps.example.com --sv-tls-secret wildcard-credential
 ```
@@ -72,7 +72,7 @@ optionally, a certificate to serve them with:
 
 ```
 bzm-opl-gen generate --facts facts.json --format docker \
-    --auth-token <AUTH_TOKEN> --sv-hostname mocks.example.com \
+    --auth-token <token> --sv-hostname mocks.example.com \
     --sv-tls-cert cert.pem --sv-tls-key key.pk8.pem
 ```
 
@@ -211,7 +211,7 @@ Accounts routinely have locations carrying `mockServices` alongside
 then run nothing but tests on them. `--sv-ingress none` is that, said out loud:
 
 ```
-bzm-opl-gen generate --facts facts.json --auth-token <AUTH_TOKEN> \
+bzm-opl-gen generate --facts facts.json --auth-token <token> \
     --namespace blazemeter --sv-ingress none
 ```
 

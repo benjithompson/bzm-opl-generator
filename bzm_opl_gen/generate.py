@@ -3109,12 +3109,16 @@ def _helm_readme(facts, o):
     ns = o["namespace"]
     token = ""
     if not o["auth_token"] or is_placeholder(o["auth_token"]):
-        # `<AUTH_TOKEN>` here is the fill-this-in convention of a command line
-        # somebody copies, and since #245 it is also the marker for this very
-        # field -- which is a collision worth keeping rather than avoiding.
-        # Pasted verbatim, it reaches the chart's own bzm-opl.validate and is
-        # refused there with `authToken` named.
-        token = (" \\\n    --set-string authToken=<AUTH_TOKEN>"
+        # **A sample value is lower case in the brackets; a marker is upper
+        # case.** Both are `<...>` and they are two different things: this one
+        # is the fill-this-in convention of a command line somebody copies,
+        # while `<AUTH_TOKEN>` is what the generator writes into a field nobody
+        # filled in. Written `<AUTH_TOKEN>` they were the same string, so a
+        # customer greping for the marker matched the instruction telling them
+        # to supply a value, and `MARKER_PATTERN` matched it too. The rule
+        # cannot be broken by accident because the pattern is upper case only
+        # -- see CLAUDE.md, where it is stated for the documentation as well.
+        token = (" \\\n    --set-string authToken=<token>"
                  "   # not in the values file;\n    # re-generate with "
                  "--auth-token <token> to embed it")
     return f"""{_bundle_table(facts, o)}{_placeholder_block(o)}{_ca_slot_block(o)}

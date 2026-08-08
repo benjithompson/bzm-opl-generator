@@ -107,15 +107,15 @@ bzm-opl-gen plan --users 5000 -o ./plan     # writes capacity-request.md
 
 # 1. find (or create) the location and agent
 bzm-opl-gen locations --api-key api-key.json --account-name "<ACCOUNT NAME>"
-bzm-opl-gen create-agent --api-key api-key.json --harbor-id <HARBOR_ID> \
+bzm-opl-gen create-agent --api-key api-key.json --harbor-id <harbor-id> \
     --name my-k8s-agent        # prints ship_id + AUTH_TOKEN -- keep the token
 
 # 2. gather the location's facts from the account
-bzm-opl-gen facts --api-key api-key.json --harbor-id <HARBOR_ID>
+bzm-opl-gen facts --api-key api-key.json --harbor-id <harbor-id>
 
 # 3. generate manifests. The token comes from you, not from the API: generate
 #    never mints one, because minting revokes the token a running agent holds
-bzm-opl-gen generate --namespace my-project --auth-token <AUTH_TOKEN> -o out/
+bzm-opl-gen generate --namespace my-project --auth-token <token> -o out/
 
 # 4. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
@@ -161,9 +161,9 @@ on an agent render every manifest (in the web UI, step 1 → **Enter values
 manually**):
 
 ```
-bzm-opl-gen facts --manual --harbor-id <HARBOR_ID> --ship-id <SHIP_ID> \
+bzm-opl-gen facts --manual --harbor-id <harbor-id> --ship-id <ship-id> \
     --func-ids performance
-bzm-opl-gen generate --auth-token <AUTH_TOKEN> --namespace their-ns -o out/
+bzm-opl-gen generate --auth-token <token> --namespace their-ns -o out/
 ```
 
 Nothing is validated and nothing is sent to BlazeMeter. What you give up: the

@@ -46,7 +46,7 @@ Up, online, down:
 
 ```
 bzm-opl-gen livetest --api-key api-key.json --facts facts.json \
-    --manifests out --ship-id <SHIP_ID> --timeout 300
+    --manifests out --ship-id <ship-id> --timeout 300
 ```
 
 No `--namespace` and no `--cluster` — a docker bundle is one container on this

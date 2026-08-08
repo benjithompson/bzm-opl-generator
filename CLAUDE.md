@@ -432,7 +432,22 @@ missing tools. The rest is what it cannot fix for you.
   builds a cluster. **Every message that quotes a marker quotes the one it is
   about**, and the two exceptions are greps rather than sentences: the README's
   `grep -rl` and the script's mount check ask "is any marker still here", over
-  files that may be another version's or the host's own. Two halves decide what
+  files that may be another version's or the host's own.
+
+  **A sample value in the documentation is lower case in the brackets; a marker
+  is upper case.** Both are `<...>` and a reader meets them side by side, so
+  `--auth-token <token>` is an instruction to supply a value and `<AUTH_TOKEN>`
+  is what the generator wrote where nobody did. They were one string until this
+  rule: the chart's README and every `--auth-token` example said `<AUTH_TOKEN>`
+  as a fill-this-in, which `MARKER_PATTERN` matched and which sent a customer
+  greping for unfinished fields to the line telling them to fill one in. The
+  rule cannot be broken by accident, because the pattern is upper case only —
+  which is also why the samples that never collided (`<harbor-id>`, `<ship-id>`,
+  `<account>`) are lower case too: a rule followed by half the page is a rule
+  nobody can read off it. Prose that *quotes* a marker keeps the upper case,
+  because there it is the marker being talked about.
+
+  Two halves decide what
   is required, and they are not the
   same question: `generate.REQUIRED_TEXT` fills what the *options* show is
   needed, and `optionGroups`' per-group `requires` fills what only a **switch on

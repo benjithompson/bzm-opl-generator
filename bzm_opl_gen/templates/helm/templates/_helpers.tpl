@@ -216,7 +216,7 @@ belong in the message -- the path is what you set, the marker is what you grep.
 {{- end -}}
 {{- end -}}
 {{- if not .Values.harborId -}}
-{{- fail "harborId is required -- get it from `bzm-opl-gen locations --account-name \"<ACCOUNT>\"` or the private location's page in the BlazeMeter UI" -}}
+{{- fail "harborId is required -- get it from `bzm-opl-gen locations --account-name \"<account>\"` or the private location's page in the BlazeMeter UI" -}}
 {{- end -}}
 {{- if not .Values.shipId -}}
 {{- fail "shipId is required -- a location can have several agents, and this deployment is one of them. `bzm-opl-gen locations` lists the ships per location" -}}

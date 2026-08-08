@@ -574,6 +574,25 @@ def test_readme_tells_you_to_pass_a_token_when_none_was_fetched():
     assert "--set-string authToken=" not in files["README.md"]
 
 
+def test_the_token_sample_is_not_marker_shaped():
+    """A sample value and a marker are both `<...>` and a reader meets them on
+    the same page, so they are told apart by case: a sample is lower case, a
+    marker is upper case.
+
+    This line was `--set-string authToken=<AUTH_TOKEN>` as a fill-this-in, and
+    #245 made that same string the marker for `auth_token`. So a customer
+    greping an unfinished bundle for what was left blank matched the
+    instruction telling them to supply a value -- and `MARKER_PATTERN` matched
+    it too. The chart is the one format that does not mark a blank token (the
+    values file is committed, so an absent token is the recommended state), so
+    nothing else here would have caught the collision."""
+    readme = gen.generate(
+        FACTS, {**BASE, "auth_token": gen.DEFAULT_OPTIONS["auth_token"]})["README.md"]
+    line, = [ln for ln in readme.splitlines() if "--set-string authToken=" in ln]
+    assert "--set-string authToken=<token>" in line
+    assert not gen.MARKER_RE.search(line)
+
+
 def test_overlay_json_values_are_parseable_where_the_chart_re_encodes_them():
     """nodeSelector and tolerations become KUBERNETES_*_JSON envs in the
     rendered ConfigMap, so what the overlay holds has to survive a YAML load as

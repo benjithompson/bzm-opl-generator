@@ -6,7 +6,7 @@ with a docker daemon; crane starts each engine as a sibling container on that
 same host, through the socket it is given.
 
 ```
-bzm-opl-gen generate --format docker --auth-token <AUTH_TOKEN> -o out/
+bzm-opl-gen generate --format docker --auth-token <token> -o out/
 
 # on the host that is to be the private location
 ./out/bzm-opl-agent.sh          # ...or `docker compose up -d` in out/
