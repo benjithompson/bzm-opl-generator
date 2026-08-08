@@ -88,6 +88,45 @@ def cli_tool():
     raise RuntimeError("neither oc nor kubectl found on PATH")
 
 
+# What this run made, and may therefore destroy (#226). One record rather than
+# a widening list of booleans on teardown(), because they are one question asked
+# about three things: the cluster, the namespace inside it, and the node's
+# /etc/hosts. Every field's default is the safe answer -- a run that fell over
+# before it learned anything owns nothing.
+class Owned(collections.namedtuple("Owned", "cluster namespace blackholed")):
+    __slots__ = ()
+
+    def __new__(cls, cluster=False, namespace=False, blackholed=()):
+        return super().__new__(cls, cluster, namespace, tuple(blackholed))
+
+
+def minikube_profile_exists():
+    """Is the profile on disk at all?
+
+    `minikube status` cannot answer this: it reports a libmachine host state,
+    and a profile that exists reads Running, Stopped, Paused, Saved, Starting,
+    Stopping, Error or Timeout depending on what the docker runtime did last.
+    Reading "it exists" off a list of the states somebody remembered fails in
+    the destructive direction -- an unlisted state means absent, means ours,
+    means deleted.
+
+    An unreadable answer is "it was already there". The two wrong answers are
+    not equal: a wrong no deletes somebody's cluster, and a wrong yes leaves one
+    behind, having said so."""
+    out = subprocess.run(["minikube", "profile", "list", "-o", "json"],
+                         capture_output=True, text=True)
+    try:
+        doc = json.loads(out.stdout)
+        groups = [g for g in doc.values() if isinstance(g, list)]
+    except (ValueError, TypeError, AttributeError):
+        print(f"note: could not read the minikube profile list, so "
+              f"'{MINIKUBE_PROFILE}' is treated as one this run did not create "
+              f"-- teardown will leave it up")
+        return True
+    return any(p.get("Name") == MINIKUBE_PROFILE
+               for g in groups for p in g if isinstance(p, dict))
+
+
 def ensure_kind():
     """True if this run created the cluster, False if it reused one already
     there. The answer is what teardown is allowed to delete -- see #226."""
@@ -113,17 +152,20 @@ def ensure_minikube(insecure_registry=None, cni=None):
     if platform.machine() in ("arm64", "aarch64"):
         print("note: BlazeMeter images are amd64-only -- your docker runtime's "
               "x86 emulation must be enabled for pods to run on this host")
-    st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
-                         "--format", "{{.Host}}"], capture_output=True, text=True)
-    host = st.stdout.strip()
-    running = host == "Running"
     # Existing and running are two questions, and only the first decides whose
     # profile it is: starting somebody's stopped profile is not creating it, and
-    # a run that deleted one afterwards would be #226 with an extra step. An
-    # absent profile prints no host state at all -- minikube reports
-    # MK_USAGE_NO_PROFILE -- so the states are what "it is there" is read off.
-    existed = host in ("Running", "Stopped", "Paused")
+    # a run that deleted one afterwards would be #226 with an extra step.
+    existed = minikube_profile_exists()
+    st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
+                         "--format", "{{.Host}}"], capture_output=True, text=True)
+    running = existed and st.stdout.strip() == "Running"
     recreated = False
+    # Before policy_enforced(), which reads whatever cluster kubectl is pointed
+    # at rather than this profile. Asked in the wrong order it answered about
+    # the standing kind testbed or CRC, and now decides a delete as well as a
+    # recreate -- so the context has to be this profile's first.
+    if existed:
+        _run(["kubectl", "config", "use-context", MINIKUBE_PROFILE], check=False)
     if running and cni and not policy_enforced():
         # minikube's default CNI accepts NetworkPolicies and enforces nothing,
         # so containment would silently be a no-op. --cni only applies at
@@ -141,7 +183,7 @@ def ensure_minikube(insecure_registry=None, cni=None):
             cmd.append(f"--cni={cni}")
         _run(cmd)
     if existed and not recreated:
-        print(f"reusing the minikube profile '{MINIKUBE_PROFILE}' ({host}) -- "
+        print(f"reusing the minikube profile '{MINIKUBE_PROFILE}' -- "
               f"this run will not delete it")
         if insecure_registry:
             # True of a stopped profile too: --insecure-registry applies when
@@ -1464,7 +1506,46 @@ def _apply(cli, namespace, path):
     _run(cmd)
 
 
+def ensure_namespace(cli, namespace):
+    """True if this run created the namespace.
+
+    The cluster's rule, one level down, and needed for the same reason: once a
+    reused cluster survives teardown, whatever was applied into it survives too
+    unless something removes it. Deleting the namespace removes the lot --
+    including the two things the `*.yaml` sweep cannot reach, the egress
+    NetworkPolicy (written to a dotfile) and the pods crane created."""
+    out = subprocess.run([cli, "get", "ns", namespace],
+                         capture_output=True, text=True)
+    if out.returncode == 0:
+        print(f"reusing the existing namespace '{namespace}' -- this run will "
+              f"not delete it")
+        return False
+    _run([cli, "create", "ns", namespace], check=False)
+    return True
+
+
+def unblackhole(hosts):
+    """Undo blackhole_public_registries on a node that outlives the run.
+
+    It appends `127.0.0.1 <registry>` to the node's /etc/hosts, and used to need
+    no undo because the profile was deleted afterwards. On a profile this run
+    did not create, leaving it there breaks every later public image pull on
+    that node -- an ImagePullBackOff with nothing to connect it to a run that
+    reported itself clean. The cached images it also removed are not restored:
+    a re-pull is a cost, not a fault."""
+    for h in hosts:
+        _run(["minikube", "ssh", "-p", MINIKUBE_PROFILE, "--",
+              f"sudo sed -i '/^127.0.0.1 {h}$/d' /etc/hosts"],
+             check=False, capture=True)
+    if hosts:
+        print(f"restored the node's /etc/hosts: {', '.join(hosts)}")
+
+
 def deploy(manifest_dir, namespace, cluster="current", insecure_registry=None):
+    # The return is dropped deliberately: run() calls ensure_cluster before this
+    # and keeps the answer. A caller reaching deploy() on its own path and then
+    # calling teardown() gets owned.cluster False and leaks a cluster it built,
+    # which is the safe direction of the two.
     ensure_cluster(cluster, insecure_registry)
     cli = cli_tool()
     _run([cli, "get", "ns", namespace], check=False)
@@ -1491,35 +1572,48 @@ def wait_online(client, harbor_id, ship_id, timeout=600, poll=15):
     return False
 
 
-def teardown(manifest_dir, namespace, cluster="current", created=False):
+def teardown(manifest_dir, namespace, cluster="current", owned=None):
     """Delete what this run created, and nothing else.
 
-    `created` comes from ensure_cluster. It used to be absent, and a
-    `--cluster kind` run deleted `bzm-opl-test` whether or not it had built it
-    -- which on a machine keeping a standing testbed under that name destroyed
-    two agents and a serving virtual service (#226). ensure_kind reuses a
-    cluster that is already there and is right to; the deletion is what had to
-    learn whose it was.
+    `owned` comes from ensure_cluster and ensure_namespace. It used to be
+    absent, and a `--cluster kind` run deleted `bzm-opl-test` whether or not it
+    had built it -- which on a machine keeping a standing testbed under that
+    name destroyed two agents and a serving virtual service (#226). ensure_kind
+    reuses a cluster that is already there and is right to; the deletion is what
+    had to learn whose it was.
 
     The default is the safe answer rather than the common one: a run that fell
-    over before ensure_cluster returned knows nothing about whose cluster it
-    is, and `finally` calls this anyway.
+    over before ensure_cluster returned knows nothing about whose cluster it is,
+    and `finally` calls this anyway.
 
-    A cluster that is not ours still gets the objects removed, by the same path
-    `current` has always used -- the run cleans up after itself without taking
-    the cluster with it."""
-    if created and cluster == "kind":
+    **A cluster that survives makes everything inside it survive**, which the
+    cluster deletion used to hide. So the reuse path is not the `*.yaml` sweep
+    alone: it drops the namespace where this run created it, and where it did
+    not, removes the egress policy by name -- that one is written to a dotfile
+    precisely so deploy()'s glob skips it, so nothing else would reach it. A
+    default-deny policy left behind whose only hole is a proxy container the
+    `finally` has just removed does not fail the next run: it makes it wait out
+    its whole timeout and report that the agent never came online."""
+    owned = owned or Owned()
+    if owned.cluster and cluster == "kind":
         _run(["kind", "delete", "cluster", "--name", KIND_CLUSTER], check=False)
         return
-    if created and cluster == "minikube":
+    if owned.cluster and cluster == "minikube":
         _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
         return
     if cluster in ("kind", "minikube"):
-        print(f"leaving the {cluster} cluster up: this run did not create it. "
-              f"Removing only the objects it applied to {namespace}.")
+        print(f"leaving the {cluster} cluster up: this run did not create it.")
     cli = cli_tool()
+    if cluster == "minikube":
+        unblackhole(owned.blackholed)
+    if owned.namespace:
+        print(f"deleting the namespace '{namespace}', which this run created")
+        _run([cli, "delete", "ns", namespace, "--ignore-not-found"], check=False)
+        return
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
+    _run([cli, "-n", namespace, "delete", "networkpolicy", EGRESS_POLICY_NAME,
+          "--ignore-not-found"], check=False)
 
 
 # -- the compose rig ----------------------------------------------------------
@@ -1674,10 +1768,10 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     if bad:
         raise BundleMismatch(bad)
     ok = False
-    # Set by ensure_cluster below, and read by teardown in the finally. It
-    # starts False so a run that fails before the cluster is up leaves whatever
-    # is there alone (#226).
-    created_cluster = False
+    # Filled in as the run learns what it made, and read by teardown in the
+    # finally. It starts empty so a run that fails before the cluster is up
+    # leaves whatever is there alone (#226).
+    owned = Owned()
     try:
         insecure = None
         if local_registry:
@@ -1687,11 +1781,15 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             insecure = f"{REGISTRY_CLUSTER_HOST}:{local_registry}"
         # The node has to exist before anything can be done to it: joining the
         # proxy to its network, blackholing registries, deploying.
-        created_cluster = ensure_cluster(
-            cluster, insecure, cni="calico" if contain_egress else None)
+        owned = owned._replace(cluster=ensure_cluster(
+            cluster, insecure, cni="calico" if contain_egress else None))
+        # The namespace is created here rather than left to deploy() and
+        # apply_egress_policy(), which both reach for it: one asker, one answer
+        # about whose it is.
+        owned = owned._replace(namespace=ensure_namespace(cli_tool(), namespace))
         if local_registry:
-            blackhole_public_registries(facts, cluster,
-                                        (opts or {}).get("private_registry"))
+            owned = owned._replace(blackholed=blackhole_public_registries(
+                facts, cluster, (opts or {}).get("private_registry")))
         # Engines are sized down so one fits a laptop cluster; the default
         # request (2 CPU / 8Gi) would sit Pending forever.
         engine_overlay = {"engine_cpu_limit": engine_cpu,
@@ -1758,7 +1856,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         print(f"LIVE TEST {'PASSED' if ok else 'FAILED'}: {why}")
     finally:
         if not keep:
-            teardown(manifest_dir, namespace, cluster, created_cluster)
+            teardown(manifest_dir, namespace, cluster, owned)
             if local_registry:
                 _run(["docker", "rm", "-f", REGISTRY_NAME], check=False, capture=True)
             if local_proxy:

@@ -1275,7 +1275,7 @@ def test_ensure_cluster_passes_the_answer_on(monkeypatch):
 def test_teardown_deletes_a_cluster_this_run_created(monkeypatch, tmp_path):
     cmds = []
     monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
-    livetest.teardown(str(tmp_path), "ns1", "kind", created=True)
+    livetest.teardown(str(tmp_path), "ns1", "kind", livetest.Owned(cluster=True))
     assert ["kind", "delete", "cluster", "--name", livetest.KIND_CLUSTER] in cmds
 
 
@@ -1286,7 +1286,7 @@ def test_teardown_leaves_a_cluster_it_did_not_create(monkeypatch, tmp_path):
     cmds = []
     monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
-    livetest.teardown(str(tmp_path), "ns1", "kind", created=False)
+    livetest.teardown(str(tmp_path), "ns1", "kind", livetest.Owned())
     assert not any("delete" in c and "cluster" in c for c in cmds)
     assert any(c[:2] == ["kubectl", "-n"] and "delete" in c for c in cmds)
 
@@ -1295,7 +1295,7 @@ def test_teardown_leaves_a_minikube_profile_it_did_not_create(monkeypatch, tmp_p
     cmds = []
     monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
-    livetest.teardown(str(tmp_path), "ns1", "minikube", created=False)
+    livetest.teardown(str(tmp_path), "ns1", "minikube", livetest.Owned())
     assert not any("minikube" in c for c in cmds)
 
 
@@ -1309,7 +1309,12 @@ def test_teardown_defaults_to_leaving_the_cluster_alone(monkeypatch, tmp_path):
     assert not any("minikube" in c for c in cmds)
 
 
-def _minikube_host(monkeypatch, host, cmds):
+def _minikube_host(monkeypatch, host, cmds, exists=None):
+    """`host` is what `minikube status --format {{.Host}}` prints; `exists`
+    defaults to "there is a profile whenever a state was reported"."""
+    if exists is None:
+        exists = bool(host)
+    monkeypatch.setattr(livetest, "minikube_profile_exists", lambda: exists)
     monkeypatch.setattr(livetest.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(
                             a[0], 0, stdout=host, stderr=""))
@@ -1348,3 +1353,115 @@ def test_a_recreated_minikube_profile_is_ours(monkeypatch):
     monkeypatch.setattr(livetest, "policy_enforced", lambda: False)
     assert livetest.ensure_minikube(cni="calico") is True
     assert any("delete" in c for c in cmds) and any("start" in c for c in cmds)
+
+
+# -- what a cluster that survives keeps ---------------------------------------
+#
+# Deleting the cluster used to clean up everything inside it. Once a reused one
+# survives, each of those has to be answered for on its own.
+
+
+def test_a_profile_in_an_unlisted_state_is_not_claimed(monkeypatch):
+    """minikube reports Saved/Error/Starting/Stopping/Timeout as well, and a
+    state nobody listed must not read as 'no profile, so it is mine'."""
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(
+                            a[0], 0,
+                            stdout=json.dumps({"valid": [{"Name": livetest.MINIKUBE_PROFILE}],
+                                               "invalid": []}), stderr=""))
+    assert livetest.minikube_profile_exists() is True
+
+
+def test_an_absent_profile_is_ours_to_create(monkeypatch):
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(
+                            a[0], 0, stdout='{"valid":[],"invalid":[]}', stderr=""))
+    assert livetest.minikube_profile_exists() is False
+
+
+def test_an_unreadable_profile_list_is_not_ours(monkeypatch, capsys):
+    """Could-not-read must not arrive as there-is-nothing-there: one answer
+    leaves a profile behind, the other deletes somebody's cluster."""
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(
+                            a[0], 1, stdout="minikube: command not found", stderr=""))
+    assert livetest.minikube_profile_exists() is True
+    assert "could not read" in capsys.readouterr().out
+
+
+def test_the_profile_state_is_only_read_where_a_profile_exists(monkeypatch):
+    """A missing profile makes `status` print a not-found sentence, which is
+    not a host state -- reading it as one is how 'Stopped' logic goes wrong."""
+    cmds = []
+    _minikube_host(monkeypatch, 'Profile "bzm-opl-test" not found.', cmds,
+                   exists=False)
+    assert livetest.ensure_minikube() is True
+
+
+def test_policy_is_judged_after_the_context_is_this_profile(monkeypatch):
+    """policy_enforced() reads whatever kubectl points at. Asked first it
+    answered about the standing kind testbed, and it now decides a delete."""
+    cmds, asked_at = [], []
+    _minikube_host(monkeypatch, "Running", cmds)
+    monkeypatch.setattr(livetest, "policy_enforced",
+                        lambda: asked_at.append(len(cmds)) or True)
+    livetest.ensure_minikube(cni="calico")
+    switched = [i for i, c in enumerate(cmds) if "use-context" in c]
+    assert switched and asked_at[0] > switched[0]
+
+
+def test_teardown_drops_a_namespace_this_run_created(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind", livetest.Owned(namespace=True))
+    assert ["kubectl", "delete", "ns", "ns1", "--ignore-not-found"] in cmds
+
+
+def test_teardown_removes_the_egress_policy_from_a_namespace_it_kept(monkeypatch, tmp_path):
+    """The policy is written to a dotfile so deploy()'s glob skips it, so the
+    *.yaml sweep cannot reach it either. Left behind on a surviving cluster it
+    denies the next run's egress, which reads as an agent that never came up."""
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind", livetest.Owned())
+    assert any(livetest.EGRESS_POLICY_NAME in c and "delete" in c for c in cmds)
+
+
+def test_teardown_restores_the_node_hosts_file_on_a_cluster_it_keeps(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "minikube",
+                      livetest.Owned(blackholed=["gcr.io"]))
+    assert any("/etc/hosts" in str(c) and "gcr.io" in str(c) for c in cmds)
+
+
+def test_teardown_does_not_bother_restoring_hosts_on_a_cluster_it_deletes(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    livetest.teardown(str(tmp_path), "ns1", "minikube",
+                      livetest.Owned(cluster=True, blackholed=["gcr.io"]))
+    assert not any("/etc/hosts" in str(c) for c in cmds)
+
+
+def test_ensure_namespace_reports_one_it_did_not_create(monkeypatch):
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", ""))
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: None)
+    assert livetest.ensure_namespace("kubectl", "ns1") is False
+
+
+def test_ensure_namespace_reports_one_it_created(monkeypatch):
+    cmds = []
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", ""))
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    assert livetest.ensure_namespace("kubectl", "ns1") is True
+    assert ["kubectl", "create", "ns", "ns1"] in cmds
+
+
+def test_owned_defaults_to_owning_nothing():
+    o = livetest.Owned()
+    assert (o.cluster, o.namespace, o.blackholed) == (False, False, ())

@@ -229,7 +229,13 @@ missing tools. The rest is what it cannot fix for you.
   up leaves everything alone. **Existing and running are two questions**, and
   only the first decides ownership: a *stopped* minikube profile is started and
   still not the run's, or the rule would delete somebody's cluster with one
-  extra step in it. It used to delete unconditionally, and the name it
+  extra step in it. Existence is read off `minikube profile list`, never off a
+  host state — a profile reports eight of those and a list of the ones somebody
+  remembered fails towards deleting. **A cluster that survives makes everything
+  inside it survive**, which the cluster deletion used to hide: `Owned` carries
+  the namespace and the node's `/etc/hosts` beside it, because the egress
+  NetworkPolicy is written to a dotfile no glob reaches and the registry
+  blackhole is never otherwise undone. It used to delete unconditionally, and the name it
   deletes is the standing kind testbed's — two agents and a serving virtual
   service. The one deliberate exception is `--contain-egress` recreating a
   running minikube profile with no policy enforcer, which is announced and which
