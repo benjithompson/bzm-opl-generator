@@ -185,8 +185,9 @@ OPTIONS = [
             "BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with "
             "`--api-key`) issues a **new** one; otherwise the token already "
             "written into the output directory is reused, provided that bundle's "
-            "`profile.json` names the same ship; otherwise the placeholder stays "
-            "and the command says where a real token comes from. It is the one "
+            "`profile.json` names the same ship; otherwise the marker "
+            "`<AUTH_TOKEN>` stays and the command says where a real token comes "
+            "from. It is the one "
             "option stripped from `out/profile.json`, and it stays stripped -- a "
             "profile is a file people commit and hand over. **Minting invalidates "
             "the previous token**, and an agent left holding a stale one does not "
@@ -420,7 +421,9 @@ OPTIONS = [
         "ca_bundle_slot", "boolean", "CA trust",
         summary="Emit the CA ConfigMap with the PEM slot marked, for a certificate not yet in hand.",
         doc="The bundle carries the CA ConfigMap wired to the agent, with "
-            "`<PLACEHOLDER>` where the PEM goes. For the common moment: crane "
+            "`<CA_BUNDLE>` where the PEM goes -- the marker names the option "
+            "the PEM belongs to, so the file says what is missing on its own. "
+            "For the common moment: crane "
             "is failing TLS and the certificate is still with the platform "
             "team. One edit finishes it, and nothing else has to be wired. "
             "Refused beside `ca_bundle` -- supplying the PEM and leaving a slot "

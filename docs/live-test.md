@@ -195,11 +195,12 @@ already deployed there.
 
 A run that re-renders nothing (no `--local-proxy`, no `--run-test`) deploys the
 bundle exactly as it sits in `--manifests`, and so mints nothing at all. If that
-bundle still carries the `<PLACEHOLDER>` marker the command refuses up
+bundle still carries the `<AUTH_TOKEN>` marker the command refuses up
 front, rather than deploying an agent that cannot authenticate and reporting,
 twelve to twenty minutes later, only that it never came online. The same refusal
-covers every other field left blank when the bundle was generated — the marker
-is one string, and `profile.json` names which fields carry it.
+covers every other field left blank when the bundle was generated — each carries
+`<KEY>` for its own option key, and the refusal names the field beside the
+marker so the message and the file are one search.
 
 **The bundle's identity is checked, not re-rendered.** `--manifests` defaults to
 `out/`, and `out/` is whatever the last `generate` left there — so a run given

@@ -77,7 +77,7 @@ export interface BundleHandover {
    *  definition not this one, so the block names them and offers the way back
    *  rather than pointing at a form nobody can see. */
   unfinished: OptionGroup[];
-  /** Required fields left empty, so the bundle carries `<PLACEHOLDER>` for
+  /** Required fields left empty, so the bundle carries `<KEY>` for each of
    *  them. Never a reason the download is disabled -- the bundle is real and
    *  says of itself that it is unfinished -- which is why this is beside the
    *  button rather than in front of it. */
