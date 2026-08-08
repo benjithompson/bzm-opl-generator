@@ -3,9 +3,34 @@
 Success = the BlazeMeter API reports the ship with a **fresh heartbeat** and
 idle/running state. That exercises the full chain: RBAC, SCC admission, image
 pull, egress to `*.blazemeter.com`, and credentials. `--keep` skips teardown;
-`--cluster kind` creates/deletes a disposable `bzm-opl-test` cluster (crane
-comes online; engines won't fit laptop resources — use `--cluster current`
-against a real cluster for full engine validation).
+`--cluster kind` and `--cluster minikube` use a cluster named `bzm-opl-test`
+(crane comes online; engines won't fit laptop resources — use
+`--cluster current` against a real cluster for full engine validation).
+
+**A run deletes a cluster only if it created one.** Both flags reuse a
+`bzm-opl-test` that is already there, and a reused cluster survives teardown.
+The run says which happened as it starts and again as it finishes. A **stopped**
+minikube profile is started and still not owned: starting somebody's profile is
+not creating it. This matters wherever a standing cluster carries that name:
+deleting it unconditionally is what #226 was. The one exception is
+deliberate and announced: `--contain-egress` recreates a running minikube
+profile that has no policy enforcer, because `--cni` applies at creation only
+and containment would otherwise be a silent no-op — after which the profile is
+this run's, and teardown deletes it.
+
+**A cluster that survives makes everything inside it survive**, which the
+cluster deletion used to hide, so each of those is answered for on its own:
+
+| what the run made | what teardown does with it |
+|---|---|
+| the namespace, where the run created it | deletes it, and every object and pod in it |
+| a namespace that was already there | deletes the applied `*.yaml`, plus the egress NetworkPolicy by name — it lives in a dotfile so no glob reaches it |
+| `127.0.0.1 <registry>` in the node's `/etc/hosts` (`--local-registry`) | removes those lines where the cluster is kept |
+
+The middle one is the expensive one to get wrong. A default-deny egress policy
+left in the namespace, whose only hole is a proxy container the same `finally`
+has just removed, does not fail the next run — it makes it wait out its whole
+timeout and report that the agent never came online.
 
 There are **two rigs**, and which one a run gets is read off the bundle rather
 than asked for — a manifests bundle is applied to a cluster, a `--format docker`
