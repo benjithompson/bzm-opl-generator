@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { ErrorMsg, Field, inputCls, TextInput } from "../components";
+import { ErrorMsg, Field, TextInput } from "../components";
 import { Applies } from "../formats";
 import { CaMode } from "../optionGroups";
-import { readCertFile } from "../pemFile";
+import { certCount, readCertFile } from "../pemFile";
 
 // Who owns the bundle, per mode -- the difference that decides which one to
 // pick, and the reason the modes are radios rather than three sets of fields.
@@ -10,16 +10,25 @@ import { readCertFile } from "../pemFile";
 // drops the two ConfigMap modes without this file knowing which format that is.
 const CA_MODES: { mode: CaMode; label: string; hint: string; key: string }[] = [
   {
-    mode: "existing",
-    label: "Reference an existing ConfigMap (recommended)",
-    hint: "your platform/security team owns and rotates the trust bundle (e.g. via trust-manager); manifests only reference it",
-    key: "ca_existing_configmap",
+    // First, and the default (optionGroups.enable), because it is the moment
+    // most customers are in when they discover they need this at all: crane is
+    // failing TLS and the certificate is still with the platform team (#230).
+    mode: "slot",
+    label: "Create the ConfigMap here — certificate to follow",
+    hint: "the bundle carries it wired to the agent, with the PEM slot marked; paste the certificate in when it arrives, then deploy",
+    key: "ca_bundle_slot",
   },
   {
     mode: "inline",
-    label: "Paste PEM — generator creates the ConfigMap",
-    hint: "you own the bundle; rotation means regenerating and re-applying",
+    label: "Create the ConfigMap here — I have the certificate",
+    hint: "the PEM goes into the bundle; rotation means regenerating and re-applying",
     key: "ca_bundle",
+  },
+  {
+    mode: "existing",
+    label: "Reference a ConfigMap your platform team owns",
+    hint: "they own and rotate the trust bundle (e.g. via trust-manager) and this bundle only points at it — so the ConfigMap has to exist already",
+    key: "ca_existing_configmap",
   },
   {
     mode: "inject",
@@ -130,25 +139,37 @@ export function CaGroup(props: {
           </Field>
         </div>
       )}
+      {mode === "slot" && (
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2
+                      text-[11px] text-slate-600">
+          <code>bzm_cacerts.yaml</code> ships in the bundle, wired to the agent,
+          with <code>&lt;PLACEHOLDER&gt;</code> where the PEM goes. Paste the
+          certificate into it when your team sends it, then deploy as normal.
+          Nothing else needs changing.
+        </p>
+      )}
       {mode === "inline" && (
         <>
+          {/* The paste box is gone. A customer configuring CA trust has a
+              *file*, and a textarea asked them to open it in an editor first --
+              which is what made this mode feel wrong for the thing they were
+              holding (#227). What is left states what was read, because the
+              value is no longer visible: a PEM is not something anybody proofs
+              by eye in a 3-row box, and the certificate count is the fact worth
+              reading back. */}
           <Field label="CA bundle (PEM)">
-            <textarea className={inputCls + " font-mono text-[10px]"} rows={3}
-              placeholder="-----BEGIN CERTIFICATE-----"
-              value={props.bundle}
-              onChange={(e) => props.onBundle(e.target.value)} />
+            <p className="mt-0.5 text-sm text-slate-600">
+              {props.bundle.trim()
+                ? `${certCount(props.bundle)} certificate`
+                  + (certCount(props.bundle) === 1 ? "" : "s") + " loaded"
+                : "No certificate chosen yet."}
+            </p>
           </Field>
-          {/* Outside the Field, because Field is itself a <label> and a file
-              input inside one is a label wrapping a label. The customer has a
-              file (#227); asking them to open it in an editor and paste it was
-              the step that made this mode feel wrong for one. It fills the same
-              option -- `ca_bundle` is content and never a path, so the file is
-              read here and the server never learns it existed. */}
           <div className="flex items-center gap-2 flex-wrap">
             <label className="rounded-md px-3 py-1.5 text-sm font-medium border
                               border-slate-300 text-slate-600 hover:bg-slate-50
                               cursor-pointer">
-              Choose file
+              {props.bundle.trim() ? "Replace file" : "Choose file"}
               {/* Wide on purpose, `.der` included. A file this cannot use is
                   better picked and refused than greyed out: the refusal names
                   `openssl x509`, and a dialog that hides the customer's file
@@ -164,9 +185,15 @@ export function CaGroup(props: {
                   if (f) pick(f);
                 }} />
             </label>
+            {props.bundle.trim() && (
+              <button type="button"
+                className="rounded-md px-3 py-1.5 text-sm font-medium border
+                           border-slate-300 text-slate-600 hover:bg-slate-50"
+                onClick={() => props.onBundle("")}>Remove</button>
+            )}
             <span className="text-[11px] text-slate-400">
-              read in your browser and pasted into the box above; the bundle
-              carries the text, never a path
+              read in your browser; the bundle carries the certificate itself,
+              never a path
             </span>
           </div>
           {current?.ok && (

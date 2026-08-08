@@ -138,6 +138,7 @@ DEFAULT_OPTIONS = {
     "engines_per_node": None,
     # CA trust -- pick ONE mode:
     "ca_bundle": None,               # inline PEM -> generator creates the ConfigMap
+    "ca_bundle_slot": False,         # same ConfigMap, PEM slot marked for later
     "ca_existing_configmap": None,   # name of a ConfigMap the platform team owns/rotates
     "ca_configmap_key": None,        # bundle file key within it (default ca-bundle.crt)
     "ca_openshift_inject": False,    # labeled empty CM; OpenShift injects cluster trust
@@ -544,6 +545,10 @@ HOOK_FILE = "bzm_cranehook.yaml"
 CA_MOUNT_PATH = "/var/cm"
 CA_FILENAME = "ca-bundle.crt"
 CA_CONFIGMAP = "blazemeter-cacerts"
+# The manifest that holds it. Named once because three places say it: the
+# ConfigMap emitter, the README's waiting-for-a-certificate block, and the
+# ConfigMap comment that tells somebody which file to open.
+CA_CONFIGMAP_FILE = "bzm_cacerts.yaml"
 
 # The funcId BlazeMeter puts on a location that serves virtual services, and so
 # the one that makes the ingress options mandatory. A tuple, not a string,
@@ -868,6 +873,7 @@ def _sv_docker_cfg(o):
 CA_MODES = {
     "ca_existing_configmap": "an existing ConfigMap",
     "ca_bundle": "an inline PEM",
+    "ca_bundle_slot": "a PEM slot to fill in later",
     "ca_openshift_inject": "OpenShift injection",
 }
 
@@ -891,18 +897,32 @@ def _ca_cfg(o):
     # a ConfigMap name the page for that format never showed.
     ignored = ignored_options(o)
     active = [k for k in CA_MODES if o[k] and k not in ignored]
+    # The slot and a PEM are two answers to one question rather than a value and
+    # a fallback for it, so this is refused before the count below can read it
+    # as an ordinary two-mode collision: the message has to name the pair,
+    # because "choose one CA mode" would send somebody to the wrong control.
+    if "ca_bundle_slot" in active and "ca_bundle" in active:
+        raise ValueError(
+            "ca_bundle_slot leaves the PEM to be filled in later, and ca_bundle "
+            "supplies it now -- set one. Drop ca_bundle_slot to use the "
+            "certificate you have, or drop ca_bundle to hand over a bundle "
+            "waiting for one.")
     if len(active) > 1:
         raise ValueError("choose one CA mode: ca_bundle (inline PEM) | "
-                         "ca_existing_configmap | ca_openshift_inject")
+                         "ca_bundle_slot | ca_existing_configmap | "
+                         "ca_openshift_inject")
     if not active:
         return None
     if active[0] == "ca_existing_configmap":
         return {"cm": o["ca_existing_configmap"],
                 "key": o["ca_configmap_key"] or CA_FILENAME, "mode": "existing"}
-    # inline + inject both use our own ConfigMap; inject's key is fixed to
-    # ca-bundle.crt (the key OpenShift writes into labeled ConfigMaps).
-    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME,
-            "mode": "inline" if active[0] == "ca_bundle" else "inject"}
+    # inline, the slot and inject all use our own ConfigMap; inject's key is
+    # fixed to ca-bundle.crt (the key OpenShift writes into labeled ConfigMaps).
+    # The slot renders as inline holding the marker -- one renderer, so the
+    # bundle a customer fills in is the bundle they would have generated.
+    mode = {"ca_bundle": "inline", "ca_bundle_slot": "slot"}.get(
+        active[0], "inject")
+    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
 
 
 def proxy_url(url, p):
@@ -1257,12 +1277,15 @@ def _configmap(facts, o):
     if ca:
         ca_comment = {
             "inline": "  # Corporate CA bundle (generator-created ConfigMap).",
+            "slot": f"  # Corporate CA bundle -- {CA_CONFIGMAP_FILE} is in this bundle,",
             "existing": f"  # CA bundle from existing ConfigMap '{ca['cm']}' -- the platform",
             "inject": "  # OpenShift cluster trust bundle (operator-injected ConfigMap).",
         }[ca["mode"]]
         lines.append(ca_comment)
         if ca["mode"] == "existing":
             lines.append("  # team owns and rotates it; these manifests only reference it.")
+        if ca["mode"] == "slot":
+            lines.append("  # waiting for the certificate to be pasted into it.")
         path = f"{CA_MOUNT_PATH}/{ca['key']}"
         lines += [
             "  # Mounted into crane; engines get the same ConfigMap mounted via",
@@ -1320,16 +1343,34 @@ metadata:
     # Nobody hand-manages PEMs; rotation is the cluster's job.
     config.openshift.io/inject-trusted-cabundle: "true"
 """
-    pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
+    body = ca_pem(o)
+    pem = "\n".join("    " + line for line in body.strip().splitlines())
+    # The comment is for the human who opens this file, and it never reaches the
+    # applied object -- so unlike the marker itself it costs nothing at apply
+    # time and cannot be read back as content. A bare <PLACEHOLDER> says a value
+    # is missing; it does not say which value, or what shape it has.
+    note = ("" if ca["mode"] != "slot" else
+            f"  # Paste your CA here, replacing {PLACEHOLDER} below: the whole\n"
+            f"  # -----BEGIN CERTIFICATE----- block, and your public roots with\n"
+            f"  # it -- this file replaces the trust store rather than adding to\n"
+            f"  # it. Keep the four-space indent. Then apply this bundle.\n")
     return f"""kind: ConfigMap
 apiVersion: v1
 metadata:
   name: {CA_CONFIGMAP}
   namespace: {o['namespace']}
 data:
-  {CA_FILENAME}: |
+{note}  {CA_FILENAME}: |
 {pem}
 """
+
+
+def ca_pem(o):
+    """The PEM the bundle writes, which is the marker where the slot was asked
+    for. One helper because both platforms write it -- a ConfigMap entry here, a
+    file beside the script on docker -- and a slot that reached only one of them
+    would be a mode that silently means nothing on the other."""
+    return PLACEHOLDER if o.get("ca_bundle_slot") else o["ca_bundle"]
 
 
 def _proxy_secret_block(o):
@@ -1862,6 +1903,52 @@ PLACEHOLDER_SOURCE = {
 }
 
 
+# Which marked fields the API server actually stops, measured with
+# `kubectl apply --dry-run=server` on a real cluster (#230). Only these two
+# reach a *name*; every other marked field lands in a Secret value, a ConfigMap
+# value or an environment variable, and applies cleanly. The README used to
+# tell the reader all of them were caught, which is the same "could not read"
+# vs "there is nothing there" collision one layer out: a bundle that applies
+# and an agent that then fails is exactly what the marker exists to prevent.
+PLACEHOLDER_REFUSED_BY_NAME = frozenset(("namespace", "service_account_name"))
+
+
+def _ca_slot_block(o):
+    """The README section for a bundle whose CA ConfigMap is waiting for a PEM.
+
+    Separate from the placeholder block on purpose, and not folded into it: the
+    slot is a decision somebody made, and that block reports decisions nobody
+    made. Printing "this bundle is not finished" over a bundle that is exactly
+    what was asked for would teach the reader to ignore the one sentence that
+    means somebody forgot something.
+    """
+    ca = _ca_cfg(o)
+    if not ca or ca["mode"] != "slot":
+        return ""
+    if o["output_format"] == "docker":
+        where = DOCKER_CA_FILE
+        check, cmd = (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both "
+                      f"refuse to start while the marker is there, so nothing "
+                      f"deploys by accident."), ""
+    else:
+        # No install-time hook on flat manifests, and the API server takes a
+        # ConfigMap value whatever it says (#230) -- so the check is one the
+        # reader runs, and it needs nothing installed.
+        where = CA_CONFIGMAP_FILE
+        check = ("**Applying it as it stands succeeds** -- the marker is a "
+                 "ConfigMap value, not a name -- so the agent would come up "
+                 "trusting nothing extra. This is the check:")
+        cmd = f"\n>\n> ```\n> grep -c {PLACEHOLDER} {CA_CONFIGMAP_FILE}\n> ```"
+    body = textwrap.fill(
+        f"**This bundle is waiting for a certificate.** `{where}` is here and "
+        f"wired to the agent, with `{PLACEHOLDER}` where the PEM goes. Paste "
+        f"your CA into it -- the whole BEGIN CERTIFICATE block, and your "
+        f"public roots with it, because this file replaces the trust store "
+        f"rather than adding to it -- and deploy as normal. {check}",
+        width=76, break_on_hyphens=False)
+    return "\n> " + "\n> ".join(body.splitlines()) + cmd + "\n\n"
+
+
 def _placeholder_block(o, where=()):
     """The README section naming every field left blank, or "" when none were.
 
@@ -1904,11 +1991,25 @@ def _placeholder_block(o, where=()):
                  "mounted file is bytes, so an agent started with either comes "
                  "up and fails later: `404` and `Sleeping for 300` on a blank "
                  "credential, a rejected handshake on a blank certificate.")
-    else:
+    elif all(k in PLACEHOLDER_REFUSED_BY_NAME for k in found):
         stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
                  "Kubernetes name, so the API server rejects the object and "
                  "names the field. That is the intended behaviour, not a fault "
                  "in this bundle.")
+    elif o["output_format"] == "helm":
+        # The chart is the one cluster format with an install-time hook, and
+        # bzm-opl.validate already refuses exactly this set.
+        stops = ("`helm install` refuses it and names the field, including for "
+                 "the values the API server never sees as names.")
+    else:
+        # Measured, not assumed (#230): only a marked *name* is rejected, and
+        # the fields are in the table above, so this says which *kind* stops it
+        # rather than listing them again. Claiming the API server catches them
+        # all is what sent somebody to apply a bundle expecting to be stopped.
+        stops = (f"Applying it does not always fail: the API server rejects "
+                 f"`{PLACEHOLDER}` as a name and accepts it as a value, so an "
+                 f"agent can deploy and fail after. Check with "
+                 f"`grep -rl {PLACEHOLDER} *.yaml`.")
     # Wrapped rather than hand-broken: the sentence differs per format and by
     # how many fields there are, so fixed line breaks land wherever the shorter
     # wording leaves them. Never inside a hyphenated word, though -- a wrap
@@ -2762,12 +2863,12 @@ def _helm_values(facts, o):
         lines += ["proxy:", "  enabled: false", '  http: ""', '  https: ""',
                   f"  noProxy: {_yq(DEFAULT_NO_PROXY)}"]
     lines.append("")
-    mode = {"inline": "inline", "existing": "existing",
+    mode = {"inline": "inline", "slot": "inline", "existing": "existing",
             "inject": "openshiftInject"}[ca["mode"]] if ca else "none"
     lines += ["caBundle:", f"  mode: {mode}"]
-    if ca and ca["mode"] == "inline":
+    if ca and ca["mode"] in ("inline", "slot"):
         lines.append("  pem: |")
-        lines += ["    " + line for line in o["ca_bundle"].strip().splitlines()]
+        lines += ["    " + line for line in ca_pem(o).strip().splitlines()]
     else:
         lines.append('  pem: ""')
     lines += [
@@ -2818,7 +2919,7 @@ def _helm_readme(facts, o):
         token = (" \\\n    --set-string authToken=<AUTH_TOKEN>"
                  "   # not in the values file;\n    # re-generate with "
                  "--auth-token <token> to embed it")
-    return f"""{_bundle_table(facts, o)}{_placeholder_block(o)}
+    return f"""{_bundle_table(facts, o)}{_placeholder_block(o)}{_ca_slot_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Install")}```
@@ -3196,7 +3297,7 @@ def docker_file_mounts(o):
 
     out = []
     if _ca_cfg(o):
-        out.append(mount("ca_bundle", o["ca_bundle"]))
+        out.append(mount("ca_bundle", ca_pem(o)))
     sv = _sv_docker_cfg(o)
     if sv and sv["cert"]:
         out += [mount("sv_tls_cert", sv["cert"]), mount("sv_tls_key", sv["key"])]
@@ -3852,7 +3953,7 @@ def _docker_readme(facts, o):
   store rather than adding to it, so it has to be a full bundle -- your CA *and*
   the public roots -- or the agent stops trusting BlazeMeter itself.
 """
-    return f"""{_bundle_table(facts, o)}{placeholders}
+    return f"""{_bundle_table(facts, o)}{placeholders}{_ca_slot_block(o)}
 ## Run it
 
 Either of these, not both -- they are the same container by two routes, so pick
@@ -4078,8 +4179,11 @@ def generate(facts, options):
     if o["cluster_rbac"]:
         out["bzm_clusterrole.yaml"] = _tpl("clusterrole.yaml").substitute(sub)
         out["bzm_clusterrolebinding.yaml"] = _tpl("clusterrolebinding.yaml").substitute(sub)
-    if ca and ca["mode"] in ("inline", "inject"):
-        out["bzm_cacerts.yaml"] = _ca_configmap(facts, o)
+    # The slot is here because it is the whole point of it: the bundle carries
+    # the ConfigMap, wired, and one edit finishes it. `existing` is the only
+    # mode that emits nothing, because there the object is somebody else's.
+    if ca and ca["mode"] in ("inline", "slot", "inject"):
+        out[CA_CONFIGMAP_FILE] = _ca_configmap(facts, o)
     if o["crane_hook"]:
         out[HOOK_FILE] = _tpl("cranehook.yaml").substitute(
             sub, **_hook_sub(o, sv))
@@ -4291,7 +4395,7 @@ def _readme(facts, o, files):
                   f"`{_crane_image(facts, o).rsplit(':', 1)[1]}` until you "
                   f"re-generate\n  and re-apply. An agent far enough behind "
                   f"loses BlazeMeter support.")
-    return f"""{_bundle_table(facts, o, token_row)}{_placeholder_block(o)}
+    return f"""{_bundle_table(facts, o, token_row)}{_placeholder_block(o)}{_ca_slot_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Apply")}```

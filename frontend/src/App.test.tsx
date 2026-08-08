@@ -929,7 +929,7 @@ test("a chosen certificate file fills the CA option, and one that is not PEM is 
     fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     fireEvent.click(await screen.findByRole("switch", { name: "Custom CA trust" }));
-    fireEvent.click(await screen.findByLabelText(/Paste PEM/));
+    fireEvent.click(await screen.findByLabelText(/I have the certificate/));
 
     const input = () => document.querySelector(
       'input[type="file"][accept^=".pem"]') as HTMLInputElement;
@@ -961,10 +961,13 @@ test("a chosen certificate file fills the CA option, and one that is not PEM is 
     // sentence describing a value that has gone is the same fault either way
     // round: an `openssl` refusal under a bundle that is now fine, or the green
     // count above a box the mode switch emptied.
-    fireEvent.change(screen.getByPlaceholderText("-----BEGIN CERTIFICATE-----"),
-                     { target: { value: pem } });
+    // The paste box is gone (#230), so the way the value changes under a note
+    // is Remove -- which is the same question the note has to answer: does it
+    // still describe what the bundle carries?
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(screen.queryByText(/openssl x509/)).toBeNull());
     expect(screen.queryByText(/corp-root\.pem — 2 certificates/)).toBeNull();
+    expect(screen.getByText(/No certificate chosen yet/)).toBeTruthy();
   });
 
 // -- the download step, through the page -------------------------------------
