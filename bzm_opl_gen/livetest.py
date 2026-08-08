@@ -41,6 +41,7 @@ import os
 import platform
 import re
 import subprocess
+import tempfile
 import time
 
 from . import generate
@@ -61,6 +62,16 @@ PROXY_NAME = "bzm-opl-proxy"
 # mitmproxy >= 12 dies with SIGILL on arm64 VMs, whichever docker runtime hosts
 # them; 11.1.3 is the newest tag that runs there. Pin it.
 PROXY_IMAGE = "mitmproxy/mitmproxy:11.1.3"
+
+# The rig's own trust-bundle ConfigMap, for --ca-mode existing. The key is
+# deliberately NOT `ca-bundle.crt`: that is what _ca_cfg falls back to when
+# ca_configmap_key is unset, so a run using it would pass whether or not the
+# configured key reached anything -- a proof that holds for the wrong reason,
+# which is the failure the negative control exists to stop elsewhere. A name of
+# the rig's own, so nothing a customer or a platform team owns is ever the
+# object under test (see ensure_ca_configmap, which refuses one it did not make).
+CA_RIG_CONFIGMAP = "bzm-opl-livetest-trust"
+CA_RIG_KEY = "corp-root.pem"
 PROXY_CA_PATH = "/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem"
 PROXY_PORT = 8080               # mitmdump's default; container-internal only
 # Sent to *.blazemeter.com through the proxy, so it must stay out of NO_PROXY.
@@ -93,11 +104,14 @@ def cli_tool():
 # about three things: the cluster, the namespace inside it, and the node's
 # /etc/hosts. Every field's default is the safe answer -- a run that fell over
 # before it learned anything owns nothing.
-class Owned(collections.namedtuple("Owned", "cluster namespace blackholed")):
+class Owned(collections.namedtuple(
+        "Owned", "cluster namespace blackholed ca_configmap")):
     __slots__ = ()
 
-    def __new__(cls, cluster=False, namespace=False, blackholed=()):
-        return super().__new__(cls, cluster, namespace, tuple(blackholed))
+    def __new__(cls, cluster=False, namespace=False, blackholed=(),
+                ca_configmap=False):
+        return super().__new__(cls, cluster, namespace, tuple(blackholed),
+                               ca_configmap)
 
 
 def minikube_profile_exists():
@@ -127,21 +141,27 @@ def minikube_profile_exists():
                for g in groups for p in g if isinstance(p, dict))
 
 
-def ensure_kind():
+def ensure_kind(announce=True):
     """True if this run created the cluster, False if it reused one already
-    there. The answer is what teardown is allowed to delete -- see #226."""
+    there. The answer is what teardown is allowed to delete -- see #226.
+
+    `announce` is off for the caller that throws the answer away. deploy()
+    calls this a second time, after run() has already created the cluster, and
+    the reuse message it printed then -- "this run will not delete it" -- was
+    the opposite of what teardown went on to do. A function that drops the
+    answer must not narrate it either."""
     out = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True)
     created = KIND_CLUSTER not in out.stdout.split()
     if created:
         _run(["kind", "create", "cluster", "--name", KIND_CLUSTER, "--wait", "120s"])
-    else:
+    elif announce:
         print(f"reusing the kind cluster '{KIND_CLUSTER}' -- this run will not "
               f"delete it")
     _run(["kubectl", "config", "use-context", f"kind-{KIND_CLUSTER}"])
     return created
 
 
-def ensure_minikube(insecure_registry=None, cni=None):
+def ensure_minikube(insecure_registry=None, cni=None, announce=True):
     """True if this run created the profile, False if one was already there.
 
     The recreate below is the one place the rig deletes a cluster it did not
@@ -183,8 +203,9 @@ def ensure_minikube(insecure_registry=None, cni=None):
             cmd.append(f"--cni={cni}")
         _run(cmd)
     if existed and not recreated:
-        print(f"reusing the minikube profile '{MINIKUBE_PROFILE}' -- "
-              f"this run will not delete it")
+        if announce:
+            print(f"reusing the minikube profile '{MINIKUBE_PROFILE}' -- "
+                  f"this run will not delete it")
         if insecure_registry:
             # True of a stopped profile too: --insecure-registry applies when
             # the profile is created, and starting one is not creating it.
@@ -299,19 +320,73 @@ def proxy_flows(host_substr="blazemeter.com"):
     return [l for l in (out.stdout + out.stderr).splitlines() if host_substr in l]
 
 
-def proxy_overlay(host, port, ca_pem, user=None, password=None):
-    """generate() options that point the agent at the local mitm proxy and
-    make it trust the mitm CA (inline mode -- the generator owns the ConfigMap).
-    Clears the other CA modes so _ca_cfg() doesn't see two."""
+def proxy_overlay(host, port, ca_pem, user=None, password=None,
+                  ca_mode="inline"):
+    """generate() options that point the agent at the local mitm proxy and make
+    it trust the mitm CA.
+
+    Two CA modes, because both are real customer configurations and only one had
+    ever been deployed under interception (#227):
+
+      inline    -- the generator owns the ConfigMap and writes the PEM into it.
+      existing  -- the *rig* owns a ConfigMap (ensure_ca_configmap) and the
+                   bundle only references it, which is the mode BlazeMeter
+                   recommend and nearly every customer takes.
+
+    Whichever is asked for, the other two are cleared: the overlay is merged
+    onto a profile.json that may already carry any of the three, and _ca_cfg
+    refuses a bundle where two are set. So this is not "set the mode" but
+    "replace whatever mode was there", which is why every key is written on
+    both branches rather than only the one being turned on."""
     url = f"http://{host}:{port}"
     proxy = {"http": url, "https": url, "no_proxy": PROXY_NO_PROXY}
     if user:
         proxy["username"] = user
         if password:
             proxy["password"] = password
-    return {"proxy": proxy, "ca_bundle": ca_pem,
-            "ca_existing_configmap": None, "ca_configmap_key": None,
+    existing = ca_mode == "existing"
+    return {"proxy": proxy,
+            "ca_bundle": None if existing else ca_pem,
+            "ca_existing_configmap": CA_RIG_CONFIGMAP if existing else None,
+            "ca_configmap_key": CA_RIG_KEY if existing else None,
             "ca_openshift_inject": False}
+
+
+def ensure_ca_configmap(cli, namespace, ca_pem,
+                        name=None, key=None):
+    """Create the rig's trust-bundle ConfigMap. True if this run created it.
+
+    Written with `--from-file=<key>=<path>`, which is the explicit form the
+    generated README tells a customer to use and for the same reason: the bare
+    `--from-file=<path>` BlazeMeter document keys the entry on the file's own
+    basename, so a temp file would land under a key nothing mounts and the pod
+    would get an *empty* bundle rather than a missing one.
+
+    **It refuses one it did not create.** The cluster's rule and the namespace's,
+    one level further down: this replaces the entire content of a trust bundle,
+    so a name that is already taken is somebody else's and the rig does not know
+    whose. In a namespace this run created the case cannot arise."""
+    name, key = name or CA_RIG_CONFIGMAP, key or CA_RIG_KEY
+    out = subprocess.run([cli, "-n", namespace, "get", "cm", name],
+                         capture_output=True, text=True)
+    if out.returncode == 0:
+        raise RuntimeError(
+            f"a ConfigMap named {name} already exists in namespace "
+            f"{namespace}; this run did not create it and will not replace its "
+            f"contents. Remove it, or run against a namespace of your own.")
+    # A temp file rather than a heredoc: --from-file is the only form that keys
+    # the entry explicitly, and it reads a path.
+    fd, path = tempfile.mkstemp(prefix="bzm-opl-ca-", suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(ca_pem)
+        _run([cli, "-n", namespace, "create", "configmap", name,
+              f"--from-file={key}={path}"], check=True)
+    finally:
+        os.unlink(path)
+    print(f"created ConfigMap {name} in {namespace} holding the MITM CA "
+          f"under key {key}")
+    return True
 
 
 def verify_proxy_reachable(host, cluster, user=None, password=None):
@@ -332,7 +407,7 @@ def verify_proxy_reachable(host, cluster, user=None, password=None):
     return False
 
 
-def ensure_cluster(cluster, insecure_registry=None, cni=None):
+def ensure_cluster(cluster, insecure_registry=None, cni=None, announce=True):
     """Idempotent -- safe to call before deploy() when something (the proxy
     overlay) needs the node up early.
 
@@ -340,9 +415,9 @@ def ensure_cluster(cluster, insecure_registry=None, cni=None):
     licenses teardown to delete it. `current` is never ours: the run was
     pointed at whatever kubectl already had."""
     if cluster == "kind":
-        return ensure_kind()
+        return ensure_kind(announce=announce)
     if cluster == "minikube":
-        return ensure_minikube(insecure_registry, cni=cni)
+        return ensure_minikube(insecure_registry, cni=cni, announce=announce)
     return False
 
 
@@ -1006,10 +1081,19 @@ def proxy_log_failures(before=None):
 def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
                      timeout=180):
     """Deploy the same thing minus the CA and require it to fail. A rig that
-    cannot fail proves nothing about the run that passes."""
+    cannot fail proves nothing about the run that passes.
+
+    **All three modes are cleared, not `ca_bundle` alone.** Clearing the inline
+    PEM is the whole answer only for an inline run; for an existing-ConfigMap
+    run it leaves the reference standing, and a Deployment referencing a
+    ConfigMap that is not there does not start at all -- so nothing ever logs
+    CERTIFICATE_VERIFY_FAILED and the control fails having tested nothing. What
+    is wanted is an agent that runs and cannot verify, which is the bundle with
+    no CA configured at all."""
     from .generate import CA_CONFIGMAP
     print("negative control: deploying without the CA bundle, expecting TLS failure")
-    regenerate({**overlay, "ca_bundle": None})
+    regenerate({**overlay, "ca_bundle": None, "ca_existing_configmap": None,
+                "ca_configmap_key": None, "ca_openshift_inject": False})
     stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
     if os.path.exists(stale):
         os.remove(stale)          # else deploy() re-applies the previous render
@@ -1546,7 +1630,11 @@ def deploy(manifest_dir, namespace, cluster="current", insecure_registry=None):
     # and keeps the answer. A caller reaching deploy() on its own path and then
     # calling teardown() gets owned.cluster False and leaks a cluster it built,
     # which is the safe direction of the two.
-    ensure_cluster(cluster, insecure_registry)
+    #
+    # ...and announce=False for the same reason. This call happens after run()
+    # has created the cluster, so it finds one and would report "reusing ...
+    # this run will not delete it" about a profile teardown is about to delete.
+    ensure_cluster(cluster, insecure_registry, announce=False)
     cli = cli_tool()
     _run([cli, "get", "ns", namespace], check=False)
     _run([cli, "create", "ns", namespace], check=False)
@@ -1610,6 +1698,12 @@ def teardown(manifest_dir, namespace, cluster="current", owned=None):
         print(f"deleting the namespace '{namespace}', which this run created")
         _run([cli, "delete", "ns", namespace, "--ignore-not-found"], check=False)
         return
+    # Reached only where the namespace survives, so the ConfigMap would too --
+    # and ensure_ca_configmap refuses one it did not create, which would make
+    # the next run into this namespace fail over an object this rig left there.
+    if owned.ca_configmap:
+        _run([cli, "-n", namespace, "delete", "cm", CA_RIG_CONFIGMAP,
+              "--ignore-not-found"], check=False)
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
     _run([cli, "-n", namespace, "delete", "networkpolicy", EGRESS_POLICY_NAME,
@@ -1737,10 +1831,15 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         facts=None, local_registry=None,
         local_proxy=None, proxy_user=None, proxy_pass=None, regenerate=None,
         negative_control_check=True, opts=None, contain_egress=False,
-        run_test=None, engine_cpu="1", engine_mem="4Gi"):
+        run_test=None, engine_cpu="1", engine_mem="4Gi", ca_mode="inline"):
     """regenerate(overlay) -- callback that re-renders the manifests in
     manifest_dir with extra generate() options merged in. Required with
     --local-proxy, whose CA only exists once the proxy container is up.
+
+    ca_mode -- which CA-trust configuration is under test, "inline" (the
+    generator owns the ConfigMap) or "existing" (the rig creates one and the
+    bundle references it). Only meaningful with --local-proxy, which is what
+    makes the CA load-bearing.
 
     opts -- the generate() options the manifests were built from; enables the
     read-back assertions in assert_live_config()."""
@@ -1808,8 +1907,14 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                   f"MITM CA bundle {len(ca_pem)} bytes")
             if not verify_proxy_reachable(host, cluster, proxy_user, proxy_pass):
                 return False
+            # Before the negative control, which deploys with no CA configured
+            # at all and so never references this. One creation, one owner.
+            if ca_mode == "existing":
+                owned = owned._replace(ca_configmap=ensure_ca_configmap(
+                    cli_tool(), namespace, ca_pem))
             overlay = {**proxy_overlay(host, PROXY_PORT, ca_pem,
-                                       proxy_user, proxy_pass), **engine_overlay}
+                                       proxy_user, proxy_pass, ca_mode),
+                       **engine_overlay}
             if contain_egress:
                 apply_egress_policy(cli_tool(), namespace, host,
                                     manifest_dir)
