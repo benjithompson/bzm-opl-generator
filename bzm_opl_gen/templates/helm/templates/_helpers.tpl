@@ -189,10 +189,18 @@ on it, so each message names the fix.
 {{/*
 The generator writes <PLACEHOLDER> into a value somebody left blank, so that a
 bundle handed on unfinished says so instead of carrying an empty string. The
-flat manifests are stopped by the API server -- <PLACEHOLDER> is not a legal
-RFC 1123 name -- but a chart has values the API server never sees as names
-(authToken, privateRegistry, the proxy URLs), so `helm install` has to be the
-one that refuses those. First, and before the emptiness checks below, because
+API server stops a marked *name* -- <PLACEHOLDER> is not a legal RFC 1123 name
+-- and nothing stops a marked *value*: authToken, caBundle.pem, privateRegistry
+and the proxy URLs are a Secret entry, a ConfigMap entry and environment
+variables, and all of them apply cleanly (measured, #230). So `helm install` is
+the only thing between those and an agent that deploys and then fails, which is
+why this list is the values rather than the names.
+
+caBundle.pem is deliberately included even though `ca_bundle_slot` renders it on
+purpose: a slot is a bundle waiting for a certificate, and installing one is
+still installing an agent that trusts nothing extra. The flat manifests cannot
+refuse it -- they have no install step -- so their README prints the grep
+instead. First, and before the emptiness checks below, because
 "you left this blank" is the more specific answer and the one that names the
 form it was left blank on.
 */}}

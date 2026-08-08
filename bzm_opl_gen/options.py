@@ -412,6 +412,18 @@ OPTIONS = [
             "last-applied-configuration annotation, which is why anything over 200KB "
             "applies `--server-side`."),
     Option(
+        "ca_bundle_slot", "boolean", "CA trust",
+        summary="Emit the CA ConfigMap with the PEM slot marked, for a certificate not yet in hand.",
+        doc="The bundle carries the CA ConfigMap wired to the agent, with "
+            "`<PLACEHOLDER>` where the PEM goes. For the common moment: crane "
+            "is failing TLS and the certificate is still with the platform "
+            "team. One edit finishes it, and nothing else has to be wired. "
+            "Refused beside `ca_bundle` -- supplying the PEM and leaving a slot "
+            "for it are two answers to one question. The cluster formats are "
+            "**not** stopped from applying it (a ConfigMap value is not a "
+            "name), which is why the README prints the grep that catches it; "
+            "the chart and the docker bundle both refuse it outright."),
+    Option(
         "ca_existing_configmap", "string", "CA trust",
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",
         doc="Reference a platform-owned trust-bundle ConfigMap -- recommended, "

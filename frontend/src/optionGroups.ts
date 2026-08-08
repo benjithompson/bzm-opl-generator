@@ -19,7 +19,7 @@ import { envIncomplete } from "./env";
 // What the bundle is. Only two things here need it: the filter at the foot of
 // this file, and the one group whose recommended mode depends on the platform.
 // formats.ts imports nothing of ours, so this direction is the only one.
-import { Applies, isDocker, keysApply } from "./formats";
+import { Applies, keysApply } from "./formats";
 
 export type GroupId =
   "registry" | "proxy" | "ca" | "sched" | "security" | "sv" | "svDocker";
@@ -129,11 +129,18 @@ export const isOpenshift = (o: Options) =>
   o.platform === "openshift" && o.openshift_cluster !== false;
 
 // -- CA trust ----------------------------------------------------------------
-// One-of: existing ConfigMap | inline PEM | OpenShift injection.
-export type CaMode = "none" | "existing" | "inline" | "inject";
+// One-of: a slot to fill in | the PEM now | somebody else's ConfigMap |
+// OpenShift injection. `slot` is first because it is the common moment (#230):
+// crane is failing TLS and the certificate is still with the platform team, so
+// what is wanted is the ConfigMap manifest wired and waiting, not a reference
+// to an object nobody has made.
+export type CaMode = "none" | "slot" | "inline" | "existing" | "inject";
 
 export function caModeOf(o: Options): CaMode {
-  return o.ca_existing_configmap != null ? "existing"
+  // Before `inline`, because the two are the same ConfigMap and the slot is the
+  // more specific answer -- `_ca_cfg` refuses them together for that reason.
+  return o.ca_bundle_slot ? "slot"
+    : o.ca_existing_configmap != null ? "existing"
     : o.ca_bundle != null ? "inline"
     : o.ca_openshift_inject ? "inject" : "none";
 }
@@ -145,7 +152,10 @@ export function caModePatch(o: Options, mode: CaMode): OptionPatch {
   return {
     ca_existing_configmap: mode === "existing" ? (o.ca_existing_configmap ?? "") : null,
     ca_configmap_key: mode === "existing" ? o.ca_configmap_key : null,
+    // Never both: the generator refuses a slot beside a PEM, because supplying
+    // the certificate and leaving a gap for it are two answers to one question.
     ca_bundle: mode === "inline" ? (o.ca_bundle ?? "") : null,
+    ca_bundle_slot: mode === "slot",
     ca_openshift_inject: mode === "inject",
   };
 }
@@ -346,7 +356,8 @@ export const OPTION_GROUPS: OptionGroup[] = [
     title: "Custom CA trust",
     hint: "TLS-intercepting proxy / private CAs — mounted into crane + engines",
     functionalities: [],
-    keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle", "ca_openshift_inject"],
+    keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle",
+           "ca_bundle_slot", "ca_openshift_inject"],
     // Per mode, which is why this is a function. `ca_configmap_key` is not here
     // in either: it defaults to ca-bundle.crt, and OpenShift injection fills a
     // ConfigMap this bundle names itself, so that mode needs nothing typed.
@@ -354,17 +365,20 @@ export const OPTION_GROUPS: OptionGroup[] = [
       const mode = caModeOf(o);
       if (mode === "existing") return ["ca_existing_configmap"];
       if (mode === "inline") return ["ca_bundle"];
+      // `slot` requires nothing, and that is the whole point of it: the
+      // certificate is deliberately absent, so marking it would put "you left
+      // this blank" over the one mode that says so itself.
       return [];
     },
     detect: (o) => caModeOf(o) !== "none",
-    // On lands on the recommended mode rather than on no mode at all, which
-    // would show three radios and no fields. Which one is recommended depends
-    // on the format, and this is the one place in this file that reads it: the
-    // other two modes name a ConfigMap, and a docker bundle has none -- so
-    // seeding "existing" there would write an option the bundle's README then
-    // reports as set-and-not-carried, off a switch nobody aimed at it.
-    enable: (o) => caModePatch(
-      o, isDocker(String(o.output_format ?? "")) ? "inline" : "existing"),
+    // On lands on `slot`, on every format. It is the only mode that is
+    // complete the moment it is picked -- the bundle carries the ConfigMap (a
+    // file, on docker) wired and waiting -- so switching the group on can no
+    // longer produce a configuration that blocks the download until something
+    // is typed. It also needs no format branch, which the old seed did: the two
+    // ConfigMap-naming modes reach nothing in a docker bundle, so `existing`
+    // there wrote an option the README then reported as set-and-not-carried.
+    enable: (o) => caModePatch(o, "slot"),
     disable: (o) => caModePatch(o, "none"),
   },
   {

@@ -3391,3 +3391,91 @@ def test_extra_env_travels_in_the_profile():
         "ship_id": "bbb222", "extra_env": {"PREFERRED_INTERFACE": "eth1"},
     })["profile.json"])
     assert profile["extra_env"] == {"PREFERRED_INTERFACE": "eth1"}
+
+
+# -- the bundle that is complete except for the certificate (#230) ------------
+#
+# The common moment is not "I have a PEM" but "crane is failing TLS and I am
+# waiting on my platform team". `ca_bundle_slot` is that answer: the bundle
+# carries bzm_cacerts.yaml wired to the Deployment, with the PEM slot marked.
+# It is a deliberate choice, not a field somebody forgot, which is the whole
+# difference between it and leaving `ca_bundle` blank.
+
+
+def test_the_slot_emits_a_configmap_wired_like_any_other():
+    files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True})
+    _all_yaml_parse(files)
+    assert "bzm_cacerts.yaml" in files
+    cm = yaml.safe_load(files["bzm_cacerts.yaml"])
+    assert cm["data"][gen.CA_FILENAME].strip() == gen.PLACEHOLDER
+    # ...and everything downstream is identical to a filled-in inline bundle:
+    # the point is a bundle that needs one edit, not one that needs wiring.
+    d = yaml.safe_load(files["bzm_deployment.yaml"])
+    spec = d["spec"]["template"]["spec"]
+    assert spec["volumes"][0]["configMap"]["name"] == gen.CA_CONFIGMAP
+    assert spec["containers"][0]["volumeMounts"][0]["mountPath"] == gen.CA_MOUNT_PATH
+    conf = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert conf["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}"
+
+
+def test_the_slot_is_findable_in_the_file_somebody_edits():
+    """The manifest is the artefact a human opens, and a bare `<PLACEHOLDER>`
+    says nothing about what belongs there. A YAML comment never reaches the
+    applied object, so it costs nothing at apply time."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True})
+    text = files["bzm_cacerts.yaml"]
+    assert "#" in text and "BEGIN CERTIFICATE" in text
+    # It stays a comment: the ConfigMap still parses, and the data is the marker
+    # alone rather than the marker plus prose.
+    assert yaml.safe_load(text)["data"][gen.CA_FILENAME].strip() == gen.PLACEHOLDER
+
+
+def test_a_filled_bundle_carries_no_slot_comment():
+    pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    text = gen.generate(FACTS, {"namespace": "ns1",
+                                "ca_bundle": pem})["bzm_cacerts.yaml"]
+    assert "paste" not in text.lower()
+
+
+def test_the_slot_and_a_pem_are_two_answers_to_one_question():
+    """Not a merge and not a precedence: somebody has said both `here is the
+    certificate` and `the certificate is coming`, and only they know which."""
+    with pytest.raises(ValueError, match="ca_bundle_slot"):
+        gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True,
+                             "ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n"
+                                          "-----END CERTIFICATE-----"})
+
+
+def test_the_slot_is_one_of_the_ca_modes_not_a_fourth_thing():
+    """It competes with the other modes like any other: a bundle cannot both
+    reference somebody's ConfigMap and carry its own."""
+    with pytest.raises(ValueError, match="choose one CA mode"):
+        gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True,
+                             "ca_existing_configmap": "corp-trust"})
+
+
+def test_the_slot_says_what_is_missing_rather_than_that_somebody_forgot():
+    """`placeholder_options` reports fields nobody answered, and this one was
+    answered -- with `later`. Reporting it there would put "this bundle is not
+    finished" over a bundle that is exactly what was asked for, beside a
+    sentence claiming the API server will reject it, which for a ConfigMap
+    value it will not."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "de" * 32,
+                                 "ca_bundle_slot": True})
+    readme = files["README.md"]
+    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
+    assert "not finished" not in readme
+    # ...but it is not silent either: the bundle cannot work until the PEM
+    # lands, and the README is where the person applying it finds that out.
+    assert "bzm_cacerts.yaml" in readme
+    assert "certificate" in readme.lower()
+
+
+def test_the_docker_bundle_gets_the_same_slot_in_its_own_shape():
+    """Docker writes the PEM as a file beside the script rather than into a
+    ConfigMap, and its run script already refuses a placeholder file -- so the
+    slot needs no new guard there, only the file."""
+    files = gen.generate(FACTS, {"output_format": "docker", "ship_id": "bbb222",
+                                 "auth_token": "de" * 32,
+                                 "ca_bundle_slot": True})
+    assert gen.PLACEHOLDER in files[gen.DOCKER_CA_FILE]

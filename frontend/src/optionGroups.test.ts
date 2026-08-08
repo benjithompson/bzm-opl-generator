@@ -31,6 +31,7 @@ const DETECTS: [GroupId, string, unknown][] = [
   ["proxy", "proxy", { http: "http://proxy:3128" }],
   ["ca", "ca_existing_configmap", "corp-trust-bundle"],
   ["ca", "ca_bundle", "-----BEGIN CERTIFICATE-----"],
+  ["ca", "ca_bundle_slot", true],
   ["ca", "ca_openshift_inject", true],
   ["sched", "tolerations", [{ key: "lifecycle" }]],
   ["sched", "node_selector", { pool: "loadtest" }],
@@ -86,6 +87,7 @@ const FULL: Options = {
   ca_existing_configmap: "corp-trust-bundle",
   ca_configmap_key: "ca-bundle.crt",
   ca_bundle: "-----BEGIN CERTIFICATE-----",
+  ca_bundle_slot: true,
   ca_openshift_inject: true,
   sv_hostname: "C123ABCXYZ",
   sv_tls_cert: "-----BEGIN CERTIFICATE-----",
@@ -215,7 +217,7 @@ describe("switching a group off", () => {
       proxy: { proxy: null },
       ca: {
         ca_existing_configmap: null, ca_configmap_key: null,
-        ca_bundle: null, ca_openshift_inject: false,
+        ca_bundle: null, ca_bundle_slot: false, ca_openshift_inject: false,
       },
       sched: { tolerations: null, node_selector: null,
                engine_tolerations: null, engine_node_selector: null },
@@ -275,20 +277,30 @@ describe("switching a group on", () => {
     expect(GROUP_BY_ID.sv.enable({ sv_ingress: "contour" })).toEqual({});
   });
 
-  it("starts CA trust on the existing-ConfigMap mode", () => {
+  it("starts CA trust on the slot, which is complete the moment it is picked", () => {
+    /** #230. It used to start on the existing-ConfigMap mode, which needs a
+     *  name typed before the bundle can be downloaded -- so switching the group
+     *  on created a blocker. The slot needs nothing: the bundle carries the
+     *  ConfigMap wired, with the PEM to be pasted in later. */
     const patch = GROUP_BY_ID.ca.enable({});
     expect(detectGroups({ ...patch }, allGroupsOff()).ca).toBe(true);
     expect(patch).toEqual({
-      ca_existing_configmap: "", ca_configmap_key: undefined,
-      ca_bundle: null, ca_openshift_inject: false,
+      ca_existing_configmap: null, ca_configmap_key: null,
+      ca_bundle: null, ca_bundle_slot: true, ca_openshift_inject: false,
     });
+    expect(GROUP_BY_ID.ca.requires!({ ...patch })).toEqual([]);
   });
 
-  it("keeps a CA ConfigMap that is already named", () => {
+  it("does not carry a named ConfigMap into the mode that has no use for one", () => {
+    /** The old seed kept `ca_existing_configmap` so switching the group off and
+     *  on again did not lose it. The seed is a different mode now, and a mode
+     *  writes every CA key on purpose (see caModePatch) -- two set at once is
+     *  what `_ca_cfg` refuses. Picking the existing-ConfigMap radio is what
+     *  brings the box back, empty, which is the same as any other mode. */
     expect(GROUP_BY_ID.ca.enable({ ca_existing_configmap: "corp", ca_configmap_key: "k" }))
       .toEqual({
-        ca_existing_configmap: "corp", ca_configmap_key: "k",
-        ca_bundle: null, ca_openshift_inject: false,
+        ca_existing_configmap: null, ca_configmap_key: null,
+        ca_bundle: null, ca_bundle_slot: true, ca_openshift_inject: false,
       });
   });
 });

@@ -236,6 +236,8 @@ def cmd_generate(a):
         if path:
             with open(path) as fh:
                 opts[key] = fh.read()
+    if getattr(a, "ca_bundle_slot", False):
+        opts["ca_bundle_slot"] = True
     if a.ca_configmap:
         name, _, key = a.ca_configmap.partition(":")
         opts["ca_existing_configmap"] = name
@@ -1022,6 +1024,10 @@ def main():
                    help='engines only, overriding --node-selector -- the dedicated engine pool. JSON object, e.g. \'{"pool":"bzm-engines"}\'. Pass \'{}\' to let engines land anywhere.')
     g.add_argument("--ca-bundle", dest="ca_bundle", metavar="PEM_FILE",
                    help="inline CA mode: PEM file -> generator creates the ConfigMap")
+    g.add_argument("--ca-placeholder", dest="ca_bundle_slot", action="store_true",
+                   help="CA ConfigMap in the bundle, wired, with the PEM slot "
+                        "marked -- for when crane is failing TLS and the "
+                        "certificate is still with the platform team")
     g.add_argument("--ca-configmap", dest="ca_configmap", metavar="NAME[:KEY]",
                    help="reference an existing trust-bundle ConfigMap the platform "
                         "team owns (key defaults to ca-bundle.crt)")
