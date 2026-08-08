@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from bzm_opl_gen import core, server  # noqa: E402
+from bzm_opl_gen import core, server, ui_build  # noqa: E402
 from test_generate import FACTS  # noqa: E402
 # The same fakes tests/test_core.py and tests/test_cli.py drive, for the same
 # reason they share them: three surfaces call the same core functions, and a
@@ -2302,40 +2302,106 @@ def test_an_agent_s_heartbeat_is_never_cached(monkeypatch):
     assert [x[0] for x in c.calls].count("private_location") == 3
 
 
+def _page_and_sources(monkeypatch, tmp_path, sources=None,
+                      recorded="match"):
+    """Point the routes at a frontend and a built page of this test's making.
+
+    `recorded` is what the built page records: "match" for the fingerprint of
+    the sources beside it, None for a page built before #237, or any string for
+    a page built from something else.
+    """
+    frontend = tmp_path / "frontend"
+    if sources is not None:
+        (frontend / "src").mkdir(parents=True)
+        for rel, body in sources.items():
+            (frontend / rel).write_text(body)
+    dist = tmp_path / "ui_dist"
+    dist.mkdir()
+    (dist / ui_build.BUILT_PAGE).write_text("<html></html>")
+    if recorded == "match":
+        recorded = ui_build.source_fingerprint(str(frontend))
+    if recorded is not None:
+        (dist / ui_build.FINGERPRINT_FILE).write_text(json.dumps(
+            {"algorithm": ui_build.ALGORITHM, "fingerprint": recorded}))
+    monkeypatch.setattr(server, "UI_DIST", str(dist))
+    monkeypatch.setattr(server, "_FRONTEND", str(frontend))
+    return frontend
+
+
 def test_build_route_says_what_is_being_served(monkeypatch, tmp_path):
     """#224. A local service serves the checkout that installed it, and nothing
-    rebuilds ui_dist -- so the page can be older than the code behind it for
+    rebuilds ui_dist -- so the page can stop matching the code behind it for
     days. The symptom is a route answering 404, which the page correctly reads
     as "not read yet" and responds to by showing every field. The server was
     the last thing suspected, so it now says."""
     body = client.get("/api/build").json()
     assert set(body) == {"version", "built", "stale", "commit"}
 
-    dist = tmp_path / "ui_dist"
-    dist.mkdir()
-    (dist / "index.html").write_text("<html></html>")
-    src = tmp_path / "frontend" / "src"
-    src.mkdir(parents=True)
-    monkeypatch.setattr(server, "UI_DIST", str(dist))
-    monkeypatch.setattr(server, "_FRONTEND_SRC", str(src))
+    frontend = _page_and_sources(monkeypatch, tmp_path, {"src/App.tsx": "x"})
+    assert server.build_state()["stale"] is False
 
-    (src / "App.tsx").write_text("x")
-    os.utime(dist / "index.html", (1000, 1000))
-    os.utime(src / "App.tsx", (2000, 2000))
+    (frontend / "src" / "App.tsx").write_text("y")
     assert server.build_state()["stale"] is True
 
-    os.utime(dist / "index.html", (3000, 3000))
+
+def test_the_route_answers_staleness_by_content_and_not_by_a_clock(
+        monkeypatch, tmp_path):
+    """#238. `git pull`, `git checkout` and a branch switch rewrite the mtime of
+    every file they touch and change nothing about the build, so the old rule
+    raised the flag after a fast-forward through two merged pull requests with
+    the built output byte-identical (measured 2026-08-08). A banner that cries
+    wolf after every pull is one people learn to ignore, which is precisely what
+    the failure it exists for cannot afford."""
+    frontend = _page_and_sources(monkeypatch, tmp_path, {"src/App.tsx": "x"})
+    touched = frontend / "src" / "App.tsx"
+    os.utime(touched, (10 ** 10, 10 ** 10))     # newer than the built page
     assert server.build_state()["stale"] is False
+
+
+def test_a_page_that_records_nothing_is_its_own_answer(monkeypatch, tmp_path):
+    """The fourth state, and the served value is the string the page checks.
+
+    A built page from before #237 has sources beside it and records nothing
+    about which sources it came from. That is *not read*: False would claim a
+    check nobody performed, True would warn about every such checkout until
+    somebody rebuilds, and the wheel's None would make "can never be checked"
+    and "rebuild and it can be" one answer."""
+    _page_and_sources(monkeypatch, tmp_path, {"src/App.tsx": "x"}, recorded=None)
+    assert server.build_state()["stale"] == "unrecorded"
+    assert client.get("/api/build").json()["stale"] == "unrecorded"
 
 
 def test_a_wheel_has_no_source_to_be_stale_against(monkeypatch, tmp_path):
     """`stale` is None off a checkout, never False. An installed wheel ships a
-    built ui_dist and no frontend/src, so nothing can be compared -- and False
-    there would claim the page had been checked and found current. Same rule as
-    every other unread in this codebase."""
-    dist = tmp_path / "ui_dist"
-    dist.mkdir()
-    (dist / "index.html").write_text("<html></html>")
-    monkeypatch.setattr(server, "UI_DIST", str(dist))
-    monkeypatch.setattr(server, "_FRONTEND_SRC", str(tmp_path / "nope"))
+    built ui_dist and no frontend, so nothing can be compared -- and False there
+    would claim the page had been checked and found current. Distinct from the
+    unrecorded answer above: nothing anybody does to a wheel can answer this
+    question, where a rebuild answers that one. Same rule as every other unread
+    in this codebase."""
+    _page_and_sources(monkeypatch, tmp_path, sources=None, recorded="deadbeef")
     assert server.build_state()["stale"] is None
+    assert client.get("/api/build").json()["stale"] is None
+
+
+def test_only_a_stale_page_is_worded_as_a_warning(monkeypatch, capsys):
+    """The startup line, all four answers, and the trap under it: `"unrecorded"`
+    is a non-empty string, so the `if build_state()["stale"]` this used to be
+    would print the `!!` warning for one of the two states that are not one.
+    Each answer says which it is, or says nothing."""
+    def printed(state):
+        monkeypatch.setattr(server, "build_state",
+                            lambda: {"stale": state}, raising=True)
+        capsys.readouterr()
+        _served(monkeypatch)
+        return capsys.readouterr().out
+
+    warned = printed(True)
+    assert "!!" in warned and "not built from" in warned
+
+    noted = printed(ui_build.UNRECORDED)
+    assert "!!" not in noted                    # nothing is known to be wrong
+    assert "records nothing about the sources" in noted
+    assert "npm run build" in noted             # and a rebuild answers it
+
+    assert "npm run build" not in printed(False)
+    assert "npm run build" not in printed(None)

@@ -49,11 +49,11 @@ Python buffers stdout when redirected, so the log stays empty until exit;
 `kubectl get pods` is the live view.
 
 **Frontend — `cd frontend && npx vitest run && npx tsc --noEmit`.** Logic lives
-in plain modules, each with its own `.test.ts` — `api`, `attempt`, `capacity`,
-`engineSize`, `env`, `foldSet`, `formats`, `heartbeat`, `manualIds`, `openRow`,
-`optionGroups`, `sched`, `session`, `sv`, `text`, `token` — and components wire
-them. Two suites do render (`App`, `CapacityView`), for the flows only an effect
-reaches. `noUnusedLocals` is on, so a binding left behind by a refactor fails
+in plain modules, each with its own `.test.ts` — `api`, `attempt`, `build`,
+`capacity`, `engineSize`, `env`, `foldSet`, `formats`, `heartbeat`, `manualIds`,
+`openRow`, `optionGroups`, `sched`, `session`, `sv`, `text`, `token` — and
+components wire them. Two suites do render (`App`, `CapacityView`), for the
+flows only an effect reaches. `noUnusedLocals` is on, so a binding left behind by a refactor fails
 the typecheck rather than accumulating.
 
 ## Account facts
@@ -873,6 +873,22 @@ restricts the endpoint, and neither says the thing asked for is gone. The
 browser half is `frontend/src/stale.ts`, which branches on `ApiError.status` and
 on nothing else — never on the message, and never on a status-less failure like
 fetch rejecting because the server is not running.
+
+A sixth, about this repo's own build: **`ui_build.staleness` answers four
+things, and two of them are not a stale page** (#238). The built page under
+`bzm_opl_gen/ui_dist` records a fingerprint of the sources it was built from,
+and comparing it with the sources on disk gives True, False, `"unrecorded"` — a
+page built before that record existed, which is **not read** — and None, the
+installed wheel, which has no `frontend` for the question to be about. Each of
+the three shortcuts loses something: False claims a check nobody performed,
+True warns about every checkout until somebody rebuilds, and folding it into
+None makes "can never be checked" and "rebuild and it can be" one answer.
+`UNRECORDED` is a string on purpose, so `is True` and `is False` both miss it —
+`server.main` prints a `!!` warning on one of the four, and the plain `if` it
+used to be would have shouted about a non-empty string. It replaced an mtime
+comparison, which is the same rule from the other side: a timestamp answered a
+question nobody asked, so every `git pull` read as a stale page. The banner is
+`frontend/src/build.ts`, which owns the wording and the tone for all four.
 
 **The page has a Refresh, and it is a button because the staleness is rare.**
 What the page holds ages while it is open (an agent a colleague created, a
