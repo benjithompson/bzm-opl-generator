@@ -58,12 +58,12 @@ spec:
           image: {{ include "bzm-opl.craneImage" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
-            {{- if eq .Values.platform "openshift" }}
-            # restricted-v2 SCC assigns an in-range UID; leave runAsUser unset
-            # for portability.
             runAsNonRoot: true
-            {{- else }}
-            runAsNonRoot: true
+            {{- /*
+              A UID only off openshift, where the restricted-v2 SCC assigns an
+              in-range one and naming our own costs portability for nothing.
+            */}}
+            {{- if ne .Values.platform "openshift" }}
             runAsUser: {{ .Values.runAsUser }}
             runAsGroup: {{ .Values.runAsUser }}
             {{- end }}
