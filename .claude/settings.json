@@ -14,6 +14,7 @@
       "Bash(kubectl version:*)",
       "Bash(kubectl diff:*)",
       "Bash(kubectl rollout status:*)",
+      "Bash(kubectl scale:*)",
       "Bash(kubectl config get-contexts:*)",
       "Bash(kubectl config current-context:*)",
       "Bash(kubectl config use-context:*)",
