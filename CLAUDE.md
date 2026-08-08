@@ -221,8 +221,19 @@ missing tools. The rest is what it cannot fix for you.
 - **arm64:** BlazeMeter images are amd64-only and run under emulation. Engines
   are slow; size them down (`--engine-cpu 1 --engine-mem 4Gi`) or they stay
   Pending. **Pin `mitmproxy:11.1.3`** — 12+ dies with SIGILL on arm64 VMs.
-- `minikube -p bzm-opl-test` is disposable: the rig deletes and recreates that
-  profile freely and touches only its own named containers.
+- **The rig deletes a cluster only if it created one** (#226). `--cluster kind`
+  and `--cluster minikube` both reuse a `bzm-opl-test` that is already there,
+  and `ensure_cluster` returns which of the two happened; `teardown` deletes the
+  cluster on that answer alone, and otherwise removes just the objects it
+  applied. The default is False, so a run that falls over before the cluster is
+  up leaves everything alone. **Existing and running are two questions**, and
+  only the first decides ownership: a *stopped* minikube profile is started and
+  still not the run's, or the rule would delete somebody's cluster with one
+  extra step in it. It used to delete unconditionally, and the name it
+  deletes is the standing kind testbed's — two agents and a serving virtual
+  service. The one deliberate exception is `--contain-egress` recreating a
+  running minikube profile with no policy enforcer, which is announced and which
+  makes the profile the run's own.
 
 ## Architecture
 

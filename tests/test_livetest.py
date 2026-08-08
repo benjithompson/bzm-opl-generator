@@ -1231,3 +1231,120 @@ def test_sv_read_does_not_hang_on_an_unreachable_api_server(monkeypatch):
     read = livetest.sv_read("ns1", timeout=3)
     assert read.status == livetest.SV_READ_NO_CONTEXT
     assert "3s" in read.detail
+
+
+# -- whose cluster is it -------------------------------------------------------
+#
+# The rig reuses a cluster that is already there, and used to delete it either
+# way. On this machine the name it reuses (`bzm-opl-test`) is a standing kind
+# testbed holding two agents and a serving virtual service (#226). So the
+# question teardown has to be able to answer is not "which cluster" but "did
+# this run build it".
+
+
+def _kind_present(monkeypatch, names, cmds):
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(
+                            a[0], 0, stdout=" ".join(names), stderr=""))
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+
+
+def test_ensure_kind_reports_a_cluster_it_created(monkeypatch):
+    cmds = []
+    _kind_present(monkeypatch, [], cmds)
+    assert livetest.ensure_kind() is True
+    assert any("create" in c for c in cmds)
+
+
+def test_ensure_kind_reports_a_cluster_it_only_reused(monkeypatch):
+    cmds = []
+    _kind_present(monkeypatch, [livetest.KIND_CLUSTER], cmds)
+    assert livetest.ensure_kind() is False
+    assert not any("create" in c for c in cmds)
+
+
+def test_ensure_cluster_passes_the_answer_on(monkeypatch):
+    monkeypatch.setattr(livetest, "ensure_kind", lambda: True)
+    monkeypatch.setattr(livetest, "ensure_minikube", lambda *a, **k: False)
+    assert livetest.ensure_cluster("kind") is True
+    assert livetest.ensure_cluster("minikube") is False
+    # Nobody's cluster to own: the run was pointed at whatever kubectl has.
+    assert livetest.ensure_cluster("current") is False
+
+
+def test_teardown_deletes_a_cluster_this_run_created(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    livetest.teardown(str(tmp_path), "ns1", "kind", created=True)
+    assert ["kind", "delete", "cluster", "--name", livetest.KIND_CLUSTER] in cmds
+
+
+def test_teardown_leaves_a_cluster_it_did_not_create(monkeypatch, tmp_path):
+    """The whole point of #226: a reused cluster survives, and the run still
+    clears the objects it applied into it."""
+    (tmp_path / "bzm_deployment.yaml").write_text("kind: Deployment\n")
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind", created=False)
+    assert not any("delete" in c and "cluster" in c for c in cmds)
+    assert any(c[:2] == ["kubectl", "-n"] and "delete" in c for c in cmds)
+
+
+def test_teardown_leaves_a_minikube_profile_it_did_not_create(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "minikube", created=False)
+    assert not any("minikube" in c for c in cmds)
+
+
+def test_teardown_defaults_to_leaving_the_cluster_alone(monkeypatch, tmp_path):
+    """A run that fell over before ensure_cluster answered knows nothing about
+    whose cluster it is, so the default has to be the safe one."""
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "minikube")
+    assert not any("minikube" in c for c in cmds)
+
+
+def _minikube_host(monkeypatch, host, cmds):
+    monkeypatch.setattr(livetest.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(
+                            a[0], 0, stdout=host, stderr=""))
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest.platform, "machine", lambda: "x86_64")
+
+
+def test_a_minikube_profile_this_run_started_from_nothing_is_ours(monkeypatch):
+    cmds = []
+    _minikube_host(monkeypatch, "", cmds)          # no such profile
+    assert livetest.ensure_minikube() is True
+    assert any("start" in c for c in cmds)
+
+
+def test_a_running_minikube_profile_is_not_ours(monkeypatch):
+    cmds = []
+    _minikube_host(monkeypatch, "Running", cmds)
+    assert livetest.ensure_minikube() is False
+    assert not any("start" in c for c in cmds)
+
+
+def test_a_stopped_minikube_profile_is_started_but_still_not_ours(monkeypatch):
+    """Starting somebody's stopped profile is not creating it. It was there
+    before the run and has to be there after (#226)."""
+    cmds = []
+    _minikube_host(monkeypatch, "Stopped", cmds)
+    assert livetest.ensure_minikube() is False
+    assert any("start" in c for c in cmds)          # still started, just not owned
+
+
+def test_a_recreated_minikube_profile_is_ours(monkeypatch):
+    """--contain-egress deletes a running profile with no policy enforcer. What
+    comes back is this run's, and teardown may take it."""
+    cmds = []
+    _minikube_host(monkeypatch, "Running", cmds)
+    monkeypatch.setattr(livetest, "policy_enforced", lambda: False)
+    assert livetest.ensure_minikube(cni="calico") is True
+    assert any("delete" in c for c in cmds) and any("start" in c for c in cmds)

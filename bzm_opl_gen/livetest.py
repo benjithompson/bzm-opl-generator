@@ -89,19 +89,41 @@ def cli_tool():
 
 
 def ensure_kind():
+    """True if this run created the cluster, False if it reused one already
+    there. The answer is what teardown is allowed to delete -- see #226."""
     out = subprocess.run(["kind", "get", "clusters"], capture_output=True, text=True)
-    if KIND_CLUSTER not in out.stdout.split():
+    created = KIND_CLUSTER not in out.stdout.split()
+    if created:
         _run(["kind", "create", "cluster", "--name", KIND_CLUSTER, "--wait", "120s"])
+    else:
+        print(f"reusing the kind cluster '{KIND_CLUSTER}' -- this run will not "
+              f"delete it")
     _run(["kubectl", "config", "use-context", f"kind-{KIND_CLUSTER}"])
+    return created
 
 
 def ensure_minikube(insecure_registry=None, cni=None):
+    """True if this run created the profile, False if one was already there.
+
+    The recreate below is the one place the rig deletes a cluster it did not
+    build, and it stays: a profile with no policy enforcer makes containment a
+    silent no-op, the flag only applies at creation, and this profile is
+    disposable by design. It also makes the answer honest -- after a recreate
+    the profile running is this run's."""
     if platform.machine() in ("arm64", "aarch64"):
         print("note: BlazeMeter images are amd64-only -- your docker runtime's "
               "x86 emulation must be enabled for pods to run on this host")
     st = subprocess.run(["minikube", "status", "-p", MINIKUBE_PROFILE,
                          "--format", "{{.Host}}"], capture_output=True, text=True)
-    running = st.stdout.strip() == "Running"
+    host = st.stdout.strip()
+    running = host == "Running"
+    # Existing and running are two questions, and only the first decides whose
+    # profile it is: starting somebody's stopped profile is not creating it, and
+    # a run that deleted one afterwards would be #226 with an extra step. An
+    # absent profile prints no host state at all -- minikube reports
+    # MK_USAGE_NO_PROFILE -- so the states are what "it is there" is read off.
+    existed = host in ("Running", "Stopped", "Paused")
+    recreated = False
     if running and cni and not policy_enforced():
         # minikube's default CNI accepts NetworkPolicies and enforces nothing,
         # so containment would silently be a no-op. --cni only applies at
@@ -109,7 +131,7 @@ def ensure_minikube(insecure_registry=None, cni=None):
         print(f"recreating the '{MINIKUBE_PROFILE}' profile: egress containment "
               f"needs --cni={cni}, and the running profile has no policy enforcer")
         _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
-        running = False
+        running, recreated = False, True
     if not running:
         cmd = ["minikube", "start", "-p", MINIKUBE_PROFILE, "--driver=docker",
                "--cpus=4", "--memory=6g", "--wait=all"]
@@ -118,13 +140,19 @@ def ensure_minikube(insecure_registry=None, cni=None):
         if cni:
             cmd.append(f"--cni={cni}")
         _run(cmd)
-    elif insecure_registry:
-        print(f"note: reusing running minikube profile -- it must already trust "
-              f"insecure registry {insecure_registry} (flag only applies at creation)")
+    if existed and not recreated:
+        print(f"reusing the minikube profile '{MINIKUBE_PROFILE}' ({host}) -- "
+              f"this run will not delete it")
+        if insecure_registry:
+            # True of a stopped profile too: --insecure-registry applies when
+            # the profile is created, and starting one is not creating it.
+            print(f"note: it must already trust insecure registry "
+                  f"{insecure_registry} (flag only applies at creation)")
     _run(["kubectl", "config", "use-context", MINIKUBE_PROFILE])
     if cni:
         _run(["kubectl", "-n", "kube-system", "rollout", "status",
               "daemonset/calico-node", "--timeout=300s"], check=False)
+    return recreated or not existed
 
 
 def policy_enforced():
@@ -264,11 +292,16 @@ def verify_proxy_reachable(host, cluster, user=None, password=None):
 
 def ensure_cluster(cluster, insecure_registry=None, cni=None):
     """Idempotent -- safe to call before deploy() when something (the proxy
-    overlay) needs the node up early."""
+    overlay) needs the node up early.
+
+    Returns whether this run created the cluster, which is the only thing that
+    licenses teardown to delete it. `current` is never ours: the run was
+    pointed at whatever kubectl already had."""
     if cluster == "kind":
-        ensure_kind()
-    elif cluster == "minikube":
-        ensure_minikube(insecure_registry, cni=cni)
+        return ensure_kind()
+    if cluster == "minikube":
+        return ensure_minikube(insecure_registry, cni=cni)
+    return False
 
 
 def blackhole_public_registries(facts, cluster, private_registry):
@@ -1458,13 +1491,32 @@ def wait_online(client, harbor_id, ship_id, timeout=600, poll=15):
     return False
 
 
-def teardown(manifest_dir, namespace, cluster="current"):
-    if cluster == "kind":
+def teardown(manifest_dir, namespace, cluster="current", created=False):
+    """Delete what this run created, and nothing else.
+
+    `created` comes from ensure_cluster. It used to be absent, and a
+    `--cluster kind` run deleted `bzm-opl-test` whether or not it had built it
+    -- which on a machine keeping a standing testbed under that name destroyed
+    two agents and a serving virtual service (#226). ensure_kind reuses a
+    cluster that is already there and is right to; the deletion is what had to
+    learn whose it was.
+
+    The default is the safe answer rather than the common one: a run that fell
+    over before ensure_cluster returned knows nothing about whose cluster it
+    is, and `finally` calls this anyway.
+
+    A cluster that is not ours still gets the objects removed, by the same path
+    `current` has always used -- the run cleans up after itself without taking
+    the cluster with it."""
+    if created and cluster == "kind":
         _run(["kind", "delete", "cluster", "--name", KIND_CLUSTER], check=False)
         return
-    if cluster == "minikube":
+    if created and cluster == "minikube":
         _run(["minikube", "delete", "-p", MINIKUBE_PROFILE], check=False)
         return
+    if cluster in ("kind", "minikube"):
+        print(f"leaving the {cluster} cluster up: this run did not create it. "
+              f"Removing only the objects it applied to {namespace}.")
     cli = cli_tool()
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
@@ -1622,6 +1674,10 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     if bad:
         raise BundleMismatch(bad)
     ok = False
+    # Set by ensure_cluster below, and read by teardown in the finally. It
+    # starts False so a run that fails before the cluster is up leaves whatever
+    # is there alone (#226).
+    created_cluster = False
     try:
         insecure = None
         if local_registry:
@@ -1631,7 +1687,8 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             insecure = f"{REGISTRY_CLUSTER_HOST}:{local_registry}"
         # The node has to exist before anything can be done to it: joining the
         # proxy to its network, blackholing registries, deploying.
-        ensure_cluster(cluster, insecure, cni="calico" if contain_egress else None)
+        created_cluster = ensure_cluster(
+            cluster, insecure, cni="calico" if contain_egress else None)
         if local_registry:
             blackhole_public_registries(facts, cluster,
                                         (opts or {}).get("private_registry"))
@@ -1701,7 +1758,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         print(f"LIVE TEST {'PASSED' if ok else 'FAILED'}: {why}")
     finally:
         if not keep:
-            teardown(manifest_dir, namespace, cluster)
+            teardown(manifest_dir, namespace, cluster, created_cluster)
             if local_registry:
                 _run(["docker", "rm", "-f", REGISTRY_NAME], check=False, capture=True)
             if local_proxy:

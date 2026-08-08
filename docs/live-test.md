@@ -3,9 +3,21 @@
 Success = the BlazeMeter API reports the ship with a **fresh heartbeat** and
 idle/running state. That exercises the full chain: RBAC, SCC admission, image
 pull, egress to `*.blazemeter.com`, and credentials. `--keep` skips teardown;
-`--cluster kind` creates/deletes a disposable `bzm-opl-test` cluster (crane
-comes online; engines won't fit laptop resources — use `--cluster current`
-against a real cluster for full engine validation).
+`--cluster kind` and `--cluster minikube` use a cluster named `bzm-opl-test`
+(crane comes online; engines won't fit laptop resources — use
+`--cluster current` against a real cluster for full engine validation).
+
+**A run deletes a cluster only if it created one.** Both flags reuse a
+`bzm-opl-test` that is already there, and a reused cluster survives teardown —
+only the objects the run applied are removed, and the run says so as it starts
+and again as it finishes. A **stopped** minikube profile is started and still
+not owned: starting somebody's profile is not creating it. This matters
+wherever a standing cluster carries that name: deleting it unconditionally is
+what #226 was. The one exception is
+deliberate and announced: `--contain-egress` recreates a running minikube
+profile that has no policy enforcer, because `--cni` applies at creation only
+and containment would otherwise be a silent no-op — after which the profile is
+this run's, and teardown deletes it.
 
 There are **two rigs**, and which one a run gets is read off the bundle rather
 than asked for — a manifests bundle is applied to a cluster, a `--format docker`
