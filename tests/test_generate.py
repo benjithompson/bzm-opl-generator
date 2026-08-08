@@ -634,6 +634,26 @@ def test_the_create_command_is_in_the_helm_bundle_too():
     assert "create configmap corp-trust" in files["README.md"]
 
 
+def test_the_helm_bundle_makes_the_namespace_before_it_puts_a_configmap_in_it():
+    """Helm's own install line carries `--create-namespace`, so the namespace is
+    allowed not to exist yet -- and a step ahead of it that names the namespace
+    fails with `namespaces "ns1" not found` and no way past it."""
+    readme = gen.generate(FACTS, {"namespace": "ns1", "output_format": "helm",
+                                  "openshift_cluster": False,
+                                  "ca_existing_configmap": "corp-trust"})["README.md"]
+    assert "kubectl create namespace ns1" in readme
+    assert readme.index("create namespace ns1") < readme.index("create configmap")
+
+
+def test_the_manifests_bundle_does_not_grow_a_namespace_step():
+    """Its apply lines have always assumed the namespace exists -- nothing in
+    that bundle creates one. A step that created it here would be this README
+    answering a question the rest of it does not."""
+    readme = gen.generate(FACTS, {"namespace": "ns1",
+                                  "ca_existing_configmap": "corp-trust"})["README.md"]
+    assert "create namespace" not in readme
+
+
 def test_the_create_command_follows_the_cluster_not_the_posture():
     """Same rule as every other emitted command: `openshift_cluster` says which
     binary the person deploying has."""

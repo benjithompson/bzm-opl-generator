@@ -75,16 +75,32 @@ export function CaGroup(props: {
   // the file could not be read at all, and the file was read and holds no
   // certificate. Collapsing the last two would tell somebody to convert a file
   // nothing ever opened.
-  const [note, setNote] = useState<{ ok: boolean; msg: string } | null>(null);
+  //
+  // `saw` is the bundle the note is true *about*, and it is what stops the note
+  // outliving it. Switching the mode away and back clears `ca_bundle`, and
+  // pasting over a refused file corrects the box; either way the sentence on
+  // screen would go on describing a value that is no longer there -- a green
+  // "2 certificates" above an empty box, or an `openssl` refusal under a bundle
+  // that is now fine. Compared at render rather than cleared by an effect: the
+  // question is whether the note still describes what is in the box, and that
+  // is answerable from the props.
+  const [note, setNote] =
+    useState<{ ok: boolean; msg: string; saw: string } | null>(null);
   const pick = (f: File) => {
+    const held = props.bundle;
     f.text().then((text) => {
       const read = readCertFile(f.name, text);
-      if (!read.ok) { setNote({ ok: false, msg: read.why }); return; }
+      // A refusal writes nothing, so the note it leaves is about the value
+      // already in the box.
+      if (!read.ok) { setNote({ ok: false, msg: read.why, saw: held }); return; }
       props.onBundle(read.pem);
-      setNote({ ok: true, msg: `${f.name} — ${read.certs} certificate`
-                                + (read.certs === 1 ? "" : "s") });
-    }).catch(() => setNote({ ok: false, msg: `${f.name} could not be read.` }));
+      setNote({ ok: true, saw: read.pem,
+                msg: `${f.name} — ${read.certs} certificate`
+                     + (read.certs === 1 ? "" : "s") });
+    }).catch(() => setNote(
+      { ok: false, msg: `${f.name} could not be read.`, saw: held }));
   };
+  const current = note && note.saw === props.bundle ? note : null;
   return (
     <>
       {!single && (
@@ -133,7 +149,12 @@ export function CaGroup(props: {
                               border-slate-300 text-slate-600 hover:bg-slate-50
                               cursor-pointer">
               Choose file
-              <input type="file" accept=".pem,.crt,.cer,.ca-bundle,.txt"
+              {/* Wide on purpose, `.der` included. A file this cannot use is
+                  better picked and refused than greyed out: the refusal names
+                  `openssl x509`, and a dialog that hides the customer's file
+                  says nothing at all. */}
+              <input type="file"
+                accept=".pem,.crt,.cer,.cert,.der,.ca-bundle,.txt"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -148,10 +169,10 @@ export function CaGroup(props: {
               carries the text, never a path
             </span>
           </div>
-          {note?.ok && (
-            <p className="text-[11px] text-slate-500">{note.msg}</p>
+          {current?.ok && (
+            <p className="text-[11px] text-slate-500">{current.msg}</p>
           )}
-          <ErrorMsg msg={note && !note.ok ? note.msg : null} />
+          <ErrorMsg msg={current && !current.ok ? current.msg : null} />
         </>
       )}
       {/* Where it ends up, which is the whole difference between the two

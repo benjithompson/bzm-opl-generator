@@ -953,9 +953,18 @@ test("a chosen certificate file fills the CA option, and one that is not PEM is 
     // A DER file reads as text and holds no block. Filling the box with what
     // the bytes decoded to would mount cleanly and be trusted by nothing, so it
     // is refused -- and the option keeps what it already had.
-    await pick("corp-root.crt", " binary");
+    await pick("corp-root.crt", "\u0000\u0002 binary");
     expect(screen.getByText(/openssl x509/)).toBeTruthy();
     expect(asked[asked.length - 1]?.ca_bundle).toBe(`${pem}\n${pem}`);
+
+    // ...and the refusal goes when the box stops being what it is about. A
+    // sentence describing a value that has gone is the same fault either way
+    // round: an `openssl` refusal under a bundle that is now fine, or the green
+    // count above a box the mode switch emptied.
+    fireEvent.change(screen.getByPlaceholderText("-----BEGIN CERTIFICATE-----"),
+                     { target: { value: pem } });
+    await waitFor(() => expect(screen.queryByText(/openssl x509/)).toBeNull());
+    expect(screen.queryByText(/corp-root\.pem — 2 certificates/)).toBeNull();
   });
 
 // -- the download step, through the page -------------------------------------

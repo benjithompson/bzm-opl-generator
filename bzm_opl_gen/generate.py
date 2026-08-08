@@ -2081,12 +2081,23 @@ def _deploy_steps(o, verb):
         # makes the key this bundle mounts the key the command creates, whatever
         # the customer's file happens to be called, so the two cannot be set
         # into disagreement.
+        # ...and on helm the namespace is allowed not to exist yet, because the
+        # install line carries --create-namespace. A ConfigMap step ahead of it
+        # would fail with `namespaces "..." not found` and nothing before it to
+        # run. The manifests README deliberately gets no such line: nothing in
+        # that bundle creates a namespace either, and its apply lines have
+        # always assumed one, so adding it here would have this step answer a
+        # question the rest of that README does not.
+        make_ns = (f"{cli(o)} create namespace {o['namespace']}   "
+                   f"# --create-namespace does it at step {len(steps) + 2}, "
+                   f"which is too late\n"
+                   if o["output_format"] == "helm" else "")
         steps.append(
             f"**{{n}}. Create the trust-bundle ConfigMap**, if your platform "
             f"team has not\nalready -- this bundle references `{ca['cm']}`\nin "
             f"`{o['namespace']}` and does not create it:\n\n"
-            f"```\n{cli(o)} -n {o['namespace']} create configmap {ca['cm']} "
-            f"--from-file={ca['key']}=/path/to/your-ca.pem\n```\n\n"
+            f"```\n{make_ns}{cli(o)} -n {o['namespace']} create configmap "
+            f"{ca['cm']} --from-file={ca['key']}=/path/to/your-ca.pem\n```\n\n"
             f"Keep the `{ca['key']}=` in front of the path. Without it the key "
             f"is the file's own\nname, and a key these manifests do not mount "
             f"gives crane an empty bundle rather\nthan an error.\n\n")
