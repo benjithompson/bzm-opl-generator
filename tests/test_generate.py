@@ -2150,7 +2150,8 @@ def test_compose_refuses_a_placeholder_in_the_same_words_as_the_script():
 
     One wording for both routes, so a customer reads the same sentence about the
     same variable and the same file whichever file they started from."""
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE)
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", gen.DOCKER_ENV_FILE,
+                                          gen.PLACEHOLDER)
     files = gen.generate(FACTS, {**DOCKER, "auth_token": ""})
     # Split out, the credential is in the one file both routes read -- so that
     # is where the guard sits. Compose interpolates env_file values; docker's
@@ -2173,7 +2174,7 @@ def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
     files name both files, because an inline value is in both of the two that
     start this container."""
     where = f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}"
-    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where)
+    wrong, todo = gen._docker_blank_lines("AUTH_TOKEN", where, gen.PLACEHOLDER)
     files = gen.generate(FACTS, {**DOCKER, "auth_token": "", "use_secret": False})
     svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["AUTH_TOKEN"] == (
@@ -2235,7 +2236,7 @@ def _blank_mount_vars(sh):
     file (`"$0"`, `"$ENV_FILE"`) and this one names the mount's own variable,
     which is exactly the difference between the two halves of the check."""
     return set(re.findall(
-        r"^if grep -q '" + re.escape(gen.PLACEHOLDER)
+        r"^if grep -q '" + re.escape(gen.MARKER_PATTERN)
         + r"' \"\$([A-Z][A-Z0-9_]*)\"; then$", sh, re.M))
 
 
@@ -2834,8 +2835,8 @@ def test_half_a_tls_pair_is_a_blank_field_rather_than_a_refusal():
     assert only_cert[gen.DOCKER_SV_KEY_FILE] == gen.PLACEHOLDER
     assert "`sv_tls_key`" in only_cert["README.md"]
     blank_host = gen.generate(FACTS, {**SV_DOCKER, "sv_hostname": ""})
-    assert "HOSTNAME_OVERRIDE" in dict(gen._docker_blank_env(FACTS, {
-        **gen.DEFAULT_OPTIONS, **SV_DOCKER, "sv_hostname": gen.PLACEHOLDER}))
+    assert "HOSTNAME_OVERRIDE" in gen._blank_env_by_name(FACTS, {
+        **gen.DEFAULT_OPTIONS, **SV_DOCKER, "sv_hostname": gen.PLACEHOLDER})
     assert "HOSTNAME_OVERRIDE carries" in blank_host[gen.DOCKER_RUN_FILE]
 
 

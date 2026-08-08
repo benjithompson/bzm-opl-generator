@@ -172,10 +172,16 @@ on it, so each message names the fix.
 */}}
 {{- define "bzm-opl.validate" -}}
 {{/*
-The generator writes <PLACEHOLDER> into a value somebody left blank, so that a
-bundle handed on unfinished says so instead of carrying an empty string. The
-API server stops a marked *name* -- <PLACEHOLDER> is not a legal RFC 1123 name
--- and nothing stops a marked *value*: authToken, caBundle.pem, privateRegistry
+The generator writes a marker into a value somebody left blank, so that a bundle
+handed on unfinished says so instead of carrying an empty string. A marker is
+<KEY> -- the option's own key in upper case -- and the test below is the shape
+rather than one string, because the key differs per field and a chart may also
+be installed from a bundle an older version of the generator wrote. The pattern
+is generate.MARKER_PATTERN, restated here because Go templates cannot import it,
+and tests/test_helm.py holds the two equal.
+
+The API server stops a marked *name* -- no marker is a legal RFC 1123 name --
+and nothing stops a marked *value*: authToken, caBundle.pem, privateRegistry
 and the proxy URLs are a Secret entry, a ConfigMap entry and environment
 variables, and all of them apply cleanly (measured, #230). So `helm install` is
 the only thing between those and an agent that deploys and then fails, which is
@@ -198,7 +204,8 @@ form it was left blank on.
       "proxy.http" .Values.proxy.http
       "proxy.https" .Values.proxy.https -}}
 {{- range $field, $value := $blank -}}
-{{- if eq (trim (toString (default "" $value))) "<PLACEHOLDER>" -}}
+{{- $held := trim (toString (default "" $value)) -}}
+{{- if regexMatch "^<[A-Z][A-Z0-9_]*>$" $held -}}
 {{- fail (printf "%s was left blank when this bundle was generated and still holds <PLACEHOLDER>. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in -- installing as it stands would deploy an agent that cannot work" $field $field) -}}
 {{- end -}}
 {{- end -}}

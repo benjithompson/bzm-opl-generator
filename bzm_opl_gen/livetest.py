@@ -1340,12 +1340,21 @@ def compose_unset(manifest_dir):
 
 BlankMounts = collections.namedtuple("BlankMounts", "blank unread")
 
+# One mounted file this bundle left blank: the generator's own mount, the path
+# that was actually read, and the marker found in it. The marker is read off the
+# file rather than rebuilt from `m.option`, for the reason the check itself is
+# read off the file: the path may be an override the host supplied, or a bundle
+# an older version of this generator wrote, and neither is obliged to carry the
+# marker this version would write for that option.
+BlankMount = collections.namedtuple("BlankMount", "mount path marker")
+
 
 def compose_blank_mounts(manifest_dir):
-    """The bundle's mounted files that still carry the marker, and the ones that
-    could not be read -- two lists, because they are two answers. Each entry is
-    the generator's own mount beside the path that was actually looked at, which
-    is not always the bundle's copy (see below).
+    """The bundle's mounted files that still carry a marker, and the ones that
+    could not be read -- two lists, because they are two answers. A blank entry
+    is a BlankMount: the generator's own mount, the path that was actually
+    looked at (not always the bundle's copy -- see below), and the marker that
+    was found there.
 
     The guard above cannot see these, and neither can `placeholder_options`. A
     blank *variable* becomes `${BZM_OPL_UNSET_NAME:?...}` in a file this reads;
@@ -1377,8 +1386,10 @@ def compose_blank_mounts(manifest_dir):
         text = _file_text(path)
         if text is None:
             unread.append((m, path))
-        elif generate.PLACEHOLDER in text:
-            blank.append((m, path))
+            continue
+        mark = generate.marker_in(text)
+        if mark:
+            blank.append(BlankMount(m, path, mark))
     return BlankMounts(blank, unread)
 
 
@@ -1576,9 +1587,9 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
                      f"{generate.PLACEHOLDER} -- the {m.what} this bundle "
                      f"mounts is whatever that file holds")
     if mounts.blank:
-        files = ", ".join(at for _m, at in mounts.blank)
-        opts = ", ".join(m.option for m, _at in mounts.blank)
-        names = ", ".join(m.var for m, _at in mounts.blank)
+        files = ", ".join(b.path for b in mounts.blank)
+        opts = ", ".join(b.mount.option for b in mounts.blank)
+        names = ", ".join(b.mount.var for b in mounts.blank)
         many = len(mounts.blank) > 1
         refusals.append(
             f"{files} carr{'y' if many else 'ies'} {generate.PLACEHOLDER}, "

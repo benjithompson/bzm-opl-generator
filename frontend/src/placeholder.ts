@@ -27,8 +27,22 @@ import { Options } from "./api";
 import { Applies } from "./formats";
 import { GroupId, OPTION_GROUPS, serviceAccountOk } from "./optionGroups";
 
-/** Kept identical to generate.PLACEHOLDER by test_server.py, like every other
- *  constant this page shares with the generator. */
+/** The marker for one option key: the key in upper case, with a dotted key
+ *  joined by an underscore. `auth_token` gives `<AUTH_TOKEN>`, `proxy.https`
+ *  gives `<PROXY_HTTPS>`.
+ *
+ *  `generate.marker` is the same rule on the server, and the two are held to it
+ *  by `test_server.py` through the examples in `fixtures.ts` -- neither side can
+ *  change the rule alone. Not served, because the page has to write a marker
+ *  before any response has arrived. */
+export function marker(key: string): string {
+  return `<${key.replace(/\./g, "_").toUpperCase()}>`;
+}
+
+/** The marker still emitted for every blank field (#244). It is what `marker`
+ *  would produce for an option called `placeholder`, so every reader that
+ *  recognises `<KEY>` already recognises it; #245 replaces it with the per-key
+ *  one and this goes. */
 export const PLACEHOLDER = "<PLACEHOLDER>";
 
 /** The core fields, which belong to no group: they are on the step itself. */

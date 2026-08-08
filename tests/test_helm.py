@@ -11,6 +11,7 @@ nothing skipped on a machine with no helm installed.
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -415,6 +416,37 @@ def test_unnamed_service_account_is_marked_in_helm_format_too():
     assert v["serviceAccount"]["name"] == gen.PLACEHOLDER
     assert "service_account_name" in plain["README.md"]
     assert "not finished" in plain["README.md"]
+
+
+def test_the_charts_marker_test_is_the_generators_pattern():
+    """`bzm-opl.validate` is the only thing between a marked *value* and an
+    agent that installs and then fails, and it is written in Go templates, which
+    cannot import `generate.MARKER_PATTERN`. So the pattern is restated in the
+    chart and held equal here.
+
+    Restated in one direction only: what the chart has to recognise is every
+    marker this generator writes, so the shapes are asserted against the chart's
+    own regular expression through Python's engine. The two dialects agree on
+    this much of the syntax -- a character class, a star and two anchors -- and
+    a pattern that needed more than that is one no reader could hold in their
+    head across two languages.
+    """
+    tpl = os.path.join(os.path.dirname(__file__), "..", "bzm_opl_gen",
+                       "templates", "helm", "templates", "_helpers.tpl")
+    with open(tpl) as fh:
+        text = fh.read()
+    found = re.search(r'regexMatch "([^"]+)" \$held', text)
+    assert found, "the marker test is not where it was -- was it rewritten?"
+    assert found.group(1) == f"^{gen.MARKER_PATTERN}$"
+    chart_re = re.compile(found.group(1))
+    for key in ("auth_token", "service_account_name", "private_registry",
+                "ca_existing_configmap", "ca_bundle", "proxy.https"):
+        assert chart_re.fullmatch(gen.marker(key)), key
+    # ...and it takes nothing else. A value that merely carries an angle
+    # bracket is a value somebody supplied.
+    for held in ("", "TOKEN", "<not a marker>", "reg.example.com/bzm",
+                 "http://px:3128"):
+        assert not chart_re.fullmatch(held), held
 
 
 def test_service_virtualization_is_refused():

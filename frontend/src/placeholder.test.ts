@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { MARKER_EXAMPLES } from "./fixtures";
 import { GroupFlags } from "./optionGroups";
 import {
-  blankRequired, PLACEHOLDER, placeholderWarning, withPlaceholders,
+  blankRequired, marker, PLACEHOLDER, placeholderWarning, withPlaceholders,
 } from "./placeholder";
 
 /** Every option applies: a Kubernetes bundle. */
@@ -89,6 +90,17 @@ describe("blankRequired, for a group that is switched on", () => {
     // Nobody has picked one yet: that is a question, not an empty box, and it
     // is configureBlockedBy's to refuse.
     expect(blankRequired(filled, k8s, on("sv"))).toEqual([]);
+  });
+});
+
+describe("marker", () => {
+  it("follows the rule the generator follows", () => {
+    // The examples are in fixtures.ts, and test_server.py asserts
+    // generate.marker against the same entries -- so this side and that side
+    // cannot drift apart without one of the two failing.
+    for (const [key, want] of Object.entries(MARKER_EXAMPLES)) {
+      expect(marker(key)).toBe(want);
+    }
   });
 });
 
