@@ -1119,14 +1119,15 @@ def _tpl(name):
         return Template(f.read())
 
 
-def _image_overrides(facts, registry):
+def _image_overrides(facts, o):
     """Build crane IMAGE_OVERRIDES JSON from account facts. Which images are
-    included follows the location's enabled funcIds (facts.select_images)."""
-    entries = {}
-    for img in select_images(facts):
-        name = img["repo"].rsplit("/", 1)[-1]
-        entries[img["key"]] = f"{registry.rstrip('/')}/{name}:{img['tag']}"
-    return entries
+    included follows the location's enabled funcIds (facts.select_images); where
+    each one is pulled from is `cluster_composed_targets`, which the mirror
+    script pushes to, so the map and the push list cannot name two different
+    references (#234)."""
+    targets = cluster_composed_targets(facts, o)
+    return {i["key"]: targets[f"{i['repo']}:{i['tag']}"]
+            for i in select_images(facts)}
 
 
 def _configmap(facts, o):
@@ -1198,7 +1199,7 @@ def _configmap(facts, o):
                 " Gateway per virtual service."
             )
     if o["private_registry"]:
-        overrides = _image_overrides(facts, o["private_registry"])
+        overrides = _image_overrides(facts, o)
         lines += [
             "  # Private registry: images resolved from the account, not from a",
             f"  # table here ({facts.get('images_source', 'unknown')}).",
@@ -2224,11 +2225,11 @@ def docker_composed_targets(facts, o):
     BlazeMeter's own unqualified image name -- which is the crane *key* without
     its tag, org segment and all where the key has one -- and always `latest`,
     whatever /versions pins. **There is no `IMAGE_OVERRIDES` on this format**,
-    which is what makes
-    the last-segment reduction `_image_overrides` performs correct on Kubernetes
-    and wrong here: there, crane resolves the key through that map and pulls
-    exactly what was mirrored; here nothing maps anything and crane's own
-    composition is the only name that matters.
+    so nothing maps a mirrored path back and crane's own composition is the only
+    name that matters. That much is measured here and stays true; what this
+    docstring used to add -- that the map makes any destination correct on
+    Kubernetes -- is false, and #234 is what it cost. The cluster half composes
+    too, from a different rule, and has `cluster_composed_targets` for it.
 
     The key is the pinned public ref and stays pinned: it is the *source*, the
     content whose version is known, and it is the one record of which version
@@ -2263,6 +2264,80 @@ def docker_composed_targets(facts, o):
         return {}
     registry = o["private_registry"].rstrip("/")
     return {f"{i['repo']}:{i['tag']}": f"{registry}/{key_base(i['key'])}:latest"
+            for i in select_images(facts)}
+
+
+def composed_image_ref(repo, tag, registry):
+    """Where a Kubernetes agent's crane will look for one image, mirrored into
+    `registry`. The rule; `cluster_composed_targets` is it applied to a
+    location's images, and `core.mirror_images` is the one caller that holds
+    references rather than facts.
+
+    The registry replaces `PUBLIC_REGISTRY` and the whole path below it is
+    kept -- `blazemeter/` and `charmander/` and all, because every segment of it
+    is a real directory. That is the same fact `repo_for_key` learned from the
+    other side, where dropping `charmander` resolved a browser image to a repo
+    that 404s.
+
+    A repo that is not BlazeMeter's keeps everything after its own host, which
+    is the same rule and is **not** measured: such a repo can only arrive from
+    an inventory that already names a private mirror, and no such location has
+    been read. It is a shape rather than a claim about what crane does with one.
+    """
+    if repo.startswith(PUBLIC_REGISTRY + "/"):
+        path = repo[len(PUBLIC_REGISTRY) + 1:]
+    else:
+        head, sep, rest = repo.partition("/")
+        path = rest if sep and ("." in head or ":" in head) else repo
+    return f"{registry.rstrip('/')}/{path}:{tag}"
+
+
+def cluster_composed_targets(facts, o):
+    """Every image a Kubernetes agent's crane will pull, as {the pinned public
+    ref: the reference crane composes}. Empty for docker and where no registry
+    was configured.
+
+    One function because **two files in one bundle name these**: the value in
+    `IMAGE_OVERRIDES` (the ConfigMap, and `imageOverrides` in the chart's values
+    overlay) and the mirror script's push targets. Held equal by construction
+    rather than by two renderers agreeing -- #234 is what a disagreement here
+    costs, and it is #209 one platform over.
+
+    The value keeps the repo path below `PUBLIC_REGISTRY`, because that is what
+    crane composes. Measured live, 2026-08-08, on a `--format helm` bundle
+    against a private registry with `gcr.io` blackholed on the node: the bundle
+    wrote `"taurus-cloud:2.4.454-reduced": "<registry>/v4:2.4.454-reduced"`, the
+    mirror pushed exactly that, and crane created the engine pod asking for
+    `<registry>/blazemeter/v4:2.4.454-reduced` -- `manifest unknown`. So crane
+    composed `${DOCKER_REGISTRY}/<repo path>:<tag>` and did **not** resolve the
+    override. Pushing the images a second time under the composed shape made the
+    run pass.
+
+    **Only the engine reference was observed.** The location's other images were
+    pushed under both shapes rather than tested under one, so nothing here says
+    which reference crane asks for them by; one rule for the lot is the same
+    reading `docker_composed_targets` takes, and the difference between the two
+    platforms is a property of what crane composes from rather than of the
+    images. It is also unknown whether crane ignores `IMAGE_OVERRIDES` for
+    engines or looks the entry up under a key the map does not carry. The two
+    are not distinguished by that run and this does not depend on which is true:
+    where the map's value **is** the composed name, both readings pull an image
+    that exists.
+
+    The tag stays the location's pinned one, which is the other difference from
+    docker: `IMAGE_OVERRIDES` names a tag rather than leaving crane to default
+    one, so there is nothing here for `latest` to stand in for.
+
+    Crane's own image is deliberately **not** here, exactly as on docker. The
+    bundle names that reference itself -- `_crane_image`, reaching the
+    Deployment and the chart's `image.repository` -- so the two agree whatever
+    shape it takes, and it is not crane's to compose. That is also why crane's
+    image pulled fine through the whole of #234.
+    """
+    if o.get("output_format") == "docker" or not o["private_registry"]:
+        return {}
+    return {f"{i['repo']}:{i['tag']}":
+            composed_image_ref(i["repo"], i["tag"], o["private_registry"])
             for i in select_images(facts)}
 
 
@@ -2343,6 +2418,10 @@ def _mirror_script(facts, o):
     # to the other, so a mirror pushing anything else pushes to a path nothing
     # reads -- #209, which the mirror reported as a success and the first deploy
     # as a missing image.
+    # ...and it composes on Kubernetes too, from the repo path rather than from
+    # the key -- #234, the same failure one platform over: the mirror reported
+    # success and the first *test* went ImagePullBackOff, after the agent was
+    # already online. The map is per format because the composition is.
     composed = docker_composed_targets(facts, o)
     if composed:
         # Emitted only where the two shapes are actually both present, so an
@@ -2368,6 +2447,28 @@ def _mirror_script(facts, o):
             "#",
             "#     These are exactly the references README.md tells you to",
             "#     `docker pull` on the agent host once this has run.",
+            "",
+        ]
+    else:
+        composed = cluster_composed_targets(facts, o)
+        lines += [
+            "# Two shapes of destination below, and the difference is deliberate:",
+            "#",
+            "#   crane's own image  ->  <registry>/crane:<version>",
+            "#     This bundle names that reference itself -- the Deployment, or",
+            "#     the chart's image.repository -- so the two agree by",
+            "#     construction and it can be any shape at all. The crane-hook",
+            "#     image, where one is included, is the bundle's own the same way.",
+            "#",
+            "#   everything crane creates  ->  <registry>/blazemeter/<path>:<version>",
+            "#     Crane composes these from DOCKER_REGISTRY and the image's own",
+            "#     repository path. A live run showed it doing exactly that for",
+            "#     the engine, without reading IMAGE_OVERRIDES: the path below",
+            "#     blazemeter/ has to survive the mirror or the first test ends",
+            "#     in ImagePullBackOff, long after the agent reports online.",
+            "#",
+            "#     These are exactly the values IMAGE_OVERRIDES carries, so the",
+            "#     two files cannot name different references.",
             "",
         ]
     for ref in refs:
@@ -2698,7 +2799,7 @@ def _helm_values(facts, o):
         "",
     ]
     if o["private_registry"]:
-        overrides = _image_overrides(facts, o["private_registry"])
+        overrides = _image_overrides(facts, o)
         lines += [
             f"privateRegistry: {_yq(o['private_registry'])}",
             "# Resolved from the account, not from a table here "
@@ -3860,10 +3961,11 @@ def _docker_prepull_block(facts, o):
     `latest` whatever /versions pins: a location pinning 6.0.30.4 had
     `.../blazemeter/service-mock:latest` asked for at deploy time. So this is
     built from `key_base`, not from `img["tag"]`, and not from
-    `_image_overrides`' last-segment repo name -- that one resolves the key on
-    Kubernetes, where IMAGE_OVERRIDES is what crane reads, and there is no such
-    variable here. A command naming the pinned tag fetches an image nothing then
-    starts -- the same failure this bullet exists to prevent, wearing the fix.
+    `cluster_composed_targets`' repo path and pinned tag -- crane composes from
+    the *key* here and from the repo path there, which is a difference between
+    the two platforms rather than between two renderings of one. A command
+    naming the pinned tag fetches an image nothing then starts -- the same
+    failure this bullet exists to prevent, wearing the fix.
 
     **Every image this bundle's crane creates**, engines included (#218). It
     covered only the mock ones while the engine half was unmeasured; a live

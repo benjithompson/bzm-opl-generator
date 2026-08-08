@@ -145,7 +145,8 @@ def test_private_registry_carries_the_derived_image_map():
     v, _ = _values(private_registry="reg.io/bzm")
     assert v["privateRegistry"] == "reg.io/bzm"
     # Same keys the ConfigMap's IMAGE_OVERRIDES would carry, from the same facts.
-    assert v["imageOverrides"] == gen._image_overrides(FACTS, "reg.io/bzm")
+    assert v["imageOverrides"] == gen._image_overrides(
+        FACTS, {"private_registry": "reg.io/bzm"})
 
 
 def test_no_private_registry_leaves_overrides_empty():

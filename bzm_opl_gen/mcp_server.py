@@ -641,8 +641,9 @@ DESCRIPTIONS["opl_bundle"] = (
     "  options  -- every generate option, its default and what it does\n"
     "  images   -- the image references this bundle pulls {facts, "
     "all?}. With mirror=<prefix> it also pulls them and pushes them "
-    "into that registry, which writes to it -- confirm before "
-    "calling it that way.\n"
+    "into that registry, under the names a Kubernetes agent then asks "
+    "for, which writes to it -- confirm before calling it that way. A "
+    "docker bundle's images are its own script's, not these.\n"
     "Applying the bundle is yours: `kubectl apply -f <out_dir>`. No "
     "action on this tool touches a cluster at all.")
 

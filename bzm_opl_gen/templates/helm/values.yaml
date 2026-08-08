@@ -90,8 +90,14 @@ craneHook:
 # then copy IMAGE_OVERRIDES out of out/bzm_configmap.yaml. The generator reads
 # the account's live agent inventory; a hand-written map goes stale.
 imageOverrides: {}
-  # taurus-cloud:latest: registry.example.com/blazemeter/taurus-cloud:1.2.3
-  # blazemeter:latest: registry.example.com/blazemeter/blazemeter:4.5.6
+  # The value is the reference crane composes: your registry, then the image's
+  # whole path below BlazeMeter's public project, then the tag. Crane builds an
+  # engine's reference that way and does not read this map for it, so a path
+  # reduced to its last segment is an ImagePullBackOff on the first test.
+  # The key is crane's own name for the image, which is not always the repo
+  # (taurus-cloud lives at blazemeter/v4).
+  # taurus-cloud:latest: registry.example.com/blazemeter/v4:2.4.454-reduced
+  # apm-image:latest: registry.example.com/blazemeter/apm:1.7.112
 
 # Emit commented DOCKER_REGISTRY_USERNAME/PASSWORD placeholders in the ConfigMap
 # for crane-side engine image pulls. Fill them in, or use image.pullSecret and a

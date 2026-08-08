@@ -238,12 +238,26 @@ def ensure_registry(port):
 def mirror_images(facts, port, arch="linux/amd64"):
     """Pull the location's images (amd64 -- what the engines are built for),
     push into the local registry under the names generate() writes into
-    IMAGE_OVERRIDES / the crane Deployment."""
+    IMAGE_OVERRIDES / the crane Deployment.
+
+    The destinations come from `generate.cluster_composed_targets` rather than
+    from a rule of the rig's own, because this had a second copy of the wrong
+    one: the rig pushed the engine where the bundle's map pointed and crane
+    asked somewhere else (#234). The registry differs by host only -- the rig
+    pushes to `localhost:<port>` and the node reaches the same registry as
+    `host.minikube.internal:<port>` -- so the path below it is the only part
+    that has to match, and it now comes from one function.
+
+    Crane's own image falls through to the short form, which is the reference
+    `generate._crane_image` writes into the Deployment and the chart.
+    """
     from .facts import image_refs
+    from .generate import cluster_composed_targets
     refs = image_refs(facts)
+    reg = f"localhost:{port}"
+    composed = cluster_composed_targets(facts, {"private_registry": reg})
     for ref in refs:
-        name = ref.rsplit("/", 1)[-1]
-        target = f"localhost:{port}/{name}"
+        target = composed.get(ref, f"{reg}/{ref.rsplit('/', 1)[-1]}")
         _run(["docker", "pull", "--platform", arch, ref])
         _run(["docker", "tag", ref, target])
         _run(["docker", "push", target])

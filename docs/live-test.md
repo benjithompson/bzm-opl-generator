@@ -224,7 +224,13 @@ reach it. The run therefore also:
 - **blackholes the public registries** on the node (`127.0.0.1 gcr.io`, plus a
   purge of cached copies) whenever `--local-registry` is on, so an image
   `IMAGE_OVERRIDES` forgot to rewrite is an ImagePullBackOff here rather than a
-  silent fallback that only breaks in the customer's air-gapped cluster;
+  silent fallback that only breaks in the customer's air-gapped cluster.
+  **Pass `--run-test` with it.** A run that stops at "agent online" pulls
+  crane's image and no other, and crane's reference is one the bundle names
+  itself — so the whole registry proof stopped at the half that works, and the
+  engine was pulled from a path nothing had pushed to for months (#234). The
+  engine image check below is what covers the other half, and it needs an
+  engine;
 - **runs a negative control first** — the same deploy with the CA stripped,
   required to fail with `CERTIFICATE_VERIFY_FAILED` before the real run is
   trusted. A rig that cannot fail proves nothing. Skip with

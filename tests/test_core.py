@@ -21,6 +21,7 @@ import time
 import zipfile
 
 import pytest
+import yaml
 
 from bzm_opl_gen import api, core, generate as gen
 from test_generate import FACTS
@@ -780,6 +781,27 @@ def test_a_refused_credential_is_not_a_malformed_request(name):
     assert isinstance(e, core.UpstreamError)
     assert e.status == 502
     assert not isinstance(e, core.BadRequest)
+
+
+def test_mirroring_by_hand_pushes_where_the_bundle_will_look():
+    """`images --mirror` (and the MCP tool behind it) was the third copy of
+    #234's destination rule, and it is the one with no bundle beside it to
+    disagree with -- somebody mirrors, then generates, and the map points at a
+    path nothing was pushed to. Held against a real bundle's IMAGE_OVERRIDES.
+
+    It takes references rather than facts, so docker's composed names are out
+    of reach here -- those come from the crane key -- and the bundle's own
+    script is that platform's answer.
+    """
+    reg = "reg.local/bzm"
+    pushed = {c.split()[-1] for c in core.mirror_images(
+        core.bundle_images(FACTS), mirror=reg, dry_run=True)["commands"]
+        if " push " in c}
+    files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": reg})
+    overrides = json.loads(yaml.safe_load(
+        files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
+    assert pushed == set(overrides.values()) | {gen._crane_image(
+        FACTS, {"private_registry": reg})}
 
 
 # -- the zip ------------------------------------------------------------------
