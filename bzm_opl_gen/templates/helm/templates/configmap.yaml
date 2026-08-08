@@ -25,8 +25,13 @@ data:
   {{- end }}
   KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType }}
   RUN_HEALTH_WEB_SERVICE: 'true'
-  {{- if .Values.privateRegistry }}
+  {{- /*
+    Unconditional: bzm-opl.dockerRegistry falls back to BlazeMeter's public
+    project, so this line is the same either way. Only the overrides below
+    depend on privateRegistry.
+  */}}
   DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
+  {{- if .Values.privateRegistry }}
   IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
   {{- if .Values.registryAuth }}
   # Crane-side auth for engine image pulls (or use image.pullSecret plus a
@@ -36,8 +41,6 @@ data:
   # DOCKER_REGISTRY_PASSWORD: <password>
   # DOCKER_REGISTRY_EMAIL: <email>
   {{- end }}
-  {{- else }}
-  DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . }}
   {{- end }}
   {{- if eq (include "bzm-opl.autoUpdate" .) "true" }}
   # On: crane rewrites this Deployment -- its image, and .spec.strategy to
@@ -85,11 +88,13 @@ data:
     Always emitted, defaults included: doctor and the planner certify the
     2 CPU / 8Gi fallback, and a ConfigMap that omitted these on an empty value
     ran engines with no limits at all (OOMKilled 4s in, live -- #132). The
-    literals restate generate.ENGINE_DEFAULT_CPU/MEM; tests/test_helm.py holds
-    them equal.
+    fallback lives in the two helpers, which the pod comment and NOTES.txt also
+    read, so the figure this ConfigMap sets is the figure they quote; those
+    literals restate generate.ENGINE_DEFAULT_CPU/MEM and tests/test_helm.py
+    holds them equal.
   */}}
-  KUBERNETES_RESOURCES_LIMITS_CPU: {{ .Values.engine.cpuLimit | default "2" | quote }}
-  KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ .Values.engine.memoryLimit | default "8Gi" | quote }}
+  KUBERNETES_RESOURCES_LIMITS_CPU: {{ include "bzm-opl.engineCpuLimit" . | quote }}
+  KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ include "bzm-opl.engineMemoryLimit" . | quote }}
   {{- with .Values.engine.ephemeralRequestMb }}
   KUBERNETES_REQUESTS_EPHEMERAL_STORAGE: {{ . | quote }}
   {{- end }}

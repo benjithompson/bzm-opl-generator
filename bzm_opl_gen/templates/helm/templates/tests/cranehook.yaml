@@ -86,7 +86,7 @@ spec:
         - name: SERVICE_ACCOUNT_NAME
           value: {{ include "bzm-opl.serviceAccountName" . | quote }}
         - name: DOCKER_REGISTRY
-          value: {{ include "bzm-opl.registry" . | quote }}
+          value: {{ include "bzm-opl.dockerRegistry" . | quote }}
       resources:
         requests: { cpu: 100m, memory: 256Mi }
         limits: { cpu: 200m, memory: 512Mi }

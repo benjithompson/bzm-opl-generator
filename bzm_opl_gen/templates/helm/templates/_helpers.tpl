@@ -91,7 +91,10 @@ the same rewrite, keeping the tag).
 {{- else if .Values.privateRegistry -}}
 {{- printf "%s/crane:%s" (trimSuffix "/" .Values.privateRegistry) $tag -}}
 {{- else -}}
-{{- printf "gcr.io/verdant-bulwark-278/blazemeter/crane:%s" $tag -}}
+{{/* The public project keeps a `blazemeter/` segment that a mirror does not,
+which is why this is not simply <registry>/crane. The root itself comes from
+the one helper that carries it. */}}
+{{- printf "%s/blazemeter/crane:%s" (include "bzm-opl.dockerRegistry" .) $tag -}}
 {{- end -}}
 {{- end -}}
 
@@ -103,10 +106,6 @@ months. Both names are also written into the Pod's env -- crane-hook is told
 what it is called -- which is why they are helpers and not literals.
 */}}
 {{- define "bzm-opl.hookRoleName" -}}bzm-cranehook{{- end -}}
-
-{{- define "bzm-opl.registry" -}}
-{{- include "bzm-opl.dockerRegistry" . -}}
-{{- end -}}
 
 {{- define "bzm-opl.hookImage" -}}
 {{- printf "%s/cranehook:latest" (include "bzm-opl.dockerRegistry" .) -}}
@@ -127,12 +126,9 @@ separate proxy-auth env vars, so userinfo in the URL is the only form
 credentials can take.
 */}}
 {{- define "bzm-opl.proxyHasCreds" -}}
-{{- $urls := list (.Values.proxy.http | toString) (.Values.proxy.https | toString) -}}
-{{- $found := "" -}}
-{{- range $u := $urls -}}
-{{- if regexMatch "^[A-Za-z][A-Za-z0-9+.-]*://[^/@]+@" $u -}}{{- $found = "true" -}}{{- end -}}
-{{- end -}}
-{{- $found -}}
+{{- $userinfo := "^[A-Za-z][A-Za-z0-9+.-]*://[^/@]+@" -}}
+{{- if or (regexMatch $userinfo (.Values.proxy.http | toString))
+          (regexMatch $userinfo (.Values.proxy.https | toString)) -}}true{{- end -}}
 {{- end -}}
 
 {{/* Where the proxy URLs go: the Secret when they carry credentials and a
@@ -142,21 +138,10 @@ Secret is in play, the ConfigMap otherwise. */}}
 {{- end -}}
 
 {{/*
-Whether crane updates itself. Unset is OFF, which is this chart departing from
-BlazeMeter's own Kubernetes manifest (it ships AUTO_KUBERNETES_UPDATE: 'true').
-
-With it on, crane rewrites its own Deployment's `.image` and `.spec.strategy`
-as field manager `OpenAPI-Generator` within seconds of install, and Helm
-applies server-side -- so the next `helm upgrade` fails on a field-ownership
-conflict rather than a diff, with the ConfigMap already applied.
-`--force-conflicts` does not rescue it: forcing `type: Recreate` back leaves
-crane's `strategy.rollingUpdate` beside it and the API server rejects the pair,
-so changing anything means uninstall + install. Observed on a live cluster, not
-inferred. A chart whose default breaks its own upgrade path is not a default.
-
-The cost of off, and it is a real one: the agent stops upgrading itself, so
-keeping it current is your job, and one that falls far enough behind loses
-support.
+Whether crane updates itself. Unset is OFF -- this chart departing from
+BlazeMeter's own Kubernetes manifest, because on breaks the chart's own upgrade
+path. The live evidence and the cost of the default are in values.yaml, beside
+the setting somebody actually reads.
 */}}
 {{- define "bzm-opl.autoUpdate" -}}
 {{- if kindIs "bool" .Values.autoUpdate -}}

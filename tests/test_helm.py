@@ -252,21 +252,27 @@ def test_chart_carries_the_default_engine_limits_too():
     falling back to the generator's own defaults when the overlay is empty --
     the same change the manifests emitter made for #132, restated in Go
     templates because the chart renders with no Python in reach. The default
-    literals live in the template, so this holds them equal to
-    ENGINE_DEFAULT_CPU/MEM; whether the render then matches the manifests
+    literal lives in the helper -- one copy, which the ConfigMap, the pod
+    comment and NOTES.txt all read -- so this holds *that* equal to
+    ENGINE_DEFAULT_CPU/MEM and holds the ConfigMap to reading it rather than
+    spelling the figure again; whether the render then matches the manifests
     object-for-object is helm_parity.py's job."""
     with open(os.path.join(gen.HELM_DIR, "templates", "configmap.yaml")) as f:
         template = f.read()
-    for values_key, env, default in (
+    with open(os.path.join(gen.HELM_DIR, "templates", "_helpers.tpl")) as f:
+        helpers = f.read()
+    for values_key, env, helper, default in (
             ("engine.cpuLimit", "KUBERNETES_RESOURCES_LIMITS_CPU",
-             gen.ENGINE_DEFAULT_CPU),
+             "bzm-opl.engineCpuLimit", gen.ENGINE_DEFAULT_CPU),
             ("engine.memoryLimit", "KUBERNETES_RESOURCES_LIMITS_MEMORY",
-             gen.ENGINE_DEFAULT_MEM)):
+             "bzm-opl.engineMemoryLimit", gen.ENGINE_DEFAULT_MEM)):
         # Unconditional: a `with` block around the env is the old shape, where
         # an empty overlay meant no limits at all.
         assert f"with .Values.{values_key}" not in template
         line = next(l for l in template.splitlines() if l.startswith(f"  {env}:"))
-        assert f'default "{default}"' in line, line
+        assert f'include "{helper}"' in line, line
+        defn = next(l for l in helpers.splitlines() if f'define "{helper}"' in l)
+        assert f'default "{default}" .Values.{values_key}' in defn, defn
 
 
 def test_overlay_offers_no_engine_request_knob():
