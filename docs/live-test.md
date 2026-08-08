@@ -134,12 +134,45 @@ CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDL
 2. reads the mitm CA out of the container and appends it to the public roots,
 3. CONNECTs through the proxy from inside the node and requires the attempt to
    appear in the proxy's *own* log before going further,
-4. **regenerates** `out/` from `out/profile.json` with `proxy` + inline
-   `ca_bundle` merged in (so the manifests under test are generator output, not
+4. **regenerates** `out/` from `out/profile.json` with `proxy` + the CA mode
+   under test merged in (so the manifests under test are generator output, not
    a hand-patched Deployment),
 5. deploys, waits for the agent to come online, and then requires
    `blazemeter.com` lines in the proxy log — online *without* them means the
    agent bypassed the proxy, which fails the test.
+
+### Which CA mode is under test (`--ca-mode`)
+
+There are two ways a customer configures CA trust on a cluster, and until #227
+only one of them had ever been deployed under interception.
+
+| `--ca-mode` | who owns the ConfigMap | what the bundle carries |
+|---|---|---|
+| `inline` (default) | the generator | `bzm_cacerts.yaml`, holding the PEM |
+| `existing` | the **rig**, created before the deploy | a reference by name and key only |
+
+`existing` is the mode BlazeMeter recommend and the one nearly every customer
+takes, because a platform team owns and rotates the bundle. The rig creates
+`bzm-opl-livetest-trust` holding the MITM CA and generates a bundle that only
+references it.
+
+**The key is deliberately not `ca-bundle.crt`.** It is `corp-root.pem`, because
+`ca-bundle.crt` is what the generator falls back to when `ca_configmap_key` is
+unset — so a run using it would pass whether or not the configured key reached
+anything. With a key nothing defaults to, `REQUESTS_CA_BUNDLE` inside the crane
+pod is `/var/cm/corp-root.pem` or the run fails.
+
+Two rules it keeps, both the cluster's and the namespace's one level further
+down: it **refuses a ConfigMap of that name it did not create** rather than
+replacing a trust bundle that is somebody's, and it deletes the one it did
+create when the namespace survives teardown. The negative control clears **all
+three** CA modes rather than the inline PEM alone — clearing only that leaves an
+existing-mode run referencing a ConfigMap that is gone, and a pod that cannot
+start never logs `CERTIFICATE_VERIFY_FAILED`, so the control would fail having
+tested nothing.
+
+`--ca-mode` needs `--local-proxy`; without one no CA is configured at all, so
+the flag is refused rather than ignored.
 
 ## The credential a run uses
 

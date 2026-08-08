@@ -1216,3 +1216,20 @@ def test_doctor_and_the_other_surfaces_answer_from_one_rule(monkeypatch, capsys,
         printed = _doctor_namespace(monkeypatch, capsys, tmp_path,
                                     "--manifests", manifests)
         assert printed == core.preflight(facts, options, doc)["namespace"]
+
+
+def test_ca_mode_needs_the_proxy_that_owns_the_ca(monkeypatch, tmp_path):
+    """The CA under test is the MITM proxy's, so a run with no proxy configures
+    no CA trust at all -- and would report a pass having deployed neither mode.
+    Named rather than ignored, like every other flag combination this rig
+    refuses."""
+    _, _, exit = _livetest(monkeypatch, tmp_path, FakeClient(),
+                           "--ca-mode", "existing")
+    assert "--ca-mode needs --local-proxy" in str(exit)
+
+
+def test_the_default_ca_mode_asks_for_no_proxy(monkeypatch, tmp_path):
+    """inline is the default and the rig's long-standing behaviour, so it must
+    not start refusing runs that never mentioned a CA."""
+    regenerate, _, exit = _livetest(monkeypatch, tmp_path, FakeClient())
+    assert exit.code == 0 and regenerate is not None
