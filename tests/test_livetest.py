@@ -1264,7 +1264,7 @@ def test_ensure_kind_reports_a_cluster_it_only_reused(monkeypatch):
 
 
 def test_ensure_cluster_passes_the_answer_on(monkeypatch):
-    monkeypatch.setattr(livetest, "ensure_kind", lambda: True)
+    monkeypatch.setattr(livetest, "ensure_kind", lambda **k: True)
     monkeypatch.setattr(livetest, "ensure_minikube", lambda *a, **k: False)
     assert livetest.ensure_cluster("kind") is True
     assert livetest.ensure_cluster("minikube") is False
@@ -1465,3 +1465,174 @@ def test_ensure_namespace_reports_one_it_created(monkeypatch):
 def test_owned_defaults_to_owning_nothing():
     o = livetest.Owned()
     assert (o.cluster, o.namespace, o.blackholed) == (False, False, ())
+
+
+# -- the existing-ConfigMap CA mode, live (#227) -------------------------------
+#
+# The rig has only ever exercised the inline mode: proxy_overlay seeds
+# `ca_bundle` and clears the other two, so the mode nearly every customer takes
+# has never been deployed under TLS interception. `--ca-mode existing` makes the
+# rig create the trust ConfigMap itself and reference it.
+#
+# The key is deliberately NOT `ca-bundle.crt`. That is what `_ca_cfg` falls back
+# to when `ca_configmap_key` is unset, so a run using it would pass whether or
+# not the key reached anything -- the same shape of vacuous proof the negative
+# control exists to stop.
+
+
+def test_the_existing_mode_overlay_names_the_rigs_own_configmap():
+    o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="existing")
+    assert o["ca_existing_configmap"] == livetest.CA_RIG_CONFIGMAP
+    assert o["ca_configmap_key"] == livetest.CA_RIG_KEY
+    assert o["ca_bundle"] is None and o["ca_openshift_inject"] is False
+
+
+def test_the_rigs_key_is_not_the_generators_default():
+    """Or the run would pass with `ca_configmap_key` reaching nothing."""
+    assert livetest.CA_RIG_KEY != gen.CA_FILENAME
+
+
+def test_the_existing_mode_still_carries_the_proxy():
+    o = livetest.proxy_overlay("h", 8080, CA_PEM, "bzm", "s3cr3t",
+                               ca_mode="existing")
+    assert o["proxy"]["https"] == "http://h:8080"
+    assert o["proxy"]["username"] == "bzm"
+
+
+def test_the_existing_mode_renders_a_bundle_that_mounts_the_rigs_key():
+    """The whole chain in one assertion: no ConfigMap of our own, the reference
+    by name, and both variables built from the non-default key."""
+    opts = {"namespace": "ns1", "auth_token": "tok",
+            **livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="existing")}
+    files = gen.generate(FACTS, opts)
+    assert "bzm_cacerts.yaml" not in files
+    d = yaml.safe_load(files["bzm_deployment.yaml"])
+    vol = d["spec"]["template"]["spec"]["volumes"][0]["configMap"]["name"]
+    assert vol == livetest.CA_RIG_CONFIGMAP
+    cm = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
+    assert cm["REQUESTS_CA_BUNDLE"] == f"/var/cm/{livetest.CA_RIG_KEY}"
+    assert cm["KUBERNETES_CA_BUNDLE_MOUNT"] == (
+        f"REQUESTS_CA_BUNDLE={livetest.CA_RIG_CONFIGMAP}={livetest.CA_RIG_KEY}:"
+        f"AWS_CA_BUNDLE={livetest.CA_RIG_CONFIGMAP}={livetest.CA_RIG_KEY}")
+
+
+def test_the_existing_mode_wins_over_a_profile_carrying_an_inline_pem():
+    """The mirror of test_overlay_replaces_existing_ca_mode: whichever mode the
+    bundle under test was written with, the rig's own answer replaces it, or
+    _ca_cfg sees two and refuses."""
+    opts = {"namespace": "ns1", "ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n"
+                                             "-----END CERTIFICATE-----",
+            **livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="existing")}
+    files = gen.generate(FACTS, opts)
+    assert "bzm_cacerts.yaml" not in files
+
+
+def test_ensure_ca_configmap_creates_it_with_the_key_the_bundle_mounts(
+        monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 1, "", ""))
+    assert livetest.ensure_ca_configmap("kubectl", "ns1", CA_PEM) is True
+    create, = [c for c in cmds if "create" in c and "configmap" in c]
+    assert create[:5] == ["kubectl", "-n", "ns1", "create", "configmap"]
+    assert create[5] == livetest.CA_RIG_CONFIGMAP
+    # --from-file=<key>=<path>, the explicit form: the bare one would key the
+    # entry on the temp file's own name and mount an empty file.
+    arg, = [a for a in create if a.startswith("--from-file=")]
+    assert arg.startswith(f"--from-file={livetest.CA_RIG_KEY}=")
+    written = arg.split("=", 2)[2]
+    assert not os.path.exists(written), "the temp CA file outlived the call"
+
+
+def test_ensure_ca_configmap_refuses_one_it_did_not_create(monkeypatch):
+    """Same rule as the cluster and the namespace: what this run did not make,
+    it does not overwrite -- and overwriting is what a rig replacing the content
+    of somebody's trust bundle would do."""
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    with pytest.raises(RuntimeError, match=livetest.CA_RIG_CONFIGMAP):
+        livetest.ensure_ca_configmap("kubectl", "ns1", CA_PEM)
+
+
+def test_teardown_removes_the_ca_configmap_from_a_namespace_it_kept(
+        monkeypatch, tmp_path):
+    """A surviving namespace keeps it otherwise, and the next run into that
+    namespace is then refused by ensure_ca_configmap -- correctly, but over an
+    object this rig left there."""
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind",
+                      livetest.Owned(ca_configmap=True))
+    assert ["kubectl", "-n", "ns1", "delete", "cm", livetest.CA_RIG_CONFIGMAP,
+            "--ignore-not-found"] in cmds
+
+
+def test_teardown_does_not_remove_a_ca_configmap_this_run_did_not_create(
+        monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind", livetest.Owned())
+    assert not any(livetest.CA_RIG_CONFIGMAP in c for c in cmds)
+
+
+def test_owned_still_defaults_to_owning_nothing():
+    """The field is new; the rule it has to keep is not."""
+    assert livetest.Owned().ca_configmap is False
+
+
+def test_the_negative_control_clears_whichever_mode_the_run_is_using(
+        monkeypatch, tmp_path):
+    """It cleared `ca_bundle` alone, which for an existing-ConfigMap run leaves
+    the reference in place: the pod then never starts (the ConfigMap is gone
+    with it), so nothing ever logs CERTIFICATE_VERIFY_FAILED and the control
+    fails for the wrong reason."""
+    seen = {}
+    monkeypatch.setattr(livetest, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(livetest, "deploy", lambda *a, **k: "kubectl")
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    overlay = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="existing")
+    livetest.negative_control(lambda o: seen.update(o), overlay,
+                              str(tmp_path), "ns1", "kind", timeout=0)
+    assert seen["ca_bundle"] is None
+    assert seen["ca_existing_configmap"] is None
+    assert seen["ca_openshift_inject"] is False
+
+
+def test_a_second_ensure_cluster_does_not_say_the_run_will_keep_what_it_built(
+        monkeypatch, capsys):
+    """run() creates the cluster and keeps the answer; deploy() then calls
+    ensure_cluster again and drops it. That second call finds the profile it
+    just made and printed "reusing ... this run will not delete it" -- which
+    teardown then contradicts by deleting it, correctly.
+
+    Seen in the #227 live run: the log said the profile would survive, twice,
+    and the run ended with `minikube delete`. A function that drops the answer
+    must not narrate it either, or the log reports the opposite of what happens.
+    """
+    monkeypatch.setattr(livetest, "minikube_profile_exists", lambda: True)
+    monkeypatch.setattr(livetest, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(livetest, "policy_enforced", lambda *a, **k: True)
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, "Running", ""))
+    livetest.ensure_minikube(announce=False)
+    assert "will not delete it" not in capsys.readouterr().out
+
+
+def test_ensure_cluster_still_announces_a_reuse_to_the_caller_that_keeps_it(
+        monkeypatch, capsys):
+    """The message is the point everywhere else: it is the only place a run says
+    which cluster it is about to leave alone."""
+    monkeypatch.setattr(livetest, "minikube_profile_exists", lambda: True)
+    monkeypatch.setattr(livetest, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(livetest, "policy_enforced", lambda *a, **k: True)
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, "Running", ""))
+    livetest.ensure_minikube()
+    assert "will not delete it" in capsys.readouterr().out

@@ -665,6 +665,12 @@ def cmd_livetest(a):
             f"only that it never came online. "
             f"{core.token_recovery_hint(opts)}")
     proxy_user = proxy_pass = None
+    # Named rather than ignored: the mode decides how the CA reaches the pod,
+    # and without --local-proxy no CA is configured at all -- so a run given
+    # --ca-mode existing alone would report a pass having deployed neither.
+    if a.ca_mode != "inline" and not a.local_proxy:
+        sys.exit("--ca-mode needs --local-proxy: the CA under test is the "
+                 "proxy's, and a run without one configures no CA trust at all")
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
         sys.exit("--contain-egress needs --local-proxy and --cluster minikube: "
                  "the policy denies everything except DNS, the apiserver, and "
@@ -719,7 +725,8 @@ def cmd_livetest(a):
                       proxy_pass=proxy_pass, regenerate=regenerate, opts=opts,
                       negative_control_check=not a.skip_negative_control,
                       contain_egress=a.contain_egress, run_test=a.run_test,
-                      engine_cpu=a.engine_cpu, engine_mem=a.engine_mem)
+                      engine_cpu=a.engine_cpu, engine_mem=a.engine_mem,
+                      ca_mode=a.ca_mode)
     sys.exit(0 if ok else 1)
 
 
@@ -1189,6 +1196,12 @@ def main():
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "
                         "knowing whether the rig can fail at all)")
+    t.add_argument("--ca-mode", choices=("inline", "existing"), default="inline",
+                   help="with --local-proxy: which CA-trust configuration to "
+                        "deploy. 'inline' writes the MITM CA into a ConfigMap "
+                        "the generator owns; 'existing' has the rig create one "
+                        "and the bundle only reference it, which is the mode "
+                        "BlazeMeter recommend (default inline)")
     t.add_argument("--proxy-auth", metavar="USER:PASS", default="bzm:s3cr3t",
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
