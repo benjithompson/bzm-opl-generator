@@ -24,7 +24,12 @@ drop out of `IMAGE_OVERRIDES`.
 
 The web UI ships prebuilt in `bzm_opl_gen/ui_dist/`, so nothing above needs npm.
 Changing it does: `cd frontend && npm install`, and `npm run build` is what
-refreshes what the wheel carries ([docs/web-ui.md](docs/web-ui.md)).
+refreshes what the wheel carries ([docs/web-ui.md](docs/web-ui.md)). **Commit
+the rebuild with the source change.** A build records a fingerprint of the
+sources it was built from, and `tests/test_ui_build.py` recomputes it — so a
+`frontend/src` edit committed without a rebuilt `ui_dist` fails the offline
+suite and names the command, rather than shipping a page older than the code
+behind it.
 
 ## Layout
 
@@ -42,6 +47,7 @@ bzm_opl_gen/
   options.py     what each generate option is for (docs/options.md renders it)
   evidence.py    the cluster-evidence document's section names, stated once
   service.py     the macOS LaunchAgent `ui --install-service` writes
+  ui_build.py    the fingerprint a frontend build records, and how to recompute it
   core.py        orchestration, transport-free -- no fastapi, no request objects
   server.py      HTTP over core.py: routes, request models, the web UI's bind
   mcp_server.py  MCP over core.py: six action-dispatch tools, docs as resources
@@ -50,7 +56,8 @@ bzm_opl_gen/
                               | create-location | create-agent | delete-location
   templates/     per-CRD best-practice templates, plus templates/helm/ (the chart)
   profiles/      option profiles (standard | private-registry | proxy-ca)
-  ui_dist/       prebuilt web UI, shipped in the wheel
+  ui_dist/       prebuilt web UI, shipped in the wheel; a build records the
+                 sources it was built from in source-fingerprint.json
 frontend/        web UI source (React); `npm run build` refreshes ui_dist/
 tests/           offline unit tests (fixture facts), plus helm_parity.py
 docs/            user-facing reference split out of README.md
