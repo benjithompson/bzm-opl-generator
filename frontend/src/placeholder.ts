@@ -5,9 +5,11 @@
  *  nobody typed did not, and the bundle came out with no private registry and
  *  nothing anywhere saying so -- the group's switch was on, the field was
  *  empty, and empty is what "not using one" looks like in the options. Both
- *  become the same thing here: the field carries `<PLACEHOLDER>` into the
+ *  become the same thing here: the field carries `<PRIVATE_REGISTRY>` into the
  *  bundle, the README names it, and applying it fails with the field named
- *  rather than deploying something subtly wrong.
+ *  rather than deploying something subtly wrong. The marker is the field's own
+ *  key in upper case, so the string in the file says which box was left empty
+ *  without the README having to be the only place that does.
  *
  *  **The marker never enters the options this page holds.** It is applied to
  *  what is *sent* (`withPlaceholders`), so the input stays empty on screen,
@@ -38,12 +40,6 @@ import { GroupId, OPTION_GROUPS, serviceAccountOk } from "./optionGroups";
 export function marker(key: string): string {
   return `<${key.replace(/\./g, "_").toUpperCase()}>`;
 }
-
-/** The marker still emitted for every blank field (#244). It is what `marker`
- *  would produce for an option called `placeholder`, so every reader that
- *  recognises `<KEY>` already recognises it; #245 replaces it with the per-key
- *  one and this goes. */
-export const PLACEHOLDER = "<PLACEHOLDER>";
 
 /** The core fields, which belong to no group: they are on the step itself. */
 const CORE: { key: string; blank: (o: Options) => boolean }[] = [
@@ -95,9 +91,14 @@ export function withPlaceholders(o: Options, blanks: string[]): Options {
   if (!blanks.length) return o;
   const out: Record<string, unknown> = { ...o };
   for (const key of blanks) {
+    // The marker for the whole dotted key, so `proxy.https` sends
+    // `<PROXY_HTTPS>` and not the sub-key's own -- the generator's
+    // `placeholder_options` reports the same dotted key back, and the two have
+    // to be the one name for the one field.
+    const mark = marker(key);
     const [head, sub] = key.split(".");
-    if (sub === undefined) { out[head] = PLACEHOLDER; continue; }
-    out[head] = { ...(out[head] as object ?? {}), [sub]: PLACEHOLDER };
+    if (sub === undefined) { out[head] = mark; continue; }
+    out[head] = { ...(out[head] as object ?? {}), [sub]: mark };
   }
   return out as Options;
 }
@@ -110,10 +111,16 @@ export function withPlaceholders(o: Options, blanks: string[]): Options {
  *  generated now, and says of itself that it is unfinished. */
 export function placeholderWarning(blanks: string[]): string {
   if (!blanks.length) return "";
-  const list = blanks.length === 1 ? blanks[0]
-    : `${blanks.slice(0, -1).join(", ")} and ${blanks[blanks.length - 1]}`;
+  // Each field beside its own marker, because the marker is the half that is
+  // useful away from this page: it is what somebody greps the bundle for once
+  // the zip has been handed on. Paired rather than listed twice, or the
+  // sentence is two lists the reader has to line up by position.
+  const named = blanks.map((k) => `${k} (${marker(k)})`);
+  const list = named.length === 1 ? named[0]
+    : `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
   const is = blanks.length === 1 ? "is" : "are";
-  return `${list} ${is} empty, so the bundle will carry ${PLACEHOLDER} `
-    + `instead. It cannot be applied until ${blanks.length === 1
-      ? "it is" : "they are"} filled in — here, or in the files afterwards.`;
+  return `${list} ${is} empty, so the bundle will carry ${blanks.length === 1
+    ? "that marker" : "those markers"} instead. It cannot be applied until `
+    + `${blanks.length === 1 ? "it is" : "they are"} filled in — here, or in `
+    + `the files afterwards.`;
 }

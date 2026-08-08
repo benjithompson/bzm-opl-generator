@@ -128,7 +128,7 @@ def test_crane_image_is_pinned_to_what_the_account_advertises():
 
 
 def test_unfetched_token_is_left_empty_not_placeholdered():
-    """The default auth_token is gen.PLACEHOLDER for the manifests. Carried into
+    """The default auth_token is `<AUTH_TOKEN>` for the manifests. Carried into
     values it would install an agent that authenticates with the literal string,
     so it becomes an empty value the chart rejects.
 
@@ -138,7 +138,7 @@ def test_unfetched_token_is_left_empty_not_placeholdered():
     See REQUIRED_TEXT."""
     v, plain = _values(auth_token=gen.DEFAULT_OPTIONS["auth_token"])
     assert v["authToken"] == ""
-    assert gen.PLACEHOLDER not in plain[gen.HELM_VALUES_FILE]
+    assert not gen.MARKER_RE.search(plain[gen.HELM_VALUES_FILE])
     assert "not finished" not in plain["README.md"]
 
 
@@ -413,7 +413,7 @@ def test_unnamed_service_account_is_marked_in_helm_format_too():
     bzm-opl.validate) -- that guard now covers a hand-edited values file, which
     is the only route left to an install with one in it."""
     v, plain = _values(service_account_name="", service_account_create=False)
-    assert v["serviceAccount"]["name"] == gen.PLACEHOLDER
+    assert v["serviceAccount"]["name"] == gen.marker("service_account_name")
     assert "service_account_name" in plain["README.md"]
     assert "not finished" in plain["README.md"]
 

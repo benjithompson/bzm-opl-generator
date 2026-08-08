@@ -1480,19 +1480,24 @@ def _profile_refusals(manifest_dir, ship_id, profile):
             f"bundle, and a re-render would merge onto it rather than "
             f"correct it")
     # A field somebody left blank. The API server would refuse the object
-    # anyway -- <PLACEHOLDER> is not a legal name -- but it refuses it *after*
+    # anyway -- no marker is a legal name -- but it refuses it *after*
     # this rig has built a cluster, and the run then spends its whole 12-20
     # minutes reporting that the agent never came online. The same shape as the
     # three guards around it, and cheaper than all of them: it is one read of a
     # file already open.
     blank = generate.placeholder_options(profile or {})
     if blank:
+        # Each field beside its own marker, because the two are what somebody
+        # then greps the bundle with -- the field names the box on the form and
+        # the marker names the string in the file.
+        named = ", ".join(f"{k} ({generate.marker(k)})" for k in blank)
         refusals.append(
-            f"{path} was generated with {', '.join(blank)} left blank, so the "
-            f"bundle carries {generate.PLACEHOLDER} instead of "
-            f"{'those values' if len(blank) > 1 else 'that value'}. Nothing "
-            f"here can guess {'them' if len(blank) > 1 else 'it'}: re-generate "
-            f"the bundle with {'them' if len(blank) > 1 else 'it'} set")
+            f"{path} was generated with {named} left blank, so the bundle "
+            f"carries {'those markers' if len(blank) > 1 else 'that marker'} "
+            f"instead of {'those values' if len(blank) > 1 else 'that value'}. "
+            f"Nothing here can guess {'them' if len(blank) > 1 else 'it'}: "
+            f"re-generate the bundle with "
+            f"{'them' if len(blank) > 1 else 'it'} set")
     return refusals
 
 
@@ -1583,16 +1588,20 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
     # against a real account to prove a handshake that cannot happen.
     mounts = compose_blank_mounts(manifest_dir)
     for m, at in mounts.unread:
-        notes.append(f"{at} could not be read, so it was not checked for "
-                     f"{generate.PLACEHOLDER} -- the {m.what} this bundle "
-                     f"mounts is whatever that file holds")
+        # No marker is named here, and that is the honest answer: nothing read
+        # the file, so nothing knows what is in it. The one this bundle would
+        # have written is `generate.marker(m.option)`, and printing that would
+        # read as a marker somebody had seen.
+        notes.append(f"{at} could not be read, so it was not checked for a "
+                     f"marker -- the {m.what} this bundle mounts is whatever "
+                     f"that file holds")
     if mounts.blank:
-        files = ", ".join(b.path for b in mounts.blank)
+        files = ", ".join(f"{b.path} ({b.marker})" for b in mounts.blank)
         opts = ", ".join(b.mount.option for b in mounts.blank)
         names = ", ".join(b.mount.var for b in mounts.blank)
         many = len(mounts.blank) > 1
         refusals.append(
-            f"{files} carr{'y' if many else 'ies'} {generate.PLACEHOLDER}, "
+            f"{files} carr{'y' if many else 'ies'} a marker, "
             f"which is what this generator writes into a mounted file whose "
             f"option was left blank ({opts}). The container would come up and "
             f"fail on it later -- a rejected handshake rather than an agent "

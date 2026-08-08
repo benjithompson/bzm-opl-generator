@@ -206,7 +206,13 @@ form it was left blank on.
 {{- range $field, $value := $blank -}}
 {{- $held := trim (toString (default "" $value)) -}}
 {{- if regexMatch "^<[A-Z][A-Z0-9_]*>$" $held -}}
-{{- fail (printf "%s was left blank when this bundle was generated and still holds <PLACEHOLDER>. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in -- installing as it stands would deploy an agent that cannot work" $field $field) -}}
+{{/*
+The marker is printed from the value rather than built from $field, and the two
+are not the same string: $field is this chart's own path (serviceAccount.name)
+while the marker names the generator's option (<SERVICE_ACCOUNT_NAME>). Both
+belong in the message -- the path is what you set, the marker is what you grep.
+*/}}
+{{- fail (printf "%s was left blank when this bundle was generated and still holds %s. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in -- installing as it stands would deploy an agent that cannot work" $field $held $field) -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.harborId -}}

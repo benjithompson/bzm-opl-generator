@@ -15,7 +15,8 @@ from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
-# What a required text field holds when it was left blank: a marker, `<KEY>`.
+# What a required text field holds when it was left blank: a marker, `<KEY>` --
+# the option's own key in upper case.
 #
 # **The angle brackets are the guard, not decoration.** No Kubernetes name,
 # label or namespace may contain `<` or `>` (RFC 1123 is lowercase alphanumerics
@@ -37,14 +38,6 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 # then the README table's answer and nowhere else's.
 MARKER_PATTERN = "<[A-Z][A-Z0-9_]*>"
 MARKER_RE = re.compile(MARKER_PATTERN)
-
-# ...and what is emitted today, which is one marker for every field (#244).
-# The readers below all ask MARKER_RE, so they already recognise the per-key
-# markers this constant is about to be replaced by (#245); nothing writes one
-# yet, so no bundle's *values* change while the readers are converted. This is
-# the expand half of an expand-contract, and the constant goes when the emitting
-# half lands.
-PLACEHOLDER = "<PLACEHOLDER>"
 
 
 def marker(key):
@@ -120,11 +113,11 @@ DEFAULT_OPTIONS = {
     "output_format": "manifests",   # manifests | helm
     "namespace": "blazemeter",
     "use_secret": True,              # False -> AUTH_TOKEN in ConfigMap (simplified)
-    # PLACEHOLDER rather than a token-specific marker: see the constant. This is
-    # the one option whose *default* is the placeholder, because it is the one
-    # with no sensible value to fall back to -- the rest reach it only by being
-    # emptied (see fill_placeholders).
-    "auth_token": PLACEHOLDER,
+    # The one option whose *default* is its marker, because it is the one with
+    # no sensible value to fall back to -- the rest reach a marker only by being
+    # emptied (see fill_placeholders). Written out rather than `marker(
+    # "auth_token")` so this table stays a table of values a reader can see.
+    "auth_token": "<AUTH_TOKEN>",
     "private_registry": None,        # e.g. registry.example.com/blazemeter
     "pull_secret": None,             # name of docker-registry secret for crane image
     "registry_auth": False,          # emit commented DOCKER_REGISTRY_USERNAME/PASSWORD
@@ -407,7 +400,12 @@ REQUIRED_TEXT = {
 
 
 def fill_placeholders(o):
-    """Resolve every required-but-blank text option to PLACEHOLDER, in place.
+    """Resolve every required-but-blank text option to its own marker, in place.
+
+    Its own, rather than one shared marker: the bundle is the artefact that gets
+    handed on, and `<AUTH_TOKEN>` in the Secret says which field is missing from
+    the file alone. A shared marker said only that *something* was, and which
+    field was then the README table's answer and nowhere else's.
 
     A format that has no such field is skipped, on the same rule as every other
     reader here: a docker bundle has no namespace and no ServiceAccount, and
@@ -419,7 +417,7 @@ def fill_placeholders(o):
         if key in ignored or not applies(o):
             continue
         if not str(o.get(key) or "").strip():
-            o[key] = PLACEHOLDER
+            o[key] = marker(key)
     return o
 
 
@@ -439,7 +437,7 @@ def _reportable(o, key):
 
 
 def placeholder_options(o):
-    """The fields this bundle carries a PLACEHOLDER for, sorted.
+    """The fields this bundle carries a marker for, sorted.
 
     Reads the values rather than REQUIRED_TEXT: the marker is the fact, and half
     of the fields that can carry one are the page's to decide (see above), so a
@@ -1407,10 +1405,11 @@ metadata:
     pem = "\n".join("    " + line for line in body.strip().splitlines())
     # The comment is for the human who opens this file, and it never reaches the
     # applied object -- so unlike the marker itself it costs nothing at apply
-    # time and cannot be read back as content. A bare <PLACEHOLDER> says a value
-    # is missing; it does not say which value, or what shape it has.
+    # time and cannot be read back as content. `<CA_BUNDLE>` says which value is
+    # missing; it does not say what shape that value has, which is this.
     note = ("" if ca["mode"] != "slot" else
-            f"  # Paste your CA here, replacing {PLACEHOLDER} below: the whole\n"
+            f"  # Paste your CA here, replacing {marker('ca_bundle')} below: "
+            f"the whole\n"
             f"  # -----BEGIN CERTIFICATE----- block, and your public roots with\n"
             f"  # it -- this file replaces the trust store rather than adding to\n"
             f"  # it. Keep the four-space indent. Then apply this bundle.\n")
@@ -1430,7 +1429,7 @@ def ca_pem(o):
     for. One helper because both platforms write it -- a ConfigMap entry here, a
     file beside the script on docker -- and a slot that reached only one of them
     would be a mode that silently means nothing on the other."""
-    return PLACEHOLDER if o.get("ca_bundle_slot") else o["ca_bundle"]
+    return marker("ca_bundle") if o.get("ca_bundle_slot") else o["ca_bundle"]
 
 
 def _proxy_secret_block(o):
@@ -1998,10 +1997,19 @@ def _ca_slot_block(o):
         check = ("**Applying it as it stands succeeds** -- the marker is a "
                  "ConfigMap value, not a name -- so the agent would come up "
                  "trusting nothing extra. This is the check:")
-        cmd = f"\n>\n> ```\n> grep -c {PLACEHOLDER} {CA_CONFIGMAP_FILE}\n> ```"
+        # The marker this file actually carries, rather than the pattern every
+        # reader matches: this block is about one field, the reader is going to
+        # look at one file, and a regular expression printed as a command a
+        # customer copies is a worse answer than the string they will see.
+        # Quoted, and it was not before: `grep -c <CA_BUNDLE> file` is a shell
+        # *redirect* from a file called CA_BUNDLE, so the command a reader
+        # copies fails with "no such file" and says nothing about the bundle.
+        cmd = (f"\n>\n> ```\n> grep -c '{marker('ca_bundle')}' "
+               f"{CA_CONFIGMAP_FILE}\n> ```")
     body = textwrap.fill(
         f"**This bundle is waiting for a certificate.** `{where}` is here and "
-        f"wired to the agent, with `{PLACEHOLDER}` where the PEM goes. Paste "
+        f"wired to the agent, with `{marker('ca_bundle')}` where the PEM goes. "
+        f"Paste "
         f"your CA into it -- the whole BEGIN CERTIFICATE block, and your "
         f"public roots with it, because this file replaces the trust store "
         f"rather than adding to it -- and deploy as normal. {check}",
@@ -2025,13 +2033,23 @@ def _placeholder_block(o, where=()):
     if not found:
         return ""
     where = dict(where)
+    # The marker gets a column of its own, because it is what a reader has in
+    # front of them: they are looking at `<SV_TLS_KEY>` in a file and this table
+    # is where that string is joined to a field name and to whoever knows the
+    # value. It also makes the table the one place a `grep` can be built from.
     rows = "\n".join(
-        f"| `{k}` | {PLACEHOLDER_SOURCE.get(k, 'no value was given')}"
+        f"| `{k}` | `{marker(k)}` "
+        f"| {PLACEHOLDER_SOURCE.get(k, 'no value was given')}"
         + (f" (in `{where[k]}`)" if k in where else "") + " |"
         for k in found)
     n = len(found)
-    subject = (f"{n} fields were left blank and carry" if n > 1
-               else "1 field was left blank and carries")
+    # One field is named inline; several are left to the table. Listing every
+    # marker in the sentence as well would restate the column beside it, and the
+    # sentence is the part that has to be read at a glance.
+    subject = (f"{n} fields were left blank, and each carries a marker naming "
+               f"it" if n > 1
+               else f"1 field was left blank, and it carries "
+                    f"`{marker(found[0])}`")
     # What stops it, per format -- and they genuinely differ, so one sentence
     # for all three would be wrong twice. The Kubernetes formats are refused by
     # something outside the bundle (the API server, then the chart's own
@@ -2052,10 +2070,13 @@ def _placeholder_block(o, where=()):
                  "up and fails later: `404` and `Sleeping for 300` on a blank "
                  "credential, a rejected handshake on a blank certificate.")
     elif all(k in PLACEHOLDER_REFUSED_BY_NAME for k in found):
-        stops = (f"Applying it fails -- `{PLACEHOLDER}` is not a legal "
-                 "Kubernetes name, so the API server rejects the object and "
-                 "names the field. That is the intended behaviour, not a fault "
-                 "in this bundle.")
+        markers = " and ".join(f"`{marker(k)}`" for k in found)
+        stops = (f"Applying it fails -- {markers} "
+                 + ("are not legal Kubernetes names" if n > 1
+                    else "is not a legal Kubernetes name")
+                 + ", so the API server rejects the object and names the "
+                   "field. That is the intended behaviour, not a fault in this "
+                   "bundle.")
     elif o["output_format"] == "helm":
         # The chart is the one cluster format with an install-time hook, and
         # bzm-opl.validate already refuses exactly this set.
@@ -2066,26 +2087,31 @@ def _placeholder_block(o, where=()):
         # the fields are in the table above, so this says which *kind* stops it
         # rather than listing them again. Claiming the API server catches them
         # all is what sent somebody to apply a bundle expecting to be stopped.
-        stops = (f"Applying it does not always fail: the API server rejects "
-                 f"`{PLACEHOLDER}` as a name and accepts it as a value, so an "
-                 f"agent can deploy and fail after. Check with "
-                 f"`grep -rl {PLACEHOLDER} *.yaml`.")
+        # The grep is the pattern rather than a marker, and it is the one place
+        # in this block that is: the question here is "does any field still
+        # carry one", over several files and several fields, so a single
+        # marker would answer it for one of them. Each field's own marker is
+        # in the table above, for a reader who wants to check just that one.
+        stops = (f"Applying it does not always fail: the API server rejects a "
+                 f"marker used as a name and accepts one used as a value, so "
+                 f"an agent can deploy and fail after. Check with "
+                 f"`grep -rl '{MARKER_PATTERN}' *.yaml`.")
     # Wrapped rather than hand-broken: the sentence differs per format and by
     # how many fields there are, so fixed line breaks land wherever the shorter
     # wording leaves them. Never inside a hyphenated word, though -- a wrap
     # through `bzm-opl-agent.sh` renders as two words in the Markdown, and the
     # sentence names files.
     quote = textwrap.fill(
-        f"**This bundle is not finished.** {subject} `{PLACEHOLDER}` instead of "
-        f"a value. {stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
+        f"**This bundle is not finished.** {subject} instead of a value. "
+        f"{stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
         f"with {'them' if n > 1 else 'it'} set.",
         width=76, break_on_hyphens=False)
     quoted = "\n".join("> " + ln for ln in quote.splitlines())
     return f"""
 {quoted}
 
-| field | where the value comes from |
-|---|---|
+| field | marker | where the value comes from |
+|---|---|---|
 {rows}
 """
 
@@ -2611,9 +2637,10 @@ def existing_auth_token(output_dir):
         # A marker is not a token, whichever marker it is. Asked of the value
         # rather than compared with today's default, because this reads a
         # directory an *older* version of this generator may have written: a
-        # bundle carrying the shared `<PLACEHOLDER>` would otherwise be read
-        # back as a credential, and the caller that reuses it (core.resolve_
-        # auth_token, branch 3) would write it into the new bundle as one.
+        # bundle carrying an older version's `<PLACEHOLDER>` would otherwise
+        # read back as a credential, and the caller that reuses it
+        # (core.resolve_auth_token, branch 3) would write it into the new
+        # bundle as one.
         if m and not is_placeholder(m.group(1)):
             return m.group(1)
     return None
@@ -3528,7 +3555,7 @@ def _set_but_not_carried(o):
             if o.get(k) != DEFAULT_OPTIONS[k]]
 
 
-# A required field left blank resolves to <PLACEHOLDER>, and on Kubernetes the
+# A required field left blank resolves to its marker, and on Kubernetes the
 # angle brackets are the guard: no RFC 1123 name may contain one, so the API
 # server refuses the object and names the field, and the chart repeats that
 # check (bzm-opl.validate) for the values the API server never sees as names.
@@ -3568,8 +3595,8 @@ def _docker_blank_env(facts, o):
     Read off the *rendered* values rather than off REQUIRED_TEXT or
     placeholder_options, which stay the option-level answer the README prints.
     Two reasons, and both are about the artefact being a different question from
-    the form: a value can carry the marker without being one (a proxy URL is
-    `user:pass@<PLACEHOLDER>`, assembled by proxy_url from a blank host), and
+    the form: a value can carry a marker without being one (a proxy URL is
+    `user:pass@<PROXY_HTTPS>`, assembled by proxy_url from a blank host), and
     what a running script can check is a variable rather than an option.
 
     It also settles **a format may not refuse what it says it ignores**
