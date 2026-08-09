@@ -40,7 +40,7 @@ bzm-opl-gen ui                              # opens the web UI
 ```
 
 `uv tool install` works the same. Upgrade with `pipx upgrade bzm-opl-gen`, pin
-with `"bzm-opl-gen[ui]==0.4.0"`.
+with `"bzm-opl-gen[ui]==0.4.1"`.
 
 `[ui]` is the web page, `[mcp]` the MCP server ([docs/mcp.md](docs/mcp.md)),
 `[ui,mcp]` both. The bare CLI pulls in one package, `cryptography` — it reads
@@ -53,17 +53,17 @@ hostname against it.
 To track `main`, or to run a tag PyPI has not seen:
 
 ```
-pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.4.0"
+pipx install "bzm-opl-gen[ui] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.4.1"
 ```
 
-Drop `@v0.4.0` to track `main`; add `--force` to reinstall over an existing copy.
+Drop `@v0.4.1` to track `main`; add `--force` to reinstall over an existing copy.
 
 Every release also attaches the built wheel. Download it from the Releases page,
 or with `gh release download --repo benjithompson/bzm-opl-generator`, then
 install the file by its real name:
 
 ```
-pipx install './bzm_opl_gen-0.4.0-py3-none-any.whl[ui]'
+pipx install './bzm_opl_gen-0.4.1-py3-none-any.whl[ui]'
 ```
 
 Name the version rather than globbing it. Neither the shell (inside quotes) nor

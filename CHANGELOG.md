@@ -9,6 +9,34 @@ or **Security**, and drop any section that would be empty. Write entries for
 the person upgrading: what changed for them, not which files moved. Lead with
 anything that breaks.
 
+## [0.4.1] — 2026-08-08
+
+### Added
+
+- **A CA slot now refuses to start.** A `--format manifests` bundle generated
+  with `--ca-placeholder` used to apply cleanly and run a `1/1 Running` agent
+  that could never come online -- the marker is a ConfigMap value, so the API
+  server takes it, and the only evidence was `NO_CERTIFICATE_OR_CRL_FOUND` in
+  crane's own log. The bundle now carries a `ca-slot-check` initContainer, so
+  `kubectl get pods` shows `Init:Error` (then `Init:CrashLoopBackOff`) and
+  `kubectl logs -c ca-slot-check` names the field, the file and the fix. It runs
+  crane's own image, which is already mirrored and pull-secreted, so a sealed
+  cluster with the public registries blackholed pulls nothing new for it. Helm
+  and docker keep the refusals they already had; nothing is duplicated into
+  them.
+- **`generate` says so when it writes one.** One line beside the `AUTH_TOKEN`
+  line, naming the file to fill in for that format and what stops each one. The
+  CLI prints it and the MCP server carries it as a warning.
+
+### Fixed
+
+- **The waiting-for-a-certificate block named a file two formats do not have.**
+  It said `bzm_cacerts.yaml` whatever the format, and a chart bundle carries no
+  such file while a docker bundle carries no ConfigMap at all. Each format now
+  names the file that is in its own directory.
+
+Every bundle generated without `ca_bundle_slot` is unchanged, byte for byte.
+
 ## [0.4.0] — 2026-08-08
 
 ### Added
@@ -1520,7 +1548,8 @@ First packaged release.
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
 
-[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.0...v0.3.1
