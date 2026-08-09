@@ -1,6 +1,6 @@
 [project]
 name = "bzm-opl-gen"
-version = "0.4.0"
+version = "0.4.1"
 description = "Generate and live-test BlazeMeter OPL (private location) k8s/OpenShift deployments from a customer's actual BlazeMeter account"
 # Without this the PyPI page renders with no body at all -- the description
 # above is the one-liner, not the page.
