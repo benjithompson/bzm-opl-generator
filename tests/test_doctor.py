@@ -14,7 +14,7 @@ import textwrap
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import doctor, facts as facts_mod  # noqa: E402
+from bzm_opl_gen import doctor, facts as facts_mod, generate as gen  # noqa: E402
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -1115,6 +1115,24 @@ def test_probe_egress_cannot_honour_a_ca_without_crane(monkeypatch):
     _crane(monkeypatch, False)
     probes = doctor.probe_egress("kubectl", "ns1", {"ca_bundle": "PEM"})
     assert set(probes.values()) == {None}
+
+
+@pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
+def test_a_bundle_with_any_ca_mode_probes_with_that_ca(monkeypatch, mode):
+    """`--cacert` is decided by whether CA trust is configured at all, and the
+    predicate read three of the four modes: a slot bundle whose PEM had been
+    pasted in probed *without* it, so an intercepting proxy's certificate was
+    rejected and `check_egress` FAILed over a namespace that reaches
+    BlazeMeter. Read off CA_MODES, so a fifth mode cannot repeat it (#250)."""
+    opts = {mode: True if gen.DEFAULT_OPTIONS[mode] is False else "x"}
+    targets = doctor.egress_targets(opts)
+    seen = _crane(monkeypatch, True, "\n".join(f"{t} rc=0" for t in targets))
+    doctor.probe_egress("kubectl", "ns1", opts)
+    assert '--cacert "$REQUESTS_CA_BUNDLE"' in seen[0]
+    # And with crane absent, the answer is 'unknown' rather than a one-shot
+    # pod's verdict, which has no trust bundle to reach that CA with.
+    _crane(monkeypatch, False)
+    assert set(doctor.probe_egress("kubectl", "ns1", opts).values()) == {None}
 
 
 def test_probe_egress_falls_back_to_one_shot_pod(monkeypatch):

@@ -105,6 +105,26 @@ def test_secret_options_are_the_ones_profile_json_omits():
         assert f'"{name}"' not in written
 
 
+def test_ca_options_are_the_ones_this_registry_files_under_ca_trust():
+    """`generate.CA_OPTIONS` is what a caller clears to leave CA trust
+    unconfigured -- livetest's negative control, and the proxy overlay that
+    replaces whatever mode a profile already carried. Both went on clearing
+    three keys after `ca_bundle_slot` made a fourth mode (#250), so the set is
+    held against the section the registry files each option under: a fifth CA
+    option gets a registry row (the two parity tests above see to that), and if
+    it is not in `CA_OPTIONS` it fails here rather than in a 12-20 minute live
+    run that proves nothing."""
+    ca = {o.name for o in opt.OPTIONS if o.group == "CA trust"}
+    assert ca == set(gen.CA_OPTIONS)
+
+
+def test_clearing_the_ca_options_leaves_no_mode_configured():
+    """The other half of it: cleared to what? `no_ca()` answers with each
+    option's own default, so `_ca_cfg` resolves to no CA at all."""
+    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True,
+                        **gen.no_ca()}) is None
+
+
 def test_a_nullable_option_is_the_one_whose_default_is_none():
     """`nullable` is what every served shape spends -- core.option_docs carries
     it to the UI and to an MCP session, and a client that cannot send `None`

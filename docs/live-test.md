@@ -165,11 +165,12 @@ pod is `/var/cm/corp-root.pem` or the run fails.
 Two rules it keeps, both the cluster's and the namespace's one level further
 down: it **refuses a ConfigMap of that name it did not create** rather than
 replacing a trust bundle that is somebody's, and it deletes the one it did
-create when the namespace survives teardown. The negative control clears **all
-three** CA modes rather than the inline PEM alone — clearing only that leaves an
-existing-mode run referencing a ConfigMap that is gone, and a pod that cannot
-start never logs `CERTIFICATE_VERIFY_FAILED`, so the control would fail having
-tested nothing.
+create when the namespace survives teardown. The negative control clears **every
+CA mode** rather than the inline PEM alone, and reads the set from the generator
+so a mode added later is cleared too. Clearing only the inline PEM leaves an
+existing-mode run referencing a ConfigMap that is gone, and leaves a slot bundle
+its `ca-slot-check` initContainer; the pod then does not start, so it never logs
+`CERTIFICATE_VERIFY_FAILED` and the control fails having tested nothing.
 
 `--ca-mode` needs `--local-proxy`; without one no CA is configured at all, so
 the flag is refused rather than ignored.
