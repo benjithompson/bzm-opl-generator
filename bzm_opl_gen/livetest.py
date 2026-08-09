@@ -347,23 +347,22 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
                    bundle only references it, which is the mode BlazeMeter
                    recommend and nearly every customer takes.
 
-    Whichever is asked for, the other two are cleared: the overlay is merged
-    onto a profile.json that may already carry any of the three, and _ca_cfg
-    refuses a bundle where two are set. So this is not "set the mode" but
-    "replace whatever mode was there", which is why every key is written on
-    both branches rather than only the one being turned on."""
+    Whichever is asked for, every other mode is cleared: the overlay is merged
+    onto a profile.json that may already carry any of them, and _ca_cfg refuses
+    a bundle where two are set. So this is not "set the mode" but "replace
+    whatever mode was there", which is why it starts from generate.no_ca()
+    rather than writing the keys it knows about -- listing them is what left
+    `ca_bundle_slot` standing beside the rig's own PEM (#250)."""
     url = f"http://{host}:{port}"
     proxy = {"http": url, "https": url, "no_proxy": PROXY_NO_PROXY}
     if user:
         proxy["username"] = user
         if password:
             proxy["password"] = password
-    existing = ca_mode == "existing"
-    return {"proxy": proxy,
-            "ca_bundle": None if existing else ca_pem,
-            "ca_existing_configmap": CA_RIG_CONFIGMAP if existing else None,
-            "ca_configmap_key": CA_RIG_KEY if existing else None,
-            "ca_openshift_inject": False}
+    mode = ({"ca_existing_configmap": CA_RIG_CONFIGMAP,
+             "ca_configmap_key": CA_RIG_KEY} if ca_mode == "existing"
+            else {"ca_bundle": ca_pem})
+    return {"proxy": proxy, **generate.no_ca(), **mode}
 
 
 def ensure_ca_configmap(cli, namespace, ca_pem,
@@ -1097,17 +1096,24 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     """Deploy the same thing minus the CA and require it to fail. A rig that
     cannot fail proves nothing about the run that passes.
 
-    **All three modes are cleared, not `ca_bundle` alone.** Clearing the inline
-    PEM is the whole answer only for an inline run; for an existing-ConfigMap
-    run it leaves the reference standing, and a Deployment referencing a
-    ConfigMap that is not there does not start at all -- so nothing ever logs
-    CERTIFICATE_VERIFY_FAILED and the control fails having tested nothing. What
-    is wanted is an agent that runs and cannot verify, which is the bundle with
-    no CA configured at all."""
+    **Every CA mode is cleared, not `ca_bundle` alone, and the set comes from
+    `generate.no_ca()` rather than from a list here.** Clearing the inline PEM
+    is the whole answer only for an inline run, and each mode left standing
+    fails the control in its own way while looking like the same failure:
+
+      existing  -- the reference survives, the Deployment names a ConfigMap
+                   that is not there, and the pod does not start at all.
+      slot      -- the bundle keeps its `ca-slot-check` initContainer (#241) and
+                   the pod stops at `Init:Error`; crane never runs.
+
+    Neither ever logs CERTIFICATE_VERIFY_FAILED, so the control fails having
+    tested nothing, and it costs the run its whole timeout to say so. What is
+    wanted is an agent that runs and cannot verify, which is the bundle with no
+    CA configured at all -- listing the keys is how the slot was missed for a
+    whole mode's lifetime (#250)."""
     from .generate import CA_CONFIGMAP
     print("negative control: deploying without the CA bundle, expecting TLS failure")
-    regenerate({**overlay, "ca_bundle": None, "ca_existing_configmap": None,
-                "ca_configmap_key": None, "ca_openshift_inject": False})
+    regenerate({**overlay, **generate.no_ca()})
     stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
     if os.path.exists(stale):
         os.remove(stale)          # else deploy() re-applies the previous render

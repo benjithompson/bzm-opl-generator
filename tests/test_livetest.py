@@ -1635,6 +1635,41 @@ def test_the_negative_control_clears_whichever_mode_the_run_is_using(
     assert seen["ca_openshift_inject"] is False
 
 
+def test_the_negative_control_clears_every_ca_option_the_generator_has(
+        monkeypatch, tmp_path):
+    """Read off the generator rather than listed here, so a mode added later
+    fails this rather than passing quietly (#250). `ca_bundle_slot` was that
+    mode: a slot bundle handed to `livetest --manifests` kept its slot through
+    the negative control, so the pod stopped at `Init:Error`, crane never
+    started, nothing logged CERTIFICATE_VERIFY_FAILED, and the run spent its
+    whole timeout reporting a failed control over a bundle whose CA
+    configuration it had not removed."""
+    seen = {}
+    monkeypatch.setattr(livetest, "_run", lambda *a, **k: None)
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(livetest, "deploy", lambda *a, **k: "kubectl")
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    overlay = {**livetest.proxy_overlay("h", 8080, CA_PEM), "ca_bundle_slot": True}
+    livetest.negative_control(lambda o: seen.update(o), overlay,
+                              str(tmp_path), "ns1", "kind", timeout=0)
+    for key in gen.CA_OPTIONS:
+        assert seen[key] == gen.DEFAULT_OPTIONS[key], key
+    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **seen}) is None
+
+
+def test_the_proxy_overlay_replaces_every_ca_mode_too():
+    """Same fault, same source: the overlay is merged onto a profile.json that
+    may carry any mode, so a slot left standing beside the rig's own PEM is
+    `_ca_cfg` refusing the pair -- the run dies at the re-render instead of at
+    the deploy, which is louder and just as wrong."""
+    for mode in ("inline", "existing"):
+        o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode=mode)
+        for key in gen.CA_OPTIONS:
+            assert key in o, f"{mode}: {key} is left for the profile to answer"
+        assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
+
+
 def test_a_second_ensure_cluster_does_not_say_the_run_will_keep_what_it_built(
         monkeypatch, capsys):
     """run() creates the cluster and keeps the answer; deploy() then calls

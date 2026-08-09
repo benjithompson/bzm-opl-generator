@@ -96,10 +96,10 @@ GROUPS = [
      "it for performance testing alone; see "
      "[Service virtualization](service-virtualization.md)."),
     ("CA trust",
-     "Pick **exactly one** of the three modes -- inline PEM, an existing "
-     "ConfigMap, or OpenShift injection. More than one is refused rather than "
-     "resolved. All three mount at `/var/cm` and propagate to engines via "
-     "`KUBERNETES_CA_BUNDLE_MOUNT`."),
+     "Pick **exactly one** of the four modes -- inline PEM, a PEM slot to fill "
+     "in later, an existing ConfigMap, or OpenShift injection. More than one is "
+     "refused rather than resolved. All four mount at `/var/cm` and propagate "
+     "to engines via `KUBERNETES_CA_BUNDLE_MOUNT`."),
     ("Scheduling", None),
     ("Engine and agent sizing",
      "All unset by default: crane has its own defaults and this generator only "

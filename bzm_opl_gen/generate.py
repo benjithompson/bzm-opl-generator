@@ -934,6 +934,26 @@ CA_MODES = {
     "ca_openshift_inject": "OpenShift injection",
 }
 
+# Every option CA trust is configured with: the modes above, and the key that
+# qualifies the existing-ConfigMap one. A caller that has to *remove* CA trust
+# rather than pick a mode reads this and clears all of it -- livetest's negative
+# control, which proves nothing unless the CA is really gone, and the proxy
+# overlay, which replaces whatever mode the profile it merges onto carried. Both
+# listed the keys instead, and both were still clearing three of them when
+# `ca_bundle_slot` made a fourth mode (#250).
+CA_OPTIONS = tuple(CA_MODES) + ("ca_configmap_key",)
+
+
+def no_ca():
+    """CA trust as this generator's own default: every CA option unset.
+
+    The starting point for an overlay that replaces a mode, and the whole of one
+    that removes it. Each key is cleared to its own default rather than to a
+    falsy value chosen here, because `ca_openshift_inject` defaults to False and
+    the rest to None, and a caller writing the wrong one of those puts a value
+    in profile.json that no form could have produced."""
+    return {k: DEFAULT_OPTIONS[k] for k in CA_OPTIONS}
+
 
 def _ca_cfg(o):
     """Resolve the CA-trust mode to {cm, key, mode} or None.
