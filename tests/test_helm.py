@@ -237,6 +237,28 @@ def test_ca_modes_map_to_the_charts_vocabulary(opts, mode, extra):
         assert v["caBundle"][k] == want
 
 
+def test_the_chart_keeps_its_install_time_refusal_and_gains_no_guard():
+    """The manifests format grew an initContainer for a CA slot (#241) and the
+    chart deliberately did not. Helm has an install step to refuse at, where the
+    message reaches the person typing the command rather than a pod log, so a
+    guard here would be a second answer to a question already answered -- and
+    the two formats then genuinely diverge on this one object, which is why
+    `tests/helm_parity.py` compares neither `initContainers` nor a case that
+    sets the slot.
+
+    The README is the other half: it sends a chart reader to the values overlay,
+    which is what a chart bundle actually carries. It named `bzm_cacerts.yaml`
+    until #241 -- a file that is not in the directory.
+    """
+    _, files = _values(ca_bundle_slot=True)
+    for name, text in files.items():
+        assert gen.CA_SLOT_INIT_CONTAINER not in text, name
+        assert "initContainers" not in text, name
+    readme = files["README.md"]
+    assert gen.HELM_VALUES_FILE in readme and "helm install" in readme
+    assert gen.CA_CONFIGMAP_FILE not in readme
+
+
 def test_overlay_carries_no_limitrange_at_all():
     """It used to, and pinned the max computed at generate time -- so raising
     the engine size later produced `default` above `max` and the API server

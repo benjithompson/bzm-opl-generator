@@ -982,6 +982,177 @@ def _ca_cfg(o):
     return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
 
 
+# -- the slot that was never filled in (#241) ---------------------------------
+#
+# A slot bundle is finished by one edit, and the failure when nobody makes it is
+# the quietest this generator has: the marker is a ConfigMap *value*, so the API
+# server takes it (PLACEHOLDER_REFUSED_BY_NAME), all seven objects apply, and the
+# crane pod reports `1/1 Running` while every call to BlazeMeter dies with
+# `SSLError(136, NO_CERTIFICATE_OR_CRL_FOUND)` in its own log alone -- measured
+# on minikube. The other two formats have somewhere to refuse from and both do:
+# helm at `helm install` (bzm-opl.validate), docker from the run script and from
+# compose's required-variable check. Flat manifests have no install step, so the
+# refusal has to be something the bundle carries into the cluster, and that is
+# `_ca_slot_init_container` below.
+
+# The initContainer that carries it. Named, and short: `kubectl get pods` says
+# only `Init:Error`, so the name is what leads a reader from there to
+# `kubectl describe pod` and `kubectl logs -c ca-slot-check`, which is where the
+# two sentences below are.
+CA_SLOT_INIT_CONTAINER = "ca-slot-check"
+
+
+def _ca_slot_lines():
+    """What a bundle says about a CA slot nobody filled in: what is wrong, then
+    what to do -- the two-sentence shape `_docker_blank_file_lines` gives the
+    same kind of fact on the other platform.
+
+    One wording and two surfaces, which is why it is a function rather than
+    prose at either: the initContainer echoes it into the pod's log, and
+    `ca_slot_notice` prints it at generate. A third version of this sentence
+    would be one more thing to keep true.
+
+    It names the ConfigMap and the file, and they are deliberately not the same
+    object: whoever reads the first sentence is looking at a cluster, and
+    whoever acts on the second is looking at a directory.
+
+    **No `"`, `$` or backtick in either sentence.** They are echoed from a
+    double-quoted shell string inside a YAML block scalar, where all three would
+    be read by the shell rather than printed.
+    """
+    return (f"{CA_CONFIGMAP} still holds {marker('ca_bundle')} -- ca_bundle was "
+            f"set to a slot when this bundle was generated, so the PEM is still "
+            f"to be pasted in.",
+            f"Paste your CA into {CA_CONFIGMAP_FILE} -- the whole BEGIN "
+            f"CERTIFICATE block, and your public roots with it -- then apply "
+            f"this bundle again. Crane trusts nothing until it lands, and fails "
+            f"every call to BlazeMeter with NO_CERTIFICATE_OR_CRL_FOUND.")
+
+
+def ca_slot_notice(options):
+    """What `generate` says out loud about a CA slot, or None.
+
+    The cheap half of #241, and it is a *generate-time* line rather than
+    anything in the bundle: the person who runs the command is the one who chose
+    the slot, and the moment they can act on it is now. Everything it says is
+    said again in the bundle for the person who applies it -- `_ca_slot_block`
+    in the README, and the guard itself in the Deployment -- because those are
+    routinely two people.
+
+    Takes raw options and merges the defaults itself, so a caller holding what
+    somebody typed can ask without resolving first (the CLI does, before
+    `generate` runs at all).
+
+    A contradictory pair answers None rather than a sentence: `_ca_cfg` refuses
+    `ca_bundle_slot` beside `ca_bundle`, and that refusal is `generate`'s to
+    make one line later. Reporting a slot here first would name a mode the
+    bundle is about to be refused for.
+    """
+    o = {**DEFAULT_OPTIONS, **options}
+    try:
+        ca = _ca_cfg(o)
+    except ValueError:
+        return None
+    if not ca or ca["mode"] != "slot":
+        return None
+    wrong, todo = _ca_slot_lines()
+    # What stops a deploy, per format, and the three genuinely differ -- so one
+    # sentence for all of them would be wrong twice. Nothing new is added to
+    # helm or docker by saying this: their refusals already exist, and this line
+    # reports them rather than duplicating them.
+    stops = {
+        "helm": "`helm install` refuses it and names the field.",
+        "docker": (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both refuse "
+                   f"to start it."),
+        "manifests": (f"`kubectl apply` still creates every object -- a marker "
+                      f"is refused as a name and accepted as a value -- but the "
+                      f"crane pod stops at `Init:Error`, on the "
+                      f"{CA_SLOT_INIT_CONTAINER} initContainer."),
+    }[o["output_format"]]
+    return f"CA slot: {wrong} {stops} {todo}"
+
+
+def _ca_slot_init_container(facts, o, ca):
+    """The guard, as an initContainer on the crane Deployment, or "".
+
+    Only for a slot, so every other bundle renders byte-for-byte what it did
+    before: this is a refusal, and a bundle with a certificate in it has nothing
+    to be refused over.
+
+    **The image is crane's own, and that is the whole reason this is workable.**
+    These bundles are for sealed clusters -- a private registry, the public ones
+    blackholed on the node -- so a `busybox` or `alpine` here would
+    ImagePullBackOff on exactly the clusters the guard exists for, turning one
+    silent failure into a different one. Crane's reference is already mirrored,
+    already pull-secreted and already pinned by the same options, and it carries
+    a shell: `/bin/sh` is busybox and `/bin/grep` is beside it (checked by
+    running the image; it is not distroless).
+
+    The pattern is `MARKER_PATTERN` rather than this option's own marker, for
+    `_docker_run_sh`'s reason: what is read is the *live* ConfigMap, which may
+    have been edited by hand or written by an older version of this generator,
+    and neither is obliged to use today's marker for this field.
+
+    Requests and limits are crane's own numbers rather than smaller ones nobody
+    measured. A pod's effective request is max(largest init container, sum of
+    the containers), so repeating crane's leaves the scheduling footprint of
+    this Deployment exactly as it was -- and a cluster with a LimitRange or a
+    ResourceQuota sees one more container it already accepts.
+
+    **The chart gets none of this, deliberately.** Helm refuses the same bundle
+    at install time, where the message reaches the person typing the command
+    rather than a pod log, so duplicating the guard into the chart would be a
+    second answer to a question already answered. That is also why
+    `tests/helm_parity.py` does not compare `initContainers`: the two formats
+    genuinely diverge on this one object.
+    """
+    if not ca or ca["mode"] != "slot":
+        return ""
+    wrong, todo = _ca_slot_lines()
+    path = f"{CA_MOUNT_PATH}/{ca['key']}"
+    return f"""      initContainers:
+        # Nothing outside the bundle stops a CA slot nobody filled in: the
+        # marker is a ConfigMap value, so it applies, and crane then runs
+        # 1/1 Running trusting nothing (#241). This is where that becomes
+        # visible -- `kubectl get pods` shows Init:Error, and
+        # `kubectl logs -c {CA_SLOT_INIT_CONTAINER}` says which field and which file.
+        - name: {CA_SLOT_INIT_CONTAINER}
+          image: "{_crane_image(facts, o)}"
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # A check that could not read its file must not report a pass.
+              # Crane reads this same path out of REQUESTS_CA_BUNDLE, so a
+              # bundle that is not there is a fact about the deployment rather
+              # than a read somebody was refused.
+              if [ ! -r {path} ]; then
+                echo "{path} is not mounted, and it is what REQUESTS_CA_BUNDLE names." >&2
+                echo "Apply {CA_CONFIGMAP_FILE} from this bundle, or check the {CA_CONFIGMAP} ConfigMap." >&2
+                exit 1
+              fi
+              if grep -q '{MARKER_PATTERN}' {path}; then
+                echo "{wrong}" >&2
+                echo "{todo}" >&2
+                exit 1
+              fi
+{_security_context(o)}
+          resources:
+            requests:
+              cpu: {CRANE_CPU_REQUEST}
+              memory: {CRANE_MEM_REQUEST}
+              ephemeral-storage: {o['crane_ephemeral_storage'] or CRANE_EPHEMERAL_STORAGE}
+            limits:
+              cpu: "{CRANE_CPU_LIMIT}"
+              memory: {CRANE_MEM_LIMIT}
+              ephemeral-storage: {o['crane_ephemeral_storage'] or CRANE_EPHEMERAL_STORAGE}
+          volumeMounts:
+            - name: cacerts
+              mountPath: {CA_MOUNT_PATH}
+              readOnly: true
+"""
+
+
 def proxy_url(url, p):
     """Embed credentials in the proxy URL (http://user:pass@host:port) --
     BlazeMeter has no separate proxy-auth env vars; the URL carries them."""
@@ -1989,14 +2160,29 @@ def _ca_slot_block(o):
         check, cmd = (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both "
                       f"refuse to start while the marker is there, so nothing "
                       f"deploys by accident."), ""
+    elif o["output_format"] == "helm":
+        # The values overlay, not the ConfigMap manifest: a chart bundle carries
+        # no `bzm_cacerts.yaml` at all -- the chart renders the ConfigMap from
+        # `caBundle` -- and this block named it anyway until #241 split the
+        # branches, sending a reader to a file that is not in their directory.
+        where = HELM_VALUES_FILE
+        check = ("`helm install` refuses it and names the field, so nothing "
+                 "deploys by accident.")
+        cmd = ""
     else:
         # No install-time hook on flat manifests, and the API server takes a
-        # ConfigMap value whatever it says (#230) -- so the check is one the
-        # reader runs, and it needs nothing installed.
+        # ConfigMap value whatever it says (#230) -- so what stops it is the
+        # initContainer the bundle carries (#241), and the grep below is the
+        # same judgement for a reader who has not applied anything yet.
         where = CA_CONFIGMAP_FILE
-        check = ("**Applying it as it stands succeeds** -- the marker is a "
-                 "ConfigMap value, not a name -- so the agent would come up "
-                 "trusting nothing extra. This is the check:")
+        check = (f"**Applying it as it stands succeeds** -- the marker is a "
+                 f"ConfigMap value, not a name -- and the agent then does not "
+                 f"start: the `{CA_SLOT_INIT_CONTAINER}` initContainer reads "
+                 f"the mounted bundle and refuses while the marker is there, "
+                 f"so the pod sits at `Init:Error` instead of running and "
+                 f"trusting nothing. `kubectl logs -c "
+                 f"{CA_SLOT_INIT_CONTAINER}` says the same thing this does. "
+                 f"Before applying anything, this is the check:")
         # The marker this file actually carries, rather than the pattern every
         # reader matches: this block is about one field, the reader is going to
         # look at one file, and a regular expression printed as a command a
@@ -4380,6 +4566,9 @@ def generate(facts, options):
             if o["use_secret"] else ""
         ),
         "SCHEDULING_BLOCK": _scheduling_block(o),
+        # Empty for every bundle but the one it guards, so a Deployment with no
+        # CA slot in it renders exactly the bytes it rendered before (#241).
+        "INIT_CONTAINERS_BLOCK": _ca_slot_init_container(facts, o, ca),
         "VOLUME_MOUNTS_BLOCK": (
             "          volumeMounts:\n"
             f"            - name: cacerts\n"

@@ -427,10 +427,13 @@ OPTIONS = [
             "is failing TLS and the certificate is still with the platform "
             "team. One edit finishes it, and nothing else has to be wired. "
             "Refused beside `ca_bundle` -- supplying the PEM and leaving a slot "
-            "for it are two answers to one question. The cluster formats are "
-            "**not** stopped from applying it (a ConfigMap value is not a "
-            "name), which is why the README prints the grep that catches it; "
-            "the chart and the docker bundle both refuse it outright."),
+            "for it are two answers to one question. Every format refuses to "
+            "*start* on the marker, and each from somewhere different: the "
+            "chart at `helm install`, the docker bundle from its run script and "
+            "from compose, and a manifests bundle from a `ca-slot-check` "
+            "initContainer on the crane Deployment -- `kubectl apply` still "
+            "creates every object, because a ConfigMap value is not a name, and "
+            "the pod then stops at `Init:Error`."),
     Option(
         "ca_existing_configmap", "string", "CA trust",
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",
