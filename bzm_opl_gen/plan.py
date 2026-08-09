@@ -150,6 +150,38 @@ SIZING_MODELS = {
 }
 
 
+def sizing_models_for(func_ids):
+    """The models that describe a location carrying `func_ids`, in
+    SIZING_MODELS order.
+
+    This module sizes a target for somebody with no location, and every other
+    surface has one -- so this is the join between the two, and the reason it is
+    here rather than beside either caller. The bundle README and `doctor` both
+    hold a location's funcIds and had no way to turn them into a unit, so both
+    printed performance's whatever the location ran: `500 virtual users each`
+    over an agent that runs browsers (#165). A fourth model becomes a row above
+    and neither of them needs an edit.
+
+    A functionality *is* a funcId (#149), so this is a filter rather than a
+    translation, and the order is this table's rather than the location's: it is
+    the tie-break the configure step already uses for a location carrying
+    several, so the same location reads the same way on screen and in its
+    bundle.
+
+    **Three answers, and the middle one is why this returns a list.** `None` is
+    funcIds nobody read -- facts written before they were recorded -- and `[]`
+    is funcIds that were read and that no model here covers, which real accounts
+    genuinely have (tdm, dataPublisher, delphix). Both leave a caller with no
+    unit to print, and what a caller may say about the location is opposite in
+    the two cases, so the value carries which rather than the caller
+    remembering.
+    """
+    if func_ids is None:
+        return None
+    carried = set(func_ids)
+    return [f for f in SIZING_MODELS if f in carried]
+
+
 def per_pod_capacity(functionality, cpu_millis, mem_bytes):
     """What one pod of this size carries, in that functionality's own unit --
     or None where there is no measured figure to scale.

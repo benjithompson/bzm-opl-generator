@@ -10,7 +10,7 @@ from string import Template
 from urllib.parse import quote
 
 from .facts import (image_category, image_refs, key_base, needed_categories,
-                    select_images)
+                    runs_engine, select_images)
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -2382,15 +2382,98 @@ Locations within a minute or so.
 """
 
 
-def _sizing_bullet(o):
+def _sizing_vocab(facts, o):
+    """Everything the two sizing sentences need about the model this location is
+    described in -- its row from `plan.SIZING_MODELS`, whether its agent carries
+    a taurus engine, and what one pod of the configured size holds. `None` where
+    the location's funcIds name no model here.
+
+    `plan` is imported inside the function because `plan` imports *this* module
+    for the engine footprint and the node overhead, so the pair can only be
+    acyclic one way round. Deferring costs nothing: by the time a README is
+    rendered both modules are loaded, whichever was imported first. One
+    accessor rather than three, so the deferral is argued once.
+
+    The three answers `plan.sizing_models_for` carries collapse to two here on
+    purpose. Unread funcIds and funcIds naming no covered model are different
+    facts about the *account*, and this file is a handover to somebody holding a
+    cluster: in both cases nothing here knows what the location is sized in, and
+    the honest sentence is the same one. What must not happen is either of them
+    reading as performance, which is what did happen (#165).
+    """
+    from . import plan
+    models = plan.sizing_models_for(facts.get("func_ids")) or []
+    if not models:
+        return None
+    fid = models[0]
+    return {**plan.SIZING_MODELS[fid],
+            "id": fid,
+            # Not "is this the first row": `threadsPerEngine` is BlazeMeter's
+            # virtual-users-per-engine field, so performance is the one model
+            # whose own figure that field already is.
+            "is_performance": fid == plan.PERFORMANCE,
+            "engine": runs_engine(fid),
+            "per_pod": plan.per_pod_capacity(fid, *engine_size(o))}
+
+
+def _sizing_bullet(facts, o):
+    """What one pod costs, in the word for the pod this location actually
+    creates.
+
+    The engine branch is a **requirement** -- what a concurrent engine needs,
+    which is BlazeMeter's own documented footprint and true on any platform, so
+    a docker host is sized by it as much as a node is. The non-engine branch
+    cannot be that sentence, because nobody has measured what a mock pod needs;
+    what it states instead is what the bundle *applies*, and that is a claim only
+    the cluster formats can make. Docker carries no limits pair at all
+    (`engine_cpu_limit` is in its `IGNORED_BY_FORMAT`), so there the honest
+    answer is no size at all rather than a Kubernetes mechanism worded for a
+    platform with no pods.
+
+    The disk figure goes with the engine branch for the same reason: 60GB with
+    40GB of /tmp was measured on an engine mid-run, and a mock pod is not one.
+    """
     reg = o["private_registry"]
-    return (f"- Each concurrent engine needs **{format_cpu(engine_size(o)[0])} CPU + "
-            f"{format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk** "
-            f"({ENGINE_TMP_GB}GB of it /tmp),\n  and egress to `*.blazemeter.com`"
-            + (f" and `{reg}`." if reg else "."))
+    egress = "egress to `*.blazemeter.com`" + (f" and `{reg}`." if reg else ".")
+    m = _sizing_vocab(facts, o)
+    if m is None or m["engine"]:
+        return (f"- Each concurrent engine needs **{format_cpu(engine_size(o)[0])} CPU + "
+                f"{format_memory(engine_size(o)[1])} RAM + {ENGINE_DISK_GB}GB disk** "
+                f"({ENGINE_TMP_GB}GB of it /tmp),\n  and {egress}")
+    if "engine_cpu_limit" in ignored_options(o):
+        # `runs` rather than `pod` here and in _location_bullet: SIZING_MODELS
+        # names the thing in Kubernetes' noun, and this platform has no pods.
+        return (f"- What this location's {m['runs']} need on this host has not "
+                f"been measured, and\n  this format carries no limits pair to cap "
+                f"them with. The agent needs {egress}")
+    return (f"- Each concurrent {m['pod']} is capped at **{format_cpu(engine_size(o)[0])} CPU + "
+            f"{format_memory(engine_size(o)[1])} RAM** -- crane applies\n  one limits "
+            f"pair to every pod it creates -- and the agent needs {egress}")
 
 
-def _location_bullet(facts):
+def _requests_bullet(facts, o):
+    """The other half of the pod's size, and the half this bundle cannot set.
+
+    Only where there is an engine. `overrideCPU`/`overrideMemory` were measured
+    as the *engine* requests crane stamps, and what is documented as reaching a
+    mock pod is the `KUBERNETES_RESOURCES_LIMITS_*` pair beside them rather than
+    these. So a location with no engine gets the field names and the fact that
+    nobody here has watched them land, which is the same rule that keeps the
+    disk figure out of `_sizing_bullet`'s non-engine branch.
+    """
+    m = _sizing_vocab(facts, o)
+    if m is None or m["engine"]:
+        return (f"- Engine *requests* come from the location, not this bundle: `overrideCPU` and\n"
+                f"  `overrideMemory` under Settings -> Private Locations, defaulting to\n"
+                f"  {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set\n"
+                f"  them to match the limits above, a run competes for CPU it never reserved.")
+    return (f"- *Requests* come from the location too -- `overrideCPU` and `overrideMemory`\n"
+            f"  under Settings -> Private Locations, defaulting to "
+            f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Those were\n"
+            f"  measured on engines; what a {m['pod']} is given has not been.")
+
+
+def _location_bullet(facts, o):
     """What the location must be set to, in the file the person applying this
     bundle actually reads.
 
@@ -2411,19 +2494,57 @@ def _location_bullet(facts):
     however they came to be unknown, and claims nothing about a location nobody
     looked up. Only when both are known does it state them.
 
-    One line per branch, because `test_readme_is_short_and_actionable` caps the
-    file at 45 and is right to: this is a handover somebody skims while holding
-    a cluster, not documentation.
+    Three rendered lines a branch at the most, because
+    `test_readme_is_short_and_actionable` caps the file and is right to: this is
+    a handover somebody skims while holding a cluster, not documentation. That
+    test walks every model rather than the performance one it used to measure --
+    the branches below are the only part of the file whose length varies with
+    the location, so measuring one of them measured none of the others (#165).
+
+    **The unit is the location's, and `threadsPerEngine` is never it** (#165).
+    Both numbers are what the account stores and both are stated as such; what
+    changed is that only a performance location has them stated *in* virtual
+    users. A GUI location is sized in browser instances and an engine that size
+    carries about four of them, so relabelling 500 would be a worse claim than
+    the one it replaced -- the model's figure is printed beside the account's
+    field rather than over it.
     """
     slots, tpe = facts.get("slots"), facts.get("threads_per_engine")
     if not slots or not tpe:
+        # Untouched by the model, because it names fields rather than units and
+        # both are what the account stores whatever it runs.
         return ("\n- **Check this location's `slots` and `threadsPerEngine`** "
                 "(Settings -> Private Locations): unset, the agent comes online "
                 "and looks healthy, and every test start fails with 403 *Not "
                 "enough available resources*.")
-    return (f"\n- This location runs **{slots} engine(s) per agent at {tpe:,} "
-            f"virtual users each** (`slots` / `threadsPerEngine`); its total is "
-            f"that times the agents in it.")
+    total = "its total is that times the agents in it"
+    m = _sizing_vocab(facts, o)
+    if m is None:
+        # Names neither of the two ways to get here. `plan.sizing_models_for`
+        # keeps unread funcIds apart from funcIds that name no model, and doctor
+        # says which; a handover cannot act on either, so this states the fields
+        # and claims nothing -- including nothing about whether anybody looked.
+        return (f"\n- This location holds `slots` **{slots}** and "
+                f"`threadsPerEngine` **{tpe:,}**; {total}. Nothing here knows "
+                f"which model it is sized in, so neither figure is given a unit.")
+    if not m["engine"]:
+        # `per_pod` rather than a sentence about mockServices: it is None only
+        # because that model has no baseline, and a later non-engine model with
+        # one must state its figure here rather than deny having it.
+        carries = (f"they are sized in **{m['unit']}**, about **{m['per_pod']}** "
+                   f"to each" if m["per_pod"] else
+                   f"how many {m['unit']} its {m['runs']} serve has not been measured")
+        return (f"\n- This location runs **{m['runs']}**, which carry no taurus "
+                f"engine. `slots` is **{slots}** and `threadsPerEngine` "
+                f"**{tpe:,}**, as the account stores them; {carries}.")
+    if m["is_performance"]:
+        return (f"\n- This location runs **{slots} engine(s) per agent at {tpe:,} "
+                f"virtual users each** (`slots` / `threadsPerEngine`); {total}.")
+    carries = (f", about **{m['per_pod']}** to an engine this size"
+               if m["per_pod"] else "")
+    return (f"\n- This location runs **{slots} engine(s) per agent** (`slots`); "
+            f"{total}. It runs {m['runs']}, sized in **{m['unit']}**{carries} "
+            f"rather than in the **{tpe:,}** its `threadsPerEngine` holds.")
 
 
 def _sa_bullet(o):
@@ -3383,7 +3504,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}
+{_sizing_bullet(facts, o)}{_location_bullet(facts, o)}{_sa_bullet(o)}
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
@@ -4403,6 +4524,43 @@ def _docker_prepull_block(facts, o):
 """
 
 
+def _docker_socket_bullet(facts, o):
+    """Why the socket is mounted, in the noun for what this location makes crane
+    start through it.
+
+    The mechanism is one mechanism: an SV agent creates mock containers on the
+    same socket for the same reason, so only the word changes. It changes to
+    "containers" rather than to the model's own pod word, because `pod` is the
+    Kubernetes noun and there are no pods on this platform (#165).
+    """
+    m = _sizing_vocab(facts, o)
+    starts = ("engines as containers on this host" if m is None or m["engine"]
+              else "the containers this location needs on this host")
+    return (f"- **The socket is the point.** Crane starts {starts}\n"
+            f"  through `/var/run/docker.sock`, so whoever starts it needs access to "
+            f"it. That\n  is effectively root on the machine -- BlazeMeter's own "
+            f"instructions say the\n  same.")
+
+
+def _docker_beside_bullet(facts, o):
+    """What the host has to be sized for. Same substitution as
+    `_docker_socket_bullet`, and the point survives it: crane's own footprint is
+    not the location's.
+
+    The non-engine branch carries its own subject rather than a pronoun -- the
+    bullet above it varies (the `.env` warning is there or it is not), so
+    "They" would name whatever happened to precede it.
+    """
+    m = _sizing_vocab(facts, o)
+    if m is None or m["engine"]:
+        return ("- **Engines run beside it, not inside it.** Size the host for the "
+                "whole\n  location, not for crane: every engine is another container "
+                "here.")
+    return (f"- **This location's {m['runs']} run beside crane, not inside it.** "
+            f"Size the\n  host for the whole location, not for crane: each one is "
+            f"another container\n  here.")
+
+
 def _docker_readme(facts, o):
     # The credential and the command are in different files here, so the block
     # names the one to edit. It replaces a paragraph that said the same thing
@@ -4458,19 +4616,15 @@ run pulls crane and can take considerably longer. Watch it with
 
 ## Worth knowing
 
-{_sizing_bullet(o)}{_location_bullet(facts)}
-- **The socket is the point.** Crane starts engines as containers on this host
-  through `/var/run/docker.sock`, so whoever starts it needs access to it. That
-  is effectively root on the machine -- BlazeMeter's own instructions say the
-  same.
+{_sizing_bullet(facts, o)}{_location_bullet(facts, o)}
+{_docker_socket_bullet(facts, o)}
 - **One agent per host.** Both files name the container after the agent
   (`{docker_container_name(o["ship_id"])}`), so whichever you run second refuses
   and says so. That is what stops two routes becoming two cranes on one agent
   identity, which BlazeMeter reports as duplicated results rather than as an
   error. Neither replaces an existing container: it may be the agent serving
   this location right now.{env_note}
-- **Engines run beside it, not inside it.** Size the host for the whole
-  location, not for crane: every engine is another container here.{ca_block}{_docker_sv_block(facts, o)}{_docker_prepull_block(facts, o)}
+{_docker_beside_bullet(facts, o)}{ca_block}{_docker_sv_block(facts, o)}{_docker_prepull_block(facts, o)}
 - BlazeMeter's Docker Command tab generates the same command without this
   bundle's settings. This one is that command with them folded in; the identity
   (`HARBOR_ID`, `SHIP_ID`) is the same either way.
@@ -4893,11 +5047,8 @@ def _readme(facts, o, files):
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(o)}{_location_bullet(facts)}{_sa_bullet(o)}{_sv_bullet(facts, o)}
-- Engine *requests* come from the location, not this bundle: `overrideCPU` and
-  `overrideMemory` under Settings -> Private Locations, defaulting to
-  {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. The scheduler places pods on requests, so unless you set
-  them to match the limits above, a run competes for CPU it never reserved.{pinned}{big_ca}
+{_sizing_bullet(facts, o)}{_location_bullet(facts, o)}{_sa_bullet(o)}{_sv_bullet(facts, o)}
+{_requests_bullet(facts, o)}{pinned}{big_ca}
 - `bzm-opl-gen doctor` checks a cluster against all of the above before you apply.
 {_ignored_block(o)}"""
 

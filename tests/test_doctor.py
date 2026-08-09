@@ -44,7 +44,7 @@ def _big(name="big1"):
 
 
 FACTS = {"harbor_id": "aaa111", "harbor_name": "Test Location",
-         "slots": 2, "threads_per_engine": 500}
+         "func_ids": ["performance"], "slots": 2, "threads_per_engine": 500}
 
 LR_MATCHING = {
     "metadata": {"name": "blazemeter-engine-sizing"},
@@ -186,6 +186,70 @@ def test_threads_per_engine_names_the_arithmetic():
 def test_threads_per_engine_silent_when_unset():
     """check_location already FAILs on this; don't say it twice."""
     assert doctor.check_threads_per_engine({**FACTS, "threads_per_engine": None}, {}, {}) == []
+
+
+def test_the_ratio_is_named_as_performances_over_a_location_that_runs_browsers():
+    """#165: `500 threads on a 1 CPU / 4Gi engine` was printed over a GUI
+    Functional location, which is sized in browser instances.
+
+    A GUI agent does carry a taurus engine, so the arithmetic is still worth
+    doing and the verdict is unchanged -- what was missing is the sentence
+    saying which model it belongs to, and what this location's own model would
+    be measured in."""
+    c = doctor.check_threads_per_engine(
+        {**FACTS, "func_ids": ["functionalGui"], "threads_per_engine": 500}, {}, {})[0]
+    assert c.status == doctor.PASS
+    assert "browser instances" in c.detail
+    assert "virtual users" not in c.detail
+
+
+def test_a_location_with_no_engine_is_not_judged_against_the_engine_ratio():
+    """An SV agent carries crane, group-gateway and service-mock and no engine
+    at all, so the threads-per-engine ratio is arithmetic about a pod it never
+    creates. Stated rather than skipped: a check that returns nothing reads as
+    one that passed."""
+    c = doctor.check_threads_per_engine(
+        {**FACTS, "func_ids": ["mockServices"], "threads_per_engine": 500}, {}, {})[0]
+    assert c.status == doctor.PASS
+    assert "no taurus engine" in c.detail
+    # It reports what the account stores and stops there -- no supported figure,
+    # because there is none to compare against.
+    assert "500" in c.detail and "supports" not in c.detail
+
+
+def test_funcids_this_tool_does_not_size_keep_the_ratio_and_say_whose_it_is():
+    """The `or` half of #165's third criterion. tdm and delphix are real funcIds
+    in real accounts and no model here covers them, so the performance ratio is
+    still the only one there is -- applied, with the caveat that the location may
+    not be a performance one, rather than applied silently."""
+    over = doctor.check_threads_per_engine(
+        {**FACTS, "func_ids": ["tdm"], "threads_per_engine": 1000}, {}, {})[0]
+    assert over.status == doctor.WARN         # the arithmetic is unchanged
+    assert "performance" in over.detail
+
+
+def test_unread_funcids_and_funcids_that_size_nothing_read_differently():
+    """The house rule, on the surface it was written for. Facts with no funcIds
+    were not read; funcIds naming no model here were. Both leave the performance
+    ratio as the only one to apply, and only one of them is a statement about
+    what the location is."""
+    unread = doctor.check_threads_per_engine(
+        {k: v for k, v in FACTS.items() if k != "func_ids"}, {}, {})[0]
+    read = doctor.check_threads_per_engine({**FACTS, "func_ids": ["tdm"]}, {}, {})[0]
+    assert unread.status == read.status == doctor.PASS
+    assert "carry no funcIds" in unread.detail
+    assert "name nothing this tool sizes" in read.detail
+    assert unread.detail != read.detail
+
+
+def test_the_engine_heap_is_not_reported_for_an_agent_with_no_jvm():
+    """`the location has no engineXmx set` over a service-virtualization
+    location is a WARN about a JVM that does not exist there."""
+    checks = doctor.check_engine_heap(
+        {**FACTS, "func_ids": ["mockServices"], "engine_xmx_mb": None},
+        {"engine_mem_limit": "8Gi"}, {})
+    assert [c.status for c in checks] == [doctor.PASS]
+    assert "no taurus engine" in checks[0].detail
 
 
 # -- eligible_nodes ---------------------------------------------------------

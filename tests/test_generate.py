@@ -966,7 +966,20 @@ def test_readme_is_short_and_actionable():
     and it is bounded by the number of blank fields rather than by anyone's
     appetite for prose (test_placeholder_block_is_bounded holds it to that).
     Counting it here would have this guard fire on a bundle that is doing
-    exactly what it should."""
+    exactly what it should.
+
+    Measured for **every** sizing model and for a location none of them cover,
+    because the location bullet is the one part of this file whose length varies
+    with what the location runs -- measuring the performance one measured none
+    of the rest, and two of them had crept past the cap unnoticed (#165)."""
+    import bzm_opl_gen.plan as plan_mod
+    opts = {"namespace": "ns1", "auth_token": "de" * 32, "sv_ingress": "none"}
+    for fids in [[f] for f in plan_mod.SIZING_MODELS] + [["tdm"], []]:
+        long = gen.generate({**FACTS, "func_ids": fids, "slots": 2,
+                             "threads_per_engine": 500}, opts)["README.md"]
+        assert len(long.splitlines()) < 45, (
+            f"README for {fids} is {len(long.splitlines())} lines -- creeping "
+            f"back towards an essay")
     readme = gen.generate(
         FACTS, {"namespace": "ns1", "auth_token": "de" * 32})["README.md"]
     assert "not finished" not in readme
@@ -1677,6 +1690,83 @@ def test_the_readme_does_not_diagnose_a_location_nobody_asked_about():
     for claim in ("has no `slots`", "has no `threadsPerEngine`",
                   "typed in", "manual"):
         assert claim not in typed, claim
+
+
+def _readme_for(func_ids, **facts_over):
+    """A README for a location running `func_ids`.
+
+    `sv_ingress=none` for every one of them rather than only for mockServices:
+    it is a declaration, not a functionality switch, and a bundle that carries
+    it is the same as one that does not (see SV_INGRESS_NONE). What it buys here
+    is that the sizing sentences are read off the *funcIds*, with no ingress
+    configuration anywhere near them.
+    """
+    facts = {**FACTS, "func_ids": func_ids, "slots": 2,
+             "threads_per_engine": 500, **facts_over}
+    return gen.generate(facts, {"namespace": "ns1",
+                                "sv_ingress": "none"})["README.md"]
+
+
+def test_a_browser_location_is_not_told_it_runs_virtual_users():
+    """#165: a GUI Functional bundle's README said "500 virtual users each" over
+    a location that runs browsers, and that is the sentence a customer reads
+    while deciding how much cluster to ask for.
+
+    The number stays -- `threadsPerEngine` really is 500 and the account really
+    stores it -- and it is *not* relabelled as browser instances either: an
+    engine this size carries about four of those, so pouring the one figure into
+    the other unit would be a worse lie than the one being fixed."""
+    r = _readme_for(["functionalGui"])
+    assert "virtual users" not in r
+    assert "browser instances" in r
+    # The account's own field, named as its own field, and never as the sizing
+    # figure beside it.
+    assert "500" in r and "threadsPerEngine" in r
+    assert "500 browser instances" not in r
+
+
+def test_a_service_virtualization_location_is_not_described_in_engines():
+    """One layer further out than the same point on #154: an SV agent carries no
+    taurus engine at all, so every engine sentence in the handover is about a
+    pod that location never creates. The limits still reach its mock pods --
+    crane applies one pair to everything it creates -- so the bundle still has a
+    per-pod size to state, in the word for the pod that gets it."""
+    r = _readme_for(["mockServices"])
+    assert "virtual users" not in r
+    assert "Each concurrent engine" not in r
+    assert "mock pod" in r
+    # And it does not invent the figure the table deliberately leaves out.
+    assert "requests per second" in r and "has not been measured" in r
+
+
+def test_funcids_this_tool_does_not_size_get_no_unit_at_all():
+    """A real account's locations carry funcIds this tool has no model for (tdm,
+    dataPublisher, delphix). Reading one of those as performance is how the
+    wrong unit got printed in the first place, so nothing is claimed: the two
+    fields are stated as the account stores them and left unlabelled."""
+    r = _readme_for(["tdm"])
+    assert "virtual users" not in r and "browser instances" not in r
+    assert "slots" in r and "threadsPerEngine" in r
+
+
+def test_a_performance_readme_is_unchanged_by_any_of_it():
+    """The common bundle, and the one the 45-line cap is measured on. Every
+    branch above exists so that this sentence stays exactly true where it always
+    was true."""
+    r = _readme_for(["performance"], slots=4, threads_per_engine=1000)
+    assert "4 engine(s) per agent at 1,000 virtual users each" in r
+    assert "Each concurrent engine needs" in r
+
+
+def test_the_readme_reads_its_units_off_the_sizing_table():
+    """AC4 of #165, asserted rather than described: a fourth model must not need
+    an edit here. Every unit the README can print is one plan.SIZING_MODELS
+    holds, so the table stays the single source for the page, the planner, the
+    preflight and the handover alike."""
+    import bzm_opl_gen.plan as plan_mod
+    for fid, m in plan_mod.SIZING_MODELS.items():
+        r = _readme_for([fid])
+        assert m["unit"] in r, fid
 
 
 def test_generate_never_asks_how_the_facts_arrived():

@@ -352,6 +352,16 @@ def check_threads_per_engine(facts, opts, cluster):
     if not tpe:
         return []                     # check_location has already reported it
     cpu, mem = engine_size(opts)
+    model = _sizing_model(facts, cpu, mem)
+    if model and not model["engine"]:
+        # No taurus engine on this agent at all, so the ratio is arithmetic
+        # about a pod the location never creates. Said rather than skipped: a
+        # check that returns nothing reads exactly like one that passed.
+        return [Check("threadsPerEngine vs engine size", PASS,
+                      f"not judged -- this location runs {model['runs']} and "
+                      f"carries no taurus engine, so the per-engine ratio is not "
+                      f"about it. threadsPerEngine is {tpe}, which is what the "
+                      f"account stores")]
     supported = plan.supported_vus(cpu, mem)
     size = _engine_str(cpu, mem)
     if tpe > supported:
@@ -359,9 +369,61 @@ def check_threads_per_engine(facts, opts, cluster):
                       f"{tpe} threads on a {size} engine; that size supports about "
                       f"{supported} ({DEFAULT_THREADS_PER_ENGINE} threads per "
                       f"{ENGINE_DEFAULT_CPU} CPU / {ENGINE_DEFAULT_MEM}). Lower "
-                      f"threadsPerEngine or raise the engine limits")]
+                      f"threadsPerEngine or raise the engine limits"
+                      + _model_caveat(facts, model))]
     return [Check("threadsPerEngine vs engine size", PASS,
-                  f"{tpe} threads on a {size} engine (supports ~{supported})")]
+                  f"{tpe} threads on a {size} engine (supports ~{supported})"
+                  + _model_caveat(facts, model))]
+
+
+def _sizing_model(facts, cpu, mem):
+    """The model a location's funcIds put it in, with what one pod of the
+    configured size holds -- or None where they name no model here.
+
+    `doctor` has a location where `plan` has only a number, so this is the same
+    join the bundle README makes and for the same reason (#165): both were
+    printing the performance model's vocabulary over whatever the location ran.
+    A fourth model is a row in `plan.SIZING_MODELS` and needs no edit here.
+    """
+    models = plan.sizing_models_for(facts.get("func_ids")) or []
+    if not models:
+        return None
+    fid = models[0]
+    return {**plan.SIZING_MODELS[fid],
+            "id": fid,
+            "engine": facts_mod.runs_engine(fid),
+            "per_pod": plan.per_pod_capacity(fid, cpu, mem)}
+
+
+def _model_caveat(facts, model):
+    """Whose ratio was just applied, where it is not this location's own.
+
+    The threads-per-engine ratio is the performance model's, and it is the only
+    one there is: a GUI agent runs the same taurus engine, and funcIds this tool
+    has no model for still have to be judged by something. So the verdict stands
+    and the sentence names the model instead -- which is the half that was
+    missing, not the arithmetic.
+
+    Two ways to have no model and they are not one sentence. Facts carrying no
+    funcIds at all were not read; funcIds naming none of these models were, and
+    real accounts have them (tdm, dataPublisher, delphix). `doctor` is where
+    somebody is working out what is wrong, and "we did not look" reported as
+    "there is nothing there" is the failure this whole file is arranged against.
+    """
+    if model is None:
+        if facts.get("func_ids") is None:
+            return (". These facts carry no funcIds, so that is the performance "
+                    "ratio applied to a location nothing here has read the "
+                    "functionalities of")
+        return (". Its funcIds name nothing this tool sizes, so that is the "
+                "performance ratio applied to a location that may not be one")
+    if model["id"] == plan.PERFORMANCE:
+        return ""
+    carries = (f", about {model['per_pod']} to an engine this size"
+               if model["per_pod"] else "")
+    return (f". That is the performance ratio: this location runs "
+            f"{model['runs']}, which are sized in {model['unit']}{carries}, and "
+            f"threadsPerEngine is BlazeMeter's own field rather than that figure")
 
 
 # -- node eligibility ---------------------------------------------------------
@@ -708,8 +770,18 @@ def check_engine_heap(facts, opts, cluster):
     """
     xmx = facts.get("engine_xmx_mb")
     threads = facts.get("threads_per_engine")
-    _, mem = engine_size(opts)
+    cpu, mem = engine_size(opts)
     limit = format_memory(mem)
+    model = _sizing_model(facts, cpu, mem)
+    if model and not model["engine"]:
+        # Every branch below is about a JVM. This agent carries crane,
+        # group-gateway and service-mock and no taurus engine, so `the location
+        # has no engineXmx set` here is a WARN about a heap that does not exist
+        # (#165).
+        return [Check("engine heap", PASS,
+                      f"not judged -- this location runs {model['runs']} and "
+                      f"carries no taurus engine, so there is no JVM here for a "
+                      f"heap to be wrong for")]
     if xmx is None:
         if facts_mod.from_manual_entry(facts):
             return [Check("engine heap", WARN,

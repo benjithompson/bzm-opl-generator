@@ -9,6 +9,41 @@ or **Security**, and drop any section that would be empty. Write entries for
 the person upgrading: what changed for them, not which files moved. Lead with
 anything that breaks.
 
+## [Unreleased]
+
+### Fixed
+
+- **The bundle README and `doctor` described engines and virtual users at a
+  location that runs neither.** A GUI Functional bundle's handover said
+  `2 engine(s) per agent at 500 virtual users each` and `doctor` reported
+  `500 threads on a 1 CPU / 4Gi engine`, over a location that BlazeMeter sizes
+  in browser instances -- and that is the sentence somebody reads while deciding
+  how much cluster to ask for. Both surfaces now speak the location's own model,
+  read off its funcIds:
+  - A **GUI Functional** bundle states its sizing in browser instances and about
+    how many one engine of the configured size carries. The `threadsPerEngine`
+    figure is still printed as what the account stores, and is **not** relabelled
+    as browser instances -- an engine that size carries about four of those, so
+    pouring one figure into the other unit would be worse than the wording it
+    replaced.
+  - A **service-virtualization** bundle describes no engine at all: its agent
+    carries none. A cluster bundle states the limits pair in the word for the pod
+    that gets it; a **docker** bundle carries no limits pair (they are Kubernetes
+    variables and its README already said so), so it states no per-pod size
+    rather than a mechanism it does not have. Either way the bundle says plainly
+    that requests per second per mock pod has not been measured, and the docker
+    socket and host-sizing bullets stop naming engines.
+  - A location whose funcIds this tool has no model for (`tdm`, `dataPublisher`,
+    `delphix`) gets its two figures stated without a unit rather than read as
+    performance. `doctor` keeps the performance ratio there -- it is the only one
+    there is -- and now says whose ratio it is, and separately says when the
+    funcIds were never read at all.
+  - `doctor`'s engine-heap check no longer warns about an unset JVM heap on an
+    agent that runs no JVM.
+
+  Every performance bundle is unchanged, byte for byte, and every verdict on a
+  performance location keeps its wording.
+
 ## [0.4.1] — 2026-08-08
 
 ### Added
