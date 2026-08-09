@@ -3734,11 +3734,15 @@ def test_the_notice_names_the_file_and_the_refusal_of_its_own_format(
         assert name not in notice
 
 
-def test_the_notice_leaves_a_contradiction_to_the_refusal_that_owns_it():
-    """`ca_bundle_slot` beside `ca_bundle` is refused by `generate` one line
-    later, naming the pair. Announcing a slot first would name a mode the bundle
-    is about to be refused for."""
-    assert gen.ca_slot_notice({
-        "namespace": "ns1", "ca_bundle_slot": True,
-        "ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n"
-                     "-----END CERTIFICATE-----"}) is None
+@pytest.mark.parametrize("options", (
+    # Two answers to one question, which `_ca_cfg` refuses naming the pair.
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"},
+    # A format nobody offers, which `generate` refuses naming the three.
+    {"output_format": "kustomize"},
+))
+def test_the_notice_leaves_every_refusal_to_the_one_that_owns_it(options):
+    """A notice must not be the thing that raises, least of all from inside the
+    MCP server's warning list -- and each of these is refused one line later, by
+    the code that can name what is wrong with it."""
+    assert gen.ca_slot_notice(dict(options, namespace="ns1",
+                                   ca_bundle_slot=True)) is None

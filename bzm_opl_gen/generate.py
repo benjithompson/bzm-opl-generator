@@ -1060,10 +1060,12 @@ def ca_slot_notice(options):
     somebody typed can ask without resolving first (the CLI does, before
     `generate` runs at all).
 
-    A contradictory pair answers None rather than a sentence: `_ca_cfg` refuses
-    `ca_bundle_slot` beside `ca_bundle`, and that refusal is `generate`'s to
-    make one line later. Reporting a slot here first would name a mode the
-    bundle is about to be refused for.
+    Anything `generate` is going to refuse answers None rather than a sentence
+    -- a contradictory pair (`_ca_cfg` refuses `ca_bundle_slot` beside
+    `ca_bundle`), a format nobody offers. Those refusals are `generate`'s to
+    make one line later, and announcing a slot first would describe a bundle
+    that is about to be refused. This is a *notice*: it must not be the thing
+    that raises, least of all from inside the MCP server's warning list.
     """
     o = {**DEFAULT_OPTIONS, **options}
     try:
@@ -1088,7 +1090,9 @@ def ca_slot_notice(options):
                       f"is refused as a name and accepted as a value -- but the "
                       f"crane pod stops at `Init:Error`, on the "
                       f"{CA_SLOT_INIT_CONTAINER} initContainer."),
-    }[o["output_format"]]
+    }.get(o["output_format"])
+    if not stops:
+        return None
     return f"CA slot: {wrong} {stops} {todo}"
 
 
