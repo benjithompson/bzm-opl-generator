@@ -9,7 +9,7 @@ or **Security**, and drop any section that would be empty. Write entries for
 the person upgrading: what changed for them, not which files moved. Lead with
 anything that breaks.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-08
 
 ### Added
 
@@ -1520,7 +1520,8 @@ First packaged release.
   and OpenShift routes, plus `sv-expose` for reaching a virtual service where
   crane's own nginx Ingress doesn't resolve.
 
-[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/benjithompson/bzm-opl-generator/compare/v0.2.0...v0.3.0

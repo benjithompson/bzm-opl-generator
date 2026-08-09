@@ -20,7 +20,7 @@ pipx install "bzm-opl-gen[mcp]"
 
 `[mcp]` rather than `[ui]`: the extras are independent, and `[ui,mcp]` installs
 both. To track `main` or a tag PyPI has not seen, install from git instead —
-`pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.3.2"`
+`pipx install "bzm-opl-gen[mcp] @ git+https://github.com/benjithompson/bzm-opl-generator@v0.4.0"`
 — and see the [README](../README.md#install) for the rest of that story,
 including the release-wheel route if you would rather install an artifact.
 
