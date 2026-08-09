@@ -30,7 +30,7 @@ ${SCHEDULING_BLOCK}${PULL_SECRETS_BLOCK}      restartPolicy: Always
       securityContext:
         seccompProfile:
           type: RuntimeDefault
-      containers:
+${INIT_CONTAINERS_BLOCK}      containers:
         - name: bzm-crane-${SHIP_ID}
           image: "${CRANE_IMAGE}"
           imagePullPolicy: Always

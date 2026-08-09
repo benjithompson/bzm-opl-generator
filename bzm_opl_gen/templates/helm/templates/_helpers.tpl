@@ -189,9 +189,12 @@ why this list is the values rather than the names.
 
 caBundle.pem is deliberately included even though `ca_bundle_slot` renders it on
 purpose: a slot is a bundle waiting for a certificate, and installing one is
-still installing an agent that trusts nothing extra. The flat manifests cannot
-refuse it -- they have no install step -- so their README prints the grep
-instead. First, and before the emptiness checks below, because
+still installing an agent that trusts nothing extra. The flat manifests refuse
+it too, and from somewhere else -- they have no install step, so the refusal
+rides into the cluster as a `ca-slot-check` initContainer on the crane
+Deployment (#241) and the pod stops before crane starts. Nothing of that belongs
+here: this is the install step the manifests do not have.
+First, and before the emptiness checks below, because
 "you left this blank" is the more specific answer and the one that names the
 form it was left blank on.
 */}}

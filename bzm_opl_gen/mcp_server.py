@@ -790,6 +790,13 @@ def _token_warnings(source):
 
 def _bundle_warnings(options):
     out = []
+    # The CLI prints this beside the token line; here it is a warning, because
+    # this surface has no "beside" and a session that generated a slot bundle
+    # and moved on to `kubectl apply` would meet the failure as a healthy pod
+    # that never comes online (#241). None for every other bundle.
+    slot = gen_mod.ca_slot_notice(options)
+    if slot:
+        out.append(slot)
     if options.get("auto_update"):
         out.append(
             "auto_update is on: crane will take field ownership of its own "

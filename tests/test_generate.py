@@ -3560,3 +3560,194 @@ def test_the_docker_bundle_gets_the_same_slot_in_its_own_shape():
                                  "auth_token": "de" * 32,
                                  "ca_bundle_slot": True})
     assert files[gen.DOCKER_CA_FILE] == gen.marker("ca_bundle")
+
+
+# -- ...and the guard that stops it deploying anyway (#241) -------------------
+#
+# Measured on minikube: a manifests bundle with the slot still empty applies all
+# seven objects, runs `1/1 Running`, and dies only in crane's own log
+# (NO_CERTIFICATE_OR_CRL_FOUND). helm refuses at install and docker refuses from
+# both of its routes, so flat manifests were the one format with nowhere to
+# refuse from. The guard is an initContainer, because `kubectl get pods` is
+# where somebody looks.
+
+
+def _init_container(files):
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    return spec.get("initContainers")
+
+
+def test_a_slot_bundle_refuses_to_start_while_the_marker_is_there():
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True})
+    init, = _init_container(files)
+    assert init["name"] == gen.CA_SLOT_INIT_CONTAINER
+    script = init["args"][0]
+    # The pattern, never this option's own marker: what it reads is the live
+    # ConfigMap, which may have been edited by hand or written by an older
+    # version of this generator under `<PLACEHOLDER>`.
+    assert gen.MARKER_PATTERN in script
+    assert gen.marker("ca_bundle") not in script.split("echo")[0]
+    assert f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}" in script
+    # Whole value, not a substring: a pasted certificate carrying a bracketed
+    # word (a `friendlyName: <REDACTED>` header) must not read as an empty slot,
+    # and a CrashLoopBackOff is not the place to take `marker_in`'s trade. The
+    # same `^<...>$` the chart applies to the same value.
+    assert "grep -qx" in script
+    assert "exit 1" in script
+    # It reads the same mounted ConfigMap crane reads, or it would be judging a
+    # different file from the one that is about to fail.
+    assert init["volumeMounts"] == [{"name": "cacerts",
+                                     "mountPath": gen.CA_MOUNT_PATH,
+                                     "readOnly": True}]
+
+
+def test_the_guard_names_the_field_the_file_and_the_fix():
+    """`kubectl get pods` says only `Init:Error`; the name leads to
+    `kubectl logs -c ...`, and this is what is waiting there."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True})
+    script = _init_container(files)[0]["args"][0]
+    assert "ca_bundle" in script                      # the field
+    assert gen.CA_CONFIGMAP_FILE in script            # the file to edit
+    assert "BEGIN CERTIFICATE" in script              # what to put in it
+    assert "NO_CERTIFICATE_OR_CRL_FOUND" in script    # what happens otherwise
+
+
+def test_the_guard_says_so_when_it_could_not_look():
+    """A check that cannot read its file must not report a pass. Crane reads the
+    same path out of REQUESTS_CA_BUNDLE, so a bundle that is not mounted is a
+    fact about the deployment rather than a read somebody was refused -- it
+    refuses, and it says which of the two happened."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True})
+    script = _init_container(files)[0]["args"][0]
+    unreadable = script.split("if grep")[0]
+    assert "! -r" in unreadable and "REQUESTS_CA_BUNDLE" in unreadable
+    assert "exit 1" in unreadable
+
+
+def test_the_guard_runs_the_image_the_cluster_already_pulls():
+    """The one decision that sinks this if it is wrong. These bundles are for
+    sealed clusters -- private registry, public registries blackholed on the
+    node -- so a busybox or alpine initContainer would ImagePullBackOff on
+    exactly the clusters the guard exists for. Crane's own reference is already
+    mirrored, pull-secreted and pinned, and it carries a shell."""
+    o = {"namespace": "ns1", "ship_id": "bbb222", "ca_bundle_slot": True,
+         "private_registry": "reg.example.com/bzm", "pull_secret": "regcred"}
+    files = gen.generate(FACTS, o)
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    init, = spec["initContainers"]
+    assert init["image"] == spec["containers"][0]["image"]
+    assert init["image"].startswith("reg.example.com/bzm/")
+    # The pull secret is the pod's, so it covers both containers by construction
+    # -- named here because an initContainer that was not covered by it is the
+    # same ImagePullBackOff by another route.
+    assert spec["imagePullSecrets"] == [{"name": "regcred"}]
+
+
+def test_the_guard_costs_the_pod_nothing_to_schedule():
+    """A pod's request is max(largest init container, sum of the containers), so
+    repeating crane's own numbers leaves this Deployment's footprint exactly
+    where it was -- and a cluster with a LimitRange or a ResourceQuota sees one
+    more container it already accepts."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True,
+                                 "crane_ephemeral_storage": "4Gi"})
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    init, crane = spec["initContainers"][0], spec["containers"][0]
+    assert init["resources"] == crane["resources"]
+    assert init["resources"]["limits"]["ephemeral-storage"] == "4Gi"
+    # ...and it runs under the same posture, or a restricted PodSecurity
+    # namespace rejects the pod over the container that was added to protect it.
+    assert init["securityContext"] == crane["securityContext"]
+
+
+@pytest.mark.parametrize("platform", ("k8s", "openshift"))
+def test_the_guard_takes_the_platforms_own_security_context(platform):
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True, "platform": platform})
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
+    init, crane = spec["initContainers"][0], spec["containers"][0]
+    assert init["securityContext"] == crane["securityContext"]
+    # OpenShift's SCC assigns the UID; pinning one is refused there.
+    assert ("runAsUser" in init["securityContext"]) is (platform == "k8s")
+
+
+def test_the_guard_is_echoed_from_a_shell_and_survives_it():
+    """The two sentences are echoed from a double-quoted shell string inside a
+    YAML block scalar. A `"` ends the string, a `$` or a backtick is read by the
+    shell rather than printed, and either way the message a customer meets is
+    not the message that was written."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True})
+    for line in _init_container(files)[0]["args"][0].splitlines():
+        if line.strip().startswith("echo "):
+            assert not set(line.strip()[6:-5]) & set('"$`\\'), line
+
+
+@pytest.mark.parametrize("options", (
+    {},
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"},
+    {"ca_existing_configmap": "corp-trust"},
+    {"ca_openshift_inject": True},
+))
+def test_every_other_bundle_carries_no_guard_at_all(options):
+    """The guard is a refusal, and a bundle with a certificate in it has nothing
+    to be refused over. Byte-identity for everything else is the acceptance
+    criterion behind this."""
+    files = gen.generate(FACTS, dict(options, namespace="ns1",
+                                     ship_id="bbb222"))
+    assert _init_container(files) is None
+    assert gen.CA_SLOT_INIT_CONTAINER not in files["bzm_deployment.yaml"]
+
+
+def test_generate_says_it_before_the_bundle_is_even_written():
+    """The cheap half. The person who runs the command is the one who chose the
+    slot, and generate was the one moment that said nothing about it."""
+    o = {"namespace": "ns1", "ship_id": "bbb222", "ca_bundle_slot": True}
+    notice = gen.ca_slot_notice(o)
+    assert gen.CA_CONFIGMAP_FILE in notice and "ca_bundle" in notice
+    assert gen.CA_SLOT_INIT_CONTAINER in notice and "Init:Error" in notice
+    # Raw options in, defaults merged inside: the caller holds what somebody
+    # typed and has resolved nothing yet.
+    assert gen.ca_slot_notice({"namespace": "ns1"}) is None
+
+
+@pytest.mark.parametrize("fmt,where,names,absent", (
+    ("manifests", gen.CA_CONFIGMAP_FILE, ("Init:Error",),
+     ("helm install", "compose")),
+    ("helm", gen.HELM_VALUES_FILE, ("helm install",),
+     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
+    ("docker", gen.DOCKER_CA_FILE, (gen.DOCKER_RUN_FILE, "docker compose up"),
+     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
+))
+def test_the_notice_names_the_file_and_the_refusal_of_its_own_format(
+        fmt, where, names, absent):
+    """Three formats, three files and three refusals, and one sentence for all
+    of them would be wrong twice over. The file is the half that is easy to get
+    wrong: a chart bundle carries no `bzm_cacerts.yaml` and a docker bundle
+    carries no ConfigMap at all, so naming one would send somebody to a file
+    that is not in their directory. Nothing is added to helm or docker by saying
+    this -- their refusals already exist and this reports them."""
+    notice = gen.ca_slot_notice({"namespace": "ns1", "ship_id": "bbb222",
+                                 "output_format": fmt, "ca_bundle_slot": True})
+    assert f"Paste your CA into {where}" in notice
+    for name in names:
+        assert name in notice
+    for name in absent:
+        assert name not in notice
+
+
+@pytest.mark.parametrize("options", (
+    # Two answers to one question, which `_ca_cfg` refuses naming the pair.
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"},
+    # A format nobody offers, which `generate` refuses naming the three.
+    {"output_format": "kustomize"},
+))
+def test_the_notice_leaves_every_refusal_to_the_one_that_owns_it(options):
+    """A notice must not be the thing that raises, least of all from inside the
+    MCP server's warning list -- and each of these is refused one line later, by
+    the code that can name what is wrong with it."""
+    assert gen.ca_slot_notice(dict(options, namespace="ns1",
+                                   ca_bundle_slot=True)) is None

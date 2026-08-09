@@ -305,6 +305,22 @@ def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
     assert "create-agent" in body["token_source"]["message"]
 
 
+def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
+        fake_account, tmp_path):
+    """This surface has no "beside" -- the CLI prints the slot line next to the
+    token one, and a session reads a JSON body. A session that generated a slot
+    bundle and moved on to `kubectl apply` would meet the failure as a pod that
+    runs and never comes online (#241), so it is a warning."""
+    body = ok("opl_bundle", "generate",
+              {"facts": FACTS, "out_dir": str(tmp_path),
+               "options": {"ca_bundle_slot": True}})
+    assert any(gen_mod.CA_SLOT_INIT_CONTAINER in w for w in body["warnings"]), \
+        body["warnings"]
+    plain = ok("opl_bundle", "generate",
+               {"facts": FACTS, "out_dir": str(tmp_path)})
+    assert not any("CA slot" in w for w in plain["warnings"])
+
+
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
                                                               tmp_path):
     """The explicit ask on the issue: the one action that silently revokes a

@@ -291,6 +291,13 @@ def cmd_generate(a):
     # itself. Which of the four happened decides whether an agent is still
     # running, and the run that said nothing was the one that rotated (#64).
     print(source.message)
+    # Beside the token line, and for the same reason: both say what the bundle
+    # about to be written cannot do yet. Generate was the one moment that said
+    # nothing about a CA slot (#241), and it is the moment the person who chose
+    # the slot is still here. None for every other bundle.
+    notice = gen_mod.ca_slot_notice(opts)
+    if notice:
+        print(notice)
     # Through core, so every refusal generate() writes -- an engine limit that
     # is not a quantity, a service account named as the empty string -- arrives
     # as the sentence it was written as rather than at the foot of a traceback.
