@@ -315,6 +315,49 @@ missing tools. The rest is what it cannot fix for you.
   groups in TypeScript — same rule as `IGNORED_BY_FORMAT`, same single
   `fixtures.ts` copy held equal by `test_server.py`.
 
+- **Every surface holding a *location* joins it to that table through
+  `plan.sizing_models_for`.** The page got each functionality's own vocabulary
+  in #147 and the planner got a model per functionality in #154; the **bundle
+  README** and **`doctor`** went on speaking performance's, so a GUI Functional
+  bundle's handover read `2 engine(s) per agent at 500 virtual users each` and
+  the preflight reported `500 threads on a 1 CPU / 4Gi engine`, over a location
+  sized in browser instances (#165). The join is one function because it was
+  going to be two, and its answers are **three**: funcIds nobody read, funcIds
+  that name no model here (real accounts carry `tdm`, `dataPublisher`,
+  `delphix`), and a list — the middle one is why it returns a list rather than
+  an id. `generate` collapses the outer two into one sentence and argues it at
+  the site; `doctor` does not, because it is where somebody is working out what
+  is wrong.
+
+  Three rules the wording keeps. **`threadsPerEngine` is never relabelled**: it
+  is what the account stores and it is BlazeMeter's own virtual-users-per-engine
+  field, so a GUI location gets the model's figure printed *beside* it — an
+  engine that size carries about four browser instances, and pouring 500 into
+  that unit would be a worse claim than the one being fixed. **A model with no
+  engine loses every engine sentence**, not just the unit: an SV agent carries
+  crane, group-gateway and service-mock and no `v4`, so the README states the
+  per-pod limits in the word for the pod that gets them and `doctor` returns a
+  stated *not judged* rather than silence — a check that returns nothing reads
+  exactly like one that passed. **The performance ratio stays the only ratio**
+  where a location has no model of its own: it is applied, and the sentence says
+  whose it is. A fourth model is a row in `SIZING_MODELS` and no edit in either
+  surface, which `test_the_readme_reads_its_units_off_the_sizing_table` walks.
+  `generate` reaches `plan` through a **function-level import** — `plan` imports
+  `generate` for the engine footprint, so the pair is acyclic one way only.
+
+  Two traps in the wording, both found by review rather than by a test.
+  `SIZING_MODELS`' `pod`/`pods` are **Kubernetes** nouns, so prose shared by all
+  three formats uses `runs` instead — a docker bundle has no pods, and the
+  non-engine sizing sentence there states *no size at all*, because docker
+  carries no limits pair (`engine_cpu_limit` is in its `IGNORED_BY_FORMAT`) and
+  nobody has measured what a mock container needs. The engine branch is
+  different in kind and survives on both platforms: it states a *requirement*,
+  which sizes a host as well as a node. And the location bullet is the one part
+  of the README whose length varies with the location, so
+  `test_readme_is_short_and_actionable` walks every model — measuring the
+  performance one measured none of the others, and two branches had crept past
+  the cap.
+
 - **`slots` is engines per *agent*, not per location.** BlazeMeter's own UI
   calls it "Engines per agent", so a location's concurrency is `agents x slots`;
   real accounts lean on it (17 agents at slots=1; 2 agents at slots=10).

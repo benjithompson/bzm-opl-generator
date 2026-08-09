@@ -191,6 +191,29 @@ def test_browser_instances_scale_with_the_pod_as_virtual_users_do():
     assert plan.per_pod_capacity("functionalGui", 1, 1) == 1
 
 
+def test_a_locations_funcids_pick_the_models_that_describe_it():
+    """The join every surface that has a *location* makes: the bundle README and
+    doctor both have funcIds and had no way to turn them into a unit, so both
+    spoke performance's whatever the location ran (#165)."""
+    assert plan.sizing_models_for(["functionalGui"]) == ["functionalGui"]
+    assert plan.sizing_models_for(["mockServices"]) == ["mockServices"]
+    # SIZING_MODELS order, not the location's -- the same tie-break the page's
+    # startFunctionality uses, so a location carrying both lands where the
+    # equivalent one on screen does.
+    assert plan.sizing_models_for(["mockServices", "performance"]) == [
+        "performance", "mockServices"]
+
+
+def test_funcids_nobody_could_read_are_not_funcids_that_size_nothing():
+    """Three answers, and the middle one is the whole reason this returns a list
+    rather than one id. A location carrying only tdm or delphix was *read*, and
+    it is sized by no model here; facts with no funcIds at all were not read.
+    Both leave the same absent unit behind, so the value has to carry which."""
+    assert plan.sizing_models_for(None) is None
+    assert plan.sizing_models_for([]) == []
+    assert plan.sizing_models_for(["tdm", "delphix"]) == []
+
+
 def test_service_virtualization_has_no_figure_to_be_sized_with():
     """The point of the whole table. `vus_per_engine_assumed` carries supplied
     against defaulted; requests per second per core is in neither position,
