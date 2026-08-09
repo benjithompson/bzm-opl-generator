@@ -36,7 +36,8 @@ from . import facts as facts_mod
 from . import evidence as evidence_mod
 from .api import (API_BASE, DEFAULT_THREADS_PER_ENGINE,
                   ENGINE_UPLOAD_HOSTS)
-from .generate import (CRANE_CPU_LIMIT, CRANE_CPU_REQUEST, CRANE_MEM_LIMIT,
+from .generate import (CA_MODES, CRANE_CPU_LIMIT, CRANE_CPU_REQUEST,
+                       CRANE_MEM_LIMIT,
                        CRANE_MEM_REQUEST, DEFAULT_OPTIONS,
                        ENGINE_DEFAULT_CPU, ENGINE_DEFAULT_MEM, ENGINE_DISK_GB,
                        ENGINE_TMP_GB,
@@ -1616,8 +1617,17 @@ def evidence_summary(doc, namespace=None):
 
 
 def _ca_configured(opts):
-    return bool(opts.get("ca_bundle") or opts.get("ca_existing_configmap")
-                or opts.get("ca_openshift_inject"))
+    """Whether this bundle configures CA trust at all -- in any mode.
+
+    Read off `CA_MODES` rather than listed, which is what left `ca_bundle_slot`
+    out of it (#250): a slot bundle whose PEM had been pasted in probed without
+    `--cacert`, and an intercepting proxy's certificate was then rejected --
+    a FAIL saying BlazeMeter is unreachable, over a namespace that reaches it.
+
+    `.get`, and deliberately not `_ca_cfg`: these options may be a partial dict,
+    and a doctor must report rather than raise over a pair `generate` refuses.
+    """
+    return any(opts.get(k) for k in CA_MODES)
 
 
 def _rc_lines(output, targets):

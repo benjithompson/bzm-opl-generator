@@ -793,7 +793,11 @@ def assert_engine_config(pod, opts):
     if reg and not all(i.startswith(reg.split("/")[0]) for i in images):
         fails.append(f"engine image is not from the private registry: {images} "
                      f"-- IMAGE_OVERRIDES does not cover the engine")
-    if opts.get("ca_bundle") or opts.get("ca_existing_configmap"):
+    # Every mode, off the generator's own list: this read two of the four, so a
+    # slot or OpenShift-injected bundle run with --run-test and no --local-proxy
+    # skipped both checks and passed having verified neither (#250). The proxy
+    # path hid it, proxy_overlay always writing `ca_bundle`.
+    if any(opts.get(k) for k in generate.CA_MODES):
         # Crane mounts the ConfigMap as a directory at /var/cm; the engine gets
         # the bundle file itself (/var/cm/ca-bundle.crt, subPath). Accept both.
         mounts = [m for c in containers for m in c.get("volumeMounts", [])

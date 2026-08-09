@@ -295,6 +295,21 @@ def test_engine_config_catches_missing_ca_propagation():
     assert any("REQUESTS_CA_BUNDLE" in f for f in fails)
 
 
+@pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
+def test_engine_config_checks_the_ca_whichever_mode_configured_it(mode):
+    """The gate read two of the four modes, so a slot bundle (or an
+    OpenShift-injected one) run with `--run-test` and no `--local-proxy` skipped
+    both CA assertions and the rig reported a pass having checked neither. The
+    proxy path hides it -- proxy_overlay always writes `ca_bundle` -- which is
+    why this is read off CA_MODES rather than off the run the rig usually
+    makes."""
+    value = True if gen.DEFAULT_OPTIONS[mode] is False else "x"
+    opts = {**ENGINE_OPTS, "ca_bundle": None, mode: value}
+    fails = livetest.assert_engine_config(_engine_pod(ca=False), opts)
+    assert any("KUBERNETES_CA_BUNDLE_MOUNT did not propagate" in f for f in fails)
+    assert any("REQUESTS_CA_BUNDLE" in f for f in fails)
+
+
 def test_engine_config_catches_missing_proxy_env():
     fails = livetest.assert_engine_config(_engine_pod(proxy=False), ENGINE_OPTS)
     assert any("bypassing the customer's proxy" in f for f in fails)
