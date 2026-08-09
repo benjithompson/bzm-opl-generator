@@ -3674,8 +3674,11 @@ def test_the_guard_is_echoed_from_a_shell_and_survives_it():
     YAML block scalar. A `"` ends the string, a `$` or a backtick is read by the
     shell rather than printed, and either way the message a customer meets is
     not the message that was written."""
-    for line in gen._ca_slot_lines():
-        assert not set(line) & set('"$`\\')
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                 "ca_bundle_slot": True})
+    for line in _init_container(files)[0]["args"][0].splitlines():
+        if line.strip().startswith("echo "):
+            assert not set(line.strip()[6:-5]) & set('"$`\\'), line
 
 
 @pytest.mark.parametrize("options", (
@@ -3706,19 +3709,29 @@ def test_generate_says_it_before_the_bundle_is_even_written():
     assert gen.ca_slot_notice({"namespace": "ns1"}) is None
 
 
-@pytest.mark.parametrize("fmt,names", (
-    ("manifests", (gen.CA_CONFIGMAP_FILE, "Init:Error")),
-    ("helm", ("helm install",)),
-    ("docker", (gen.DOCKER_RUN_FILE, "docker compose up")),
+@pytest.mark.parametrize("fmt,where,names,absent", (
+    ("manifests", gen.CA_CONFIGMAP_FILE, ("Init:Error",),
+     ("helm install", "compose")),
+    ("helm", gen.HELM_VALUES_FILE, ("helm install",),
+     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
+    ("docker", gen.DOCKER_CA_FILE, (gen.DOCKER_RUN_FILE, "docker compose up"),
+     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
 ))
-def test_the_notice_names_what_actually_stops_each_format(fmt, names):
-    """Three formats, three refusals, and one sentence for all of them would be
-    wrong twice. Nothing is added to helm or docker by saying this -- their
-    refusals already exist and this reports them."""
+def test_the_notice_names_the_file_and_the_refusal_of_its_own_format(
+        fmt, where, names, absent):
+    """Three formats, three files and three refusals, and one sentence for all
+    of them would be wrong twice over. The file is the half that is easy to get
+    wrong: a chart bundle carries no `bzm_cacerts.yaml` and a docker bundle
+    carries no ConfigMap at all, so naming one would send somebody to a file
+    that is not in their directory. Nothing is added to helm or docker by saying
+    this -- their refusals already exist and this reports them."""
     notice = gen.ca_slot_notice({"namespace": "ns1", "ship_id": "bbb222",
                                  "output_format": fmt, "ca_bundle_slot": True})
+    assert f"Paste your CA into {where}" in notice
     for name in names:
         assert name in notice
+    for name in absent:
+        assert name not in notice
 
 
 def test_the_notice_leaves_a_contradiction_to_the_refusal_that_owns_it():

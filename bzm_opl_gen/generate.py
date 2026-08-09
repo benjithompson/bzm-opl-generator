@@ -1002,31 +1002,48 @@ def _ca_cfg(o):
 CA_SLOT_INIT_CONTAINER = "ca-slot-check"
 
 
-def _ca_slot_lines():
+def _ca_slot_where(o):
+    """The file a CA slot is filled in, for this format.
+
+    Three formats, three files, and they are not interchangeable: manifests
+    carry the ConfigMap manifest, a chart bundle carries none of it and the PEM
+    goes into the values overlay the chart renders from, and docker writes the
+    PEM as a file beside the script. Named once because both surfaces that send
+    somebody to it -- the README block and `ca_slot_notice` -- had to know, and
+    one of them was naming `bzm_cacerts.yaml` at a chart bundle that has no such
+    file.
+    """
+    return {"docker": DOCKER_CA_FILE, "helm": HELM_VALUES_FILE}.get(
+        o["output_format"], CA_CONFIGMAP_FILE)
+
+
+def _ca_slot_lines(holder, where):
     """What a bundle says about a CA slot nobody filled in: what is wrong, then
     what to do -- the two-sentence shape `_docker_blank_file_lines` gives the
-    same kind of fact on the other platform.
+    same kind of fact on the other platform, down to the verb.
 
     One wording and two surfaces, which is why it is a function rather than
     prose at either: the initContainer echoes it into the pod's log, and
     `ca_slot_notice` prints it at generate. A third version of this sentence
     would be one more thing to keep true.
 
-    It names the ConfigMap and the file, and they are deliberately not the same
-    object: whoever reads the first sentence is looking at a cluster, and
-    whoever acts on the second is looking at a directory.
+    `holder` is what carries the marker and it is the one thing that genuinely
+    differs: the guard is read by somebody looking at a cluster, where the
+    answer is a ConfigMap, and the notice by somebody looking at a directory,
+    where it is a file. `where` is always a file, because pasting a PEM into a
+    live ConfigMap is not the fix either of them wants.
 
-    **No `"`, `$` or backtick in either sentence.** They are echoed from a
-    double-quoted shell string inside a YAML block scalar, where all three would
-    be read by the shell rather than printed.
+    **No `"`, `$` or backtick in either sentence, and none in what is passed
+    in.** They are echoed from a double-quoted shell string inside a YAML block
+    scalar, where all three would be read by the shell rather than printed.
     """
-    return (f"{CA_CONFIGMAP} still holds {marker('ca_bundle')} -- ca_bundle was "
-            f"set to a slot when this bundle was generated, so the PEM is still "
-            f"to be pasted in.",
-            f"Paste your CA into {CA_CONFIGMAP_FILE} -- the whole BEGIN "
-            f"CERTIFICATE block, and your public roots with it -- then apply "
-            f"this bundle again. Crane trusts nothing until it lands, and fails "
-            f"every call to BlazeMeter with NO_CERTIFICATE_OR_CRL_FOUND.")
+    return (f"{holder} carries {marker('ca_bundle')} -- ca_bundle was set to a "
+            f"slot when this bundle was generated, so the PEM is still to be "
+            f"pasted in.",
+            f"Paste your CA into {where} -- the whole BEGIN CERTIFICATE block, "
+            f"and your public roots with it -- and deploy. Crane trusts nothing "
+            f"until it lands, and fails every call to BlazeMeter with "
+            f"NO_CERTIFICATE_OR_CRL_FOUND.")
 
 
 def ca_slot_notice(options):
@@ -1055,7 +1072,10 @@ def ca_slot_notice(options):
         return None
     if not ca or ca["mode"] != "slot":
         return None
-    wrong, todo = _ca_slot_lines()
+    where = _ca_slot_where(o)
+    # The file is what carries the marker here: nothing is deployed yet, so
+    # there is no ConfigMap for a reader to look at.
+    wrong, todo = _ca_slot_lines(where, where)
     # What stops a deploy, per format, and the three genuinely differ -- so one
     # sentence for all of them would be wrong twice. Nothing new is added to
     # helm or docker by saying this: their refusals already exist, and this line
@@ -1108,7 +1128,9 @@ def _ca_slot_init_container(facts, o, ca):
     """
     if not ca or ca["mode"] != "slot":
         return ""
-    wrong, todo = _ca_slot_lines()
+    # The ConfigMap, not the file: whoever reads this has a cluster in front of
+    # them and the file may be nowhere near it.
+    wrong, todo = _ca_slot_lines(f"the {ca['cm']} ConfigMap", CA_CONFIGMAP_FILE)
     path = f"{CA_MOUNT_PATH}/{ca['key']}"
     return f"""      initContainers:
         # Nothing outside the bundle stops a CA slot nobody filled in: the
@@ -2155,17 +2177,17 @@ def _ca_slot_block(o):
     ca = _ca_cfg(o)
     if not ca or ca["mode"] != "slot":
         return ""
+    # One reader, one file, and the format decides which -- so it is resolved
+    # where `ca_slot_notice` resolves it rather than branch by branch here. This
+    # block named `bzm_cacerts.yaml` at a chart bundle until #241, and a chart
+    # bundle carries no such file: the chart renders the ConfigMap from
+    # `caBundle` in the values overlay.
+    where = _ca_slot_where(o)
     if o["output_format"] == "docker":
-        where = DOCKER_CA_FILE
         check, cmd = (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both "
                       f"refuse to start while the marker is there, so nothing "
                       f"deploys by accident."), ""
     elif o["output_format"] == "helm":
-        # The values overlay, not the ConfigMap manifest: a chart bundle carries
-        # no `bzm_cacerts.yaml` at all -- the chart renders the ConfigMap from
-        # `caBundle` -- and this block named it anyway until #241 split the
-        # branches, sending a reader to a file that is not in their directory.
-        where = HELM_VALUES_FILE
         check = ("`helm install` refuses it and names the field, so nothing "
                  "deploys by accident.")
         cmd = ""
@@ -2174,7 +2196,6 @@ def _ca_slot_block(o):
         # ConfigMap value whatever it says (#230) -- so what stops it is the
         # initContainer the bundle carries (#241), and the grep below is the
         # same judgement for a reader who has not applied anything yet.
-        where = CA_CONFIGMAP_FILE
         check = (f"**Applying it as it stands succeeds** -- the marker is a "
                  f"ConfigMap value, not a name -- and the agent then does not "
                  f"start: the `{CA_SLOT_INIT_CONTAINER}` initContainer reads "
