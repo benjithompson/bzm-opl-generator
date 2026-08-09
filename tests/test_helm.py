@@ -252,8 +252,13 @@ def test_the_chart_keeps_its_install_time_refusal_and_gains_no_guard():
     """
     _, files = _values(ca_bundle_slot=True)
     for name, text in files.items():
-        assert gen.CA_SLOT_INIT_CONTAINER not in text, name
+        # Structural: no file declares one. The chart's own validation helper
+        # *names* the manifests guard in a comment, and has to -- a chart reader
+        # asking why this refusal is here needs to know the other format has an
+        # answer of its own rather than none.
         assert "initContainers" not in text, name
+    deployment = files[f"{gen.CHART_DIR}/templates/deployment.yaml"]
+    assert gen.CA_SLOT_INIT_CONTAINER not in deployment
     readme = files["README.md"]
     assert gen.HELM_VALUES_FILE in readme and "helm install" in readme
     assert gen.CA_CONFIGMAP_FILE not in readme

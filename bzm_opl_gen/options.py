@@ -433,7 +433,7 @@ OPTIONS = [
             "from compose, and a manifests bundle from a `ca-slot-check` "
             "initContainer on the crane Deployment -- `kubectl apply` still "
             "creates every object, because a ConfigMap value is not a name, and "
-            "the pod then stops at `Init:Error`."),
+            "the pod then stops at `Init:Error`, then `Init:CrashLoopBackOff`."),
     Option(
         "ca_existing_configmap", "string", "CA trust",
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",

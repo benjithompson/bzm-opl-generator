@@ -3587,8 +3587,13 @@ def test_a_slot_bundle_refuses_to_start_while_the_marker_is_there():
     # ConfigMap, which may have been edited by hand or written by an older
     # version of this generator under `<PLACEHOLDER>`.
     assert gen.MARKER_PATTERN in script
-    assert gen.marker("ca_bundle") not in script.split("if grep")[0]
+    assert gen.marker("ca_bundle") not in script.split("echo")[0]
     assert f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}" in script
+    # Whole value, not a substring: a pasted certificate carrying a bracketed
+    # word (a `friendlyName: <REDACTED>` header) must not read as an empty slot,
+    # and a CrashLoopBackOff is not the place to take `marker_in`'s trade. The
+    # same `^<...>$` the chart applies to the same value.
+    assert "grep -qx" in script
     assert "exit 1" in script
     # It reads the same mounted ConfigMap crane reads, or it would be judging a
     # different file from the one that is about to fail.

@@ -996,9 +996,12 @@ def _ca_cfg(o):
 # `_ca_slot_init_container` below.
 
 # The initContainer that carries it. Named, and short: `kubectl get pods` says
-# only `Init:Error`, so the name is what leads a reader from there to
-# `kubectl describe pod` and `kubectl logs -c ca-slot-check`, which is where the
-# two sentences below are.
+# only `Init:Error` -- and then `Init:CrashLoopBackOff`, because the pod's
+# restartPolicy is Always and the kubelet backs off -- so the name is what leads
+# a reader from either of those to `kubectl describe pod` and
+# `kubectl logs -c ca-slot-check`, which is where the two sentences below are.
+# **Both states are named wherever this one is**, or somebody who looks a minute
+# after applying greps for a string that has left the screen.
 CA_SLOT_INIT_CONTAINER = "ca-slot-check"
 
 
@@ -1088,8 +1091,9 @@ def ca_slot_notice(options):
                    f"to start it."),
         "manifests": (f"`kubectl apply` still creates every object -- a marker "
                       f"is refused as a name and accepted as a value -- but the "
-                      f"crane pod stops at `Init:Error`, on the "
-                      f"{CA_SLOT_INIT_CONTAINER} initContainer."),
+                      f"crane pod stops on the {CA_SLOT_INIT_CONTAINER} "
+                      f"initContainer -- `Init:Error`, then "
+                      f"`Init:CrashLoopBackOff` as the kubelet backs off."),
     }.get(o["output_format"])
     if not stops:
         return None
@@ -1117,6 +1121,16 @@ def _ca_slot_init_container(facts, o, ca):
     have been edited by hand or written by an older version of this generator,
     and neither is obliged to use today's marker for this field.
 
+    **It is matched whole, and that is the opposite judgement from the docker
+    script next door.** `marker_in` is a substring search and takes a loud false
+    refusal over a silent miss, which is right where the refusal is a script
+    somebody just ran; here it is a CrashLoopBackOff inside a cluster, over a
+    certificate somebody has already pasted in. A PEM is arbitrary text -- a
+    `friendlyName: <REDACTED>` header is enough -- so the whole trimmed value
+    has to be the marker, which is `is_placeholder`'s rule and the same
+    `^<...>$` the chart's `bzm-opl.validate` applies to the same value. The
+    slot writes nothing but the marker, so nothing honest is missed.
+
     Requests and limits are crane's own numbers rather than smaller ones nobody
     measured. A pod's effective request is max(largest init container, sum of
     the containers), so repeating crane's leaves the scheduling footprint of
@@ -1140,7 +1154,8 @@ def _ca_slot_init_container(facts, o, ca):
         # Nothing outside the bundle stops a CA slot nobody filled in: the
         # marker is a ConfigMap value, so it applies, and crane then runs
         # 1/1 Running trusting nothing (#241). This is where that becomes
-        # visible -- `kubectl get pods` shows Init:Error, and
+        # visible -- kubectl get pods shows Init:Error, then
+        # Init:CrashLoopBackOff, and
         # `kubectl logs -c {CA_SLOT_INIT_CONTAINER}` says which field and which file.
         - name: {CA_SLOT_INIT_CONTAINER}
           image: "{_crane_image(facts, o)}"
@@ -1157,7 +1172,10 @@ def _ca_slot_init_container(facts, o, ca):
                 echo "Apply {CA_CONFIGMAP_FILE} from this bundle, or check the {CA_CONFIGMAP} ConfigMap." >&2
                 exit 1
               fi
-              if grep -q '{MARKER_PATTERN}' {path}; then
+              # Whole value, not a substring: `tr` strips the whitespace and
+              # `grep -x` anchors what is left, so a pasted certificate that
+              # happens to carry a bracketed word is not read as an empty slot.
+              if printf %s "$(tr -d '[:space:]' < {path})" | grep -qx '{MARKER_PATTERN}'; then
                 echo "{wrong}" >&2
                 echo "{todo}" >&2
                 exit 1
@@ -2204,10 +2222,13 @@ def _ca_slot_block(o):
                  f"ConfigMap value, not a name -- and the agent then does not "
                  f"start: the `{CA_SLOT_INIT_CONTAINER}` initContainer reads "
                  f"the mounted bundle and refuses while the marker is there, "
-                 f"so the pod sits at `Init:Error` instead of running and "
-                 f"trusting nothing. `kubectl logs -c "
+                 f"so the pod sits at `Init:Error` -- then "
+                 f"`Init:CrashLoopBackOff`, as the kubelet backs off -- instead "
+                 f"of running and trusting nothing. `kubectl logs -c "
                  f"{CA_SLOT_INIT_CONTAINER}` says the same thing this does. "
-                 f"Before applying anything, this is the check:")
+                 f"Apply the certificate and the pod clears itself on the "
+                 f"kubelet's next retry, which the backoff can put a few "
+                 f"minutes out. Before applying anything, this is the check:")
         # The marker this file actually carries, rather than the pattern every
         # reader matches: this block is about one field, the reader is going to
         # look at one file, and a regular expression printed as a command a
