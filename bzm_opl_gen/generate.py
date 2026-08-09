@@ -1091,9 +1091,9 @@ def ca_slot_notice(options):
                    f"to start it."),
         "manifests": (f"`kubectl apply` still creates every object -- a marker "
                       f"is refused as a name and accepted as a value -- but the "
-                      f"crane pod stops on the {CA_SLOT_INIT_CONTAINER} "
-                      f"initContainer -- `Init:Error`, then "
-                      f"`Init:CrashLoopBackOff` as the kubelet backs off."),
+                      f"crane pod then stops on the {CA_SLOT_INIT_CONTAINER} "
+                      f"initContainer, at `Init:Error` and then "
+                      f"`Init:CrashLoopBackOff`."),
     }.get(o["output_format"])
     if not stops:
         return None
@@ -1154,9 +1154,9 @@ def _ca_slot_init_container(facts, o, ca):
         # Nothing outside the bundle stops a CA slot nobody filled in: the
         # marker is a ConfigMap value, so it applies, and crane then runs
         # 1/1 Running trusting nothing (#241). This is where that becomes
-        # visible -- kubectl get pods shows Init:Error, then
-        # Init:CrashLoopBackOff, and
-        # `kubectl logs -c {CA_SLOT_INIT_CONTAINER}` says which field and which file.
+        # visible: kubectl get pods shows Init:Error and then
+        # Init:CrashLoopBackOff, and kubectl logs -c {CA_SLOT_INIT_CONTAINER}
+        # says which field and which file.
         - name: {CA_SLOT_INIT_CONTAINER}
           image: "{_crane_image(facts, o)}"
           imagePullPolicy: Always
