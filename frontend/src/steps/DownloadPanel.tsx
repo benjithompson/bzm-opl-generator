@@ -73,10 +73,14 @@ export interface BundleHandover {
    *  an endpoint is probed over -- and they are one answer, so they arrive as
    *  one value. */
   sv: Sv;
-  /** The two blocks that are not a group's: an unusable service account name,
-   *  and a preview that did not render. Neither is shown here -- the field and
-   *  the preview pane say so where they are -- but both stop the buttons. */
-  saOk: boolean;
+  /** A preview that did not render, which is the one block that is neither a
+   *  group's nor a blank field's: there is no bundle to download. Not shown here
+   *  -- the preview pane says so where it is.
+   *
+   *  It had `saOk` beside it, an empty service account name, and that is gone
+   *  with the gate that read it (see `ready`): a blank required field is a
+   *  marker now, so the bundle exists and this step's job is to say what it
+   *  carries rather than to withhold it. */
   genErr: string | null;
   /** Groups in use but unfinished. They are on the configure step, which is by
    *  definition not this one, so the block names them and offers the way back
@@ -170,11 +174,20 @@ export function DownloadPanel(p: DownloadPanelProps) {
   // prove it moved is how a move turns into a rewrite nobody diffed.
   const { facts, shipId, options, format, sv } = bundle;
   const { plan } = credential;
-  // One expression for both buttons rather than the same five terms twice. It
-  // is a judgement this panel makes and keeps: two of the five are elsewhere on
-  // screen (the service account field, the preview pane), and the other three
-  // are said right here.
-  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok && bundle.saOk;
+  // One expression for both buttons rather than the same terms twice.
+  //
+  // **A blank field is not among them, and an empty service account name was
+  // until this commit.** It blocked here on the reading that `generate()`
+  // refuses one -- true when that gate was written, and false since a blank
+  // required field became its own marker: `fill_placeholders` runs before every
+  // validator, so `service_account()` sees `<SERVICE_ACCOUNT_NAME>` and the
+  // bundle renders. What was left was a page that printed "the bundle will carry
+  // those markers instead" and then would not produce it, with the button
+  // disabled and nothing on this step saying why -- the off-screen blocker,
+  // in the one place that had kept it. Every term below is either a bundle that
+  // does not exist (no facts, no agent, a preview that did not render) or a
+  // configuration `generate()` really does raise on (sv.ok).
+  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok;
   return (
             <div className="space-y-3">
               <div className="flex gap-2 items-center">

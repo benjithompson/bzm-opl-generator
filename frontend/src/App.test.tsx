@@ -1082,6 +1082,52 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
   });
 
+test("a blank namespace and service account still download, carrying their markers",
+  async () => {
+    // The bug this is here for: the step printed "namespace (<NAMESPACE>) and
+    // service_account_name (<SERVICE_ACCOUNT_NAME>) are empty, so the bundle will
+    // carry those markers instead" and then disabled the button, because `ready`
+    // still required a non-empty service account name. That gate was written when
+    // `generate()` refused an empty one; a blank required field became its own
+    // marker, and nothing revisited the gate -- so the page contradicted itself
+    // and the reason was on no step.
+    //
+    // Driven through the form rather than from an options literal: what broke was
+    // the state a person reaches by clearing two boxes.
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent))} />);
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    // The suggestion has to have landed before the boxes are cleared: picking a
+    // location suggests its functionality's namespace, and a clear that races it
+    // is undone by the suggestion rather than by the bug under test.
+    const ns = await screen.findByPlaceholderText<HTMLInputElement>(/e\.g\. blazemeter/);
+    await waitFor(() => expect(ns.value).toBe("blazemeter"));
+    for (const box of [/e\.g\. blazemeter/, /e\.g\. crane/]) {
+      fireEvent.change(screen.getByPlaceholderText(box),
+                       { target: { value: "" } });
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+
+    // ...and what it sends is the marked bundle, not a bundle with two empty
+    // strings in it: an empty service account name resolves to the namespace's
+    // `default` on a cluster, which is the failure the marker exists to stop.
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].options).toMatchObject({
+      namespace: marker("namespace"),
+      service_account_name: marker("service_account_name"),
+    });
+    // The sentence stays on screen beside the button that just worked. It is the
+    // half that has to be true for allowing the download to be safe.
+    expect(screen.getByText(/are empty, so the bundle will carry/).textContent)
+      .toMatch(/namespace \(<NAMESPACE>\)/);
+  });
+
 test("the scheduling radio prescribes a dedicated engine pool, and the choice reaches the bundle",
   async () => {
     const sent: Sent[] = [];

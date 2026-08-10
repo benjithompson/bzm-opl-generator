@@ -533,6 +533,28 @@ missing tools. The rest is what it cannot fix for you.
   never enters `options`, only `withPlaceholders(options)` on the way out, or it
   lands in the session snapshot looking like something somebody typed.
 
+  **"Warns, never blocks" is two gates, and only one of them was checked.**
+  `configureBlockedBy` dropped the namespace and the service account when the
+  marker arrived; `DownloadPanel`'s own `ready` went on requiring a non-empty
+  `service_account_name`, on the reading that `generate()` refuses one. It did,
+  once — `fill_placeholders` now runs before every validator, so
+  `service_account()` sees `<SERVICE_ACCOUNT_NAME>` and the bundle renders. What
+  was left was the page printing *the bundle will carry those markers instead*
+  and then disabling the button, with the reason on no step: the off-screen
+  blocker, surviving in the one gate that is not named `...BlockedBy`. So `ready`
+  is now only "there is no bundle" (no facts, no agent, a preview that did not
+  render) plus `sv.ok`, which `generate()` really does raise on, and a blank
+  field may never re-enter it. A frontend test drives the two boxes empty and
+  presses Download, because the state is reached by clearing two fields and no
+  unit test of either half sees it.
+
+  The two fields lost their asterisk and their red border with it. Red says the
+  input is wrong about a state the page supports, and the asterisk promises a
+  refusal that no longer happens; blank is amber, each hint names the marker the
+  field becomes, and the rail's `needs attention` is the third signal. The
+  *placeholder* stays a sample (`e.g. blazemeter`) where the identity boxes show
+  the marker — these two have a value worth suggesting and an id has none.
+
 - **`extra_env` is the escape hatch, and the reserved set is what keeps it
   honest.** BlazeMeter's agent-environment reference is much wider than the
   options here, and the only way to the rest was hand-editing the generated

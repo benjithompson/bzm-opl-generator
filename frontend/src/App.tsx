@@ -1862,7 +1862,7 @@ export default function App({ api }: { api: Api }) {
                 // `sentOptions`, not `options`: the zip this panel downloads has
                 // to be the bundle the preview showed, markers included.
                 facts, shipId, options: sentOptions, format,
-                sv, saOk, genErr, blanks, idBlanks,
+                sv, genErr, blanks, idBlanks,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
                 goToAgent: () => setStep(0),
               }}

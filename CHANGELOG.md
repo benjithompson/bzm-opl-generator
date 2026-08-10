@@ -39,6 +39,22 @@ anything that breaks.
 
 ### Fixed
 
+- **The web UI would not download a bundle whose service account name was
+  empty, having just said it would carry a marker for it.** The configure step
+  printed `namespace (<NAMESPACE>) and service_account_name
+  (<SERVICE_ACCOUNT_NAME>) are empty, so the bundle will carry those markers
+  instead` and the download button then stayed disabled, with nothing on the
+  download step saying why. The button's own gate still required a non-empty
+  name, from when an empty one refused to generate; a blank required field has
+  been its own marker since 0.4.0, so the bundle renders and the gate was
+  refusing a bundle the page had already described. Blank fields no longer block
+  either button.
+
+  The two fields also lost their red asterisk and their red border. Both
+  promised a refusal that no longer happens; a blank one is amber now, and each
+  field says which marker it becomes and that the bundle cannot be applied while
+  it does.
+
 - **The bundle README and `doctor` described engines and virtual users at a
   location that runs neither.** A GUI Functional bundle's handover said
   `2 engine(s) per agent at 500 virtual users each` and `doctor` reported
