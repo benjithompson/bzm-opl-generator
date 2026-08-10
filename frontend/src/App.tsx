@@ -69,7 +69,7 @@ import { buildNotice } from "./build";
 import { shipOnline } from "./heartbeat";
 // The shape a hand-typed id and token come in, and what is wrong with one that
 // does not. Nothing is built from a value that fails it.
-import { manualComplete } from "./manualIds";
+import { blankManualIds, manualComplete } from "./manualIds";
 // What the account can generate, by workspace.
 import { CapacityView } from "./CapacityView";
 // The planner's form shape and its empty value: plain data, so the session
@@ -1402,6 +1402,16 @@ export default function App({ api }: { api: Api }) {
   const blanks = useMemo(
     () => blankRequired(options, applies, grpOn),
     [options, applies, grpOn]);
+  // ...and the identity, which is a separate list because it is filled in on a
+  // separate step and is not an option: `harbor_id` is a fact, and `ship_id` is
+  // resolved out of one by the generator. Manual entry is the only mode it can
+  // be missing in -- connect mode reads both off a location somebody picked, so
+  // there is no box to leave empty. The token is deliberately not asked about
+  // here; the download step's own line answers for it (see blankManualIds).
+  const idBlanks = useMemo(
+    () => (sourceMode === "manual"
+      ? blankManualIds(manual.harbor_id, manual.ship_id) : []),
+    [sourceMode, manual]);
   // What every caller that generates actually sends. Derived, never stored:
   // the marker must not reach `options`, or it lands in the session snapshot
   // and comes back on the next load as a value somebody appears to have typed
@@ -1852,8 +1862,9 @@ export default function App({ api }: { api: Api }) {
                 // `sentOptions`, not `options`: the zip this panel downloads has
                 // to be the bundle the preview showed, markers included.
                 facts, shipId, options: sentOptions, format,
-                sv, saOk, genErr, blanks,
+                sv, saOk, genErr, blanks, idBlanks,
                 unfinished: incomplete, goToConfigure: () => setStep(1),
+                goToAgent: () => setStep(0),
               }}
               credential={{ plan: tokenPlan }}
               attempt={attempt} report={setAttempt}

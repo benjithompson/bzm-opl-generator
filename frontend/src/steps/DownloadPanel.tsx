@@ -62,6 +62,11 @@ export interface BundleHandover {
    *  group -- the reason the button is disabled is a step away, so the block
    *  offers the way to it. */
   goToConfigure: () => void;
+  /** ...and back to step 1, which is where the identity is typed. Two ways back
+   *  because there are two steps behind this one, and a block that named a blank
+   *  harbor id while offering the configure step would send somebody to the wrong
+   *  form. */
+  goToAgent: () => void;
   /** Everything about service virtualization, from sv.ts. Four things are read
    *  off it here -- whether the settings are finished, whether the chart is
    *  refused and why, whether a mock watch is meaningful at all, and the scheme
@@ -82,6 +87,12 @@ export interface BundleHandover {
    *  says of itself that it is unfinished -- which is why this is beside the
    *  button rather than in front of it. */
   blanks: string[];
+  /** The identity left empty: `harbor_id`, `ship_id`, or both. Its own list and
+   *  its own block, because the way back is step 1 rather than step 2 -- and it
+   *  is only ever non-empty in manual entry, where a bundle may deliberately be
+   *  generated before the BlazeMeter location exists. Not a reason the download
+   *  is disabled either, for the same reason `blanks` is not. */
+  idBlanks: string[];
 }
 
 /** What the next download will do about the agent's credential. */
@@ -197,6 +208,22 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   This bundle carries a placeholder AUTH_TOKEN — fill it in
                   before applying it.
                 </p>
+              )}
+              {/* The identity left empty, which is the one blank a bundle can
+                  carry and still be exactly what was asked for: a customer with
+                  no private location yet has no ids to type, and the manifests
+                  are what gets their platform team to approve one. Said here for
+                  the same reason as the block below -- this is where the zip is
+                  taken away -- and pointing at step 1, where the ids are. */}
+              {bundle.idBlanks.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-800 grow">
+                    {placeholderWarning(bundle.idBlanks)}
+                  </p>
+                  <Button kind="ghost" onClick={bundle.goToAgent}>
+                    Agent
+                  </Button>
+                </div>
               )}
               {/* Required fields left empty. Repeated here rather than left on
                   step 2, because this is where the bundle is taken away: the

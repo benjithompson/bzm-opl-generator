@@ -11,6 +11,32 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **A bundle can now be generated before the private location exists.** The
+  harbor id and the ship id are optional everywhere they are typed -- the web
+  UI's step 1, `facts --manual`, and the MCP server's `opl_facts manual` -- and
+  the bundle carries `<HARBOR_ID>` and `<SHIP_ID>` where each id belongs,
+  exactly as a blank credential already carried `<AUTH_TOKEN>`. This is the case
+  where the manifests are what a customer's platform team has to approve
+  *before* anybody creates the location, and until now the web UI refused to go
+  past step 1 without both ids while the CLI refused without `--ship-id`.
+
+  Nothing about it is silent. Each empty box on the page shows the marker it
+  will become rather than a sample id, the page names the fields beside the
+  boxes and again beside the download button, the bundle's README lists them
+  with where each value comes from, and `facts --manual` and the MCP tool say so
+  in their own output. **A marked bundle cannot be applied**: a marker is not a
+  legal Kubernetes label value, so the API server rejects the crane Deployment
+  naming `metadata.labels` and the marker (measured with
+  `kubectl apply --dry-run=server`), and the docker bundle's script and its
+  `compose up` both refuse before anything is created. Fill the ids in, or
+  re-generate once BlazeMeter has issued them.
+
+  Two agents in one location and no `--ship-id` is still a refusal, and
+  deliberately: that is a question with two answers rather than none, and
+  guessing binds the bundle to an agent somebody else may be running.
+
 ### Fixed
 
 - **The bundle README and `doctor` described engines and virtual users at a

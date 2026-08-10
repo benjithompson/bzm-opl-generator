@@ -28,7 +28,7 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 # an empty credential and a pod that reads as a slow boot. The key inside the
 # brackets changes none of that -- `<AUTH_TOKEN>` is no more a legal name than
 # any other marker -- so the set of fields the API server stops is exactly the
-# set it stopped before (PLACEHOLDER_REFUSED_BY_NAME).
+# set it stopped before (PLACEHOLDER_REFUSED_BY_API).
 #
 # What the key buys is the artefact reading for itself. A bundle is handed on --
 # committed, zipped, pasted into a ticket -- and the person who applies it is
@@ -69,6 +69,21 @@ def is_placeholder(v):
     value somebody meant.
     """
     return isinstance(v, str) and MARKER_RE.fullmatch(v.strip()) is not None
+
+
+def or_marker(value, key):
+    """`value`, or the marker for `key` where nobody supplied one.
+
+    The one-line form of `fill_placeholders` for the two fields that are not
+    options in the table it walks: the **identity**. `harbor_id` is a fact and
+    `ship_id` is an option resolved out of one, so neither can be filled from
+    `REQUIRED_TEXT` -- and both can genuinely be missing, because a bundle is
+    asked for before the BlazeMeter location exists (a customer who wants the
+    manifests their platform team has to approve, and has not created the
+    location yet). Blank and absent are one answer here, on the same rule the
+    table keeps.
+    """
+    return value if str(value or "").strip() else marker(key)
 
 
 def marker_in(text):
@@ -443,6 +458,10 @@ def placeholder_options(o):
     of the fields that can carry one are the page's to decide (see above), so a
     table of what is required could only ever report half of them. `proxy` is
     nested, and is reported under the sub-key somebody has to go and fill in.
+
+    Options only, which is why `placeholder_fields` exists beside it: `harbor_id`
+    is a fact, and the two callers that read a *profile* rather than a rendered
+    bundle (`livetest`, and the CLI's replay) have no facts to ask.
     """
     found = [k for k, v in o.items()
              if is_placeholder(v) and _reportable(o, k)]
@@ -453,6 +472,23 @@ def placeholder_options(o):
         if is_placeholder(v):
             found.append(f"extra_env.{name}")
     return sorted(found)
+
+
+def placeholder_fields(facts, o):
+    """Every field a *rendered bundle* carries a marker for, sorted.
+
+    The options above, plus `harbor_id` -- the one marked field that is a fact
+    rather than an option. It is not folded into the options to be reported with
+    them: `profile.json` deliberately does not record it (it comes from facts,
+    which is why `livetest.bundle_check` reads HARBOR_ID out of the ConfigMap
+    instead), and putting it in the options to make one list would be that same
+    belief, one layer down.
+
+    `ship_id` needs no such treatment and is in the options already, resolved
+    there by `generate()` before anything renders.
+    """
+    facts_found = ["harbor_id"] if is_placeholder(facts.get("harbor_id")) else []
+    return sorted(placeholder_options(o) + facts_found)
 
 
 def engine_size(o):
@@ -1006,7 +1042,7 @@ def _ca_cfg(o):
 #
 # A slot bundle is finished by one edit, and the failure when nobody makes it is
 # the quietest this generator has: the marker is a ConfigMap *value*, so the API
-# server takes it (PLACEHOLDER_REFUSED_BY_NAME), all seven objects apply, and the
+# server takes it (PLACEHOLDER_REFUSED_BY_API), all seven objects apply, and the
 # crane pod reports `1/1 Running` while every call to BlazeMeter dies with
 # `SSLError(136, NO_CERTIFICATE_OR_CRL_FOUND)` in its own log alone -- measured
 # on minikube. The other two formats have somewhere to refuse from and both do:
@@ -2171,6 +2207,18 @@ PLACEHOLDER_SOURCE = {
     "auth_token": "the agent's own token: BlazeMeter -> Settings -> Private "
                   "Locations -> this agent -> Docker Command, or re-generate "
                   "with `--auth-token`",
+    # The identity, and its answer is a step rather than a lookup: a bundle can
+    # be generated before the location exists, and then there is no id to read
+    # off anywhere. Both rows say create it first, because that is the actual
+    # remedy -- the ids do not exist to be found.
+    "harbor_id": "the private location: BlazeMeter -> Settings -> Private "
+                 "Locations -> this location, or `bzm-opl-gen locations`. If it "
+                 "has not been created yet, create it -- the id is BlazeMeter's "
+                 "to issue",
+    "ship_id": "the agent inside that location, from the same page. One "
+               "location holds several agents and this bundle is one of them, "
+               "so create the agent and take its id and its AUTH_TOKEN "
+               "together",
     "namespace": "the namespace the agent is being deployed into -- your "
                  "platform team owns this if you do not",
     "service_account_name": "the account crane runs as. It is *not* safe to "
@@ -2198,13 +2246,23 @@ PLACEHOLDER_SOURCE = {
 
 
 # Which marked fields the API server actually stops, measured with
-# `kubectl apply --dry-run=server` on a real cluster (#230). Only these two
-# reach a *name*; every other marked field lands in a Secret value, a ConfigMap
-# value or an environment variable, and applies cleanly. The README used to
-# tell the reader all of them were caught, which is the same "could not read"
-# vs "there is nothing there" collision one layer out: a bundle that applies
-# and an agent that then fails is exactly what the marker exists to prevent.
-PLACEHOLDER_REFUSED_BY_NAME = frozenset(("namespace", "service_account_name"))
+# `kubectl apply --dry-run=server` on a real cluster (#230). Every other marked
+# field lands in a Secret value, a ConfigMap value or an environment variable,
+# and applies cleanly. The README used to tell the reader all of them were
+# caught, which is the same "could not read" vs "there is nothing there"
+# collision one layer out: a bundle that applies and an agent that then fails is
+# exactly what the marker exists to prevent.
+#
+# Two kinds of refusal, and the name says the first because it was the only one
+# for a while. `namespace` and `service_account_name` reach an object *name*; the
+# identity pair reaches a **label value**, which the API server holds to nearly
+# the same syntax and refuses in the same breath -- measured on Kubernetes 1.32:
+# `metadata.labels: Invalid value: "<HARBOR_ID>"`, and the Deployment is rejected
+# with the field named. Both are "the cluster stops it before anything runs",
+# which is the question this set answers, so they share it rather than splitting
+# it into two lists the README would have to join.
+PLACEHOLDER_REFUSED_BY_API = frozenset((
+    "namespace", "service_account_name", "harbor_id", "ship_id"))
 
 
 def _ca_slot_block(o):
@@ -2269,7 +2327,7 @@ def _ca_slot_block(o):
     return "\n> " + "\n> ".join(body.splitlines()) + cmd + "\n\n"
 
 
-def _placeholder_block(o, where=()):
+def _placeholder_block(facts, o, where=()):
     """The README section naming every field left blank, or "" when none were.
 
     Loud and near the top on purpose. The bundle is the artefact that gets
@@ -2281,7 +2339,7 @@ def _placeholder_block(o, where=()):
     docker bundle's two files split the credentials from the command, and "go
     and fill it in" without saying which file is half an answer.
     """
-    found = placeholder_options(o)
+    found = placeholder_fields(facts, o)
     if not found:
         return ""
     where = dict(where)
@@ -2321,11 +2379,15 @@ def _placeholder_block(o, where=()):
                  "mounted file is bytes, so an agent started with either comes "
                  "up and fails later: `404` and `Sleeping for 300` on a blank "
                  "credential, a rejected handshake on a blank certificate.")
-    elif all(k in PLACEHOLDER_REFUSED_BY_NAME for k in found):
+    elif all(k in PLACEHOLDER_REFUSED_BY_API for k in found):
         markers = " and ".join(f"`{marker(k)}`" for k in found)
+        # One sentence for both kinds of refusal, because a reader meets one
+        # failure: a marker is neither a legal object name nor a legal label
+        # value, and the API server says so about whichever of the two this
+        # bundle put it in.
         stops = (f"Applying it fails -- {markers} "
-                 + ("are not legal Kubernetes names" if n > 1
-                    else "is not a legal Kubernetes name")
+                 + ("are not legal Kubernetes names or label values" if n > 1
+                    else "is not a legal Kubernetes name or label value")
                  + ", so the API server rejects the object and names the "
                    "field. That is the intended behaviour, not a fault in this "
                    "bundle.")
@@ -3494,7 +3556,7 @@ def _helm_readme(facts, o):
         token = (" \\\n    --set-string authToken=<token>"
                  "   # not in the values file;\n    # re-generate with "
                  "--auth-token <token> to embed it")
-    return f"""{_bundle_table(facts, o)}{_placeholder_block(o)}{_ca_slot_block(o)}
+    return f"""{_bundle_table(facts, o)}{_placeholder_block(facts, o)}{_ca_slot_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Install")}```
@@ -4096,6 +4158,11 @@ def _compose_required_file(m):
 
 
 def _docker_run_sh(facts, o):
+    # `NAME="{name}"` is quoted in the template below because a ship id may be a
+    # marker: unquoted, `NAME=bzm-crane-<SHIP_ID>` is a redirection, so `sh`
+    # refuses the whole *file* with a syntax error and the two lines further down
+    # that name the blank field are never reached. A shell parse error is the
+    # loudest failure this script has and the least informative.
     name = docker_container_name(o["ship_id"])
     # Every sibling file is resolved against the script rather than against the
     # working directory: this is a file people copy onto a host and run from
@@ -4177,7 +4244,7 @@ fi
 set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-NAME={name}
+NAME="{name}"
 {env_line}{mount_lines}
 if docker ps -a --format '{{{{.Names}}}}' | grep -qx "$NAME"; then
   # Not removed automatically: the container of this name may be the agent that
@@ -4575,8 +4642,9 @@ def _docker_readme(facts, o):
     # -- which is the same half-answer naming one of the two files would be for
     # the token.
     placeholders = _placeholder_block(
-        o, {"auth_token": _docker_where(o["use_secret"]),
-            **{m.option: m.file for m in docker_file_mounts(o)}})
+        facts, o,
+        {"auth_token": _docker_where(o["use_secret"]),
+         **{m.option: m.file for m in docker_file_mounts(o)}})
     ignored_block = _ignored_block(o)
     # Only where the file exists to be renamed. It is the tidy-up somebody
     # reaches for on seeing a compose file beside a `.env`-shaped one, and it
@@ -4675,15 +4743,32 @@ def generate(facts, options):
     # `service_account_name is required` was a refusal with no way to satisfy it
     # from a page that had already let the field be emptied.
     fill_placeholders(o)
-    if "ship_id" not in o:
+    # Blank is read as absent, for the reason every other field here reads it
+    # that way: a form hands back "" for a box nobody typed in, and a profile
+    # written from an unfinished bundle hands back the marker.
+    if not str(o.get("ship_id") or "").strip():
         ships = facts.get("ships") or []
         if len(ships) == 1:
             o["ship_id"] = ships[0]["id"]
         else:
+            # Two real agents and nobody saying which is the one blank a marker
+            # may not stand in for: it is a question with two answers rather than
+            # none, and guessing binds the bundle to an identity somebody else
+            # may already be running.
             raise ValueError(
                 f"ship_id required: location has {len(ships)} ships "
                 f"({[s['id'] for s in ships]})"
             )
+    # The identity, which is the one pair that can be missing without anybody
+    # having emptied a box: a bundle is routinely asked for before the BlazeMeter
+    # location and agent exist, and then there is no id to read off anywhere
+    # (facts.manual carries the markers for exactly that case). Resolved here,
+    # beside fill_placeholders and for its reason -- the ConfigMap, the labels,
+    # the helm overlay, the READMEs and profile.json then all speak one value.
+    # `facts` is copied rather than written through: a caller's dict is theirs,
+    # and doctor and plan read the same one.
+    o["ship_id"] = or_marker(o["ship_id"], "ship_id")
+    facts = {**facts, "harbor_id": or_marker(facts.get("harbor_id"), "harbor_id")}
 
     if o["output_format"] not in OUTPUT_FORMATS:
         raise ValueError(f"output_format must be one of {OUTPUT_FORMATS}, "
@@ -5037,7 +5122,7 @@ def _readme(facts, o, files):
                   f"`{_crane_image(facts, o).rsplit(':', 1)[1]}` until you "
                   f"re-generate\n  and re-apply. An agent far enough behind "
                   f"loses BlazeMeter support.")
-    return f"""{_bundle_table(facts, o, token_row)}{_placeholder_block(o)}{_ca_slot_block(o)}
+    return f"""{_bundle_table(facts, o, token_row)}{_placeholder_block(facts, o)}{_ca_slot_block(o)}
 ## Deploy
 
 {_deploy_steps(o, "Apply")}```

@@ -273,6 +273,38 @@ def test_facts_says_nothing_extra_when_the_image_list_was_read(monkeypatch,
     assert "location image list" in out.out
 
 
+def test_manual_facts_take_neither_id_and_name_what_is_missing(monkeypatch,
+                                                              tmp_path, capsys):
+    """The location that does not exist yet. `--manual --ship-id` used to be
+    required, and nothing here can look an id up -- but a customer whose location
+    has not been created has none to give, and the manifests are what gets it
+    approved. So the facts carry the markers, and the command says so: this
+    output is what the person running it has in front of them, where the bundle's
+    README is three steps away.
+
+    Nothing is patched, because nothing is reached -- which is the other half of
+    the manual path.
+    """
+    out = tmp_path / "facts.json"
+    _run(monkeypatch, "facts", "--manual", "--output", str(out))
+    f = json.loads(out.read_text())
+    assert f["harbor_id"] == gen.marker("harbor_id")
+    assert f["ships"][0]["id"] == gen.marker("ship_id")
+    err = capsys.readouterr().err
+    assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in err
+    assert "not a legal label value" in err
+
+
+def test_gathering_facts_still_needs_the_location_it_reads(monkeypatch):
+    """--harbor-id stopped being argparse-required so that --manual could take it
+    blank, which leaves the gather branch to say it for itself. Both halves of
+    that message matter: which flag is missing, and that the other branch takes
+    it blank."""
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "facts", "--api-key", KEY)
+    assert "--harbor-id" in str(caught.value)
+
+
 def _facts_file(tmp_path, ships):
     f = json.load(open("examples/facts.example.json"))
     if ships is None:

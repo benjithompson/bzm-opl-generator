@@ -9,6 +9,7 @@ told it has, because a missing key is the silent failure (crane resolves it
 against the public registry).
 """
 
+import json
 import os
 import sys
 
@@ -114,6 +115,86 @@ def test_no_validation_of_the_ids():
     m = facts_mod.manual("  not-an-id  ", "also/not/one")
     assert m["harbor_id"] == "  not-an-id  "
     assert m["ships"][0]["id"] == "also/not/one"
+
+
+# -- the location that does not exist yet -------------------------------------
+#
+# The case: a customer who needs the manifests *before* their private location
+# is created, because the manifests are what their platform team has to approve.
+# BlazeMeter has issued no harbor id, no ship id and no token, so all three are
+# blank -- and blank here is the marker, not a refusal, exactly as it already was
+# for the token alone.
+
+@pytest.mark.parametrize("harbor,ship,marked", [
+    ("", "", ["harbor_id", "ship_id"]),
+    (H, "", ["ship_id"]),
+    ("", S, ["harbor_id"]),
+    (None, None, ["harbor_id", "ship_id"]),      # what argparse hands over
+    ("   ", "\n", ["harbor_id", "ship_id"]),     # a form's own whitespace
+    (H, S, []),
+])
+def test_an_id_nobody_has_is_its_own_marker(harbor, ship, marked):
+    f = facts_mod.manual(harbor, ship)
+    got = [k for k, v in (("harbor_id", f["harbor_id"]),
+                          ("ship_id", f["ships"][0]["id"]))
+           if gen.is_placeholder(v)]
+    assert got == marked
+    # Each names its own field, which is the half a shared marker never had: the
+    # bundle is handed on, and `<SHIP_ID>` in the labels says which id is missing
+    # without the README being the only thing that does.
+    if "harbor_id" in marked:
+        assert f["harbor_id"] == gen.marker("harbor_id")
+    if "ship_id" in marked:
+        assert f["ships"][0]["id"] == gen.marker("ship_id")
+
+
+def test_a_bundle_for_a_location_that_does_not_exist_yet():
+    """Everything renders, the markers reach the objects that carry the identity,
+    and the README names both fields. What stops it is the cluster: a marker is
+    not a legal label value, so the crane Deployment is refused with the field
+    named -- measured with `kubectl apply --dry-run=server` (see
+    generate.PLACEHOLDER_REFUSED_BY_API)."""
+    f = facts_mod.manual("", "")
+    files = _gen(f)
+    cm = _cm(files)
+    assert cm["HARBOR_ID"] == gen.marker("harbor_id")
+    assert cm["SHIP_ID"] == gen.marker("ship_id")
+    dep = yaml.safe_load(files["bzm_deployment.yaml"])
+    assert dep["metadata"]["labels"]["harbor_id"] == gen.marker("harbor_id")
+    assert dep["spec"]["selector"]["matchLabels"]["ship_id"] == gen.marker("ship_id")
+    assert gen.placeholder_fields(f, {"ship_id": gen.marker("ship_id")}) == [
+        "harbor_id", "ship_id"]
+    readme = files["README.md"]
+    assert "not finished" in readme
+    assert "`harbor_id`" in readme and "`ship_id`" in readme
+    # The refusal is stated as the cluster's, because that is what was measured.
+    assert "not legal Kubernetes names or label values" in readme
+
+
+def test_the_profile_records_the_agent_and_not_the_location():
+    """`profile.json` carries options, and `harbor_id` is a fact -- which is why
+    `placeholder_options` reports one of the two and `placeholder_fields` both.
+    A replay through the profile alone therefore cannot know the location was
+    blank, and must not be made to look as though it could: livetest reads
+    HARBOR_ID out of the ConfigMap for the same reason."""
+    files = _gen(facts_mod.manual("", ""))
+    prof = json.loads(files[gen.PROFILE_FILE])
+    assert "harbor_id" not in prof
+    assert prof["ship_id"] == gen.marker("ship_id")
+    assert gen.placeholder_options(prof) == ["ship_id"]
+
+
+def test_a_second_real_agent_is_still_a_refusal_rather_than_a_marker():
+    """The one blank the marker may not stand in for. Two agents and nobody
+    saying which is a question with two answers rather than none, and picking one
+    binds the bundle to an identity somebody else may be running."""
+    f = facts_mod.manual(H, S)
+    f["ships"].append({"id": "9f8e7d6c5b4a39281706f5e4", "name": None,
+                       "state": None, "installed_version": None,
+                       "last_heartbeat": None})
+    with pytest.raises(ValueError) as caught:
+        gen.generate(f, {"namespace": "cust", "auth_token": "TOK"})
+    assert "ship_id required" in str(caught.value)
 
 
 # -- the image catalogue ------------------------------------------------------

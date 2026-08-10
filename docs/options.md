@@ -161,8 +161,21 @@ Which fields are covered:
 | where it comes from | fields |
 |---|---|
 | always | `namespace`, `service_account_name`, `auth_token` |
+| the identity, where BlazeMeter has issued none | `harbor_id`, `ship_id` |
 | once an SV backend is chosen | `sv_subdomain`, `sv_tls_secret` |
 | once the group is switched on in the web UI | `private_registry`, `proxy.http`/`proxy.https`, `ca_existing_configmap`, `ca_bundle` |
+
+The identity row is the one field pair that is not an option you set: `harbor_id`
+is a *fact* about the location and `ship_id` is resolved from it. Both are marked
+where they are missing, which is the case of a private location that does not
+exist yet — a customer needs the manifests to get one approved, so
+`facts --manual` takes neither id (and the web UI's two boxes are optional).
+The refusal is the cluster's and was measured: a marker reaches the crane
+Deployment's labels and selector, and the API server rejects the object naming
+`metadata.labels` and the marker. Every other object in the bundle still applies,
+which is why the README says which kind of failure to expect rather than claiming
+the whole apply is stopped. `ship_id` is in `profile.json` and `harbor_id` is
+not — a profile records options, and the location comes from facts.
 
 The last row is the web UI's, and only the web UI's: a registry, a proxy and a
 CA are configured by *having* a value, so on the command line a blank one and

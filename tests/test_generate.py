@@ -1824,7 +1824,9 @@ def test_docker_command_is_the_documented_shape():
     # The identity, and the container named as BlazeMeter names it.
     assert "--env HARBOR_ID=aaa111" in sh
     assert "--env SHIP_ID=bbb222" in sh
-    assert "NAME=bzm-crane-bbb222" in sh
+    # Quoted at the assignment, because a ship id may be a marker and
+    # `NAME=bzm-crane-<SHIP_ID>` unquoted is a redirection -- see _docker_run_sh.
+    assert 'NAME="bzm-crane-bbb222"' in sh
     # Which manager this agent is for, stated rather than defaulted -- the
     # Kubernetes ConfigMap states its own the same way.
     assert "--env CONTAINER_MANAGER_TYPE=DOCKER" in sh
@@ -1910,6 +1912,18 @@ def test_docker_scripts_are_valid_shell():
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
         assert r.returncode == 0, (extra, r.stderr)
+    # ...and the identity, which needs facts with no id in them and is the one
+    # marker that reaches a shell *assignment* rather than a quoted value:
+    # unquoted, `NAME=bzm-crane-<SHIP_ID>` is a redirection, so `sh` refuses the
+    # file at that line and the two lines naming the field -- twenty lines
+    # further down -- are never reached.
+    import bzm_opl_gen.facts as facts_mod
+    sh = gen.generate(facts_mod.manual("", ""),
+                      {**DOCKER, "ship_id": ""})["bzm-opl-agent.sh"]
+    assert gen.marker("ship_id") in sh, "the case did not arise"
+    r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
+                       capture_output=True)
+    assert r.returncode == 0, r.stderr
 
 
 def _run_bundle(tmp_path, files=None, env=None):
@@ -1990,6 +2004,25 @@ def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
     # The crane image carries it too and is deliberately not checked: a
     # reference with `<` in it is refused by docker itself, from either route.
     assert "<PRIVATE_REGISTRY>/crane" in files["bzm-opl-agent.sh"]
+
+
+def test_docker_script_refuses_an_identity_nobody_supplied(tmp_path):
+    """The bundle generated before the BlazeMeter location exists, run.
+
+    Two things are asserted and the first is the one that broke: the script has
+    to *get* to its own refusal. The container name carries the ship id, and
+    `NAME=bzm-crane-<SHIP_ID>` unquoted is a redirection -- `sh` refused the file
+    at that line with a syntax error, which is loud and says nothing about which
+    field was left blank. Quoted, the run reaches the two lines that name it.
+    """
+    import bzm_opl_gen.facts as facts_mod
+    files = gen.generate(facts_mod.manual("", ""), {**DOCKER, "ship_id": ""})
+    r, made = _run_bundle(tmp_path, files)
+    assert "syntax error" not in r.stderr, r.stderr
+    assert r.returncode == 1
+    assert "HARBOR_ID carries <HARBOR_ID>" in r.stderr
+    assert "Set it in bzm-opl-agent.sh and compose.yaml" in r.stderr
+    assert made == ["ps"], made           # nothing was started
 
 
 def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
@@ -2157,7 +2190,7 @@ def test_both_routes_carry_the_same_container_name():
     files = gen.generate(FACTS, DOCKER)
     svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]
     assert svc[gen.DOCKER_COMPOSE_SERVICE]["container_name"] == name
-    assert f"NAME={name}" in files[gen.DOCKER_RUN_FILE]
+    assert f'NAME="{name}"' in files[gen.DOCKER_RUN_FILE]
 
 
 def test_compose_reads_the_credential_file_the_script_does():
@@ -2293,6 +2326,34 @@ def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
                                  "proxy": {"http": gen.marker("proxy.http")}})
     svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
+
+
+def test_docker_refuses_an_identity_nobody_supplied():
+    """The identity is two more environment variables to this platform, so the
+    guard that already exists covers it -- `_docker_blank_env` reads the rendered
+    values rather than a table of option keys, which is why HARBOR_ID and SHIP_ID
+    needed nothing of their own. Asserted because the failure it prevents is the
+    quietest one docker has: a container that starts, answers 404 and logs
+    `Sleeping for 300`, which reads exactly like a slow boot."""
+    import bzm_opl_gen.facts as facts_mod
+    # `ship_id` off the shared fixture, or the marker never reaches the bundle:
+    # the option outranks the facts, which is the whole of how a bundle is
+    # generated for one agent out of several.
+    files = gen.generate(facts_mod.manual("", ""),
+                         {**DOCKER, "ship_id": ""})
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    for name, key in (("HARBOR_ID", "harbor_id"), ("SHIP_ID", "ship_id")):
+        wrong, todo = gen._docker_blank_lines(
+            name, f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}",
+            gen.marker(key))
+        assert svc["environment"][name] == (
+            f"${{BZM_OPL_UNSET_{name}:?{wrong} {todo}}}")
+        for line in (wrong, todo):
+            assert line in files[gen.DOCKER_RUN_FILE]
+    # ...and the container name carries it too, which is what makes the two
+    # routes exclusive whether the bundle is finished or not.
+    assert svc["container_name"] == gen.docker_container_name(
+        gen.marker("ship_id"))
 
 
 # -- ...and the two files are held equal, over the whole option matrix --------

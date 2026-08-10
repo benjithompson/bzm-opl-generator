@@ -41,6 +41,9 @@ import {
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
 import * as session from "./session";
+// The marker rule, from the page's own copy of it: a fake that spelled
+// "<SHIP_ID>" out by hand would stop agreeing with the generator silently.
+import { marker } from "./placeholder";
 import { EMPTY_PLAN_INPUTS } from "./usePlan";
 // The sizings a fresh page offers: one per served model, so they are built from
 // the same fixture the page's own /api/sizing-models stub answers with.
@@ -2273,8 +2276,17 @@ function manualPage(asked: string[][], generated: Options[] = [],
     manualFacts: async (b) => {
       asked.push(b.func_ids);
       return {
-        facts: { harbor_id: b.harbor_id, func_ids: b.func_ids,
-                 ships: [{ id: b.ship_id, name: "agent-1" }], images: [] },
+        // The marker for an id nobody typed, which is what `facts.manual` does
+        // on the server: neither id is required, and the *facts* are where a
+        // blank one becomes `<HARBOR_ID>` / `<SHIP_ID>`. Mirrored here rather
+        // than left as "" because the page reads its agent out of this answer,
+        // and a fake that returned the blank back would have the page behave as
+        // though there were no agent at all -- which is the one thing the real
+        // server never says here.
+        facts: { harbor_id: b.harbor_id || marker("harbor_id"),
+                 func_ids: b.func_ids,
+                 ships: [{ id: b.ship_id || marker("ship_id"),
+                           name: "agent-1" }], images: [] },
         gui_images_incomplete: false,
       };
     },
@@ -2292,6 +2304,53 @@ async function declareManually() {
                    { target: { value: TYPED.ship } });
   fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 }
+
+// -- ...and the identity nobody has yet --------------------------------------
+// The case: a customer whose private location has not been created, who needs
+// the manifests to get one approved. Both ids used to stop the page -- there is
+// nothing to generate for, on the reading that an id is always available to
+// whoever is asking -- and BlazeMeter has not issued either until somebody
+// creates the location, so the bundle carries the markers and says so.
+
+test("manual entry generates for a location that does not exist yet",
+  async () => {
+    const generated: Options[] = [];
+    render(<App api={manualPage([], generated)} />);
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+
+    // Nothing typed at all, and the bundle is still generated -- for the agent
+    // the marker stands in for. Asserted on the request rather than on the tick
+    // beside the step: what matters is that a bundle was asked for, and for
+    // which identity.
+    await waitFor(() => expect(generated.length).toBeGreaterThan(0));
+    expect(generated[generated.length - 1].ship_id).toBe(marker("ship_id"));
+
+    // ...and the form says which fields the bundle will carry a marker for, in
+    // the sentence the configure step's blank fields already get. All three,
+    // here: somebody looking at three empty boxes is owed one answer about
+    // them.
+    const warning = await screen.findByText(/are empty, so the bundle will carry/);
+    expect(warning.textContent).toMatch(/harbor_id \(<HARBOR_ID>\)/);
+    expect(warning.textContent).toMatch(/ship_id \(<SHIP_ID>\)/);
+    expect(warning.textContent).toMatch(/auth_token \(<AUTH_TOKEN>\)/);
+  });
+
+test("the empty identity boxes show the marker the bundle will carry",
+  async () => {
+    // The hint in an empty box is the string that ends up in the file, not a
+    // sample id. A sample was what they showed, which reads as an example of
+    // what to type -- true, and silent about what happens if nothing is typed.
+    render(<App api={manualPage([])} />);
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+    expect(screen.getByLabelText(/^Harbor ID/)
+      .getAttribute("placeholder")).toBe(marker("harbor_id"));
+    expect(screen.getByLabelText(/^Ship ID/)
+      .getAttribute("placeholder")).toBe(marker("ship_id"));
+    expect(screen.getByLabelText(/^Auth token/)
+      .getAttribute("placeholder")).toBe(marker("auth_token"));
+  });
 
 test("declaring a functionality in manual entry suggests its namespace",
   async () => {

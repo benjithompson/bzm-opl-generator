@@ -528,8 +528,12 @@ def get_facts(harbor_id: str):
 
 
 class ManualFactsIn(BaseModel):
-    harbor_id: str
-    ship_id: str
+    # Both blank by default, because the page may legitimately ask before either
+    # id exists -- see facts.manual. Blank rather than optional: this is a form's
+    # two text boxes, and "" is what a form sends for a box nobody typed in, so
+    # there is no third state here for `Blank` to carry.
+    harbor_id: str = ""
+    ship_id: str = ""
     func_ids: list = ["performance"]
 
 

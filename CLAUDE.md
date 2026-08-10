@@ -469,13 +469,40 @@ missing tools. The rest is what it cannot fix for you.
   guard**: no Kubernetes name may contain them, so `kubectl apply` rejects the
   object and names the field — which is why a blank field may resolve to a value
   at all, and `<AUTH_TOKEN>` is no more a legal RFC 1123 name than
-  `<PLACEHOLDER>` was, so `PLACEHOLDER_REFUSED_BY_NAME` did not change. The
+  `<PLACEHOLDER>` was, so the set of fields the API server stops did not change
+  at #245. The
   chart's `bzm-opl.validate` refuses one for the values the API
   server never sees as names, and `livetest.bundle_check` refuses one before it
   builds a cluster. **Every message that quotes a marker quotes the one it is
   about**, and the two exceptions are greps rather than sentences: the README's
   `grep -rl` and the script's mount check ask "is any marker still here", over
   files that may be another version's or the host's own.
+
+  **The identity is marked too, and it is the pair that is not an option.**
+  `harbor_id` is a *fact* and `ship_id` an option resolved out of one, so neither
+  is in `REQUIRED_TEXT` and neither could be — what fills them is
+  `generate.or_marker`, one line each in `generate()`, beside `fill_placeholders`
+  and for its reason. Both may be blank because **a bundle is routinely wanted
+  before the BlazeMeter location exists**: the manifests are what a customer's
+  platform team approves, and no id has been issued to read off. So `facts.manual`
+  carries the marker for whichever was not typed — in the *facts*, because the
+  page reads its agent back out of that answer and a blank one would read as no
+  agent at all — and every surface that types them takes them blank
+  (`facts --manual`, `opl_facts manual`, the page's step 1). `PLACEHOLDER_SOURCE`
+  answers with a step rather than a lookup for these two: create the location,
+  because the id does not exist to be found.
+
+  Two consequences worth keeping. `PLACEHOLDER_REFUSED_BY_API` was
+  `..._BY_NAME`, and the rename is the fact widening rather than a tidy-up: the
+  identity reaches the crane Deployment's **labels and selector**, which the API
+  server refuses in the same breath as a name — measured,
+  `metadata.labels: Invalid value: "<HARBOR_ID>"` — while the other five objects
+  in the bundle apply. And `placeholder_options` stays options-only, with
+  `placeholder_fields(facts, o)` beside it for what a *rendered bundle* carries:
+  `profile.json` deliberately does not record `harbor_id`, and folding the fact
+  into the options to get one list would be exactly the belief that absence
+  exists to prevent. The docker half needed nothing — `_docker_blank_env` reads
+  rendered values, so HARBOR_ID and SHIP_ID were already guarded in both routes.
 
   **A sample value in the documentation is lower case in the brackets; a marker
   is upper case.** Both are `<...>` and a reader meets them side by side, so
@@ -1238,7 +1265,11 @@ stale list can cost a credential nothing can read back.
   which way the facts arrived — keep it that way, and add to `FALLBACK_IMAGES`
   rather than special-casing the manual path. The one consumer that legitimately
   asks is `doctor`, and it asks the marker the facts carry
-  (`from_manual_entry()`).
+  (`from_manual_entry()`). **Neither id is required** — a blank one is
+  `generate.or_marker`'s, which is the "no location yet" case argued in the
+  marker bullet above — and that is the one thing in this function that is not
+  simply "the shape `gather` returns": a *gathered* location always has an id,
+  and the ids here are typed.
 - **A Kubernetes agent reports images as bare keys** (`taurus-cloud:latest`,
   `torero:4.6.182`) with no registry and `Size: 0` — crane's configured image
   set rather than what is on the node. Docker agents report registry-qualified

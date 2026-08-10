@@ -575,9 +575,22 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
     written into a Secret, and the whole point is to produce manifests for an
     account nobody here can reach -- so there is nothing to check them against,
     and a check that could only ever be a guess would reject correct input.
+
+    **Either id may be blank, and blank is a marker rather than a refusal.** The
+    case is a customer who needs the bundle before they have the location: the
+    manifests are what a platform team approves, and BlazeMeter's own ids do not
+    exist to be read off anywhere until somebody creates the location and the
+    agent in it. So a blank id carries `<HARBOR_ID>` / `<SHIP_ID>` into the
+    bundle, exactly as a blank AUTH_TOKEN already carried its own -- the API
+    server refuses the Deployment those land in the labels of (measured, see
+    generate.PLACEHOLDER_REFUSED_BY_API), and the README names the field. The
+    marker is built by `generate.marker` and by nothing else, so the rule stays
+    stated once; imported inside the function because `generate` imports this
+    module, and the pair is acyclic one way only.
     """
+    from .generate import or_marker
     return {
-        "harbor_id": harbor_id,
+        "harbor_id": or_marker(harbor_id, "harbor_id"),
         "harbor_name": harbor_name or None,
         "func_ids": list(func_ids or ["performance"]),
         # Unknown without the API, and only doctor reads them. None is what
@@ -594,8 +607,9 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
         "override_memory": None,
         "engine_xmx_mb": None,
         "engine_xms_mb": None,
-        "ships": [{"id": ship_id, "name": None, "state": None,
-                   "installed_version": None, "last_heartbeat": None}],
+        "ships": [{"id": or_marker(ship_id, "ship_id"), "name": None,
+                   "state": None, "installed_version": None,
+                   "last_heartbeat": None}],
         "images": [dict(i, size_mb=None) for i in FALLBACK_IMAGES],
         "images_source": MANUAL_SOURCE,
         # No account, so the location's image list was never asked for. Not a
