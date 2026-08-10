@@ -194,13 +194,14 @@ labels and selector, which the API server refuses in the same breath as a name -
 measured, `metadata.labels: Invalid value: "<HARBOR_ID>"`. The two emptiness
 checks below still cover a chart installed by hand with no values at all.
 
-caBundle.pem is deliberately included even though `ca_bundle_slot` renders it on
-purpose: a slot is a bundle waiting for a certificate, and installing one is
-still installing an agent that trusts nothing extra. The flat manifests refuse
-it too, and from somewhere else -- they have no install step, so the refusal
-rides into the cluster as a `ca-slot-check` initContainer on the crane
-Deployment (#241) and the pod stops before crane starts. Nothing of that belongs
-here: this is the install step the manifests do not have.
+caBundle.file carries a marker where nobody named the certificate, and it is
+refused here for the reason every marker is: installing as it stands deploys an
+agent that trusts nothing extra. bzm-opl-gen no longer writes a marker into
+caBundle.pem -- the certificate is a *file* now (#256), so pem is empty in every
+generated overlay -- but a chart installed by hand may still be given one, and
+the check costs nothing. The flat manifests refuse the same bundle from
+somewhere else: they carry no ConfigMap at all, so the kubelet stops the pod at
+ContainerCreating naming the ConfigMap it cannot mount.
 First, and before the emptiness checks below, because
 "you left this blank" is the more specific answer and the one that names the
 form it was left blank on.

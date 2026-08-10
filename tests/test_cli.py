@@ -348,15 +348,17 @@ def test_generate_says_a_ca_slot_out_loud(monkeypatch, tmp_path, capsys):
     both say what the bundle about to be written cannot do yet."""
     _generate(monkeypatch, tmp_path, "--ca-placeholder")
     out = capsys.readouterr().out
-    assert gen.CA_CONFIGMAP_FILE in out and "ca_bundle" in out
-    assert gen.CA_SLOT_INIT_CONTAINER in out
-    assert out.index("AUTH_TOKEN") < out.index("CA slot") < out.index("wrote ")
+    # The file mode names a file rather than shipping a slot, so what the line
+    # has to carry is the name (here nobody supplied one) and who builds the
+    # ConfigMap from it.
+    assert gen.marker("ca_cert_file") in out and gen.CA_CONFIGMAP in out
+    assert out.index("AUTH_TOKEN") < out.index("CA certificate") < out.index("wrote ")
 
 
 def test_generate_says_nothing_about_a_slot_nobody_asked_for(monkeypatch,
                                                              tmp_path, capsys):
     _generate(monkeypatch, tmp_path)
-    assert "CA slot" not in capsys.readouterr().out
+    assert "CA certificate" not in capsys.readouterr().out
 
 
 def test_generate_rotates_only_when_told_to(monkeypatch, tmp_path, capsys):

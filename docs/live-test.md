@@ -168,9 +168,10 @@ replacing a trust bundle that is somebody's, and it deletes the one it did
 create when the namespace survives teardown. The negative control clears **every
 CA mode** rather than the inline PEM alone, and reads the set from the generator
 so a mode added later is cleared too. Clearing only the inline PEM leaves an
-existing-mode run referencing a ConfigMap that is gone, and leaves a slot bundle
-its `ca-slot-check` initContainer; the pod then does not start, so it never logs
-`CERTIFICATE_VERIFY_FAILED` and the control fails having tested nothing.
+existing-mode run referencing a ConfigMap that is gone, and leaves a file-mode
+bundle naming a ConfigMap nothing created; the pod then does not start, so it
+never logs `CERTIFICATE_VERIFY_FAILED` and the control fails having tested
+nothing.
 
 `--ca-mode` needs `--local-proxy`; without one no CA is configured at all, so
 the flag is refused rather than ignored.

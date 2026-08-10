@@ -262,6 +262,13 @@ def cmd_generate(a):
                 opts[key] = fh.read()
     if getattr(a, "ca_bundle_slot", False):
         opts["ca_bundle_slot"] = True
+    # A name, not a path: nothing here opens it. The file is read where the
+    # ConfigMap is built -- by `helm install` out of the chart directory, or by
+    # the `kubectl create configmap --from-file` line the README prints -- so
+    # this generator does not need the certificate to be anywhere it can see,
+    # which is what lets a bundle be produced for a cluster nobody here reaches.
+    if getattr(a, "ca_cert_file", None):
+        opts["ca_cert_file"] = a.ca_cert_file
     if a.ca_configmap:
         name, _, key = a.ca_configmap.partition(":")
         opts["ca_existing_configmap"] = name
@@ -1063,9 +1070,15 @@ def main():
     g.add_argument("--ca-bundle", dest="ca_bundle", metavar="PEM_FILE",
                    help="inline CA mode: PEM file -> generator creates the ConfigMap")
     g.add_argument("--ca-placeholder", dest="ca_bundle_slot", action="store_true",
-                   help="CA ConfigMap in the bundle, wired, with the PEM slot "
-                        "marked -- for when crane is failing TLS and the "
-                        "certificate is still with the platform team")
+                   help="file CA mode: the certificate is a file you supply, "
+                        "named by --ca-cert-file. The bundle carries no PEM and "
+                        "the ConfigMap is built from that file -- BlazeMeter's "
+                        "own shape, and the answer when crane is failing TLS "
+                        "and the certificate is still with the platform team")
+    g.add_argument("--ca-cert-file", dest="ca_cert_file", metavar="NAME",
+                   help="the certificate's file name, used as the ConfigMap "
+                        "key, the mounted filename and (helm) the file read "
+                        "from the chart directory. Blank -> <CA_CERT_FILE>")
     g.add_argument("--ca-configmap", dest="ca_configmap", metavar="NAME[:KEY]",
                    help="reference an existing trust-bundle ConfigMap the platform "
                         "team owns (key defaults to ca-bundle.crt)")

@@ -1513,10 +1513,8 @@ export default function App({ api }: { api: Api }) {
         mode={caMode} onMode={setCaMode}
         configmap={raw("ca_existing_configmap")}
         configmapKey={raw("ca_configmap_key")}
-        bundle={raw("ca_bundle")}
-        onConfigmap={(v) => set("ca_existing_configmap", v)}
-        onConfigmapKey={(v) => set("ca_configmap_key", v)}
-        onBundle={(v) => set("ca_bundle", v)} />
+        certFile={raw("ca_cert_file")}
+        onCertFile={(v) => set("ca_cert_file", v)} />
     ),
     sched: (
       <SchedGroup
