@@ -1040,6 +1040,103 @@ def test_a_finished_bundle_carries_no_marker():
     assert not gen.MARKER_RE.search("".join(files.values()))
 
 
+# Which field each marker belongs to, built from the rule rather than listed: the
+# option keys, plus `harbor_id` (a fact) and `ship_id` (an option with no default,
+# resolved out of the facts, so `DEFAULT_OPTIONS` does not carry it). Only markers
+# this map knows are
+# judged below, so `MARKER_PATTERN` appearing in a bundle as a *pattern* (the
+# README's grep, the docker script's own check) is not read as a field.
+FIELD_BY_MARKER = {gen.marker(k): k for k in
+                   list(gen.DEFAULT_OPTIONS) + ["harbor_id", "ship_id"]}
+
+
+def _markers_carried(files):
+    """Every field the *artefacts* carry a marker for.
+
+    Two exclusions, and both are about which files describe *this* bundle. The
+    README is what is being judged against them. And `helm/` is the chart, copied
+    verbatim and byte-identical in every bundle -- its templates and comments
+    quote markers to explain them (`bzm-opl.validate` names
+    `<SERVICE_ACCOUNT_NAME>` in the sentence about what it refuses), and prose
+    that quotes a marker is a marker being talked about rather than a field
+    somebody left blank. The bundle's own half of a chart is
+    `bzm-opl-values.yaml`, which is not excluded.
+    """
+    return {FIELD_BY_MARKER[m]
+            for name, text in files.items()
+            if name != "README.md" and not name.startswith(gen.CHART_DIR + "/")
+            for m in gen.MARKER_RE.findall(text) if m in FIELD_BY_MARKER}
+
+
+def _fields_named(readme):
+    """Every field the README's not-finished table has a row for."""
+    return set(re.findall(r"^\| `([a-z_.]+)` \| `<", readme, re.M))
+
+
+# Every mix of the five fields a form can leave empty, over all three formats.
+# The parametrisation is the point: each of these was verified by reading one
+# bundle, and the failure mode is a *combination* -- ids supplied while the token
+# and the two core fields are not, which is the case that turned up the summary
+# table claiming a credential the Secret did not hold.
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
+@pytest.mark.parametrize("blank", [
+    set(), {"harbor_id"}, {"ship_id"}, {"auth_token"},
+    {"namespace"}, {"service_account_name"},
+    {"harbor_id", "ship_id"},
+    {"auth_token", "namespace", "service_account_name"},   # the mix reported
+    {"harbor_id", "ship_id", "auth_token"},
+    {"harbor_id", "ship_id", "namespace", "service_account_name", "auth_token"},
+])
+def test_the_readme_names_exactly_the_markers_the_bundle_carries(fmt, blank):
+    """The accuracy property, mechanically: a reader is handed this README *and*
+    these files, and the two must agree about what is missing.
+
+    Both directions matter and they fail differently. A marker the README does
+    not name is a bundle that looks finished and is not -- the whole failure the
+    marker exists to prevent, one level up. A field the README names that no file
+    carries is a false alarm, which teaches somebody to stop reading the block.
+
+    The exemptions are read off the generator rather than restated: a format that
+    ignores an option never marks it, and a chart's `authToken` is empty rather
+    than marked (which its own sentence covers -- see test_helm.py).
+    """
+    ids = {"harbor_id": "0a1b2c3d4e5f60718293a4b5",
+           "ship_id": "6c5b4a39281706f5e4d3c2b1"}
+    facts = facts_mod.manual(
+        "" if "harbor_id" in blank else ids["harbor_id"],
+        "" if "ship_id" in blank else ids["ship_id"])
+    o = {"platform": "k8s", "output_format": fmt,
+         "ship_id": "" if "ship_id" in blank else ids["ship_id"],
+         "namespace": "" if "namespace" in blank else "cust",
+         "service_account_name": "" if "service_account_name" in blank else "crane",
+         "auth_token": "" if "auth_token" in blank else "de" * 32}
+    files = gen.generate(facts, o)
+    assert _markers_carried(files) == _fields_named(files["README.md"])
+
+
+@pytest.mark.parametrize("use_secret", [True, False])
+def test_the_summary_table_never_says_a_missing_credential_is_there(use_secret):
+    """The row above that table, which the matrix cannot judge: it is prose about
+    a file rather than a marker row.
+
+    It said `in bzm_secret.yaml` whatever the Secret held, so the table a reader
+    skims announced a credential the bundle did not have -- and it sat four lines
+    above the block naming `auth_token` as blank, which is a page contradicting
+    itself. The file is still named either way: where the token *is* is the useful
+    half when there is one, and where it *would* be is the useful half when there
+    is not.
+    """
+    where = "bzm_secret.yaml" if use_secret else "bzm_configmap.yaml"
+    for token, supplied in (("de" * 32, True), ("", False)):
+        readme = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                      "use_secret": use_secret,
+                                      "auth_token": token})["README.md"]
+        row, = [ln for ln in readme.splitlines() if ln.startswith("| AUTH_TOKEN")]
+        assert where in row
+        assert ("not supplied" in row) is not supplied
+        assert (gen.marker("auth_token") in row) is not supplied
+
+
 def test_the_marker_reaches_the_objects_that_name_the_field():
     """Not only the README: the point is that applying it fails. `<NAMESPACE>`
     is not a legal RFC 1123 name, so each of these is rejected by the API server

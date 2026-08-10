@@ -478,6 +478,22 @@ missing tools. The rest is what it cannot fix for you.
   `grep -rl` and the script's mount check ask "is any marker still here", over
   files that may be another version's or the host's own.
 
+  **The README is held to the bundle by a test, not by review.**
+  `test_the_readme_names_exactly_the_markers_the_bundle_carries` walks every mix
+  of the five fields a form can leave empty across all three formats and requires
+  one set: the fields the not-finished table names, and the markers the *files*
+  carry. Both directions fail differently — an unnamed marker is a bundle that
+  reads as finished, a named field no file carries teaches the reader to skip the
+  block — and every earlier check here read one bundle by hand, which is how a
+  mix nobody had generated (ids supplied, the token and the two core fields not)
+  stayed wrong. Two exclusions, both principled: the README is what is being
+  judged, and `helm/` is the chart, byte-identical in every bundle and full of
+  prose that *quotes* markers to explain them. **Prose is outside that set and
+  needs its own assertion** — the summary table's `AUTH_TOKEN` row said `in
+  bzm_secret.yaml` over a Secret holding the marker, four lines above the block
+  naming it blank, and no test over marker *rows* can see a sentence about a
+  file.
+
   **The identity is marked too, and it is the pair that is not an option.**
   `harbor_id` is a *fact* and `ship_id` an option resolved out of one, so neither
   is in `REQUIRED_TEXT` and neither could be — what fills them is

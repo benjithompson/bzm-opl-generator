@@ -39,6 +39,20 @@ anything that breaks.
 
 ### Fixed
 
+- **A bundle README's summary table said the AUTH_TOKEN was in the Secret when
+  the Secret held a placeholder.** The row read `AUTH_TOKEN | in
+  bzm_secret.yaml` whatever the file contained, four lines above a block naming
+  `auth_token` as one of the fields left blank — the summary contradicting the
+  detail. It now reads ``AUTH_TOKEN | `<AUTH_TOKEN>` in bzm_secret.yaml -- **not
+  supplied**`` where nobody supplied one, and still names the file either way.
+
+  The README is now held to the bundle **mechanically**: a test walks every mix
+  of the five fields a form can leave empty, across all three formats, and
+  requires the fields the README names and the markers the files actually carry
+  to be the same set. A marker the README does not name is a bundle that looks
+  finished; a field it names that no file carries teaches the reader to ignore
+  the block.
+
 - **A chart bundle's README counted the fields left blank and left the
   AUTH_TOKEN out of the count.** `authToken` is deliberately empty rather than
   marked in a chart — supplying it at `helm install` time is what the bundle

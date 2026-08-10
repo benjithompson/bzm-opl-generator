@@ -5148,8 +5148,21 @@ def _readme(facts, o, files):
         big_ca = (f"\n- The CA bundle is {len(o['ca_bundle']) // 1024}KB, so apply "
                   f"`bzm_cacerts.yaml` with `--server-side` -- client-side apply "
                   f"stores a copy in an annotation capped at 256KB.")
-    token_row = [("AUTH_TOKEN", "in bzm_secret.yaml" if o["use_secret"]
-                  else "in bzm_configmap.yaml (plain text)")]
+    # Where the credential is, and **whether it is there at all**. The row used
+    # to say `in bzm_secret.yaml` whatever the file held, so the one table a
+    # reader skims said the token was in the bundle while the Secret held
+    # `<AUTH_TOKEN>`. The placeholder block below named it, which is the answer
+    # for somebody who reads the whole page; this table is the summary, and a
+    # summary that contradicts the block under it is worse than no summary.
+    where_token = ("bzm_secret.yaml" if o["use_secret"]
+                   else "bzm_configmap.yaml (plain text)")
+    token_row = [("AUTH_TOKEN", f"in {where_token}")]
+    if is_placeholder(o["auth_token"]):
+        # The marker as the file actually holds it, not `marker("auth_token")`:
+        # a bundle re-generated from an older profile carries that version's
+        # shared `<PLACEHOLDER>`, and this row is a statement about this file.
+        token_row = [("AUTH_TOKEN", f"`{str(o['auth_token']).strip()}` in "
+                                    f"{where_token} -- **not supplied**")]
     # On the resolved value, not on an explicit false: off is the default now,
     # so the common bundle is the one that needs telling. Whoever receives it
     # is the person who has to notice the agent ageing, and nothing else in the
