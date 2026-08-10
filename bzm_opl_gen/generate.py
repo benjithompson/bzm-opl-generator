@@ -71,6 +71,24 @@ def is_placeholder(v):
     return isinstance(v, str) and MARKER_RE.fullmatch(v.strip()) is not None
 
 
+def helm_token_at_install(o):
+    """Whether a chart bundle expects its AUTH_TOKEN at `helm install` time --
+    that is, whether nobody supplied one.
+
+    One predicate for the three readers that have to agree about it: the values
+    overlay writes `authToken: ""` (never the marker, which would install an
+    agent authenticating with the literal string), the README's install command
+    grows `--set-string authToken=...`, and the not-finished block says the token
+    is not in the list of blank fields *or* in the file. They were two copies of
+    the same condition and the third would have made three.
+
+    A chart is the one format where an absent token is the recommended state
+    rather than an unfinished one -- see REQUIRED_TEXT -- so this is not
+    `is_placeholder` on the option: nothing in the bundle carries a marker for it.
+    """
+    return not o.get("auth_token") or is_placeholder(o["auth_token"])
+
+
 def or_marker(value, key):
     """`value`, or the marker for `key` where nobody supplied one.
 
@@ -2410,6 +2428,26 @@ def _placeholder_block(facts, o, where=()):
                  f"marker used as a name and accepts one used as a value, so "
                  f"an agent can deploy and fail after. Check with "
                  f"`grep -rl '{MARKER_PATTERN}' *.yaml`.")
+    # **The one field that is missing and is not in the table**, said here or the
+    # count above reads as the whole of what this bundle still needs. A chart
+    # leaves `authToken` empty rather than marked -- an absent token is the
+    # *recommended* state there, since the values file is the file people commit
+    # (see REQUIRED_TEXT) -- so it is in no row, carries no marker, and a reader
+    # counting the rows is one value short. The install command below has always
+    # named it; that is twenty lines further down, and this block is where
+    # somebody is told what is not finished. Only where nobody supplied one: a
+    # chart generated with `--auth-token` embeds it and has nothing to add.
+    #
+    # A row instead of a sentence was the other option and it would have to lie
+    # in the marker column: nothing in the bundle contains `<AUTH_TOKEN>`. Missing
+    # and answered-elsewhere are different facts, which is why this block reports
+    # them in different sentences rather than in one list.
+    also = ""
+    if o["output_format"] == "helm" and helm_token_at_install(o):
+        also = (" The AUTH_TOKEN is not among them and not in this bundle at "
+                "all: a chart takes it at install time, which is what "
+                "`--set-string authToken=...` in the Deploy command below is "
+                "for.")
     # Wrapped rather than hand-broken: the sentence differs per format and by
     # how many fields there are, so fixed line breaks land wherever the shorter
     # wording leaves them. Never inside a hyphenated word, though -- a wrap
@@ -2418,7 +2456,7 @@ def _placeholder_block(facts, o, where=()):
     quote = textwrap.fill(
         f"**This bundle is not finished.** {subject} instead of a value. "
         f"{stops} Fill {'them' if n > 1 else 'it'} in, or re-generate "
-        f"with {'them' if n > 1 else 'it'} set.",
+        f"with {'them' if n > 1 else 'it'} set.{also}",
         width=76, break_on_hyphens=False)
     quoted = "\n".join("> " + ln for ln in quote.splitlines())
     return f"""
@@ -3283,7 +3321,7 @@ def _helm_values(facts, o):
         f"harborId: {_yq(facts['harbor_id'])}",
         f"shipId: {_yq(o['ship_id'])}",
     ]
-    if o["auth_token"] and not is_placeholder(o["auth_token"]):
+    if not helm_token_at_install(o):
         lines += [
             "# The agent credential. Anyone holding it can register as this",
             "# agent -- pass it at install time (--set-string authToken=...) or",
@@ -3543,7 +3581,7 @@ def _helm_readme(facts, o):
     chart's own helm/README.md carries the why."""
     ns = o["namespace"]
     token = ""
-    if not o["auth_token"] or is_placeholder(o["auth_token"]):
+    if helm_token_at_install(o):
         # **A sample value is lower case in the brackets; a marker is upper
         # case.** Both are `<...>` and they are two different things: this one
         # is the fill-this-in convention of a command line somebody copies,

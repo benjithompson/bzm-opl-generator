@@ -189,6 +189,15 @@ leaves `authToken` empty rather than marked, because supplying it at install
 time — `helm install --set-string authToken=...` — is what the bundle's own
 README asks for: the values file is the file people commit.
 
+The chart's exemption has one consequence worth knowing, because it made the
+README misleading until 0.4.2: the token is in no row of that table and carries
+no marker, so the count above it — "4 fields were left blank" — is not the whole
+of what the bundle still needs. The block now says so in its own sentence
+whenever nobody supplied a token, and the install command below it is where the
+value goes. A chart with every field filled and only the token left for install
+time is *finished* and gets no banner at all, which is the state the exemption
+exists for.
+
 ## The service account
 
 `service_account_name` is required in both Kubernetes formats — manifests and

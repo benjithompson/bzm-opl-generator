@@ -39,6 +39,17 @@ anything that breaks.
 
 ### Fixed
 
+- **A chart bundle's README counted the fields left blank and left the
+  AUTH_TOKEN out of the count.** `authToken` is deliberately empty rather than
+  marked in a chart — supplying it at `helm install` time is what the bundle
+  asks for — so it appears in no row of the "This bundle is not finished" table.
+  A bundle with four markers therefore said `4 fields were left blank` over a
+  file that needs five values before it can install, and the only mention of the
+  token was the install command further down. That block now names it whenever
+  nobody supplied one. A chart with every field filled and only the token left
+  for install time still gets no banner, which is the state the exemption exists
+  for.
+
 - **The web UI would not download a bundle whose service account name was
   empty, having just said it would carry a marker for it.** The configure step
   printed `namespace (<NAMESPACE>) and service_account_name
