@@ -290,8 +290,10 @@ describe("the prerequisite context", () => {
     // route.openshift.io -- so it is not on the select to be picked.
     expect(sv(SV_LOC, { platform: "k8s" }).ingressTypes)
       .toEqual(["nginx", "istio", "contour"]);
-    expect(sv(SV_LOC, { platform: "openshift" }).ingressTypes)
-      .toEqual(CONST.ingress_types);
+    // `openshift_cluster` stated, never left to the default: it defaults to
+    // false now (#256), so the posture alone no longer makes a cluster.
+    expect(sv(SV_LOC, { platform: "openshift", openshift_cluster: true })
+      .ingressTypes).toEqual(CONST.ingress_types);
     // ...and the SCC-friendly posture is not the same answer: it is recommended
     // on vanilla Kubernetes too, which is where a Route would have been offered
     // for every bundle that took the default.
@@ -352,7 +354,8 @@ describe("the option patch", () => {
     // error. nginx works anywhere.
     expect(sv(PERF_LOC, { sv_ingress: "openshift", platform: "k8s" }).patch)
       .toEqual({ sv_ingress: "nginx" });
-    expect(sv(SV_LOC, { sv_ingress: "openshift", platform: "openshift" }).patch)
+    expect(sv(SV_LOC, { sv_ingress: "openshift", platform: "openshift",
+                        openshift_cluster: true }).patch)
       .toBeNull();
     // The other way to stop being OpenShift, which the cluster toggle is: same
     // stranding, and the same rescue.

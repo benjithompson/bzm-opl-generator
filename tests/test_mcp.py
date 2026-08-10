@@ -314,11 +314,11 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path),
                "options": {"ca_bundle_slot": True}})
-    assert any(gen_mod.CA_SLOT_INIT_CONTAINER in w for w in body["warnings"]), \
+    assert any(gen_mod.CA_CONFIGMAP in w for w in body["warnings"]), \
         body["warnings"]
     plain = ok("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": str(tmp_path)})
-    assert not any("CA slot" in w for w in plain["warnings"])
+    assert not any("CA certificate" in w for w in plain["warnings"])
 
 
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,

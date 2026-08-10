@@ -657,13 +657,31 @@ def test_the_manifests_bundle_does_not_grow_a_namespace_step():
 
 def test_the_create_command_follows_the_cluster_not_the_posture():
     """Same rule as every other emitted command: `openshift_cluster` says which
-    binary the person deploying has."""
-    files = gen.generate(FACTS, {"namespace": "ns1",
+    binary the person deploying has.
+
+    Both halves are stated, and neither relies on the default. The default is
+    now False and used to be True, so a test that named only the OpenShift half
+    would have gone on passing while the other one moved."""
+    files = gen.generate(FACTS, {"namespace": "ns1", "openshift_cluster": True,
                                  "ca_existing_configmap": "corp-trust"})
     assert "oc -n ns1 create configmap corp-trust" in _commands(files)
     plain = gen.generate(FACTS, {"namespace": "ns1", "openshift_cluster": False,
                                  "ca_existing_configmap": "corp-trust"})
     assert "kubectl -n ns1 create configmap corp-trust" in _commands(plain)
+
+
+def test_a_plain_kubernetes_bundle_is_what_you_get_without_answering():
+    """The default cluster is plain Kubernetes, and the bundle says `kubectl`.
+
+    It defaulted to OpenShift, matching `platform: openshift` beside it -- which
+    read the product off the posture, the one thing the pair was split to stop
+    (#256). The cost landed on the larger half of the installs: a customer who
+    answered nothing was handed a README written in `oc`."""
+    files = gen.generate(FACTS, {"namespace": "ns1",
+                                 "ca_existing_configmap": "corp-trust"})
+    cmds = _commands(files)
+    assert "kubectl -n ns1 create configmap corp-trust" in cmds
+    assert "oc " not in cmds
 
 
 def test_proxy_plain_in_configmap():
@@ -1013,7 +1031,7 @@ def test_the_cluster_decides_oc_or_kubectl_not_the_posture():
     opts = {"namespace": "ns1", "auth_token": "de" * 32,
             "node_selector": CRANE_POOL, "engine_node_selector": ENGINE_POOL,
             "engine_tolerations": ENGINE_TOL}
-    oc = _commands(gen.generate(FACTS, opts))
+    oc = _commands(gen.generate(FACTS, dict(opts, openshift_cluster=True)))
     assert "oc -n ns1 rollout status" in oc and "oc label node" in oc
     assert "kubectl " not in oc
 
@@ -1296,6 +1314,22 @@ SV_OPTS = {"namespace": "ns1", "sv_ingress": "nginx",
            "sv_subdomain": "apps.example.com", "sv_tls_secret": "wildcard-tls"}
 
 
+def _sv(**kw):
+    """`SV_OPTS` plus overrides, with the cluster answered where the backend
+    needs it.
+
+    `sv_ingress: openshift` publishes a route.openshift.io Route and is refused
+    anywhere else, and the cluster now defaults to plain Kubernetes (#256) -- so
+    a parametrised case that names that backend has to name the cluster too, or
+    it stops testing the backend and starts testing the refusal, which
+    `test_sv_openshift_ingress_requires_the_openshift_platform` already owns.
+    `setdefault`, so a case that wants the refusal can still ask for it."""
+    if kw.get("sv_ingress") == "openshift":
+        kw.setdefault("platform", "openshift")
+        kw.setdefault("openshift_cluster", True)
+    return dict(SV_OPTS, **kw)
+
+
 def test_sv_location_without_ingress_refuses():
     with pytest.raises(ValueError, match="WAITING_FOR_DOMAIN") as e:
         gen.generate(SV_FACTS, {"namespace": "ns1"})
@@ -1384,9 +1418,7 @@ def test_sv_ingress_allows_nodeport_where_it_was_measured_working():
     for NODEPORT, the manifests would say CLUSTERIP, and nothing would say why.
     """
     for ingress in [i for i, b in gen.SV_INGRESS_BACKENDS.items() if b.nodeport_ok]:
-        opts = dict(SV_OPTS, service_type="NODEPORT", sv_ingress=ingress)
-        if ingress == "openshift":
-            opts["platform"] = "openshift"
+        opts = _sv(service_type="NODEPORT", sv_ingress=ingress)
         data = yaml.safe_load(
             gen.generate(SV_FACTS, opts)["bzm_configmap.yaml"])["data"]
         assert data["KUBERNETES_SERVICE_USE_TYPE"] == "NODEPORT"
@@ -1467,9 +1499,11 @@ def test_sv_readme_names_the_tls_secret_and_the_namespace_it_goes_in():
     assert "kubectl -n bzm-agent create secret tls wildcard-tls" in md
     assert "`*.apps.example.com`" in md
     # The bundle is read as one document, so this line follows whichever CLI the
-    # rest of it applies with -- see gen.cli().
+    # rest of it applies with -- see gen.cli(). Which is `openshift_cluster` and
+    # not `platform`: the posture installs on vanilla Kubernetes too, so it
+    # cannot decide which binary the reader has.
     oc = gen.generate(SV_FACTS, dict(SV_OPTS, namespace="bzm-agent",
-                                     platform="openshift"))["README.md"]
+                                     openshift_cluster=True))["README.md"]
     assert "oc -n bzm-agent create secret tls wildcard-tls" in oc
     # BlazeMeter's page is contradicted by name, or a reader who has it open
     # follows it instead.
@@ -1483,10 +1517,7 @@ def test_sv_readme_is_silent_where_the_backend_never_reads_the_secret(ingress):
     """Naming a namespace for something nothing looks at is an instruction that
     gets followed and then disbelieved. Both of these require the *name* --
     crane crash-loops without it -- and neither references the Secret."""
-    o = dict(SV_OPTS, sv_ingress=ingress)
-    if ingress == "openshift":
-        o["platform"] = "openshift"
-    md = gen.generate(SV_FACTS, o)["README.md"]
+    md = gen.generate(SV_FACTS, _sv(sv_ingress=ingress))["README.md"]
     assert "create secret tls" not in md
 
 
@@ -1507,7 +1538,7 @@ def test_sv_ingress_rbac_is_not_granted_to_crd_based_types(ingress):
     creates an Ingress. Granting it elsewhere is dead permission, and this tool
     exists to keep the Role to what is actually used. Confirmed live for both --
     each published its object with a Role carrying only its own API group."""
-    groups = _role_groups(gen.generate(SV_FACTS, dict(SV_OPTS, sv_ingress=ingress)))
+    groups = _role_groups(gen.generate(SV_FACTS, _sv(sv_ingress=ingress)))
     assert "ingresses" not in groups.get("networking.k8s.io", [])
 
 
@@ -1517,6 +1548,7 @@ def test_sv_openshift_route_rbac_includes_custom_host():
     the route`, no Route appears, and the virtual service stalls. OpenShift
     gates spec.host behind a separate create on routes/custom-host."""
     files = gen.generate(SV_FACTS, dict(SV_OPTS, platform="openshift",
+                                        openshift_cluster=True,
                                         sv_ingress="openshift"))
     groups = _role_groups(files)
     assert groups["route.openshift.io"] == ["routes", "routes/custom-host"]
@@ -3720,279 +3752,162 @@ def test_extra_env_travels_in_the_profile():
     })["profile.json"])
     assert profile["extra_env"] == {"PREFERRED_INTERFACE": "eth1"}
 
-
-# -- the bundle that is complete except for the certificate (#230) ------------
+# -- the bundle that names a certificate it does not carry (#230, #241) -------
 #
 # The common moment is not "I have a PEM" but "crane is failing TLS and I am
-# waiting on my platform team". `ca_bundle_slot` is that answer: the bundle
-# carries bzm_cacerts.yaml wired to the Deployment, with the PEM slot marked.
-# It is a deliberate choice, not a field somebody forgot, which is the whole
-# difference between it and leaving `ca_bundle` blank.
+# waiting on my platform team". `ca_bundle_slot` is that answer, and since #256
+# it answers it the way BlazeMeter's own agent documentation does: the
+# certificate is a *file*, named by `ca_cert_file`, and the bundle carries no
+# PEM at all. It is a deliberate choice, not a field somebody forgot, which is
+# the whole difference between it and leaving `ca_bundle` blank.
+#
+# It used to ship the ConfigMap with `<CA_BUNDLE>` inside it, which needed a
+# `ca-slot-check` initContainer to stop a bundle nobody finished from running
+# 1/1 and trusting nothing. Naming a file removes that failure instead of
+# guarding it, so the guard and its tests went with it -- what replaces them
+# here is the assertion that no PEM and no marker reach any manifest.
+
+CERT_FILE_OPTS = {"namespace": "ns1", "ca_bundle_slot": True,
+                  "ca_cert_file": "corp-root.crt"}
 
 
-def test_the_slot_emits_a_configmap_wired_like_any_other():
-    files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True})
+def test_the_file_mode_carries_no_configmap_and_no_pem():
+    """The manifests reference the ConfigMap and do not create it, which is the
+    shape BlazeMeter's example and the Kubernetes ConfigMap-volume page both
+    use. Nothing in the bundle holds a certificate or a slot for one."""
+    files = gen.generate(FACTS, CERT_FILE_OPTS)
     _all_yaml_parse(files)
-    assert "bzm_cacerts.yaml" in files
-    cm = yaml.safe_load(files["bzm_cacerts.yaml"])
-    assert cm["data"][gen.CA_FILENAME].strip() == gen.marker("ca_bundle")
-    # ...and everything downstream is identical to a filled-in inline bundle:
-    # the point is a bundle that needs one edit, not one that needs wiring.
-    d = yaml.safe_load(files["bzm_deployment.yaml"])
-    spec = d["spec"]["template"]["spec"]
+    assert "bzm_cacerts.yaml" not in files
+    assert not any(gen.marker("ca_bundle") in t for t in files.values())
+    assert not any("BEGIN CERTIFICATE" in t for t in files.values())
+
+
+def test_the_file_mode_wires_the_agent_exactly_like_a_filled_bundle():
+    """Everything downstream of the certificate is identical to an inline
+    bundle: what differs is where the bytes come from, and nothing else. This is
+    the BlazeMeter documented Deployment, key for key."""
+    files = gen.generate(FACTS, CERT_FILE_OPTS)
+    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
     assert spec["volumes"][0]["configMap"]["name"] == gen.CA_CONFIGMAP
     assert spec["containers"][0]["volumeMounts"][0]["mountPath"] == gen.CA_MOUNT_PATH
     conf = yaml.safe_load(files["bzm_configmap.yaml"])["data"]
-    assert conf["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}"
+    path = f"{gen.CA_MOUNT_PATH}/corp-root.crt"
+    assert conf["REQUESTS_CA_BUNDLE"] == path
+    assert conf["AWS_CA_BUNDLE"] == path
+    assert conf["KUBERNETES_CA_BUNDLE_MOUNT"] == (
+        f"REQUESTS_CA_BUNDLE={gen.CA_CONFIGMAP}=corp-root.crt:"
+        f"AWS_CA_BUNDLE={gen.CA_CONFIGMAP}=corp-root.crt")
 
 
-def test_the_slot_is_findable_in_the_file_somebody_edits():
-    """The manifest is the artefact a human opens, and `<CA_BUNDLE>` says which
-    field is missing without saying what shape the value has. A YAML comment
-    never reaches the applied object, so it costs nothing at apply time."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True})
-    text = files["bzm_cacerts.yaml"]
-    assert "#" in text and "BEGIN CERTIFICATE" in text
-    # It stays a comment: the ConfigMap still parses, and the data is the marker
-    # alone rather than the marker plus prose.
-    assert yaml.safe_load(text)["data"][gen.CA_FILENAME].strip() \
-        == gen.marker("ca_bundle")
+def test_one_field_names_the_file_everywhere_it_appears():
+    """BlazeMeter's chart takes `request_ca_bundle` and `aws_ca_bundle`
+    separately and one certificate may serve both, so this generator asks once.
+    The name reaching two of the three places and not the third is the failure
+    worth a test: a wrong key mounts an empty file rather than failing."""
+    conf = yaml.safe_load(gen.generate(FACTS, dict(
+        CERT_FILE_OPTS, ca_cert_file="weird name.pem"))["bzm_configmap.yaml"])["data"]
+    assert conf["REQUESTS_CA_BUNDLE"].endswith("/weird name.pem")
+    assert conf["AWS_CA_BUNDLE"].endswith("/weird name.pem")
+    assert conf["KUBERNETES_CA_BUNDLE_MOUNT"].count("weird name.pem") == 2
 
 
-def test_a_filled_bundle_carries_no_slot_comment():
+def test_an_unnamed_certificate_is_the_marker_and_not_a_name_we_invented():
+    """A bundle is routinely generated before anybody knows what the file will
+    be called. `ca-bundle.crt` chosen here would sit where a customer's own name
+    goes and read back as a decision somebody made."""
+    conf = yaml.safe_load(gen.generate(FACTS, {
+        "namespace": "ns1", "ca_bundle_slot": True})["bzm_configmap.yaml"])["data"]
+    assert conf["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.marker('ca_cert_file')}"
+    # ...and the inline mode does not, because there the bundle writes the file
+    # itself and the name is genuinely this generator's to pick.
     pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
-    text = gen.generate(FACTS, {"namespace": "ns1",
-                                "ca_bundle": pem})["bzm_cacerts.yaml"]
-    assert "paste" not in text.lower()
+    inline = yaml.safe_load(gen.generate(FACTS, {
+        "namespace": "ns1", "ca_bundle": pem})["bzm_configmap.yaml"])["data"]
+    assert inline["REQUESTS_CA_BUNDLE"] == f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}"
 
 
-def test_the_slot_and_a_pem_are_two_answers_to_one_question():
-    """Not a merge and not a precedence: somebody has said both `here is the
-    certificate` and `the certificate is coming`, and only they know which."""
+def test_the_readme_prints_the_create_command_keyed_to_what_is_mounted():
+    """`--from-file=<key>=<path>` rather than the bare `--from-file=<path>`
+    BlazeMeter document: the bare form keys the entry on the file's own name, so
+    a certificate called anything else lands under a key nothing mounts."""
+    md = gen.generate(FACTS, CERT_FILE_OPTS)["README.md"]
+    assert (f"kubectl create configmap {gen.CA_CONFIGMAP}" in md
+            and "--from-file=corp-root.crt=./corp-root.crt -n ns1" in md)
+    # The failure when somebody skips it, because a step nobody explains is a
+    # step people skip. It is the kubelet refusing the mount, not this bundle.
+    assert "ContainerCreating" in md
+
+
+def test_the_helm_bundle_ships_the_file_rather_than_inlining_the_pem():
+    """The values overlay is what gets committed, diffed and pasted into
+    tickets, so no certificate goes in it. The chart reads the file out of the
+    chart directory, which is Helm's own convention and the only place
+    `.Files.Get` looks."""
+    pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    files = gen.generate(FACTS, {"namespace": "ns1", "output_format": "helm",
+                                 "ca_bundle": pem})
+    assert files[f"{gen.CHART_DIR}/{gen.CA_FILENAME}"].strip() == pem
+    values = files[gen.HELM_VALUES_FILE]
+    assert f'file: "{gen.CA_FILENAME}"' in values
+    assert "BEGIN CERTIFICATE" not in values
+    # ...and with no certificate in hand, the name alone and no file: the chart
+    # refuses the install rather than resolving a placeholder file and
+    # installing an agent that trusts nothing.
+    named = gen.generate(FACTS, dict(CERT_FILE_OPTS, output_format="helm"))
+    assert f"{gen.CHART_DIR}/corp-root.crt" not in named
+    assert 'file: "corp-root.crt"' in named[gen.HELM_VALUES_FILE]
+
+
+def test_naming_a_file_and_supplying_a_pem_are_two_answers_to_one_question():
     with pytest.raises(ValueError, match="ca_bundle_slot"):
         gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True,
-                             "ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n"
-                                          "-----END CERTIFICATE-----"})
+                             "ca_bundle": "-----BEGIN CERTIFICATE-----"})
 
 
-def test_the_slot_is_one_of_the_ca_modes_not_a_fourth_thing():
-    """It competes with the other modes like any other: a bundle cannot both
-    reference somebody's ConfigMap and carry its own."""
-    with pytest.raises(ValueError, match="choose one CA mode"):
-        gen.generate(FACTS, {"namespace": "ns1", "ca_bundle_slot": True,
-                             "ca_existing_configmap": "corp-trust"})
-
-
-def test_the_slot_says_what_is_missing_rather_than_that_somebody_forgot():
-    """`placeholder_options` reports fields nobody answered, and this one was
-    answered -- with `later`. Reporting it there would put "this bundle is not
-    finished" over a bundle that is exactly what was asked for, beside a
-    sentence claiming the API server will reject it, which for a ConfigMap
-    value it will not."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "auth_token": "de" * 32,
-                                 "ca_bundle_slot": True})
-    readme = files["README.md"]
-    assert gen.placeholder_options(json.loads(files[gen.PROFILE_FILE])) == []
-    assert "not finished" not in readme
-    # ...but it is not silent either: the bundle cannot work until the PEM
-    # lands, and the README is where the person applying it finds that out.
-    assert "bzm_cacerts.yaml" in readme
-    assert "certificate" in readme.lower()
-
-
-def test_the_docker_bundle_gets_the_same_slot_in_its_own_shape():
-    """Docker writes the PEM as a file beside the script rather than into a
-    ConfigMap, and its run script already refuses a placeholder file -- so the
-    slot needs no new guard there, only the file."""
-    files = gen.generate(FACTS, {"output_format": "docker", "ship_id": "bbb222",
-                                 "auth_token": "de" * 32,
-                                 "ca_bundle_slot": True})
-    assert files[gen.DOCKER_CA_FILE] == gen.marker("ca_bundle")
-
-
-# -- ...and the guard that stops it deploying anyway (#241) -------------------
-#
-# Measured on minikube: a manifests bundle with the slot still empty applies all
-# seven objects, runs `1/1 Running`, and dies only in crane's own log
-# (NO_CERTIFICATE_OR_CRL_FOUND). helm refuses at install and docker refuses from
-# both of its routes, so flat manifests were the one format with nowhere to
-# refuse from. The guard is an initContainer, because `kubectl get pods` is
-# where somebody looks.
-
-
-def _init_container(files):
-    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    return spec.get("initContainers")
-
-
-def test_a_slot_bundle_refuses_to_start_while_the_marker_is_there():
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True})
-    init, = _init_container(files)
-    assert init["name"] == gen.CA_SLOT_INIT_CONTAINER
-    script = init["args"][0]
-    # The pattern, never this option's own marker: what it reads is the live
-    # ConfigMap, which may have been edited by hand or written by an older
-    # version of this generator under `<PLACEHOLDER>`.
-    assert gen.MARKER_PATTERN in script
-    assert gen.marker("ca_bundle") not in script.split("echo")[0]
-    assert f"{gen.CA_MOUNT_PATH}/{gen.CA_FILENAME}" in script
-    # Whole value, not a substring: a pasted certificate carrying a bracketed
-    # word (a `friendlyName: <REDACTED>` header) must not read as an empty slot,
-    # and a CrashLoopBackOff is not the place to take `marker_in`'s trade. The
-    # same `^<...>$` the chart applies to the same value.
-    assert "grep -qx" in script
-    assert "exit 1" in script
-    # It reads the same mounted ConfigMap crane reads, or it would be judging a
-    # different file from the one that is about to fail.
-    assert init["volumeMounts"] == [{"name": "cacerts",
-                                     "mountPath": gen.CA_MOUNT_PATH,
-                                     "readOnly": True}]
-
-
-def test_the_guard_names_the_field_the_file_and_the_fix():
-    """`kubectl get pods` says only `Init:Error`; the name leads to
-    `kubectl logs -c ...`, and this is what is waiting there."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True})
-    script = _init_container(files)[0]["args"][0]
-    assert "ca_bundle" in script                      # the field
-    assert gen.CA_CONFIGMAP_FILE in script            # the file to edit
-    assert "BEGIN CERTIFICATE" in script              # what to put in it
-    assert "NO_CERTIFICATE_OR_CRL_FOUND" in script    # what happens otherwise
-
-
-def test_the_guard_says_so_when_it_could_not_look():
-    """A check that cannot read its file must not report a pass. Crane reads the
-    same path out of REQUESTS_CA_BUNDLE, so a bundle that is not mounted is a
-    fact about the deployment rather than a read somebody was refused -- it
-    refuses, and it says which of the two happened."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True})
-    script = _init_container(files)[0]["args"][0]
-    unreadable = script.split("if grep")[0]
-    assert "! -r" in unreadable and "REQUESTS_CA_BUNDLE" in unreadable
-    assert "exit 1" in unreadable
-
-
-def test_the_guard_runs_the_image_the_cluster_already_pulls():
-    """The one decision that sinks this if it is wrong. These bundles are for
-    sealed clusters -- private registry, public registries blackholed on the
-    node -- so a busybox or alpine initContainer would ImagePullBackOff on
-    exactly the clusters the guard exists for. Crane's own reference is already
-    mirrored, pull-secreted and pinned, and it carries a shell."""
-    o = {"namespace": "ns1", "ship_id": "bbb222", "ca_bundle_slot": True,
-         "private_registry": "reg.example.com/bzm", "pull_secret": "regcred"}
-    files = gen.generate(FACTS, o)
-    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    init, = spec["initContainers"]
-    assert init["image"] == spec["containers"][0]["image"]
-    assert init["image"].startswith("reg.example.com/bzm/")
-    # The pull secret is the pod's, so it covers both containers by construction
-    # -- named here because an initContainer that was not covered by it is the
-    # same ImagePullBackOff by another route.
-    assert spec["imagePullSecrets"] == [{"name": "regcred"}]
-
-
-def test_the_guard_costs_the_pod_nothing_to_schedule():
-    """A pod's request is max(largest init container, sum of the containers), so
-    repeating crane's own numbers leaves this Deployment's footprint exactly
-    where it was -- and a cluster with a LimitRange or a ResourceQuota sees one
-    more container it already accepts."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True,
-                                 "crane_ephemeral_storage": "4Gi"})
-    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    init, crane = spec["initContainers"][0], spec["containers"][0]
-    assert init["resources"] == crane["resources"]
-    assert init["resources"]["limits"]["ephemeral-storage"] == "4Gi"
-    # ...and it runs under the same posture, or a restricted PodSecurity
-    # namespace rejects the pod over the container that was added to protect it.
-    assert init["securityContext"] == crane["securityContext"]
-
-
-@pytest.mark.parametrize("platform", ("k8s", "openshift"))
-def test_the_guard_takes_the_platforms_own_security_context(platform):
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True, "platform": platform})
-    spec = yaml.safe_load(files["bzm_deployment.yaml"])["spec"]["template"]["spec"]
-    init, crane = spec["initContainers"][0], spec["containers"][0]
-    assert init["securityContext"] == crane["securityContext"]
-    # OpenShift's SCC assigns the UID; pinning one is refused there.
-    assert ("runAsUser" in init["securityContext"]) is (platform == "k8s")
-
-
-def test_the_guard_is_echoed_from_a_shell_and_survives_it():
-    """The two sentences are echoed from a double-quoted shell string inside a
-    YAML block scalar. A `"` ends the string, a `$` or a backtick is read by the
-    shell rather than printed, and either way the message a customer meets is
-    not the message that was written."""
-    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
-                                 "ca_bundle_slot": True})
-    for line in _init_container(files)[0]["args"][0].splitlines():
-        if line.strip().startswith("echo "):
-            assert not set(line.strip()[6:-5]) & set('"$`\\'), line
-
-
-@pytest.mark.parametrize("options", (
-    {},
-    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"},
-    {"ca_existing_configmap": "corp-trust"},
-    {"ca_openshift_inject": True},
-))
-def test_every_other_bundle_carries_no_guard_at_all(options):
-    """The guard is a refusal, and a bundle with a certificate in it has nothing
-    to be refused over. Byte-identity for everything else is the acceptance
-    criterion behind this."""
-    files = gen.generate(FACTS, dict(options, namespace="ns1",
-                                     ship_id="bbb222"))
-    assert _init_container(files) is None
-    assert gen.CA_SLOT_INIT_CONTAINER not in files["bzm_deployment.yaml"]
+def test_the_file_mode_is_one_of_the_ca_modes_not_a_fourth_thing():
+    """`no_ca()` clears every CA option, and `CA_OPTIONS` is what it reads --
+    livetest's negative control proves nothing unless the CA is really gone."""
+    assert "ca_bundle_slot" in gen.CA_MODES
+    assert "ca_cert_file" in gen.CA_OPTIONS
+    cleared = gen.no_ca()
+    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **CERT_FILE_OPTS, **cleared}) is None
 
 
 def test_generate_says_it_before_the_bundle_is_even_written():
-    """The cheap half. The person who runs the command is the one who chose the
-    slot, and generate was the one moment that said nothing about it."""
-    o = {"namespace": "ns1", "ship_id": "bbb222", "ca_bundle_slot": True}
-    notice = gen.ca_slot_notice(o)
-    assert gen.CA_CONFIGMAP_FILE in notice and "ca_bundle" in notice
-    assert gen.CA_SLOT_INIT_CONTAINER in notice and "Init:Error" in notice
-    # Raw options in, defaults merged inside: the caller holds what somebody
-    # typed and has resolved nothing yet.
-    assert gen.ca_slot_notice({"namespace": "ns1"}) is None
+    """The person who runs the command chose the file mode and can act now; the
+    README says it again for the person who applies the bundle, who is routinely
+    somebody else."""
+    said = gen.ca_slot_notice(CERT_FILE_OPTS)
+    assert "corp-root.crt" in said and gen.CA_CONFIGMAP in said
 
 
-@pytest.mark.parametrize("fmt,where,names,absent", (
-    ("manifests", gen.CA_CONFIGMAP_FILE, ("Init:Error",),
-     ("helm install", "compose")),
-    ("helm", gen.HELM_VALUES_FILE, ("helm install",),
-     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
-    ("docker", gen.DOCKER_CA_FILE, (gen.DOCKER_RUN_FILE, "docker compose up"),
-     ("Init:Error", gen.CA_CONFIGMAP_FILE)),
-))
-def test_the_notice_names_the_file_and_the_refusal_of_its_own_format(
-        fmt, where, names, absent):
-    """Three formats, three files and three refusals, and one sentence for all
-    of them would be wrong twice over. The file is the half that is easy to get
-    wrong: a chart bundle carries no `bzm_cacerts.yaml` and a docker bundle
-    carries no ConfigMap at all, so naming one would send somebody to a file
-    that is not in their directory. Nothing is added to helm or docker by saying
-    this -- their refusals already exist and this reports them."""
-    notice = gen.ca_slot_notice({"namespace": "ns1", "ship_id": "bbb222",
-                                 "output_format": fmt, "ca_bundle_slot": True})
-    assert f"Paste your CA into {where}" in notice
-    for name in names:
-        assert name in notice
-    for name in absent:
-        assert name not in notice
+def test_the_notice_tells_a_named_file_from_one_nobody_has_named():
+    """Two different facts, and only one is a thing left undone. Saying "still
+    to do" over a finished bundle teaches the reader to ignore the sentence that
+    means somebody forgot something."""
+    named = gen.ca_slot_notice(CERT_FILE_OPTS)
+    assert "corp-root.crt" in named and gen.marker("ca_cert_file") not in named
+    blank = gen.ca_slot_notice({"namespace": "ns1", "ca_bundle_slot": True})
+    assert gen.marker("ca_cert_file") in blank
 
 
-@pytest.mark.parametrize("options", (
-    # Two answers to one question, which `_ca_cfg` refuses naming the pair.
-    {"ca_bundle": "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----"},
-    # A format nobody offers, which `generate` refuses naming the three.
-    {"output_format": "kustomize"},
-))
+@pytest.mark.parametrize("fmt,says", [
+    ("manifests", "kubectl apply"),
+    ("helm", "helm install"),
+    ("docker", gen.DOCKER_RUN_FILE),
+])
+def test_the_notice_names_who_builds_the_configmap_on_this_format(fmt, says):
+    """Three formats, three answers, and one sentence for all of them would be
+    wrong twice: the chart builds it at install, a pipeline builds it before
+    apply, and docker has no ConfigMap at all."""
+    said = gen.ca_slot_notice(dict(CERT_FILE_OPTS, output_format=fmt))
+    assert says in said
+
+
+@pytest.mark.parametrize("options", [
+    {"ca_bundle": "-----BEGIN CERTIFICATE-----"},   # refused beside the file mode
+    {"output_format": "nonsense"},
+])
 def test_the_notice_leaves_every_refusal_to_the_one_that_owns_it(options):
     """A notice must not be the thing that raises, least of all from inside the
     MCP server's warning list -- and each of these is refused one line later, by

@@ -888,7 +888,7 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
 
     // The OpenShift-only CA mode, picked while the bundle is an OpenShift one.
     fireEvent.click(await screen.findByRole("switch", { name: "Custom CA trust" }));
-    fireEvent.click(await screen.findByLabelText(/OpenShift cluster trust injection/));
+    fireEvent.click(await screen.findByLabelText(/OpenShift cluster trust bundle/));
     await waitFor(() =>
       expect(asked[asked.length - 1]?.ca_openshift_inject).toBe(true));
 
@@ -906,18 +906,26 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
     // ever fills it, and the agent trusts nothing extra while the bundle reads
     // as configured.
     expect(asked[asked.length - 1]?.ca_openshift_inject).toBe(false);
-    expect(screen.queryByLabelText(/OpenShift cluster trust injection/)).toBeNull();
+    expect(screen.queryByLabelText(/OpenShift cluster trust bundle/)).toBeNull();
     // The posture is untouched: it is the other question, and the one this
     // customer still wants answered the recommended way.
     expect(asked[asked.length - 1]?.platform).toBe("openshift");
   });
 
-test("a chosen certificate file fills the CA option, and one that is not PEM is refused",
+test("the CA group asks for a file name, and a blank one is not a blocker",
   async () => {
-    /** #227: the customer has a file, and pasting it into a textarea was the
-     *  step that made the inline mode feel wrong for one. `pemFile.test.ts`
-     *  holds the decision; this holds the wiring -- that a pick reaches
-     *  `ca_bundle` and a refusal reaches nobody. */
+    /** #256: this group was four radio buttons -- a PEM slot, a paste box,
+     *  somebody else's ConfigMap, OpenShift injection -- which asked a customer
+     *  to choose an ownership model before they could say the one thing they
+     *  knew. BlazeMeter's own documentation asks for neither a model nor a PEM:
+     *  their chart takes a certificate *file name*, and their Deployment
+     *  example references a ConfigMap built from that file.
+     *
+     *  Blank is deliberately not a refusal. It becomes `<CA_CERT_FILE>`, the
+     *  chart refuses the install and every surface names it -- so blocking the
+     *  download here would be the off-screen blocker this page keeps removing,
+     *  in the one mode whose whole premise is that the certificate is
+     *  elsewhere. */
     const asked: Options[] = [];
     render(<App api={accountOf([loc("h-0", "Dublin",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
@@ -932,45 +940,35 @@ test("a chosen certificate file fills the CA option, and one that is not PEM is 
     fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     fireEvent.click(await screen.findByRole("switch", { name: "Custom CA trust" }));
-    fireEvent.click(await screen.findByLabelText(/I have the certificate/));
 
-    const input = () => document.querySelector(
-      'input[type="file"][accept^=".pem"]') as HTMLInputElement;
-    const pick = async (name: string, body: string) => {
-      const file = Object.assign(new File([body], name),
-                                 { text: async () => body });
-      await act(async () => {
-        fireEvent.change(input(), { target: { files: [file] } });
-      });
-    };
-
-    const pem = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
-    await pick("corp-root.pem", `${pem}\n${pem}\n`);
-    // The option carries the file's text, and the count is stated: the mount
-    // replaces the trust store rather than adding to it, so how many
-    // certificates arrived is the one thing worth reading back.
+    // Switching the group on is already a complete configuration: the file mode
+    // needs nothing typed, which is why it is what `enable` seeds.
     await waitFor(() =>
-      expect(asked[asked.length - 1]?.ca_bundle).toBe(`${pem}\n${pem}`));
-    expect(screen.getByText(/corp-root\.pem — 2 certificates/)).toBeTruthy();
+      expect(asked[asked.length - 1]?.ca_bundle_slot).toBe(true));
+    expect(asked[asked.length - 1]?.ca_cert_file ?? null).toBeNull();
 
-    // A DER file reads as text and holds no block. Filling the box with what
-    // the bytes decoded to would mount cleanly and be trusted by nothing, so it
-    // is refused -- and the option keeps what it already had.
-    await pick("corp-root.crt", "\u0000\u0002 binary");
-    expect(screen.getByText(/openssl x509/)).toBeTruthy();
-    expect(asked[asked.length - 1]?.ca_bundle).toBe(`${pem}\n${pem}`);
+    // There is one control, and it is the file name. No paste box and no
+    // certificate upload: the bundle never carries a certificate from this
+    // page. Keyed on the accept list rather than on `input[type=file]` at
+    // large -- the profile importer is one of those and belongs to another
+    // step.
+    expect(document.querySelector('input[type="file"][accept^=".pem"]'))
+      .toBeNull();
+    fireEvent.change(await screen.findByLabelText(/Certificate file name/),
+                     { target: { value: "corp-root.crt" } });
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.ca_cert_file).toBe("corp-root.crt"));
 
-    // ...and the refusal goes when the box stops being what it is about. A
-    // sentence describing a value that has gone is the same fault either way
-    // round: an `openssl` refusal under a bundle that is now fine, or the green
-    // count above a box the mode switch emptied.
-    // The paste box is gone (#230), so the way the value changes under a note
-    // is Remove -- which is the same question the note has to answer: does it
-    // still describe what the bundle carries?
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(screen.queryByText(/openssl x509/)).toBeNull());
-    expect(screen.queryByText(/corp-root\.pem — 2 certificates/)).toBeNull();
-    expect(screen.getByText(/No certificate chosen yet/)).toBeTruthy();
+    // ...and clearing it again is allowed, and is not a blocker. Blank arrives
+    // as the empty string, like every other text box here, and the generator
+    // resolves it to `<CA_CERT_FILE>` -- so the page never has to hold a marker
+    // in `options`, which is the rule that keeps one out of the session
+    // snapshot looking like something somebody typed.
+    fireEvent.change(screen.getByLabelText(/Certificate file name/),
+                     { target: { value: "" } });
+    await waitFor(() =>
+      expect(asked[asked.length - 1]?.ca_cert_file).toBe(""));
+    expect(screen.queryByText(/CA_CERT_FILE/)).toBeNull();
   });
 
 // -- the download step, through the page -------------------------------------

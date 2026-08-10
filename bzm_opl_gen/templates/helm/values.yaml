@@ -274,8 +274,11 @@ proxy:
 
 # Pick one mode:
 #   none            no custom trust.
-#   inline          the PEM below (or caBundle.file, read from the chart
-#                   directory) becomes a ConfigMap this chart owns.
+#   inline          caBundle.file (or the PEM below) becomes a ConfigMap this
+#                   chart owns. The file is the normal way and what
+#                   bzm-opl-gen writes: commit the certificate beside
+#                   Chart.yaml and name it, so the values file you commit,
+#                   diff and paste into a ticket holds no certificate bytes.
 #   existing        reference a ConfigMap the platform team owns and rotates,
 #                   e.g. one written by trust-manager. The chart only reads it.
 #   openshiftInject an empty labeled ConfigMap; OpenShift's network operator
@@ -283,8 +286,11 @@ proxy:
 caBundle:
   mode: none
   pem: ""
-  # Path relative to the chart directory, e.g. "certificate.crt". Ignored unless
-  # mode is inline and pem is empty.
+  # The certificate's file name, relative to the chart directory, e.g.
+  # "certificate.crt" -- helm reads it with .Files.Get, which looks nowhere
+  # else, so it has to sit beside Chart.yaml. Used when mode is inline; the PEM
+  # above wins if both are set. `--set-file caBundle.pem=/any/path.crt` is the
+  # way in for a certificate that cannot be committed here.
   file: ""
   existingConfigMap: ""
   key: ca-bundle.crt

@@ -136,9 +136,16 @@ DEFAULT_OPTIONS = {
     # being read off the other. What it decides is the command a human types --
     # `oc` against `kubectl` -- plus the two things only OpenShift serves: a
     # route.openshift.io Route and an inject-trusted-cabundle ConfigMap.
-    # True by default because `platform: openshift` is, and every bundle
-    # generated before this option existed was written for `oc`.
-    "openshift_cluster": True,
+    # False by default: OpenShift is the smaller half of the installs and the
+    # default was costing the larger half. It used to be True, to match
+    # `platform: openshift` beside it -- but that is the *posture*, which is
+    # recommended on vanilla Kubernetes too, so matching it here read the
+    # product off the posture, which is the confusion this pair was split to
+    # end. What the default decides is `kubectl` rather than `oc` in every
+    # sentence the bundle prints, and whether the CA group offers cluster trust
+    # injection at all; a plain-Kubernetes customer was getting `oc` and an
+    # OpenShift-only CA mode without having answered anything.
+    "openshift_cluster": False,
     # manifests -> flat YAML to kubectl apply. helm -> the chart in
     # templates/helm, plus a values overlay built from these same options -- the
     # same deployment expressed twice, not two codebases. tests/helm_parity.py
@@ -223,9 +230,27 @@ DEFAULT_OPTIONS = {
     "engines_per_node": None,
     # CA trust -- pick ONE mode:
     "ca_bundle": None,               # inline PEM -> generator creates the ConfigMap
-    "ca_bundle_slot": False,         # same ConfigMap, PEM slot marked for later
+    "ca_bundle_slot": False,         # the certificate is a *file*, named below
     "ca_existing_configmap": None,   # name of a ConfigMap the platform team owns/rotates
     "ca_configmap_key": None,        # bundle file key within it (default ca-bundle.crt)
+    # The certificate's file name, and the one field the file mode asks for. It
+    # names the same thing in all four places the file appears -- the key inside
+    # the ConfigMap, the file mounted at CA_MOUNT_PATH, the chart-directory file
+    # helm reads at install, and the `--from-file=` key a pipeline creates the
+    # ConfigMap with -- because they are one file and asking four times is how a
+    # bundle ends up mounting a key nothing wrote. It is BlazeMeter's own shape:
+    # their helm chart takes `ca_bundle.request_ca_bundle` and
+    # `ca_bundle.aws_ca_bundle` as file *names*, and one certificate may serve
+    # both, which is why this is one field and not two.
+    #
+    # Blank is left blank rather than defaulted, and becomes the marker: a
+    # bundle is routinely generated before anybody knows what the certificate
+    # will be called, and `ca-bundle.crt` chosen here would be a name this
+    # generator invented sitting where a customer's own file name goes -- read
+    # back later as a decision somebody made. Only the inline mode defaults it,
+    # because there the certificate is in hand and the bundle writes the file
+    # itself, so the name is genuinely this generator's to pick.
+    "ca_cert_file": None,            # certificate file name; blank -> <CA_CERT_FILE>
     "ca_openshift_inject": False,    # labeled empty CM; OpenShift injects cluster trust
     "engine_cpu_limit": None,        # e.g. "2" -> KUBERNETES_RESOURCES_LIMITS_CPU
     "engine_mem_limit": None,        # e.g. "8Gi" -> KUBERNETES_RESOURCES_LIMITS_MEMORY
@@ -984,7 +1009,7 @@ def _sv_docker_cfg(o):
 CA_MODES = {
     "ca_existing_configmap": "an existing ConfigMap",
     "ca_bundle": "an inline PEM",
-    "ca_bundle_slot": "a PEM slot to fill in later",
+    "ca_bundle_slot": "a certificate file the ConfigMap is built from",
     "ca_openshift_inject": "OpenShift injection",
 }
 
@@ -995,7 +1020,7 @@ CA_MODES = {
 # overlay, which replaces whatever mode the profile it merges onto carried. Both
 # listed the keys instead, and both were still clearing three of them when
 # `ca_bundle_slot` made a fourth mode (#250).
-CA_OPTIONS = tuple(CA_MODES) + ("ca_configmap_key",)
+CA_OPTIONS = tuple(CA_MODES) + ("ca_configmap_key", "ca_cert_file")
 
 
 def no_ca():
@@ -1047,91 +1072,54 @@ def _ca_cfg(o):
     if active[0] == "ca_existing_configmap":
         return {"cm": o["ca_existing_configmap"],
                 "key": o["ca_configmap_key"] or CA_FILENAME, "mode": "existing"}
-    # inline, the slot and inject all use our own ConfigMap; inject's key is
-    # fixed to ca-bundle.crt (the key OpenShift writes into labeled ConfigMaps).
-    # The slot renders as inline holding the marker -- one renderer, so the
-    # bundle a customer fills in is the bundle they would have generated.
-    mode = {"ca_bundle": "inline", "ca_bundle_slot": "slot"}.get(
+    # inline, the file mode and inject all use our own ConfigMap. Inject's key is
+    # fixed to ca-bundle.crt -- it is the key OpenShift's operator writes into a
+    # labeled ConfigMap, so naming it here would rename a file we do not write.
+    # The other two take the file name, because it is one file: the key in the
+    # ConfigMap, the file at CA_MOUNT_PATH, and what a pipeline or the chart
+    # reads it from.
+    #
+    # Blank falls two different ways, and that is the difference between a name
+    # nobody has supplied and one this generator is entitled to choose. Inline
+    # holds the certificate and writes the file itself, so CA_FILENAME is a
+    # default; the file mode names a file somebody else will put there, so blank
+    # is the marker and every surface says the name is still missing.
+    mode = {"ca_bundle": "inline", "ca_bundle_slot": "file"}.get(
         active[0], "inject")
-    return {"cm": CA_CONFIGMAP, "key": CA_FILENAME, "mode": mode}
+    key = {
+        "inject": CA_FILENAME,
+        "inline": o["ca_cert_file"] or CA_FILENAME,
+        "file": o["ca_cert_file"] or marker("ca_cert_file"),
+    }[mode]
+    return {"cm": CA_CONFIGMAP, "key": key, "mode": mode}
 
 
-# -- the slot that was never filled in (#241) ---------------------------------
+# -- the certificate the bundle names but does not carry -------------------
 #
-# A slot bundle is finished by one edit, and the failure when nobody makes it is
-# the quietest this generator has: the marker is a ConfigMap *value*, so the API
-# server takes it (PLACEHOLDER_REFUSED_BY_API), all seven objects apply, and the
-# crane pod reports `1/1 Running` while every call to BlazeMeter dies with
-# `SSLError(136, NO_CERTIFICATE_OR_CRL_FOUND)` in its own log alone -- measured
-# on minikube. The other two formats have somewhere to refuse from and both do:
-# helm at `helm install` (bzm-opl.validate), docker from the run script and from
-# compose's required-variable check. Flat manifests have no install step, so the
-# refusal has to be something the bundle carries into the cluster, and that is
-# `_ca_slot_init_container` below.
-
-# The initContainer that carries it. Named, and short: `kubectl get pods` says
-# only `Init:Error` -- and then `Init:CrashLoopBackOff`, because the pod's
-# restartPolicy is Always and the kubelet backs off -- so the name is what leads
-# a reader from either of those to `kubectl describe pod` and
-# `kubectl logs -c ca-slot-check`, which is where the two sentences below are.
-# **Both states are named wherever this one is**, or somebody who looks a minute
-# after applying greps for a string that has left the screen.
-CA_SLOT_INIT_CONTAINER = "ca-slot-check"
-
-
-def _ca_slot_where(o):
-    """The file a CA slot is filled in, for this format.
-
-    Three formats, three files, and they are not interchangeable: manifests
-    carry the ConfigMap manifest, a chart bundle carries none of it and the PEM
-    goes into the values overlay the chart renders from, and docker writes the
-    PEM as a file beside the script. Named once because both surfaces that send
-    somebody to it -- the README block and `ca_slot_notice` -- had to know, and
-    one of them was naming `bzm_cacerts.yaml` at a chart bundle that has no such
-    file.
-    """
-    return {"docker": DOCKER_CA_FILE, "helm": HELM_VALUES_FILE}.get(
-        o["output_format"], CA_CONFIGMAP_FILE)
-
-
-def _ca_slot_lines(holder, where):
-    """What a bundle says about a CA slot nobody filled in: what is wrong, then
-    what to do -- the two-sentence shape `_docker_blank_file_lines` gives the
-    same kind of fact on the other platform, down to the verb.
-
-    One wording and two surfaces, which is why it is a function rather than
-    prose at either: the initContainer echoes it into the pod's log, and
-    `ca_slot_notice` prints it at generate. A third version of this sentence
-    would be one more thing to keep true.
-
-    `holder` is what carries the marker and it is the one thing that genuinely
-    differs: the guard is read by somebody looking at a cluster, where the
-    answer is a ConfigMap, and the notice by somebody looking at a directory,
-    where it is a file. `where` is always a file, because pasting a PEM into a
-    live ConfigMap is not the fix either of them wants.
-
-    **No `"`, `$` or backtick in either sentence, and none in what is passed
-    in.** They are echoed from a double-quoted shell string inside a YAML block
-    scalar, where all three would be read by the shell rather than printed.
-    """
-    return (f"{holder} carries {marker('ca_bundle')} -- ca_bundle was set to a "
-            f"slot when this bundle was generated, so the PEM is still to be "
-            f"pasted in.",
-            f"Paste your CA into {where} -- the whole BEGIN CERTIFICATE block, "
-            f"and your public roots with it -- and deploy. Crane trusts nothing "
-            f"until it lands, and fails every call to BlazeMeter with "
-            f"NO_CERTIFICATE_OR_CRL_FOUND.")
+# The file mode is the one BlazeMeter's own agent documentation follows: the
+# crane Deployment references a ConfigMap, and the ConfigMap is built from a
+# certificate *file* somebody supplies. So the bundle names a file and carries
+# no PEM, and there are two things left to say -- what the file is called, and
+# who builds the ConfigMap from it, which differs by format.
+#
+# This replaced a ConfigMap shipped with `<CA_BUNDLE>` inside it (#241). That
+# shape had the quietest failure this generator has ever had: the marker is a
+# ConfigMap *value*, so the API server took it, every object applied, and crane
+# ran `1/1 Running` trusting nothing -- which needed a `ca-slot-check`
+# initContainer in the Deployment to catch. Naming a file instead removes the
+# failure rather than guarding it: no ConfigMap means no volume, and the pod
+# stops at `ContainerCreating` with `configmap "blazemeter-cacerts" not found`
+# against its own name. That is louder than the guard was, and it is the
+# kubelet saying it rather than a container this generator wrote.
 
 
 def ca_slot_notice(options):
-    """What `generate` says out loud about a CA slot, or None.
+    """What `generate` says out loud about a certificate it does not carry.
 
-    The cheap half of #241, and it is a *generate-time* line rather than
-    anything in the bundle: the person who runs the command is the one who chose
-    the slot, and the moment they can act on it is now. Everything it says is
-    said again in the bundle for the person who applies it -- `_ca_slot_block`
-    in the README, and the guard itself in the Deployment -- because those are
-    routinely two people.
+    A *generate-time* line rather than anything in the bundle: the person who
+    runs the command is the one who chose the file mode, and the moment they can
+    act on it is now. Everything here is said again in the README, for the
+    person who applies the bundle, because those are routinely two people.
 
     Takes raw options and merges the defaults itself, so a caller holding what
     somebody typed can ask without resolving first (the CLI does, before
@@ -1140,7 +1128,7 @@ def ca_slot_notice(options):
     Anything `generate` is going to refuse answers None rather than a sentence
     -- a contradictory pair (`_ca_cfg` refuses `ca_bundle_slot` beside
     `ca_bundle`), a format nobody offers. Those refusals are `generate`'s to
-    make one line later, and announcing a slot first would describe a bundle
+    make one line later, and announcing a file first would describe a bundle
     that is about to be refused. This is a *notice*: it must not be the thing
     that raises, least of all from inside the MCP server's warning list.
     """
@@ -1149,126 +1137,31 @@ def ca_slot_notice(options):
         ca = _ca_cfg(o)
     except ValueError:
         return None
-    if not ca or ca["mode"] != "slot":
+    if not ca or ca["mode"] != "file":
         return None
-    where = _ca_slot_where(o)
-    # The file is what carries the marker here: nothing is deployed yet, so
-    # there is no ConfigMap for a reader to look at.
-    wrong, todo = _ca_slot_lines(where, where)
-    # What stops a deploy, per format, and the three genuinely differ -- so one
-    # sentence for all of them would be wrong twice. Nothing new is added to
-    # helm or docker by saying this: their refusals already exist, and this line
-    # reports them rather than duplicating them.
-    stops = {
-        "helm": "`helm install` refuses it and names the field.",
-        "docker": (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both refuse "
-                   f"to start it."),
-        "manifests": (f"`kubectl apply` still creates every object -- a marker "
-                      f"is refused as a name and accepted as a value -- but the "
-                      f"crane pod then stops on the {CA_SLOT_INIT_CONTAINER} "
-                      f"initContainer, at `Init:Error` and then "
-                      f"`Init:CrashLoopBackOff`."),
+    # Two different facts, and only one of them is a thing left undone. An
+    # unnamed file is a bundle nobody has finished; a named one is complete and
+    # waiting on a step that was always going to be somebody's, so saying "still
+    # to do" over it would teach the reader to ignore the sentence that means
+    # somebody forgot something.
+    named = (f"names {ca['key']}" if not is_placeholder(ca["key"]) else
+             f"carries {marker('ca_cert_file')} -- nobody has said what the "
+             f"certificate is called")
+    # Who builds the ConfigMap, per format, and the three genuinely differ.
+    builds = {
+        "helm": (f"Put the PEM in {CHART_DIR}/ under that name; helm install "
+                 f"builds the {CA_CONFIGMAP} ConfigMap from it, and refuses "
+                 f"while it is missing."),
+        "docker": (f"Put the PEM beside ./{DOCKER_RUN_FILE}, which refuses to "
+                   f"start without it."),
+        "manifests": (f"Create the {CA_CONFIGMAP} ConfigMap from it before "
+                      f"kubectl apply -- the README prints the command. Until "
+                      f"then the crane pod sits at ContainerCreating and names "
+                      f"the ConfigMap it cannot mount."),
     }.get(o["output_format"])
-    if not stops:
+    if not builds:
         return None
-    return f"CA slot: {wrong} {stops} {todo}"
-
-
-def _ca_slot_init_container(facts, o, ca):
-    """The guard, as an initContainer on the crane Deployment, or "".
-
-    Only for a slot, so every other bundle renders byte-for-byte what it did
-    before: this is a refusal, and a bundle with a certificate in it has nothing
-    to be refused over.
-
-    **The image is crane's own, and that is the whole reason this is workable.**
-    These bundles are for sealed clusters -- a private registry, the public ones
-    blackholed on the node -- so a `busybox` or `alpine` here would
-    ImagePullBackOff on exactly the clusters the guard exists for, turning one
-    silent failure into a different one. Crane's reference is already mirrored,
-    already pull-secreted and already pinned by the same options, and it carries
-    a shell: `/bin/sh` is busybox and `/bin/grep` is beside it (checked by
-    running the image; it is not distroless).
-
-    The pattern is `MARKER_PATTERN` rather than this option's own marker, for
-    `_docker_run_sh`'s reason: what is read is the *live* ConfigMap, which may
-    have been edited by hand or written by an older version of this generator,
-    and neither is obliged to use today's marker for this field.
-
-    **It is matched whole, and that is the opposite judgement from the docker
-    script next door.** `marker_in` is a substring search and takes a loud false
-    refusal over a silent miss, which is right where the refusal is a script
-    somebody just ran; here it is a CrashLoopBackOff inside a cluster, over a
-    certificate somebody has already pasted in. A PEM is arbitrary text -- a
-    `friendlyName: <REDACTED>` header is enough -- so the whole trimmed value
-    has to be the marker, which is `is_placeholder`'s rule and the same
-    `^<...>$` the chart's `bzm-opl.validate` applies to the same value. The
-    slot writes nothing but the marker, so nothing honest is missed.
-
-    Requests and limits are crane's own numbers rather than smaller ones nobody
-    measured. A pod's effective request is max(largest init container, sum of
-    the containers), so repeating crane's leaves the scheduling footprint of
-    this Deployment exactly as it was -- and a cluster with a LimitRange or a
-    ResourceQuota sees one more container it already accepts.
-
-    **The chart gets none of this, deliberately.** Helm refuses the same bundle
-    at install time, where the message reaches the person typing the command
-    rather than a pod log, so duplicating the guard into the chart would be a
-    second answer to a question already answered. That is also why
-    `tests/helm_parity.py` does not compare `initContainers`: the two formats
-    genuinely diverge on this one object.
-    """
-    if not ca or ca["mode"] != "slot":
-        return ""
-    # The ConfigMap, not the file: whoever reads this has a cluster in front of
-    # them and the file may be nowhere near it.
-    wrong, todo = _ca_slot_lines(f"the {ca['cm']} ConfigMap", CA_CONFIGMAP_FILE)
-    path = f"{CA_MOUNT_PATH}/{ca['key']}"
-    return f"""      initContainers:
-        # Nothing outside the bundle stops a CA slot nobody filled in: the
-        # marker is a ConfigMap value, so it applies, and crane then runs
-        # 1/1 Running trusting nothing (#241). This is where that becomes
-        # visible: kubectl get pods shows Init:Error and then
-        # Init:CrashLoopBackOff, and kubectl logs -c {CA_SLOT_INIT_CONTAINER}
-        # says which field and which file.
-        - name: {CA_SLOT_INIT_CONTAINER}
-          image: "{_crane_image(facts, o)}"
-          imagePullPolicy: Always
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              # A check that could not read its file must not report a pass.
-              # Crane reads this same path out of REQUESTS_CA_BUNDLE, so a
-              # bundle that is not there is a fact about the deployment rather
-              # than a read somebody was refused.
-              if [ ! -r {path} ]; then
-                echo "{path} is not mounted, and it is what REQUESTS_CA_BUNDLE names." >&2
-                echo "Apply {CA_CONFIGMAP_FILE} from this bundle, or check the {CA_CONFIGMAP} ConfigMap." >&2
-                exit 1
-              fi
-              # Whole value, not a substring: `tr` strips the whitespace and
-              # `grep -x` anchors what is left, so a pasted certificate that
-              # happens to carry a bracketed word is not read as an empty slot.
-              if printf %s "$(tr -d '[:space:]' < {path})" | grep -qx '{MARKER_PATTERN}'; then
-                echo "{wrong}" >&2
-                echo "{todo}" >&2
-                exit 1
-              fi
-{_security_context(o)}
-          resources:
-            requests:
-              cpu: {CRANE_CPU_REQUEST}
-              memory: {CRANE_MEM_REQUEST}
-              ephemeral-storage: {o['crane_ephemeral_storage'] or CRANE_EPHEMERAL_STORAGE}
-            limits:
-              cpu: "{CRANE_CPU_LIMIT}"
-              memory: {CRANE_MEM_LIMIT}
-              ephemeral-storage: {o['crane_ephemeral_storage'] or CRANE_EPHEMERAL_STORAGE}
-          volumeMounts:
-            - name: cacerts
-              mountPath: {CA_MOUNT_PATH}
-              readOnly: true
-"""
+    return f"CA certificate: this bundle {named}. {builds}"
 
 
 def proxy_url(url, p):
@@ -1624,15 +1517,15 @@ def _configmap(facts, o):
     if ca:
         ca_comment = {
             "inline": "  # Corporate CA bundle (generator-created ConfigMap).",
-            "slot": f"  # Corporate CA bundle -- {CA_CONFIGMAP_FILE} is in this bundle,",
+            "file": f"  # Corporate CA bundle -- the {ca['cm']} ConfigMap, which you",
             "existing": f"  # CA bundle from existing ConfigMap '{ca['cm']}' -- the platform",
             "inject": "  # OpenShift cluster trust bundle (operator-injected ConfigMap).",
         }[ca["mode"]]
         lines.append(ca_comment)
         if ca["mode"] == "existing":
             lines.append("  # team owns and rotates it; these manifests only reference it.")
-        if ca["mode"] == "slot":
-            lines.append("  # waiting for the certificate to be pasted into it.")
+        if ca["mode"] == "file":
+            lines.append(f"  # create from {ca['key']} -- see the README.")
         path = f"{CA_MOUNT_PATH}/{ca['key']}"
         lines += [
             "  # Mounted into crane; engines get the same ConfigMap mounted via",
@@ -1690,35 +1583,29 @@ metadata:
     # Nobody hand-manages PEMs; rotation is the cluster's job.
     config.openshift.io/inject-trusted-cabundle: "true"
 """
-    body = ca_pem(o)
-    pem = "\n".join("    " + line for line in body.strip().splitlines())
-    # The comment is for the human who opens this file, and it never reaches the
-    # applied object -- so unlike the marker itself it costs nothing at apply
-    # time and cannot be read back as content. `<CA_BUNDLE>` says which value is
-    # missing; it does not say what shape that value has, which is this.
-    note = ("" if ca["mode"] != "slot" else
-            f"  # Paste your CA here, replacing {marker('ca_bundle')} below: "
-            f"the whole\n"
-            f"  # -----BEGIN CERTIFICATE----- block, and your public roots with\n"
-            f"  # it -- this file replaces the trust store rather than adding to\n"
-            f"  # it. Keep the four-space indent. Then apply this bundle.\n")
+    # Only `inline` reaches here now: the file mode emits no ConfigMap at all,
+    # because the file is what it is built from and this generator has not read
+    # it (see `generate`, and the README's `kubectl create configmap` line).
+    pem = "\n".join("    " + line for line in ca_pem(o).strip().splitlines())
     return f"""kind: ConfigMap
 apiVersion: v1
 metadata:
   name: {CA_CONFIGMAP}
   namespace: {o['namespace']}
 data:
-{note}  {CA_FILENAME}: |
+  {ca['key']}: |
 {pem}
 """
 
 
 def ca_pem(o):
-    """The PEM the bundle writes, which is the marker where the slot was asked
-    for. One helper because both platforms write it -- a ConfigMap entry here, a
-    file beside the script on docker -- and a slot that reached only one of them
-    would be a mode that silently means nothing on the other."""
-    return marker("ca_bundle") if o.get("ca_bundle_slot") else o["ca_bundle"]
+    """The certificate the bundle writes, where there is one to write.
+
+    One helper because both platforms write it -- a ConfigMap entry here, a file
+    beside the script on docker. It is no longer ever a marker: the file mode
+    names a file rather than holding a slot, so a bundle with no certificate in
+    it writes no certificate anywhere."""
+    return o["ca_bundle"]
 
 
 def _proxy_secret_block(o):
@@ -2284,64 +2171,59 @@ PLACEHOLDER_REFUSED_BY_API = frozenset((
 
 
 def _ca_slot_block(o):
-    """The README section for a bundle whose CA ConfigMap is waiting for a PEM.
+    """The README section for a bundle whose certificate is a file, or "".
 
     Separate from the placeholder block on purpose, and not folded into it: the
-    slot is a decision somebody made, and that block reports decisions nobody
-    made. Printing "this bundle is not finished" over a bundle that is exactly
-    what was asked for would teach the reader to ignore the one sentence that
-    means somebody forgot something.
+    file mode is a decision somebody made, and that block reports decisions
+    nobody made. Printing "this bundle is not finished" over a bundle that is
+    exactly what was asked for would teach the reader to ignore the one sentence
+    that means somebody forgot something. Where the *name* was left blank the
+    placeholder block says so already, under `ca_cert_file`, so this block never
+    repeats it -- it says what to do with the file, which is true either way.
+
+    The command is the whole point of the section on manifests, and it is
+    `--from-file=<key>=<path>` rather than the bare `--from-file=<path>`
+    BlazeMeter's own documentation shows: the bare form keys the entry on the
+    file's own name, so a certificate a customer calls `corp root CA.pem` lands
+    under a key nothing mounts. Naming the key makes the ConfigMap match what
+    KUBERNETES_CA_BUNDLE_MOUNT already says it will be.
     """
     ca = _ca_cfg(o)
-    if not ca or ca["mode"] != "slot":
+    if not ca or ca["mode"] != "file":
         return ""
-    # One reader, one file, and the format decides which -- so it is resolved
-    # where `ca_slot_notice` resolves it rather than branch by branch here. This
-    # block named `bzm_cacerts.yaml` at a chart bundle until #241, and a chart
-    # bundle carries no such file: the chart renders the ConfigMap from
-    # `caBundle` in the values overlay.
-    where = _ca_slot_where(o)
+    name = ca["key"]
     if o["output_format"] == "docker":
-        check, cmd = (f"`./{DOCKER_RUN_FILE}` and `docker compose up` both "
-                      f"refuse to start while the marker is there, so nothing "
-                      f"deploys by accident."), ""
+        lead = (f"**This bundle names a certificate it does not carry.** Put it "
+                f"beside `./{DOCKER_RUN_FILE}` as `{DOCKER_CA_FILE}`, or point "
+                f"`CA_BUNDLE` at one the host already has. The script refuses "
+                f"to start without it, so nothing deploys trusting nothing.")
+        cmd = ""
     elif o["output_format"] == "helm":
-        check = ("`helm install` refuses it and names the field, so nothing "
-                 "deploys by accident.")
+        lead = (f"**This bundle names a certificate it does not carry.** Put "
+                f"the PEM in `{CHART_DIR}/` as `{name}` -- beside `Chart.yaml`, "
+                f"which is the only place `helm` reads a file from -- and "
+                f"install as normal. The chart builds the `{CA_CONFIGMAP}` "
+                f"ConfigMap from it and refuses the install while it is "
+                f"missing, naming the field.")
         cmd = ""
     else:
-        # No install-time hook on flat manifests, and the API server takes a
-        # ConfigMap value whatever it says (#230) -- so what stops it is the
-        # initContainer the bundle carries (#241), and the grep below is the
-        # same judgement for a reader who has not applied anything yet.
-        check = (f"**Applying it as it stands succeeds** -- the marker is a "
-                 f"ConfigMap value, not a name -- and the agent then does not "
-                 f"start: the `{CA_SLOT_INIT_CONTAINER}` initContainer reads "
-                 f"the mounted bundle and refuses while the marker is there, "
-                 f"so the pod sits at `Init:Error` -- then "
-                 f"`Init:CrashLoopBackOff`, as the kubelet backs off -- instead "
-                 f"of running and trusting nothing. `kubectl logs -c "
-                 f"{CA_SLOT_INIT_CONTAINER}` says the same thing this does. "
-                 f"Apply the certificate and the pod clears itself on the "
-                 f"kubelet's next retry, which the backoff can put a few "
-                 f"minutes out. Before applying anything, this is the check:")
-        # The marker this file actually carries, rather than the pattern every
-        # reader matches: this block is about one field, the reader is going to
-        # look at one file, and a regular expression printed as a command a
-        # customer copies is a worse answer than the string they will see.
-        # Quoted, and it was not before: `grep -c <CA_BUNDLE> file` is a shell
-        # *redirect* from a file called CA_BUNDLE, so the command a reader
-        # copies fails with "no such file" and says nothing about the bundle.
-        cmd = (f"\n>\n> ```\n> grep -c '{marker('ca_bundle')}' "
-               f"{CA_CONFIGMAP_FILE}\n> ```")
-    body = textwrap.fill(
-        f"**This bundle is waiting for a certificate.** `{where}` is here and "
-        f"wired to the agent, with `{marker('ca_bundle')}` where the PEM goes. "
-        f"Paste "
-        f"your CA into it -- the whole BEGIN CERTIFICATE block, and your "
-        f"public roots with it, because this file replaces the trust store "
-        f"rather than adding to it -- and deploy as normal. {check}",
-        width=76, break_on_hyphens=False)
+        lead = (f"**This bundle names a certificate it does not carry.** The "
+                f"manifests reference the `{CA_CONFIGMAP}` ConfigMap and do not "
+                f"create it, which is the shape BlazeMeter's own example and "
+                f"the Kubernetes ConfigMap-volume documentation both use. "
+                f"Create it from your certificate first, then apply:")
+        cmd = (f"\n>\n> ```\n"
+               f"> kubectl create configmap {CA_CONFIGMAP} \\\n"
+               f">     --from-file={name}=./{name} -n {o['namespace']}\n"
+               f"> kubectl apply -f .\n> ```\n>\n"
+               + "\n".join("> " + line for line in textwrap.fill(
+                   f"Until that ConfigMap exists the crane pod sits at "
+                   f"`ContainerCreating` and names it, which is the kubelet "
+                   f"refusing the mount. That is the whole reason the "
+                   f"certificate is a file: an agent cannot reach this state "
+                   f"and report itself online.",
+                   width=76, break_on_hyphens=False).splitlines()))
+    body = textwrap.fill(lead, width=76, break_on_hyphens=False)
     return "\n> " + "\n> ".join(body.splitlines()) + cmd + "\n\n"
 
 
@@ -3529,16 +3411,28 @@ def _helm_values(facts, o):
         lines += ["proxy:", "  enabled: false", '  http: ""', '  https: ""',
                   f"  noProxy: {_yq(DEFAULT_NO_PROXY)}"]
     lines.append("")
-    mode = {"inline": "inline", "slot": "inline", "existing": "existing",
+    mode = {"inline": "inline", "file": "inline", "existing": "existing",
             "inject": "openshiftInject"}[ca["mode"]] if ca else "none"
     lines += ["caBundle:", f"  mode: {mode}"]
-    if ca and ca["mode"] in ("inline", "slot"):
-        lines.append("  pem: |")
-        lines += ["    " + line for line in ca_pem(o).strip().splitlines()]
+    # `pem` is never written, and the certificate never enters this file. The
+    # chart builds the ConfigMap from `file`, read out of the chart directory at
+    # install time -- which is Helm's own convention for a file, and the reason
+    # both modes render the same two lines: a bundle generated with the
+    # certificate ships it as `helm/<name>` beside the chart, and one generated
+    # without it names where to put the same file. So the values overlay is the
+    # thing people commit and diff, and it holds no certificate bytes either
+    # way. It used to inline the PEM here, which put a certificate in the file
+    # most likely to be pasted into a ticket and made a late-arriving one a
+    # hand edit of YAML.
+    if ca and ca["mode"] in ("inline", "file"):
+        lines += [
+            '  pem: ""',
+            f"  # The certificate, read from the chart directory at install time.",
+            f"  file: {_yq(ca['key'])}",
+        ]
     else:
-        lines.append('  pem: ""')
+        lines += ['  pem: ""', '  file: ""']
     lines += [
-        '  file: ""',
         f"  existingConfigMap: {_yq(ca['cm'] if ca and ca['mode'] == 'existing' else '')}",
         f"  key: {_yq(ca['key'] if ca else CA_FILENAME)}",
         f"  mountPath: {_yq(CA_MOUNT_PATH)}",
@@ -4866,7 +4760,14 @@ def generate(facts, options):
         # blank-file guard all walk, and a file written here and absent there is
         # a mount pointing at nothing.
         for m in docker_file_mounts(o):
-            out[m.file] = m.content
+            # `None` is a mount whose content nobody supplied -- the file mode,
+            # where the certificate is a file you put beside the script. The
+            # mount still has to be wired (the `-v`, the env, the overridable
+            # `CA_BUNDLE`), so it stays in the list and only the file is not
+            # written: the script's own existence check is what refuses to
+            # start, which is louder than a file holding a marker.
+            if m.content is not None:
+                out[m.file] = m.content
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         out["README.md"] = _docker_readme(facts, o)
@@ -4876,6 +4777,14 @@ def generate(facts, options):
     if o["output_format"] == "helm":
         out = _helm_chart_files()
         out[HELM_VALUES_FILE] = _helm_values(facts, o)
+        # The certificate as a file beside the chart, which is what `caBundle.file`
+        # names and what `.Files.Get` can reach -- it reads inside the chart
+        # directory only, so this is the one place it may go. Written only where
+        # there is a certificate: the file mode deliberately ships nothing, and
+        # the chart then refuses the install naming the field, which is a better
+        # answer than a file holding a marker that resolves and installs.
+        if ca and ca["mode"] == "inline":
+            out[f"{CHART_DIR}/{ca['key']}"] = ca_pem(o).strip() + "\n"
         if o["private_registry"]:
             out["bzm-opl-image-mirror.sh"] = _mirror_script(facts, o)
         if separate_pools(o):
@@ -4909,9 +4818,14 @@ def generate(facts, options):
             if o["use_secret"] else ""
         ),
         "SCHEDULING_BLOCK": _scheduling_block(o),
-        # Empty for every bundle but the one it guards, so a Deployment with no
-        # CA slot in it renders exactly the bytes it rendered before (#241).
-        "INIT_CONTAINERS_BLOCK": _ca_slot_init_container(facts, o, ca),
+        # Always empty now. It carried the `ca-slot-check` guard (#241), which
+        # existed only because the bundle shipped a ConfigMap holding a marker;
+        # the file mode ships no ConfigMap and no marker, so the kubelet refuses
+        # the pod by name instead. The substitution stays rather than the
+        # template losing the line: an initContainer is the natural place for
+        # the next guard that has to run before crane, and a Deployment with
+        # none renders exactly the bytes it rendered before.
+        "INIT_CONTAINERS_BLOCK": "",
         "VOLUME_MOUNTS_BLOCK": (
             "          volumeMounts:\n"
             f"            - name: cacerts\n"
@@ -4944,10 +4858,14 @@ def generate(facts, options):
     if o["cluster_rbac"]:
         out["bzm_clusterrole.yaml"] = _tpl("clusterrole.yaml").substitute(sub)
         out["bzm_clusterrolebinding.yaml"] = _tpl("clusterrolebinding.yaml").substitute(sub)
-    # The slot is here because it is the whole point of it: the bundle carries
-    # the ConfigMap, wired, and one edit finishes it. `existing` is the only
-    # mode that emits nothing, because there the object is somebody else's.
-    if ca and ca["mode"] in ("inline", "slot", "inject"):
+    # Two modes emit nothing, for opposite reasons. `existing` names an object
+    # that is somebody else's; `file` names an object you create from your own
+    # certificate file, with the `kubectl create configmap --from-file` line the
+    # README prints -- which is the convention the Kubernetes ConfigMap-volume
+    # docs and BlazeMeter's own example both follow. Shipping a ConfigMap
+    # holding a marker instead is what this replaced: it made the bundle look
+    # finished, applied cleanly, and left crane trusting nothing (#241).
+    if ca and ca["mode"] in ("inline", "inject"):
         out[CA_CONFIGMAP_FILE] = _ca_configmap(facts, o)
     if o["crane_hook"]:
         out[HOOK_FILE] = _tpl("cranehook.yaml").substitute(

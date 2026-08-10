@@ -284,11 +284,17 @@ def test_explicitly_unpinned_engines_are_empty_in_the_overlay_not_cranes():
 
 
 @pytest.mark.parametrize("opts,mode,extra", [
+    # The certificate is a *file* in both create-it-here modes, and the values
+    # overlay carries its name rather than its bytes -- so `pem` is empty on
+    # every row here, including the one that supplied a PEM.
     ({"ca_bundle": "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"},
-     "inline", {"pem": "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n"}),
+     "inline", {"pem": "", "file": "ca-bundle.crt"}),
+    ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.crt"},
+     "inline", {"pem": "", "file": "corp-root.crt", "key": "corp-root.crt"}),
     ({"ca_existing_configmap": "trust-bundle", "ca_configmap_key": "tls.pem"},
      "existing", {"existingConfigMap": "trust-bundle", "key": "tls.pem"}),
-    ({"platform": "openshift", "ca_openshift_inject": True}, "openshiftInject", {}),
+    ({"platform": "openshift", "openshift_cluster": True,
+      "ca_openshift_inject": True}, "openshiftInject", {}),
     ({}, "none", {}),
 ])
 def test_ca_modes_map_to_the_charts_vocabulary(opts, mode, extra):
@@ -298,31 +304,26 @@ def test_ca_modes_map_to_the_charts_vocabulary(opts, mode, extra):
         assert v["caBundle"][k] == want
 
 
-def test_the_chart_keeps_its_install_time_refusal_and_gains_no_guard():
-    """The manifests format grew an initContainer for a CA slot (#241) and the
-    chart deliberately did not. Helm has an install step to refuse at, where the
-    message reaches the person typing the command rather than a pod log, so a
-    guard here would be a second answer to a question already answered -- and
-    the two formats then genuinely diverge on this one object, which is why
-    `tests/helm_parity.py` compares neither `initContainers` nor a case that
-    sets the slot.
+def test_the_chart_keeps_its_install_time_refusal_and_carries_no_guard():
+    """Helm refuses at install, where the message reaches the person typing the
+    command rather than a pod log.
 
-    The README is the other half: it sends a chart reader to the values overlay,
-    which is what a chart bundle actually carries. It named `bzm_cacerts.yaml`
-    until #241 -- a file that is not in the directory.
+    The manifests format grew an initContainer for a CA slot (#241) and the
+    chart deliberately did not; since #256 neither has one, because the file
+    mode ships no marker for a guard to find. What is asserted here is the half
+    that did not change: the chart's own refusal, and a README that sends a
+    chart reader to the values overlay rather than to `bzm_cacerts.yaml`, which
+    a chart bundle does not carry.
     """
-    _, files = _values(ca_bundle_slot=True)
+    _, files = _values(ca_bundle_slot=True, ca_cert_file="corp-root.crt")
     for name, text in files.items():
-        # Structural: no file declares one. The chart's own validation helper
-        # *names* the manifests guard in a comment, and has to -- a chart reader
-        # asking why this refusal is here needs to know the other format has an
-        # answer of its own rather than none.
         assert "initContainers" not in text, name
-    deployment = files[f"{gen.CHART_DIR}/templates/deployment.yaml"]
-    assert gen.CA_SLOT_INIT_CONTAINER not in deployment
     readme = files["README.md"]
     assert gen.HELM_VALUES_FILE in readme and "helm install" in readme
     assert gen.CA_CONFIGMAP_FILE not in readme
+    # The chart reads the file out of its own directory, so that is where the
+    # README has to send somebody -- `.Files.Get` looks nowhere else.
+    assert f"{gen.CHART_DIR}/" in readme and "corp-root.crt" in readme
 
 
 def test_overlay_carries_no_limitrange_at_all():

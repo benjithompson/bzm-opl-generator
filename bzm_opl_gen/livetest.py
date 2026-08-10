@@ -1107,8 +1107,9 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
 
       existing  -- the reference survives, the Deployment names a ConfigMap
                    that is not there, and the pod does not start at all.
-      slot      -- the bundle keeps its `ca-slot-check` initContainer (#241) and
-                   the pod stops at `Init:Error`; crane never runs.
+      file      -- the bundle names a certificate and creates no ConfigMap, so
+                   the Deployment mounts one that is not there and the pod
+                   stops at ContainerCreating; crane never runs.
 
     Neither ever logs CERTIFICATE_VERIFY_FAILED, so the control fails having
     tested nothing, and it costs the run its whole timeout to say so. What is

@@ -136,9 +136,12 @@ OPTIONS = [
     Option(
         "openshift_cluster", "boolean", "Platform and output",
         summary="Is the target cluster OpenShift? Decides oc vs kubectl, Routes and trust injection.",
-        doc="The product, where `platform` is only the posture. Default `true`, "
-            "matching the default posture. Set it `false` for the SCC-friendly "
-            "posture on a cluster that is not OpenShift, and three things follow: "
+        doc="The product, where `platform` is only the posture. Default `false`: "
+            "it used to match the default posture, which read the product off "
+            "the posture -- the very thing this pair was split to stop -- and "
+            "handed plain-Kubernetes customers a bundle written in `oc`. Leave "
+            "it `false` for the SCC-friendly posture on a cluster that is not "
+            "OpenShift, and three things follow: "
             "every command the bundle tells you to run is written with `kubectl` "
             "rather than `oc`; `sv_ingress: openshift` is refused, because a plain "
             "API server serves no `route.openshift.io` Route and the agent would "
@@ -419,21 +422,36 @@ OPTIONS = [
             "applies `--server-side`."),
     Option(
         "ca_bundle_slot", "boolean", "CA trust",
-        summary="Emit the CA ConfigMap with the PEM slot marked, for a certificate not yet in hand.",
-        doc="The bundle carries the CA ConfigMap wired to the agent, with "
-            "`<CA_BUNDLE>` where the PEM goes -- the marker names the option "
-            "the PEM belongs to, so the file says what is missing on its own. "
-            "For the common moment: crane "
-            "is failing TLS and the certificate is still with the platform "
-            "team. One edit finishes it, and nothing else has to be wired. "
-            "Refused beside `ca_bundle` -- supplying the PEM and leaving a slot "
-            "for it are two answers to one question. Every format refuses to "
-            "*start* on the marker, and each from somewhere different: the "
-            "chart at `helm install`, the docker bundle from its run script and "
-            "from compose, and a manifests bundle from a `ca-slot-check` "
-            "initContainer on the crane Deployment -- `kubectl apply` still "
-            "creates every object, because a ConfigMap value is not a name, and "
-            "the pod then stops at `Init:Error`, then `Init:CrashLoopBackOff`."),
+        summary="The certificate is a file you supply; name it with ca_cert_file.",
+        doc="The certificate is a **file**, named by `ca_cert_file`, and the "
+            "bundle carries no PEM anywhere. This is the convention BlazeMeter's "
+            "own agent documentation follows, and their helm chart with it -- "
+            "`ca_bundle.request_ca_bundle` there is a file name, not content. "
+            "What each format does with the name differs, because the platforms "
+            "genuinely differ: the chart reads the file out of the chart "
+            "directory at install (`caBundle.file`, Helm's own `.Files.Get`), a "
+            "manifests bundle prints the `kubectl create configmap "
+            "--from-file=<key>=<file>` line its README leads with, and a docker "
+            "bundle mounts the file beside its run script. All three end at the "
+            "same crane Deployment. Refused beside `ca_bundle` -- naming a file "
+            "and supplying the certificate are two answers to one question."),
+    Option(
+        "ca_cert_file", "string", "CA trust",
+        default_note="unset -> <CA_CERT_FILE>",
+        summary="The certificate's file name, used everywhere the file appears.",
+        doc="The certificate's file name, and the only field the file mode asks "
+            "for. One field rather than two: BlazeMeter's chart takes "
+            "`request_ca_bundle` and `aws_ca_bundle` separately and one "
+            "certificate may serve both, which is what this generator writes. "
+            "The name reaches the key inside the ConfigMap, the file mounted "
+            "under `ca_configmap_key`'s mount path, the chart-directory file "
+            "helm reads, and the `--from-file=` key -- one file, named once. "
+            "Left blank it becomes `<CA_CERT_FILE>`, because a bundle is "
+            "routinely generated before anybody knows what the certificate will "
+            "be called and a name invented here would read as one somebody "
+            "chose. With `ca_bundle` instead -- the certificate in hand -- it "
+            "defaults to `ca-bundle.crt`, since the bundle writes that file "
+            "itself and the name is genuinely the generator's to pick."),
     Option(
         "ca_existing_configmap", "string", "CA trust",
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",

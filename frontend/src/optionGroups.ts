@@ -122,40 +122,55 @@ export interface OptionGroup {
  *  answer which binary the person deploying types. Two readers here need the
  *  product rather than the posture: the SV backends (only OpenShift serves a
  *  route.openshift.io Route) and CA trust (only OpenShift fills a labeled
- *  ConfigMap in). `!== false` because absent means the default, which is on --
- *  Boolean() would read an untouched bundle as plain Kubernetes and hide two
- *  controls that were being offered a moment ago. */
+ *  ConfigMap in). */
+// Absent reads as *off*, which is the generator's default (#256). It used to
+// read absent as on, to match `platform: openshift` beside it -- which is
+// reading the product off the posture, the one thing this pair exists to stop,
+// and it put `oc` in a plain Kubernetes customer's README and offered them a
+// trust-injection ConfigMap nothing would ever fill. `=== true` rather than
+// truthiness so the two halves of the page and the generator agree on what an
+// unanswered option means.
 export const isOpenshift = (o: Options) =>
-  o.platform === "openshift" && o.openshift_cluster !== false;
+  o.platform === "openshift" && o.openshift_cluster === true;
 
 // -- CA trust ----------------------------------------------------------------
-// One-of: a slot to fill in | the PEM now | somebody else's ConfigMap |
-// OpenShift injection. `slot` is first because it is the common moment (#230):
-// crane is failing TLS and the certificate is still with the platform team, so
-// what is wanted is the ConfigMap manifest wired and waiting, not a reference
-// to an object nobody has made.
-export type CaMode = "none" | "slot" | "inline" | "existing" | "inject";
+// One-of: the certificate as a file | the PEM now | somebody else's ConfigMap |
+// OpenShift injection. `file` is the answer this page offers, and the other two
+// ConfigMap modes are reachable only from the CLI or a profile -- see CaGroup
+// for why they are still *shown* where a loaded profile carries one.
+//
+// `file` is the shape BlazeMeter's own documentation uses: the Deployment
+// references a ConfigMap built from a certificate file, and the bundle names
+// the file rather than carrying a PEM. It is also the common moment (#230):
+// crane is failing TLS and the certificate is still with the platform team.
+export type CaMode = "none" | "file" | "inline" | "existing" | "inject";
 
 export function caModeOf(o: Options): CaMode {
-  // Before `inline`, because the two are the same ConfigMap and the slot is the
-  // more specific answer -- `_ca_cfg` refuses them together for that reason.
-  return o.ca_bundle_slot ? "slot"
+  // Before `inline`, because the two are the same ConfigMap and the file mode
+  // is the more specific answer -- `_ca_cfg` refuses them together for that
+  // reason.
+  return o.ca_bundle_slot ? "file"
     : o.ca_existing_configmap != null ? "existing"
     : o.ca_bundle != null ? "inline"
     : o.ca_openshift_inject ? "inject" : "none";
 }
 
 /** The patch that puts CA trust in `mode`. The group's enable and disable are
- *  this same function at "existing" and "none", so the radio buttons and the
- *  switch cannot end up disagreeing about what a mode means. */
+ *  this same function at "file" and "none", so the control and the switch
+ *  cannot end up disagreeing about what a mode means. */
 export function caModePatch(o: Options, mode: CaMode): OptionPatch {
   return {
     ca_existing_configmap: mode === "existing" ? (o.ca_existing_configmap ?? "") : null,
     ca_configmap_key: mode === "existing" ? o.ca_configmap_key : null,
-    // Never both: the generator refuses a slot beside a PEM, because supplying
-    // the certificate and leaving a gap for it are two answers to one question.
+    // Never both: the generator refuses the file mode beside a PEM, because
+    // naming the certificate and supplying it are two answers to one question.
     ca_bundle: mode === "inline" ? (o.ca_bundle ?? "") : null,
-    ca_bundle_slot: mode === "slot",
+    ca_bundle_slot: mode === "file",
+    // Kept across a mode switch rather than cleared, because it is the one
+    // thing somebody typed: switching to OpenShift injection and back must not
+    // lose the file name. Cleared only when CA trust is switched off, which is
+    // `disable` -- the whole group going away.
+    ca_cert_file: mode === "none" ? null : (o.ca_cert_file ?? null),
     ca_openshift_inject: mode === "inject",
   };
 }
@@ -357,7 +372,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "TLS-intercepting proxy / private CAs — mounted into crane + engines",
     functionalities: [],
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle",
-           "ca_bundle_slot", "ca_openshift_inject"],
+           "ca_bundle_slot", "ca_cert_file", "ca_openshift_inject"],
     // Per mode, which is why this is a function. `ca_configmap_key` is not here
     // in either: it defaults to ca-bundle.crt, and OpenShift injection fills a
     // ConfigMap this bundle names itself, so that mode needs nothing typed.
@@ -365,20 +380,21 @@ export const OPTION_GROUPS: OptionGroup[] = [
       const mode = caModeOf(o);
       if (mode === "existing") return ["ca_existing_configmap"];
       if (mode === "inline") return ["ca_bundle"];
-      // `slot` requires nothing, and that is the whole point of it: the
-      // certificate is deliberately absent, so marking it would put "you left
-      // this blank" over the one mode that says so itself.
+      // `file` requires nothing. A blank name is `<CA_CERT_FILE>` and every
+      // surface says so, which is the marker rule -- and this page warns rather
+      // than blocks, so requiring it here would be the off-screen blocker in
+      // the one mode whose whole premise is that the certificate is elsewhere.
       return [];
     },
     detect: (o) => caModeOf(o) !== "none",
-    // On lands on `slot`, on every format. It is the only mode that is
-    // complete the moment it is picked -- the bundle carries the ConfigMap (a
-    // file, on docker) wired and waiting -- so switching the group on can no
-    // longer produce a configuration that blocks the download until something
-    // is typed. It also needs no format branch, which the old seed did: the two
-    // ConfigMap-naming modes reach nothing in a docker bundle, so `existing`
-    // there wrote an option the README then reported as set-and-not-carried.
-    enable: (o) => caModePatch(o, "slot"),
+    // On lands on `file`, on every format. It is the only mode that is complete
+    // the moment it is picked -- the bundle names the certificate and wires
+    // everything to it -- so switching the group on can no longer produce a
+    // configuration that blocks the download until something is typed. It also
+    // needs no format branch, which the old seed did: the two ConfigMap-naming
+    // modes reach nothing in a docker bundle, so `existing` there wrote an
+    // option the README then reported as set-and-not-carried.
+    enable: (o) => caModePatch(o, "file"),
     disable: (o) => caModePatch(o, "none"),
   },
   {

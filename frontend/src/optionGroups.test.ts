@@ -68,6 +68,11 @@ const DETECTS: [GroupId, string, unknown][] = [
 const WRITE_ONLY: [GroupId, string][] = [
   // Only meaningful beside ca_existing_configmap, which does the detecting.
   ["ca", "ca_configmap_key"],
+  // The certificate's file name configures no trust on its own -- it names the
+  // file the *file mode* reads, and `ca_bundle_slot` is what says that mode is
+  // on. A profile carrying only this has no CA trust, and lighting the group up
+  // would claim one.
+  ["ca", "ca_cert_file"],
   // An imported profile carrying these without an ingress is not an SV config;
   // the ingress is what the group is.
   ["sv", "sv_subdomain"],
@@ -88,6 +93,7 @@ const FULL: Options = {
   ca_configmap_key: "ca-bundle.crt",
   ca_bundle: "-----BEGIN CERTIFICATE-----",
   ca_bundle_slot: true,
+  ca_cert_file: "corp-root.crt",
   ca_openshift_inject: true,
   sv_hostname: "C123ABCXYZ",
   sv_tls_cert: "-----BEGIN CERTIFICATE-----",
@@ -143,11 +149,12 @@ describe("the cluster, which the posture is not", () => {
       .toBe(true);
   });
 
-  it("reads absent as the default, which is on", () => {
-    // Boolean() here would read every bundle generated before the option
-    // existed -- and every one still being typed -- as plain Kubernetes, taking
-    // two controls off screen that were being offered a moment earlier.
-    expect(isOpenshift({ platform: "openshift" })).toBe(true);
+  it("reads absent as the default, which is off", () => {
+    // The generator's default is False (#256), so an unanswered option has to
+    // read the same way on both sides: a page that called it OpenShift would
+    // offer a trust-injection mode the bundle then generates for a cluster that
+    // never fills it in.
+    expect(isOpenshift({ platform: "openshift" })).toBe(false);
   });
 });
 
@@ -217,7 +224,8 @@ describe("switching a group off", () => {
       proxy: { proxy: null },
       ca: {
         ca_existing_configmap: null, ca_configmap_key: null,
-        ca_bundle: null, ca_bundle_slot: false, ca_openshift_inject: false,
+        ca_bundle: null, ca_bundle_slot: false, ca_cert_file: null,
+        ca_openshift_inject: false,
       },
       sched: { tolerations: null, node_selector: null,
                engine_tolerations: null, engine_node_selector: null },
@@ -286,7 +294,8 @@ describe("switching a group on", () => {
     expect(detectGroups({ ...patch }, allGroupsOff()).ca).toBe(true);
     expect(patch).toEqual({
       ca_existing_configmap: null, ca_configmap_key: null,
-      ca_bundle: null, ca_bundle_slot: true, ca_openshift_inject: false,
+      ca_bundle: null, ca_bundle_slot: true, ca_cert_file: null,
+      ca_openshift_inject: false,
     });
     expect(GROUP_BY_ID.ca.requires!({ ...patch })).toEqual([]);
   });
@@ -300,7 +309,8 @@ describe("switching a group on", () => {
     expect(GROUP_BY_ID.ca.enable({ ca_existing_configmap: "corp", ca_configmap_key: "k" }))
       .toEqual({
         ca_existing_configmap: null, ca_configmap_key: null,
-        ca_bundle: null, ca_bundle_slot: true, ca_openshift_inject: false,
+        ca_bundle: null, ca_bundle_slot: true, ca_cert_file: null,
+        ca_openshift_inject: false,
       });
   });
 });
