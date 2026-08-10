@@ -1040,6 +1040,103 @@ def test_a_finished_bundle_carries_no_marker():
     assert not gen.MARKER_RE.search("".join(files.values()))
 
 
+# Which field each marker belongs to, built from the rule rather than listed: the
+# option keys, plus `harbor_id` (a fact) and `ship_id` (an option with no default,
+# resolved out of the facts, so `DEFAULT_OPTIONS` does not carry it). Only markers
+# this map knows are
+# judged below, so `MARKER_PATTERN` appearing in a bundle as a *pattern* (the
+# README's grep, the docker script's own check) is not read as a field.
+FIELD_BY_MARKER = {gen.marker(k): k for k in
+                   list(gen.DEFAULT_OPTIONS) + ["harbor_id", "ship_id"]}
+
+
+def _markers_carried(files):
+    """Every field the *artefacts* carry a marker for.
+
+    Two exclusions, and both are about which files describe *this* bundle. The
+    README is what is being judged against them. And `helm/` is the chart, copied
+    verbatim and byte-identical in every bundle -- its templates and comments
+    quote markers to explain them (`bzm-opl.validate` names
+    `<SERVICE_ACCOUNT_NAME>` in the sentence about what it refuses), and prose
+    that quotes a marker is a marker being talked about rather than a field
+    somebody left blank. The bundle's own half of a chart is
+    `bzm-opl-values.yaml`, which is not excluded.
+    """
+    return {FIELD_BY_MARKER[m]
+            for name, text in files.items()
+            if name != "README.md" and not name.startswith(gen.CHART_DIR + "/")
+            for m in gen.MARKER_RE.findall(text) if m in FIELD_BY_MARKER}
+
+
+def _fields_named(readme):
+    """Every field the README's not-finished table has a row for."""
+    return set(re.findall(r"^\| `([a-z_.]+)` \| `<", readme, re.M))
+
+
+# Every mix of the five fields a form can leave empty, over all three formats.
+# The parametrisation is the point: each of these was verified by reading one
+# bundle, and the failure mode is a *combination* -- ids supplied while the token
+# and the two core fields are not, which is the case that turned up the summary
+# table claiming a credential the Secret did not hold.
+@pytest.mark.parametrize("fmt", ["manifests", "helm", "docker"])
+@pytest.mark.parametrize("blank", [
+    set(), {"harbor_id"}, {"ship_id"}, {"auth_token"},
+    {"namespace"}, {"service_account_name"},
+    {"harbor_id", "ship_id"},
+    {"auth_token", "namespace", "service_account_name"},   # the mix reported
+    {"harbor_id", "ship_id", "auth_token"},
+    {"harbor_id", "ship_id", "namespace", "service_account_name", "auth_token"},
+])
+def test_the_readme_names_exactly_the_markers_the_bundle_carries(fmt, blank):
+    """The accuracy property, mechanically: a reader is handed this README *and*
+    these files, and the two must agree about what is missing.
+
+    Both directions matter and they fail differently. A marker the README does
+    not name is a bundle that looks finished and is not -- the whole failure the
+    marker exists to prevent, one level up. A field the README names that no file
+    carries is a false alarm, which teaches somebody to stop reading the block.
+
+    The exemptions are read off the generator rather than restated: a format that
+    ignores an option never marks it, and a chart's `authToken` is empty rather
+    than marked (which its own sentence covers -- see test_helm.py).
+    """
+    ids = {"harbor_id": "0a1b2c3d4e5f60718293a4b5",
+           "ship_id": "6c5b4a39281706f5e4d3c2b1"}
+    facts = facts_mod.manual(
+        "" if "harbor_id" in blank else ids["harbor_id"],
+        "" if "ship_id" in blank else ids["ship_id"])
+    o = {"platform": "k8s", "output_format": fmt,
+         "ship_id": "" if "ship_id" in blank else ids["ship_id"],
+         "namespace": "" if "namespace" in blank else "cust",
+         "service_account_name": "" if "service_account_name" in blank else "crane",
+         "auth_token": "" if "auth_token" in blank else "de" * 32}
+    files = gen.generate(facts, o)
+    assert _markers_carried(files) == _fields_named(files["README.md"])
+
+
+@pytest.mark.parametrize("use_secret", [True, False])
+def test_the_summary_table_never_says_a_missing_credential_is_there(use_secret):
+    """The row above that table, which the matrix cannot judge: it is prose about
+    a file rather than a marker row.
+
+    It said `in bzm_secret.yaml` whatever the Secret held, so the table a reader
+    skims announced a credential the bundle did not have -- and it sat four lines
+    above the block naming `auth_token` as blank, which is a page contradicting
+    itself. The file is still named either way: where the token *is* is the useful
+    half when there is one, and where it *would* be is the useful half when there
+    is not.
+    """
+    where = "bzm_secret.yaml" if use_secret else "bzm_configmap.yaml"
+    for token, supplied in (("de" * 32, True), ("", False)):
+        readme = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222",
+                                      "use_secret": use_secret,
+                                      "auth_token": token})["README.md"]
+        row, = [ln for ln in readme.splitlines() if ln.startswith("| AUTH_TOKEN")]
+        assert where in row
+        assert ("not supplied" in row) is not supplied
+        assert (gen.marker("auth_token") in row) is not supplied
+
+
 def test_the_marker_reaches_the_objects_that_name_the_field():
     """Not only the README: the point is that applying it fails. `<NAMESPACE>`
     is not a legal RFC 1123 name, so each of these is rejected by the API server
@@ -1824,7 +1921,9 @@ def test_docker_command_is_the_documented_shape():
     # The identity, and the container named as BlazeMeter names it.
     assert "--env HARBOR_ID=aaa111" in sh
     assert "--env SHIP_ID=bbb222" in sh
-    assert "NAME=bzm-crane-bbb222" in sh
+    # Quoted at the assignment, because a ship id may be a marker and
+    # `NAME=bzm-crane-<SHIP_ID>` unquoted is a redirection -- see _docker_run_sh.
+    assert 'NAME="bzm-crane-bbb222"' in sh
     # Which manager this agent is for, stated rather than defaulted -- the
     # Kubernetes ConfigMap states its own the same way.
     assert "--env CONTAINER_MANAGER_TYPE=DOCKER" in sh
@@ -1910,6 +2009,18 @@ def test_docker_scripts_are_valid_shell():
         r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
                            capture_output=True)
         assert r.returncode == 0, (extra, r.stderr)
+    # ...and the identity, which needs facts with no id in them and is the one
+    # marker that reaches a shell *assignment* rather than a quoted value:
+    # unquoted, `NAME=bzm-crane-<SHIP_ID>` is a redirection, so `sh` refuses the
+    # file at that line and the two lines naming the field -- twenty lines
+    # further down -- are never reached.
+    import bzm_opl_gen.facts as facts_mod
+    sh = gen.generate(facts_mod.manual("", ""),
+                      {**DOCKER, "ship_id": ""})["bzm-opl-agent.sh"]
+    assert gen.marker("ship_id") in sh, "the case did not arise"
+    r = subprocess.run(["sh", "-n", "-"], input=sh, text=True,
+                       capture_output=True)
+    assert r.returncode == 0, r.stderr
 
 
 def _run_bundle(tmp_path, files=None, env=None):
@@ -1990,6 +2101,25 @@ def test_docker_script_refuses_an_inline_placeholder_too(tmp_path):
     # The crane image carries it too and is deliberately not checked: a
     # reference with `<` in it is refused by docker itself, from either route.
     assert "<PRIVATE_REGISTRY>/crane" in files["bzm-opl-agent.sh"]
+
+
+def test_docker_script_refuses_an_identity_nobody_supplied(tmp_path):
+    """The bundle generated before the BlazeMeter location exists, run.
+
+    Two things are asserted and the first is the one that broke: the script has
+    to *get* to its own refusal. The container name carries the ship id, and
+    `NAME=bzm-crane-<SHIP_ID>` unquoted is a redirection -- `sh` refused the file
+    at that line with a syntax error, which is loud and says nothing about which
+    field was left blank. Quoted, the run reaches the two lines that name it.
+    """
+    import bzm_opl_gen.facts as facts_mod
+    files = gen.generate(facts_mod.manual("", ""), {**DOCKER, "ship_id": ""})
+    r, made = _run_bundle(tmp_path, files)
+    assert "syntax error" not in r.stderr, r.stderr
+    assert r.returncode == 1
+    assert "HARBOR_ID carries <HARBOR_ID>" in r.stderr
+    assert "Set it in bzm-opl-agent.sh and compose.yaml" in r.stderr
+    assert made == ["ps"], made           # nothing was started
 
 
 def test_a_finished_docker_bundle_carries_no_refusal(tmp_path):
@@ -2157,7 +2287,7 @@ def test_both_routes_carry_the_same_container_name():
     files = gen.generate(FACTS, DOCKER)
     svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]
     assert svc[gen.DOCKER_COMPOSE_SERVICE]["container_name"] == name
-    assert f"NAME={name}" in files[gen.DOCKER_RUN_FILE]
+    assert f'NAME="{name}"' in files[gen.DOCKER_RUN_FILE]
 
 
 def test_compose_reads_the_credential_file_the_script_does():
@@ -2293,6 +2423,34 @@ def test_compose_refuses_an_inline_placeholder_at_the_value_itself():
                                  "proxy": {"http": gen.marker("proxy.http")}})
     svc = yaml.safe_load(proxy[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
     assert svc["environment"]["HTTP_PROXY"].startswith("${BZM_OPL_UNSET_HTTP_PROXY:?")
+
+
+def test_docker_refuses_an_identity_nobody_supplied():
+    """The identity is two more environment variables to this platform, so the
+    guard that already exists covers it -- `_docker_blank_env` reads the rendered
+    values rather than a table of option keys, which is why HARBOR_ID and SHIP_ID
+    needed nothing of their own. Asserted because the failure it prevents is the
+    quietest one docker has: a container that starts, answers 404 and logs
+    `Sleeping for 300`, which reads exactly like a slow boot."""
+    import bzm_opl_gen.facts as facts_mod
+    # `ship_id` off the shared fixture, or the marker never reaches the bundle:
+    # the option outranks the facts, which is the whole of how a bundle is
+    # generated for one agent out of several.
+    files = gen.generate(facts_mod.manual("", ""),
+                         {**DOCKER, "ship_id": ""})
+    svc = yaml.safe_load(files[gen.DOCKER_COMPOSE_FILE])["services"]["crane"]
+    for name, key in (("HARBOR_ID", "harbor_id"), ("SHIP_ID", "ship_id")):
+        wrong, todo = gen._docker_blank_lines(
+            name, f"{gen.DOCKER_RUN_FILE} and {gen.DOCKER_COMPOSE_FILE}",
+            gen.marker(key))
+        assert svc["environment"][name] == (
+            f"${{BZM_OPL_UNSET_{name}:?{wrong} {todo}}}")
+        for line in (wrong, todo):
+            assert line in files[gen.DOCKER_RUN_FILE]
+    # ...and the container name carries it too, which is what makes the two
+    # routes exclusive whether the bundle is finished or not.
+    assert svc["container_name"] == gen.docker_container_name(
+        gen.marker("ship_id"))
 
 
 # -- ...and the two files are held equal, over the whole option matrix --------

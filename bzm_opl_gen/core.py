@@ -602,7 +602,7 @@ def gather_facts(client, harbor_id):
     return _upstream(facts_mod.gather, client, harbor_id)
 
 
-def manual_facts(harbor_id, ship_id, func_ids=("performance",)):
+def manual_facts(harbor_id=None, ship_id=None, func_ids=("performance",)):
     """Facts from the three values BlazeMeter shows on the agent, with no API
     key involved -- the case where you are producing manifests for a customer's
     cluster and have access to neither their account nor their cluster.
@@ -613,6 +613,11 @@ def manual_facts(harbor_id, ship_id, func_ids=("performance",)):
 
     The ids are not validated. There is nothing here to validate them against,
     and a guess at their format would reject input that is correct.
+
+    Neither is required. A customer who wants the manifests before their private
+    location exists has no id to give, and blank is answered with the marker for
+    that field rather than with a refusal -- see facts.manual, which is where
+    that argument lives.
     """
     facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids))
     return {"facts": facts,

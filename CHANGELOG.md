@@ -11,7 +11,74 @@ anything that breaks.
 
 ## [Unreleased]
 
+### Added
+
+- **A bundle can now be generated before the private location exists.** The
+  harbor id and the ship id are optional everywhere they are typed -- the web
+  UI's step 1, `facts --manual`, and the MCP server's `opl_facts manual` -- and
+  the bundle carries `<HARBOR_ID>` and `<SHIP_ID>` where each id belongs,
+  exactly as a blank credential already carried `<AUTH_TOKEN>`. This is the case
+  where the manifests are what a customer's platform team has to approve
+  *before* anybody creates the location, and until now the web UI refused to go
+  past step 1 without both ids while the CLI refused without `--ship-id`.
+
+  Nothing about it is silent. Each empty box on the page shows the marker it
+  will become rather than a sample id, the page names the fields beside the
+  boxes and again beside the download button, the bundle's README lists them
+  with where each value comes from, and `facts --manual` and the MCP tool say so
+  in their own output. **A marked bundle cannot be applied**: a marker is not a
+  legal Kubernetes label value, so the API server rejects the crane Deployment
+  naming `metadata.labels` and the marker (measured with
+  `kubectl apply --dry-run=server`), and the docker bundle's script and its
+  `compose up` both refuse before anything is created. Fill the ids in, or
+  re-generate once BlazeMeter has issued them.
+
+  Two agents in one location and no `--ship-id` is still a refusal, and
+  deliberately: that is a question with two answers rather than none, and
+  guessing binds the bundle to an agent somebody else may be running.
+
 ### Fixed
+
+- **A bundle README's summary table said the AUTH_TOKEN was in the Secret when
+  the Secret held a placeholder.** The row read `AUTH_TOKEN | in
+  bzm_secret.yaml` whatever the file contained, four lines above a block naming
+  `auth_token` as one of the fields left blank — the summary contradicting the
+  detail. It now reads ``AUTH_TOKEN | `<AUTH_TOKEN>` in bzm_secret.yaml -- **not
+  supplied**`` where nobody supplied one, and still names the file either way.
+
+  The README is now held to the bundle **mechanically**: a test walks every mix
+  of the five fields a form can leave empty, across all three formats, and
+  requires the fields the README names and the markers the files actually carry
+  to be the same set. A marker the README does not name is a bundle that looks
+  finished; a field it names that no file carries teaches the reader to ignore
+  the block.
+
+- **A chart bundle's README counted the fields left blank and left the
+  AUTH_TOKEN out of the count.** `authToken` is deliberately empty rather than
+  marked in a chart — supplying it at `helm install` time is what the bundle
+  asks for — so it appears in no row of the "This bundle is not finished" table.
+  A bundle with four markers therefore said `4 fields were left blank` over a
+  file that needs five values before it can install, and the only mention of the
+  token was the install command further down. That block now names it whenever
+  nobody supplied one. A chart with every field filled and only the token left
+  for install time still gets no banner, which is the state the exemption exists
+  for.
+
+- **The web UI would not download a bundle whose service account name was
+  empty, having just said it would carry a marker for it.** The configure step
+  printed `namespace (<NAMESPACE>) and service_account_name
+  (<SERVICE_ACCOUNT_NAME>) are empty, so the bundle will carry those markers
+  instead` and the download button then stayed disabled, with nothing on the
+  download step saying why. The button's own gate still required a non-empty
+  name, from when an empty one refused to generate; a blank required field has
+  been its own marker since 0.4.0, so the bundle renders and the gate was
+  refusing a bundle the page had already described. Blank fields no longer block
+  either button.
+
+  The two fields also lost their red asterisk and their red border. Both
+  promised a refusal that no longer happens; a blank one is amber now, and each
+  field says which marker it becomes and that the bundle cannot be applied while
+  it does.
 
 - **The bundle README and `doctor` described engines and virtual users at a
   location that runs neither.** A GUI Functional bundle's handover said

@@ -817,6 +817,25 @@ def test_manual_facts_need_no_account():
     assert body["facts"]["harbor_id"] == "H1"
 
 
+def test_manual_facts_need_no_ids_and_say_which_are_missing():
+    """A location BlazeMeter has not issued ids for. The facts are produced --
+    refusing here would leave this server the one surface that cannot generate
+    what the page and the CLI both can -- and what is missing is in `warnings`,
+    where a session reads it before the bundle is handed on. A response that
+    carried the markers and said nothing would be a bundle described as
+    deployable."""
+    body = ok("opl_facts", "manual", {})
+    assert body["facts"]["harbor_id"] == gen_mod.marker("harbor_id")
+    assert body["facts"]["ships"][0]["id"] == gen_mod.marker("ship_id")
+    said = " ".join(body["warnings"])
+    assert "harbor_id and ship_id" in said
+    assert "<HARBOR_ID>" in said and "<SHIP_ID>" in said
+    # ...and an id that was supplied is not reported as missing.
+    one = ok("opl_facts", "manual", {"harbor_id": "H1"})
+    assert one["warnings"] == [] or "harbor_id" not in " ".join(one["warnings"])
+    assert "ship_id" in " ".join(one["warnings"])
+
+
 def test_preflight_reads_an_evidence_file_without_a_cluster(monkeypatch):
     from evidence_fixtures import document as _evidence
     from test_doctor import FACTS as LOC_FACTS

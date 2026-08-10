@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  checkId, HARBOR, manualComplete, SHIP, tidy, TOKEN,
+  blankManualIds, checkId, HARBOR, manualComplete, SHIP, tidy, TOKEN,
 } from "./manualIds";
 
 const id = "0a1b2c3d4e5f60718293a4b5";        // 24 hex, as an account issues them
@@ -53,15 +53,42 @@ describe("tidy", () => {
 });
 
 describe("manualComplete", () => {
-  it("wants both ids, and a token only if one was typed", () => {
-    expect(manualComplete(id, id, "")).toBe(true);
+  it("takes every field blank, because the bundle carries the markers", () => {
+    // The use case this exists for: a customer whose private location has not
+    // been created yet needs the manifests before BlazeMeter has issued any of
+    // these values. The bundle then carries <HARBOR_ID>, <SHIP_ID> and
+    // <AUTH_TOKEN>, the page says so, and the cluster refuses to apply it.
+    expect(manualComplete("", "", "")).toBe(true);
+    expect(manualComplete(id, "", "")).toBe(true);
+    expect(manualComplete("", id, tok)).toBe(true);
     expect(manualComplete(id, id, tok)).toBe(true);
-    expect(manualComplete(id, "", tok)).toBe(false);
-    expect(manualComplete("", id, tok)).toBe(false);
   });
 
   it("is false while any field is the wrong shape", () => {
+    // Which is the failure it was written for, and is untouched: a truncated
+    // paste renders a bundle that applies cleanly and joins nothing.
     expect(manualComplete(id.slice(0, 12), id, "")).toBe(false);
     expect(manualComplete(id, id, "not-a-token")).toBe(false);
+  });
+});
+
+describe("blankManualIds", () => {
+  it("names the fields in the order the form asks for them", () => {
+    expect(blankManualIds("", "", "")).toEqual(
+      ["harbor_id", "ship_id", "auth_token"]);
+    expect(blankManualIds(id, "", tok)).toEqual(["ship_id"]);
+    expect(blankManualIds(id, id, tok)).toEqual([]);
+  });
+
+  it("says nothing about a token it was not asked about", () => {
+    // The download step's own line answers for the credential, off the branch
+    // the server reports rather than off this form -- so it leaves the argument
+    // out, and two sentences about one credential never appear together.
+    expect(blankManualIds("", "")).toEqual(["harbor_id", "ship_id"]);
+    expect(blankManualIds(id, id)).toEqual([]);
+  });
+
+  it("reads whitespace as blank, as every other reader here does", () => {
+    expect(blankManualIds("   ", id)).toEqual(["harbor_id"]);
   });
 });

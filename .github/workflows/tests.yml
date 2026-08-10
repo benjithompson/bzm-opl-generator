@@ -224,6 +224,27 @@ jobs:
           cat "$RUNNER_TEMP/blank.err"
           grep -q 'BZM_OPL_UNSET_AUTH_TOKEN' "$RUNNER_TEMP/blank.err"
 
+      # ...and the same for the identity, which is the state a bundle generated
+      # before the BlazeMeter location exists is in: `facts --manual` with no ids
+      # at all. The offline suite holds the wording of both guards; only compose
+      # can say whether it refuses the file, which is the whole reason this job
+      # exists. Every value here is supplied except the two ids, so a failure
+      # naming AUTH_TOKEN would mean the identity guard never fired.
+      - name: an identity nobody supplied is refused by compose itself
+        run: |
+          python -m bzm_opl_gen facts --manual -o "$RUNNER_TEMP/no-location.json"
+          python -m bzm_opl_gen generate --format docker \
+              --facts "$RUNNER_TEMP/no-location.json" \
+              --auth-token 0123456789abcdef0123456789abcdef \
+              -o "$RUNNER_TEMP/docker-no-location"
+          cd "$RUNNER_TEMP/docker-no-location"
+          if docker compose config -q 2>"$RUNNER_TEMP/ids.err"; then
+            echo "compose accepted a bundle with no harbor id and no ship id" >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/ids.err"
+          grep -qE 'BZM_OPL_UNSET_(HARBOR|SHIP)_ID' "$RUNNER_TEMP/ids.err"
+
   # The web UI. Separate from the python job rather than bolted onto its
   # matrix: it shares no toolchain with it, and running it twice over two
   # python versions would say nothing new. The suite is the option-group

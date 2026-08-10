@@ -26,7 +26,7 @@
 import { ReactNode, useState } from "react";
 import { Functionality, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, RequiredMark, SegmentedControl,
+  Button, Check, Field, inputCls, SegmentedControl,
 } from "../components";
 import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
@@ -35,7 +35,7 @@ import {
   engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
   runsFunctionality, SHARED_GROUPS, UnclaimedFuncIds,
 } from "../optionGroups";
-import { placeholderWarning } from "../placeholder";
+import { marker, placeholderWarning } from "../placeholder";
 // The two sentences about crane's one pod-limit pair, and the predicate for the
 // second. One rule, said differently at the two surfaces because they are
 // different questions: manual entry is *deciding* what to build and applies it,
@@ -135,31 +135,52 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
  *  not namespaced and there is no ServiceAccount to run as. A section that
  *  appears and disappears has to be a section. */
 function CoreFields(p: ConfigurePanelProps) {
-  // The asterisk says the field is required; the input's border says whether it
-  // has been filled in. Two jobs, and the badge that used to do both said
-  // "REQUIRED" in red on a form where nothing was wrong yet.
-  const ok = () => <RequiredMark />;
+  // **Neither field is marked required any more, and neither is red when empty.**
+  // Both used to carry the asterisk and a red border, from when an empty one
+  // refused to generate. What a blank one produces now is `<NAMESPACE>` or
+  // `<SERVICE_ACCOUNT_NAME>` in the bundle, named in the warning at the foot of
+  // this step and refused by the API server at apply time -- so red says "this
+  // is wrong" about a state the page supports and the asterisk promises a refusal
+  // that no longer happens. Amber is what this page says "unfinished, and
+  // allowed" in everywhere else, and each field's own hint is where the marker is
+  // named -- step 1's identity boxes put it in the *placeholder* because an id
+  // has no sample value to suggest, and these two do.
+  //
+  // The rail beside the form still reads these two (`todo` -> "needs attention"),
+  // which is the third signal and the one that survives being scrolled past.
+  const blankCls = (ok: boolean) => inputCls + (ok ? "" : " border-amber-300");
   return (
     <div className="space-y-3">
       <label className="block">
         <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-          Namespace{ok()}
+          Namespace
         </span>
-        <input className={inputCls + (p.namespaceOk ? " border-emerald-400" : " border-red-300")}
+        {/* The sample stays the placeholder here, where step 1's identity boxes
+            show the marker instead: these two have a value worth suggesting and
+            an id has none, so the box that can say `e.g. blazemeter` says it and
+            the marker is in the sentence underneath. Lower case in no brackets
+            at all, which is the documentation's rule for a sample read twice. */}
+        <input className={blankCls(p.namespaceOk)}
           value={String(p.options.namespace ?? "")} placeholder="e.g. blazemeter"
           onChange={(e) => p.set("namespace", e.target.value)} />
+        <span className="text-[11px] text-slate-400">
+          every object in the bundle is created in it — left empty, the bundle
+          carries {marker("namespace")} and cannot be applied
+        </span>
       </label>
       <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
         <label className="block">
           <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
-            Service account{ok()}
+            Service account
           </span>
-          <input className={inputCls + (p.saOk ? "" : " border-red-300")}
+          <input className={blankCls(p.saOk)}
             value={String(p.options.service_account_name ?? "")}
             placeholder="e.g. crane"
             onChange={(e) => p.set("service_account_name", e.target.value)} />
           <span className="text-[11px] text-slate-400">
-            what the agent runs as, and what the RoleBinding grants to
+            what the agent runs as, and what the RoleBinding grants to — left
+            empty, the bundle carries {marker("service_account_name")} rather
+            than falling back to the namespace’s <code>default</code>
           </span>
         </label>
         <div className="pt-5 w-52">

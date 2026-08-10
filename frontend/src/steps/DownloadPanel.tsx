@@ -62,16 +62,25 @@ export interface BundleHandover {
    *  group -- the reason the button is disabled is a step away, so the block
    *  offers the way to it. */
   goToConfigure: () => void;
+  /** ...and back to step 1, which is where the identity is typed. Two ways back
+   *  because there are two steps behind this one, and a block that named a blank
+   *  harbor id while offering the configure step would send somebody to the wrong
+   *  form. */
+  goToAgent: () => void;
   /** Everything about service virtualization, from sv.ts. Four things are read
    *  off it here -- whether the settings are finished, whether the chart is
    *  refused and why, whether a mock watch is meaningful at all, and the scheme
    *  an endpoint is probed over -- and they are one answer, so they arrive as
    *  one value. */
   sv: Sv;
-  /** The two blocks that are not a group's: an unusable service account name,
-   *  and a preview that did not render. Neither is shown here -- the field and
-   *  the preview pane say so where they are -- but both stop the buttons. */
-  saOk: boolean;
+  /** A preview that did not render, which is the one block that is neither a
+   *  group's nor a blank field's: there is no bundle to download. Not shown here
+   *  -- the preview pane says so where it is.
+   *
+   *  It had `saOk` beside it, an empty service account name, and that is gone
+   *  with the gate that read it (see `ready`): a blank required field is a
+   *  marker now, so the bundle exists and this step's job is to say what it
+   *  carries rather than to withhold it. */
   genErr: string | null;
   /** Groups in use but unfinished. They are on the configure step, which is by
    *  definition not this one, so the block names them and offers the way back
@@ -82,6 +91,12 @@ export interface BundleHandover {
    *  says of itself that it is unfinished -- which is why this is beside the
    *  button rather than in front of it. */
   blanks: string[];
+  /** The identity left empty: `harbor_id`, `ship_id`, or both. Its own list and
+   *  its own block, because the way back is step 1 rather than step 2 -- and it
+   *  is only ever non-empty in manual entry, where a bundle may deliberately be
+   *  generated before the BlazeMeter location exists. Not a reason the download
+   *  is disabled either, for the same reason `blanks` is not. */
+  idBlanks: string[];
 }
 
 /** What the next download will do about the agent's credential. */
@@ -159,11 +174,20 @@ export function DownloadPanel(p: DownloadPanelProps) {
   // prove it moved is how a move turns into a rewrite nobody diffed.
   const { facts, shipId, options, format, sv } = bundle;
   const { plan } = credential;
-  // One expression for both buttons rather than the same five terms twice. It
-  // is a judgement this panel makes and keeps: two of the five are elsewhere on
-  // screen (the service account field, the preview pane), and the other three
-  // are said right here.
-  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok && bundle.saOk;
+  // One expression for both buttons rather than the same terms twice.
+  //
+  // **A blank field is not among them, and an empty service account name was
+  // until this commit.** It blocked here on the reading that `generate()`
+  // refuses one -- true when that gate was written, and false since a blank
+  // required field became its own marker: `fill_placeholders` runs before every
+  // validator, so `service_account()` sees `<SERVICE_ACCOUNT_NAME>` and the
+  // bundle renders. What was left was a page that printed "the bundle will carry
+  // those markers instead" and then would not produce it, with the button
+  // disabled and nothing on this step saying why -- the off-screen blocker,
+  // in the one place that had kept it. Every term below is either a bundle that
+  // does not exist (no facts, no agent, a preview that did not render) or a
+  // configuration `generate()` really does raise on (sv.ok).
+  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok;
   return (
             <div className="space-y-3">
               <div className="flex gap-2 items-center">
@@ -197,6 +221,22 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   This bundle carries a placeholder AUTH_TOKEN — fill it in
                   before applying it.
                 </p>
+              )}
+              {/* The identity left empty, which is the one blank a bundle can
+                  carry and still be exactly what was asked for: a customer with
+                  no private location yet has no ids to type, and the manifests
+                  are what gets their platform team to approve one. Said here for
+                  the same reason as the block below -- this is where the zip is
+                  taken away -- and pointing at step 1, where the ids are. */}
+              {bundle.idBlanks.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="text-xs text-amber-800 grow">
+                    {placeholderWarning(bundle.idBlanks)}
+                  </p>
+                  <Button kind="ghost" onClick={bundle.goToAgent}>
+                    Agent
+                  </Button>
+                </div>
               )}
               {/* Required fields left empty. Repeated here rather than left on
                   step 2, because this is where the bundle is taken away: the

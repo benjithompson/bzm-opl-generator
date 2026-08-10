@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from bzm_opl_gen import core, server, ui_build  # noqa: E402
+from bzm_opl_gen import core, generate, server, ui_build  # noqa: E402
 from test_generate import FACTS  # noqa: E402
 # The same fakes tests/test_core.py and tests/test_cli.py drive, for the same
 # reason they share them: three surfaces call the same core functions, and a
@@ -113,6 +113,20 @@ def test_manual_facts_need_no_api_key():
     assert f["ships"][0]["id"] == "S1"
     assert f["images_source"] == "manual entry (no account access)"
     assert r.json()["gui_images_incomplete"] is False
+
+
+def test_manual_facts_need_no_ids_either():
+    """The location that does not exist yet: a customer needs the manifests to
+    get one approved, and BlazeMeter has issued neither id. Blank is the marker
+    rather than a 422 -- the page's two boxes are optional, and this route is
+    what they post to."""
+    r = client.post("/api/facts/manual", json={"func_ids": ["performance"]})
+    assert r.status_code == 200
+    f = r.json()["facts"]
+    assert f["harbor_id"] == generate.marker("harbor_id")
+    # The agent the page reads back out of this answer. It has to be the marker
+    # rather than "", or the page has no agent at all and previews nothing.
+    assert f["ships"][0]["id"] == generate.marker("ship_id")
 
 
 def test_manual_facts_flag_the_gui_image_gap():

@@ -187,6 +187,13 @@ variables, and all of them apply cleanly (measured, #230). So `helm install` is
 the only thing between those and an agent that deploys and then fails, which is
 why this list is the values rather than the names.
 
+harborId and shipId are the pair that is *not* here for that same reason, and it
+is worth saying so: they may be blank now (a bundle generated before the
+BlazeMeter location exists), and the marker then lands in the crane Deployment's
+labels and selector, which the API server refuses in the same breath as a name --
+measured, `metadata.labels: Invalid value: "<HARBOR_ID>"`. The two emptiness
+checks below still cover a chart installed by hand with no values at all.
+
 caBundle.pem is deliberately included even though `ca_bundle_slot` renders it on
 purpose: a slot is a bundle waiting for a certificate, and installing one is
 still installing an agent that trusts nothing extra. The flat manifests refuse

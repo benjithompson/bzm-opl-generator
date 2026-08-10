@@ -14,8 +14,19 @@
 // Identity only. What the location *runs* is declared once, in the Configure
 // step -- asking it here as well made one fact two questions in two
 // vocabularies (funcIds here, functionalities there).
+//
+// **None of the three is required, and the empty box says what it will become.**
+// A location that does not exist yet has no ids to read off anywhere, and the
+// manifests are routinely what a customer's platform team has to approve before
+// anybody creates one -- so a blank field is answered with its own marker rather
+// than with a refusal, which is the rule the rest of this form's fields already
+// keep (see placeholder.ts). What each box shows while it is empty is therefore
+// the marker itself and not a sample id: it is the string that ends up in the
+// bundle, so the form and the file say one thing.
 import { Field, SecretInput, TextInput } from "../components";
-import { checkId, HARBOR, IdRule, SHIP, tidy, TOKEN } from "../manualIds";
+import { blankManualIds, checkId, HARBOR, IdRule, SHIP, tidy, TOKEN }
+  from "../manualIds";
+import { marker, placeholderWarning } from "../placeholder";
 
 export function ManualSource(props: {
   harborId: string;
@@ -25,6 +36,7 @@ export function ManualSource(props: {
   onShipId: (v: string) => void;
   onAuthToken: (v: string) => void;
 }) {
+  const blanks = blankManualIds(props.harborId, props.shipId, props.authToken);
   return (
     <div className="space-y-3">
       <p className="text-xs text-slate-500">
@@ -33,33 +45,44 @@ export function ManualSource(props: {
         looked up — only the shape of each value is checked here.
       </p>
 
-      <Field label="Harbor ID (private location)" required
-        hint="HARBOR_ID — identifies the location the agent joins">
+      <Field label="Harbor ID (private location)"
+        hint="HARBOR_ID — identifies the location the agent joins. 24 hex characters">
         {/* Whitespace is removed rather than complained about: the install
             command wraps, so a copy off it arrives with a newline in the
             middle, and that is a paste artefact rather than a typo. */}
-        <TextInput mono placeholder="0a1b2c3d4e5f60718293a4b5"
+        <TextInput mono placeholder={marker(HARBOR.key)}
           value={props.harborId} onChange={(v) => props.onHarborId(tidy(v))} />
         <Complaint rule={HARBOR} value={props.harborId} />
       </Field>
 
-      <Field label="Ship ID (agent)" required
+      <Field label="Ship ID (agent)"
         hint="SHIP_ID — this agent's own identity, and part of the Deployment's selector">
-        <TextInput mono placeholder="6c5b4a39281706f5e4d3c2b1"
+        <TextInput mono placeholder={marker(SHIP.key)}
           value={props.shipId} onChange={(v) => props.onShipId(tidy(v))} />
         <Complaint rule={SHIP} value={props.shipId} />
       </Field>
 
       {/* Masked: the same field the connected path now has, and the same reason
-          -- see SecretInput. Left empty the bundle still generates, with the
-          placeholder and a banner beside the download saying so, which is why
-          this one is not marked required. */}
+          -- see SecretInput. */}
       <Field label="Auth token"
         hint="AUTH_TOKEN — goes into the Secret. Anyone holding it can register as this agent.">
-        <SecretInput placeholder="1a2b3c4d5e6f708192a3b4c5d6e7f809…"
+        <SecretInput placeholder={marker(TOKEN.key)}
           value={props.authToken} onChange={(v) => props.onAuthToken(tidy(v))} />
         <Complaint rule={TOKEN} value={props.authToken} />
       </Field>
+
+      {/* The same sentence the configure step's blank fields get, from the same
+          function: the bundle is generated, it carries the markers, and it cannot
+          be applied until they are filled in. Amber rather than red, and beside
+          the boxes rather than over the step, because nothing here is wrong --
+          this is the deliberate state for a location BlazeMeter has not issued
+          ids for yet. */}
+      {blanks.length > 0 && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2
+                      text-xs text-amber-800">
+          {placeholderWarning(blanks)}
+        </p>
+      )}
     </div>
   );
 }

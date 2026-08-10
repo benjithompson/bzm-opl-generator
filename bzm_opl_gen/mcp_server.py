@@ -107,6 +107,14 @@ customer whose account you cannot reach. It cannot know which browser image a
 GUI location uses -- only the account names the pinned build -- and says so
 rather than guessing.
 
+Facts without a location either: both ids are optional there. A customer whose
+private location does not exist yet has no id to read off, and the manifests are
+often what their platform team has to approve first -- so the bundle carries
+<HARBOR_ID> and <SHIP_ID> where the ids belong, the README names them, and the
+cluster refuses to apply it (a marker is not a legal label value). Report that
+plainly: it is a bundle for review, and it becomes deployable when the location
+and the agent exist and their ids are filled in.
+
 Preflight without a cluster: `opl_preflight doctor` reads a cluster *evidence*
 file, which the customer collects and sends. It never runs kubectl here. If
 you have not got one, say so -- do not report a preflight you did not run.
@@ -572,8 +580,12 @@ DESCRIPTIONS["opl_facts"] = (
     "ids, and which functionalities the location is enabled for.\n"
     "  gather -- read them from the account {harbor_id}\n"
     "  manual -- build the same structure from ids read off the "
-    "BlazeMeter UI {harbor_id, ship_id, func_ids?}, for a customer "
-    "whose account you cannot reach\n"
+    "BlazeMeter UI {harbor_id?, ship_id?, func_ids?}, for a customer "
+    "whose account you cannot reach. Both ids are optional: leave one out "
+    "and the bundle carries <HARBOR_ID>/<SHIP_ID> where it belongs and names "
+    "the field, which is the answer for a location BlazeMeter has not issued "
+    "ids for yet. Supply them when the customer has them -- a marked bundle "
+    "cannot be applied\n"
     "func_ids decide which images the bundle carries, so `manual` needs the "
     f"ones the location really runs -- {', '.join(core.covered_func_ids())} "
     "are the ones this tool configures for, and the default is performance.\n"
@@ -585,9 +597,13 @@ def _facts(action, args):
         harbor_id, = _need(args, "harbor_id")
         facts = core.gather_facts(_client(args), harbor_id)
     elif action == "manual":
-        harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
+        # Neither id is _need'ed: a bundle is routinely wanted before the
+        # location exists, and refusing here would leave this server the one
+        # surface that cannot produce what the page and the CLI both can. What
+        # is missing is not silent -- it rides into the bundle as a marker and
+        # is named in `warnings` below.
         facts = core.manual_facts(
-            harbor_id, ship_id,
+            args.get("harbor_id"), args.get("ship_id"),
             func_ids=args.get("func_ids") or ["performance"])["facts"]
     else:
         raise _unknown(action, FACTS_ACTIONS)
@@ -620,6 +636,21 @@ def _facts_warnings(facts):
             "browser image. The account names the pinned build a location uses "
             "-- gather facts with an API key rather than by hand, or expect the "
             "browser engines to fail to pull.")
+    # An id nobody supplied. Named here rather than left to the bundle's README,
+    # because this server's caller is a session in somebody's directory: the
+    # facts object goes straight on to opl_bundle, and a warning at the step that
+    # made it is the one that arrives before the bundle is handed over.
+    blank = [k for k, v in (("harbor_id", facts.get("harbor_id")),
+                            ("ship_id", core.sole_ship_id(facts)))
+             if gen_mod.is_placeholder(v)]
+    if blank:
+        out.append(
+            f"{' and '.join(blank)} was not supplied, so every bundle generated "
+            f"from these facts carries "
+            f"{' and '.join(gen_mod.marker(k) for k in blank)} instead. The "
+            f"cluster refuses it -- a marker is not a legal label value -- so "
+            f"this bundle is for review, and the ids have to be filled in (or "
+            f"the facts re-made) before it is applied.")
     return out
 
 

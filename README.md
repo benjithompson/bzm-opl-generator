@@ -173,6 +173,17 @@ account names one of 60+ pinned repos and nothing here can guess which — and
 `doctor` has no concurrency numbers. With a key none of that applies, and it
 needs no deployed agent: `facts` reads the location's own image list.
 
+**...and without the private location either.** Leave `--harbor-id`,
+`--ship-id` or `--auth-token` out and the bundle carries `<HARBOR_ID>`,
+`<SHIP_ID>` and `<AUTH_TOKEN>` where each value belongs, names the fields in its
+README, and cannot be applied: a marker is not a legal Kubernetes label value, so
+the cluster refuses the agent's Deployment and says which field it is. That is
+the answer for a customer whose location does not exist yet — the manifests are
+often what their platform team has to approve *before* anybody creates one. Fill
+the three values in, or re-generate with them set, once BlazeMeter has issued
+them. In the web UI the same thing holds: the boxes on step 1 are optional and
+each empty box shows the marker it will become.
+
 The cluster has the same answer — someone with access runs the read-only
 [scripts/bzm-cluster-evidence.sh](scripts/bzm-cluster-evidence.sh), and you
 preflight from the file:

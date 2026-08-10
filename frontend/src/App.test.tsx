@@ -41,6 +41,9 @@ import {
 // second declaration of the shape, and one that starts passing for the wrong
 // reason the first time the version is bumped -- see session.VERSION.
 import * as session from "./session";
+// The marker rule, from the page's own copy of it: a fake that spelled
+// "<SHIP_ID>" out by hand would stop agreeing with the generator silently.
+import { marker } from "./placeholder";
 import { EMPTY_PLAN_INPUTS } from "./usePlan";
 // The sizings a fresh page offers: one per served model, so they are built from
 // the same fixture the page's own /api/sizing-models stub answers with.
@@ -1077,6 +1080,52 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     // download reporting that the download was uneventful is what teaches
     // people not to read the line. The rotated branch is asserted below.
     expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
+  });
+
+test("a blank namespace and service account still download, carrying their markers",
+  async () => {
+    // The bug this is here for: the step printed "namespace (<NAMESPACE>) and
+    // service_account_name (<SERVICE_ACCOUNT_NAME>) are empty, so the bundle will
+    // carry those markers instead" and then disabled the button, because `ready`
+    // still required a non-empty service account name. That gate was written when
+    // `generate()` refused an empty one; a blank required field became its own
+    // marker, and nothing revisited the gate -- so the page contradicted itself
+    // and the reason was on no step.
+    //
+    // Driven through the form rather than from an options literal: what broke was
+    // the state a person reaches by clearing two boxes.
+    const sent: Sent[] = [];
+    render(<App api={perfAccount(transfers(sent))} />);
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    // The suggestion has to have landed before the boxes are cleared: picking a
+    // location suggests its functionality's namespace, and a clear that races it
+    // is undone by the suggestion rather than by the bug under test.
+    const ns = await screen.findByPlaceholderText<HTMLInputElement>(/e\.g\. blazemeter/);
+    await waitFor(() => expect(ns.value).toBe("blazemeter"));
+    for (const box of [/e\.g\. blazemeter/, /e\.g\. crane/]) {
+      fireEvent.change(screen.getByPlaceholderText(box),
+                       { target: { value: "" } });
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+
+    // ...and what it sends is the marked bundle, not a bundle with two empty
+    // strings in it: an empty service account name resolves to the namespace's
+    // `default` on a cluster, which is the failure the marker exists to stop.
+    await waitFor(() => expect(sent.length).toBe(1));
+    expect(sent[0].options).toMatchObject({
+      namespace: marker("namespace"),
+      service_account_name: marker("service_account_name"),
+    });
+    // The sentence stays on screen beside the button that just worked. It is the
+    // half that has to be true for allowing the download to be safe.
+    expect(screen.getByText(/are empty, so the bundle will carry/).textContent)
+      .toMatch(/namespace \(<NAMESPACE>\)/);
   });
 
 test("the scheduling radio prescribes a dedicated engine pool, and the choice reaches the bundle",
@@ -2273,8 +2322,17 @@ function manualPage(asked: string[][], generated: Options[] = [],
     manualFacts: async (b) => {
       asked.push(b.func_ids);
       return {
-        facts: { harbor_id: b.harbor_id, func_ids: b.func_ids,
-                 ships: [{ id: b.ship_id, name: "agent-1" }], images: [] },
+        // The marker for an id nobody typed, which is what `facts.manual` does
+        // on the server: neither id is required, and the *facts* are where a
+        // blank one becomes `<HARBOR_ID>` / `<SHIP_ID>`. Mirrored here rather
+        // than left as "" because the page reads its agent out of this answer,
+        // and a fake that returned the blank back would have the page behave as
+        // though there were no agent at all -- which is the one thing the real
+        // server never says here.
+        facts: { harbor_id: b.harbor_id || marker("harbor_id"),
+                 func_ids: b.func_ids,
+                 ships: [{ id: b.ship_id || marker("ship_id"),
+                           name: "agent-1" }], images: [] },
         gui_images_incomplete: false,
       };
     },
@@ -2292,6 +2350,53 @@ async function declareManually() {
                    { target: { value: TYPED.ship } });
   fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
 }
+
+// -- ...and the identity nobody has yet --------------------------------------
+// The case: a customer whose private location has not been created, who needs
+// the manifests to get one approved. Both ids used to stop the page -- there is
+// nothing to generate for, on the reading that an id is always available to
+// whoever is asking -- and BlazeMeter has not issued either until somebody
+// creates the location, so the bundle carries the markers and says so.
+
+test("manual entry generates for a location that does not exist yet",
+  async () => {
+    const generated: Options[] = [];
+    render(<App api={manualPage([], generated)} />);
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+
+    // Nothing typed at all, and the bundle is still generated -- for the agent
+    // the marker stands in for. Asserted on the request rather than on the tick
+    // beside the step: what matters is that a bundle was asked for, and for
+    // which identity.
+    await waitFor(() => expect(generated.length).toBeGreaterThan(0));
+    expect(generated[generated.length - 1].ship_id).toBe(marker("ship_id"));
+
+    // ...and the form says which fields the bundle will carry a marker for, in
+    // the sentence the configure step's blank fields already get. All three,
+    // here: somebody looking at three empty boxes is owed one answer about
+    // them.
+    const warning = await screen.findByText(/are empty, so the bundle will carry/);
+    expect(warning.textContent).toMatch(/harbor_id \(<HARBOR_ID>\)/);
+    expect(warning.textContent).toMatch(/ship_id \(<SHIP_ID>\)/);
+    expect(warning.textContent).toMatch(/auth_token \(<AUTH_TOKEN>\)/);
+  });
+
+test("the empty identity boxes show the marker the bundle will carry",
+  async () => {
+    // The hint in an empty box is the string that ends up in the file, not a
+    // sample id. A sample was what they showed, which reads as an example of
+    // what to type -- true, and silent about what happens if nothing is typed.
+    render(<App api={manualPage([])} />);
+    fireEvent.click(await screen.findByRole(
+      "radio", { name: /Enter values manually/ }));
+    expect(screen.getByLabelText(/^Harbor ID/)
+      .getAttribute("placeholder")).toBe(marker("harbor_id"));
+    expect(screen.getByLabelText(/^Ship ID/)
+      .getAttribute("placeholder")).toBe(marker("ship_id"));
+    expect(screen.getByLabelText(/^Auth token/)
+      .getAttribute("placeholder")).toBe(marker("auth_token"));
+  });
 
 test("declaring a functionality in manual entry suggests its namespace",
   async () => {

@@ -143,17 +143,23 @@ def cmd_facts(a):
     three values BlazeMeter shows on the agent, for a customer whose account
     nobody here can reach."""
     if a.manual:
-        if not a.ship_id:
-            sys.exit("--manual needs --ship-id: it is what identifies this agent "
-                     "to BlazeMeter, and the API is not there to look it up")
+        # Neither id is required, and that is the same rule the form on the page
+        # keeps: a bundle is routinely wanted before the BlazeMeter location
+        # exists, and an id nobody can read off yet is a blank field like any
+        # other. facts.manual carries the marker for whichever is missing, and
+        # the note below names them.
+        #
         # facts.manual, not core.manual_facts: it reaches nothing, so there is
         # no refusal for core to carry, and its wrapper's second field is the
         # gui note this command already prints for both branches at once.
         f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
     else:
         if not a.api_key:
-            sys.exit("facts needs --api-key, or --manual --ship-id to build them "
-                     "from values you already have")
+            sys.exit("facts needs --api-key, or --manual to build them from "
+                     "values you already have")
+        if not a.harbor_id:
+            sys.exit("facts needs --harbor-id: it is the location to read. "
+                     "--manual takes it too, and takes it blank")
         f = core.gather_facts(_client(a), a.harbor_id)
     facts_mod.save(f, a.output)
     # Manual facts carry no location name -- nothing knows it -- so fall back to
@@ -176,6 +182,24 @@ def cmd_facts(a):
               "for you. The account names it, so gather facts with an API key; "
               "otherwise add the key to IMAGE_OVERRIDES by hand. Fine as it is "
               "against the public registry, not against a private one.",
+              file=sys.stderr)
+    # An id nobody supplied, named here as well as in the bundle's README: this
+    # command's own output is what a reader has in front of them, and a facts
+    # file that says `<HARBOR_ID>` where an id belongs is worth one line rather
+    # than a discovery three steps later.
+    #
+    # `core.sole_ship_id` rather than the first ship: an agent is never taken by
+    # position here (see the test that reads this file), and its None covers both
+    # states that are not an id nobody supplied -- a real location with no agent
+    # yet, and one with several, neither of which has a blank to report.
+    blank = [f"{k} ({gen_mod.marker(k)})" for k, v in
+             (("harbor_id", f["harbor_id"]),
+              ("ship_id", core.sole_ship_id(f))) if gen_mod.is_placeholder(v)]
+    if blank:
+        print(f"note: {' and '.join(blank)} left blank, so every bundle "
+              f"generated from this file carries the marker instead. The "
+              f"cluster refuses it -- a marker is not a legal label value -- so "
+              f"fill it in, or re-gather once the location exists.",
               file=sys.stderr)
 
 
@@ -911,12 +935,19 @@ def main():
 
     f = sub.add_parser("facts", help="gather account facts -> facts.json")
     f.add_argument("--api-key")
-    f.add_argument("--harbor-id", required=True)
+    # Not required by argparse any more, because --manual takes it blank: the
+    # gather branch checks for it and says so (cmd_facts), which is one message
+    # about which branch you are on rather than argparse refusing both.
+    f.add_argument("--harbor-id")
     f.add_argument("--manual", action="store_true",
-                   help="build facts from --harbor-id + --ship-id without an API "
-                        "key, for a location whose account you cannot reach. "
-                        "Images come from the built-in catalogue")
-    f.add_argument("--ship-id", dest="ship_id", help="required with --manual")
+                   help="build facts from the ids BlazeMeter shows you, without "
+                        "an API key, for a location whose account you cannot "
+                        "reach. Both ids are optional. Images come from the "
+                        "built-in catalogue")
+    f.add_argument("--ship-id", dest="ship_id",
+                   help="the agent, with --manual. Leave either id out and the "
+                        "bundle carries <HARBOR_ID>/<SHIP_ID> and names them -- "
+                        "for a location BlazeMeter has not issued ids for yet")
     f.add_argument("--func-ids", dest="func_ids", nargs="+", default=["performance"],
                    help="with --manual: the location's functionalities, which "
                         "decide "

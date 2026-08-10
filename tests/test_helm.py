@@ -142,6 +142,67 @@ def test_unfetched_token_is_left_empty_not_placeholdered():
     assert "not finished" not in plain["README.md"]
 
 
+def test_the_not_finished_block_says_the_token_is_missing_too():
+    """The count above it is what a reader treats as the whole of what is
+    outstanding, and for a chart the token is not in it: `authToken` is left
+    empty rather than marked, so it is in no row and carries no marker. A bundle
+    with four blank fields therefore said `4 fields were left blank` over a file
+    that also needs a credential -- five values to supply, four of them listed.
+
+    The install command has always named it. That is under the next heading, and
+    this block is where somebody is told what the bundle still needs.
+    """
+    # The bundle as reported: a location that does not exist yet, generated as a
+    # chart with the two core fields cleared as well. Four markers, five values
+    # to supply.
+    from bzm_opl_gen import facts as facts_mod
+    files = gen.generate(facts_mod.manual("", ""),
+                         {**BASE, "ship_id": "", "namespace": "",
+                          "service_account_name": "", "auth_token": ""})
+    readme = files["README.md"]
+    # Unwrapped before matching: the block is `textwrap.fill`ed and quoted, so
+    # every sentence in it is broken across lines at a width that moves with the
+    # wording. Asserting on the rendered line breaks would be asserting on the
+    # wrap.
+    said = " ".join(readme.replace("\n> ", " ").split())
+    assert "4 fields were left blank" in said
+    assert "AUTH_TOKEN is not among them and not in this bundle at all" in said
+    assert "`--set-string authToken=...` in the Deploy command below" in said
+    # Said, not listed: a fifth row would have to invent a marker for it, and
+    # nothing in the bundle carries `<AUTH_TOKEN>` -- which the values file is
+    # the authority on.
+    assert "| `auth_token` |" not in readme
+    assert not gen.MARKER_RE.search(files[gen.HELM_VALUES_FILE].replace(
+        gen.marker("harbor_id"), "").replace(gen.marker("ship_id"), "")
+        .replace(gen.marker("namespace"), "")
+        .replace(gen.marker("service_account_name"), ""))
+
+
+def test_a_supplied_token_is_not_reported_as_missing():
+    """The other half, and the reason the sentence is conditional: a chart
+    generated with `--auth-token` embeds the credential, so there is nothing to
+    say about install time -- and a bundle saying so anyway would send somebody
+    to add a `--set-string` that overrides the value they asked for."""
+    files = gen.generate(FACTS, {**BASE, "namespace": "",
+                                 "auth_token": "de" * 32})
+    readme = files["README.md"]
+    assert "not finished" in readme                 # the namespace still is
+    assert "AUTH_TOKEN is not among them" not in readme
+    assert "--set-string authToken" not in readme
+
+
+def test_only_an_absent_token_still_earns_no_banner():
+    """Unchanged, and the rule the sentence above had to be written around: a
+    chart generated exactly the way its own README asks -- every field filled,
+    the token left for install time -- is finished. A `this bundle is not
+    finished` banner on it would be the false alarm REQUIRED_TEXT exempts it to
+    avoid, and the new sentence rides on a block that exists for another field
+    rather than creating one."""
+    files = gen.generate(FACTS, {**BASE, "auth_token": ""})
+    assert "not finished" not in files["README.md"]
+    assert "--set-string authToken" in files["README.md"]
+
+
 def test_private_registry_carries_the_derived_image_map():
     v, _ = _values(private_registry="reg.io/bzm")
     assert v["privateRegistry"] == "reg.io/bzm"
