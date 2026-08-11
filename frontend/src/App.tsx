@@ -2,7 +2,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "re
 import {
   Api, Account, AgentEnvVar, AgentStatus, BuildState, Capacity, Facts,
   Functionality,
-  GeneratedFile, ManualFactsOut, TokenReport,
+  GeneratedFile, ManualFactsOut, PlaceholderSource, TokenReport,
   FuncIdVocabulary, Location, Options, Ship, SvCheckOut,
   SizingModel, SlotMinimum, SvConstants, SvMocksOut, Workspace,
 } from "./api";
@@ -31,7 +31,7 @@ import {
 } from "./optionGroups";
 // Required fields nobody filled in: what they resolve to on the way out, and
 // the one list the two panels warn from.
-import { blankRequired, withPlaceholders } from "./placeholder";
+import { blankRequired, gaps, withPlaceholders } from "./placeholder";
 // What the bundle is, and which options that leaves reaching something. The
 // table of what a docker bundle drops is the generator's and is fetched, never
 // restated here.
@@ -214,6 +214,15 @@ export default function App({ api }: { api: Api }) {
   // falls back to naming a variable by hand, which is a field too many rather
   // than an option nobody can reach.
   const [agentEnv, setAgentEnv] = useState<AgentEnvVar[]>([]);
+  // ...and where the value for each marked field comes from, which the download
+  // step's list prints under each row. `null` rather than `{}` here, and it is
+  // the difference between the tables above and this one: they are *consulted*,
+  // so an empty one honestly means "nothing is refused yet", while this one is
+  // *displayed*, and a row with no sentence has to be a row whose sentence
+  // nobody read rather than one the generator declined to give. Nothing waits
+  // for it -- a row is complete without it.
+  const [placeholderSources, setPlaceholderSources] =
+    useState<Record<string, PlaceholderSource> | null>(null);
   const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
   // The functionalities in play, and the vocabulary they are chosen from.
   //
@@ -458,6 +467,10 @@ export default function App({ api }: { api: Api }) {
     // the format hides. That looked like four generator defects once (#224).
     api.build?.().then(setBuild).catch(() => {});
     api.reservedEnv().then(setReservedEnv).catch(() => {});
+    // Left null on a refusal, which is what the state means: the download
+    // step's rows print the field and its marker either way, and the sentence
+    // is simply not there.
+    api.placeholders().then(setPlaceholderSources).catch(() => {});
     api.slotMinimums().then(setSlotMinimums).catch(() => {});
     api.funcIdVocabulary().then(setFuncIds).catch(() => {});
     api.functionalities().then(setFunctionalities).catch(() => {});
@@ -1420,6 +1433,14 @@ export default function App({ api }: { api: Api }) {
   // does not re-POST for a bundle that did not change.
   const sentOptions = useMemo(
     () => withPlaceholders(options, blanks), [options, blanks]);
+  // ...and the three lists joined, which is what the download step shows: one
+  // row per field the bundle carries a marker for, in the order somebody would
+  // fill them in. Joined here rather than in the panel because all three parts
+  // are this file's state, and a panel that reassembled them would be a second
+  // place for them to disagree.
+  const downloadGaps = useMemo(
+    () => gaps(idBlanks, blanks, tokenPlan.incomplete, placeholderSources),
+    [idBlanks, blanks, tokenPlan.incomplete, placeholderSources]);
 
   // debounced live preview
   useEffect(() => {
@@ -1860,8 +1881,8 @@ export default function App({ api }: { api: Api }) {
                 // `sentOptions`, not `options`: the zip this panel downloads has
                 // to be the bundle the preview showed, markers included.
                 facts, shipId, options: sentOptions, format,
-                sv, genErr, blanks, idBlanks,
-                unfinished: incomplete, goToConfigure: () => setStep(1),
+                sv, genErr, gaps: downloadGaps,
+                goToConfigure: () => setStep(1),
                 goToAgent: () => setStep(0),
               }}
               credential={{ plan: tokenPlan }}

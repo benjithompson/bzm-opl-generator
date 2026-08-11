@@ -48,9 +48,22 @@ export interface DownloadPlan {
   request: TokenRequest;
   /** Beside the button: what the bundle will carry. */
   hint: string;
-  /** The bundle cannot be applied as it stands, so say so over the button
-   *  rather than in a README nobody opens after the download. */
-  incomplete: boolean;
+  /** Whether the bundle leaves the AUTH_TOKEN as a marker -- and the third
+   *  answer is what the field is for.
+   *
+   *  It was a boolean, defaulting to true before the first preview landed, on
+   *  the reading that claiming a token the bundle may not carry is the worse
+   *  mistake. That is right about the *hint*, which says what the bundle
+   *  carries and has to say something. It is wrong about a row in a list of
+   *  fields left blank: `report` is null for the moment before the preview
+   *  answers, so every bundle grew an AUTH_TOKEN row on arrival and lost it a
+   *  moment later -- unread rendering as a gap, which is this codebase's oldest
+   *  rule in the one place a boolean could not express it.
+   *
+   *  `"unread"` is a string for `ui_build.UNRECORDED`'s reason: `=== true` and
+   *  `=== false` both miss it, so a caller that folds it into either has to say
+   *  so. The panel drops the row; the hint keeps the cautious sentence. */
+  incomplete: boolean | "unread";
 }
 
 const CARRIES: Record<TokenBranch, string> = {
@@ -67,9 +80,14 @@ const CARRIES: Record<TokenBranch, string> = {
 
 /** What the next download will do, from the preview's own report.
  *
- *  `report` is null only before the first preview lands, and reads as the
- *  placeholder: a bundle claimed to carry a token it may not have is the
- *  failure worth avoiding.
+ *  `report` is null only before the first preview lands, and the two fields
+ *  answer that differently on purpose. The **hint** reads it as the
+ *  placeholder: it is one line beside the button and it has to say something,
+ *  and a bundle claimed to carry a token it may not have is the failure worth
+ *  avoiding. `incomplete` answers `"unread"`, because a *row* naming a field
+ *  left blank is a claim about the bundle rather than a caution about it, and
+ *  making that claim before anything has been read is the failure worth
+ *  avoiding there.
  *
  *  Every branch sends the same request now. That is not the same as sending
  *  nothing -- `given` and `placeholder` are still distinct answers about what this
@@ -79,7 +97,7 @@ const CARRIES: Record<TokenBranch, string> = {
 export function downloadPlan(report: TokenReport | null): DownloadPlan {
   const branch = report?.branch ?? "placeholder";
   return { request: { rotate_token: false }, hint: CARRIES[branch],
-           incomplete: branch === "placeholder" };
+           incomplete: report ? branch === "placeholder" : "unread" };
 }
 
 

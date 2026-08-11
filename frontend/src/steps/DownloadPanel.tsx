@@ -30,13 +30,13 @@
 // credential is credential.plan.request, taken whole: this file has no say in
 // it, which is what stopped the two buttons disagreeing (#104) back when there
 // were two.
+import { useState } from "react";
 import {
   Api, AgentStatus, Facts, Options, SvCheckOut, SvMocksOut,
 } from "../api";
 import { Attempt, NO_ATTEMPT, downloadFailed, downloaded } from "../attempt";
-import { Button, ErrorMsg, Switch } from "../components";
-import { OptionGroup } from "../optionGroups";
-import { placeholderWarning } from "../placeholder";
+import { Button, ErrorMsg, SubSection, Switch } from "../components";
+import { Gap, gapSummary } from "../placeholder";
 import { DownloadPlan } from "../token";
 // Service virtualization as one record: whether this bundle can be a chart,
 // whether its settings are finished, how a published endpoint is probed. It
@@ -82,21 +82,17 @@ export interface BundleHandover {
    *  marker now, so the bundle exists and this step's job is to say what it
    *  carries rather than to withhold it. */
   genErr: string | null;
-  /** Groups in use but unfinished. They are on the configure step, which is by
-   *  definition not this one, so the block names them and offers the way back
-   *  rather than pointing at a form nobody can see. */
-  unfinished: OptionGroup[];
-  /** Required fields left empty, so the bundle carries `<KEY>` for each of
-   *  them. Never a reason the download is disabled -- the bundle is real and
-   *  says of itself that it is unfinished -- which is why this is beside the
-   *  button rather than in front of it. */
-  blanks: string[];
-  /** The identity left empty: `harbor_id`, `ship_id`, or both. Its own list and
-   *  its own block, because the way back is step 1 rather than step 2 -- and it
-   *  is only ever non-empty in manual entry, where a bundle may deliberately be
-   *  generated before the BlazeMeter location exists. Not a reason the download
-   *  is disabled either, for the same reason `blanks` is not. */
-  idBlanks: string[];
+  /** Every field this bundle carries a marker for, assembled in App by
+   *  `placeholder.gaps` -- the identity, the credential and the blank options
+   *  in one list, in the order somebody would fill them in.
+   *
+   *  One list, and it was four blocks: the token had a line, the identity had a
+   *  card, the option blanks had a card and each unfinished group had another,
+   *  all four in amber, stacked over a button that worked. Never a reason the
+   *  download is disabled -- the bundle is real and says of itself that it is
+   *  unfinished -- which is why this is beside the button rather than in front
+   *  of it, and why the panel is folded shut. */
+  gaps: Gap[];
 }
 
 /** What the next download will do about the agent's credential. */
@@ -167,8 +163,43 @@ const BUNDLE_HOLDS: Record<string, string> = {
   docker: "bzm-opl-agent.sh + compose.yaml + bzm-opl-agent.env + README",
 };
 
+/** One field left blank, with the way back to the form that fills it in.
+ *
+ *  The marker leads, because it is the half that is useful away from this page:
+ *  it is the string somebody greps a handed-on bundle for. The option key sits
+ *  beside it in the page's own vocabulary, and the sentence under both is the
+ *  generator's -- served, never restated here, and simply absent where it has
+ *  not been read (see `Gap.source`). A row with no sentence still says the two
+ *  true things. */
+function GapRow({ gap, goToAgent, goToConfigure }: {
+  gap: Gap; goToAgent: () => void; goToConfigure: () => void;
+}) {
+  return (
+    <li className="flex items-start gap-2">
+      <div className="grow min-w-0">
+        <p className="text-xs">
+          <span className="font-mono font-semibold text-slate-700">
+            {gap.marker}
+          </span>
+          <span className="text-slate-400"> · {gap.key}</span>
+        </p>
+        {gap.source && (
+          <p className="text-[11px] text-slate-500 mt-0.5">{gap.source}</p>
+        )}
+      </div>
+      <Button kind="ghost"
+        onClick={gap.step === 1 ? goToAgent : goToConfigure}>
+        {gap.step === 1 ? "Agent" : "Configure"}
+      </Button>
+    </li>
+  );
+}
+
 export function DownloadPanel(p: DownloadPanelProps) {
   const { api, bundle, credential, attempt, report, watch } = p;
+  // Whether the list is open. Local, like every other fold on this page: it is
+  // a fact about this view rather than about the bundle.
+  const [gapsOpen, setGapsOpen] = useState(false);
   // The names the markup below already used, for the values it reads most: the
   // markup is the markup that was in App, and rewriting every reference to
   // prove it moved is how a move turns into a rewrite nobody diffed.
@@ -177,17 +208,31 @@ export function DownloadPanel(p: DownloadPanelProps) {
   // One expression for both buttons rather than the same terms twice.
   //
   // **A blank field is not among them, and an empty service account name was
-  // until this commit.** It blocked here on the reading that `generate()`
-  // refuses one -- true when that gate was written, and false since a blank
-  // required field became its own marker: `fill_placeholders` runs before every
-  // validator, so `service_account()` sees `<SERVICE_ACCOUNT_NAME>` and the
-  // bundle renders. What was left was a page that printed "the bundle will carry
-  // those markers instead" and then would not produce it, with the button
-  // disabled and nothing on this step saying why -- the off-screen blocker,
-  // in the one place that had kept it. Every term below is either a bundle that
-  // does not exist (no facts, no agent, a preview that did not render) or a
-  // configuration `generate()` really does raise on (sv.ok).
-  const ready = !!facts && !!shipId && !bundle.genErr && sv.ok;
+  // until #245.** It blocked here on the reading that `generate()` refuses one
+  // -- true when that gate was written, and false since a blank required field
+  // became its own marker: `fill_placeholders` runs before every validator, so
+  // `service_account()` sees `<SERVICE_ACCOUNT_NAME>` and the bundle renders.
+  // What was left was a page that printed "the bundle will carry those markers
+  // instead" and then would not produce it, with the button disabled and
+  // nothing on this step saying why -- the off-screen blocker, in the one place
+  // that had kept it.
+  //
+  // **`sv.ok` was the last of them, and it went the same way.** It read
+  // `svIncomplete`, which is true on a blank `sv_subdomain` or `sv_tls_secret`
+  // -- and those are the sv group's own `requires`, so they are in `gaps` too:
+  // the panel listed them as markers the bundle carries while the button beside
+  // it refused to produce that bundle. Measured rather than reasoned, because
+  // the comment above `REQUIRED_TEXT` said the opposite: `generate()` renders
+  // both, emitting `<SV_SUBDOMAIN>` and `<SV_TLS_SECRET>` into the ConfigMap,
+  // and `_sv_cfg`'s refusal cannot fire after `fill_placeholders` has run.
+  //
+  // The two arms of `svIncomplete` that *are* real failures -- no ingress
+  // chosen on a mockServices location, and a NodePort the backend cannot
+  // publish over -- are refused by `generate()` itself, so they arrive here as
+  // `genErr` from the preview, in red, carrying BlazeMeter-grade sentences this
+  // page could not improve on. So every term left is a bundle that does not
+  // exist: no facts, no agent, or a preview that did not render.
+  const ready = !!facts && !!shipId && !bundle.genErr;
   return (
             <div className="space-y-3">
               <div className="flex gap-2 items-center">
@@ -207,69 +252,61 @@ export function DownloadPanel(p: DownloadPanelProps) {
                   {" "}{plan.hint}
                 </span>
               </div>
-              {/* The bundle cannot be applied as it stands, said over the
-                  button rather than in a README nobody opens afterwards.
-                  One line, and it is the whole message. Core's own paragraph
-                  used to sit under it -- four ways to come by a token and a
-                  kubectl command to read one back out of a running cluster --
-                  which is a page of recovery instructions answering a question
-                  nobody has asked yet. Where the token comes from is step 1's;
-                  this says only that this bundle has not got one. */}
-              {plan.incomplete && (
-                <p className="rounded-md border border-amber-200 bg-amber-50
-                              px-3 py-2 text-xs font-semibold text-amber-800">
-                  This bundle carries a placeholder AUTH_TOKEN — fill it in
-                  before applying it.
+              {/* What the bundle carries a marker for, folded shut.
+
+                  This was four amber cards -- the token's line, the identity's,
+                  the option blanks' and one per unfinished group -- stacked
+                  over a button that worked perfectly well, which is how a
+                  bundle that generates came to read as four errors. One
+                  section, one row per field, and the same fold the configure
+                  step's own sections use.
+
+                  **Not amber, and that is deliberate.** A marker is the bundle
+                  saying which box was left empty; it is expected, it is
+                  actionable at leisure, and every one of them is the same kind
+                  of thing. Amber over the whole panel said "something is wrong
+                  here" about the ordinary case of generating a bundle before
+                  the location exists.
+
+                  **Collapsible only when there is something behind it.** The
+                  finished state is the header alone with its tick: a chevron
+                  over an empty body is a control promising something that is
+                  not there.
+
+                  The unfinished-group card is gone from this step with the
+                  rest. Two of its three arms are already rows here -- a group's
+                  `requires` is what `blankRequired` walks -- and the third is a
+                  configuration `generate()` refuses, which arrives as the
+                  `ErrorMsg` below. `incompleteGroups` still says so on the
+                  configure step, where the row it names is on screen. */}
+              {bundle.gaps.length === 0 ? (
+                /* The finished state is the bar and nothing else. Deliberately
+                   not a `SubSection` with an empty body: given no `open`/
+                   `onToggle` that component is permanently *open*, so it drew
+                   its padded body under the header as a blank strip -- a panel
+                   claiming to hold something. Given them instead it would be a
+                   chevron over nothing, which is the same claim with a control
+                   on it. Built to the header's own measurements so the two
+                   states sit in the same place as the list appears and goes. */
+                <p className="flex items-center gap-2 rounded-lg border
+                              border-slate-200 bg-slate-50 px-3 py-2.5 text-sm
+                              font-semibold text-slate-800">
+                  <span className="text-xs text-emerald-600">✓</span>
+                  Nothing left to fill in
                 </p>
+              ) : (
+                <SubSection title="Placeholders"
+                  summary={`to update — ${gapSummary(bundle.gaps)}`}
+                  open={gapsOpen} onToggle={() => setGapsOpen((v) => !v)}>
+                  <ul className="space-y-2.5">
+                    {bundle.gaps.map((g) => (
+                      <GapRow key={g.key} gap={g}
+                        goToAgent={bundle.goToAgent}
+                        goToConfigure={bundle.goToConfigure} />
+                    ))}
+                  </ul>
+                </SubSection>
               )}
-              {/* The identity left empty, which is the one blank a bundle can
-                  carry and still be exactly what was asked for: a customer with
-                  no private location yet has no ids to type, and the manifests
-                  are what gets their platform team to approve one. Said here for
-                  the same reason as the block below -- this is where the zip is
-                  taken away -- and pointing at step 1, where the ids are. */}
-              {bundle.idBlanks.length > 0 && (
-                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs text-amber-800 grow">
-                    {placeholderWarning(bundle.idBlanks)}
-                  </p>
-                  <Button kind="ghost" onClick={bundle.goToAgent}>
-                    Agent
-                  </Button>
-                </div>
-              )}
-              {/* Required fields left empty. Repeated here rather than left on
-                  step 2, because this is where the bundle is taken away: the
-                  zip really does download, and what it carries has to be said
-                  beside the button that produces it. The token above has its
-                  own line and is not repeated here -- it is the one blank field
-                  with a source this page can offer. */}
-              {bundle.blanks.length > 0 && (
-                <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs text-amber-800 grow">
-                    {placeholderWarning(bundle.blanks)}
-                  </p>
-                  <Button kind="ghost" onClick={bundle.goToConfigure}>
-                    Configure
-                  </Button>
-                </div>
-              )}
-              {/* Why the button is disabled, when the reason is a step back.
-                  A disabled button whose cause is elsewhere is the failure this
-                  is here to remove, so it names the group and offers the way
-                  to it. */}
-              {bundle.unfinished.map((g) => (
-                <div key={g.id}
-                  className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                  <p className="text-xs text-amber-800 grow">
-                    <b>{g.title}</b> is not finished:{" "}
-                    {g.requiredHint ?? g.hint}.
-                  </p>
-                  <Button kind="ghost" onClick={bundle.goToConfigure}>
-                    Configure
-                  </Button>
-                </div>
-              ))}
               <ErrorMsg msg={attempt.downloadError} />
 
               <div className="border-t border-slate-100 pt-3">

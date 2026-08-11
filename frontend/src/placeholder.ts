@@ -25,7 +25,7 @@
  *  anyway is harmless and deliberate -- it is the same value -- and it is what
  *  lets `blankRequired` be the one list the warnings are written from.
  */
-import { Options } from "./api";
+import { Options, PlaceholderSource } from "./api";
 import { Applies } from "./formats";
 import { GroupId, OPTION_GROUPS, serviceAccountOk } from "./optionGroups";
 
@@ -123,4 +123,82 @@ export function placeholderWarning(blanks: string[]): string {
     ? "that marker" : "those markers"} instead. It cannot be applied until `
     + `${blanks.length === 1 ? "it is" : "they are"} filled in — here, or in `
     + `the files afterwards.`;
+}
+
+// -- the download step's list -------------------------------------------------
+// The step above says this per form; the download step says it once, over the
+// whole bundle, as one row per field. It used to be four separate blocks -- the
+// token, the identity, the option blanks and an unfinished group -- stacked in
+// amber, which is how a bundle that generates perfectly well came to look like
+// four errors. One list, one severity: every marker has to be filled in before
+// the bundle is applied, and which of them the API server happens to stop first
+// is the README's subject rather than this step's.
+
+/** One field left blank, as the download step lists it. */
+export interface Gap {
+  /** The option key, dotted where it is nested -- what the configure step calls
+   *  the field, and what `PLACEHOLDER_SOURCE` is keyed by. */
+  key: string;
+  /** What the bundle will carry in its place. Built here rather than read off
+   *  `source`, so a row is complete before /api/placeholders answers and does
+   *  not change when it does. */
+  marker: string;
+  /** Where the value comes from, when that has been read. **Absent is not
+   *  empty**: a key the served table has no entry for, or a table that has not
+   *  arrived, leaves this undefined and the row renders the field and the
+   *  marker alone -- which is true either way. An empty string would be the
+   *  generator saying there is no answer, which it never says. */
+  source?: string;
+  /** Which step fills it in: 1 is the agent step, where the identity and the
+   *  credential are typed, 2 is configure. The row carries the way back,
+   *  because the field it names is not on this step. */
+  step: 1 | 2;
+}
+
+/** The identity and the credential, which are step 1's and are not options.
+ *  `harbor_id` is a fact and `ship_id` is resolved out of one, so neither is in
+ *  `blankRequired`; the token is not there either, because no form on the
+ *  configure step holds it. */
+const AGENT_STEP = new Set(["harbor_id", "ship_id", "auth_token"]);
+
+/** Every field this bundle carries a marker for, in the order somebody would
+ *  fill them in: the identity first, then the credential, then the options in
+ *  the order the configure step asks for them.
+ *
+ *  `token` is `DownloadPlan.incomplete`, and its third answer is why this takes
+ *  the whole value rather than a boolean. `"unread"` is no preview having
+ *  landed, which is not the same as a bundle that carries a token -- listing a
+ *  field as blank before anything has been read is a claim, and the row would
+ *  appear on every bundle for the moment before the first preview answers and
+ *  then vanish.
+ *
+ *  `sources` may be null throughout, and nothing here waits for it.
+ */
+export function gaps(
+    idBlanks: string[], blanks: string[], token: boolean | "unread",
+    sources: Record<string, PlaceholderSource> | null): Gap[] {
+  const keys = [...idBlanks, ...(token === true ? ["auth_token"] : []),
+                ...blanks];
+  return keys.map((key) => {
+    const source = sources?.[key]?.source;
+    return {
+      key, marker: marker(key), step: AGENT_STEP.has(key) ? 1 as const : 2,
+      // Spread rather than `source: source` so an unread one is *absent* from
+      // the object, not present and undefined. The distinction is the point of
+      // the field, and `"source" in gap` has to be able to answer it.
+      ...(source ? { source } : {}),
+    };
+  });
+}
+
+/** The bar over the folded list: what it is, in the fewest words that name the
+ *  markers. Bounded, because a header cannot grow -- a truncated list ends
+ *  mid-marker and says nothing about what it dropped, where a counted one is
+ *  honest about the tail and opens onto it. */
+export function gapSummary(list: Gap[]): string {
+  const m = list.map((g) => g.marker);
+  if (m.length === 0) return "";
+  if (m.length === 1) return m[0];
+  if (m.length <= 3) return `${m.slice(0, -1).join(", ")} and ${m[m.length - 1]}`;
+  return `${m[0]}, ${m[1]} and ${m.length - 2} more`;
 }

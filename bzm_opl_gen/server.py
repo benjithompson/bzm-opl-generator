@@ -862,6 +862,11 @@ def reserved_env():
     return core.reserved_env()
 
 
+@app.get("/api/placeholders", description=core.placeholders.__doc__)
+def placeholders():
+    return core.placeholders()
+
+
 @app.get("/api/agent-env", description=core.agent_env.__doc__)
 def agent_env(func_ids: Optional[str] = None):
     """The location's funcIds, comma-separated, or the parameter left off.

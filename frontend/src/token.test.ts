@@ -25,9 +25,21 @@ describe("downloadPlan", () => {
   // Before the first preview lands there is nothing to go on, and the honest
   // answer is the one that understates the bundle rather than the one that
   // claims a token is in it.
-  it("assumes the placeholder before anything has been generated", () => {
-    expect(downloadPlan(null).incomplete).toBe(true);
-  });
+  // The two fields answer "no preview has landed" differently, and that is the
+  // point: the hint is one line beside the button and has to say something, so
+  // it takes the cautious branch; `incomplete` feeds a *list of fields left
+  // blank*, where naming one before anything has been read is a claim rather
+  // than a caution. It was `true` for both, so every bundle grew an AUTH_TOKEN
+  // row on arrival and lost it a moment later.
+  it("says the hint's cautious sentence before anything has been generated",
+    () => {
+      expect(downloadPlan(null).hint).toMatch(/left as a placeholder/);
+    });
+
+  it("does not claim the token is missing before anything has been generated",
+    () => {
+      expect(downloadPlan(null).incomplete).toBe("unread");
+    });
 
   it("treats a token in the form as complete", () => {
     const plan = downloadPlan(report("given"));

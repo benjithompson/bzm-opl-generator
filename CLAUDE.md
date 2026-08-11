@@ -583,6 +583,48 @@ missing tools. The rest is what it cannot fix for you.
   *placeholder* stays a sample (`e.g. blazemeter`) where the identity boxes show
   the marker — these two have a value worth suggesting and an id has none.
 
+  **On the download step it is one folded list, one row per field, and no
+  amber.** It was four amber cards — the token's line, the identity's, the
+  option blanks' and one per unfinished group — stacked over a button that
+  worked, which is how a bundle that generates perfectly well came to read as
+  four errors: the whole of what the page had to say about the ordinary case of
+  generating manifests before the location exists. `placeholder.gaps` joins the
+  three lists in App and `DownloadPanel` renders a `SubSection` over them,
+  collapsed, its bar naming the markers (`gapSummary`, which **counts** a tail
+  rather than truncating it — a header cannot grow, and CSS truncation ends
+  mid-marker and says nothing about what it dropped). **One severity, and
+  `PLACEHOLDER_REFUSED_BY_API` is deliberately not served**: every marker has to
+  be filled in before the bundle is applied, which of them the API server stops
+  first is the README's subject, and a served field nothing renders is a second
+  copy of that set waiting to disagree with the first.
+
+  Three things it cost. **`sv.ok` was the last off-screen blocker** and it was
+  stale in the same way `service_account_name` had been: `generate()` renders a
+  blank `sv_subdomain`/`sv_tls_secret` and emits the markers, because
+  `fill_placeholders` runs before `_sv_cfg` — measured, against a comment above
+  `REQUIRED_TEXT` that said the opposite and has been corrected. `ready` is now
+  only "there is no bundle"; the two arms of `svIncomplete` that *are* real
+  failures arrive as `genErr` from the preview, in red, with the server's own
+  sentences. **`DownloadPlan.incomplete` gained a third answer**, `"unread"`,
+  because `report` is null until the first preview lands and a boolean made
+  every bundle grow an AUTH_TOKEN row on arrival and lose it a moment later —
+  unread rendering as a gap, in the one place a boolean could not express it.
+  The *hint* still takes the cautious branch there: it is one line that has to
+  say something, where a row is a claim. And **`PLACEHOLDER_SOURCE` is plain
+  prose now** — no backticks, no `--`, no `*emphasis*`, no `->` — because it has
+  two surfaces: a Markdown cell in the bundle's README and a line of text in
+  this panel, which printed the Markdown source. That is `plan.py`'s rule for
+  its warnings, arriving at a second table;
+  `test_the_placeholder_sentences_render_the_same_two_ways` is what holds it,
+  since nothing failed while the table had one surface.
+
+  **The finished state is a bar and not a fold.** `SubSection` with neither
+  `open` nor `onToggle` is permanently *open*, so an empty one draws a padded
+  blank strip; given them it is a chevron over nothing. Both are a panel
+  claiming to hold something, so `Nothing left to fill in` is built to the
+  header's own measurements instead. Silence was the state before, and silence
+  reads exactly like a step nobody has reached.
+
 - **`extra_env` is the escape hatch, and the reserved set is what keeps it
   honest.** BlazeMeter's agent-environment reference is much wider than the
   options here, and the only way to the rest was hand-editing the generated
