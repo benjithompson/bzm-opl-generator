@@ -2638,15 +2638,21 @@ def create_namespace_cmd(o):
     the common case, and a README whose first command fails is what this is
     about.
 
-    `--dry-run=client -o yaml` renders the object without sending it, and the
-    `apply` that reads it creates the namespace or leaves it as it is. Ownership
-    stays where it was: the annotation apply writes lands on the namespace
-    object, which no file in this bundle names, so no later `delete -f` over
-    these files can reach it.
+    So the command asks first and creates only what is missing. **The obvious
+    idempotent idiom is the third wrong answer and it was measured**: piping
+    `create namespace --dry-run=client -o yaml` into `apply` looks harmless and
+    is not, because client-side apply computes deletions from the object's
+    previous `last-applied-configuration`. Against a namespace somebody else
+    created *with apply*, our bare Namespace carries no labels, so apply deletes
+    theirs -- measured on a live cluster, `pod-security.kubernetes.io/enforce`,
+    a team label and an owner annotation all removed, reported as `namespace/...
+    configured`. Silently relaxing a PodSecurity level is a worse failure than
+    the one being fixed, and `--server-side` strips the same labels through the
+    ownership migration. A `get || create` cannot: it sends nothing at all when
+    the namespace is there.
     """
-    kc = cli(o)
-    return (f"{kc} create namespace {o['namespace']} --dry-run=client -o yaml "
-            f"| {kc} apply -f -")
+    kc, ns = cli(o), o["namespace"]
+    return f"{kc} get namespace {ns} >/dev/null 2>&1 || {kc} create namespace {ns}"
 
 
 def _deploy_steps(o, verb):
@@ -5170,8 +5176,8 @@ def _readme(facts, o, files):
 {apply_lines}
 ```
 
-The first line creates the namespace and succeeds if the namespace exists
-already. It claims nothing, so a later `{kc} delete -f .` leaves the namespace.
+The first line creates the namespace only where it is missing and changes nothing
+about one that exists. No file here owns it, so `{kc} delete -f .` leaves it.
 
 {_verify_block(o)}
 ## Worth knowing

@@ -144,11 +144,15 @@ anything that breaks.
   Deploy block now leads with the command that creates it:
 
   ```
-  kubectl create namespace blazemeter-perf --dry-run=client -o yaml | kubectl apply -f -
+  kubectl get namespace blazemeter-perf >/dev/null 2>&1 || kubectl create namespace blazemeter-perf
   ```
 
-  Run it on a namespace that already exists and it succeeds and changes nothing,
-  so the block is safe to follow either way. The bundle still carries **no**
+  It asks first, so a namespace that already exists is left exactly as it is and
+  the block is safe to follow either way. **Do not replace it with the shorter
+  `create --dry-run=client -o yaml | apply -f -`**: that form was measured
+  deleting the labels off a namespace somebody else had created with `apply`,
+  `pod-security.kubernetes.io/enforce` among them. The bundle still carries
+  **no**
   Namespace manifest, deliberately: a manifest that owned the namespace would
   make a later `kubectl delete -f .` take the namespace and everything else
   inside it, including whatever else the customer runs there. An OpenShift

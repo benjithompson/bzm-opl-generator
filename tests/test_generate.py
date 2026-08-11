@@ -990,10 +990,13 @@ def test_readme_is_short_and_actionable():
 
     The cap moved from 45 to 49 at #164, and that is the one kind of growth it
     is not guarding against: the Deploy block gained the command that creates
-    the namespace, plus the two lines saying it is safe to run twice and claims
-    nothing. Four lines of instruction rather than four of reasoning -- what
-    this test exists to stop is the essay coming back, and a first command that
-    works is the opposite of that."""
+    the namespace, a blank line, and two lines saying what that command does to
+    a namespace somebody already owns -- which is nothing, and which a reader
+    has to be told or they will reach for a shorter command that does not hold.
+    One line of instruction and two of the smallest reasoning that keeps it
+    right. What this test exists to stop is the essay coming back, and a first
+    command that works is the opposite of that. The longest README any sizing
+    model produces is 48."""
     import bzm_opl_gen.plan as plan_mod
     opts = {"namespace": "ns1", "auth_token": "de" * 32, "sv_ingress": "none"}
     for fids in [[f] for f in plan_mod.SIZING_MODELS] + [["tdm"], []]:
@@ -1037,10 +1040,14 @@ def test_the_deploy_block_leads_with_a_command_that_makes_the_namespace(
     idempotent: a plain `create namespace` fails with AlreadyExists on the
     namespace a platform team already made, which is the common case rather than
     the odd one. Helm answers both with `--create-namespace` on its install
-    line; the manifests bundle answers them with a create piped through apply,
-    which also claims nothing -- an emitted `bzm_namespace.yaml` would apply
-    from cold and then make `kubectl delete -f .` take the customer's namespace
-    and everything else in it.
+    line; the manifests bundle answers them by asking first, which is the only
+    idempotent form that leaves an existing namespace alone -- piping
+    `--dry-run=client -o yaml` into `apply` was measured deleting the labels off
+    a namespace created with apply, `pod-security.kubernetes.io/enforce`
+    included (see `create_namespace_cmd`). An emitted `bzm_namespace.yaml` is
+    wrong in the third direction: it would apply from cold and then make
+    `kubectl delete -f .` take the customer's namespace and everything else in
+    it.
 
     Asserted over the two CLIs because this is a command the bundle prints, and
     every one of those follows the cluster rather than the posture."""
@@ -1053,8 +1060,8 @@ def test_the_deploy_block_leads_with_a_command_that_makes_the_namespace(
         assert lines[0].startswith("helm install")
         assert "--create-namespace" in lines[0]
     else:
-        assert lines[0] == (f"{cli} create namespace ns1 --dry-run=client "
-                            f"-o yaml | {cli} apply -f -")
+        assert lines[0] == (f"{cli} get namespace ns1 >/dev/null 2>&1 "
+                            f"|| {cli} create namespace ns1")
         # ...and it is the *first* thing, not merely present: everything under
         # it names the namespace with `-n`.
         assert all("-n ns1" in ln for ln in lines[1:])
