@@ -140,7 +140,13 @@ object crane created is correct — the location is going away regardless.
   with `--run-test` or it proves half of what it looks like it proves**: the
   two had never run together, a crane-only run pulls no engine image, and the
   engine pull was wrong for months while every private-registry run passed
-  (#234). The rig's own mirror is `livetest.mirror_images`, and it reads the
+  (#234). **The rig says that itself now** (#242) — a warning in `cmd_livetest`,
+  beside the two pairing rules that are refusals, naming the engine image as the
+  one thing the run cannot fail on. A warning and not a refusal, because the
+  flag does reach something: crane's own image, the blackhole, and the overrides
+  the agent resolves for itself. This bullet was the whole guard until then, and
+  a sentence nobody executes is what the fifth recurrence of a rule is made of.
+  The rig's own mirror is `livetest.mirror_images`, and it reads the
   generator's destinations rather than keeping a rule of its own — it had one,
   and it was the same wrong one.
 - **`--local-proxy`** runs mitmproxy **on the cluster's docker network**, never

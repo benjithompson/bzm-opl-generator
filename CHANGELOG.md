@@ -136,6 +136,18 @@ anything that breaks.
   Every performance bundle is unchanged, byte for byte, and every verdict on a
   performance location keeps its wording.
 
+- **`livetest --local-registry` said nothing about the one image it never
+  pulls.** The flag mirrors the location's images into a local registry and
+  blackholes the public ones, so a bundle that names an image the registry does
+  not hold fails the run. That holds for every image the agent pulls, and not
+  for the engine: no engine exists unless `--run-test` starts one, so a
+  crane-only run pulls no engine image and a wrong engine reference passes. A
+  private-registry defect survived months of green runs that way. The run now
+  prints a warning naming that gap, and continues -- what the flag does prove
+  without a test is crane's own image, the blackhole, and the overrides the
+  agent resolves for itself. Pass `--run-test` as well and the run says nothing,
+  having covered the engine.
+
 ## [0.4.1] — 2026-08-08
 
 ### Added

@@ -124,6 +124,13 @@ down with the cluster.
 | `--contain-egress` | calico + a default-deny egress NetworkPolicy | that the proxy is the **only** way out, not just the way that was taken |
 | `--run-test TEST_ID` | a real BlazeMeter run on the location | what crane passes to the **engines** it spawns: image override, CA propagation, proxy env |
 
+**`--local-registry` covers the engine image only with `--run-test`.** No engine
+exists unless a test starts one, so a crane-only run pulls no engine image and a
+wrong engine reference passes. The run still proves crane's own image, the
+blackholed public registries, and the overrides the agent resolves itself. The
+rig prints that gap when the pair is not run together; #234 is the defect it
+hid, wrong for months while every private-registry run reported a pass.
+
 `--local-proxy` is deliberately hostile: mitmproxy terminates TLS with its own
 CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDLE`
 / CA ConfigMap actually lands in the crane process. The rig

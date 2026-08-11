@@ -716,6 +716,71 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()
 
 
+# -- what a private-registry run does not cover (#242) ------------------------
+# The other two pairing rules are refusals, because the flag would otherwise
+# reach nothing. This one warns: --local-registry proves crane's own image and
+# the blackhole with no engine anywhere, and only the engine reference is left
+# unread. #234 is what that cost -- the first run ever to combine the two failed
+# on the engine and nothing else, months after the defect landed.
+
+
+def _registry_livetest(monkeypatch, tmp_path, *extra):
+    """`livetest` over a finished bundle with the rig faked. Hands back whether
+    livetest.run was reached, so a warning can be told from a refusal."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    # A real token, because a run with neither --local-proxy nor --run-test
+    # re-renders nothing and refuses a bundle still carrying the placeholder.
+    gen.write(gen.generate(facts, {"namespace": "ns1", "auth_token": "REAL"}),
+              str(manifests))
+    reached = []
+    monkeypatch.setattr(cli.livetest, "run",
+                        lambda *a, **kw: reached.append(True) or True)
+    _account(monkeypatch, FakeClient())
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--auth-token", "REAL", *extra)
+    return bool(reached), caught.value
+
+
+def test_livetest_says_a_registry_run_without_a_test_never_pulls_an_engine(
+        monkeypatch, tmp_path, capsys):
+    """The gap, named: no engine is started, so no engine image is pulled and a
+    wrong engine reference cannot fail here. A warning and not a refusal -- the
+    run still proves crane's image and the blackhole -- so the rig deploys."""
+    reached, exit = _registry_livetest(monkeypatch, tmp_path,
+                                       "--local-registry", "5001")
+    out = capsys.readouterr().out
+    assert "warning" in out and "--run-test" in out
+    assert "engine image" in out and "cannot fail here" in out
+    assert reached and exit.code == 0
+
+
+def test_livetest_says_nothing_where_a_test_covers_the_engine(monkeypatch,
+                                                              tmp_path, capsys):
+    """The pair the flag is meant to be run as. There is nothing left unread,
+    so there is nothing to say."""
+    reached, exit = _registry_livetest(monkeypatch, tmp_path,
+                                       "--local-registry", "5001",
+                                       "--run-test", "12345")
+    assert "--local-registry" not in capsys.readouterr().out
+    assert reached and exit.code == 0
+
+
+def test_livetest_says_nothing_about_a_registry_nobody_asked_for(monkeypatch,
+                                                                 tmp_path,
+                                                                 capsys):
+    """A run with neither flag pulls from wherever the bundle points and makes
+    no claim about a private registry, so this warning is not its subject."""
+    reached, exit = _registry_livetest(monkeypatch, tmp_path)
+    assert "--local-registry" not in capsys.readouterr().out
+    assert reached and exit.code == 0
+
+
 # -- the CA mode a rig run deploys (#251) -------------------------------------
 # The rig re-renders the CA only where it has one to inject, and until this it
 # re-rendered to `inline` whatever the bundle carried: a file-mode bundle run

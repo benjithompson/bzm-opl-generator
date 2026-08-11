@@ -730,6 +730,24 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
+    # The third pairing rule, and the only one that warns (#242). The two above
+    # refuse because the flag would otherwise reach nothing; --local-registry
+    # reaches plenty on its own -- crane's image, the blackhole, the overrides
+    # the agent resolves for itself -- and one thing less than the reader
+    # assumes. Nothing pulls the engine image unless --run-test starts an
+    # engine, so a wrong engine reference passes here. That is how #234 lived
+    # for months: the first run to combine the two failed immediately, on the
+    # engine and nothing else, while crane pulled from the same registry in the
+    # same run. Said after every refusal above, so a run about to be refused
+    # does not narrate a gap it will never reach.
+    if a.local_registry and not a.run_test:
+        print("warning: --local-registry without --run-test does not cover the "
+              "engine image. This run starts crane and no engine, so nothing "
+              "pulls the engine reference the bundle composed, and a wrong one "
+              "cannot fail here. The run still proves crane's own image, the "
+              "blackholed public registries, and the overrides the agent "
+              "resolves itself. Add --run-test <TEST_ID> to cover the engine "
+              "(#234).")
     # Unsaid, the mode under test is the one the bundle was generated with
     # (#251). --local-proxy re-renders the CA -- the CA under test is the
     # proxy's own -- and this used to re-render to `inline` whatever the bundle
