@@ -386,6 +386,160 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
     return {"proxy": proxy, **generate.no_ca(), **mode}
 
 
+# The CA-trust modes this rig can deploy, which is `generate`'s four minus
+# `inject`: nothing here injects a trust bundle, the cluster network operator
+# does that on OpenShift, so a run under the proxy can only test one of these
+# three. Also `--ca-mode`'s choices, so the flag and the overlay cannot grow
+# different vocabularies.
+RIG_CA_MODES = ("inline", "existing", "file")
+
+
+def rig_ca_mode(profile):
+    """The `--ca-mode` a bundle is *already* generated for, or None where the
+    rig has no mode for what it carries.
+
+    What it is for: `--local-proxy` re-renders the CA -- it has to, the CA under
+    test is the proxy's own -- and the mode it re-renders to used to be
+    `--ca-mode`'s default rather than the bundle's own answer. So a file-mode
+    bundle run under the proxy was deployed as an inline one and reported a
+    pass, having proved a mode nobody had generated. That is #251 in the shape
+    it survived #256 in: the re-render no longer overwrites a PEM (the bundle
+    carries none), but it still replaced the configuration it was handed.
+
+    Read off `generate.ca_mode` rather than off the keys, so a mode added later
+    is one edit and not the four #250 was. **None is only ever "no mode of
+    mine"** -- a bundle with no CA trust, or an OpenShift-injection one. It is
+    not where an unreadable answer arrives: `generate.CA_UNRESOLVED` is refused
+    by `ca_configmap_refusal`, which every caller of this runs first, so the
+    unresolved case never reaches the choice this makes.
+    """
+    mode = generate.ca_mode(profile)
+    return mode if mode in RIG_CA_MODES else None
+
+
+def resolved_ca_mode(profile, asked=None):
+    """The CA mode a run deploys: what was asked for, else the bundle's own,
+    else inline.
+
+    One resolver rather than a default in two places. `cmd_livetest` needs the
+    answer before the credential mint, and `run()` needs it for a caller that is
+    not the CLI at all (the MCP server), so both ask this and cannot disagree.
+    Idempotent, so resolving an already-resolved mode is the same answer.
+    """
+    return asked or rig_ca_mode(profile) or "inline"
+
+
+def ca_mode_notice(profile, chosen):
+    """What the run says about the mode it is about to deploy.
+
+    The sentence is here rather than in the CLI because which modes the rig can
+    build, and what it does to a bundle that carries another one, are the rig's
+    answers. Three of them, and they are three different facts about the bundle:
+    it carries the mode being deployed, it carries another one that is being
+    replaced, or it carries none this rig can build -- which is itself two
+    bundles (no CA at all, and OpenShift injection, which the cluster network
+    operator performs and nothing here does), so they get their own sentences
+    too. Never a refusal: `--ca-mode` is how somebody deliberately tests a mode
+    other than the bundle's, and it stays allowed. It must only stop being the
+    quiet answer.
+    """
+    carried = rig_ca_mode(profile)
+    if carried == chosen:
+        # True of the mode and not of the object, for `existing`: the rig
+        # deploys that mode under a ConfigMap of its own name and key, because
+        # a customer's belongs to a customer (see ensure_ca_configmap).
+        under = (f" -- under {CA_RIG_CONFIGMAP}, this rig's own ConfigMap "
+                 f"rather than the one the bundle names"
+                 if chosen == "existing" else "")
+        return (f"CA mode under test: {chosen}, which is what this bundle was "
+                f"generated for{under}")
+    if carried:
+        return (f"note: this bundle is generated for the {carried} CA mode, and "
+                f"--ca-mode {chosen} replaces it -- the run tests {chosen}, not "
+                f"what is on disk")
+    mode = generate.ca_mode(profile)
+    why = ("is generated for OpenShift trust injection, which this rig cannot "
+           "deploy -- nothing here injects a trust bundle"
+           if mode == "inject" else
+           "configures no CA trust, and a run under the proxy needs some -- "
+           "the CA under test is the proxy's own")
+    return f"note: this bundle {why}, so the run deploys the {chosen} mode instead"
+
+
+def ca_configmap_refusal(profile, local_proxy):
+    """Why this run cannot deploy this bundle's CA trust, or None.
+
+    Two of the four modes name a ConfigMap the bundle does not create -- `file`
+    leaves it to the pipeline that holds the certificate, `existing` to the
+    platform team that owns the trust bundle -- and **this rig creates neither
+    of them**, in a namespace that is usually one it made moments earlier. The
+    kubelet then holds the crane pod at ContainerCreating naming a ConfigMap
+    that is not there, no heartbeat can arrive, and the run spends its whole
+    12-20 minutes reporting only that the agent never came online. Same shape
+    and same cost as the ServiceAccount and AUTH_TOKEN guards beside it in
+    `cmd_livetest`, and cheaper than both: it is one field of a file already
+    read.
+
+    It refuses a namespace somebody prepared with that ConfigMap in it, which
+    `ensure_namespace` would otherwise reuse. That is deliberate for now and it
+    is the ServiceAccount guard's position too: the object cannot be looked for
+    before the cluster this guard runs ahead of, and the failure it prevents
+    costs a whole run.
+
+    `--local-proxy` answers None for the modes it can build, because there the
+    overlay replaces whatever mode the profile carried with one the rig builds
+    itself (`proxy_overlay` starts from `generate.no_ca()`), and `--ca-mode`
+    decides which. That is the honest reason the pairing is safe, rather than
+    the accident #251 found it to be: a slot beside the rig's own PEM used to be
+    `_ca_cfg` refusing the pair.
+
+    `inject` is deliberately not refused. Its ConfigMap is emitted by the
+    bundle -- empty, labeled for the cluster network operator -- so the object
+    is there and the pod starts. On a cluster with no operator to fill it crane
+    then fails TLS, which is a legible line in a log rather than a pod that
+    never runs, and `--cluster current` may well be pointed at an OpenShift
+    where it is filled.
+    """
+    ca = generate.resolved_ca(profile)
+    if ca is generate.CA_UNRESOLVED:
+        # Refused whatever the flags are, and before either of them can matter:
+        # a re-rendering run raises out of generate() once the cluster is up,
+        # and a lean one deploys manifests whose own profile contradicts them.
+        return (f"{generate.PROFILE_FILE} sets more than one CA mode, and the "
+                f"generator takes one: a run that re-renders would raise out of "
+                f"generate() with the cluster already built, and one that does "
+                f"not would deploy manifests whose own profile disagrees with "
+                f"them. Re-generate the bundle with a single CA mode set "
+                f"({', '.join(generate.CA_MODES)})")
+    if local_proxy or not ca or ca["mode"] not in ("file", "existing"):
+        return None
+    # Each mode names its own object and its own owner, and the run that builds
+    # it does a different thing in each: one stands in for the pipeline, the
+    # other for the platform team. The names come off `_ca_cfg`'s own answer --
+    # `ca_cert_file`'s fall back to the marker is stated there, and restating it
+    # here is how the CA lists drifted apart in #250.
+    if ca["mode"] == "file":
+        carries = (f"names the certificate file {ca['key']} and creates no "
+                   f"ConfigMap, so the crane pod mounts {ca['cm']}, which a "
+                   f"customer's pipeline builds from that certificate")
+        instead = ("builds that ConfigMap from the proxy's own CA the way that "
+                   "pipeline does")
+    else:
+        carries = (f"references the existing ConfigMap {ca['cm']}, which a "
+                   f"platform team owns and this bundle does not create")
+        instead = ("creates a trust ConfigMap of the rig's own and re-renders "
+                   "the bundle to reference it")
+    return (
+        f"{generate.PROFILE_FILE} says this bundle {carries}. livetest creates "
+        f"no such ConfigMap, and deploys into a namespace it has usually just "
+        f"made itself: the crane pod would sit at ContainerCreating naming it, "
+        f"no heartbeat could arrive, and the run would spend its whole timeout "
+        f"reporting only that the agent never came online. Add --local-proxy "
+        f"--ca-mode {ca['mode']}: it {instead}, and it is the only run that "
+        f"tests this mode at all. Or re-generate the bundle with the PEM inline "
+        f"(--ca-bundle), which carries its own ConfigMap")
+
+
 def ensure_ca_configmap(cli, namespace, ca_pem,
                         name=None, key=None):
     """Create the rig's trust-bundle ConfigMap. True if this run created it.
@@ -1902,15 +2056,19 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
         facts=None, local_registry=None,
         local_proxy=None, proxy_user=None, proxy_pass=None, regenerate=None,
         negative_control_check=True, opts=None, contain_egress=False,
-        run_test=None, engine_cpu="1", engine_mem="4Gi", ca_mode="inline"):
+        run_test=None, engine_cpu="1", engine_mem="4Gi", ca_mode=None):
     """regenerate(overlay) -- callback that re-renders the manifests in
     manifest_dir with extra generate() options merged in. Required with
     --local-proxy, whose CA only exists once the proxy container is up.
 
-    ca_mode -- which CA-trust configuration is under test, "inline" (the
-    generator owns the ConfigMap) or "existing" (the rig creates one and the
-    bundle references it). Only meaningful with --local-proxy, which is what
-    makes the CA load-bearing.
+    ca_mode -- which CA-trust configuration is under test: "inline" (the
+    generator owns the ConfigMap), "existing" (the rig creates one and the
+    bundle references it) or "file" (the bundle names a certificate and the rig
+    builds the generator's own ConfigMap from it). Only meaningful with
+    --local-proxy, which is what makes the CA load-bearing. **None is not
+    "inline"**: it is nobody having asked, which resolves to the mode the bundle
+    was generated for -- the default is here rather than only in the CLI so a
+    caller that is not the CLI gets the same run (#251).
 
     opts -- the generate() options the manifests were built from; enables the
     read-back assertions in assert_live_config()."""
@@ -1937,6 +2095,14 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
     bad = bundle_check(manifest_dir, harbor_id, ship_id, opts).report()
     if bad:
         raise BundleMismatch(bad)
+    # Same reason, one question further on, and it is why this resolves rather
+    # than defaulting in its signature: the CLI has already asked, but the MCP
+    # server has not, and a run that deployed `inline` over a bundle generated
+    # for another mode would report a pass having proved a configuration nobody
+    # generated (#251). `ca_configmap_refusal` is the CLI's alone, because it
+    # has to come before the credential mint and because a caller that passes no
+    # profile has nothing here to read.
+    ca_mode = resolved_ca_mode(opts, ca_mode)
     ok = False
     # Filled in as the run learns what it made, and read by teardown in the
     # finally. It starts empty so a run that fails before the cluster is up

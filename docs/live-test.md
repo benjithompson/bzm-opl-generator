@@ -143,18 +143,37 @@ CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDL
 
 ### Which CA mode is under test (`--ca-mode`)
 
-There are two ways a customer configures CA trust on a cluster, and until #227
-only one of them had ever been deployed under interception.
+Three of the four ways a customer configures CA trust on a cluster can be
+deployed here — the fourth, OpenShift trust injection, is the cluster network
+operator's work and nothing this rig can perform. Until #227 only one of the
+three had ever been deployed under interception.
 
 | `--ca-mode` | who owns the ConfigMap | what the bundle carries |
 |---|---|---|
-| `inline` (default) | the generator | `bzm_cacerts.yaml`, holding the PEM |
+| `inline` | the generator | `bzm_cacerts.yaml`, holding the PEM |
 | `existing` | the **rig**, created before the deploy | a reference by name and key only |
+| `file` | the **rig**, under the generator's own name | a certificate file name, and no ConfigMap |
+
+**The default is the mode the bundle was generated for**, read out of
+`profile.json`, and `inline` only where the bundle has no mode this rig can
+build — one that configures no CA at all, or one generated for OpenShift trust
+injection, which the cluster network operator performs and nothing here does.
+Naming the flag replaces the bundle's mode, which is how a bundle is
+deliberately tested under another one; either way the run says which mode it is
+deploying before it builds anything. It used to default to `inline` whatever
+the bundle carried, so a file-mode bundle was deployed as an inline one and
+reported a pass, having proved a configuration nobody had generated (#251).
 
 `existing` is the mode BlazeMeter recommend and the one nearly every customer
 takes, because a platform team owns and rotates the bundle. The rig creates
 `bzm-opl-livetest-trust` holding the MITM CA and generates a bundle that only
-references it.
+references it. `file` is what the web UI generates: the bundle names a
+certificate and creates no ConfigMap, and the rig builds `blazemeter-cacerts`
+from the MITM CA the way a customer's pipeline builds it from theirs —
+`kubectl create configmap --from-file=<key>=<file>`, the line the bundle's own
+README prints. **It is created after the negative control**, which deletes that
+same name, and moving it earlier is a run that deploys against a ConfigMap the
+control has just removed (#256).
 
 **The key is deliberately not `ca-bundle.crt`.** It is `corp-root.pem`, because
 `ca-bundle.crt` is what the generator falls back to when `ca_configmap_key` is
@@ -175,6 +194,21 @@ nothing.
 
 `--ca-mode` needs `--local-proxy`; without one no CA is configured at all, so
 the flag is refused rather than ignored.
+
+**Without `--local-proxy`, a `file` or `existing` bundle is refused outright.**
+Both name a ConfigMap the bundle does not create — a pipeline holding the
+certificate builds one, a platform team owns the other — and this rig deploys
+into a namespace it creates itself, where neither object is there. The crane
+pod would sit at `ContainerCreating` naming it, no heartbeat could arrive, and
+the run would spend its whole 12–20 minutes reporting only that the agent never
+came online. The refusal names the ConfigMap and the run that would build it,
+and it arrives before the cluster exists and before the credential is minted.
+An OpenShift-injection bundle is not refused: its ConfigMap is emitted, empty,
+so the pod starts and a cluster with no operator to fill it fails TLS in a log
+line you can read. A `profile.json` setting **two** CA modes is refused with or
+without the proxy — the generator takes one, so a re-rendering run would raise
+with the cluster already built and a lean one would deploy manifests their own
+profile disagrees with.
 
 ## The credential a run uses
 

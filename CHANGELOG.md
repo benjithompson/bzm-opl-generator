@@ -39,6 +39,31 @@ anything that breaks.
 
 ### Fixed
 
+- **`livetest` deployed the CA mode it chose rather than the one the bundle was
+  generated for.** `--ca-mode` defaulted to `inline`, and `--local-proxy`
+  re-renders the CA whatever the bundle carried — so a bundle generated for the
+  file mode (what the web UI now writes) was deployed as an inline one and
+  reported a pass, having proved a configuration nobody had generated. The
+  default is now the bundle's own mode, read out of `profile.json`, and
+  `inline` only where the bundle has no mode this rig can build. Passing
+  `--ca-mode` still replaces the bundle's mode, which is how another one is
+  deliberately tested, and the run now says which mode it is deploying, and
+  what it replaced, before it builds anything. The default is resolved inside
+  the rig rather than in the command, so `opl_agent livetest` — the MCP
+  server's entry point, which names no mode — gets the same run.
+
+- **A run with no `--local-proxy` deployed a bundle whose CA ConfigMap nothing
+  would create.** The `file` and `existing` modes both name a ConfigMap
+  somebody else builds — a pipeline holding the certificate, a platform team
+  holding the trust bundle — and the rig deploys into a namespace it creates
+  itself, where neither is there. The crane pod sat at `ContainerCreating` and
+  the run spent its whole 12–20 minutes reporting only that the agent never
+  came online. It is now refused before the cluster is built and before the
+  credential is minted, naming the ConfigMap and the run that would build it.
+  A `profile.json` that sets two CA modes at once is refused there too, with or
+  without the proxy: the generator takes one, so a run that re-renders would
+  raise with the cluster already built.
+
 - **A bundle README's summary table said the AUTH_TOKEN was in the Secret when
   the Secret held a placeholder.** The row read `AUTH_TOKEN | in
   bzm_secret.yaml` whatever the file contained, four lines above a block naming

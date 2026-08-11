@@ -716,6 +716,92 @@ def test_livetest_with_a_token_in_hand_mints_nothing(monkeypatch, tmp_path):
     assert "HELD-ALREADY" in (manifests / "bzm_secret.yaml").read_text()
 
 
+# -- the CA mode a rig run deploys (#251) -------------------------------------
+# The rig re-renders the CA only where it has one to inject, and until this it
+# re-rendered to `inline` whatever the bundle carried: a file-mode bundle run
+# under --local-proxy was deployed as an inline one and passed, having proved a
+# configuration nobody had generated. Without the proxy the same bundle names a
+# ConfigMap nothing in the run creates, which is a pod that never starts and a
+# whole timeout spent saying only that the agent never came online.
+
+CA_FILE_MODE = {"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"}
+
+
+def _ca_livetest(monkeypatch, tmp_path, client, options, *extra):
+    """`livetest` over a bundle generated with `options`, the rig faked. Hands
+    back what livetest.run was given, so a test can read the mode it resolved."""
+    facts = json.load(open("examples/facts.example.json"))
+    (tmp_path / "facts.json").write_text(json.dumps(facts))
+    manifests = tmp_path / "out"
+    manifests.mkdir()
+    gen.write(gen.generate(facts, {"namespace": "ns1", **options}),
+              str(manifests))
+    captured = {}
+    monkeypatch.setattr(cli.livetest, "run",
+                        lambda *a, **kw: captured.update(kw) or True)
+    _account(monkeypatch, client)
+    with pytest.raises(SystemExit) as caught:
+        _run(monkeypatch, "livetest", "--api-key", KEY,
+             "--facts", str(tmp_path / "facts.json"),
+             "--manifests", str(manifests), "--namespace", "ns1",
+             "--run-test", "12345", *extra)
+    return captured, caught.value
+
+
+def test_livetest_refuses_a_ca_configmap_nothing_in_the_run_creates(monkeypatch,
+                                                                    tmp_path):
+    """And refuses it before the mint, like every guard around it: a run that is
+    about to be refused must not rotate the credential the deployed agent is
+    holding."""
+    c = FakeClient()
+    captured, exit = _ca_livetest(monkeypatch, tmp_path, c, CA_FILE_MODE)
+    assert captured == {}
+    assert gen.CA_CONFIGMAP in str(exit.code) and "--ca-mode file" in str(exit.code)
+    assert c.calls == []
+
+
+def test_livetest_deploys_the_ca_mode_the_bundle_was_generated_for(monkeypatch,
+                                                                   tmp_path):
+    """The default is the bundle's own answer rather than `inline`. The run
+    tests what is on disk unless somebody asks for something else."""
+    captured, exit = _ca_livetest(monkeypatch, tmp_path, FakeClient(),
+                                  CA_FILE_MODE, "--local-proxy",
+                                  "--cluster", "kind")
+    assert exit.code == 0
+    assert captured["ca_mode"] == "file"
+
+
+def test_livetest_says_when_the_flag_replaces_the_bundles_ca_mode(monkeypatch,
+                                                                 tmp_path,
+                                                                 capsys):
+    """Still allowed -- --ca-mode is how somebody deliberately tests another
+    configuration -- but never the quiet answer, and said before the cluster is
+    built."""
+    captured, exit = _ca_livetest(monkeypatch, tmp_path, FakeClient(),
+                                  CA_FILE_MODE, "--local-proxy",
+                                  "--cluster", "kind", "--ca-mode", "inline")
+    assert exit.code == 0 and captured["ca_mode"] == "inline"
+    out = capsys.readouterr().out
+    assert "file" in out and "--ca-mode inline replaces it" in out
+
+
+@pytest.mark.parametrize("options,says", [
+    ({}, "configures no CA trust"),
+    ({"ca_openshift_inject": True}, "OpenShift trust injection"),
+])
+def test_livetest_defaults_to_inline_where_the_bundle_has_no_rig_mode(
+        monkeypatch, tmp_path, capsys, options, says):
+    """Two bundles answer "no mode this rig can build" and they are not the same
+    bundle: one configures no CA at all, one is OpenShift injection, which the
+    cluster network operator performs and nothing here does. The rig has to
+    configure a CA of its own under interception, so both get inline -- with the
+    sentence that says which of the two happened."""
+    captured, exit = _ca_livetest(monkeypatch, tmp_path, FakeClient(), options,
+                                  "--local-proxy", "--cluster", "kind")
+    assert exit.code == 0 and captured["ca_mode"] == "inline"
+    assert says in capsys.readouterr().out
+
+
 # -- livetest on a docker bundle ----------------------------------------------
 # `--format docker` had never been live-tested at all: the rig applies YAML to a
 # cluster, so a docker bundle was refused outright. #179 gave it the cheapest

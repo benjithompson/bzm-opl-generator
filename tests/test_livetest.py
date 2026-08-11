@@ -1764,6 +1764,157 @@ def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with()
         files["bzm_configmap.yaml"]
 
 
+# -- what a run owes the CA mode it was handed (#251) --------------------------
+#
+# Two halves of one question. A run with no proxy re-renders no CA and deploys
+# what is on disk: for `file` and `existing` that is a ConfigMap this rig never
+# creates, so it is refused before the cluster exists. A run with the proxy
+# re-renders the CA whatever happens -- the CA under test is the proxy's own --
+# so the only question left is which mode it re-renders *to*, and the answer is
+# the bundle's own unless somebody says otherwise.
+
+
+@pytest.mark.parametrize("options,mode", [
+    ({}, None),
+    ({"ca_bundle": CA_PEM}, "inline"),
+    ({"ca_existing_configmap": "corp-trust"}, "existing"),
+    ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"}, "file"),
+    ({"ca_openshift_inject": True}, None),
+])
+def test_the_rig_reads_which_ca_mode_a_bundle_is_already_in(options, mode):
+    """None is the two bundles the rig has no mode for: one with no CA at all,
+    and an OpenShift-injection one -- nothing here injects a trust bundle, the
+    cluster network operator does."""
+    assert livetest.rig_ca_mode(dict(options, namespace="ns1")) == mode
+
+
+def test_every_rig_ca_mode_is_one_the_overlay_can_build():
+    """The flag's choices and the overlay's branches are one list, so a mode
+    named on the command line always has something to render."""
+    for mode in livetest.RIG_CA_MODES:
+        o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode=mode)
+        assert livetest.rig_ca_mode({"namespace": "ns1", **o}) == mode
+
+
+@pytest.mark.parametrize("options,names", [
+    ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"},
+     (gen.CA_CONFIGMAP, "corp-root.pem", "--ca-mode file")),
+    ({"ca_existing_configmap": "corp-trust"},
+     ("corp-trust", "--ca-mode existing")),
+])
+def test_a_ca_configmap_nothing_creates_is_refused_before_the_cluster(options,
+                                                                     names):
+    """The bundle names a ConfigMap somebody else builds -- a pipeline holding
+    the certificate, a platform team holding the trust bundle -- and this rig
+    deploys into a namespace it creates itself, where neither is there. The
+    kubelet holds the pod at ContainerCreating, no heartbeat arrives, and the
+    run spends its whole 12-20 minutes reporting only that the agent never came
+    online. The refusal names the object and the run that would build it."""
+    said = livetest.ca_configmap_refusal(dict(options, namespace="ns1"), False)
+    for name in names:
+        assert name in said
+
+
+def test_a_bundle_that_leaves_the_certificate_unnamed_is_refused_by_its_marker():
+    """A bundle generated before anybody knew what the certificate was called.
+    The marker is what somebody greps the directory with, so it is what the
+    refusal quotes."""
+    said = livetest.ca_configmap_refusal({"namespace": "ns1",
+                                          "ca_bundle_slot": True}, False)
+    assert gen.marker("ca_cert_file") in said
+
+
+@pytest.mark.parametrize("options", [
+    {},
+    {"ca_bundle": CA_PEM},
+    {"ca_openshift_inject": True},
+])
+def test_the_modes_that_carry_their_own_configmap_are_not_refused(options):
+    """Inline writes the ConfigMap into the bundle; inject emits an empty one
+    for the cluster operator to fill, so the object is there and the pod starts
+    -- a cluster with no operator then fails TLS, which is a line in a log
+    rather than a pod that never runs. Neither is this guard's business."""
+    assert livetest.ca_configmap_refusal(dict(options, namespace="ns1"),
+                                         False) is None
+
+
+@pytest.mark.parametrize("options", [
+    {"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"},
+    {"ca_existing_configmap": "corp-trust"},
+])
+def test_the_proxy_is_what_makes_those_two_modes_deployable(options):
+    """--local-proxy replaces whatever mode the profile carried with one the rig
+    builds itself, so under it every mode is fine. That is the honest reason the
+    pairing is safe: #251 found it as an accident, a slot beside the rig's own
+    PEM being `_ca_cfg` refusing the pair."""
+    assert livetest.ca_configmap_refusal(dict(options, namespace="ns1"),
+                                         True) is None
+
+
+@pytest.mark.parametrize("local_proxy", [False, True])
+def test_a_profile_setting_two_ca_modes_is_refused_either_way(local_proxy):
+    """The third answer `generate.ca_mode` keeps separate, arriving where it
+    matters: a re-rendering run would raise out of generate() with the cluster
+    already built, and a lean one would deploy manifests whose own profile
+    disagrees with them. Refused before either can happen, and not read as a
+    bundle with no CA trust."""
+    said = livetest.ca_configmap_refusal(
+        {"namespace": "ns1", "ca_bundle_slot": True, "ca_bundle": CA_PEM},
+        local_proxy)
+    assert said and gen.PROFILE_FILE in said and "CA mode" in said
+
+
+@pytest.mark.parametrize("asked,carried,resolved", [
+    (None, {}, "inline"),
+    (None, {"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"}, "file"),
+    (None, {"ca_openshift_inject": True}, "inline"),
+    ("inline", {"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"},
+     "inline"),
+])
+def test_one_resolver_answers_for_the_cli_and_for_run(asked, carried, resolved):
+    """The default is here rather than in `run()`'s signature and again in the
+    CLI: the CLI needs the answer before the credential mint and `run()` needs
+    it for a caller that is not the CLI at all, so both ask this. Idempotent, so
+    resolving an already-resolved mode is the same answer."""
+    profile = dict(carried, namespace="ns1")
+    assert livetest.resolved_ca_mode(profile, asked) == resolved
+    assert livetest.resolved_ca_mode(profile, resolved) == resolved
+
+
+@pytest.mark.parametrize("options,says", [
+    ({"ca_bundle": CA_PEM}, "what this bundle was generated for"),
+    ({}, "configures no CA trust"),
+    ({"ca_openshift_inject": True}, "OpenShift trust injection"),
+])
+def test_the_run_says_which_ca_mode_it_is_about_to_deploy(options, says):
+    """Three different facts about the bundle, and the two behind one None get
+    their own sentences: no CA at all, and an injection bundle this rig cannot
+    deploy."""
+    profile = dict(options, namespace="ns1")
+    said = livetest.ca_mode_notice(profile,
+                                   livetest.resolved_ca_mode(profile))
+    assert says in said
+
+
+def test_the_notice_says_when_a_flag_replaces_the_bundles_mode():
+    """Still allowed -- --ca-mode is how somebody deliberately tests another
+    configuration -- but never the quiet answer."""
+    said = livetest.ca_mode_notice(
+        {"namespace": "ns1", "ca_bundle_slot": True,
+         "ca_cert_file": "corp-root.pem"}, "inline")
+    assert "file" in said and "--ca-mode inline replaces it" in said
+
+
+def test_the_notice_does_not_claim_the_existing_mode_keeps_the_bundles_object():
+    """True of the mode and false of the object: the rig deploys `existing`
+    under a ConfigMap of its own name and key, because a customer's belongs to a
+    customer. The sentence says so rather than reading as "unchanged"."""
+    said = livetest.ca_mode_notice({"namespace": "ns1",
+                                    "ca_existing_configmap": "corp-trust"},
+                                   "existing")
+    assert livetest.CA_RIG_CONFIGMAP in said
+
+
 def test_a_second_ensure_cluster_does_not_say_the_run_will_keep_what_it_built(
         monkeypatch, capsys):
     """run() creates the cluster and keeps the answer; deploy() then calls

@@ -688,7 +688,14 @@ def cmd_livetest(a):
             f"where that account will not exist. Re-generate without "
             f"--no-create-service-account, or create '{sa}' in {a.namespace} "
             f"yourself before starting the run")
-    # Third guard of the same shape, and the one the mint below cannot cover: a
+    # Third guard of the same shape, about the other object the bundle names and
+    # does not create: the CA ConfigMap of the `file` and `existing` modes. The
+    # sentence is livetest's, because which modes the rig can build is the rig's
+    # answer and the same one --ca-mode is resolved from below.
+    ca_bad = livetest.ca_configmap_refusal(opts, a.local_proxy)
+    if ca_bad:
+        sys.exit(ca_bad)
+    # Fourth guard of the same shape, and the one the mint below cannot cover: a
     # run that re-renders nothing deploys what is on disk, so if that bundle
     # carries the placeholder the agent can never authenticate. Every object
     # applies, no heartbeat arrives, and the run spends its whole 12-20 minutes
@@ -707,8 +714,10 @@ def cmd_livetest(a):
     proxy_user = proxy_pass = None
     # Named rather than ignored: the mode decides how the CA reaches the pod,
     # and without --local-proxy no CA is configured at all -- so a run given
-    # --ca-mode existing alone would report a pass having deployed neither.
-    if a.ca_mode != "inline" and not a.local_proxy:
+    # --ca-mode existing alone would report a pass having deployed neither. Read
+    # off the flag as typed rather than off the resolved mode below, or a bundle
+    # generated for the file mode would be refused for a flag nobody passed.
+    if a.ca_mode and a.ca_mode != "inline" and not a.local_proxy:
         sys.exit("--ca-mode needs --local-proxy: the CA under test is the "
                  "proxy's, and a run without one configures no CA trust at all")
     if a.contain_egress and not (a.local_proxy and a.cluster == "minikube"):
@@ -721,6 +730,17 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
+    # Unsaid, the mode under test is the one the bundle was generated with
+    # (#251). --local-proxy re-renders the CA -- the CA under test is the
+    # proxy's own -- and this used to re-render to `inline` whatever the bundle
+    # carried, so a file-mode bundle was deployed as an inline one and passed,
+    # having proved a configuration nobody had generated. Said here rather than
+    # beside the flag guards above, so a run that is about to be refused for one
+    # of them does not narrate a CA mode first; both the resolution and the
+    # sentence are livetest's, which is also what `run()` resolves through.
+    ca_mode = livetest.resolved_ca_mode(opts, a.ca_mode)
+    if a.local_proxy:
+        print(livetest.ca_mode_notice(opts, ca_mode))
     # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
     # the engine sizing); the callback needs a profile to merge onto, so it is
     # only available when one was found.
@@ -766,7 +786,7 @@ def cmd_livetest(a):
                       negative_control_check=not a.skip_negative_control,
                       contain_egress=a.contain_egress, run_test=a.run_test,
                       engine_cpu=a.engine_cpu, engine_mem=a.engine_mem,
-                      ca_mode=a.ca_mode)
+                      ca_mode=ca_mode)
     sys.exit(0 if ok else 1)
 
 
@@ -1253,8 +1273,7 @@ def main():
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "
                         "knowing whether the rig can fail at all)")
-    t.add_argument("--ca-mode", choices=("inline", "existing", "file"),
-                   default="inline",
+    t.add_argument("--ca-mode", choices=livetest.RIG_CA_MODES,
                    help="with --local-proxy: which CA-trust configuration to "
                         "deploy. 'inline' writes the MITM CA into a ConfigMap "
                         "the generator owns; 'existing' has the rig create one "
@@ -1262,7 +1281,8 @@ def main():
                         "it; 'file' is what the page now generates -- the "
                         "bundle names a certificate file and creates no "
                         "ConfigMap, and the rig builds it the way a customer's "
-                        "pipeline does (default inline)")
+                        "pipeline does. Default: the mode the bundle was "
+                        "generated for, else inline")
     t.add_argument("--proxy-auth", metavar="USER:PASS", default="bzm:s3cr3t",
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
