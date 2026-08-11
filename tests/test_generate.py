@@ -635,24 +635,21 @@ def test_the_create_command_is_in_the_helm_bundle_too():
     assert "create configmap corp-trust" in files["README.md"]
 
 
-def test_the_helm_bundle_makes_the_namespace_before_it_puts_a_configmap_in_it():
-    """Helm's own install line carries `--create-namespace`, so the namespace is
-    allowed not to exist yet -- and a step ahead of it that names the namespace
-    fails with `namespaces "ns1" not found` and no way past it."""
-    readme = gen.generate(FACTS, {"namespace": "ns1", "output_format": "helm",
+@pytest.mark.parametrize("fmt", ["manifests", "helm"])
+def test_a_cluster_bundle_makes_the_namespace_before_it_puts_a_configmap_in_it(fmt):
+    """This step puts an object *in* the namespace, and both formats create the
+    namespace further down the page -- helm with `--create-namespace` on the
+    install line, manifests with the first line of its apply block. Both are too
+    late for a step above them, which fails with `namespaces "ns1" not found`
+    and nothing before it to run.
+
+    Helm was the only format that carried this line until #164, because it was
+    the only one whose Deploy block created a namespace at all."""
+    readme = gen.generate(FACTS, {"namespace": "ns1", "output_format": fmt,
                                   "openshift_cluster": False,
                                   "ca_existing_configmap": "corp-trust"})["README.md"]
     assert "kubectl create namespace ns1" in readme
     assert readme.index("create namespace ns1") < readme.index("create configmap")
-
-
-def test_the_manifests_bundle_does_not_grow_a_namespace_step():
-    """Its apply lines have always assumed the namespace exists -- nothing in
-    that bundle creates one. A step that created it here would be this README
-    answering a question the rest of it does not."""
-    readme = gen.generate(FACTS, {"namespace": "ns1",
-                                  "ca_existing_configmap": "corp-trust"})["README.md"]
-    assert "create namespace" not in readme
 
 
 def test_the_create_command_follows_the_cluster_not_the_posture():
@@ -989,19 +986,26 @@ def test_readme_is_short_and_actionable():
     Measured for **every** sizing model and for a location none of them cover,
     because the location bullet is the one part of this file whose length varies
     with what the location runs -- measuring the performance one measured none
-    of the rest, and two of them had crept past the cap unnoticed (#165)."""
+    of the rest, and two of them had crept past the cap unnoticed (#165).
+
+    The cap moved from 45 to 49 at #164, and that is the one kind of growth it
+    is not guarding against: the Deploy block gained the command that creates
+    the namespace, plus the two lines saying it is safe to run twice and claims
+    nothing. Four lines of instruction rather than four of reasoning -- what
+    this test exists to stop is the essay coming back, and a first command that
+    works is the opposite of that."""
     import bzm_opl_gen.plan as plan_mod
     opts = {"namespace": "ns1", "auth_token": "de" * 32, "sv_ingress": "none"}
     for fids in [[f] for f in plan_mod.SIZING_MODELS] + [["tdm"], []]:
         long = gen.generate({**FACTS, "func_ids": fids, "slots": 2,
                              "threads_per_engine": 500}, opts)["README.md"]
-        assert len(long.splitlines()) < 45, (
+        assert len(long.splitlines()) < 49, (
             f"README for {fids} is {len(long.splitlines())} lines -- creeping "
             f"back towards an essay")
     readme = gen.generate(
         FACTS, {"namespace": "ns1", "auth_token": "de" * 32})["README.md"]
     assert "not finished" not in readme
-    assert len(readme.splitlines()) < 45, "README is creeping back towards an essay"
+    assert len(readme.splitlines()) < 49, "README is creeping back towards an essay"
     # The four things someone needs: what this is, how to deploy, how to check,
     # and what it costs to run.
     assert "apply -f bzm_deployment.yaml" in readme
@@ -1009,6 +1013,74 @@ def test_readme_is_short_and_actionable():
     assert "online" in readme
     assert gen.ENGINE_STAMPED_REQUEST_CPU in readme     # the engine request gap
     assert "bzm_limitrange.yaml" not in readme
+
+
+def _deploy_block(readme):
+    """The lines of the Deploy section, up to the next heading."""
+    return readme.split("## Deploy", 1)[1].split("\n## ", 1)[0].splitlines()
+
+
+@pytest.mark.parametrize("fmt,cli,openshift", [
+    ("manifests", "kubectl", False), ("manifests", "oc", True),
+    ("helm", "kubectl", False), ("helm", "oc", True),
+])
+def test_the_deploy_block_leads_with_a_command_that_makes_the_namespace(
+        fmt, cli, openshift):
+    """The README's first command has to be one that succeeds (#164). Every
+    object in a cluster bundle is namespaced, no file in it is the namespace, so
+    the first apply used to fail on a fresh cluster with `namespaces "ns1" not
+    found` -- and the word namespace appeared in that README exactly once, in
+    the facts table, as a value.
+
+    Both directions are held, because each is a first command that fails. The
+    namespace is created before anything names it, and the creation is
+    idempotent: a plain `create namespace` fails with AlreadyExists on the
+    namespace a platform team already made, which is the common case rather than
+    the odd one. Helm answers both with `--create-namespace` on its install
+    line; the manifests bundle answers them with a create piped through apply,
+    which also claims nothing -- an emitted `bzm_namespace.yaml` would apply
+    from cold and then make `kubectl delete -f .` take the customer's namespace
+    and everything else in it.
+
+    Asserted over the two CLIs because this is a command the bundle prints, and
+    every one of those follows the cluster rather than the posture."""
+    readme = gen.generate(FACTS, {"namespace": "ns1", "output_format": fmt,
+                                  "openshift_cluster": openshift})["README.md"]
+    lines = [ln for ln in _deploy_block(readme)
+             if ln.startswith((cli, "helm "))]
+    assert lines, "the Deploy block prints no command at all"
+    if fmt == "helm":
+        assert lines[0].startswith("helm install")
+        assert "--create-namespace" in lines[0]
+    else:
+        assert lines[0] == (f"{cli} create namespace ns1 --dry-run=client "
+                            f"-o yaml | {cli} apply -f -")
+        # ...and it is the *first* thing, not merely present: everything under
+        # it names the namespace with `-n`.
+        assert all("-n ns1" in ln for ln in lines[1:])
+    # The bundle does not own what it just created, and the README says so
+    # rather than leaving a reader to infer it from a missing manifest.
+    assert "bzm_namespace.yaml" not in gen.generate(
+        FACTS, {"namespace": "ns1", "output_format": fmt})
+
+
+def test_the_docker_readme_names_no_namespace_of_its_own():
+    """A container is not namespaced, so the whole question is a Kubernetes one
+    and this format must not answer it (#164).
+
+    The one place the word may appear is the "Set here, but not carried" table,
+    and only where somebody set the option away from its default: naming it is
+    the honest answer there and dropping it would be a silent one. What may
+    never appear is an *instruction* -- a create, or a `-n` on a command."""
+    for opts in ({}, {"namespace": "ns1"}):
+        readme = gen.generate(FACTS, dict(opts, output_format="docker",
+                                          auth_token="de" * 32))["README.md"]
+        assert "create namespace" not in readme
+        assert "-n ns1" not in readme
+        assert " -n " not in readme
+        if "namespace" in readme:
+            row, = [ln for ln in readme.splitlines() if "`namespace`" in ln]
+            assert row.startswith("| `namespace` |")
 
 
 def _commands(files):

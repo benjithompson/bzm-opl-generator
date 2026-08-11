@@ -2621,6 +2621,34 @@ def _sv_bullet(facts, o):
         f"verifies ever finds out.")
 
 
+def create_namespace_cmd(o):
+    """The namespace command a cluster bundle prints, written so it succeeds
+    whether or not the namespace is already there.
+
+    Every object this generator writes is namespaced and **none of them is the
+    namespace** (#164), so the first line of the manifests README used to fail on
+    a fresh cluster with `namespaces "..." not found`. The two obvious repairs
+    are both wrong in one direction each, and this is the shape that is wrong in
+    neither. A `bzm_namespace.yaml` in the bundle would apply from cold and then
+    make `kubectl delete -f .` take the customer's own namespace and everything
+    else in it -- the "never delete a Service crane created" surprise, one level
+    up, and the reason this is a README line rather than a manifest. A plain
+    `create namespace` is the same bug from the other end: it fails with
+    AlreadyExists on the namespace a platform team already made for us, which is
+    the common case, and a README whose first command fails is what this is
+    about.
+
+    `--dry-run=client -o yaml` renders the object without sending it, and the
+    `apply` that reads it creates the namespace or leaves it as it is. Ownership
+    stays where it was: the annotation apply writes lands on the namespace
+    object, which no file in this bundle names, so no later `delete -f` over
+    these files can reach it.
+    """
+    kc = cli(o)
+    return (f"{kc} create namespace {o['namespace']} --dry-run=client -o yaml "
+            f"| {kc} apply -f -")
+
+
 def _deploy_steps(o, verb):
     """Whatever has to happen before the apply/install, numbered as one list.
 
@@ -2665,17 +2693,15 @@ def _deploy_steps(o, verb):
         # makes the key this bundle mounts the key the command creates, whatever
         # the customer's file happens to be called, so the two cannot be set
         # into disagreement.
-        # ...and on helm the namespace is allowed not to exist yet, because the
-        # install line carries --create-namespace. A ConfigMap step ahead of it
-        # would fail with `namespaces "..." not found` and nothing before it to
-        # run. The manifests README deliberately gets no such line: nothing in
-        # that bundle creates a namespace either, and its apply lines have
-        # always assumed one, so adding it here would have this step answer a
-        # question the rest of that README does not.
-        make_ns = (f"{cli(o)} create namespace {o['namespace']}   "
-                   f"# --create-namespace does it at step {len(steps) + 2}, "
-                   f"which is too late\n"
-                   if o["output_format"] == "helm" else "")
+        # ...and this step puts an object *in* the namespace, so the namespace
+        # has to exist before it. Both cluster formats create one further down
+        # the page -- helm with `--create-namespace` on the install line, the
+        # manifests apply block with its own first line (#164) -- and both are
+        # too late for this step, which would fail with `namespaces "..." not
+        # found` and nothing above it to run. So the command is repeated here,
+        # which costs nothing: it is the idempotent one either way.
+        make_ns = (f"# the namespace has to exist first, and step "
+                   f"{len(steps) + 2} is too late\n{create_namespace_cmd(o)}\n")
         steps.append(
             f"**{{n}}. Create the trust-bundle ConfigMap**, if your platform "
             f"team has not\nalready -- this bundle references `{ca['cm']}`\nin "
@@ -5099,8 +5125,12 @@ def _readme(facts, o, files):
     """Same brief as _helm_readme. The engine request gap and the LimitRange
     history are real but belong in the project README, not in a handover."""
     ns, kc = o["namespace"], cli(o)
+    # The namespace first, because every line under it names one and no file in
+    # this bundle creates it (#164). See create_namespace_cmd for why it is a
+    # command here rather than a `bzm_namespace.yaml` beside the rest.
     apply_lines = "\n".join(
-        f"{kc} -n {ns} apply -f {f}" for f in APPLY_ORDER if f in files)
+        [create_namespace_cmd(o)]
+        + [f"{kc} -n {ns} apply -f {f}" for f in APPLY_ORDER if f in files])
     # Client-side apply copies the object into the last-applied-configuration
     # annotation, which the API server caps at 256KB.
     big_ca = ""
@@ -5139,6 +5169,9 @@ def _readme(facts, o, files):
 {_deploy_steps(o, "Apply")}```
 {apply_lines}
 ```
+
+The first line creates the namespace and succeeds if the namespace exists
+already. It claims nothing, so a later `{kc} delete -f .` leaves the namespace.
 
 {_verify_block(o)}
 ## Worth knowing

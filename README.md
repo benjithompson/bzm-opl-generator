@@ -120,7 +120,11 @@ bzm-opl-gen generate --namespace my-project --auth-token <token> -o out/
 # 4. preflight the target cluster before anyone waits on a stuck run
 bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 
-# 5. deploy
+# 5. deploy. No manifest in the bundle is the namespace -- one that was would
+#    let a later `delete -f` take the namespace too -- so create it here. This
+#    form succeeds whether or not it already exists, and the bundle README
+#    prints the same line
+kubectl create namespace my-project --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -n my-project -f out/
 ```
 

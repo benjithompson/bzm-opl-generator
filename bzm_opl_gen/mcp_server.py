@@ -783,7 +783,12 @@ def _after_generate(out_dir, options):
                 f"-n {options.get('namespace', 'blazemeter')} --create-namespace",
                 "opl_agent status, once the release is up"]
     ns = options.get("namespace", "blazemeter")
-    return [f"kubectl create namespace {ns}",
+    # The bundle's own command rather than a second copy of it: a plain `create
+    # namespace` fails on a namespace that already exists, and this session is
+    # about to be told to run it (#164). Merged onto the defaults because the
+    # options here are whatever the caller supplied, and `cli()` reads two keys
+    # this dict is allowed not to carry.
+    return [gen_mod.create_namespace_cmd({**gen_mod.DEFAULT_OPTIONS, **options}),
             f"kubectl apply -f {out_dir}/ -n {ns}   (YOU run this -- no "
             f"tool here applies anything)",
             "opl_agent status, to see whether the agent reported in"]
