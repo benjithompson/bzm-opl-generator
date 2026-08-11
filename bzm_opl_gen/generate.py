@@ -432,9 +432,18 @@ REQUIRED_TEXT = {
     # elsewhere between a thing nobody supplied and a thing supplied somewhere
     # else. The chart still refuses a marker that reaches it by any other route.
     "auth_token": lambda o: o.get("output_format") != "helm",
-    # Both are refused outright by _sv_cfg when the ingress is a real backend --
-    # a virtual service with no subdomain stalls at WAITING_FOR_DOMAIN, and
-    # crane will not start without the TLS secret even for plain HTTP.
+    # Both matter for the same reason -- a virtual service with no subdomain
+    # stalls at WAITING_FOR_DOMAIN, and crane will not start without the TLS
+    # secret even for plain HTTP -- and both are *marked* rather than refused.
+    #
+    # This comment said "refused outright by _sv_cfg", which was true when it
+    # was written and has not been since `fill_placeholders` moved ahead of the
+    # validators: by the time `_sv_cfg` runs, a blank subdomain is the truthy
+    # string `<SV_SUBDOMAIN>`, so its `missing` check cannot fire and the bundle
+    # renders with the markers in the ConfigMap. The refusal below is still live
+    # for a caller reaching `_sv_cfg` with unfilled options; it is unreachable
+    # through generate(). Measured, not read -- and the download step used to
+    # disable its button on the belief this comment records.
     "sv_subdomain": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
     "sv_tls_secret": lambda o: o.get("sv_ingress") in SV_INGRESS_TYPES,
     # The docker half, and the asymmetry with the pair above is the point.
@@ -2150,45 +2159,55 @@ def _bundle_table(facts, o, extra=()):
 # said; this says who would know -- which is the whole content of the answer for
 # somebody handed a bundle they did not configure, and the reason this block is
 # a table rather than one sentence naming the fields.
+#
+# **Plain prose: no backticks, no `--`, no `*emphasis*`, no `->`.** These
+# sentences have two surfaces now. They are cells in the bundle's README, where
+# Markdown renders them, and they are served over `/api/placeholders` to the
+# download step, which prints them as text -- so the Markdown source is what a
+# reader sees there, and the panel said `create it -- the id is BlazeMeter's` and
+# `re-generate with \`--auth-token\`` with the punctuation showing. Written once,
+# in the characters both surfaces render: an em dash is an em dash and an arrow
+# is an arrow. It is `plan.py`'s rule for its warnings, which are read the same
+# two ways and for the same reason.
 PLACEHOLDER_SOURCE = {
-    "auth_token": "the agent's own token: BlazeMeter -> Settings -> Private "
-                  "Locations -> this agent -> Docker Command, or re-generate "
-                  "with `--auth-token`",
+    "auth_token": "the agent's own token: BlazeMeter → Settings → Private "
+                  "Locations → this agent → Docker Command, or re-generate "
+                  "with --auth-token",
     # The identity, and its answer is a step rather than a lookup: a bundle can
     # be generated before the location exists, and then there is no id to read
     # off anywhere. Both rows say create it first, because that is the actual
     # remedy -- the ids do not exist to be found.
-    "harbor_id": "the private location: BlazeMeter -> Settings -> Private "
-                 "Locations -> this location, or `bzm-opl-gen locations`. If it "
-                 "has not been created yet, create it -- the id is BlazeMeter's "
+    "harbor_id": "the private location: BlazeMeter → Settings → Private "
+                 "Locations → this location, or bzm-opl-gen locations. If it "
+                 "has not been created yet, create it — the id is BlazeMeter's "
                  "to issue",
     "ship_id": "the agent inside that location, from the same page. One "
                "location holds several agents and this bundle is one of them, "
                "so create the agent and take its id and its AUTH_TOKEN "
                "together",
-    "namespace": "the namespace the agent is being deployed into -- your "
+    "namespace": "the namespace the agent is being deployed into — your "
                  "platform team owns this if you do not",
-    "service_account_name": "the account crane runs as. It is *not* safe to "
-                            "leave to the namespace's `default`, which is why "
-                            "this is not defaulted for you",
+    "service_account_name": "the account crane runs as. It is not safe to "
+                            "leave to the namespace's default account, which "
+                            "is why this is not defaulted for you",
     "sv_subdomain": "the DNS suffix virtual-service endpoints are published "
-                    "under, e.g. `apps.example.com` -- it must resolve to your "
+                    "under, e.g. apps.example.com — it must resolve to your "
                     "ingress",
-    "sv_tls_secret": "a wildcard TLS secret in the *agent's* namespace, not "
-                     "`default`; required even for HTTP virtual services",
+    "sv_tls_secret": "a wildcard TLS secret in the agent's own namespace, not "
+                     "default; required even for HTTP virtual services",
     "sv_hostname": "the hostname this agent advertises its virtual services "
-                   "under -- it has to resolve to this host, and to match the "
+                   "under — it has to resolve to this host, and to match the "
                    "certificate below",
     "sv_tls_cert": "the X509 certificate for that hostname, in PEM",
     "sv_tls_key": "its private key, in PEM with PKCS#8 syntax. Never recorded "
-                  "in `profile.json`, so a bundle regenerated from a profile "
+                  "in profile.json, so a bundle regenerated from a profile "
                   "asks for it again",
     "private_registry": "the registry the BlazeMeter images were mirrored into",
     "ca_existing_configmap": "the ConfigMap your platform team keeps the trust "
                              "bundle in",
-    "ca_bundle": "the PEM itself -- your CA *and* the public roots",
-    "proxy.http": "the proxy URL, e.g. `http://proxy:3128`",
-    "proxy.https": "the proxy URL, e.g. `http://proxy:3128`",
+    "ca_bundle": "the PEM itself — your CA and the public roots together",
+    "proxy.http": "the proxy URL, e.g. http://proxy:3128",
+    "proxy.https": "the proxy URL, e.g. http://proxy:3128",
 }
 
 

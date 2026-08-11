@@ -986,6 +986,64 @@ def test_the_marker_rule_is_one_rule_in_both_languages():
         assert gen_mod.marker_in(f"user:pass@{want}:3128") == want
 
 
+def test_the_served_marker_is_the_generators_own():
+    """The download step prints the served marker on the row and sends the one
+    it built itself, so the two have to be one rule. They are -- `placeholders`
+    calls `generate.marker` -- and this is what stops that becoming a second
+    table: a per-key exception here would have the page show `<NAMESPACE>` over
+    a bundle carrying something else, in the one field nobody filled in.
+
+    Beside `test_the_marker_rule_is_one_rule_in_both_languages`, which holds the
+    *page's* copy of the rule to the generator's. This holds the *served* copy
+    to it, and there are three readers now."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/placeholders").json()
+    assert set(body) == set(gen_mod.PLACEHOLDER_SOURCE)
+    for key, entry in body.items():
+        assert entry["marker"] == gen_mod.marker(key), key
+        # Prose, and never empty: the row renders the sentence only when it has
+        # one, so an empty string here would be a field claiming a source it
+        # does not have rather than one nobody read.
+        assert entry["source"].strip()
+
+
+def test_the_placeholder_sentences_render_the_same_two_ways():
+    """These sentences are a cell in the bundle's README, which is Markdown, and
+    a line in the download step's panel, which is text. So they are written in
+    the characters both render.
+
+    The panel is what found it: `create it -- the id is BlazeMeter's` and
+    `re-generate with \x60--auth-token\x60` went on screen with the punctuation
+    showing. `plan.py` keeps this rule for its warnings and for this reason; the
+    difference is that nothing failed when this table broke it, because until
+    now it had one surface."""
+    from bzm_opl_gen import generate as gen_mod
+    for key, source in gen_mod.PLACEHOLDER_SOURCE.items():
+        assert "`" not in source, f"{key}: backticks render as backticks"
+        assert "--" not in source.replace("--auth-token", ""), \
+            f"{key}: use an em dash"
+        assert "->" not in source, f"{key}: use an arrow"
+        assert "*" not in source, f"{key}: emphasis renders as asterisks"
+
+
+def test_the_served_placeholders_carry_no_severity():
+    """One severity, decided on the page and enforced here.
+
+    Every marker has to be filled in before the bundle is applied. Which of
+    them the API server happens to stop first is real -- it is
+    `PLACEHOLDER_REFUSED_BY_API`, and the bundle's README is where it is said --
+    but nothing on the download step reads it, and a served field nothing reads
+    is a second copy of that set waiting to disagree with the first. The four
+    fields it names are in this payload like any other, with a source and
+    nothing else."""
+    from bzm_opl_gen import generate as gen_mod
+    body = client.get("/api/placeholders").json()
+    for key, entry in body.items():
+        assert set(entry) == {"marker", "source"}, key
+    for key in gen_mod.PLACEHOLDER_REFUSED_BY_API:
+        assert key in body, key
+
+
 def test_reserved_env_is_served_with_the_option_that_owns_each_name():
     """The env area on the configure step refuses a name the bundle already
     writes, and it must not keep its own list of them -- a variable added to a

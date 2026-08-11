@@ -2052,6 +2052,32 @@ def agent_env(func_ids=None):
                  or bool(runs & set(v["functionalities"])))]
 
 
+def placeholders():
+    """Every field a bundle can carry a marker for, as
+    {option: {marker, source}}.
+
+    Served for the same reason as ignored_options() and reserved_env(): the
+    marker's *shape* is a rule a caller can apply on its own -- the page builds
+    one before any response has arrived -- but where the value comes from is
+    prose this generator owns, and it reached a browser nowhere. It was in the
+    bundle's README, which is a file somebody opens after the download rather
+    than a sentence beside the field.
+
+    `source` is the whole answer for a field, and there is no severity beside
+    it. `PLACEHOLDER_REFUSED_BY_API` deliberately does **not** appear here: the
+    four fields the API server stops are the README's subject, and a served
+    field nothing renders is a second copy of that set waiting to disagree with
+    the first.
+
+    Keyed by the option, including the two dotted ones and the two that are not
+    options at all (`harbor_id` is a fact, `ship_id` is resolved out of one) --
+    a caller holding a blank field knows it by that name, and the marker is
+    what it will have to look for in the files afterwards.
+    """
+    return {key: {"marker": gen_mod.marker(key), "source": source}
+            for key, source in gen_mod.PLACEHOLDER_SOURCE.items()}
+
+
 def sv_constants():
     """The two service-virtualization enumerations a caller must not hardcode.
 

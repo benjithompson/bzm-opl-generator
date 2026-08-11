@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { MARKER_EXAMPLES } from "./fixtures";
 import { GroupFlags } from "./optionGroups";
 import {
-  blankRequired, marker, placeholderWarning, withPlaceholders,
+  blankRequired, gapSummary, gaps, marker, placeholderWarning,
+  withPlaceholders,
 } from "./placeholder";
 
 /** Every option applies: a Kubernetes bundle. */
@@ -158,5 +159,71 @@ describe("placeholderWarning", () => {
     const w = placeholderWarning(["proxy.http", "proxy.https"]);
     expect(w).toContain("proxy.http (<PROXY_HTTP>)");
     expect(w).toContain("proxy.https (<PROXY_HTTPS>)");
+  });
+});
+
+describe("gaps", () => {
+  it("orders the list the way somebody fills it in", () => {
+    const list = gaps(["harbor_id", "ship_id"], ["namespace"], true, null);
+    expect(list.map((g) => g.key))
+      .toEqual(["harbor_id", "ship_id", "auth_token", "namespace"]);
+  });
+
+  it("sends the identity and the credential back to step 1, and the options "
+     + "to step 2", () => {
+    const list = gaps(["harbor_id"], ["sv_subdomain"], true, null);
+    expect(Object.fromEntries(list.map((g) => [g.key, g.step])))
+      .toEqual({ harbor_id: 1, auth_token: 1, sv_subdomain: 2 });
+  });
+
+  // The bug this pair is for: `incomplete` was a boolean defaulting to true, so
+  // every bundle grew an AUTH_TOKEN row for the moment before the first preview
+  // landed and lost it again. Unread rendering as a gap.
+  it("does not list the token before a preview has answered", () => {
+    expect(gaps([], [], "unread", null).map((g) => g.key)).toEqual([]);
+  });
+
+  it("...and does not list one the preview says is there", () => {
+    expect(gaps([], [], false, null).map((g) => g.key)).toEqual([]);
+  });
+
+  it("carries the marker with no table read at all", () => {
+    const [gap] = gaps([], ["proxy.https"], false, null);
+    expect(gap.marker).toBe("<PROXY_HTTPS>");
+    // Absent, not empty. A row renders the sentence only when it has one, and
+    // "" would be the generator saying there is no answer -- which it never
+    // says. `in` is what the panel's rendering rests on.
+    expect("source" in gap).toBe(false);
+  });
+
+  it("takes the sentence from the served table where there is one", () => {
+    const [ns, sa] = gaps([], ["namespace", "service_account_name"], false,
+                          { namespace: { marker: "<NAMESPACE>",
+                                         source: "your platform team" } });
+    expect(ns.source).toBe("your platform team");
+    // ...and a key the table does not carry is unread, not blank: one entry
+    // arriving must not make the rest look answered.
+    expect("source" in sa).toBe(false);
+  });
+});
+
+describe("gapSummary", () => {
+  const of = (...keys: string[]) => gaps([], keys, false, null);
+
+  it("names them all while they fit", () => {
+    expect(gapSummary(of("namespace"))).toBe("<NAMESPACE>");
+    expect(gapSummary(of("namespace", "auth_token")))
+      .toBe("<NAMESPACE> and <AUTH_TOKEN>");
+  });
+
+  it("counts the tail rather than truncating it", () => {
+    // A header cannot grow, and CSS truncation ends mid-marker and says
+    // nothing about what it dropped. Five fields is an ordinary manual entry.
+    const s = gapSummary(of("a", "b", "c", "d", "e"));
+    expect(s).toBe("<A>, <B> and 3 more");
+  });
+
+  it("says nothing about an empty list", () => {
+    expect(gapSummary([])).toBe("");
   });
 });

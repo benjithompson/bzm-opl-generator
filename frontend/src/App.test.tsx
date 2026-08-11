@@ -1120,10 +1120,46 @@ test("a blank namespace and service account still download, carrying their marke
       namespace: marker("namespace"),
       service_account_name: marker("service_account_name"),
     });
-    // The sentence stays on screen beside the button that just worked. It is the
-    // half that has to be true for allowing the download to be safe.
-    expect(screen.getByText(/are empty, so the bundle will carry/).textContent)
-      .toMatch(/namespace \(<NAMESPACE>\)/);
+    // The list stays on screen beside the button that just worked. It is the
+    // half that has to be true for allowing the download to be safe -- and it
+    // is folded shut, so the bar is what says so: the markers, named, in the
+    // fewest words that name them.
+    const bar = screen.getByRole("button", { name: /Placeholders/ });
+    expect(bar.textContent).toMatch(/<NAMESPACE>/);
+    expect(bar.textContent).toMatch(/<SERVICE_ACCOUNT_NAME>/);
+    // Opening it names the field beside its marker and offers the way back.
+    fireEvent.click(bar);
+    expect(await screen.findByText(/· namespace/)).toBeTruthy();
+  });
+
+test("a blank SV subdomain is a marker, not a disabled download",
+  async () => {
+    // The last off-screen blocker on this step. `ready` carried `sv.ok`, which
+    // reads `svIncomplete`, which is true on a blank `sv_subdomain` or
+    // `sv_tls_secret` -- and those are the sv group's own `requires`, so the
+    // panel listed them as markers the bundle carries while the button beside
+    // it refused to produce that bundle.
+    //
+    // Measured on the server before it was removed here: generate() renders
+    // both, emitting <SV_SUBDOMAIN> and <SV_TLS_SECRET> into the ConfigMap.
+    // `_sv_cfg`'s refusal cannot fire after `fill_placeholders` has run.
+    //
+    // An SV location with nothing configured, which is the state the page puts
+    // itself in: the location's funcIds seed the backend, and neither of the
+    // two fields that backend requires has been typed.
+    const asked: Options[] = [];
+    render(<App api={svAccount(asked)} />);
+    fireEvent.click(await screen.findByText("Mocks"));
+    await waitFor(() => expect(
+      asked[asked.length - 1]?.sv_ingress).toBe("nginx"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+    const button = await screen.findByRole<HTMLButtonElement>(
+      "button", { name: /Download bundle/ });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    // ...and it says what it carries instead of refusing to carry it.
+    const bar = screen.getByRole("button", { name: /Placeholders/ });
+    expect(bar.textContent).toMatch(/<SV_SUBDOMAIN>/);
   });
 
 test("the scheduling radio prescribes a dedicated engine pool, and the choice reaches the bundle",
@@ -2378,6 +2414,38 @@ test("manual entry generates for a location that does not exist yet",
     expect(warning.textContent).toMatch(/harbor_id \(<HARBOR_ID>\)/);
     expect(warning.textContent).toMatch(/ship_id \(<SHIP_ID>\)/);
     expect(warning.textContent).toMatch(/auth_token \(<AUTH_TOKEN>\)/);
+  });
+
+test("a bundle with nothing left blank says so, and offers nothing to open",
+  async () => {
+    // The other end of the same panel. A finished bundle used to get silence --
+    // the four warning cards simply were not rendered -- and silence reads
+    // exactly like a step that has not been reached. So the section states it,
+    // with the tick every other finished thing on this page gets.
+    //
+    // **And it is not a fold.** Given no `open`/`onToggle` a `SubSection` is
+    // permanently open, so an empty one drew a blank padded strip under the
+    // header; given them it would be a chevron over nothing. Both are a panel
+    // claiming to hold something. Asserted as "there is no button here",
+    // because that is the shape either mistake takes.
+    const generated: Options[] = [];
+    render(<App api={manualPage([], generated, {
+      // The one difference from the fixture's default: a bundle that carries
+      // the credential. `placeholder` is what every other manual test wants,
+      // and it is the branch that puts <AUTH_TOKEN> in the list.
+      generate: async (_facts: unknown, options: Options) => {
+        generated.push(options);
+        return { files: [], token: { branch: "given" as const,
+                                     ship_id: TYPED.ship, message: "" } };
+      },
+    })} />);
+    await declareManually();
+    fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
+
+    expect(await screen.findByText(/Nothing left to fill in/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Nothing left to fill in/ }))
+      .toBeNull();
+    expect(screen.queryByRole("button", { name: /Placeholders/ })).toBeNull();
   });
 
 test("the empty identity boxes show the marker the bundle will carry",

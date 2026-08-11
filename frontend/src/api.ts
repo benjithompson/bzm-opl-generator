@@ -115,6 +115,22 @@ export interface SlotMinimum {
   message: string;
 }
 
+/** Where the value for one marked field comes from — generate's
+ *  PLACEHOLDER_SOURCE, one entry per option a bundle can leave blank.
+ *
+ *  Two fields and no third. There is no severity here on purpose: every marker
+ *  has to be filled in before the bundle is applied, and the four the API
+ *  server happens to stop first are the README's subject rather than this
+ *  page's. A flag saying which would be a second copy of
+ *  `PLACEHOLDER_REFUSED_BY_API` for nothing on screen to read. */
+export interface PlaceholderSource {
+  /** `<NAMESPACE>` — the same string `placeholder.marker` builds, so a row can
+   *  be rendered before this request lands and does not change when it does. */
+  marker: string;
+  /** One sentence: where somebody gets the value. Prose, not markup. */
+  source: string;
+}
+
 /** What one pod of a given engine size is rated for, from /api/engine-vus.
  *
  *  Asked as soon as the size changes rather than waiting for a plan: the figure
@@ -507,6 +523,19 @@ export const api = {
    *  and a variable added to a template would otherwise go on being offered
    *  until the collision surfaced as a duplicate ConfigMap key. */
   reservedEnv: () => req<Record<string, string | null>>("GET", "/api/reserved-env"),
+  /** {option: {marker, source}} for every field a bundle can carry a marker
+   *  for — generate's PLACEHOLDER_SOURCE. Served for the same reason as the
+   *  tables above: the marker's *shape* is a rule this page applies on its own
+   *  (`placeholder.marker`, which has to answer before any response arrives),
+   *  but where the value comes from is the generator's prose, and it reached a
+   *  browser nowhere — it was in the bundle's README, which is a file somebody
+   *  opens after the download rather than a sentence beside the field.
+   *
+   *  `source` is the whole of what a row says, and no severity comes with it.
+   *  A key this has no entry for is a field whose source has not been read, and
+   *  the row renders without the sentence rather than with an empty one. */
+  placeholders: () => req<Record<string, PlaceholderSource>>(
+    "GET", "/api/placeholders"),
   /** ...and the other half of the same question: the variables `extra_env` can
    *  usefully carry, which is BlazeMeter's documented reference minus every
    *  name a control on this page already writes (core.agent_env). Served, so
