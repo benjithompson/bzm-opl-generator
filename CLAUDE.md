@@ -143,8 +143,14 @@ object crane created is correct — the location is going away regardless.
   (#234). **The rig says that itself now** (#242) — a warning in `cmd_livetest`,
   beside the two pairing rules that are refusals, naming the engine image as the
   one thing the run cannot fail on. A warning and not a refusal, because the
-  flag does reach something: crane's own image, the blackhole, and the overrides
-  the agent resolves for itself. This bullet was the whole guard until then, and
+  flag does reach something. What that something is, is stated narrowly and on
+  purpose: crane's own image, and the blackhole **only where the cluster is
+  minikube**, which is the only cluster `blackhole_public_registries` acts on.
+  It claims nothing about how crane resolves an `IMAGE_OVERRIDES` entry, which
+  #234 left unread. And it is silent for a location that runs no engine
+  (`facts.runs_engine`) — an SV-only agent has no engine image to miss and no
+  `--run-test` that would start one, so warning there would name a gap the run
+  never had. This bullet was the whole guard until then, and
   a sentence nobody executes is what the fifth recurrence of a rule is made of.
   The rig's own mirror is `livetest.mirror_images`, and it reads the
   generator's destinations rather than keeping a rule of its own — it had one,

@@ -143,10 +143,12 @@ anything that breaks.
   for the engine: no engine exists unless `--run-test` starts one, so a
   crane-only run pulls no engine image and a wrong engine reference passes. A
   private-registry defect survived months of green runs that way. The run now
-  prints a warning naming that gap, and continues -- what the flag does prove
-  without a test is crane's own image, the blackhole, and the overrides the
-  agent resolves for itself. Pass `--run-test` as well and the run says nothing,
-  having covered the engine.
+  prints a warning naming that gap, and continues -- what the flag does cover
+  without a test is crane's own image, plus the blackholed public registries on
+  minikube, which is the only cluster the blackhole acts on. Pass `--run-test`
+  as well and the run says nothing, having covered the engine. A location that
+  runs no engine -- a service-virtualization agent carries none -- gets no
+  warning either, having no engine image to miss.
 
 ## [0.4.1] — 2026-08-08
 

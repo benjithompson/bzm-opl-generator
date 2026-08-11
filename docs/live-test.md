@@ -126,10 +126,12 @@ down with the cluster.
 
 **`--local-registry` covers the engine image only with `--run-test`.** No engine
 exists unless a test starts one, so a crane-only run pulls no engine image and a
-wrong engine reference passes. The run still proves crane's own image, the
-blackholed public registries, and the overrides the agent resolves itself. The
-rig prints that gap when the pair is not run together; #234 is the defect it
-hid, wrong for months while every private-registry run reported a pass.
+wrong engine reference passes. What the run still covers is crane's own image,
+and the blackholed public registries where the cluster is minikube — the only
+cluster the blackhole acts on. The rig prints that gap when the pair is not run
+together; #234 is the defect it hid, wrong for months while every
+private-registry run reported a pass. A location that runs no engine gets no
+warning, having no engine image to miss.
 
 `--local-proxy` is deliberately hostile: mitmproxy terminates TLS with its own
 CA, so `*.blazemeter.com` is unreachable unless the generated `REQUESTS_CA_BUNDLE`

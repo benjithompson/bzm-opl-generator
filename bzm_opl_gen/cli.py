@@ -732,22 +732,37 @@ def cmd_livetest(a):
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
     # The third pairing rule, and the only one that warns (#242). The two above
     # refuse because the flag would otherwise reach nothing; --local-registry
-    # reaches plenty on its own -- crane's image, the blackhole, the overrides
-    # the agent resolves for itself -- and one thing less than the reader
-    # assumes. Nothing pulls the engine image unless --run-test starts an
-    # engine, so a wrong engine reference passes here. That is how #234 lived
-    # for months: the first run to combine the two failed immediately, on the
-    # engine and nothing else, while crane pulled from the same registry in the
-    # same run. Said after every refusal above, so a run about to be refused
-    # does not narrate a gap it will never reach.
-    if a.local_registry and not a.run_test:
-        print("warning: --local-registry without --run-test does not cover the "
-              "engine image. This run starts crane and no engine, so nothing "
-              "pulls the engine reference the bundle composed, and a wrong one "
-              "cannot fail here. The run still proves crane's own image, the "
-              "blackholed public registries, and the overrides the agent "
-              "resolves itself. Add --run-test <TEST_ID> to cover the engine "
-              "(#234).")
+    # reaches something on its own and one thing less than the reader assumes.
+    # Nothing pulls the engine image unless --run-test starts an engine, so a
+    # wrong engine reference passes here. That is how #234 lived for months: the
+    # first run to combine the two failed immediately, on the engine and nothing
+    # else, while crane pulled from the same registry in the same run. Said
+    # after every refusal above, so a run about to be refused does not narrate a
+    # gap it will never reach.
+    #
+    # ...and only where this location runs an engine at all. An SV-only agent
+    # carries crane, group-gateway and service-mock and no taurus engine, so
+    # there is no engine image for the run to miss and no --run-test that would
+    # start one: warning there would name a gap the run never had. Read through
+    # `facts.runs_engine`, which is where that answer already is. Empty funcIds
+    # are the performance case, which is what `facts.needed_categories` defaults
+    # them to, so they warn.
+    func_ids = f.get("func_ids") or []
+    engine_here = not func_ids or any(facts_mod.runs_engine(i) for i in func_ids)
+    if a.local_registry and not a.run_test and engine_here:
+        # What the run *does* cover, and no more than that. The blackhole is
+        # minikube's alone -- blackhole_public_registries prints a skip note on
+        # every other cluster -- so claiming it unconditionally would be this
+        # warning making the mistake it is about. What crane resolves an
+        # IMAGE_OVERRIDES entry by is deliberately not claimed either: #234
+        # settled where the mirror must push and left that mechanism unread.
+        covered = ("crane's own image and the public registries blackholed on "
+                   "the node" if a.cluster == "minikube" else "crane's own image")
+        print(f"warning: --local-registry without --run-test does not cover "
+              f"the engine image. This run starts crane and no engine, so "
+              f"nothing pulls the engine reference the bundle composed, and a "
+              f"wrong one cannot fail here. What it does cover is {covered}. "
+              f"Add --run-test <TEST_ID> to cover the engine (#234).")
     # Unsaid, the mode under test is the one the bundle was generated with
     # (#251). --local-proxy re-renders the CA -- the CA under test is the
     # proxy's own -- and this used to re-render to `inline` whatever the bundle
