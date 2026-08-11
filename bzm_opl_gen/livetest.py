@@ -108,8 +108,10 @@ class Owned(collections.namedtuple(
         "Owned", "cluster namespace blackholed ca_configmap")):
     __slots__ = ()
 
+    # ca_configmap is the *name* this run created, or None -- two modes create
+    # one and they create different names (see run()).
     def __new__(cls, cluster=False, namespace=False, blackholed=(),
-                ca_configmap=False):
+                ca_configmap=None):
         return super().__new__(cls, cluster, namespace, tuple(blackholed),
                                ca_configmap)
 
@@ -339,13 +341,26 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
     """generate() options that point the agent at the local mitm proxy and make
     it trust the mitm CA.
 
-    Two CA modes, because both are real customer configurations and only one had
-    ever been deployed under interception (#227):
+    Three CA modes, because each is a real customer configuration and only one
+    had ever been deployed under interception (#227):
 
       inline    -- the generator owns the ConfigMap and writes the PEM into it.
       existing  -- the *rig* owns a ConfigMap (ensure_ca_configmap) and the
-                   bundle only references it, which is the mode BlazeMeter
-                   recommend and nearly every customer takes.
+                   bundle only references it by a name of its own.
+      file      -- the bundle names a certificate *file* and creates no
+                   ConfigMap; the ConfigMap is built from that file, under the
+                   generator's own name, which is what a customer's pipeline
+                   does with the `kubectl create configmap --from-file` line the
+                   README prints (#256). This is what the page now offers, so it
+                   is the mode most bundles will be, and it is the one whose
+                   failure mode is a pod that never starts rather than one that
+                   starts and trusts nothing.
+
+    `existing` and `file` differ in exactly one thing -- who names the ConfigMap
+    -- and that is worth both being here: `file` uses generate.CA_CONFIGMAP,
+    which the bundle also writes into KUBERNETES_CA_BUNDLE_MOUNT, so a run
+    proves the two agree; `existing` uses a name of the rig's own, which proves
+    the bundle carries whatever it was told.
 
     Whichever is asked for, every other mode is cleared: the overlay is merged
     onto a profile.json that may already carry any of them, and _ca_cfg refuses
@@ -359,9 +374,15 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
         proxy["username"] = user
         if password:
             proxy["password"] = password
-    mode = ({"ca_existing_configmap": CA_RIG_CONFIGMAP,
-             "ca_configmap_key": CA_RIG_KEY} if ca_mode == "existing"
-            else {"ca_bundle": ca_pem})
+    mode = {
+        "existing": {"ca_existing_configmap": CA_RIG_CONFIGMAP,
+                     "ca_configmap_key": CA_RIG_KEY},
+        # The key is deliberately not `ca-bundle.crt` here either: that is what
+        # _ca_cfg falls back to, so a run using it would pass whether or not
+        # ca_cert_file reached anything.
+        "file": {"ca_bundle_slot": True, "ca_cert_file": CA_RIG_KEY},
+        "inline": {"ca_bundle": ca_pem},
+    }[ca_mode]
     return {"proxy": proxy, **generate.no_ca(), **mode}
 
 
@@ -1747,7 +1768,12 @@ def teardown(manifest_dir, namespace, cluster="current", owned=None):
     # and ensure_ca_configmap refuses one it did not create, which would make
     # the next run into this namespace fail over an object this rig left there.
     if owned.ca_configmap:
-        _run([cli, "-n", namespace, "delete", "cm", CA_RIG_CONFIGMAP,
+        # The name this run created, not a constant: `--ca-mode file` has the
+        # rig make the *generator's* ConfigMap, so a hardcoded CA_RIG_CONFIGMAP
+        # here would delete nothing and leave blazemeter-cacerts behind in a
+        # namespace that survives -- which the next run's ensure_ca_configmap
+        # then refuses, over an object this rig left there.
+        _run([cli, "-n", namespace, "delete", "cm", owned.ca_configmap,
               "--ignore-not-found"], check=False)
     for f in sorted(glob.glob(os.path.join(manifest_dir, "*.yaml"))):
         _run([cli, "-n", namespace, "delete", "-f", f, "--ignore-not-found"], check=False)
@@ -1952,11 +1978,6 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
                   f"MITM CA bundle {len(ca_pem)} bytes")
             if not verify_proxy_reachable(host, cluster, proxy_user, proxy_pass):
                 return False
-            # Before the negative control, which deploys with no CA configured
-            # at all and so never references this. One creation, one owner.
-            if ca_mode == "existing":
-                owned = owned._replace(ca_configmap=ensure_ca_configmap(
-                    cli_tool(), namespace, ca_pem))
             overlay = {**proxy_overlay(host, PROXY_PORT, ca_pem,
                                        proxy_user, proxy_pass, ca_mode),
                        **engine_overlay}
@@ -1966,6 +1987,24 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             if negative_control_check and not negative_control(
                     regenerate, overlay, manifest_dir, namespace, cluster):
                 return False
+            # *After* the negative control, and that is not a tidy-up: the
+            # control deletes CA_CONFIGMAP by name, because a control that
+            # deployed with the CA still mounted would prove nothing. For
+            # `file` that is the very object the rig creates -- the bundle
+            # names the generator's ConfigMap and creates none -- so making it
+            # first meant making it and then having the control delete it, and
+            # the real deploy mounted a ConfigMap that was no longer there:
+            # ContainerCreating until the rollout timed out, measured, with the
+            # bundle itself correct. `existing` never showed it, its name being
+            # the rig's own and untouched by that delete.
+            #
+            # The name is *recorded* rather than assumed, because teardown has
+            # to delete what this run made and the two modes make different
+            # names. A boolean was enough while only one mode created anything.
+            if ca_mode in ("existing", "file"):
+                cm_name = generate.CA_CONFIGMAP if ca_mode == "file" else CA_RIG_CONFIGMAP
+                ensure_ca_configmap(cli_tool(), namespace, ca_pem, name=cm_name)
+                owned = owned._replace(ca_configmap=cm_name)
             regenerate(overlay)
             opts = dict(opts or {}, **overlay)
             # Everything the negative control put in the log belongs to a run

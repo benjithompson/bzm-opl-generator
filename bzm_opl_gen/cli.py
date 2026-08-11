@@ -1253,12 +1253,16 @@ def main():
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "
                         "knowing whether the rig can fail at all)")
-    t.add_argument("--ca-mode", choices=("inline", "existing"), default="inline",
+    t.add_argument("--ca-mode", choices=("inline", "existing", "file"),
+                   default="inline",
                    help="with --local-proxy: which CA-trust configuration to "
                         "deploy. 'inline' writes the MITM CA into a ConfigMap "
                         "the generator owns; 'existing' has the rig create one "
-                        "and the bundle only reference it, which is the mode "
-                        "BlazeMeter recommend (default inline)")
+                        "under a name of its own and the bundle only reference "
+                        "it; 'file' is what the page now generates -- the "
+                        "bundle names a certificate file and creates no "
+                        "ConfigMap, and the rig builds it the way a customer's "
+                        "pipeline does (default inline)")
     t.add_argument("--proxy-auth", metavar="USER:PASS", default="bzm:s3cr3t",
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")

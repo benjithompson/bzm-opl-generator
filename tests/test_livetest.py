@@ -1611,9 +1611,25 @@ def test_teardown_removes_the_ca_configmap_from_a_namespace_it_kept(
     monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
     livetest.teardown(str(tmp_path), "ns1", "kind",
-                      livetest.Owned(ca_configmap=True))
+                      livetest.Owned(ca_configmap=livetest.CA_RIG_CONFIGMAP))
     assert ["kubectl", "-n", "ns1", "delete", "cm", livetest.CA_RIG_CONFIGMAP,
             "--ignore-not-found"] in cmds
+
+
+def test_teardown_removes_the_name_this_run_made_not_a_constant(
+        monkeypatch, tmp_path):
+    """`--ca-mode file` has the rig create the *generator's* ConfigMap, because
+    that is the one the bundle mounts and does not create. Deleting
+    CA_RIG_CONFIGMAP by name would remove nothing and leave blazemeter-cacerts
+    in a surviving namespace, which the next run is then refused over."""
+    cmds = []
+    monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    livetest.teardown(str(tmp_path), "ns1", "kind",
+                      livetest.Owned(ca_configmap=gen.CA_CONFIGMAP))
+    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+            "--ignore-not-found"] in cmds
+    assert not any(livetest.CA_RIG_CONFIGMAP in c for c in cmds)
 
 
 def test_teardown_does_not_remove_a_ca_configmap_this_run_did_not_create(
@@ -1625,9 +1641,39 @@ def test_teardown_does_not_remove_a_ca_configmap_this_run_did_not_create(
     assert not any(livetest.CA_RIG_CONFIGMAP in c for c in cmds)
 
 
+def test_the_negative_control_deletes_the_name_the_file_mode_depends_on(
+        monkeypatch, tmp_path):
+    """Why the rig creates its ConfigMap *after* the control, not before.
+
+    The control has to deploy with no CA reachable, so it deletes CA_CONFIGMAP
+    by name. In `--ca-mode file` that is exactly the object the rig creates --
+    the bundle mounts the generator's ConfigMap and creates none -- so creating
+    it first meant creating it and then having the control delete it. Measured:
+    the real deploy mounted a ConfigMap that was no longer there and sat in
+    ContainerCreating until the rollout timed out, with the bundle itself
+    correct. `existing` never showed it, its name being the rig's own.
+
+    Asserted over the command the control runs, so the ordering rule in run()
+    has something that fails when the name it deletes changes."""
+    cmds = []
+    monkeypatch.setattr(livetest, "_run",
+                        lambda cmd, **kw: cmds.append(cmd))
+    monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
+    monkeypatch.setattr(livetest, "deploy", lambda *a, **k: "kubectl")
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    overlay = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
+    livetest.negative_control(lambda o: None, overlay, str(tmp_path), "ns1",
+                              "kind", timeout=0)
+    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+            "--ignore-not-found"] in cmds
+
+
 def test_owned_still_defaults_to_owning_nothing():
-    """The field is new; the rule it has to keep is not."""
-    assert livetest.Owned().ca_configmap is False
+    """The field carries a *name* now, so the safe default is None rather than
+    False -- teardown branches on it either way, and a run that fell over before
+    it created anything must still own nothing."""
+    assert livetest.Owned().ca_configmap is None
 
 
 def test_the_negative_control_clears_whichever_mode_the_run_is_using(
@@ -1678,11 +1724,44 @@ def test_the_proxy_overlay_replaces_every_ca_mode_too():
     may carry any mode, so a slot left standing beside the rig's own PEM is
     `_ca_cfg` refusing the pair -- the run dies at the re-render instead of at
     the deploy, which is louder and just as wrong."""
-    for mode in ("inline", "existing"):
+    for mode in ("inline", "existing", "file"):
         o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode=mode)
         for key in gen.CA_OPTIONS:
             assert key in o, f"{mode}: {key} is left for the profile to answer"
         assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
+
+
+def test_the_file_mode_names_the_configmap_the_bundle_itself_writes():
+    """The rig has to create the object the bundle references, and for the file
+    mode that name is the *generator's* -- it is what lands in
+    KUBERNETES_CA_BUNDLE_MOUNT, so a rig ConfigMap under any other name is one
+    the agent never mounts and the run fails for a reason that is the rig's.
+
+    The key is deliberately not `ca-bundle.crt`: that is `_ca_cfg`'s fallback,
+    so a run using it would pass whether or not `ca_cert_file` reached
+    anything -- the same trap `existing` avoids with the same key."""
+    o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
+    ca = gen._ca_cfg({**gen.DEFAULT_OPTIONS, **o})
+    assert ca["mode"] == "file"
+    assert ca["cm"] == gen.CA_CONFIGMAP
+    assert ca["key"] == livetest.CA_RIG_KEY != gen.CA_FILENAME
+
+
+def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with():
+    """`ensure_ca_configmap` refuses a name it did not create, which is the rule
+    that stops the rig replacing a trust bundle that is somebody's. That rule
+    only holds here because the bundle emits no ConfigMap of its own -- if it
+    still shipped one, applying the bundle and then creating the rig's would be
+    the rig colliding with itself."""
+    from test_generate import FACTS
+    o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
+    files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222", **o})
+    assert gen.CA_CONFIGMAP_FILE not in files
+    # ...and the Deployment still mounts it, which is the half that makes the
+    # rig-created object reachable at all.
+    dep = files["bzm_deployment.yaml"]
+    assert gen.CA_CONFIGMAP in dep and livetest.CA_RIG_KEY in \
+        files["bzm_configmap.yaml"]
 
 
 def test_a_second_ensure_cluster_does_not_say_the_run_will_keep_what_it_built(
