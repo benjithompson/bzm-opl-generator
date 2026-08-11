@@ -1113,6 +1113,56 @@ def _ca_cfg(o):
 # kubelet saying it rather than a container this generator wrote.
 
 
+# Options that name no CA trust this generator can resolve -- two modes set at
+# once, which `_ca_cfg` refuses. A string, and never None or False, for
+# `ui_build.UNRECORDED`'s reason: a caller that forgets it gets a value that
+# matches no mode and no emptiness test rather than one that quietly reads as
+# "this bundle configures no CA".
+CA_UNRESOLVED = "unresolved"
+
+
+def resolved_ca(options):
+    """The CA trust these options resolve to, for a caller that is *describing*
+    a bundle rather than rendering one: `{cm, key, mode}`.
+
+    Three answers, and the third is this repo's central rule. A bundle that
+    configures no CA trust at all is None. Options `generate` is going to refuse
+    -- `_ca_cfg` refuses `ca_bundle_slot` beside `ca_bundle` -- are
+    `CA_UNRESOLVED`, never None: "nobody configured a CA" and "this cannot be
+    read as a CA configuration" are opposite facts, and a reader that folded
+    them together would tell somebody their bundle has no CA trust about one
+    that has two.
+
+    Raw options, defaults merged here, so a caller holding what somebody typed
+    can ask without resolving first (the CLI does, before `generate` runs at
+    all) and a caller holding a profile.json can ask without merging (livetest
+    does). It does not raise: the refusal is `generate`'s to make one line
+    later, and a *reader* that raised would put a ValueError in the MCP server's
+    warning list and in a rig guard whose whole job is to be the thing that
+    speaks before anything is built.
+    """
+    try:
+        return _ca_cfg({**DEFAULT_OPTIONS, **(options or {})})
+    except ValueError:
+        return CA_UNRESOLVED
+
+
+def ca_mode(options):
+    """`resolved_ca` read for the mode alone -- "existing", "inline", "file",
+    "inject", None, or `CA_UNRESOLVED`, which are the same six answers.
+
+    The one reader for callers that have to act on the *mode* rather than on the
+    keys: livetest, which creates the ConfigMap for two of them and can create
+    it for neither of the other two. Reading `o["ca_bundle_slot"]` and friends
+    at those call sites is what #250 was, four times over; this is the same
+    answer `_ca_cfg` already computes to render the bundle.
+    """
+    ca = resolved_ca(options)
+    if ca is CA_UNRESOLVED:
+        return ca
+    return ca["mode"] if ca else None
+
+
 def ca_slot_notice(options):
     """What `generate` says out loud about a certificate it does not carry.
 
@@ -1121,23 +1171,15 @@ def ca_slot_notice(options):
     act on it is now. Everything here is said again in the README, for the
     person who applies the bundle, because those are routinely two people.
 
-    Takes raw options and merges the defaults itself, so a caller holding what
-    somebody typed can ask without resolving first (the CLI does, before
-    `generate` runs at all).
-
-    Anything `generate` is going to refuse answers None rather than a sentence
-    -- a contradictory pair (`_ca_cfg` refuses `ca_bundle_slot` beside
-    `ca_bundle`), a format nobody offers. Those refusals are `generate`'s to
-    make one line later, and announcing a file first would describe a bundle
-    that is about to be refused. This is a *notice*: it must not be the thing
-    that raises, least of all from inside the MCP server's warning list.
+    Anything `generate` is going to refuse answers None rather than a sentence:
+    a contradictory pair, which `resolved_ca` answers `CA_UNRESOLVED` for, and a
+    format nobody offers, through the `builds` lookup below. This is a *notice*:
+    it must not be the thing that raises, least of all from inside the MCP
+    server's warning list.
     """
     o = {**DEFAULT_OPTIONS, **options}
-    try:
-        ca = _ca_cfg(o)
-    except ValueError:
-        return None
-    if not ca or ca["mode"] != "file":
+    ca = resolved_ca(options)
+    if ca is CA_UNRESOLVED or not ca or ca["mode"] != "file":
         return None
     # Two different facts, and only one of them is a thing left undone. An
     # unnamed file is a bundle nobody has finished; a named one is complete and

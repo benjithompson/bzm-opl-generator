@@ -3873,6 +3873,37 @@ def test_the_file_mode_is_one_of_the_ca_modes_not_a_fourth_thing():
     assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **CERT_FILE_OPTS, **cleared}) is None
 
 
+@pytest.mark.parametrize("options,mode", [
+    ({}, None),
+    ({"ca_bundle": "-----BEGIN CERTIFICATE-----"}, "inline"),
+    ({"ca_existing_configmap": "corp-trust"}, "existing"),
+    ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.crt"}, "file"),
+    ({"ca_openshift_inject": True}, "inject"),
+])
+def test_the_mode_a_bundle_is_in_is_readable_without_rendering_it(options, mode):
+    """One reader for callers that act on the *mode* rather than on the keys --
+    livetest creates the ConfigMap for two of these and can create it for
+    neither of the others. Reading `ca_bundle_slot` and its neighbours at each
+    such call site is what #250 was, four times over."""
+    assert gen.ca_mode(dict(options, namespace="ns1")) == mode
+
+
+def test_options_generate_will_refuse_are_their_own_answer_not_no_ca():
+    """"Nobody configured a CA" and "this cannot be read as a CA configuration"
+    are opposite facts, so they may not share a representation -- a reader that
+    folded them together would tell somebody their bundle has no CA trust about
+    one that has two. It still does not raise: this is read by a rig guard whose
+    whole job is to speak before anything is built."""
+    both = {"namespace": "ns1", "ca_bundle_slot": True,
+            "ca_bundle": "-----BEGIN CERTIFICATE-----"}
+    assert gen.ca_mode(both) is gen.CA_UNRESOLVED
+    assert gen.resolved_ca(both) is gen.CA_UNRESOLVED
+    assert gen.ca_mode({"namespace": "ns1"}) is None
+    # And the notice above it still says nothing about a bundle generate is
+    # about to refuse.
+    assert gen.ca_slot_notice(both) is None
+
+
 def test_generate_says_it_before_the_bundle_is_even_written():
     """The person who runs the command chose the file mode and can act now; the
     README says it again for the person who applies the bundle, who is routinely

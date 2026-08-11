@@ -1033,6 +1033,18 @@ comparison, which is the same rule from the other side: a timestamp answered a
 question nobody asked, so every `git pull` read as a stale page. The banner is
 `frontend/src/build.ts`, which owns the wording and the tone for all four.
 
+A seventh, over the generator's own options: **`generate.resolved_ca` answers
+`CA_UNRESOLVED` for options `_ca_cfg` refuses**, never None (#251). None there
+is a bundle that configures no CA trust, and a bundle setting two modes is one
+nothing can read as a CA configuration — opposite facts, and folded together
+they tell somebody their bundle has no CA about one that has two. A string, for
+`UNRECORDED`'s reason: it matches no mode and no emptiness test. It does not
+raise, because its readers are `ca_slot_notice` (inside the MCP server's warning
+list) and `livetest.ca_configmap_refusal`, whose whole job is to be the thing
+that speaks before anything is built — and that refusal is the one caller that
+acts on the third answer, so every reader after it may treat None as "no mode of
+mine".
+
 **The page has a Refresh, and it is a button because the staleness is rare.**
 What the page holds ages while it is open (an agent a colleague created, a
 location deleted in BlazeMeter's own UI, somebody else raising a location's
@@ -1116,6 +1128,21 @@ stale list can cost a credential nothing can read back.
   `cmd_livetest` before the token mint and again at the top of `livetest.run`
   before the try block — outside it, because that `finally` tears down a cluster.
   Unreadable is a note, not a refusal.
+
+  **What a re-render owes a value it is not injecting is: the bundle's own
+  answer** (#251). The CA is the one mode-valued option the rig replaces, and
+  `--ca-mode` defaulted to `inline` whatever the bundle carried — so a
+  file-mode bundle under `--local-proxy` was deployed as an inline one and
+  passed, proving a configuration nobody had generated. It now defaults to
+  `livetest.rig_ca_mode(profile)`, which reads `generate.ca_mode` rather than
+  the four CA keys, and a run that *does* replace the mode says so before the
+  cluster is built. The other half is the modes the rig cannot supply: `file`
+  and `existing` both name a ConfigMap the bundle does not create, and a rig
+  namespace is one this run just made, so without `--local-proxy` they are
+  refused by `livetest.ca_configmap_refusal` — beside the ServiceAccount and
+  AUTH_TOKEN guards, for their reason, and before the mint. `inject` is not
+  refused: its ConfigMap is emitted (empty), so the pod starts and the failure
+  is a log line rather than a pod that never runs.
 - **`--format docker` is a different platform, not a third rendering.** One
   agent as one container; there is no namespace, no ServiceAccount, no pod, and
   around two dozen options reach nothing. They are *named* rather than refused
