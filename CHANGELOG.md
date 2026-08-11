@@ -152,15 +152,28 @@ anything that breaks.
   `create --dry-run=client -o yaml | apply -f -`**: that form was measured
   deleting the labels off a namespace somebody else had created with `apply`,
   `pod-security.kubernetes.io/enforce` among them. The bundle still carries
-  **no**
-  Namespace manifest, deliberately: a manifest that owned the namespace would
-  make a later `kubectl delete -f .` take the namespace and everything else
-  inside it, including whatever else the customer runs there. An OpenShift
+  **no** Namespace manifest, deliberately: a manifest that owned the namespace
+  would make a later `kubectl delete -f .` take the namespace and everything
+  else inside it, including whatever else the customer runs there. An OpenShift
   bundle prints the same line with `oc`, and a bundle that has to create a
   trust-bundle ConfigMap first prints it above that step as well. A `--format
   helm` bundle already created the namespace with `--create-namespace` on its
   install line and is unchanged; a `--format docker` bundle has no namespace and
   still mentions none.
+
+- **`livetest --local-registry` said nothing about the one image it never
+  pulls.** The flag mirrors the location's images into a local registry and
+  blackholes the public ones, so a bundle that names an image the registry does
+  not hold fails the run. That holds for every image the agent pulls, and not
+  for the engine: no engine exists unless `--run-test` starts one, so a
+  crane-only run pulls no engine image and a wrong engine reference passes. A
+  private-registry defect survived months of green runs that way. The run now
+  prints a warning naming that gap, and continues -- what the flag does cover
+  without a test is crane's own image, plus the blackholed public registries on
+  minikube, which is the only cluster the blackhole acts on. Pass `--run-test`
+  as well and the run says nothing, having covered the engine. A location that
+  runs no engine -- a service-virtualization agent carries none -- gets no
+  warning either, having no engine image to miss.
 
 ## [0.4.1] — 2026-08-08
 
