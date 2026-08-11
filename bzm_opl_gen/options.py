@@ -174,10 +174,12 @@ OPTIONS = [
         summary="Namespace every generated object is placed in, and the one crane's Role covers.",
         doc="The namespace every generated object carries, and the one crane's "
             "Role and RoleBinding are scoped to. Crane creates engine pods here, "
-            "so it is also where the tests run. The bundle does **not** create "
-            "the namespace -- `kubectl create namespace` first, or `helm install "
-            "--create-namespace`. `doctor -n` overrides it for a check without "
-            "re-generating."),
+            "so it is also where the tests run. **No manifest in the bundle is "
+            "the namespace** -- owning it would let a later `kubectl delete -f .` "
+            "take the namespace and everything else in it -- so the "
+            "bundle's README creates it in its first command instead, and that "
+            "command succeeds whether or not it is already there. `doctor -n` "
+            "overrides it for a check without re-generating."),
 
     # ---- Credentials ---------------------------------------------------
     Option(
