@@ -136,6 +136,32 @@ anything that breaks.
   Every performance bundle is unchanged, byte for byte, and every verdict on a
   performance location keeps its wording.
 
+- **The bundle named a namespace it never created, so the README's first
+  command failed.** Every object in a Kubernetes bundle carries the namespace,
+  no file in the bundle is the namespace, and the README said nothing about it —
+  so following the Deploy block on a fresh cluster stopped at
+  `Error from server (NotFound): namespaces "blazemeter-perf" not found`. The
+  Deploy block now leads with the command that creates it:
+
+  ```
+  kubectl get namespace blazemeter-perf >/dev/null 2>&1 || kubectl create namespace blazemeter-perf
+  ```
+
+  It asks first, so a namespace that already exists is left exactly as it is and
+  the block is safe to follow either way. **Do not replace it with the shorter
+  `create --dry-run=client -o yaml | apply -f -`**: that form was measured
+  deleting the labels off a namespace somebody else had created with `apply`,
+  `pod-security.kubernetes.io/enforce` among them. The bundle still carries
+  **no**
+  Namespace manifest, deliberately: a manifest that owned the namespace would
+  make a later `kubectl delete -f .` take the namespace and everything else
+  inside it, including whatever else the customer runs there. An OpenShift
+  bundle prints the same line with `oc`, and a bundle that has to create a
+  trust-bundle ConfigMap first prints it above that step as well. A `--format
+  helm` bundle already created the namespace with `--create-namespace` on its
+  install line and is unchanged; a `--format docker` bundle has no namespace and
+  still mentions none.
+
 ## [0.4.1] — 2026-08-08
 
 ### Added
