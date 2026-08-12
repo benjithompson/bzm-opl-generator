@@ -1304,7 +1304,15 @@ stale list can cost a credential nothing can read back.
   the generator wrote. **The one asymmetry is `openshift_cluster`**: the chart
   has no such value, so `platform: openshift` is all it can read, and
   `helm_parity.py`'s `sv-openshift` case is the two sides judging from
-  different inputs and agreeing anyway.
+  different inputs and agreeing anyway. **Verified live** (2026-08-12, the
+  standing k8s SV location, minikube, private registry with gcr.io blackholed):
+  the chart's crane created the Ingress itself three seconds after the deploy,
+  under the chart's Role alone -- `auth can-i create ingresses.networking.k8s.io`
+  as the crane account answers yes and `gateways.networking.istio.io` no -- and
+  the endpoint served over the certificate the Secret named in `sv.tlsSecret`
+  holds. The first deploy after replacing crane fails on `CONTAINER_READY`,
+  because the new crane spends that window removing what the old one left;
+  budget one.
   Docker refused one too until #182 and does not now: it publishes virtual
   services with `HOSTNAME_OVERRIDE` and a `TLS_CERT`/`TLS_KEY` pair, which are
   `sv_hostname`, `sv_tls_cert` and `sv_tls_key`. The two PEMs carry **content**,
