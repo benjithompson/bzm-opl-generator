@@ -1363,9 +1363,11 @@ export default function App({ api }: { api: Api }) {
   // not block it -- the field for it is not on screen, so there would be
   // nothing to fix. generate() agrees on both counts for a docker bundle.
   const namespaceOk = !applies("namespace") || !!txt("namespace");
-  // Empty is refused by generate(), so this blocks the download rather than
-  // only colouring the field -- an unnamed account is the one state of these
-  // two that produces no bundle at all.
+  // Neither blocks anything any more: `generate()` refused an empty service
+  // account once, `fill_placeholders` runs before every validator now, and the
+  // gate that still read this is gone (see DownloadPanel's `ready`). What is
+  // left is amber: the field's own border, its hint naming the marker, and the
+  // rail reporting the state.
   const saOk = !applies("service_account_name") || serviceAccountOk(options);
   const saCreate = options.service_account_create !== false;
   // What the download button will do about the credential: the hint beside it,
