@@ -291,12 +291,6 @@ export default function App({ api }: { api: Api }) {
   const sv = useMemo(
     () => svState(facts?.func_ids, options, svConst, svRuns, applies),
     [facts?.func_ids, options, svConst, svRuns, applies]);
-  // ...and the last format the correction took away, or null. Not derived: once
-  // the patch is applied the options no longer hold what was replaced, so a
-  // derivation would state it for exactly the render it is already too late to
-  // read. Cleared by picking a format, which is the answer to it.
-  const [formatNotice, setFormatNotice] =
-    useState<{ was: string; why: string } | null>(null);
   /** Drop the credential and everything said about it.
    *
    *  One function because it is one fact -- the token, the rotate choice and the
@@ -1153,33 +1147,21 @@ export default function App({ api }: { api: Api }) {
     setGrpOn((g) => detectGroups(options, g, { sv: sv.required }));
   }, [options, sv.required]);
   // The one place an SV option is written without anyone pressing anything, and
-  // the whole of it: an imported profile can arrive stranded (openshift ingress
-  // on a platform that is not OpenShift, a gateway no backend will read, a
-  // chart format this location cannot have), and a location can turn out to be
-  // an SV one after the form was filled in. What has to change is decided in
-  // sv.ts as a value -- which is what makes it testable, and what stops this
-  // being two effects writing what a third reads back. Applying the patch makes
-  // the next one null, so this settles in one pass.
+  // the whole of it: an imported profile can arrive stranded (an openshift
+  // ingress on a platform that is not OpenShift, a gateway no backend will
+  // read), and a location can turn out to be an SV one after the form was
+  // filled in. What has to change is decided in sv.ts as a value -- which is
+  // what makes it testable, and what stops this being two effects writing what
+  // a third reads back. Applying the patch makes the next one null, so this
+  // settles in one pass.
   //
-  // Where the patch moves the output format, it is recorded rather than only
-  // applied. That correction is the one thing here that overrides a choice the
-  // user made on this page, and it used to happen in silence: pick Docker,
-  // switch service virtualization back on, and the segment moved to Kubernetes
-  // manifests with nothing said. The notice carries the generator's own
-  // sentence for the refusal, and `setFormat` clears it -- a format chosen
-  // after the fact is the answer, not something to keep explaining.
+  // It used to be able to move the *output format* as well, for a bundle
+  // configured for service virtualization on a format that refused it, and the
+  // notice beside the segment was that write saying so. No format refuses one
+  // now, so every branch left completes a choice made here rather than
+  // overriding one, and there is nothing for a notice to be about.
   useEffect(() => {
-    const patch = sv.patch;
-    if (!patch) return;
-    // Read off the same render that produced the patch -- `sv` is derived from
-    // `options`, so a new patch and the format it is correcting are always the
-    // one pair. The sentence is the generator's, taken from the table that
-    // disabled the segment, so the notice and the tooltip cannot drift.
-    const was = format;
-    if (patch.output_format && was && was !== patch.output_format) {
-      setFormatNotice({ was, why: sv.blockedFormats[was] ?? "" });
-    }
-    setOptions((o) => ({ ...o, ...patch }));
+    if (sv.patch) setOptions((o) => ({ ...o, ...sv.patch }));
   }, [sv.patch]);
   const flipGroup = (id: GroupId, on: boolean) => {
     setGrpOn((g) => ({ ...g, [id]: on }));
@@ -1346,10 +1328,10 @@ export default function App({ api }: { api: Api }) {
   // two dozen options reach nothing in it. So the choice is made at the top of
   // the configure step and the form follows it -- asking for a namespace and a
   // ServiceAccount and then handing over a bundle with neither is the silent
-  // failure this arrangement exists to stop. Which formats this *configuration*
-  // refuses is sv.blockedFormats, with the sentence each is refused in, and the
-  // mirror of it -- which functionalities this format refuses -- is
-  // sv.functionalityBlocked.
+  // failure this arrangement exists to stop. No format *refuses* a
+  // configuration -- the pair of tables that said which did is gone with the
+  // last refusal (see sv.ts) -- so the choice is free and what changes is the
+  // form, never the bundle's contents.
   // `format` and `applies` are both declared with `sv`, which reads them.
   /** ...and, where a field's absence needs explaining, the generator's own
    *  sentence for it. Served with the keys for exactly this: the bundle's
@@ -1851,9 +1833,7 @@ export default function App({ api }: { api: Api }) {
               locUnclaimed={locUnclaimed}
               options={options} set={set}
               format={format}
-              setFormat={(v) => { setFormatNotice(null); set("output_format", v); }}
-              blockedFormats={sv.blockedFormats}
-              functionalityBlocked={sv.functionalityBlocked} formatNotice={formatNotice}
+              setFormat={(v) => set("output_format", v)}
               applies={applies}
               grpOn={grpOn} grpRequired={sv.groupRequired}
               grpDeclined={sv.groupDeclined}

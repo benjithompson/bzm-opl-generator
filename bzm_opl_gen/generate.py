@@ -3487,6 +3487,42 @@ def _helm_values(facts, o):
             "    limits:",
             f"      ephemeral-storage: {_yq(o['crane_ephemeral_storage'])}",
         ]
+    sv = _sv_cfg(facts, o)
+    if sv:
+        # Only when a backend is chosen, like craneHook above: the chart's own
+        # default is no virtual services, and an overlay that restated every
+        # default would stop being the record of what was asked for. A location
+        # that declined (sv_ingress=none) therefore writes nothing here, which
+        # is what the flat ConfigMap does with the same options.
+        backend = SV_INGRESS_BACKENDS[sv["type"]]
+        lines += [
+            "",
+            "# Service virtualization. Crane publishes one "
+            f"{backend.creates} per virtual",
+            "# service, so the chart grants that one API group in its Role and",
+            "# nothing else. The endpoint is",
+            "# <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain",
+            "# has to be the wildcard domain your ingress controller serves.",
+            "sv:",
+            f"  ingress: {_yq(sv['type'])}",
+            f"  subdomain: {_yq(sv['subdomain'])}",
+            "  # Required even for HTTP virtual services -- crane validates it at",
+            "  # startup and crash-loops when it is empty. It has to be in this",
+            "  # namespace; nothing in this bundle creates it."
+            if backend.tls_secret_read else
+            "  # Required even for HTTP virtual services -- crane validates it at"
+            "\n  # startup and crash-loops when it is empty. This backend never"
+            f"\n  # reads it, so the Secret need not exist.",
+            f"  tlsSecret: {_yq(sv['tls_secret'])}",
+        ]
+        if sv["type"] == "istio":
+            lines.append(
+                f"  # Crane reuses this Gateway instead of creating one per\n"
+                f"  # virtual service.\n"
+                f"  istioGateway: {_yq(sv['istio_gateway'])}"
+                if sv["istio_gateway"] else
+                "  # Empty: crane creates a Gateway per virtual service.\n"
+                '  istioGateway: ""')
     lines.append("")
     if o["proxy"]:
         env = proxy_env(o)
@@ -3591,7 +3627,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 {_verify_block(o)}
 ## Worth knowing
 
-{_sizing_bullet(facts, o)}{_location_bullet(facts, o)}{_sa_bullet(o)}
+{_sizing_bullet(facts, o)}{_location_bullet(facts, o)}{_sa_bullet(o)}{_sv_bullet(facts, o)}
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.
@@ -4812,25 +4848,24 @@ def generate(facts, options):
 
     ca = _ca_cfg(o)
     sv = _sv_cfg(facts, o)
-    if sv and o["output_format"] == "helm":
-        # Not a gap to fill in later: publishing a virtual service needs an
-        # ingress backend, the RBAC for whichever one it is, and a wildcard TLS
-        # secret, and the upstream Blazemeter/helm-crane chart already carries
-        # all three. Emitting a chart that quietly dropped them would deploy,
-        # report idle, and stall at WAITING_FOR_DOMAIN.
-        raise ValueError(
-            "output_format=helm covers performance testing only, and this "
-            f"location is configured for service virtualization (sv_ingress="
-            f"{sv['type']}). Generate it as --format manifests, or use the "
-            "upstream Blazemeter/helm-crane chart, which supports both.")
 
-    # There was a third refusal here, and docker's is gone (#182). It said this
-    # generator had no options for HOSTNAME_OVERRIDE and the TLS_CERT/TLS_KEY
-    # pair, which was true of the generator and never of the agent; the three
-    # options above are it, and `sv_ingress` is now one of docker's ignored
-    # options rather than something a docker bundle is refused over. Helm's
-    # stays: the gap there is in the chart, which is a different kind of thing
-    # from a missing option.
+    # **No format refuses a virtual service any more**, and the two that did
+    # were refused for two different reasons. Docker's went in #182: it said
+    # this generator had no options for HOSTNAME_OVERRIDE and the
+    # TLS_CERT/TLS_KEY pair, which was true of the generator and never of the
+    # agent. Helm's said the chart carried neither the KUBERNETES_WEB_EXPOSE_*
+    # env nor the ingress backend's RBAC, which was true of the chart -- so it
+    # was closed by giving the chart both, rather than by dropping a check. The
+    # chart is the manifests expressed twice and nothing about publishing an
+    # endpoint was outside what that already means: the flat bundle creates no
+    # ingress object either (crane does, per virtual service) and creates no TLS
+    # secret either (the customer does, and both READMEs say so).
+    #
+    # What is left is `_sv_cfg` itself, which every cluster format shares, and
+    # the chart's own copy of it in `bzm-opl.validate` for a chart installed by
+    # hand. Nothing here is per-format, which is the property to keep: a
+    # refusal that names one format is how the page grows a segment it must
+    # then disable.
 
     if o["output_format"] == "docker":
         # Two descriptions of one container, and the bundle carries both because

@@ -114,32 +114,28 @@ export const SV_MIXED =
   + "changes what a location runs, which is BlazeMeter's own location "
   + "settings.";
 
-/** Why a format cannot carry service virtualization, by format.
+/* **No format refuses a virtual service, and there is no table here saying
+ * which do.** There was one, and it emptied in two steps. Docker's entry went
+ * in #182 -- it read "a docker agent publishes virtual services with
+ * HOSTNAME_OVERRIDE and a TLS pair, which this bundle does not carry", true of
+ * the bundle and never of the agent. Helm's was the last, and it was true of
+ * the chart: no KUBERNETES_WEB_EXPOSE_* env and no ingress RBAC, so a chart
+ * emitted anyway would deploy, report idle and stall at WAITING_FOR_DOMAIN.
+ * The chart carries both now.
  *
- *  The refusal is generate()'s, and it is about a missing thing: publishing a
- *  virtual service needs an ingress, its RBAC and a wildcard TLS secret, and
- *  the chart carries none of them, so one emitted anyway would deploy, report
- *  idle and stall at WAITING_FOR_DOMAIN. The segment says so rather than
- *  disappearing -- a format that vanishes leaves the page unable to explain the
- *  error the server would have given.
+ * What went with the table is everything that read it: `blockedFormats`, the
+ * disabled segment and its tooltip, `functionalityBlocked`, and the branch of
+ * `correction` that moved a bundle off a format it had been refused. All of
+ * them were machinery for a refusal that no longer exists, and a disabled state
+ * nothing can reach is a page claiming a rule the server does not have.
+ * `test_server.py` derives the refusing formats by calling generate() per
+ * format and requires the set to be empty; a format that grows a refusal fails
+ * there, which is where the table would have to come back.
  *
- *  **Docker was here and is not** (#182). Its entry read "a docker agent
- *  publishes virtual services with HOSTNAME_OVERRIDE and a TLS pair, which this
- *  bundle does not carry", and that was true of the bundle rather than of the
- *  agent: the three options are here now, so a docker bundle publishes virtual
- *  services and this refuses nothing about it. What is left is one format, and
- *  the record stays a table because `test_server.py` derives the set by calling
- *  generate() per format and holds this equal to it -- a second one growing, or
- *  this one losing its last entry, both have to fail somewhere.
- *
- *  A clause, lower case and unpunctuated, as IGNORED_BY_FORMAT's reasons are and
- *  for the same reason: three places say it -- the disabled segment, the
- *  functionality card that offers no switches, and the notice when the
- *  correction moves a format -- and each needs its own lead-in. */
-const BLOCKED_FORMATS: Record<string, string> = {
-  helm: "service virtualization needs an ingress, its RBAC and a TLS secret, "
-    + "which this chart does not carry",
-};
+ * The distinction it was keeping is still worth stating: **a location decides
+ * whether a functionality is run, and a format decided whether this bundle
+ * could serve it.** Only the first question has an answer now, and it is
+ * `runsFunctionality`. */
 
 /** Everything the page, the group and the download step ask about service
  *  virtualization. One record, so a consumer takes this instead of eleven
@@ -181,38 +177,6 @@ export interface Sv {
   /** What a published endpoint is probed over. Follows the TLS secret, because
    *  that is what decides whether the endpoint terminates TLS. */
   scheme: SvScheme;
-  /** Why each output format is unavailable, by format name. Empty when this
-   *  bundle carries no virtual services, which is when all three are.
-   *
-   *  Keyed off what is **configured**, not off what the location demands.
-   *  generate() refuses on `_sv_cfg` returning a config, and `_sv_cfg` never
-   *  looks at the funcIds before it does -- so a location that demands nothing
-   *  can still be configured for SV, and a docker bundle of it is refused by
-   *  the server. Read off the demand, this said nothing about that case and
-   *  the segment stayed enabled: the off-screen blocker, from the one end
-   *  #113 left open (see `runs`).
-   *
-   *  It also stops answering two questions with one empty object. Read off
-   *  `required` this was empty both when the location ran no virtual services
-   *  and when /api/sv-constants had not landed -- `func_ids: []` makes every
-   *  location a non-SV one. `svConfigured` reads an option this page wrote, so
-   *  the served table cannot make it lie. */
-  blockedFormats: Record<string, string>;
-  /** Why this bundle's format cannot serve the functionality *at all*, by
-   *  functionality id, or empty where it can.
-   *
-   *  The mirror of `blockedFormats`: that one answers "which formats may I pick
-   *  given this configuration", this one answers "may I configure this at all
-   *  given the format I picked". Both come from the same table, because they
-   *  are the same refusal read from its two ends.
-   *
-   *  Keyed by functionality id so the walk over the cards never tests for one
-   *  by name, exactly as `groupRequired` is keyed by group id. Deliberately
-   *  not a served "which functionalities does a format refuse" vocabulary:
-   *  helm and docker refuse *this* one, nothing else refuses any, and one
-   *  served table for one functionality is a shape invented ahead of its
-   *  second caller. */
-  functionalityBlocked: Record<string, string>;
   /** What a group cannot read off the options: SV is required by the location,
    *  not by anything configured. Keyed by group id so the walk over the groups
    *  never has to test for one by name. */
@@ -299,21 +263,6 @@ export function svState(
   // broken, which is BlazeMeter's own framing of HOSTNAME_OVERRIDE).
   const demand = runs && location && !declined;
   const required = k8s && demand;
-  // What a helm bundle is refused over: an SV configuration this bundle
-  // carries, or a demand that is one render from becoming one (the seed below
-  // chooses nginx for it).
-  //
-  // Read off the options rather than off `required`, and deliberately *not*
-  // gated by `k8s`: a docker bundle can hold a stranded `sv_ingress`, and it
-  // becomes live the moment somebody picks helm. What may be picked has to
-  // follow what the configuration would mean there, not what it means here.
-  //
-  // One value because the two readers must not disagree: the control disables
-  // a segment with it and `correction` moves off a selected one with it, and a
-  // segment shown enabled that resets itself the moment it is picked is worse
-  // than either mistake alone. It is what caught the split when they were two.
-  const carries = (runs && svConfigured(o.sv_ingress)) || demand;
-  const blockedHere = BLOCKED_FORMATS[String(o.output_format ?? "")];
 
   // Everything below reads the options as they are, never as the patch will
   // leave them: a record that answered for a value nothing has written yet
@@ -349,19 +298,13 @@ export function svState(
     },
     rbac: constants.backends[ingress],
     scheme: txt(o, "sv_tls_secret") ? "https" : "http",
-    blockedFormats: carries ? BLOCKED_FORMATS : {},
-    // Only where the functionality is still the location's to configure: a
-    // card for one that is not run already says so, and "not enabled here"
-    // and "not possible in this format" have to stay different answers.
-    functionalityBlocked:
-      runs && blockedHere ? { [SV_FUNCTIONALITY]: blockedHere } : {},
     groupRequired: { sv: required },
     // Both keyed to the ingress group alone, because both are sentences about
     // it: `svDocker` has no "required" state -- there is nothing generate()
     // refuses over it -- and "declined" is `sv_ingress: none`, a value only
     // the group above can hold.
     groupDeclined: { sv: k8s && location && declined },
-    patch: correction(o, required, carries, k8s),
+    patch: correction(o, required, k8s),
   };
 }
 
@@ -377,8 +320,7 @@ export function svState(
  *  CLUSTERIP whenever an ingress was configured; #60 showed the pairing works,
  *  so an imported profile keeps the value it arrived with. */
 function correction(
-    o: Options, required: boolean, carries: boolean,
-    k8s: boolean): OptionPatch | null {
+    o: Options, required: boolean, k8s: boolean): OptionPatch | null {
   // The openshift backend publishes a route.openshift.io Route, so switching
   // the platform away from OpenShift strands sv_ingress on a value generate()
   // now refuses -- and the option itself disappears from the select, leaving
@@ -401,23 +343,14 @@ function correction(
   // another ingress would hit that error with nothing in the UI to explain it.
   // Dropped here rather than only in the select's onChange for that reason.
   const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
-  // A location can turn out to be an SV one after the format was picked, and an
-  // imported profile can arrive already set to one of the two that refuse it.
-  // Fall back rather than leaving a disabled segment selected and every
-  // generate call failing.
-  //
-  // `carries` is the same value the disabled segment is drawn from, so the
-  // control and this cannot disagree about which formats are available. It is
-  // deliberately not `stranded`, which can hold for a location known to run
-  // something else: notRunPatch is clearing those options anyway, and
-  // resetting the format on the way past would take away a docker choice that
-  // was valid all along.
-  const fromBlocked = carries
-    && !!BLOCKED_FORMATS[String(o.output_format ?? "")];
-  if (!toNginx && !clearGateway && !fromBlocked) return null;
+  // A third branch moved the *output format*, for a bundle configured for
+  // service virtualization on a format that refused it. Nothing refuses one
+  // now (see the note above BLOCKED_FORMATS' grave), so it is gone -- and with
+  // it the only write on this page that overrode a choice made on it rather
+  // than completing one. Every branch left seeds or clears an SV option.
+  if (!toNginx && !clearGateway) return null;
   return {
     ...(toNginx ? { sv_ingress: "nginx" } : {}),
     ...(clearGateway ? { sv_istio_gateway: null } : {}),
-    ...(fromBlocked ? { output_format: "manifests" } : {}),
   };
 }

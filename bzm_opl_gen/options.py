@@ -162,13 +162,12 @@ OPTIONS = [
             "`compose.yaml` describing the same container, which are either/or "
             "-- see [Docker](docker.md). Most options here are Kubernetes vocabulary and "
             "reach nothing in it, and its README names the ones this bundle set. "
-            "Two of the three publish virtual services and each does it in its "
-            "own vocabulary -- `manifests` through a Kubernetes ingress "
-            "(`sv_ingress` and the two options under it), `docker` through the "
-            "agent's own `sv_hostname` and TLS pair -- so each set is the "
-            "other's ignored options. `helm` is the one that refuses a bundle "
-            "configured for it: the upstream chart carries the ingress backend, "
-            "its RBAC and the wildcard TLS secret, and ours does not."),
+            "All three publish virtual services and each does it in its own "
+            "vocabulary -- the two cluster formats through a Kubernetes ingress "
+            "(`sv_ingress` and the two options under it, which the chart takes "
+            "as its `sv.*` values), `docker` through the agent's own "
+            "`sv_hostname` and TLS pair -- so each set is the other's ignored "
+            "options and no format refuses a bundle configured for one."),
     Option(
         "namespace", "string", "Platform and output",
         summary="Namespace every generated object is placed in, and the one crane's Role covers.",

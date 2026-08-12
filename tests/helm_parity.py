@@ -125,6 +125,46 @@ CASES = {
     "crane-hook-private-registry": {"platform": "k8s", "crane_hook": True,
                                     "private_registry": "reg.example.com/bzm",
                                     "service_account_name": "bzm-agent"},
+    # Service virtualization: the ConfigMap's KUBERNETES_WEB_EXPOSE_* trio and
+    # the one API group the Role grants for it. Every backend is here because
+    # the group and the resources are per backend, and the chart restates that
+    # table in Go -- one entry transcribed wrongly is a Role that renders and
+    # publishes nothing, which is the failure the whole SV validation exists to
+    # catch. `none` is the third state and renders as a performance bundle on
+    # both sides; the istio pair is the one option that is read by a single
+    # backend.
+    "sv-nginx": {"platform": "k8s", "sv_ingress": "nginx",
+                 "sv_subdomain": "mocks.example.com",
+                 "sv_tls_secret": "wildcard-mocks"},
+    "sv-nginx-nodeport": {"platform": "k8s", "service_type": "NODEPORT",
+                          "sv_ingress": "nginx",
+                          "sv_subdomain": "mocks.example.com",
+                          "sv_tls_secret": "wildcard-mocks"},
+    "sv-istio": {"platform": "k8s", "sv_ingress": "istio",
+                 "sv_subdomain": "mocks.example.com",
+                 "sv_tls_secret": "wildcard-mocks"},
+    "sv-istio-gateway": {"platform": "k8s", "sv_ingress": "istio",
+                         "sv_subdomain": "mocks.example.com",
+                         "sv_tls_secret": "wildcard-mocks",
+                         "sv_istio_gateway": "shared-gateway"},
+    "sv-contour": {"platform": "k8s", "sv_ingress": "contour",
+                   "sv_subdomain": "mocks.example.com",
+                   "sv_tls_secret": "wildcard-mocks"},
+    # `openshift_cluster` as well as the platform: the posture installs on
+    # vanilla Kubernetes, and only the cluster being OpenShift itself serves a
+    # route.openshift.io Route. The chart has no such value -- `platform` is
+    # the only signal a hand-written values file carries -- so this is the one
+    # SV case where the two sides judge from different inputs and have to
+    # agree anyway.
+    "sv-openshift": {"platform": "openshift", "openshift_cluster": True,
+                     "sv_ingress": "openshift",
+                     "sv_subdomain": "apps.example.com",
+                     "sv_tls_secret": "wildcard-mocks"},
+    "sv-declined": {"platform": "k8s", "sv_ingress": gen.SV_INGRESS_NONE},
+    "sv-nginx-crane-hook": {"platform": "k8s", "crane_hook": True,
+                            "sv_ingress": "nginx",
+                            "sv_subdomain": "mocks.example.com",
+                            "sv_tls_secret": "wildcard-mocks"},
     # Free-form agent env. The one place a *value* crosses the overlay as
     # arbitrary text, so the quoting is the thing at risk: an unquoted `8080` or
     # `true` is a ConfigMap value Kubernetes refuses, and the two sides quote in
@@ -281,10 +321,12 @@ def _hook_diffs(flat, helm):
                     diffs.append(f"{name}.container.{f}: {mc.get(f)!r} != {hc.get(f)!r}")
             me = {e["name"]: e["value"] for e in mc["env"]}
             he = {e["name"]: e["value"] for e in hc["env"]}
-            # The SV variables are the exception, and deliberately: --format
-            # helm refuses a service-virtualization location outright, so the
-            # chart has no ingress for the hook to be told about.
-            me = {k: v for k, v in me.items() if not k.startswith("KUBERNETES_WEB_")}
+            # The SV variables used to be dropped from this comparison, because
+            # --format helm refused a service-virtualization location outright
+            # and the chart had no ingress to tell the hook about. Both formats
+            # carry one now, and the hook is told the same thing by both -- or
+            # it checks an ingress named "" on one of them, which is the shape
+            # of failure this file exists to find.
             if me != he:
                 diffs.append(f"{name}.env: {me} != {he}")
     return diffs
@@ -333,6 +375,67 @@ def overrides_stay_consistent():
     return problems
 
 
+# The service-virtualization combinations the chart refuses, and the words it
+# has to refuse them in. They are `generate._sv_cfg`'s, restated in Go for a
+# chart somebody installs by hand -- and a restatement is exactly the thing that
+# rots quietly, because the cases above render only configurations that are
+# *accepted*. Each of these fails silently on a cluster: the objects apply, the
+# agent reports idle, the mock pod runs 1/1 and the endpoint does not serve.
+#
+# Values rather than a generated bundle, because the generator refuses these
+# first and so can produce no overlay carrying one.
+SV_REFUSALS = {
+    "contour-nodeport": (["--set", "sv.ingress=contour",
+                          "--set", "serviceType=NODEPORT"],
+                         "requires serviceType: CLUSTERIP"),
+    "istio-nodeport": (["--set", "sv.ingress=istio",
+                        "--set", "serviceType=NODEPORT"],
+                       "requires serviceType: CLUSTERIP"),
+    "route-on-plain-k8s": (["--set", "sv.ingress=openshift"],
+                           "requires platform: openshift"),
+    "gateway-no-istio": (["--set", "sv.ingress=nginx",
+                          "--set", "sv.istioGateway=gw"],
+                         "only meaningful with sv.ingress istio"),
+    "unknown-backend": (["--set", "sv.ingress=traefik"],
+                        "sv.ingress must be one of"),
+    "no-subdomain": (["--set", "sv.ingress=nginx", "--set", "sv.subdomain="],
+                     "also requires sv.subdomain and sv.tlsSecret"),
+    "marker-left-in": (["--set", "sv.ingress=nginx",
+                        "--set-string", "sv.subdomain=<SV_SUBDOMAIN>"],
+                       "was left blank when this bundle was generated"),
+}
+
+
+def sv_refusals_still_refuse():
+    """Every refused combination fails the render, naming the fix."""
+    chart = os.path.join(os.path.dirname(__file__), "..", "bzm_opl_gen",
+                         "templates", "helm")
+    base = ["--set", "harborId=h", "--set", "shipId=s",
+            "--set-string", "authToken=t",
+            "--set", "sv.subdomain=apps.example.com",
+            "--set", "sv.tlsSecret=wildcard-mocks"]
+    problems = []
+    for name, (args, expected) in SV_REFUSALS.items():
+        r = subprocess.run([HELM, "template", "crane", chart, "-n", "bzm-perf"]
+                           + base + args, capture_output=True, text=True)
+        if not r.returncode:
+            problems.append(f"{name}: the chart rendered it")
+        elif expected not in (r.stderr or "") + (r.stdout or ""):
+            problems.append(f"{name}: refused, but not for the stated reason "
+                            f"-- wanted {expected!r}, got "
+                            f"{(r.stderr or r.stdout).strip()[:160]!r}")
+    # ...and the same chart renders the pairing that only looks like the first
+    # two: nginx writes a constant port, so NODEPORT is fine there (#60).
+    r = subprocess.run([HELM, "template", "crane", chart, "-n", "bzm-perf"]
+                       + base + ["--set", "sv.ingress=nginx",
+                                 "--set", "serviceType=NODEPORT"],
+                       capture_output=True, text=True)
+    if r.returncode:
+        problems.append("nginx-nodeport: refused, and it is the pairing that "
+                        f"works: {(r.stderr or r.stdout).strip()[:160]}")
+    return problems
+
+
 def main():
     if not shutil.which(HELM):
         sys.exit(f"{HELM} not found -- install helm, or set HELM=/path/to/helm")
@@ -361,6 +464,15 @@ def main():
             print(f"     {p}")
     else:
         print("ok   overrides-on-a-generated-bundle")
+
+    problems = sv_refusals_still_refuse()
+    if problems:
+        failed += 1
+        print("FAIL service-virtualization-refusals")
+        for p in problems:
+            print(f"     {p}")
+    else:
+        print("ok   service-virtualization-refusals")
 
     print()
     if failed:

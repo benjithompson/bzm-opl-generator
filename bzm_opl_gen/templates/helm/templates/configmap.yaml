@@ -25,6 +25,23 @@ data:
   {{- end }}
   KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType }}
   RUN_HEALTH_WEB_SERVICE: 'true'
+  {{- if include "bzm-opl.svEnabled" . }}
+  # Service virtualization ingress. The endpoint crane advertises is
+  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain must be
+  # the wildcard domain your ingress controller already serves.
+  KUBERNETES_WEB_EXPOSE_TYPE: {{ .Values.sv.ingress | upper }}
+  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {{ .Values.sv.subdomain }}
+  # Required even for HTTP virtual services -- crane validates it at startup and
+  # crash-loops when it is empty.
+  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {{ .Values.sv.tlsSecret }}
+  {{- if eq .Values.sv.ingress "istio" }}
+  {{- with .Values.sv.istioGateway }}
+  KUBERNETES_ISTIO_GATEWAY_NAME: {{ . }}
+  {{- else }}
+  # KUBERNETES_ISTIO_GATEWAY_NAME unset: crane creates a Gateway per virtual service.
+  {{- end }}
+  {{- end }}
+  {{- end }}
   {{- /*
     Unconditional: bzm-opl.dockerRegistry falls back to BlazeMeter's public
     project, so this line is the same either way. Only the overrides below

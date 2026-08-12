@@ -151,6 +151,67 @@ false
 {{- end -}}
 {{- end -}}
 
+{{/*
+Service virtualization: crane's web-expose backends, one entry per value
+KUBERNETES_WEB_EXPOSE_TYPE takes.
+
+This block is generate.SV_INGRESS_BACKENDS restated -- a Go template cannot
+import a Python table -- and tests/test_helm.py parses it as YAML and holds the
+two equal, field by field. Restated rather than resolved into the values file
+because a chart installed by hand has no generator to resolve anything for it,
+and the RBAC a backend needs is not a thing an installer should have to know.
+
+`group` and `resources` are what the Role grants: crane runs one implementation
+and never touches the others, so granting a second group is permission that can
+only go unused. `nodeportOk` records whether the backend survives
+serviceType: NODEPORT, which two of them do not (see values.yaml).
+`tlsSecretRead` records whether the published object references the TLS Secret
+at all -- every backend requires the *name*, and only two read it.
+
+`via_ingress_class`, the sixth field of the Python table, is deliberately not
+here: it is what `bzm-opl-gen doctor` preflights a cluster with, and nothing
+this chart renders reads it.
+*/}}
+{{- define "bzm-opl.svBackends" -}}
+nginx:
+  group: networking.k8s.io
+  resources: [ingresses]
+  creates: Ingress
+  nodeportOk: true
+  tlsSecretRead: true
+istio:
+  group: networking.istio.io
+  resources: [gateways, virtualservices]
+  creates: Gateway + VirtualService
+  nodeportOk: false
+  tlsSecretRead: false
+contour:
+  group: projectcontour.io
+  resources: [httpproxies]
+  creates: HTTPProxy
+  nodeportOk: false
+  tlsSecretRead: true
+openshift:
+  group: route.openshift.io
+  resources: [routes, routes/custom-host]
+  creates: Route
+  nodeportOk: true
+  tlsSecretRead: false
+{{- end -}}
+
+{{/*
+Is this agent publishing virtual services? Empty is a performance-only agent,
+and so is the generator's own third state, `none` -- which means "asked, and
+answered no" rather than "nobody has said". The two are one answer *here*,
+because what the chart renders is identical either way; they are two answers in
+bzm-opl-gen, which refuses to generate for a mockServices location that has not
+been asked.
+*/}}
+{{- define "bzm-opl.svEnabled" -}}
+{{- $t := trim (toString (default "" .Values.sv.ingress)) -}}
+{{- if and $t (ne $t "none") -}}true{{- end -}}
+{{- end -}}
+
 {{- define "bzm-opl.caEnabled" -}}
 {{- if ne .Values.caBundle.mode "none" -}}true{{- end -}}
 {{- end -}}
@@ -213,7 +274,9 @@ form it was left blank on.
       "caBundle.existingConfigMap" .Values.caBundle.existingConfigMap
       "caBundle.pem" .Values.caBundle.pem
       "proxy.http" .Values.proxy.http
-      "proxy.https" .Values.proxy.https -}}
+      "proxy.https" .Values.proxy.https
+      "sv.subdomain" .Values.sv.subdomain
+      "sv.tlsSecret" .Values.sv.tlsSecret -}}
 {{- range $field, $value := $blank -}}
 {{- $held := trim (toString (default "" $value)) -}}
 {{- if regexMatch "^<[A-Z][A-Z0-9_]*>$" $held -}}
@@ -262,6 +325,41 @@ See the serviceType comment in values.yaml.
 {{- end -}}
 {{- if and (eq .Values.caBundle.mode "openshiftInject") (ne .Values.platform "openshift") -}}
 {{- fail "caBundle.mode openshiftInject requires platform: openshift -- the ConfigMap is filled in by OpenShift's cluster network operator, and on plain Kubernetes it stays empty, so crane would mount an empty trust bundle and fail every TLS handshake" -}}
+{{- end -}}
+{{/*
+Service virtualization, and every one of these is generate._sv_cfg's -- the
+same combinations, refused in the same words, because both formats are one
+deployment and a chart installed by hand gets no generator to refuse them
+first. Each fails *silently* on a cluster: the objects apply, the agent reports
+idle, the mock pod runs 1/1, and the endpoint BlazeMeter advertises does not
+serve.
+*/}}
+{{- if include "bzm-opl.svEnabled" . -}}
+{{- $backends := include "bzm-opl.svBackends" . | fromYaml -}}
+{{- $type := trim (toString .Values.sv.ingress) -}}
+{{- $backend := index $backends $type -}}
+{{- if not $backend -}}
+{{- fail (printf "sv.ingress must be one of %s (or empty for a performance-only agent), got %q" (join "|" (keys $backends | sortAlpha)) $type) -}}
+{{- end -}}
+{{- if or (not .Values.sv.subdomain) (not .Values.sv.tlsSecret) -}}
+{{- fail (printf "sv.ingress %s also requires sv.subdomain and sv.tlsSecret. The subdomain is the wildcard domain the endpoint is published under, and the TLS secret is mandatory even for HTTP virtual services -- crane refuses to start without it" $type) -}}
+{{- end -}}
+{{- if and (ne .Values.serviceType "CLUSTERIP") (not $backend.nodeportOk) -}}
+{{- fail (printf "sv.ingress %s requires serviceType: CLUSTERIP, got %s. Crane fills this backend's port field from the Service's nodePort, which nothing reaches the ingress on: the %s is written, the mock runs 1/1, BlazeMeter advertises the endpoint, and the endpoint does not serve" $type .Values.serviceType $backend.creates) -}}
+{{- end -}}
+{{- if and (eq $type "openshift") (ne .Values.platform "openshift") -}}
+{{- fail (printf "sv.ingress openshift requires platform: openshift, got %q. That backend publishes a route.openshift.io Route, which a plain Kubernetes API server does not serve -- the agent would deploy cleanly and then stall with nothing to create" .Values.platform) -}}
+{{- end -}}
+{{- if and .Values.sv.istioGateway (ne $type "istio") -}}
+{{- fail (printf "sv.istioGateway is only meaningful with sv.ingress istio, not %s. Crane reads KUBERNETES_ISTIO_GATEWAY_NAME in the istio backend alone, so setting it here would silently do nothing" $type) -}}
+{{- end -}}
+{{/*
+No `else` refusing a gateway name on an agent that publishes nothing, and the
+omission is deliberate: generate._sv_cfg returns early there and ignores the
+name, so refusing it here would be this chart judging a values file the
+generator would have written -- one refusal, one place, whichever half the
+customer installs from.
+*/}}
 {{- end -}}
 {{- if and .Values.privateRegistry (not .Values.imageOverrides) -}}
 {{- fail "privateRegistry is set but imageOverrides is empty -- crane resolves engine images per key, and a key it cannot find falls back to BlazeMeter's public registry without logging anything. Generate the map for this location with `bzm-opl-gen generate --private-registry <registry>` and copy IMAGE_OVERRIDES out of out/bzm_configmap.yaml" -}}

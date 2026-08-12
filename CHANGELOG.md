@@ -13,6 +13,36 @@ anything that breaks.
 
 ### Added
 
+- **`--format helm` now covers service virtualization.** The chart was refused
+  for a bundle configured to publish virtual services, because it carried
+  neither the `KUBERNETES_WEB_EXPOSE_*` environment nor the RBAC the chosen
+  ingress backend needs -- so a location that serves mocks had to be generated
+  as flat manifests, or installed from the upstream chart. It carries both now,
+  and the four options arrive as four values:
+
+  ```yaml
+  sv:
+    ingress: nginx          # nginx | istio | contour | openshift
+    subdomain: apps.example.com
+    tlsSecret: wildcard-credential
+    istioGateway: ""        # istio only
+  ```
+
+  The chart renders the same objects the manifests do -- `tests/helm_parity.py`
+  runs every backend both ways -- and refuses the same combinations in the same
+  words, in its own copy of them, since a chart is also installed by hand with
+  no generator in front of it: `istio` and `contour` under
+  `serviceType: NODEPORT`, an OpenShift Route on a plain Kubernetes API server,
+  and a gateway name no backend but istio reads. Two things it does not create,
+  exactly as the manifests do not: the wildcard DNS record, and the TLS Secret
+  in the agent's namespace.
+
+  With that, **no output format refuses a virtual service** -- docker gained
+  its own way of publishing one earlier -- so the web UI no longer disables a
+  segment, no longer states a functionality as impossible in this bundle, and
+  no longer replaces a format you picked. Re-generate an existing chart bundle
+  to pick the `sv:` block up.
+
 - **A bundle can now be generated before the private location exists.** The
   harbor id and the ship id are optional everywhere they are typed -- the web
   UI's step 1, `facts --manual`, and the MCP server's `opl_facts manual` -- and

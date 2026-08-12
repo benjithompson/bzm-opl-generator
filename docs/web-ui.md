@@ -203,15 +203,14 @@ format that drops it. Hiding is not refusing — the value is kept, sent, and na
 in the bundle's README — and where a hidden field needs explaining, the page
 renders the generator's reason rather than a second copy of it.
 
-A format the configuration rules out is disabled with the reason on it: helm is
-the one that cannot serve service virtualization, because our chart carries none
-of the ingress the upstream one does. Docker can, in its own vocabulary — a
-hostname and a TLS pair rather than an ingress — so the page offers that group
-for it and hides the Kubernetes four, and the reverse. And a
-format you picked is never replaced in silence — where a configuration forces
-Kubernetes manifests, the panel says which format it replaced, and how to get
-back to it, until you pick one again. A configuration somebody wrote outranks a
-segment.
+**No configuration rules a format out.** All three publish virtual services,
+each in its own vocabulary — the two Kubernetes formats through an ingress, and
+docker through a hostname and a TLS pair — so the page offers the group that
+belongs to the chosen format and hides the other, and every segment stays
+selectable. Two segments used to be disabled with a sentence on them, docker's
+until it gained options of its own and helm's until the chart gained the
+ingress; with the last of them the page also lost the one write that replaced a
+choice made on it, and the notice that said so.
 
 **Two kinds of option — a functionality's own, and every deployment's — and
 nothing is hidden between them.** *Deployment functionalities* is one card per
