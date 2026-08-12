@@ -39,6 +39,16 @@ anything that breaks.
 
 ### Fixed
 
+- **The configure step's rail called a blank namespace an error.** Placement
+  showed a red dot and `needs attention` beside a step that blocks nothing: an
+  empty namespace or service account carries `<NAMESPACE>` or
+  `<SERVICE_ACCOUNT_NAME>` into the bundle, which is the ordinary way to
+  generate manifests before anyone has chosen where they go. It is amber now,
+  and reads `not filled in`. Red and `needs attention` are kept for what they
+  were for — an option group switched on and left unfinished, which the step
+  really does want fixed. The marker itself stays under the box it belongs to,
+  where each field's hint already names it and somebody can act on it.
+
 - **`livetest` deployed the CA mode it chose rather than the one the bundle was
   generated for.** `--ca-mode` defaulted to `inline`, and `--local-proxy`
   re-renders the CA whatever the bundle carried — so a bundle generated for the

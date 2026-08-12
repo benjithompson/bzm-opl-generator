@@ -1106,6 +1106,19 @@ test("a blank namespace and service account still download, carrying their marke
                        { target: { value: "" } });
     }
 
+    // The rail reports the state and nothing more. It read "needs attention" in
+    // red, which is what an unfinished group gets -- a fault the step wants
+    // fixed -- over a state this step allows and the download step lists as a
+    // gap. The marker is named under each box instead, where somebody can act
+    // on it: a rail carrying the string as well makes the one line that has to
+    // stay short into two.
+    const rail = screen.getByRole("link", { name: /Placement/ });
+    await waitFor(() => expect(rail.textContent).toMatch(/not filled in/));
+    expect(rail.textContent).not.toMatch(/<NAMESPACE>/);
+    expect(screen.queryByText(/needs attention/)).toBeNull();
+    // ...and the hint under the box is where it does appear.
+    expect(screen.getByText(/the bundle carries <NAMESPACE>/)).toBeTruthy();
+
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     const button = await screen.findByRole<HTMLButtonElement>(
       "button", { name: /Download bundle/ });

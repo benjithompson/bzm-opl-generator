@@ -146,8 +146,16 @@ function CoreFields(p: ConfigurePanelProps) {
   // named -- step 1's identity boxes put it in the *placeholder* because an id
   // has no sample value to suggest, and these two do.
   //
-  // The rail beside the form still reads these two (`todo` -> "needs attention"),
-  // which is the third signal and the one that survives being scrolled past.
+  // These hints are the one place the marker is named, and that is deliberate:
+  // it is the string somebody greps the bundle for, and it belongs beside the
+  // box it is about rather than repeated wherever the state is mentioned.
+  //
+  // The rail beside the form is the third signal and the one that survives being
+  // scrolled past, so it reports the state and not the string -- amber, "not
+  // filled in". It read "needs attention" in red, which is the wording and the
+  // colour a *fault* gets -- an unfinished group, which the step really does
+  // want fixed -- over the ordinary case of generating manifests before anyone
+  // has chosen a namespace.
   const blankCls = (ok: boolean) => inputCls + (ok ? "" : " border-amber-300");
   return (
     <div className="space-y-3">
@@ -440,6 +448,12 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   // free to disagree about what is in this bundle, which is the one thing the
   // rail is for.
   const placed = keysApply(PLACEMENT_KEYS, p.applies);
+  // Which of the placement fields are blank, read off `blanks` rather than
+  // re-tested here: that is the one list every warning about a blank field is
+  // written from (placeholder.blankRequired), and it is already filtered by the
+  // format, so the rail cannot come to name a field this bundle has no such
+  // thing as. `service_account_create` is in the keys and can never be blank.
+  const coreBlanks = p.blanks.filter((k) => PLACEMENT_KEYS.includes(k));
   // How many variables are set, for the fold's own summary and for the rail:
   // the environment area is not a group, so `grpOn` says nothing about it and
   // the two would otherwise disagree about what is in this bundle -- the one
@@ -569,10 +583,23 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 ? [`${envCount} environment variable${envCount === 1 ? "" : "s"}`]
                 : []),
             ];
-            const todo = s.id === "core"
-              ? !(p.namespaceOk && p.saOk)
-              : s.gs.some((g) => p.incomplete.includes(g));
+            // Two unfinished states, and they are not the same claim. A group
+            // switched on and not filled in is a fault: the step wants it
+            // fixed, and it is red. A blank placement field is allowed -- it
+            // becomes its own marker and the bundle says so -- so it is amber,
+            // and the rail only reports the state. Red over the two boxes made
+            // the ordinary case of generating manifests before the namespace is
+            // chosen read as an error, on a step that blocks nothing.
+            //
+            // The marker itself is not here. It belongs beside the box it is
+            // about, where the hint under each field names it and the person can
+            // act on it; a rail is orientation, and repeating the string there
+            // makes the one line that has to stay short into two.
+            const todo = s.id !== "core"
+              && s.gs.some((g) => p.incomplete.includes(g));
+            const gap = s.id === "core" && coreBlanks.length > 0;
             const detail = todo ? "needs attention"
+              : gap ? "not filled in"
               : s.id === "core" ? String(p.options.namespace ?? "")
               : s.off ? "not enabled"
               : names.length ? names.join(", ")
@@ -582,6 +609,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 className="flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
                 <span className={"mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full "
                   + (todo ? "bg-red-500"
+                    : gap ? "bg-amber-400"
                     : names.length || s.id === "core" ? "bg-emerald-500"
                     : "bg-slate-300")} />
                 <span className="min-w-0">
@@ -589,7 +617,8 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                     {s.label}
                   </span>
                   <span className={"block text-[10px] "
-                    + (todo ? "text-red-600" : "text-slate-400")}>
+                    + (todo ? "text-red-600"
+                      : gap ? "text-amber-600" : "text-slate-400")}>
                     {detail}
                   </span>
                 </span>
