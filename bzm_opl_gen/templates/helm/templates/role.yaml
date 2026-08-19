@@ -17,10 +17,10 @@ rules:
   - apiGroups: [""]
     resources: [pods, pods/log]
     verbs: [get, list]
-  # No ingress/gateway/route grants anywhere in this chart: publishing an
-  # endpoint is a service-virtualization concern, and this chart is scoped to
-  # performance testing. A location that also serves mock services needs the
-  # upstream Blazemeter/helm-crane chart.
+  # No `ingresses` here on purpose: Ingress has lived only in networking.k8s.io
+  # since k8s 1.22, so listing it under extensions grants nothing. When service
+  # virtualization is enabled the block at the end grants the one API group the
+  # configured expose backend actually writes -- Ingress, Gateway, or HTTPProxy.
   - apiGroups: [extensions, apps, ""]
     resources: [pods, services, endpoints, daemonsets, "pods/*", pods/exec,
                 deployments, replicasets, deployments/scale]
@@ -28,3 +28,12 @@ rules:
   - apiGroups: [batch]
     resources: [jobs]
     verbs: [watch, get, list, create, update, patch, delete, deletecollection]
+{{- if include "bzm-opl.svEnabled" . }}
+{{- $backend := index (include "bzm-opl.svBackends" . | fromYaml) .Values.sv.ingress }}
+  # Service virtualization: crane publishes one {{ $backend.creates }} per virtual service.
+  # Namespaced, like everything else here -- publishing an endpoint through an
+  # ingress needs no cluster-scoped permission at all.
+  - apiGroups: [{{ $backend.group }}]
+    resources: [{{ join ", " $backend.resources }}]
+    verbs: [get, list, watch, create, update, patch, delete, deletecollection]
+{{- end }}

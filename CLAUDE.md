@@ -795,43 +795,34 @@ missing tools. The rest is what it cannot fix for you.
   turning a funcId on changes what the location *is*, which is BlazeMeter's own
   UI's.
 
-  **A functionality is judged twice, and the two are different questions.** The
-  location decides whether it is *run*; the format decides whether this bundle
-  can *serve* it, and a card can be silent for either reason without them being
-  the same reason. `sv.functionalityBlocked` is the second, keyed by
-  functionality id, and it says so in its own sentence — "not possible in this
-  bundle" and "not enabled on this location" are separate answers and the card
-  gives only the true one. Don't generalise it into a served "which
-  functionalities does a format refuse" table: **helm** refuses *one* and
-  nothing else refuses any. Helm's `IGNORED_BY_FORMAT` entry deliberately does
-  not carry the four `sv_ingress` options, because helm does not *ignore*
-  service virtualization — it refuses it. Ignoring and refusing are different
-  answers, and a format that refuses says so in `generate()` rather than in that
-  table. Docker was the second refuser until #182 and is now the case that
-  proves the distinction from the other side: it *publishes* virtual services,
-  so the Kubernetes four are genuinely ignored there and its `svDocker` three
-  are ignored by the two cluster formats. **A format's refusal clears no
-  options**; the *format*
-  gives way (`correction` inside `sv.ts`, surfaced as `Sv.patch`), because a
-  configuration somebody wrote outranks a segment, and only `notRunPatch` — the
-  location's answer — wipes anything. That correction is the one write on this
-  page overriding a choice made on it rather than completing one, so it is never
-  silent: App records what it replaced (`formatNotice`) and the panel says so
-  until a format is picked.
+  **A functionality was judged twice and is judged once.** The location decides
+  whether it is *run*; the format used to decide whether the bundle could
+  *serve* it, and a card could be silent for either reason. Both refusals are
+  gone — docker's in #182, helm's when the chart grew the ingress env and the
+  backend's RBAC — so `sv.blockedFormats`, `sv.functionalityBlocked`, the
+  disabled segment, the card's fourth state and `formatNotice` are all deleted
+  rather than left empty. A disabled state nothing can reach is the page
+  claiming a rule the server does not have.
+  **`test_server.py` derives the refusing formats by calling `generate()` per
+  format and requires the set to be empty**, so a new refusal fails there, and
+  the page's answer goes back beside it. Don't add one lightly: a format that
+  *refuses* something is a segment the page must then disable, and
+  ignoring and refusing are different answers — helm's `IGNORED_BY_FORMAT`
+  entry still does not carry the four `sv_ingress` options, but now because it
+  carries them, and its `svDocker` three are ignored there as the Kubernetes
+  four are ignored on docker. **Nothing on this page overrides a choice made on
+  it any more**: `correction` inside `sv.ts` (surfaced as `Sv.patch`) seeds and
+  clears SV options only, `notRunPatch` — the location's answer — is the one
+  thing that wipes any, and no write moves the output format.
 
-  **`blockedFormats` follows what is configured, never what is demanded** (#115).
-  `generate()` refuses a helm bundle on `_sv_cfg` returning a config, and never
-  reads the funcIds first. Read off the demand instead, the gap was a
-  location whose funcIds carry no served functionality (real accounts have them:
-  tdm, dataPublisher, delphix) — `enabledFunctionalities` answers null,
-  `runsFunctionality` reads null as yes, every switch is offered, `notRunPatch`
-  clears nothing, and a full
-  SV configuration was generated on a refused format and refused by the server
-  with the segment still enabled. `svState` therefore takes `runs` as a fourth
-  input: options on their way out must not take a format with them, or a format
-  choice valid all along is lost on the way past. The formats the page blocks
-  are held to the ones `generate()` actually raises on, by `test_server.py`,
-  because the two are far apart and easy to grow a second of.
+  **What survives from #115 is `runs`, and it is still a fourth input to
+  `svState`.** The gap that issue found was a location whose funcIds carry no
+  served functionality (real accounts have them: tdm, dataPublisher, delphix) —
+  `enabledFunctionalities` answers null, `runsFunctionality` reads null as yes,
+  every switch is offered and `notRunPatch` clears nothing, so a full SV
+  configuration really does reach `generate()` with nobody having demanded it.
+  It generates now, in every format. `runs` stays because the other half of it
+  is live: options on their way out must not take anything with them.
 
   **`svState` takes `applies` as a fifth, and it is a different question from
   `runs`** (#182). Service virtualization is published with disjoint options per
@@ -840,9 +831,8 @@ missing tools. The rest is what it cannot fix for you.
   ingress — `required`, `groupRequired`, `groupDeclined`, the nginx seed, the
   openshift rescue, `ok` — is gated on it, or the page would flag a row that is
   not on screen and `correction` would write an ignored option nobody could see
-  a control for. **`carries` is deliberately not gated**: a docker bundle can
-  hold a stranded `sv_ingress`, and it goes live the moment somebody picks helm,
-  so what may be *picked* follows what the configuration would mean there.
+  a control for. (`carries` sat beside them, ungated on purpose, and went with
+  the blocked-format table it was the input to.)
   `incompleteGroups`/`blockingGroups` take `applies` for the same reason — the
   claim that a group is "never hidden, so never a blocker off screen" held only
   while no functionality-tagged group was format-hidden, and now two are.
@@ -1296,9 +1286,33 @@ stale list can cost a credential nothing can read back.
   directory are named explicitly in `pyproject.toml`; the release workflow
   asserts the wheel carries them, because a missing chart file fails at generate
   time on an installed copy and never in a checkout.
-- **`--format helm` refuses a bundle *configured* for service virtualization**
-  — never a location for carrying the funcId, which is #115's
-  whole point, and a location generated `--sv-ingress none` has the chart.
+- **Every format publishes a virtual service, and the chart was the last that
+  could not.** `--format helm` refused a bundle *configured* for one (never a
+  location for carrying the funcId, which was #115's whole point) because the
+  chart carried no `KUBERNETES_WEB_EXPOSE_*` and no ingress RBAC. It carries
+  both: `sv.ingress`, `sv.subdomain`, `sv.tlsSecret` and `sv.istioGateway` in
+  the overlay, the same ConfigMap keys, and one `apiGroups` block in the Role
+  for the backend that was chosen. The backend table is
+  `generate.SV_INGRESS_BACKENDS` **restated in Go** — `bzm-opl.svBackends`, a
+  YAML block a template parses with `fromYaml` — because a Go template cannot
+  import a Python table and a chart installed by hand has no generator to
+  resolve one for it; `tests/test_helm.py` parses that block and holds the two
+  equal field by field, `via_ingress_class` excepted (it is `doctor`'s, and
+  nothing the chart renders reads it). Its `bzm-opl.validate` restates
+  `_sv_cfg`'s refusals for the same reason, and adds nothing of its own — a
+  refusal the generator does not have would be the chart judging a values file
+  the generator wrote. **The one asymmetry is `openshift_cluster`**: the chart
+  has no such value, so `platform: openshift` is all it can read, and
+  `helm_parity.py`'s `sv-openshift` case is the two sides judging from
+  different inputs and agreeing anyway. **Verified live** (2026-08-12, the
+  standing k8s SV location, minikube, private registry with gcr.io blackholed):
+  the chart's crane created the Ingress itself three seconds after the deploy,
+  under the chart's Role alone -- `auth can-i create ingresses.networking.k8s.io`
+  as the crane account answers yes and `gateways.networking.istio.io` no -- and
+  the endpoint served over the certificate the Secret named in `sv.tlsSecret`
+  holds. The first deploy after replacing crane fails on `CONTAINER_READY`,
+  because the new crane spends that window removing what the old one left;
+  budget one.
   Docker refused one too until #182 and does not now: it publishes virtual
   services with `HOSTNAME_OVERRIDE` and a `TLS_CERT`/`TLS_KEY` pair, which are
   `sv_hostname`, `sv_tls_cert` and `sv_tls_key`. The two PEMs carry **content**,
@@ -1307,11 +1321,11 @@ stale list can cost a credential nothing can read back.
   which is `facts.manual()`'s whole premise.
   `livetest` refuses a chart directory, a profile
   with `service_account_create: false`, a placeholder `AUTH_TOKEN` it will not
-  re-render over, and a bundle whose identity is not the agent under test. Guards over silent failures: a chart
-  without the ingress stalls at `WAITING_FOR_DOMAIN`, the rig's `*.yaml` glob
-  comes back empty, and a namespace the rig was told already exists never gets
-  created, so every object applies, no pod is created, and the run waits out its
-  timeout. Each of these is 12–20 minutes and a deleted cluster otherwise.
+  re-render over, and a bundle whose identity is not the agent under test.
+  Guards over silent failures: handed a chart the rig's `*.yaml` glob comes back
+  empty, and a namespace the rig was told already exists never gets created, so
+  every object applies, no pod is created, and the run waits out its timeout.
+  Each of these is 12–20 minutes and a deleted cluster otherwise.
 
 - **`livetest` is two rigs now, and the bundle picks (#179).** `run()` applies
   manifests to a cluster; `run_compose()` starts a docker bundle with

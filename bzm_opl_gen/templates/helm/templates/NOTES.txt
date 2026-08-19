@@ -17,6 +17,20 @@ BlazeMeter agent "{{ include "bzm-opl.fullname" . }}" installed into namespace {
 Engines need {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} RAM + ~60GB disk (40GB of it /tmp) per concurrent
 engine, and egress to *.blazemeter.com{{ if .Values.privateRegistry }} and {{ .Values.privateRegistry }}{{ else }} and gcr.io{{ end }}.
 Check a cluster against that before a real run: bzm-opl-gen doctor
+{{- if include "bzm-opl.svEnabled" . }}
+{{- $backend := index (include "bzm-opl.svBackends" . | fromYaml) .Values.sv.ingress }}
+
+Virtual services are published as one {{ $backend.creates }} each, at
+<virtual-service>-<port>-{{ .Release.Namespace }}.{{ .Values.sv.subdomain }} -- so *.{{ .Values.sv.subdomain }} needs a
+DNS record pointing at your ingress controller.
+{{- if $backend.tlsSecretRead }}
+The TLS secret {{ .Values.sv.tlsSecret }} has to exist in {{ .Release.Namespace }} and cover that domain;
+nothing here creates it, and without it the endpoint still answers over the
+controller's own certificate, so only a client that verifies finds out:
+
+   {{ $cli }} -n {{ .Release.Namespace }} create secret tls {{ .Values.sv.tlsSecret }} --cert=<file> --key=<file>
+{{- end }}
+{{- end }}
 {{- if and (not .Values.privateRegistry) (not .Values.proxy.enabled) }}
 
 Note: with no privateRegistry and no proxy, the nodes pull images from the

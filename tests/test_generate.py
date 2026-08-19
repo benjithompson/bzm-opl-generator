@@ -3569,9 +3569,10 @@ def test_the_cluster_map_and_its_mirror_name_one_set():
     and in the chart's `image.repository`.
     """
     for fmt in CLUSTER_FORMATS:
-        # A mockServices location declining an ingress: the widest image set
-        # both formats will generate, since helm refuses a bundle configured
-        # for a virtual service and the images follow the location either way.
+        # A mockServices location declining an ingress. The images follow the
+        # location rather than the option, so this is the widest image set
+        # either way -- it was written when the chart refused a configured
+        # ingress, and it is still the case that says so about the images.
         files = _cluster_bundle(fmt, MOCK_FACTS, sv_ingress=gen.SV_INGRESS_NONE)
         dests = {d for _, d in _mirror_pairs(files)}
         overrides = set(_cluster_overrides(files).values())

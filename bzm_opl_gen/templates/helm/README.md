@@ -1,14 +1,12 @@
 # bzm-opl — BlazeMeter private location agent (Helm)
 
-A Helm packaging of the manifests `bzm-opl-gen generate` emits, scoped to
-**performance testing**. Same objects, same defaults, same reasoning — expressed
-as a chart so a platform team can install and upgrade it the way it installs
-everything else.
+A Helm packaging of the manifests `bzm-opl-gen generate` emits. Same objects,
+same defaults, same reasoning — expressed as a chart so a platform team can
+install and upgrade it the way it installs everything else.
 
-Service virtualization (mock services) is deliberately out of scope: it needs an
-ingress backend, its own RBAC and a wildcard TLS secret. Use the upstream
-[Blazemeter/helm-crane](https://github.com/Blazemeter/helm-crane) chart for a
-location that also serves virtual services.
+It covers both functionalities a BlazeMeter agent runs on a cluster:
+**performance testing**, which needs nothing set, and **service
+virtualization**, which needs `sv.ingress` (see below).
 
 ## Which one should I use?
 
@@ -102,6 +100,47 @@ Secret rather than the ConfigMap automatically.
 > JMeter ignores `HTTP(S)_PROXY` for sampler traffic — a library convention, not
 > a JVM one. Engine → system-under-test goes direct regardless of what is set
 > here; the proxy has to go in the test itself. Results still upload.
+
+**Service virtualization** — one setting turns it on, and it decides what crane
+publishes each virtual service as:
+
+```
+--set sv.ingress=nginx \
+--set sv.subdomain=mocks.example.com \
+--set sv.tlsSecret=wildcard-mocks
+```
+
+| `sv.ingress` | crane publishes | `serviceType: NODEPORT` | reads `sv.tlsSecret` |
+|---|---|---|---|
+| `nginx` | an Ingress (`networking.k8s.io`) | works | yes |
+| `istio` | a Gateway + VirtualService (`networking.istio.io`) | refused | no |
+| `contour` | an HTTPProxy (`projectcontour.io`) | refused | no |
+| `openshift` | a Route (`route.openshift.io`) | works | no |
+
+The Role grants that one API group, because crane runs one implementation and
+never touches the others. `istio` and `contour` are refused under
+`serviceType: NODEPORT`: they fill the published object's port from the
+Service, and a nodePort is a number no client reaches the ingress on — the
+object is written, the mock pod runs 1/1, BlazeMeter advertises the endpoint,
+and the endpoint does not serve.
+
+Two things the chart does not create, and each is silent when it is missing:
+
+- **A wildcard DNS record for `*.<sv.subdomain>`,** pointing at your ingress
+  controller. Endpoints are advertised as
+  `<virtual-service>-<port>-<namespace>.<sv.subdomain>`.
+- **The TLS Secret,** which has to be in the agent's own namespace — crane
+  creates its object there, and no controller resolves a Secret from another
+  namespace. `sv.tlsSecret` is mandatory whatever the backend does with it:
+  crane validates the name at startup and will not run without it. Where the
+  backend does read it, leaving the Secret out fails invisibly, since the
+  endpoint answers `200` over the controller's own certificate and only a
+  client that verifies ever finds out.
+
+Left empty — the default — the agent publishes nothing. That is not an error
+for a location that also serves mock services, but it is a decision: virtual
+services deployed to it stall at `WAITING_FOR_DOMAIN` with the agent idle and
+the mock pod healthy.
 
 ## Engine sizing
 
@@ -210,6 +249,10 @@ are immutable: repointing an install at a different agent needs
 | Deployment `crane` | always |
 | ConfigMap `blazemeter-cacerts` | `caBundle.mode` inline or openshiftInject |
 | ClusterRole/Binding | `clusterRbac` |
+
+No object is added by service virtualization: `sv.ingress` adds the backend's
+own API group to the Role, and the ingress objects themselves are crane's, one
+per virtual service, at run time.
 
 Whichever name `serviceAccount.name` holds is what the Deployment runs as and
 what both binding subjects grant to, created here or not. With

@@ -89,17 +89,19 @@ def test_generate_zip_helm_keeps_the_chart_directory():
     assert "bzm-opl-ns1/bzm-opl-values.yaml" in names
 
 
-def test_generate_helm_rejects_service_virtualization_400():
-    """The UI disables the segment for an SV location; this is the other half --
-    an imported profile can arrive set to helm."""
+def test_generate_helm_serves_a_service_virtualization_location():
+    """This was a 400 until the chart grew an ingress. It is the route the page
+    reaches for a location that serves mock services, so the answer arriving as
+    a bundle rather than as an error is what the segment being offered means."""
     facts = dict(FACTS, func_ids=["mockServices"])
     r = client.post("/api/generate", json={
         "facts": facts,
         "options": {"namespace": "ns1", "output_format": "helm",
                     "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
                     "sv_tls_secret": "wildcard"}})
-    assert r.status_code == 400
-    assert "performance testing only" in r.json()["detail"]
+    assert r.status_code == 200
+    files = {f["name"]: f["content"] for f in r.json()["files"]}
+    assert "ingress: \"nginx\"" in files["bzm-opl-values.yaml"]
 
 
 def test_manual_facts_need_no_api_key():
@@ -870,23 +872,25 @@ def test_the_page_knows_the_same_three_formats_the_generator_does():
         == gen_mod.OUTPUT_FORMATS
 
 
-def test_the_page_blocks_exactly_the_formats_that_refuse_a_virtual_service():
-    """sv.ts takes an output format away from a bundle that carries a virtual
-    service, and the refusal it is mirroring is generate()'s.
+def test_no_format_refuses_a_virtual_service():
+    """Every format generates the same SV configuration, and the page keeps no
+    table of the ones that do not.
 
-    Derived by asking the generator rather than by reading it: the refusals are
-    two separate raises a long way apart, and this is the one thing about them
-    the page restates. A third format growing one would leave a segment offered
-    that cannot generate -- an off-screen blocker -- and helm losing its would
-    leave a working segment disabled with a sentence about a chart that now
-    carries an ingress.
+    This used to hold `sv.ts`'s BLOCKED_FORMATS equal to the formats that
+    raise. Two entries passed through it -- docker's until #182, helm's until
+    the chart grew the ingress env and its RBAC -- and the set is empty now, so
+    the page's table and everything reading it were deleted rather than left
+    empty: a segment that can never be disabled, a card that can never state a
+    refusal, and a correction that can never move a format.
 
-    #115 was this same mismatch one level up and is why it is pinned: the page
-    disabled these segments off the *location's demand*, while `_sv_cfg`
-    refuses on the *configuration* and never looks at the funcIds. A location
-    demanding nothing could therefore be configured for service virtualization
-    and generated as docker, which the server refused with nothing on screen
-    having said so.
+    Derived by asking the generator rather than by reading it, which is what
+    makes it the alarm for a *new* refusal: one added anywhere in generate()
+    fails here, and the fix is to put the page's answer back beside it.
+
+    #115 is why the options below carry no matching funcId. `_sv_cfg` refuses
+    on the *configuration* and never looks at the location's demand, so this is
+    the state where a format's refusal was invisible to a page reading the
+    demand alone.
     """
     from bzm_opl_gen import generate as gen_mod
     facts = {"harbor_id": "aaa111", "func_ids": ["mockServices"],
@@ -895,20 +899,12 @@ def test_the_page_blocks_exactly_the_formats_that_refuse_a_virtual_service():
     sv_opts = {"ship_id": "bbb222", "auth_token": "de" * 32,
                "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
                "sv_tls_secret": "wildcard-credential"}
-    refused = set()
     for fmt in gen_mod.OUTPUT_FORMATS:
-        try:
-            gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
-        except ValueError as exc:
-            assert "service virtualization" in str(exc)
-            refused.add(fmt)
-    assert refused, "no format refuses a virtual service -- did the check move?"
+        gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
-    body = re.search(
-        r"const BLOCKED_FORMATS: Record<string, string> = \{(.*?)\n\};",
-        (src / "sv.ts").read_text(), re.S)
-    assert body, "BLOCKED_FORMATS not found -- was it renamed or moved?"
-    assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) == refused
+    assert "BLOCKED_FORMATS: Record" not in (src / "sv.ts").read_text(), \
+        "the page has a blocked-format table again -- hold it equal to the " \
+        "formats generate() refuses, as this test used to"
 
 
 def test_the_pages_copy_of_the_ignored_table_is_the_generators():

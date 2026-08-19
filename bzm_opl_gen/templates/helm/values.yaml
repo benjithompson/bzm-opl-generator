@@ -1,4 +1,4 @@
-# BlazeMeter private location agent -- performance testing only.
+# BlazeMeter private location agent.
 #
 # The three account facts at the top are the only required values. Get them with
 #   bzm-opl-gen locations --api-key api-key.json --account-name "<account>"
@@ -234,6 +234,51 @@ engine:
   # Integer MB.
   ephemeralRequestMb: ""
   ephemeralLimitMb: ""
+
+# -- Service virtualization ---------------------------------------------------
+
+# How crane publishes the virtual services (mock services) deployed to this
+# location. Empty -- the default -- is a performance-only agent: no
+# KUBERNETES_WEB_EXPOSE_* environment, and no ingress grant in the Role.
+#
+# A location that serves mock services and is installed with this left empty
+# does not fail. It deploys, the agent reports idle, the mock pod runs 1/1 and
+# every virtual service stalls at WAITING_FOR_DOMAIN, which is why the value is
+# worth setting deliberately rather than discovering.
+#
+#   nginx      an Ingress (networking.k8s.io), claimed by an IngressClass.
+#   istio      a Gateway + VirtualService (networking.istio.io).
+#   contour    an HTTPProxy (projectcontour.io).
+#   openshift  a Route (route.openshift.io); requires platform: openshift.
+#
+# Crane runs one implementation and never touches the others, so the Role
+# grants that backend's API group alone.
+#
+# istio and contour require serviceType: CLUSTERIP. They fill the published
+# object's port from the Service, and under NODEPORT that is a nodePort no
+# client reaches the ingress on -- the object is written, the mock runs 1/1,
+# BlazeMeter advertises the endpoint and the endpoint does not serve. nginx and
+# openshift write a constant port and survive either service type.
+sv:
+  ingress: ""
+  # The wildcard domain your ingress controller already serves. BlazeMeter
+  # advertises each endpoint as
+  # <virtual-service>-<port>-<namespace>.<subdomain>, so nothing resolves
+  # without a wildcard DNS record pointing at the controller.
+  subdomain: ""
+  # A TLS Secret in this namespace. Mandatory even for plain-HTTP virtual
+  # services: crane validates the name at startup and will not run without it.
+  # nginx and contour reference it from the object they publish, and resolve it
+  # in the agent's own namespace -- no controller reads a Secret from another
+  # one, and a missing Secret is silent (the endpoint answers over the
+  # controller's own certificate, and only a client that verifies finds out).
+  # istio and openshift never read it; there the name is required and unused.
+  # Nothing in this chart creates it:
+  #   kubectl -n <namespace> create secret tls <name> --cert=<file> --key=<file>
+  tlsSecret: ""
+  # istio only. Empty -> crane creates a Gateway per virtual service; named ->
+  # it reuses a Gateway you own. Read by no other backend.
+  istioGateway: ""
 
 # -- Free-form agent environment ----------------------------------------------
 

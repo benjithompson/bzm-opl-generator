@@ -348,11 +348,17 @@ def test_service_virtualization_still_refuses_without_an_ingress():
         _gen(f)
 
 
-def test_helm_format_still_refuses_a_mock_location():
+def test_the_helm_format_serves_a_mock_location_typed_by_hand():
+    """Manual entry reaches every format the same way a gathered location does.
+
+    This was a refusal until the chart carried an ingress, and the pairing is
+    the one worth keeping a test for: a bundle for an account nobody here can
+    reach, in the format a platform team installs with.
+    """
     f = facts_mod.manual(H, S, func_ids=["mockServices"])
-    with pytest.raises(ValueError, match="performance testing only"):
-        _gen(f, output_format="helm", sv_ingress="nginx",
-             sv_subdomain="apps.example.com", sv_tls_secret="wc")
+    files = _gen(f, output_format="helm", sv_ingress="nginx",
+                 sv_subdomain="apps.example.com", sv_tls_secret="wc")
+    assert "ingress: \"nginx\"" in files[gen.HELM_VALUES_FILE]
 
 
 # -- reading a real agent's inventory -----------------------------------------

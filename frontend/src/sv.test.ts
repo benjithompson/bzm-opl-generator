@@ -12,9 +12,11 @@ import { Options, SvConstants } from "./api";
 import { IGNORED_BY_FORMAT } from "./fixtures";
 import { optionApplies } from "./formats";
 import { SV_NONE, toggleDeclared } from "./optionGroups";
-import {
-  exclusiveWith, SV_FUNCTIONALITY, svMixedWithEngines, svState,
-} from "./sv";
+// SV_FUNCTIONALITY is not imported: the only assertion that read it here was
+// that a blocked format keyed its refusal by the funcId, and no format is
+// blocked now. What the constant *is* stays pinned to the generator's own
+// vocabulary, in tests/test_server.py, which is where the two can disagree.
+import { exclusiveWith, svMixedWithEngines, svState } from "./sv";
 
 // The funcId a location carries to mean "runs mockServices" is served, not
 // spelled here -- the same reason the page reads it off /api/sv-constants.
@@ -150,104 +152,31 @@ describe("whether the configuration is finished", () => {
   });
 });
 
-// -- the formats that cannot publish a virtual service ------------------------
+// -- every format publishes a virtual service ---------------------------------
 
-describe("the blocked formats", () => {
-  it("names the chart, for a location that needs virtual services", () => {
-    // One refusal, and it is generate()'s: the chart carries no ingress, no
-    // RBAC for one and no wildcard TLS secret, so one emitted anyway deploys,
-    // reports idle and stalls at WAITING_FOR_DOMAIN.
-    const blocked = sv(SV_LOC).blockedFormats;
-    expect(blocked.helm).toMatch(/ingress, its RBAC and a TLS secret/);
-    // Never manifests: it is the one that carries the ingress, and the
-    // fallback every correction below points at.
-    expect(blocked.manifests).toBeUndefined();
-    // ...and docker was here until #182. The old sentence said a docker agent
-    // "does not carry" HOSTNAME_OVERRIDE and a TLS pair, which was true of the
-    // bundle and never of the agent: it publishes virtual services now, with
-    // its own three options, so nothing about the format is refused.
-    expect(blocked.docker).toBeUndefined();
+describe("the formats a virtual service may be generated as", () => {
+  it("takes no format away from an SV location", () => {
+    // Two entries stood here and both are gone. Docker's went in #182 -- it
+    // said a docker agent "does not carry" HOSTNAME_OVERRIDE and a TLS pair,
+    // which was true of the bundle and never of the agent. Helm's was true of
+    // the chart, and the chart carries the ingress env and its RBAC now, so
+    // `Sv` has no `blockedFormats` and no `functionalityBlocked` for anything
+    // to read. What is left is the correction below, which never moves a
+    // format.
+    for (const fmt of ["manifests", "helm", "docker"]) {
+      expect(sv(SV_LOC, { ...CONFIGURED, output_format: fmt }).patch?.output_format)
+        .toBeUndefined();
+    }
   });
 
-  it("blocks nothing where nothing needs an ingress", () => {
-    expect(sv(PERF_LOC).blockedFormats).toEqual({});
-    expect(sv(SV_LOC, { sv_ingress: SV_NONE }).blockedFormats).toEqual({});
-  });
-
-  it("blocks on what is configured, not on what the location asked for", () => {
-    // #115. generate() refuses on _sv_cfg returning a config, and _sv_cfg
-    // never looks at the funcIds before it does -- so an SV configuration on a
-    // location that demanded nothing is a docker bundle the server refuses.
-    // Read off `required`, this said nothing about it and the segment stayed
-    // enabled: an off-screen blocker, which is the shape the page keeps
-    // removing.
-    const s = sv(PERF_LOC, CONFIGURED);
+  it("leaves a configuration nobody demanded on the format it arrived with", () => {
+    // #115's state, which used to be the second reader of that table: an
+    // imported profile carrying a full SV configuration for a location whose
+    // funcIds name no served functionality. The configuration is generatable
+    // as any of the three, so nothing about the format needs correcting.
+    const s = sv(PERF_LOC, { ...CONFIGURED, output_format: "helm" });
     expect(s.required).toBe(false);
-    expect(s.blockedFormats.helm).toMatch(/ingress, its RBAC and a TLS secret/);
-  });
-
-  it("still takes the chart away from a bundle whose ingress is stranded", () => {
-    // The one thing `carries` is deliberately NOT gated by the format for.
-    // A docker bundle can hold an `sv_ingress` -- it is one of that format's
-    // ignored options, kept and named rather than wiped -- and it becomes live
-    // the moment somebody picks helm. So what may be picked follows what the
-    // configuration would mean *there*, not what it means here.
-    expect(sv(PERF_LOC, { ...CONFIGURED, output_format: "docker" })
-      .blockedFormats.helm).toMatch(/this chart does not carry/);
-  });
-
-  it("blocks nothing for options that are on their way out", () => {
-    // ...and the other end of the same question. A location known to run
-    // something else has notRunPatch clearing every SV option through the
-    // group's own disable(), so an sv_ingress still in the options is not a
-    // bundle anybody will generate -- and taking the docker segment away for
-    // it would lose a format choice that was valid all along.
-    expect(svState(PERF_LOC, CONFIGURED, CONST, false).blockedFormats)
-      .toEqual({});
-  });
-
-  it("keeps 'no virtual services' apart from 'the constants have not landed'", () => {
-    // Read off `required` these shared an answer: func_ids arrives empty
-    // before /api/sv-constants lands, which makes every location a non-SV one
-    // and every format available. What is configured is an option this page
-    // wrote, so an unread table cannot make it lie.
-    const unread: SvConstants = { func_ids: [], ingress_types: [], backends: {} };
-    expect(svState(SV_LOC, CONFIGURED, unread).blockedFormats.helm)
-      .toMatch(/this chart does not carry/);
-  });
-});
-
-// -- and the same refusal read from the other end -----------------------------
-
-describe("the functionality a format cannot serve", () => {
-  it("names the format's own refusal, keyed by functionality", () => {
-    // The card renders this instead of its switches: a chart offering an
-    // ingress, a subdomain and a TLS secret is offering three fields that make
-    // the whole bundle unbuildable.
-    // Keyed by the funcId, which is what a functionality id is (#149) -- and
-    // no longer the `sv` group id it used to be spelled the same as.
-    expect(SV_FUNCTIONALITY).toBe("mockServices");
-    expect(sv(SV_LOC, { output_format: "helm" })
-      .functionalityBlocked[SV_FUNCTIONALITY])
-      .toMatch(/ingress, its RBAC and a TLS secret/);
-    // Docker serves it now (#182), so the card offers switches rather than a
-    // sentence -- the `svDocker` group's three, which are that format's way of
-    // publishing the same thing.
-    expect(sv(SV_LOC, { output_format: "docker" }).functionalityBlocked)
-      .toEqual({});
-  });
-
-  it("says nothing about a format that can serve it", () => {
-    expect(sv(SV_LOC, { output_format: "manifests" }).functionalityBlocked).toEqual({});
-    expect(sv(SV_LOC, {}).functionalityBlocked).toEqual({});
-  });
-
-  it("leaves a functionality the location does not run to say so itself", () => {
-    // "Not enabled here" and "not possible in this format" are different
-    // answers and the card must not give the second where the first is true --
-    // the location's own funcIds are what that card is about.
-    expect(svState(PERF_LOC, { output_format: "docker" }, CONST, false)
-      .functionalityBlocked).toEqual({});
+    expect(s.patch).toBeNull();
   });
 });
 
@@ -381,12 +310,15 @@ describe("the option patch", () => {
       .toEqual({ sv_ingress: "nginx", sv_istio_gateway: null });
   });
 
-  it("falls back from a format this location cannot have", () => {
-    // A location can turn out to be an SV one after the format was picked, and
-    // an imported profile can arrive already set to one that refuses it.
-    // Leaving it selected fails every generate call against a disabled segment.
-    expect(sv(SV_LOC, { ...CONFIGURED, output_format: "helm" }).patch)
-      .toEqual({ output_format: "manifests" });
+  it("never moves the format the bundle was asked for", () => {
+    // There was a branch here that did, for a bundle configured for service
+    // virtualization on a format that refused it -- the one write on this page
+    // that overrode a choice made on it. No format refuses one now, so a chart
+    // is corrected exactly as the manifests are: its ingress is seeded, and the
+    // format it arrived with is left alone.
+    expect(sv(SV_LOC, { ...CONFIGURED, output_format: "helm" }).patch).toBeNull();
+    expect(sv(SV_LOC, { output_format: "helm" }).patch)
+      .toEqual({ sv_ingress: "nginx" });
     expect(sv(PERF_LOC, { output_format: "helm" }).patch).toBeNull();
     expect(sv(SV_LOC, { sv_ingress: SV_NONE, output_format: "helm" }).patch)
       .toBeNull();
@@ -408,7 +340,7 @@ describe("the option patch", () => {
 
   it("settles in one pass from every state that needs correcting", () => {
     expect(settle(SV_LOC, { output_format: "helm", sv_istio_gateway: "gw" }))
-      .toEqual({ output_format: "manifests", sv_ingress: "nginx",
+      .toEqual({ output_format: "helm", sv_ingress: "nginx",
                  sv_istio_gateway: null });
     // Docker settles at once and untouched: the format is not refused and the
     // ingress is not its field to seed.
@@ -427,17 +359,6 @@ describe("the option patch", () => {
       .toEqual({ sv_ingress: SV_NONE, output_format: "helm" });
     expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "docker" }))
       .toEqual({ sv_ingress: SV_NONE, output_format: "docker" });
-  });
-
-  it("falls back from a format a configuration nobody demanded refuses", () => {
-    // #115: the same correction, for the state the demand could not see. An
-    // imported profile can carry docker and a full SV configuration for a
-    // location whose funcIds carry no served functionality at all, and nothing was
-    // clearing either half. Helm now, since docker serves it (#182) -- what
-    // the state is about is a configuration nobody demanded, not which format
-    // happened to be refused when it was written.
-    expect(settle(PERF_LOC, { ...CONFIGURED, output_format: "helm" }))
-      .toEqual({ ...CONFIGURED, output_format: "manifests" });
   });
 
   it("keeps the format of a bundle whose SV options are being cleared", () => {

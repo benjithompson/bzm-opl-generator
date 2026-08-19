@@ -87,6 +87,16 @@ spec:
           value: {{ include "bzm-opl.serviceAccountName" . | quote }}
         - name: DOCKER_REGISTRY
           value: {{ include "bzm-opl.dockerRegistry" . | quote }}
+        {{- if include "bzm-opl.svEnabled" . }}
+        {{- /*
+        Only when there is an ingress to check. Passed empty, the hook looks for
+        an ingress named "" and a Secret named "" and reports on both.
+        */}}
+        - name: KUBERNETES_WEB_EXPOSE_TYPE
+          value: {{ .Values.sv.ingress | upper | quote }}
+        - name: KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME
+          value: {{ .Values.sv.tlsSecret | quote }}
+        {{- end }}
       resources:
         requests: { cpu: 100m, memory: 256Mi }
         limits: { cpu: 200m, memory: 512Mi }

@@ -1036,8 +1036,9 @@ def main():
                         "helm: a chart in helm/ with values.yaml filled in from "
                         "the account -- both render the same objects. docker: a "
                         "docker run script for one agent on a host with a docker "
-                        "daemon, where most of the options below mean nothing. "
-                        "helm and docker cover performance testing only")
+                        "daemon, where most of the options below mean nothing "
+                        "and virtual services are published by hostname rather "
+                        "than by ingress")
     g.add_argument("--platform", choices=["openshift", "k8s"])
     # The posture above is not the product: it installs on vanilla Kubernetes
     # too. Only the negative has a flag, because the default posture is

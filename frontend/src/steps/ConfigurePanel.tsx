@@ -66,19 +66,12 @@ export interface ConfigurePanelProps {
    *  asks: see the header. */
   format: string;
   setFormat: (v: string) => void;
-  /** Why a format is unavailable for this bundle, by format id -- from sv.ts,
-   *  and empty where nothing configured needs an ingress. The segment says
-   *  so rather than disappearing: a format that vanishes leaves the page unable
-   *  to explain the error the server would have given. */
-  blockedFormats: Record<string, string>;
-  /** ...and the same refusal from the other end: why this format cannot serve
-   *  a functionality at all, by functionality id. The card renders it instead of its
-   *  switches, so a docker bundle stops offering an ingress, a subdomain and a
-   *  TLS secret that would make the whole bundle unbuildable. */
-  functionalityBlocked: Record<string, string>;
-  /** The format the SV correction replaced, and why -- or null. A format the
-   *  user picked is never swapped in silence; see the effect in App. */
-  formatNotice: { was: string; why: string } | null;
+  /* Three props stood here and all three were about a format refusing a
+     configuration: which formats this bundle may not be, why this format could
+     not serve a functionality, and the notice when the correction moved one.
+     No format refuses a virtual service now (see sv.ts), so every segment is
+     always selectable, every card that is run shows its switches, and nothing
+     on this page replaces a choice made on it. */
   /** Does this option reach anything in a bundle of this format? Everything
    *  below hides by it -- whole groups, the placement card, Advanced, and the
    *  individual fields inside a group's own body. From formats.ts, over the
@@ -341,12 +334,6 @@ function FunctionalityCard(
   // then, and claiming "enabled" from an unanswered question is the collapse
   // this codebase keeps refusing to make.
   const known = p.enabled != null;
-  // ...and the third thing that can be true of a card, which is about the
-  // bundle rather than the location: this format cannot serve this functionality at
-  // all. Only asked where the location does run it -- "not enabled here" and
-  // "not possible in this format" are different answers and the card may give
-  // only the one that is true.
-  const noFormat = on ? p.functionalityBlocked[feat.id] : undefined;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
@@ -389,12 +376,15 @@ function FunctionalityCard(
         <p className="text-[11px] text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Four answers, and they stay four. Not declared (manual entry only --
+      {/* Three answers, and they were four. Not declared (manual entry only --
           see the docstring): which control declares it, and none of its own.
-          Run but not by a bundle of this format: which format would, and no
-          control either -- the switches would configure a bundle the generator
-          refuses outright. Run with nothing of its own: said so, rather than
-          left blank. Run: its rows.
+          Run with nothing of its own: said so, rather than left blank. Run:
+          its rows.
+
+          The fourth was "run, but not by a bundle of this format", which named
+          the format that would and offered no control -- the switches would
+          have configured a bundle the generator refused. No format refuses one
+          now, so the only question left about a card is the location's.
 
           `!on` rather than `manual && !on` on purpose: if a card the location
           does not run ever reached this again, a sentence is the safe thing to
@@ -403,11 +393,6 @@ function FunctionalityCard(
         <p className="px-3 py-3 text-[11px] text-slate-500">
           Not what this identity was declared to run — tick <b>Enabled</b> above
           to configure it.
-        </p>
-      ) : noFormat ? (
-        <p className="px-3 py-3 text-[11px] text-slate-500">
-          Not possible in this bundle — {noFormat}. Pick{" "}
-          <b>Kubernetes manifests</b> above to configure it.
         </p>
       ) : own.length || note ? (
         <div className="divide-y divide-slate-100">
@@ -489,14 +474,14 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const secs = [
     ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
-      // A functionality this format cannot serve owns nothing here: the card states
-      // that instead of its switches, and the rail agrees rather than listing
-      // groups the card does not show. A format's refusal clears no options,
-      // because the format is what gives way (see sv.patch). The not-run case
-      // no longer reaches this in connect mode -- it is filtered above -- but
-      // `runsFunctionality` stays in the test for manual entry, where an undeclared
-      // functionality is still a card and must still own nothing.
-      gs: runsFunctionality(p.enabled, f.id) && !p.functionalityBlocked[f.id]
+      // A functionality nobody declared owns nothing here: the card states that
+      // instead of its switches, and the rail agrees rather than listing groups
+      // the card does not show. The not-run case no longer reaches this in
+      // connect mode -- it is filtered above -- but `runsFunctionality` stays in
+      // the test for manual entry, where an undeclared functionality is still a
+      // card and must still own nothing. A format used to be able to take the
+      // groups away too; none does now (see sv.ts).
+      gs: runsFunctionality(p.enabled, f.id)
         ? groupsFor(groupsOf(f.id), p.applies) : [],
       // ...and the rail says which of the two "no groups set" is: a functionality
       // running on defaults, or one this identity was not declared to run.
@@ -515,34 +500,18 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   return (
     <div className="space-y-4">
       {/* First on the page, and full width: it is the one choice here that
-          decides which of the others are asked at all. */}
+          decides which of the others are asked at all. Every segment is always
+          selectable -- the three formats differ in what they ask for, never in
+          what they can carry. One carried a `disabledReason` from sv.ts, for a
+          bundle configured for service virtualization; see the note there for
+          where it went. */}
       <SegmentedControl
         label="Output format"
         value={p.format}
         onChange={p.setFormat}
         options={OUTPUT_FORMATS.map((f) => ({
           value: f.id, label: f.label, hint: f.hint,
-          // The lead-in is this reader's; sv.ts hands over the clause. What
-          // takes a segment away is what is configured, never the location --
-          // a location that runs mockServices and was answered no generates
-          // any of the three.
-          disabledReason: p.blockedFormats[f.id]
-            && `Not for this configuration — ${p.blockedFormats[f.id]}.`,
         }))} />
-
-      {/* A format the user picked is never replaced in silence. It is the one
-          correction on this page that overrides a choice made on it, and it
-          survives until a format is picked -- which is the answer to it. */}
-      {p.formatNotice && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
-          Switched to <b>Kubernetes manifests</b>: the{" "}
-          {OUTPUT_FORMATS.find((f) => f.id === p.formatNotice!.was)?.label
-            ?? p.formatNotice.was}{" "}
-          bundle you had chosen cannot serve service virtualization
-          {p.formatNotice.why ? ` — ${p.formatNotice.why}` : ""}. Switch it off
-          in <b>Service virtualization</b> below to pick that format again.
-        </p>
-      )}
 
       {/* Required fields nobody filled in. Amber and not red, and beside Next
           rather than in front of it: the bundle generates, and what it carries

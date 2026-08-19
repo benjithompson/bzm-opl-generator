@@ -538,30 +538,95 @@ def test_the_charts_marker_test_is_the_generators_pattern():
         assert not chart_re.fullmatch(held), held
 
 
-def test_service_virtualization_is_refused():
-    """The chart is performance-only. Emitting one that quietly dropped the
-    ingress, its RBAC and the TLS secret would deploy, report idle, and stall at
-    WAITING_FOR_DOMAIN -- the exact silent failure the SV validation exists to
-    prevent."""
-    sv_facts = dict(FACTS, func_ids=["mockServices"])
-    with pytest.raises(ValueError) as e:
-        gen.generate(sv_facts, {**BASE, "sv_ingress": "nginx",
-                                "sv_subdomain": "apps.example.com",
-                                "sv_tls_secret": "wildcard"})
-    assert "performance testing only" in str(e.value)
-    assert "manifests" in str(e.value)
+SV_FACTS = dict(FACTS, func_ids=["mockServices"])
+SV_OPTS = {"sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
+           "sv_tls_secret": "wildcard"}
 
 
-def test_a_declined_sv_location_may_have_the_chart():
-    """The refusal is about what the chart cannot carry, not about the location.
+def test_service_virtualization_reaches_the_overlay():
+    """The chart was refused a virtual service until it carried one.
 
-    Declared performance-only, there is no ingress, no SV RBAC and no TLS secret
-    to drop -- so the chart carries everything this bundle asks for, and holding
-    such a location to manifests would be refusing what generate() accepts.
+    What the refusal was about was the chart, not the location: no
+    KUBERNETES_WEB_EXPOSE_* env and no ingress RBAC, so a chart emitted anyway
+    would deploy, report idle and stall at WAITING_FOR_DOMAIN. It carries both
+    now, and the overlay is where the location's answer arrives.
     """
-    sv_facts = dict(FACTS, func_ids=["mockServices"])
-    files = gen.generate(sv_facts, {**BASE, "sv_ingress": gen.SV_INGRESS_NONE})
+    values, _ = _values(**SV_OPTS)
+    assert values["sv"] == {"ingress": "nginx", "subdomain": "apps.example.com",
+                            "tlsSecret": "wildcard"}
+
+
+def test_the_istio_gateway_is_written_only_for_istio():
+    """The one SV value a single backend reads. Crane looks at
+    KUBERNETES_ISTIO_GATEWAY_NAME in the istio implementation alone, so the
+    overlay states it there and nowhere else -- and states it empty, because
+    empty is an answer there (crane creates a Gateway per virtual service)."""
+    istio, _ = _values(sv_ingress="istio", sv_subdomain="apps.example.com",
+                       sv_tls_secret="wildcard", sv_istio_gateway="shared-gw")
+    assert istio["sv"]["istioGateway"] == "shared-gw"
+    default, _ = _values(sv_ingress="istio", sv_subdomain="apps.example.com",
+                         sv_tls_secret="wildcard")
+    assert default["sv"]["istioGateway"] == ""
+    nginx, _ = _values(**SV_OPTS)
+    assert "istioGateway" not in nginx["sv"]
+
+
+def test_a_declined_location_writes_no_sv_block():
+    """`none` is the third state, and the chart's default is off -- so the
+    overlay says nothing, exactly as the flat ConfigMap emits no
+    KUBERNETES_WEB_EXPOSE_* for the same options. An overlay that restated
+    every default would stop being the record of what was asked for."""
+    values, files = _values(sv_ingress=gen.SV_INGRESS_NONE)
+    assert "sv" not in values
     assert gen.HELM_VALUES_FILE in files
+    plain, _ = _values()
+    assert "sv" not in plain
+
+
+def test_the_charts_backend_table_is_the_generators():
+    """`SV_INGRESS_BACKENDS`, restated in Go and held equal here.
+
+    A Go template cannot import a Python table, and the chart needs this one:
+    the Role grants the single API group the configured backend writes, and the
+    validation refuses the two backends that cannot survive NODEPORT. Resolving
+    it into the values file instead was the alternative and is worse -- a chart
+    installed by hand has no generator to resolve anything, and which RBAC a
+    backend needs is not a thing an installer should have to know.
+
+    Compared field by field rather than by name alone: an entry transcribed
+    with the wrong group renders a Role that applies cleanly and publishes
+    nothing, which is the silent failure the whole SV validation exists for.
+    `via_ingress_class` is the one field deliberately not restated -- it is what
+    `doctor` preflights a cluster with, and nothing the chart renders reads it.
+    """
+    tpl = os.path.join(os.path.dirname(__file__), "..", "bzm_opl_gen",
+                       "templates", "helm", "templates", "_helpers.tpl")
+    with open(tpl) as fh:
+        text = fh.read()
+    body = re.search(r'{{- define "bzm-opl\.svBackends" -}}\n(.*?)\n{{- end -}}',
+                     text, re.S)
+    assert body, "the chart's backend table is not where it was -- renamed?"
+    chart = yaml.safe_load(body.group(1))
+    assert set(chart) == set(gen.SV_INGRESS_BACKENDS)
+    for name, backend in gen.SV_INGRESS_BACKENDS.items():
+        assert chart[name] == {
+            "group": backend.group, "resources": list(backend.resources),
+            "creates": backend.creates, "nodeportOk": backend.nodeport_ok,
+            "tlsSecretRead": backend.tls_secret_read}, name
+
+
+def test_the_readme_names_the_wildcard_secret_the_bundle_does_not_create():
+    """The one prerequisite nothing in the bundle creates and nothing reports
+    missing (#185). The manifests README has named it since; the chart's is the
+    same page for the same reader, so it names it too -- and only where the
+    backend reads it, since telling somebody where to put something nothing
+    looks at is an instruction that gets followed and then disbelieved."""
+    readme = gen.generate(SV_FACTS, {**BASE, **SV_OPTS})["README.md"]
+    assert "wildcard" in readme and BASE["namespace"] in readme
+    silent = gen.generate(SV_FACTS, {**BASE, "sv_ingress": "istio",
+                                     "sv_subdomain": "apps.example.com",
+                                     "sv_tls_secret": "wildcard"})["README.md"]
+    assert "has to be in" not in silent
 
 
 def test_service_virtualization_still_works_as_manifests():

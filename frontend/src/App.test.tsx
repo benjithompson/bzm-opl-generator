@@ -346,7 +346,7 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
   });
 }
 
-test("an SV location seeds a backend into the bundle, once, and is held to manifests",
+test("an SV location seeds a backend into the bundle, once, on whichever format",
   async () => {
     const asked: Options[] = [];
     render(<App api={svAccount(asked)} />);
@@ -360,9 +360,11 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     // own nginx fallback would hide that.
     const latest = () => asked[asked.length - 1] ?? {};
     await waitFor(() => expect(latest().sv_ingress).toBe("nginx"));
-    // ...and the imported default of `helm`, which this location cannot have,
-    // is corrected in the same pass.
-    expect(latest().output_format).toBe("manifests");
+    // ...and the format the session arrived with is left exactly as it was.
+    // It used to be corrected to manifests in the same pass, because the chart
+    // could not publish a virtual service; it can, so nothing here overrides a
+    // choice somebody made.
+    expect(latest().output_format).toBe("helm");
     // Settled: the correction is applied and then there is nothing left to
     // correct. A loop would keep minting options identities and re-POSTing the
     // preview for a configuration that stopped changing.
@@ -374,29 +376,19 @@ test("an SV location seeds a backend into the bundle, once, and is held to manif
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
-    // ...and the format that cannot publish a virtual service is refused with
-    // its own sentence, rather than disappearing. On this step, because the
-    // format decides which of the questions above it are asked.
-    const chart = await screen.findByRole<HTMLButtonElement>(
-      "radio", { name: /Helm chart/ });
-    expect(chart.disabled).toBe(true);
-    // Docker is not, since #182: it publishes virtual services with its own
-    // three options, and the segment being enabled here is what says so. The
-    // segment used to be disabled with a sentence about HOSTNAME_OVERRIDE
-    // "which this bundle does not carry" -- true of the bundle, never of the
-    // agent, and now true of neither.
-    const docker = screen.getByRole<HTMLButtonElement>(
-      "radio", { name: /Docker/ });
-    expect(docker.disabled).toBe(false);
-
-    // #115: the profile arrived asking for a chart and is being generated as
-    // manifests instead, so the page says so. It used to happen in silence,
-    // which is the one correction here that overrides a choice rather than
-    // completing one. The chart's own sentence is therefore on screen twice --
-    // under the disabled segment, and in the notice naming what was replaced.
-    expect(screen.getAllByText(/which this chart does not carry/).length)
-      .toBe(2);
-    expect(screen.getByText(/Switched to/)).toBeTruthy();
+    // ...and every format is offered for it. The chart was disabled here with
+    // a sentence of its own until it grew the ingress env and its RBAC; docker
+    // was, until #182, with a sentence about HOSTNAME_OVERRIDE "which this
+    // bundle does not carry" -- true of the bundle, never of the agent. Both
+    // segments being live is what says a virtual service can be generated as
+    // any of the three.
+    for (const name of [/Kubernetes manifests/, /Helm chart/, /Docker/]) {
+      expect((await screen.findByRole<HTMLButtonElement>("radio", { name }))
+        .disabled).toBe(false);
+    }
+    // Nothing was replaced, so nothing says it was. The notice existed for the
+    // one write on this page that overrode a choice made on it.
+    expect(screen.queryByText(/Switched to/)).toBeNull();
   });
 
 // -- a functionality the location does not run --------------------------------
@@ -708,17 +700,20 @@ test("a browser pin is not a funcId this tool has no options for", async () => {
   expect(screen.getByText(/GUI Functional/)).toBeTruthy();
 });
 
-test("an SV configuration no location demanded still takes away the formats that refuse it",
+test("an SV configuration no location demanded is generated on the format it arrived with",
   async () => {
     // A restored session is one of the three ways these options arrive without
     // anyone pressing anything, and the only one that needs no account to
-    // reproduce. A chart plus a complete SV configuration: generate() refuses
-    // the pair outright, and nothing on the page used to say so -- the segment
-    // was enabled, the rail was green and the download was not blocked.
+    // reproduce. A chart plus a complete SV configuration used to be a pair
+    // generate() refused outright, and nothing on the page said so -- the
+    // segment was enabled, the rail was green and the download was not
+    // blocked. #115 answered it by taking the format away; the chart publishes
+    // virtual services now, so what is asserted is the opposite: the pair
+    // reaches the server, and the server builds it.
     //
-    // Docker until #182, which is the point: the state is "a configuration
-    // nobody demanded, on a format that refuses it", and which format that is
-    // moved when the docker agent gained options of its own.
+    // Docker was the refusing format until #182, and helm until the chart grew
+    // an ingress. The state this test is about outlived both of them: a
+    // configuration nobody demanded, arriving whole.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
@@ -734,37 +729,32 @@ test("an SV configuration no location demanded still takes away the formats that
     const asked: Options[] = [];
     render(<App api={unclaimedAccount(asked)} />);
 
-    // The acceptance criterion, as the assertion: no request carries the pair
-    // the server refuses. Not "the error is nicer" -- the combination never
-    // reaches generate() at all.
+    // Both halves survive, and neither is rewritten: the configuration is what
+    // somebody wrote, and the format is what they chose.
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 400));
-    expect(asked.filter((o) => o.output_format === "helm" && o.sv_ingress
-      && o.sv_ingress !== "none")).toEqual([]);
-    // The SV options are what survive; the format is what gives way. Nothing
-    // here wipes a configuration somebody wrote in order to keep a format.
     expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx");
-    expect(asked[asked.length - 1]?.output_format).toBe("manifests");
+    expect(asked[asked.length - 1]?.output_format).toBe("helm");
 
-    // ...and the page said so rather than swapping the segment in silence.
-    expect(await screen.findByText(/Switched to/)).toBeTruthy();
-    const chart = screen.getByRole<HTMLButtonElement>(
-      "radio", { name: /Helm chart/ });
-    expect(chart.disabled).toBe(true);
-    // The docker segment beside it stays available, because this configuration
-    // is not what that format is refused over any more -- the ingress options
-    // are simply ones it ignores, kept and named like every other.
-    expect(screen.getByRole<HTMLButtonElement>(
-      "radio", { name: /Docker/ }).disabled).toBe(false);
+    // Nothing was swapped, so there is no notice, and no segment is disabled.
+    expect(screen.queryByText(/Switched to/)).toBeNull();
+    for (const name of [/Helm chart/, /Docker/]) {
+      expect(screen.getByRole<HTMLButtonElement>("radio", { name }).disabled)
+        .toBe(false);
+    }
   });
 
-test("a functionality this bundle's format cannot serve is stated, not offered",
+test("every format offers the service-virtualization card its own switches",
   async () => {
-    // The same card as #113's, for the other reason it can carry no switches --
-    // and the two must not be confused. This location's funcIds say nothing, so
-    // "not enabled here" is false; what is true is that no *chart* this
-    // generator emits can publish a virtual service, whatever the location
-    // runs. Docker was the second such format until #182 and is not one now.
+    // This card used to have a fourth state: run, and not servable by a bundle
+    // of this format, which it stated instead of its switches. Two formats
+    // reached it -- docker until #182, the chart until it grew an ingress --
+    // and none does now, so what is asserted is that each format offers the
+    // group that is *its* way of publishing a virtual service.
+    //
+    // The location's funcIds say nothing here (`tdm` is a funcId no
+    // functionality claims), which is the state the card's remaining answers
+    // are easiest to confuse in.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
@@ -777,18 +767,14 @@ test("a functionality this bundle's format cannot serve is stated, not offered",
     render(<App api={unclaimedAccount(asked)} />);
     fireEvent.click(await screen.findByRole("button", { name: /Configure/ }));
 
-    // No switch: pressing one would configure a bundle the generator refuses,
-    // and the format would then be yanked out from under the choice just made.
-    await waitFor(() => expect(card("mockServices").queryByRole("switch")).toBeNull());
-    // It says which of the two answers this is, and names the format that can.
-    // The card is on screen at all because nobody has said what this location
-    // runs (`tdm` is a funcId no functionality claims), which is the state the two
-    // answers are easiest to confuse in.
-    expect(card("mockServices").getByText(/Not possible in this bundle/)).toBeTruthy();
+    // The chart, which is the format the session arrived on: the ingress
+    // group's switch, and no sentence in place of it.
+    await waitFor(() =>
+      expect(card("mockServices").queryByRole("switch")).not.toBeNull());
+    expect(card("mockServices").queryByText(/Not possible in this bundle/))
+      .toBeNull();
     expect(card("mockServices").queryByText(/was declared to run/)).toBeNull();
 
-    // ...and it comes back on a format that can serve it, rather than being
-    // gone for good: the card is a view over the bundle, not a decision.
     fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
     await waitFor(() =>
       expect(card("mockServices").queryByRole("switch")).not.toBeNull());
