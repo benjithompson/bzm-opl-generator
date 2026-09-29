@@ -1948,3 +1948,27 @@ def test_ensure_cluster_still_announces_a_reuse_to_the_caller_that_keeps_it(
         lambda *a, **k: subprocess.CompletedProcess(a, 0, "Running", ""))
     livetest.ensure_minikube()
     assert "will not delete it" in capsys.readouterr().out
+
+
+class _Done:
+    def __init__(self, returncode, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+@pytest.mark.parametrize("answer, expected", [
+    (_Done(0, '{"metadata": {"name": "ns1"}}'), {"metadata": {"name": "ns1"}}),
+    (_Done(1, stderr='Error from server (NotFound): namespaces "ns1" not found'), {}),
+    (_Done(1, stderr='Error from server (Forbidden): namespaces "ns1" is '
+                     'forbidden: User "u" cannot get resource'), None),
+    (FileNotFoundError("kubectl"), None),
+])
+def test_kget_named_keeps_absent_apart_from_unread(monkeypatch, answer, expected):
+    """{} only for the API server saying NotFound; every other failure is
+    None. `kget` keeps collapsing both to {}, which is right for a list."""
+    def run(cmd, **kw):
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+    monkeypatch.setattr(livetest.subprocess, "run", run)
+    assert livetest.kget_named("kubectl", None, "ns", "ns1") == expected
+    assert livetest.kget("kubectl", None, "ns", "ns1") == (expected or {})

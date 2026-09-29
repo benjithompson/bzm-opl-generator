@@ -1202,12 +1202,12 @@ def check_admission(facts, opts, cluster):
     """
     # Two different facts, and only one of them is answered by creating the
     # namespace. `{}` is a read that came back empty -- the live path's `get ns`
-    # on a namespace that is not there yet, which is the ordinary preflight
-    # case, and the only one that reaches this body. `None` is nobody having
-    # looked, which today only an evidence file says: the collector records a
-    # section it was refused as null, and telling its reader to create a
-    # namespace they may well already have is advice about a problem they do not
-    # have. That case is answered by the declaration above, before this runs.
+    # answered NotFound, which is the ordinary preflight case, and the only one
+    # that reaches this body. `None` is nobody having looked -- a refused `get
+    # ns` on the live path, or a section an evidence collector was refused --
+    # and telling its reader to create a namespace they may well already have
+    # is advice about a problem they do not have. That case is answered by the
+    # declaration above, before this runs.
     namespace_obj = cluster["namespace"]
     platform = opts.get("platform") or "openshift"
     meta = namespace_obj.get("metadata") or {}
@@ -1493,7 +1493,10 @@ def gather_cluster(cli, namespace):
         "limitranges": limitranges,
         "quotas": quotas,
         "serviceaccounts": accounts,
-        "namespace": livetest.kget(cli, None, "ns", namespace),
+        # Named, so {} alone cannot tell "not created yet" from "not allowed
+        # to look": kget_named answers None for the second, which the
+        # admission check's declaration reports as unread.
+        "namespace": livetest.kget_named(cli, None, "ns", namespace),
     }
 
 

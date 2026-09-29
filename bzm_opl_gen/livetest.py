@@ -1166,14 +1166,32 @@ def wait_master_done(client, master_id, timeout=900, poll=20):
 def kget(cli, namespace, kind, name=None):
     """`get -o json` -> parsed object, {} when it is not there. Omit `name` for
     the whole kind (a list, under "items"); a namespace that does not exist yet
-    is the normal preflight case, not an error."""
+    is the normal preflight case, not an error.
+
+    {} is also every failure, which is fine for a list -- a list that was
+    served always has `items`, so {} can only mean nobody could ask -- and
+    wrong for one named object, where {} is also the answer "there is none".
+    A reader that has to tell those apart uses `kget_named`."""
+    return kget_named(cli, namespace, kind, name) or {}
+
+
+def kget_named(cli, namespace, kind, name=None):
+    """`kget`, keeping the one distinction it drops: {} when the API server
+    answered NotFound, None for every other failure (Forbidden, no cluster, no
+    binary) -- "could not read" and "there is nothing there" must not share a
+    representation."""
     cmd = [cli, "get", kind, "-o", "json"]
     if name:
         cmd.insert(3, name)
     if namespace:
         cmd[1:1] = ["-n", namespace]
-    out = subprocess.run(cmd, capture_output=True, text=True)
-    return json.loads(out.stdout) if out.returncode == 0 and out.stdout.strip() else {}
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError:
+        return None
+    if out.returncode == 0 and out.stdout.strip():
+        return json.loads(out.stdout)
+    return {} if "(NotFound)" in (out.stderr or "") else None
 
 
 

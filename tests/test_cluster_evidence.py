@@ -45,6 +45,8 @@ def _live(monkeypatch, **served):
     answers.update(served)
     monkeypatch.setattr(doctor.livetest, "kget",
                         lambda cli, ns, kind, name=None: answers[kind])
+    monkeypatch.setattr(doctor.livetest, "kget_named",
+                        lambda cli, ns, kind, name=None: answers[kind])
     return doctor.gather_cluster("kubectl", "blazemeter")
 
 

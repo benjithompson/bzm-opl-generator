@@ -1128,6 +1128,8 @@ def test_egress_without_probes_warns():
 def _crane(monkeypatch, deployed, output=""):
     monkeypatch.setattr(doctor.livetest, "kget",
                         lambda cli, ns, kind, name=None: {"x": 1} if deployed else {})
+    monkeypatch.setattr(doctor.livetest, "kget_named",
+                        lambda cli, ns, kind, name=None: {"x": 1} if deployed else {})
     seen = []
     monkeypatch.setattr(doctor.livetest, "_crane_exec",
                         lambda cli, ns, sh: seen.append(sh) or output)
@@ -1238,6 +1240,7 @@ def test_gather_cluster_splits_one_namespaced_get_by_kind(monkeypatch):
                           SA_ITEM]}
 
     monkeypatch.setattr(doctor.livetest, "kget", fake_kget)
+    monkeypatch.setattr(doctor.livetest, "kget_named", fake_kget)
     data = doctor.gather_cluster("kubectl", "ns1")
     assert [n["metadata"]["name"] for n in data["nodes"]] == ["a"]
     assert data["limitranges"] == [dict(LR_MATCHING, kind="LimitRange")]
@@ -1254,6 +1257,7 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     """`get ns` fails on a namespace that does not exist yet -- that is the
     normal pre-flight case, not a crash."""
     monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
+    monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: {})
     data = doctor.gather_cluster("kubectl", "ns1")
     # Every list is None rather than []: kget reports a failed command as {},
     # and "could not ask" has to stay distinguishable from "asked, none exist"
@@ -1262,6 +1266,20 @@ def test_gather_cluster_survives_a_missing_namespace(monkeypatch):
     # check_admission already reads as "not created yet".
     assert data == {"nodes": None, "ingressclasses": None, "limitranges": None,
                     "quotas": None, "serviceaccounts": None, "namespace": {}}
+
+
+def test_a_namespace_nobody_may_read_is_unread_not_absent(monkeypatch):
+    """The live path's half of the rule the evidence path already kept. A
+    refused `get ns` came back from kget as {}, the same as NotFound, and
+    check_admission told somebody to create a namespace they already had."""
+    monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
+    monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: None)
+    data = doctor.gather_cluster("kubectl", "ns1")
+    assert data["namespace"] is None
+    [check] = doctor.run_check(doctor.check_admission, FACTS, {}, data)
+    assert check.status == doctor.WARN
+    assert "does not exist" not in check.detail
+    assert "could not be read" in check.detail
 
 
 @pytest.mark.parametrize("served,expected,status", [
@@ -1275,6 +1293,9 @@ def test_gather_cluster_keeps_unreadable_ingressclasses_apart_from_empty(
     turns a cluster whose API server does not serve IngressClass into a hard
     FAIL with a non-zero exit, for something never actually checked."""
     monkeypatch.setattr(doctor.livetest, "kget",
+                        lambda cli, ns, kind, name=None:
+                        served if kind == "ingressclass" else {})
+    monkeypatch.setattr(doctor.livetest, "kget_named",
                         lambda cli, ns, kind, name=None:
                         served if kind == "ingressclass" else {})
     data = doctor.gather_cluster("kubectl", "ns1")
@@ -1471,6 +1492,7 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
             {"schema": evidence.SCHEMA}).cluster)
     else:
         monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
+        monkeypatch.setattr(doctor.livetest, "kget_named", lambda *a, **k: {})
         carried = set(doctor.gather_cluster("kubectl", "ns1"))
     for check, keys in DECLARING.items():
         for key in keys:
