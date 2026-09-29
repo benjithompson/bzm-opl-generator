@@ -130,7 +130,7 @@ bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 kubectl get namespace my-project >/dev/null 2>&1 || kubectl create namespace my-project
 kubectl apply -n my-project -f out/
 
-# 6. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
+# 7. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
 bzm-opl-gen triage -n my-project
 ```
 
