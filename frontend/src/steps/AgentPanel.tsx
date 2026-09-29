@@ -303,14 +303,16 @@ export function AgentPanel({
   // Disarm on every change of agent, and open that agent's row. Keyed on shipId
   // rather than on the click so the lone-agent auto-pick opens its row too, and
   // so a row closed by hand stays closed.
+  const openAgentRow = agentRow.setOpen;
   useEffect(() => {
-    setArm("idle"); setIssueErr(null); agentRow.setOpen(agents.id);
-  }, [agents.id]);
+    setArm("idle"); setIssueErr(null); openAgentRow(agents.id);
+  }, [agents.id, openAgentRow]);
   // The same, one list up: choosing a location opens it, including when the
   // choice was a session restore rather than a click.
+  const openLocRow = locRow.setOpen;
   useEffect(() => {
-    locRow.setOpen(locations.selectedId);
-  }, [locations.selectedId]);
+    openLocRow(locations.selectedId);
+  }, [locations.selectedId, openLocRow]);
 
   const toggle = (id: string) => {
     // Choosing an agent by hand is the move on from the location, so the fold

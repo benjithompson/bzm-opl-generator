@@ -3376,7 +3376,6 @@ test("Next waits for both confirmations, and a changed agent withdraws one",
 
     // Chosen, and now it is the confirmation that is outstanding -- the block
     // names that half rather than repeating the whole step.
-    // eslint-disable-next-line no-console
     fireEvent.click(await screen.findByText("agent-1"));
     await waitFor(() =>
       expect(screen.getByText(/confirm the agent/)).toBeTruthy());

@@ -178,6 +178,7 @@ export function LocationSettings(props: {
     setDraft(seed(location, fill));
     // The plan's own four values rather than the plan: a fresh object every
     // render would re-seed on every keystroke anywhere on the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.id, location.slots, location.threadsPerEngine,
       location.overrideCPU, location.overrideMemory, touched,
       fill?.slots, fill?.threads_per_engine, fill?.override_cpu,

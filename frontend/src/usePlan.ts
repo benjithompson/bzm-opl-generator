@@ -111,6 +111,7 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
   // `rows` and not `sized` in the dependency list, deliberately: the string is
   // what says whether these are the same rows, and the array is a new object
   // every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const sizings = useMemo(() => sized, [rows]);
 
   // Debounced, because every keystroke in a number field is a plan: typing
@@ -137,7 +138,7 @@ export function useCapacityPlan(ask: PlanAsk, api: Api): PlanState {
     return () => window.clearTimeout(timer.current);
     // Primitives and the memo above, so a caller rebuilding its `ask` object
     // every render does not re-POST for a plan nothing changed about.
-  }, [sizings, engineCpu, engineMem, enginesPerNode, agents]);
+  }, [api, sizings, engineCpu, engineMem, enginesPerNode, agents]);
 
   return { plan, err, busy };
 }
@@ -166,6 +167,6 @@ export function useEngineRating(cpu: string | undefined, mem: string | undefined
       .then((r) => { if (live) setRated(r.rated); })
       .catch(() => { if (live) setRated(null); });
     return () => { live = false; };
-  }, [cpu, mem]);
+  }, [api, cpu, mem]);
   return rated;
 }
