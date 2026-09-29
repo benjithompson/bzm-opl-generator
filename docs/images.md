@@ -60,8 +60,14 @@ bzm-opl-gen images --facts facts.json --explain --lookup
 
 A series is the tag's version with the same suffix: `2.4.533-reduced` compares
 with `2.4.538-reduced`, and not with a branch build such as
-`2.4.537-MOB-...-reduced`. A tag with no version (`latest`) has no series, so no
-newest tag is reported for it.
+`2.4.537-MOB-...-reduced`.
+
+A floating tag (`latest`) has no version of its own. `--lookup` names the
+version it is now (`resolves_to`): it compares the tag's digest with the
+digests of the 10 newest versioned tags, newest first, and stops at the first
+match. The newest tag is then the newest in that version's series. When no
+tag matches, or a comparison could not be read, `resolves_to` is empty and the
+registry detail says which.
 
 Each registry read has its own state. `read` means the registry answered, and a
 tag it does not hold is a read with no digest. `unread` means it did not answer

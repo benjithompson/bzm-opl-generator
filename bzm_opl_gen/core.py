@@ -825,7 +825,8 @@ REGISTRY_WORKERS = 8
 
 _NOT_LOOKED_UP = {"registry_state": registry_client.NOT_ASKED,
                   "registry_detail": None, "digest": None, "size_mb": None,
-                  "newest_tag": None, "update_available": None}
+                  "newest_tag": None, "update_available": None,
+                  "resolves_to": None}
 
 
 def image_catalog(facts=None, lookup=True, all_images=False):
@@ -834,7 +835,8 @@ def image_catalog(facts=None, lookup=True, all_images=False):
 
     Without facts, every image the catalogue knows (`required` null). With
     `lookup`, BlazeMeter's public registry adds each image's digest, size and
-    newest tag in its series. A registry read never raises: its state is per
+    newest tag in its series, and names the version a floating tag
+    (`latest`) currently is (`resolves_to`). A registry read never raises: its state is per
     image, and `registry_lookup.state` is read, unread, partial or not-asked.
     """
     if facts is None:

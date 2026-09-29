@@ -13,6 +13,7 @@ import json
 import os
 import re
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,6 +46,11 @@ SIZE_PLATFORM = ("linux", "amd64")
 
 # A tag list is paged by `Link`; more pages than this is not a real repository.
 MAX_TAG_PAGES = 20
+
+# A floating tag is named by comparing its digest with at most this many of
+# the newest versioned tags, within this many seconds.
+RESOLVE_CANDIDATES = 10
+RESOLVE_BUDGET_S = 15
 
 USER_ENV = "BZM_REGISTRY_USER"
 PASSWORD_ENV = "BZM_REGISTRY_PASSWORD"
@@ -343,27 +349,83 @@ def registry_for(ref, credentials=None, ca_file=None):
                     ca_file=ca_file), path, tag
 
 
+def newest_versions(tags, limit=RESOLVE_CANDIDATES):
+    """The `limit` newest versioned tags, highest version first; at one
+    version the shortest suffix first (`2.4.538-reduced` before a branch
+    build of 2.4.538)."""
+    versioned = [(series(t), t) for t in tags or []]
+    versioned = [(s[0], len(s[1]), s[1], t) for s, t in versioned if s]
+    versioned.sort(key=lambda v: (tuple(-p for p in v[0]), v[1], v[2]))
+    return [v[3] for v in versioned[:limit]]
+
+
+def resolve(reg, path, digest, tags, budget_s=None):
+    """(versioned tag whose manifest digest is `digest`, detail). Compares the
+    top-level digest, so a multi-arch index matches its own tag. The tag is
+    None with a detail when nothing matched or a comparison went unread."""
+    candidates = newest_versions(tags)
+    if not candidates:
+        return None, "the repository has no versioned tag to compare with"
+    budget_s = RESOLVE_BUDGET_S if budget_s is None else budget_s
+    deadline = time.monotonic() + budget_s
+    unread = []
+    for n, cand in enumerate(candidates):
+        if time.monotonic() > deadline:
+            return None, (f"stopped comparing after {budget_s}s; "
+                          f"{len(candidates) - n} tags not compared")
+        c = reg.check(path, cand)
+        if c["state"] == PRESENT and c["digest"] == digest:
+            return cand, None
+        if c["state"] == UNREAD:
+            unread.append(f"{cand}: {c['detail']}")
+    if unread:
+        return None, (f"{len(unread)} of {len(candidates)} newest versioned "
+                      f"tags could not be compared ({unread[0]})")
+    # Measured on BlazeMeter's registry: `latest` can be far older than the
+    # newest releases, so saying which range was compared is the useful part.
+    return None, (f"it is none of the {len(candidates)} newest versioned tags "
+                  f"({candidates[0]} down to {candidates[-1]})")
+
+
 def lookup(ref):
     """What the registry says about one public image: {registry_state,
-    registry_detail, digest, size_mb, newest_tag, update_available}.
+    registry_detail, digest, size_mb, newest_tag, update_available,
+    resolves_to}.
 
     `registry_state` is read when the manifest read answered, 404 included. A
-    tag list that could not be read leaves newest_tag None and says why.
+    tag list that could not be read leaves newest_tag None and says why. A
+    floating tag (`latest`) is named by the versioned tag sharing its digest
+    (`resolves_to`); no match and an unread comparison both leave it None,
+    and `registry_detail` says which.
     """
     reg, path, tag = registry_for(ref)
     m = reg.manifest(path, tag)
     out = {"registry_state": m["state"], "registry_detail": m["detail"],
            "digest": m["digest"], "size_mb": m["size_mb"],
-           "newest_tag": None, "update_available": None}
-    if m["state"] != READ or not m["found"] or series(tag) is None:
+           "newest_tag": None, "update_available": None, "resolves_to": None}
+
+    def note(why):
+        out["registry_detail"] = f"{out['registry_detail']}; {why}" \
+            if out["registry_detail"] else why
+
+    if m["state"] != READ or not m["found"]:
+        return out
+    floating = series(tag) is None
+    if floating and not m["digest"]:
+        note("the registry sent no digest, so the tag cannot be named")
         return out
     t = reg.tags(path)
     if t["state"] != READ:
-        why = f"the tag list could not be read: {t['detail']}"
-        out["registry_detail"] = f"{out['registry_detail']}; {why}" \
-            if out["registry_detail"] else why
+        note(f"the tag list could not be read: {t['detail']}")
         return out
-    newest = newest_in_series(tag, t["tags"])
+    current = tag
+    if floating:
+        current, why = resolve(reg, path, m["digest"], t["tags"])
+        if current is None:
+            note(f"{tag} could not be named: {why}")
+            return out
+        out["resolves_to"] = current
+    newest = newest_in_series(current, t["tags"])
     out["newest_tag"] = newest
-    out["update_available"] = None if newest is None else newest != tag
+    out["update_available"] = None if newest is None else newest != current
     return out

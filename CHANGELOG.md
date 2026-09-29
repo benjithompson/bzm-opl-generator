@@ -23,7 +23,8 @@ anything that breaks.
   location, every image this tool knows), as a table, Markdown, CSV or JSON.
   `--lookup` adds each image's digest, compressed size and newest published
   tag from BlazeMeter's public registry, so you can see when a mirror is
-  behind. A registry that does not answer is reported as unread and never
+  behind. For a floating tag such as `latest` it also names the version the
+  tag is now (`resolves_to`). A registry that does not answer is reported as unread and never
   stops the command.
 
 - **`images --verify <registry>`** checks that your mirror holds every image

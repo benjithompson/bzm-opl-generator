@@ -47,7 +47,7 @@ CATALOGUE_KEYS = {"source", "location", "image_list_state", "registry_lookup",
 IMAGE_KEYS = {"key", "repo", "tag", "ref", "category", "functionalities",
               "purpose", "pulled_when", "verified", "required", "tag_mutable",
               "source", "registry_state", "registry_detail", "digest",
-              "size_mb", "newest_tag", "update_available"}
+              "size_mb", "newest_tag", "update_available", "resolves_to"}
 
 
 # -- a registry, faked at the transport ----------------------------------------
@@ -61,8 +61,10 @@ class FakeRegistry:
     """
 
     def __init__(self, manifests=None, tags=None, status=None, down=False,
-                 users=None, challenge="bearer"):
+                 users=None, challenge="bearer", broken=()):
         self.manifests = manifests or {}
+        # (repo path, tag) whose manifest answers 500.
+        self.broken = set(broken)
         self.tags = tags or {}
         self.status, self.down, self.users = status, down, users
         self.challenge = challenge
@@ -88,6 +90,8 @@ class FakeRegistry:
         if self.status:
             return registry_client.Response(self.status, {}, b"")
         m = re.match(r"^/v2/(.+)/manifests/(.+)$", u.path)
+        if m and (m.group(1), m.group(2)) in self.broken:
+            return registry_client.Response(500, {}, b"")
         if m:
             found = self.manifests.get((m.group(1), m.group(2)))
             if not found:
@@ -185,7 +189,8 @@ def test_a_lookup_follows_the_bearer_challenge_and_sums_the_amd64_layers(registr
     out = registry_client.lookup(f"{PUBLIC}/blazemeter/crane:3.8.0")
     assert out == {"registry_state": "read", "registry_detail": None,
                    "digest": "sha256:index", "size_mb": 80,
-                   "newest_tag": "3.8.1", "update_available": True}
+                   "newest_tag": "3.8.1", "update_available": True,
+                   "resolves_to": None}
     token_calls = [c for c in fake.calls if "/v2/token" in c[1]]
     assert "scope=repository%3Averdant-bulwark-278%2Fblazemeter%2Fcrane%3Apull" \
         in token_calls[0][1]
@@ -193,13 +198,95 @@ def test_a_lookup_follows_the_bearer_challenge_and_sums_the_amd64_layers(registr
     assert all(c[2].get("Authorization") in (None, "Bearer T") for c in fake.calls)
 
 
-def test_a_floating_tag_is_looked_up_without_its_tag_list(registry):
-    fake = registry(manifests={("verdant-bulwark-278/blazemeter/torero", "latest"):
-                               _manifest(152_000_000)})
-    out = registry_client.lookup(f"{PUBLIC}/blazemeter/torero:latest")
+TORERO = "verdant-bulwark-278/blazemeter/torero"
+
+
+def _digest(d, *sizes):
+    media, body, _ = _manifest(*sizes or (1,))
+    return (media, body, d)
+
+
+def test_newest_versions_order_by_version_then_the_shortest_suffix():
+    tags = ["latest", "1.0.2-MOB-1-reduced", "1.0.2-reduced", "1.0.10",
+            "1.0.9", "master-99"]
+    assert registry_client.newest_versions(tags, 3) == [
+        "1.0.10", "1.0.9", "1.0.2-reduced"]
+
+
+def test_a_floating_tag_is_named_by_the_newest_version_sharing_its_digest(registry):
+    fake = registry(
+        manifests={(TORERO, "latest"): _digest("sha256:b", 152_000_000),
+                   (TORERO, "4.6.192"): _digest("sha256:c"),
+                   (TORERO, "4.6.182"): _digest("sha256:b"),
+                   (TORERO, "4.6.170"): _digest("sha256:b")},
+        tags={TORERO: [["4.6.170", "4.6.182", "4.6.192", "latest"]]})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
     assert out["registry_state"] == "read" and out["size_mb"] == 152
+    assert out["resolves_to"] == "4.6.182"
+    assert out["newest_tag"] == "4.6.192" and out["update_available"] is True
+    assert out["registry_detail"] is None
+    # Newest first, stopping at the first match.
+    heads = [urllib.parse.urlparse(c[1]).path.rsplit("/", 1)[-1]
+             for c in fake.calls if c[0] == "HEAD"]
+    assert "4.6.170" not in heads and heads.index("4.6.192") < heads.index("4.6.182")
+
+
+def test_a_floating_tag_that_matches_nothing_is_read_and_says_so(registry):
+    registry(manifests={(TORERO, "latest"): _digest("sha256:old"),
+                        (TORERO, "4.6.192"): _digest("sha256:c")},
+             tags={TORERO: [["4.6.192", "latest"]]})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    assert out["registry_state"] == "read" and out["resolves_to"] is None
     assert out["newest_tag"] is None and out["update_available"] is None
-    assert not [c for c in fake.calls if "tags/list" in c[1]]
+    assert "none of the 1 newest" in out["registry_detail"]
+
+
+def test_a_comparison_that_went_unread_is_not_a_no_match(registry):
+    """Invariant 1: an unread candidate is reported as unread, not as absent."""
+    registry(manifests={(TORERO, "latest"): _digest("sha256:b"),
+                        (TORERO, "4.6.182"): _digest("sha256:b")},
+             tags={TORERO: [["4.6.182", "4.6.192", "latest"]]},
+             broken={(TORERO, "4.6.192")})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    assert out["resolves_to"] == "4.6.182"
+    registry(manifests={(TORERO, "latest"): _digest("sha256:b")},
+             tags={TORERO: [["4.6.192", "latest"]]},
+             broken={(TORERO, "4.6.192")})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    assert out["resolves_to"] is None
+    assert "could not be compared" in out["registry_detail"]
+    assert "none of the" not in out["registry_detail"]
+
+
+def test_an_unread_tag_list_leaves_a_floating_tag_unnamed(registry):
+    registry(manifests={(TORERO, "latest"): _digest("sha256:b")})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    assert out["registry_state"] == "read" and out["resolves_to"] is None
+    assert "tag list could not be read" in out["registry_detail"]
+
+
+def test_naming_a_floating_tag_is_bounded_in_requests_and_time(registry,
+                                                                monkeypatch):
+    versions = [f"1.0.{n}" for n in range(50)]
+    fake = registry(manifests={(TORERO, "latest"): _digest("sha256:b")},
+                    tags={TORERO: [versions + ["latest"]]})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    heads = [c for c in fake.calls if c[0] == "HEAD"]
+    assert len(heads) == registry_client.RESOLVE_CANDIDATES
+    assert "1.0.49 down to 1.0.40" in out["registry_detail"]
+    monkeypatch.setattr(registry_client, "RESOLVE_BUDGET_S", -1)
+    fake = registry(manifests={(TORERO, "latest"): _digest("sha256:b")},
+                    tags={TORERO: [versions + ["latest"]]})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:latest")
+    assert not [c for c in fake.calls if c[0] == "HEAD"]
+    assert "stopped comparing" in out["registry_detail"]
+
+
+def test_a_pinned_tag_never_resolves(registry):
+    registry(manifests={(TORERO, "4.6.182"): _digest("sha256:b")},
+             tags={TORERO: [["4.6.182", "latest"]]})
+    out = registry_client.lookup(f"gcr.io/{TORERO}:4.6.182")
+    assert out["resolves_to"] is None and out["newest_tag"] == "4.6.182"
 
 
 def test_a_tag_the_registry_lacks_is_a_read_not_a_failure(registry):
@@ -503,10 +590,10 @@ def test_the_catalogue_answer_names_no_location():
 def test_the_lookup_summary_says_read_partial_or_unread(monkeypatch):
     answers = {"read": {"registry_state": "read", "registry_detail": None,
                         "digest": "sha256:x", "size_mb": 1, "newest_tag": None,
-                        "update_available": None},
+                        "update_available": None, "resolves_to": None},
                "unread": {"registry_state": "unread", "registry_detail": "refused (403)",
                           "digest": None, "size_mb": None, "newest_tag": None,
-                          "update_available": None}}
+                          "update_available": None, "resolves_to": None}}
     monkeypatch.setattr(registry_client, "lookup", lambda ref: answers["read"])
     assert core.image_catalog(OLD_FACTS)["registry_lookup"] == {
         "state": "read", "detail": None}

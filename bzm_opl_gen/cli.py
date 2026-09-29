@@ -380,7 +380,8 @@ def cmd_toolcheck(a):
 EXPLAIN_COLUMNS = ["ref", "key", "category", "functionalities", "required",
                    "verified", "tag_mutable", "source", "purpose",
                    "pulled_when", "registry_state", "registry_detail",
-                   "digest", "size_mb", "newest_tag", "update_available"]
+                   "digest", "size_mb", "resolves_to", "newest_tag",
+                   "update_available"]
 
 
 def _explain_cell(value):
@@ -406,14 +407,17 @@ def _print_explain(cat, fmt):
     looked = cat["registry_lookup"]["state"] != "not-asked"
     if fmt == "md":
         cols = ["Image", "What it does", "Functionality", "When it is pulled",
-                "Seen in a live run"] + (["Size (MB)", "Newest tag"] if looked else [])
+                "Seen in a live run"] + (["Size (MB)", "Is now", "Newest tag"]
+                                         if looked else [])
         print("| " + " | ".join(cols) + " |")
         print("|" + "---|" * len(cols))
         for r in rows:
             cells = [f"`{r['ref']}`", r["purpose"], ", ".join(r["functionalities"]),
                      r["pulled_when"], "yes" if r["verified"] else "no"]
             if looked:
-                cells += [_explain_cell(r["size_mb"]), _explain_cell(r["newest_tag"])]
+                cells += [_explain_cell(r["size_mb"]),
+                          _explain_cell(r["resolves_to"]),
+                          _explain_cell(r["newest_tag"])]
             print("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
         return
     loc = cat["location"]
@@ -429,10 +433,11 @@ def _print_explain(cat, fmt):
         print(f"    {r['purpose']}\n    pulled: {r['pulled_when']}")
         if looked:
             if r["registry_state"] == "read":
+                now = (f", is {r['resolves_to']}" if r["resolves_to"] else "")
                 newer = (f", newer tag {r['newest_tag']}" if r["update_available"]
                          else "")
                 print(f"    registry: {r['digest'] or 'no such tag'}, "
-                      f"{_explain_cell(r['size_mb']) or '?'} MB{newer}")
+                      f"{_explain_cell(r['size_mb']) or '?'} MB{now}{newer}")
             if r["registry_detail"]:
                 print(f"    registry: {r['registry_detail']}")
     if looked and cat["registry_lookup"]["detail"]:
