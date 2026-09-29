@@ -19,17 +19,9 @@ export function Section(props: {
   );
 }
 
-/** The conventional red asterisk on a required field's label.
- *
- *  One definition because it appears on three forms now, and a marker that
- *  means "required" in two shapes means nothing in either. Not a state badge:
- *  it says the field must be filled in, which is true before anyone types and
- *  stays true afterwards. Whether it *has* been is the input's own border, and
- *  the disabled control below it that names what it is waiting for.
- *
- *  `aria-hidden` with the word beside it, because an asterisk is a convention
- *  for sighted readers and silence for everyone else. */
-export function RequiredMark() {
+/** The red asterisk on a required field's label, with a word for screen
+ *  readers. It says the field must be filled, not whether it is. */
+function RequiredMark() {
   return (
     <>
       <span aria-hidden="true" className="text-red-600">*</span>
@@ -40,8 +32,7 @@ export function RequiredMark() {
 
 export function Field(props: {
   label: string; hint?: string; children: ReactNode;
-  /** Marks the label with the asterisk. Whether the field is *filled in* is a
-   *  different question and is not shown here -- see RequiredMark. */
+  /** Marks the label with the asterisk. */
   required?: boolean;
 }) {
   return (
@@ -50,7 +41,7 @@ export function Field(props: {
         {props.label}{props.required && <RequiredMark />}
       </span>
       {props.children}
-      {props.hint && <span className="text-[11px] text-slate-400">{props.hint}</span>}
+      {props.hint && <span className="text-2xs text-slate-400">{props.hint}</span>}
     </label>
   );
 }
@@ -62,9 +53,7 @@ export const inputCls =
 export function TextInput(props: {
   value: string; onChange: (v: string) => void; placeholder?: string;
   mono?: boolean;
-  /** Shown, and not editable. Used where a field describes a state the page is
-   *  already in -- the key it is connected with -- rather than an input waiting
-   *  to be filled: hiding it would move everything below it. */
+  /** Shown but not editable, for a field describing a state the page is in. */
   disabled?: boolean;
 }) {
   return (
@@ -79,18 +68,9 @@ export function TextInput(props: {
   );
 }
 
-/** A credential in a form: masked, with a deliberate reveal.
- *
- *  #64 moved the AUTH_TOKEN out of the download and into a field -- captured when
- *  the agent is created, or pasted from what `create-ship` printed -- and that is
- *  the one place the change makes a token more visible than it was, since it now
- *  sits in the DOM instead of streaming into a zip. Masking is the mitigation: it
- *  is not secrecy (crane logs the token, and anyone who can read a pod log in
- *  that namespace can read the Secret) but permanence and reach, which is a
- *  screen share and a screenshot.
- *
- *  `type=password` rather than a CSS mask, so a password manager and a screen
- *  reader both understand what this is. */
+/** A credential field: masked, with a deliberate Show. Masking guards against
+ *  screen shares, not readers of the cluster. `type=password`, so password
+ *  managers and screen readers understand it. */
 export function SecretInput(props: {
   value: string; onChange: (v: string) => void; placeholder?: string;
 }) {
@@ -116,8 +96,7 @@ export function SecretInput(props: {
 
 export function Check(props: {
   label: string; checked: boolean; onChange: (v: boolean) => void; hint?: string;
-  /** Shown but not changeable -- a box that describes a state rather than
-   *  offering one. Hiding it instead would move whatever is below it. */
+  /** Shown but not changeable: a box describing a state rather than offering one. */
   disabled?: boolean;
 }) {
   return (
@@ -132,17 +111,13 @@ export function Check(props: {
       />
       <span>
         {props.label}
-        {props.hint && <span className="block text-[11px] text-slate-400">{props.hint}</span>}
+        {props.hint && <span className="block text-2xs text-slate-400">{props.hint}</span>}
       </span>
     </label>
   );
 }
 
-/** A whole-number field. Seven of these were `<input type="number">` with
- *  `inputCls` concatenated by hand, and they had already drifted -- one without
- *  a `min`, one with a width bolted onto the class string. The blank string is
- *  a legitimate value and means "not given"; see server._typed, which is the
- *  same fact on the other side of the wire. */
+/** A whole-number field. A blank string means "not given". */
 export function NumberInput(props: {
   value: string;
   onChange: (v: string) => void;
@@ -160,18 +135,12 @@ export function NumberInput(props: {
   );
 }
 
-/** The white card everything on these pages sits in. Was six copies of the
- *  same class string across three files, one of which had already drifted to
- *  `space-y-2`. */
+/** The white card these pages sit in. */
 export const cardCls =
   "bg-white border border-slate-200 rounded-lg p-4 space-y-3";
 
-/** One number out of a plan: the figure, what it counts, and what it costs.
- *
- *  Both places that size something show a row of these, and they had a copy
- *  each -- the same three lines at two type scales. `big` is the standalone
- *  planner, where the row is the answer to the whole page; the pane inside a
- *  location sits under four form fields and would shout over them. */
+/** One number out of a plan: the figure, what it counts, what it costs. `big`
+ *  for the sizing card, compact inside a location. */
 export function Figure(props: {
   n: number | string; unit: string; sub: string; big?: boolean;
 }) {
@@ -181,42 +150,20 @@ export function Figure(props: {
       <div className={"font-bold text-slate-900 leading-none "
         + (props.big ? "text-2xl" : "text-lg")}>{props.n}</div>
       <div className={"font-medium text-slate-600 "
-        + (props.big ? "text-xs mt-1" : "text-[11px] mt-0.5")}>{props.unit}</div>
+        + (props.big ? "text-xs mt-1" : "text-2xs mt-0.5")}>{props.unit}</div>
       <div className={"text-slate-400 "
-        + (props.big ? "text-[11px] mt-0.5" : "text-[10px]")}>{props.sub}</div>
+        + (props.big ? "text-2xs mt-0.5" : "text-3xs")}>{props.sub}</div>
     </div>
   );
 }
 
-/** What a plan cannot know, and what it wants to warn about.
- *
- *  Both sizing panels showed this and had a copy each, in two wordings -- and
- *  the wording is the point: the users-per-engine figure is the number the
- *  whole plan multiplies by, nothing on this side can measure it, and a panel
- *  that softened the sentence would be the one people believed. `compact` is
- *  the pane inside a location, where it sits under a form rather than being
- *  the page.
- *
- *  The warnings themselves are plan.py's prose, rendered as it wrote them. */
+/** What a plan assumes and what it warns about, the warnings in plan.py's own
+ *  words. `compact` inside a location. */
 export function PlanCaveats(props: {
   warnings: string[];
   compact?: boolean;
-  /** Every model the plan was asked for. Each assumed figure gets its own note
-   *  in its own unit — "4 browser instances per engine is assumed" is a
-   *  different sentence about a different workload, and one note about virtual
-   *  users standing in for both would be a figure attributed to the wrong
-   *  thing.
-   *
-   *  Required, and one shape. There was a second — an `assumed`/`vusPerEngine`
-   *  pair for a caller with only the performance figure — and both callers had
-   *  the rows all along, so nothing ever reached it: with no plan `assumed` is
-   *  false, which is the same empty list the rows give, and with one the rows
-   *  are there. What it did carry was "virtual users per engine" hardcoded for
-   *  whatever model the figure belonged to.
-   *
-   *  A model with **no** measured figure is not here: it has no note to make,
-   *  because the sentence explaining it is the server's and arrives in
-   *  `warnings` beside these. */
+  /** Every model the plan was asked for; each assumed figure gets its own note
+   *  in its own unit. An unmeasured model has none: the server's warning covers it. */
   sizings: { per_pod: number | null; per_pod_unit: string;
              per_pod_source: string }[];
 }) {
@@ -229,7 +176,7 @@ export function PlanCaveats(props: {
       {assumed.map((a) => (
         <div key={a.unit}
           className={small ? "" : "border border-amber-300 bg-amber-50 rounded-lg p-3"}>
-          <p className={small ? "text-[11px] text-amber-700" : "text-xs text-amber-900"}>
+          <p className={small ? "text-2xs text-amber-700" : "text-xs text-amber-900"}>
             <b>{a.figure.toLocaleString()} {a.unit} is
             assumed</b>, not measured — it is what a pod of this size is
             rated for. How much one pod really carries depends
@@ -242,7 +189,7 @@ export function PlanCaveats(props: {
       {props.warnings.map((w) => (
         <div key={w}
           className={small ? "" : "border border-slate-200 bg-slate-50 rounded-lg p-3"}>
-          <p className={small ? "text-[11px] text-slate-500" : "text-xs text-slate-600"}>
+          <p className={small ? "text-2xs text-slate-500" : "text-xs text-slate-600"}>
             {w}
           </p>
         </div>
@@ -251,9 +198,7 @@ export function PlanCaveats(props: {
   );
 }
 
-/** Indeterminate progress, for a wait whose length we cannot predict -- a
- *  round-trip to BlazeMeter over someone's corporate network. `currentColor`
- *  so it works on both button kinds without being told which it is on. */
+/** Indeterminate progress, in `currentColor` so it suits either button kind. */
 export function Spinner({ className = "" }: { className?: string }) {
   return (
     <svg className={"animate-spin h-3.5 w-3.5 shrink-0 " + className}
@@ -269,14 +214,11 @@ export function Spinner({ className = "" }: { className?: string }) {
 export function Button(props: {
   onClick: () => void; children: ReactNode; kind?: "primary" | "ghost";
   disabled?: boolean;
-  /** Fill the width it is given, and centre the label in it. For a button
-   *  whose label changes -- Connect / Connecting… / Disconnect -- in a row
-   *  where a neighbour is `grow`: the caller fixes the width once and the
-   *  label stops moving everything beside it. */
+  /** Fill the given width and centre the label, so a changing label does not
+   *  shift its neighbours. */
   block?: boolean;
-  /** In flight: shows a spinner and stops a second click starting a second
-   *  request. Separate from `disabled` so the caller does not have to conflate
-   *  "not allowed" with "already going". */
+  /** In flight: shows a spinner and blocks a second click. Separate from
+   *  `disabled`, which means not allowed. */
   busy?: boolean;
 }) {
   const base = "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm "
@@ -287,7 +229,7 @@ export function Button(props: {
     ghost: "border border-slate-300 text-slate-600 hover:bg-slate-50",
   };
   return (
-    <button className={`${base} ${kinds[props.kind ?? "primary"]}`}
+    <button type="button" className={`${base} ${kinds[props.kind ?? "primary"]}`}
       onClick={props.onClick} disabled={props.disabled || props.busy}
       aria-busy={props.busy || undefined}>
       {props.busy && <Spinner />}
@@ -296,14 +238,13 @@ export function Button(props: {
   );
 }
 
-/** `label` names the control for a screen reader and for a test, since the
- *  visible title beside it is a sibling rather than a <label>. Optional: most
- *  switches here are a GroupRow's, whose row is the label. */
+/** `label` names the switch for screen readers and tests; a GroupRow's row
+ *  already labels its own. */
 export function Switch({ on, onChange, label }: {
   on: boolean; onChange: (v: boolean) => void; label?: string;
 }) {
   return (
-    <button role="switch" aria-checked={on} aria-label={label}
+    <button type="button" role="switch" aria-checked={on} aria-label={label}
       onClick={() => onChange(!on)}
       className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${on ? "bg-bzm" : "bg-slate-300"}`}>
       <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
@@ -311,57 +252,32 @@ export function Switch({ on, onChange, label }: {
   );
 }
 
-/** One panel of a step: a bordered card with a header, optionally collapsible.
- *
- *  A card rather than a rule between blocks. Three sections separated by a
- *  hairline on one white background read as one long form with bold words in
- *  it -- where a panel starts and ends is the thing a reader needs before they
- *  need anything inside it, and a border is how that gets said.
- *
- *  When it collapses, the header follows the disclosure convention rather than
- *  inventing one: the whole bar is the control, the pointer changes over it, it
- *  tints on hover, and a chevron on the left points right when closed and down
- *  when open. A header that is clickable and does not look it is a header
- *  nobody clicks.
- */
+/** One panel of a step: a bordered card with a header, optionally collapsible
+ *  (the whole header bar is then the control, with a chevron). */
 export function SubSection(props: {
   title: string; hint?: string; done?: boolean; children: ReactNode;
-  /** Collapsible when both are given. Controlled from the caller, because what
-   *  should be open is a fact about where you are in the step -- the next
-   *  unfinished thing -- and only the caller knows that. Given neither, the
-   *  section is always open and has no header control. */
+  /** Collapsible when both are given, controlled by the caller, which knows
+   *  what should be open. Given neither, always open. */
   open?: boolean;
   onToggle?: () => void;
-  /** A word or two of state on the header, visible while collapsed: a folded
-   *  section that says nothing is a section you have to open to find out
-   *  whether you needed to. */
+  /** A word or two on the header, visible while collapsed. */
   summary?: string;
-  /** A control on the header row, beside the title rather than inside it.
-   *
-   *  Beside, and that is structural: a collapsible header *is* a `<button>`,
-   *  so anything interactive rendered into it would be a button inside a
-   *  button -- invalid, and in practice a click that toggles the section
-   *  instead of doing what it says. The toggle keeps the row's whole width
-   *  minus this, so the target does not shrink to the words in it. */
+  /** A control on the header row, beside the toggle rather than inside it (a
+   *  button inside a button would swallow its clicks). */
   action?: ReactNode;
 }) {
   const collapsible = props.open !== undefined && !!props.onToggle;
-  const open = !collapsible || props.open;
+  const open = !collapsible || !!props.open;
   const heading = (
     <>
-      {collapsible && (
-        <span aria-hidden="true"
-          className={"text-slate-400 text-sm leading-none transition-transform "
-            + "duration-150 shrink-0 " + (open ? "rotate-90" : "")}>›</span>
-      )}
-      {/* Only the finished state is marked. An "unfinished" glyph on every step
-          you have not reached yet reads as a list of failures. */}
+      {collapsible && <Chevron open={open} className="text-sm" />}
+      {/* Only the finished state is marked. */}
       <span className="text-xs text-emerald-600 w-2.5 shrink-0">
         {props.done ? "✓" : ""}
       </span>
       <h3 className="text-sm font-semibold text-slate-800">{props.title}</h3>
       {props.summary && (
-        <span className="text-[11px] text-slate-500 truncate">
+        <span className="text-2xs text-slate-500 truncate">
           {props.summary}
         </span>
       )}
@@ -387,45 +303,27 @@ export function SubSection(props: {
           {props.action && <div className="ml-auto">{props.action}</div>}
         </div>
       )}
-      {/* The same open/close as an agent row: grid-rows 0fr -> 1fr, because the
-          body's height is not knowable in advance and `height: auto` does not
-          transition. Kept mounted while closed so what was typed into it is
-          still there when it reopens. */}
-      {/* `invisible` as well as zero-height, and that is not decoration: the body
-          stays mounted while closed so what was typed into it survives, and a
-          mounted body inside a 0fr row is still in the hit-testing and
-          accessibility trees. Its buttons took clicks aimed at whatever was
-          drawn over them, and a keyboard tab walked into a section nobody could
-          see. visibility:hidden takes it out of both while keeping the state. */}
-      <div aria-hidden={!open}
-        className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
-          + (open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
-        <div className="overflow-hidden">
-          <div className="p-3">
-            {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
-            {props.children}
-          </div>
+      <Collapse open={open}>
+        <div className="p-3">
+          {props.hint && <p className="text-xs text-slate-500 mb-2">{props.hint}</p>}
+          {props.children}
         </div>
-      </div>
+      </Collapse>
     </section>
   );
 }
 
-export interface SegmentOption {
+interface SegmentOption {
   value: string;
   label: string;
-  /** One line under the label, always visible -- these are choices someone
-   *  makes once and needs to understand, not toggles they flip while reading. */
+  /** One line under the label, always visible. */
   hint?: string;
-  /** Set to explain why the segment cannot be picked. A disabled segment stays
-   *  visible and says why: hiding it would leave "where did the Helm option go"
-   *  as the user's problem to solve. */
+  /** Why the segment cannot be picked; it stays visible and says so. */
   disabledReason?: string;
 }
 
-/** An exclusive choice between two or three named alternatives, where both are
- *  legitimate and the difference is worth a sentence. A Switch would imply one
- *  of them is "off". */
+/** An exclusive choice between two or three named alternatives, each worth a
+ *  sentence. A Switch would imply one of them is "off". */
 export function SegmentedControl(props: {
   value: string;
   onChange: (v: string) => void;
@@ -445,7 +343,7 @@ export function SegmentedControl(props: {
           const on = o.value === props.value;
           const off = !!o.disabledReason;
           return (
-            <button key={o.value} role="radio" aria-checked={on} disabled={off}
+            <button type="button" key={o.value} role="radio" aria-checked={on} disabled={off}
               title={o.disabledReason}
               onClick={() => props.onChange(o.value)}
               className={"text-left rounded-md border px-3 py-2 transition-colors " +
@@ -460,7 +358,7 @@ export function SegmentedControl(props: {
                 {o.label}
               </span>
               {(o.disabledReason ?? o.hint) && (
-                <span className="block text-[11px] leading-snug mt-0.5 pl-[18px]">
+                <span className="block text-2xs leading-snug mt-0.5 pl-[18px]">
                   {o.disabledReason ?? o.hint}
                 </span>
               )}
@@ -472,20 +370,15 @@ export function SegmentedControl(props: {
   );
 }
 
-export interface SelectOption {
+interface SelectOption {
   value: string | number;
   label: string;
 }
 
-/** The room the open list leaves at the window's edge, and the least it will
- *  make do with. The floor matters where nothing else does: a box pinned to the
- *  bottom of the window has no room below it and none above it either once the
- *  drawer is short, and two rows behind a scrollbar still beats none. */
+/** The margin the open list keeps from the window's edge, and its least height. */
 const LIST_EDGE = 8;
 const LIST_MIN = 96;
-/** Room enough not to bother flipping the list to the other side -- about the
- *  fixed height it used to have, which was a comfortable list everywhere it had
- *  the space for one. */
+/** Room enough below that the list does not flip upward. */
 const LIST_COMFORTABLE = 224;
 
 // Combobox with type-to-filter: shows the selected label; typing filters the
@@ -494,18 +387,12 @@ export function SearchSelect(props: {
   options: SelectOption[];
   value: string | number | null;
   onChange: (v: string | number) => void;
-  /** Un-choose. Given, the clear button empties the box itself once the typed
-   *  search is gone -- because "clear the dropdown" means the value in it, and
-   *  onChange has no way to say "none". Without it the button only clears the
-   *  search, since a control that empties a field the page still depends on
-   *  would be worse than no control. */
+  /** Un-choose. Given, the clear button empties the selection once the typed
+   *  search is gone; without it, it only clears the search. */
   onClear?: () => void;
   placeholder?: string;
   disabled?: boolean;
-  /** The options are on their way. Shown in the box rather than beside it: an
-   *  empty dropdown and a slow one look identical, and the account and
-   *  workspace lists are a round trip to BlazeMeter over whatever network the
-   *  user is on. */
+  /** The options are on their way; shown in the box. */
   busy?: boolean;
 }) {
   const { options, value, onChange } = props;
@@ -536,12 +423,8 @@ export function SearchSelect(props: {
     listRef.current?.children[hi]?.scrollIntoView({ block: "nearest" });
   }, [hi]);
 
-  // Where the list will fit, measured when it opens rather than assumed. This
-  // control is used at the top of a form and at the *foot* of the nav drawer,
-  // and a fixed height that suits the first runs off the bottom of the window
-  // in the second -- which is where the workspace picker is, with 166 options
-  // in it. So it takes the room that is actually there, and opens upward when
-  // there is more above than below.
+  // Where the list fits, measured on opening: it opens upward when there is
+  // more room above, as at the foot of the nav drawer.
   const [drop, setDrop] = useState({ up: false, max: LIST_MIN });
   useEffect(() => {
     if (!open) return;
@@ -550,27 +433,17 @@ export function SearchSelect(props: {
       if (!r) return;
       const below = window.innerHeight - r.bottom - LIST_EDGE;
       const above = r.top - LIST_EDGE;
-      // Downward while there is a usable list's worth of room, whatever is
-      // above: a list that flips sides because the window happens to be a
-      // little taller upward is a control that moves for no reason the person
-      // using it can see.
+      // Downward whenever there is a comfortable list's worth of room.
       const up = below < LIST_COMFORTABLE && above > below;
-      // No upper bound: this is a ceiling, and a short list is still as tall as
-      // its options. Capping it is how the picker came to show one row of a
-      // list that had room for twenty.
+      // A ceiling only; a short list is as tall as its options.
       setDrop({ up, max: Math.max(LIST_MIN, up ? above : below) });
     };
     measure();
-    // Resizing with the list open is rare; a zoom or a rotate that leaves it
-    // hanging off the screen is the kind of thing nobody reports.
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [open]);
 
-  // What the button would clear, or null when the box is already empty. The
-  // search wins while there is one: two presses to get from "typed a filter
-  // over a chosen account" to "nothing chosen" is the order people expect,
-  // and it makes the first press undoable.
+  // What the clear button clears: the search first, then the selection.
   const clearing: "query" | "selection" | null =
     (props.disabled || props.busy) ? null
       : query ? "query"
@@ -601,20 +474,8 @@ export function SearchSelect(props: {
           else if (e.key === "Escape") { setOpen(false); setQuery(""); (e.target as HTMLInputElement).blur(); }
         }}
       />
-      {/* Clear, in place of the chevron rather than beside it: while the list is
-          open "this opens" is the one thing the arrow no longer has to say, and
-          two glyphs crowd a box this size.
-
-          There whenever there is something to clear, which is the fix for the
-          first version of this: focusing the box empties it to show the full
-          list, so an X gated on the typed search appeared only *after* a
-          keystroke -- click in, and there was nothing there to find.
-
-          Two things to clear, in order. The search first, if one has been
-          typed; then the selection, if the caller gave us a way to un-choose.
-
-          mousedown, and prevented: on click the input would blur first, and the
-          list would close under the pointer that was clearing it. */}
+      {/* Clear replaces the chevron whenever there is something to clear. On
+          mousedown, prevented, so the input does not blur and close the list. */}
       {props.busy ? (
         <Spinner className="absolute right-2.5 top-1/2 -translate-y-1/2 text-bzm" />
       ) : clearing ? (
@@ -636,10 +497,7 @@ export function SearchSelect(props: {
         <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
       )}
       {open && (
-        // z-40, not z-30: this list has to come out over whatever it is nested
-        // in, and inside the account menu z-30 put it under the fields below
-        // it. It is still under the modal layer (z-50), which is deliberate --
-        // a dialog covers the page it was opened from.
+        // z-40: above what it is nested in, still under a modal (z-50).
         <div ref={listRef}
           style={{ maxHeight: drop.max }}
           className={"absolute z-40 w-full overflow-y-auto bg-white border "
@@ -662,12 +520,8 @@ export function SearchSelect(props: {
   );
 }
 
-/** A centred modal. Unlike the two drawers -- which are furniture and stay
- *  where they are put -- this one is a question being asked, so it dims what is
- *  behind it and both Escape and a click outside answer "not now".
- *
- *  Nothing is rendered while closed, because what it holds is a form whose
- *  half-typed contents should not survive being dismissed. */
+/** A centred modal: dims the page, and Escape or a click outside closes it.
+ *  Nothing is rendered while closed, so a dismissed form does not keep its input. */
 export function Modal(props: {
   open: boolean;
   onClose: () => void;
@@ -693,10 +547,10 @@ export function Modal(props: {
         <div className="flex items-baseline gap-2 px-4 py-3 border-b border-slate-200">
           <h2 className="text-sm font-semibold text-slate-900">{props.title}</h2>
           {props.hint && (
-            <span className="text-[11px] text-slate-500 truncate">{props.hint}</span>
+            <span className="text-2xs text-slate-500 truncate">{props.hint}</span>
           )}
           <span className="grow" />
-          <button onClick={props.onClose} aria-label="Close"
+          <button type="button" onClick={props.onClose} aria-label="Close"
             className="text-slate-400 hover:text-slate-700 text-sm leading-none px-1">
             ✕
           </button>
@@ -707,18 +561,128 @@ export function Modal(props: {
   );
 }
 
-export function ErrorMsg({ msg }: { msg: string | null }) {
+/** A refusal or failure, in red. `className` replaces the default size and spacing. */
+export function ErrorMsg({ msg, className = "text-xs mt-1.5" }: {
+  msg: string | null; className?: string;
+}) {
   if (!msg) return null;
-  return <p className="text-xs text-red-600 mt-1.5 break-words">{msg}</p>;
+  return <p className={"text-red-600 break-words " + className}>{msg}</p>;
 }
 
-/** Something the operator has to act on, where the thing they asked for still
- *  happened. Distinct from ErrorMsg on purpose: an agent that was created but
- *  whose credential the account refused to issue is not a failed creation, and
- *  showing it in red invites a second click that makes a second agent. */
+/** Something to act on where the requested thing still happened, in amber
+ *  rather than red so it does not invite a repeat click. */
 export function NoticeMsg({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200
                        rounded-md px-2 py-1.5 mt-1.5 break-words">{msg}</p>;
+}
+
+const CALLOUT = {
+  amber: "border-amber-200 bg-amber-50 text-amber-800",
+  red: "border-red-300 bg-red-50 text-red-900",
+  emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+};
+
+/** An inline box of prose in one of three tones: amber to warn, red for what a
+ *  click will destroy, emerald for what just succeeded. */
+export function Callout(props: {
+  tone: keyof typeof CALLOUT; children: ReactNode; className?: string;
+}) {
+  return (
+    <div className={"rounded-md border px-3 py-2 " + CALLOUT[props.tone]
+      + (props.className ? " " + props.className : "")}>
+      {props.children}
+    </div>
+  );
+}
+
+/** The disclosure chevron: points right when closed and down when open. */
+export function Chevron({ open, className = "text-xs" }: {
+  open: boolean; className?: string;
+}) {
+  return (
+    <span aria-hidden="true"
+      className={"text-slate-400 leading-none shrink-0 transition-transform duration-150 "
+        + (open ? "rotate-90 " : "") + className}>›</span>
+  );
+}
+
+/** A body that folds open and shut under its header.
+ *
+ *  Kept mounted while closed so what was typed into it survives; `invisible`
+ *  and aria-hidden while closed so its controls leave the tab order and stop
+ *  taking clicks. Rows animate 0fr -> 1fr because `height: auto` does not. */
+export function Collapse(props: { open: boolean; id?: string; children: ReactNode }) {
+  return (
+    <div id={props.id} aria-hidden={!props.open}
+      className={"grid transition-[grid-template-rows] duration-[180ms] ease-out "
+        + (props.open ? "grid-rows-[1fr]" : "grid-rows-[0fr] invisible")}>
+      <div className="overflow-hidden">{props.children}</div>
+    </div>
+  );
+}
+
+/** A small header that shows or hides what is under it. The body is rendered
+ *  only while open, so a closed one holds no fields. */
+export function Disclosure(props: {
+  open: boolean; onToggle: () => void; header: ReactNode; children: ReactNode;
+  /** Classes for the header button. */
+  className?: string;
+}) {
+  return (
+    <>
+      <button type="button" onClick={props.onToggle} aria-expanded={props.open}
+        className={"flex items-center gap-1.5 text-left "
+          + (props.className ?? "text-2xs text-slate-500 hover:text-slate-700")}>
+        <Chevron open={props.open} />
+        {props.header}
+      </button>
+      {props.open && props.children}
+    </>
+  );
+}
+
+/** A text field inside an editable row. Not inputCls: its w-full refuses to
+ *  shrink in a flex row and pushes the rest of the row off the panel. */
+export const rowFieldCls =
+  "rounded-md border border-slate-300 px-2 py-1.5 text-xs bg-white " +
+  "focus:outline-none focus:ring-2 focus:ring-bzm/40 focus:border-bzm";
+export const rowInputCls = rowFieldCls + " flex-1 min-w-0";
+export const rowSelectCls = rowFieldCls + " shrink-0";
+
+/** Rows of fields with a remove button each and an add button under them.
+ *
+ *  `renderRow` draws one row's fields and writes a changed row with `edit`;
+ *  `below` renders under a row, for its error. */
+export function RowEditor<T>(props: {
+  rows: T[];
+  onChange: (rows: T[]) => void;
+  blank: () => T;
+  addLabel: string;
+  removeLabel: (i: number) => string;
+  renderRow: (row: T, i: number, edit: (row: T) => void) => ReactNode;
+  below?: (row: T, i: number) => ReactNode;
+}) {
+  const { rows, onChange } = props;
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r, i) => (
+        <div key={i}>
+          <div className="flex items-center gap-1.5">
+            {props.renderRow(r, i,
+              (next) => onChange(rows.map((x, j) => (j === i ? next : x))))}
+            <button type="button" title="Remove" aria-label={props.removeLabel(i)}
+              className="text-slate-400 hover:text-red-600 text-sm px-1 shrink-0"
+              onClick={() => onChange(rows.filter((_, j) => j !== i))}>×</button>
+          </div>
+          {props.below?.(r, i)}
+        </div>
+      ))}
+      <button type="button" className="text-xs text-bzm hover:underline"
+        onClick={() => onChange([...rows, props.blank()])}>
+        {props.addLabel}
+      </button>
+    </div>
+  );
 }
 

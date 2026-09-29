@@ -16,23 +16,19 @@ test("a fresh heartbeat is online, a stale one is not", () => {
 
 test("the window is a boundary, not a range with a hole in it", () => {
   expect(shipOnline(beat(HEARTBEAT_FRESH_S - 1, NOW), NOW)).toBe(true);
-  // Exactly at the window: stale. One of the two has to be, and an agent that
-  // has not been heard from for the whole window is the one to redeploy over.
+  // Exactly at the window: stale.
   expect(shipOnline(beat(HEARTBEAT_FRESH_S, NOW), NOW)).toBe(false);
 });
 
 test("no heartbeat at all is not online", () => {
-  // The listing carries none for an agent that has never reported, and 0 is
-  // what BlazeMeter sends for one -- both mean "has not been heard from",
-  // which is the state a freshly created agent is in.
+  // No heartbeat, or 0: never heard from.
   expect(shipOnline({ id: "s", name: "a", state: "IDLE" }, NOW)).toBe(false);
   expect(shipOnline({ id: "s", name: "a", state: "IDLE", lastHeartBeat: 0 },
                     NOW)).toBe(false);
 });
 
 test("a clock in the future does not read as online", () => {
-  // A machine whose clock is behind BlazeMeter's produces a negative age. It is
-  // not evidence of an agent reporting, and `< window` alone would take it.
+  // A negative age (clock skew) is not online.
   expect(shipOnline(beat(-3600, NOW), NOW)).toBe(false);
 });
 

@@ -4,9 +4,7 @@ import { SIZING_MODELS } from "./fixtures";
 import { EMPTY_PLAN_INPUTS, PlanInputs } from "./usePlan";
 import { defaultSizings, remove, save, sizingNamed } from "./sizings";
 
-// The defaults are built from the served models, so the fixture standing in for
-// /api/sizing-models is what they are built from here -- the one copy of that
-// table, held equal to the planner's by test_server.py.
+// Built from the served models' one copy (fixtures.ts).
 const DEFAULT_SIZINGS = defaultSizings(SIZING_MODELS);
 
 const perf = (users: string): PlanInputs => ({
@@ -20,10 +18,7 @@ describe("the sizings a session remembers", () => {
     for (const s of DEFAULT_SIZINGS) {
       expect(s.inputs.functionalities.length).toBeGreaterThan(0);
     }
-    // Every default names exactly what it sizes, so picking one from a list of
-    // names is picking a functionality as much as a number -- and the set is
-    // the served models', not three ids written out here. A fourth model
-    // arrives in this list by being added to plan.SIZING_MODELS.
+    // One default per served model, each naming what it sizes.
     expect(new Set(DEFAULT_SIZINGS.flatMap((s) => s.inputs.functionalities)))
       .toEqual(new Set(SIZING_MODELS.map((m) => m.functionality)));
     // ...and its target is the model's own example, in the model's own unit.
@@ -33,9 +28,7 @@ describe("the sizings a session remembers", () => {
   });
 
   test("a default is a starting point and can be edited away from", () => {
-    // The fields *are* the sizing: picking one fills them and nothing is
-    // bound to it afterwards. What this asserts is that the stored inputs are
-    // not the object the page then mutates.
+    // A copy: editing the fields does not change the stored sizing.
     const [first] = DEFAULT_SIZINGS;
     const edited = { ...first.inputs, targets: { performance: "99" } };
     expect(first.inputs.targets).not.toEqual(edited.targets);
@@ -53,8 +46,7 @@ describe("the sizings a session remembers", () => {
     expect(twice.length).toBe(once.length);
     expect(sizingNamed(twice, "Black Friday")?.targets.performance)
       .toBe("50000");
-    // In place: a re-save is a correction, not a reordering of the list
-    // somebody is reading.
+    // Replaced in place.
     expect(twice.map((s) => s.name)).toEqual(once.map((s) => s.name));
   });
 
@@ -72,9 +64,7 @@ describe("the sizings a session remembers", () => {
   });
 
   test("a name nobody saved is null, not an empty sizing", () => {
-    // The distinction this repo keeps everywhere: a sizing that is not there
-    // and a sizing with nothing in it are different answers, and a caller
-    // handed an empty one would fill the form with blanks and call it applied.
+    // Not there is null, not an empty sizing.
     expect(sizingNamed(DEFAULT_SIZINGS, "nope")).toBeNull();
   });
 });

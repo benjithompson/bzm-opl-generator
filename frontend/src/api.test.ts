@@ -1,15 +1,7 @@
 // @vitest-environment jsdom
 //
-// The two routes that produce a bundle, at the wire.
-//
-// Everything else this client does is one shape of `req`, and the pages that
-// call it are tested against the seam rather than against fetch (see
-// fakeApi.ts). These two are here because they are the ones that are not: a zip
-// cannot carry a JSON envelope and still be a zip, so what happened to the
-// credential travels in response *headers* whose literals are pinned on the
-// server side too -- and the field that leaves in the body decides whether a
-// deployed agent's credential survives. A rename on either side would otherwise
-// lose the sentence, or the refusal to rotate, without failing anything.
+// The bundle download at the wire: the credential field in the body, and the
+// report coming back in response headers whose names the server pins too.
 import { afterEach, expect, test, vi } from "vitest";
 import { api, ApiError, Facts, TokenRequest } from "./api";
 
@@ -26,9 +18,7 @@ function stubFetch(res: () => Response) {
     calls.push({ url: String(url), body: JSON.parse(String(init.body)) });
     return res();
   });
-  // jsdom implements neither, and the anchor dance is saveBlob's business
-  // rather than this test's -- what is under test is the request and the
-  // headers that came back with it.
+  // jsdom has neither; saving the blob is not under test.
   const u = URL as unknown as Record<string, unknown>;
   u.createObjectURL = () => "blob:bundle";
   u.revokeObjectURL = () => {};
@@ -53,8 +43,7 @@ test("downloadZip sends the credential request as the server names it", async ()
   expect(calls[0].body).toMatchObject({
     facts: { harbor_id: "h-perf" },
     options: { namespace: "bzm" },
-    // Spread, not converted: the record token.downloadPlan produced is the
-    // record that left, under the one name both sides use.
+    // The plan's record, spread as it is.
     rotate_token: true,
   });
   // ...and what it did comes back off the headers, in core's own words.
@@ -68,16 +57,13 @@ test("a zip with no credential headers reads as the placeholder, not as nothing"
   async () => {
     stubFetch(() => new Response("PK"));
     const token = await api.downloadZip(facts, {}, { rotate_token: false });
-    // The understating branch: a bundle claimed to carry a token it may not
-    // have is the failure worth avoiding, and "" is a message, not a token.
+    // No header: the cautious branch.
     expect(token.branch).toBe("placeholder");
   });
 
 test("the file is saved under the server's name, which is the folder it extracts to",
   async () => {
-    // The name is the server's because it is also the archive's root directory
-    // (core.zip_stem). Built here instead, a namespace the server sanitised out
-    // of the folder stays in the filename and the two disagree again.
+    // The server's archive name, which is also the folder it extracts to.
     const saved: string[] = [];
     stubFetch(() => new Response("PK", {
       headers: {
@@ -105,8 +91,7 @@ test("a download with no name header still saves under one", async () => {
 });
 
 test("a refused download keeps its status, as every other route does", async () => {
-  // A 404 on the bundle is the agent or location being gone, and stale.ts can
-  // only say so from the status -- the download's own error branch dropped it.
+  // A 404 keeps its status, so stale.ts can say the thing is gone.
   stubFetch(() => new Response(JSON.stringify({ detail: "no such ship" }),
                                { status: 404 }));
   const err = await api.downloadZip(facts, {}, { rotate_token: false })
@@ -118,8 +103,7 @@ test("a refused download keeps its status, as every other route does", async () 
 
 test("a download refused by the static mount says the page is newer than the server",
   async () => {
-    // A 405 with no JSON body: reading it as JSON used to surface as a parse
-    // error rather than the sentence every other route gives this case.
+    // A 405 with no JSON body gets the stale-server sentence.
     stubFetch(() => new Response("Method Not Allowed", { status: 405 }));
     const err = await api.downloadZip(facts, {}, { rotate_token: false })
       .catch((e) => e);

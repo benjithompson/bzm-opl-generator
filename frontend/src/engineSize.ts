@@ -1,16 +1,7 @@
-// The engine size is one figure, and the location is where it is set (#132).
-// The location's overrideCPU/overrideMemory are the engine pod's *requests*,
-// and generate derives the bundle's limits from them when no explicit option
-// names one -- so requests and limits agree by construction, and the configure
-// step does not edit the size at all. What it renders instead is this module's
-// statement: the size the bundle will carry, where that figure came from, and
-// where to change it (Location settings, which is the one manual writer).
-//
-// Statements are plain prose -- no backticks, no double dash -- the same rule
-// as plan.py's warnings, because they render as text in the panel.
-
-// The documented default (ENGINE_DEFAULT_CPU/MEM on the generator's side) --
-// the one TS copy of the 2/8Gi figure.
+// The engine size the configure step states. The location's
+// overrideCPU/overrideMemory are the engine requests, and generate derives the
+// limits from them unless an option names one, so the step edits nothing and
+// says where the figure came from. Plain prose: it renders as text.
 import { STANDARD_SIZE } from "./optionGroups";
 
 /** "2" -> 2, "500m" -> 0.5. null for anything unparseable, never zero. */
@@ -21,9 +12,8 @@ export function cpuCores(q: string): number | null {
   return m[2] === "m" ? n / 1000 : n;
 }
 
-/** "8Gi" -> 8192, "512Mi" -> 512, in the MB overrideMemory speaks. Only the
- *  binary suffixes: a bare number is bytes to Kubernetes and almost never what
- *  was meant, so refusing to guess beats comparing against the wrong unit. */
+/** "8Gi" -> 8192, "512Mi" -> 512 (MB). Binary suffixes only; a bare number
+ *  would be bytes and is refused rather than guessed. */
 export function memMb(q: string): number | null {
   const m = /^(\d+(?:\.\d+)?)(Gi|Mi)$/.exec(q.trim());
   if (!m) return null;
@@ -37,26 +27,16 @@ function cpuQuantity(cores: number): string {
     : `${Math.round(cores * 1000)}m`;
 }
 
-/** overrideMemory (MB, read as Mi -- the planner's own equivalence) as the
- *  quantity the bundle emits: the Gi form where it is whole, Mi otherwise, so
- *  4096 arrives as 4Gi and an odd 8196 stays 8196Mi. format_memory's rule. */
+/** overrideMemory (MB, read as Mi) as emitted: Gi where whole, Mi otherwise. */
 function memQuantity(mb: number): string {
   return mb % 1024 === 0 ? `${mb / 1024}Gi` : `${mb}Mi`;
 }
 
-/** What the configure step states about the engine size.
- *
- *  `kind` is where the figure came from, and the states stay distinct:
- *  - "location": derived from the location's requests, so the two halves of
- *    the figure agree by construction.
- *  - "default": the location was read and sets nothing -- the documented
- *    default, with the packing gap named.
- *  - "noLocation": there is no location to read (manual entry, or the list
- *    still loading), which must not be worded as "the location sets nothing".
- *  - "bundle" / "override": explicit options (an imported profile, or the
- *    sizing on step 1) -- they outrank the location, and where the
- *    location asks for something else that is said, never silent. */
-export interface SizeStatement {
+/** What the configure step states about the engine size. `kind` is where the
+ *  figure came from: the location's requests, the default (a location that
+ *  sets none), noLocation (nothing to read, as in manual entry), or bundle
+ *  options, which outrank the location ("override" when they disagree). */
+interface SizeStatement {
   kind: "location" | "default" | "noLocation" | "bundle" | "override";
   /** The size the bundle will carry, as the quantities it emits. */
   cpu: string;
@@ -64,11 +44,9 @@ export interface SizeStatement {
   text: string;
 }
 
-// The smallest overrideMemory (MB) read as an engine size, mirroring
-// generate.ENGINE_MIN_DERIVED_MEM_MB: the field's unit is unreliable (one
-// real account holds 32, 4000 and 8196), and a derived 4Mi limit is an engine
-// OOMKilled at startup. Below it the memory half is disregarded -- and said
-// to be, never silently.
+// The smallest overrideMemory (MB) taken as an engine size, as
+// generate.ENGINE_MIN_DERIVED_MEM_MB: the field's unit is unreliable, and a
+// 4Mi limit is an engine killed at startup. Below it, it is ignored and said so.
 const MIN_DERIVED_MEM_MB = 1024;
 
 export function sizeStatement(
@@ -90,8 +68,7 @@ export function sizeStatement(
       + "its unit in Location settings."
     : "";
   const locSet = locCpu !== null || locMem !== null;
-  // What the location implies, each half falling to the default -- the same
-  // resolution generate.resolve_engine_limits applies.
+  // Each half falls to the default, as generate.resolve_engine_limits does.
   const fromLoc = {
     cpu: locCpu === null ? STANDARD_SIZE.cpu : cpuQuantity(locCpu),
     mem: locMem === null ? STANDARD_SIZE.mem : memQuantity(locMem),

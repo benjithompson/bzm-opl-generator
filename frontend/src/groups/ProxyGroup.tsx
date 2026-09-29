@@ -1,8 +1,6 @@
 import { Field, TextInput } from "../components";
 
-/** HTTP(S) proxy. The whole group is one option -- a `proxy` object -- so it
- *  takes that object and a setter for one field of it, rather than five props
- *  that would have to be reassembled on the way back out. */
+/** HTTP(S) proxy: the whole group is one `proxy` object, set a field at a time. */
 export function ProxyGroup(props: {
   proxy: Record<string, string | undefined>;
   onField: (k: string, v: string) => void;
@@ -35,7 +33,7 @@ export function ProxyGroup(props: {
           value={String(proxy.no_proxy ?? "")}
           onChange={(v) => onField("no_proxy", v)} />
       </Field>
-      <p className="text-[11px] text-slate-400">
+      <p className="text-2xs text-slate-400">
         BlazeMeter has no separate proxy-auth env vars — credentials are
         URL-encoded into the proxy URL (user:pass@host). With
         "AUTH_TOKEN in a Secret" on, the credentialed proxy URLs move

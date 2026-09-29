@@ -1,84 +1,29 @@
-// Service virtualization, in one place.
-//
-// It used to be four blocks of App deriving a dozen values, two effects -- one
-// of which WROTE the option the other READ to decide the same question -- and a
-// reach through the option-group table to borrow the group's completeness rule.
-// Nothing could test any of it: the write loop needed a rendered page and two
-// renders to show itself at all.
-//
-// So: what the location runs, what the options currently say, and the served
-// constants go in; the answer every consumer needs comes out. The page calls it
-// once and hands the record on. Like optionGroups.ts, nothing here imports
-// React and nothing here reaches a route -- which is what makes sv.test.ts
-// possible without a DOM.
-//
-// The completeness rule is NOT restated here. It is the sv group's own
-// (optionGroups.svIncomplete), because a group declaring when it is finished is
-// what keeps "adding a functionality needs no frontend change" true.
+// Service virtualization, answered once: what the location runs, the options
+// and the served constants go in, one record comes out. No React and no routes,
+// so sv.test.ts needs no DOM. Completeness is the sv group's own rule
+// (optionGroups.svIncomplete), not restated here.
 import { Options, SvBackend, SvConstants, SvScheme } from "./api";
-// The one predicate this module takes from the format: whether the ingress
-// options reach anything in a bundle of it. Never `isDocker` -- see svState.
 import { Applies } from "./formats";
 import {
   GroupFlags, isOpenshift, OptionPatch, SV_NONE,
   svConfigured, svIncomplete, svNodePortConflict,
 } from "./optionGroups";
-import { SvCtx } from "./SvPrereqs";
 
-/** The served functionality these options belong to, as the card and the rail
- *  key it. A literal for the same reason `groupRequired: { sv: ... }` is one: this
- *  module is service virtualization, and the id it answers under is the one
- *  thing about it that cannot be derived from its inputs.
- *
- *  It is a *functionality* id -- which since #149 is BlazeMeter's funcId, and
- *  so no longer the same string as the `sv` group beside it. That it used to
- *  match the group id was luck, and the sort that hides a confusion: one names
- *  a row on this page, the other names something an account enables. It joins
- *  to core.FUNCTIONALITIES rather than to the group table, and test_server.py
- *  holds it there beside the group tags, because a rename on the server would
- *  otherwise leave the card offering switches for a bundle that cannot carry
- *  them with both suites green.
- *
- *  Exported so App asks `runsFunctionality` with this rather than a second
- *  literal of its own: two copies of an id that only one file can be right
- *  about is how the card and the format refusal would come apart. */
+/** What the SV prerequisite prose is rendered against. */
+export type SvCtx = { ns: string; dom: string; secret: string; gateway: string };
+
+/** The functionality id (the funcId) these options belong to. test_server.py
+ *  holds it to the served list; App uses this rather than its own literal. */
 export const SV_FUNCTIONALITY = "mockServices";
 
 // -- and the location it wants to itself --------------------------------------
-//
-// Crane applies **one** KUBERNETES_RESOURCES_LIMITS_CPU / _MEMORY pair to every
-// pod it creates. BlazeMeter's own reference defines them as the limits for
-// "resources created by agent" -- engines, browser pods and mock-service pods
-// alike -- and there is no KUBERNETES_MOCK_RESOURCES_*. So a location running
-// both an engine and a mock has one number answering two sizing questions, and
-// they are genuinely different questions: read off real single-functionality
-// locations' /private-locations/{h}/ships/{s}/versions, an SV agent carries
-// crane, group-gateway and service-mock and **no taurus engine at all**, while
-// performance and functionalGui both carry v4.
-//
-// Enforced asymmetrically, and that asymmetry is the decision (#147):
-//
-//  - **deciding** -- manual entry, the new-location form -- the opinion is free,
-//    so the rule is applied and said.
-//  - **connect mode** -- the location already exists and nothing on this page
-//    can un-mix it: #113 removed the one route that turned a funcId on, because
-//    changing what a location *is* belongs in BlazeMeter's own UI. So a mixed
-//    location generates normally and is warned about, never blocked.
+// Crane applies one CPU/memory limit pair to every pod it creates, and an SV
+// agent runs no engine, so SV and the engine functionalities should not share a
+// location. Where a location is being decided (manual entry, the create form)
+// that is applied; in connect mode the location exists, so it is only warned.
 
-/** What declaring one funcId takes away with it, for the surfaces that are
- *  deciding.
- *
- *  Takes `engines` -- the funcIds whose agent carries one, off the served
- *  `runs_engine` -- rather than knowing them: that is this repo's record of
- *  which agents carry an engine, read off those /versions responses, and it is
- *  a Python table. A funcId neither it nor SV names -- tdm, dataPublisher,
- *  delphix, the account's other six -- excludes nothing and is excluded by
- *  nothing, because nothing here knows what those cost; the create-location
- *  form offers the account's whole vocabulary and must not edit what it cannot
- *  judge.
- *
- *  Curried, because both callers hand the result to `toggleDeclared` as the
- *  rule it applies per box. */
+/** What declaring `id` takes away, given the funcIds that run an engine. A
+ *  funcId neither side names excludes nothing. Curried for toggleDeclared. */
 export function exclusiveWith(engines: string[]): (id: string) => string[] {
   return (id) => {
     if (id === SV_FUNCTIONALITY) return engines;
@@ -86,26 +31,20 @@ export function exclusiveWith(engines: string[]): (id: string) => string[] {
   };
 }
 
-/** ...and why, in the one sentence both deciding surfaces say it in. Prose
- *  rather than a per-surface string, because it is one fact about crane and two
- *  places would drift. No backticks and no `--`: it renders as plain text
- *  beside a set of checkboxes. */
+/** ...and why, in the sentence both deciding surfaces show. Plain text. */
 export const SV_ALONE =
   "Service virtualization is declared on its own: the agent applies one CPU "
   + "and memory limit pair to every pod it creates, so engine sizing and mock "
   + "throughput cannot be set apart. Ticking it clears Performance and GUI "
   + "Functional, and ticking either of those clears it.";
 
-/** Does this location already mix the two? Connect mode's whole answer.
- *
- *  Deliberately not `!runsFunctionality(...)` machinery and deliberately not a
- *  blocker: it is one true sentence about a location that exists, and the only
- *  place it can be acted on is BlazeMeter's own location settings. */
+/** Does this location already mix SV with an engine functionality? A warning
+ *  in connect mode, never a blocker. */
 export function svMixedWithEngines(ids: string[], engines: string[]): boolean {
   return ids.includes(SV_FUNCTIONALITY) && ids.some((f) => engines.includes(f));
 }
 
-/** ...said. Names where it can be acted on, because this page cannot. */
+/** ...said, naming where it can be changed, since this page cannot. */
 export const SV_MIXED =
   "This location runs service virtualization alongside load or browser tests. "
   + "The agent applies one CPU and memory limit pair to every pod it creates, "
@@ -114,40 +53,13 @@ export const SV_MIXED =
   + "changes what a location runs, which is BlazeMeter's own location "
   + "settings.";
 
-/* **No format refuses a virtual service, and there is no table here saying
- * which do.** There was one, and it emptied in two steps. Docker's entry went
- * in #182 -- it read "a docker agent publishes virtual services with
- * HOSTNAME_OVERRIDE and a TLS pair, which this bundle does not carry", true of
- * the bundle and never of the agent. Helm's was the last, and it was true of
- * the chart: no KUBERNETES_WEB_EXPOSE_* env and no ingress RBAC, so a chart
- * emitted anyway would deploy, report idle and stall at WAITING_FOR_DOMAIN.
- * The chart carries both now.
- *
- * What went with the table is everything that read it: `blockedFormats`, the
- * disabled segment and its tooltip, `functionalityBlocked`, and the branch of
- * `correction` that moved a bundle off a format it had been refused. All of
- * them were machinery for a refusal that no longer exists, and a disabled state
- * nothing can reach is a page claiming a rule the server does not have.
- * `test_server.py` derives the refusing formats by calling generate() per
- * format and requires the set to be empty; a format that grows a refusal fails
- * there, which is where the table would have to come back.
- *
- * The distinction it was keeping is still worth stating: **a location decides
- * whether a functionality is run, and a format decided whether this bundle
- * could serve it.** Only the first question has an answer now, and it is
- * `runsFunctionality`. */
 
 /** Everything the page, the group and the download step ask about service
- *  virtualization. One record, so a consumer takes this instead of eleven
- *  props that can only be assembled correctly one way. */
+ *  virtualization, as one record. */
 export interface Sv {
-  /** Does this location advertise mockServices? Read off the served funcIds,
-   *  never a copy of them here -- adding one must not leave the UI silently
-   *  disagreeing with the generator. */
+  /** Does this location advertise mockServices? Read off the served funcIds. */
   location: boolean;
-  /** The location's demand, answered no. A location can carry mockServices and
-   *  be wanted for performance alone; the options can hold that (SV_NONE) and
-   *  generate() accepts it. */
+  /** The location's demand, answered no (SV_NONE): wanted for performance alone. */
   declined: boolean;
   /** The demand *not yet answered* -- the state that blocks the download. */
   required: boolean;
@@ -157,118 +69,55 @@ export interface Sv {
   ok: boolean;
   /** True when the block is the service type rather than an empty field. */
   nodePortConflict: boolean;
-  /** The chosen backend, or null while nothing is chosen: the select still
-   *  shows its nginx default, but no backend's prose is claimed until one is
-   *  picked. */
+  /** The chosen backend, or null while none is chosen (the select still shows
+   *  nginx, but no backend's prose is claimed). */
   ingress: string | null;
-  /** The backends that may be offered here -- the served list, minus the
-   *  OpenShift Route on a platform that serves no route.openshift.io, which
-   *  generate() refuses. */
+  /** The backends that may be offered: the served list, minus the OpenShift
+   *  Route where the cluster is not OpenShift. */
   ingressTypes: string[];
-  /** As typed, for the controlled inputs. Trimming these would stop the user
-   *  typing a space; the trimmed reads are in `ctx` and the lookups. */
+  /** As typed, for the controlled inputs; `ctx` has the trimmed reads. */
   fields: { subdomain: string; tlsSecret: string; gateway: string };
-  /** What the prerequisite list and the endpoint host render against: filled-in
-   *  values substituted for real, empty ones as their own placeholder. */
+  /** What the prerequisite list and the endpoint host render against; blanks
+   *  show as their own placeholder. */
   ctx: SvCtx;
-  /** What the Role grants, from /api/sv-constants -- generate.py's to state.
-   *  Undefined for a backend the table does not carry. */
+  /** What the Role grants for this backend, from the served table. */
   rbac?: SvBackend;
-  /** What a published endpoint is probed over. Follows the TLS secret, because
-   *  that is what decides whether the endpoint terminates TLS. */
+  /** What a published endpoint is probed over: https when a TLS secret is set. */
   scheme: SvScheme;
-  /** What a group cannot read off the options: SV is required by the location,
-   *  not by anything configured. Keyed by group id so the walk over the groups
-   *  never has to test for one by name. */
+  /** SV required by the location rather than by the options, keyed by group id. */
   groupRequired: Partial<GroupFlags>;
-  /** ...and the same demand switched off anyway, which the row has to say
-   *  rather than falling silent the moment it stopped blocking. */
+  /** ...and that demand switched off anyway, which the row states. */
   groupDeclined: Partial<GroupFlags>;
-  /** Options that must change for this configuration to be generatable, or
-   *  null when none must.
-   *
-   *  This is the write loop as a value. Two effects used to do it: one wrote
-   *  `sv_ingress`, and the next render's derivation read it back to decide
-   *  whether SV was configured -- untestable, and impossible to reason about
-   *  from either end. Nothing here writes; the page applies the patch in one
-   *  effect, and applying it makes the next answer null, which is the property
-   *  sv.test.ts runs to a standstill. */
+  /** Options that must change for this to be generatable, or null. Applying it
+   *  makes the next answer null, so one effect settles it (sv.test.ts checks). */
   patch: OptionPatch | null;
 }
 
-/** One read of a text option, trimmed. The `.trim()` written out per site kept
- *  getting forgotten -- an ingress pasted with a trailing space missed the
- *  backend lookup and the panel silently lost its prose. */
+/** A text option, trimmed. */
 const txt = (o: Options, k: string) => String(o[k] ?? "").trim();
 
-/** Everything about service virtualization, for this location and these
- *  options. Pure: the same four inputs always give the same record.
+/** Everything about service virtualization for this location and these
+ *  options. Pure.
  *
- *  `runs` is `runsFunctionality(enabled, SV_FUNCTIONALITY)` -- does this bundle
- *  still carry SV options at all? It is not the same question as `location`,
- *  and the difference is the whole reason it is a parameter rather than
- *  derived from `funcIds` here. Three states reach this:
- *
- *  - the location runs mockServices: `runs` and `location` agree.
- *  - the location is known to run something else: `notRunPatch` is about to
- *    clear every SV option through the group's own `disable()`, so an
- *    `sv_ingress` still in the options is on its way out and must not block a
- *    format. Read from the options alone, a profile arriving with docker *and*
- *    a stranded ingress would have had its format reset on the way to having
- *    the ingress cleared -- losing a docker choice that was valid all along.
- *  - **nobody has answered** (`enabled == null` -- a location whose funcIds
- *    carry no served functionality, which real accounts have: tdm,
- *    dataPublisher, delphix). Nothing clears the options there, so a configuration really can
- *    reach generate(), and this is the state the blocked formats were blind to.
- *
- *  It defaults to `true` for the same reason `runsFunctionality` reads an
- *  unanswered question as yes, and the direction is safe here too: over-blocking costs a
- *  segment that comes back the moment SV is declined, where under-blocking is
- *  a server refusal with nothing on screen to clear. */
+ *  `runs` is whether the bundle still carries SV at all (runsFunctionality),
+ *  which differs from `location` in manual entry and while notRunPatch is
+ *  clearing a stranded configuration. Defaults to true, as unanswered does.
+ *  `applies` says whether the ingress options reach this format. */
 export function svState(
     funcIds: string[] | undefined, o: Options,
     constants: SvConstants, runs = true, applies: Applies = () => true): Sv {
   const location = (funcIds ?? []).some((f) => constants.func_ids.includes(f));
-  // Does this bundle's format have these options at all? Since #182 a docker
-  // bundle publishes virtual services with its own three (`sv_hostname` and the
-  // TLS pair), and every option below is one of its ignored ones -- so a
-  // location's demand is answered over there, and everything this record says
-  // about an ingress would otherwise be said about a row that is not on screen.
-  //
-  // Asked as "does `sv_ingress` apply", never as "is this docker": that is the
-  // question the served table answers, and it is the same predicate the form
-  // hides the fields with, so the two cannot disagree. Absent means the table
-  // has not been read, which is every field applying -- one field too many for
-  // a moment, which is formats.ts's own choice of which way to be wrong.
+  // Docker publishes virtual services with its own options, so everything
+  // about an ingress is gated on the ingress option applying to this format.
   const k8s = applies("sv_ingress");
   const declined = o.sv_ingress === SV_NONE;
-  // `runs` is a conjunct, and it has to be. The comment below used to say
-  // `required` implies `runs` because a demand comes from the funcIds a served
-  // functionality is read off -- true connected, where both are `facts.func_ids`,
-  // and false in manual entry, where `runs` is the *declaration* and `funcIds`
-  // is the facts fetched for the previous one, a debounce behind it (#151).
-  //
-  // In that gap the two writers fought: `notRunPatch` cleared `sv_ingress`
-  // because the declaration no longer carries mockServices, and `correction`
-  // re-seeded it from a demand read off the stale facts -- an effect loop that
-  // never settled, so unticking Service virtualization hung the page. Each
-  // write was individually right; what was wrong is that they answered the same
-  // question from two sources. This makes it one.
-  // The location's demand, and what this *form* can do about it, are two
-  // things now. `demand` is the location asking for virtual services to be
-  // published somehow; `required` is the ingress group being the place this
-  // bundle answers it, which a docker bundle's is not -- there the answer is
-  // the `svDocker` group beside it, and generate() refuses nothing when it is
-  // left empty (endpoints published under an IP address are degraded, not
-  // broken, which is BlazeMeter's own framing of HOSTNAME_OVERRIDE).
+  // `runs` is a conjunct: in manual entry the facts trail the declaration, and
+  // without it notRunPatch and the correction would fight over sv_ingress.
+  // `required` is also the ingress group's, which a docker bundle's is not.
   const demand = runs && location && !declined;
   const required = k8s && demand;
 
-  // Everything below reads the options as they are, never as the patch will
-  // leave them: a record that answered for a value nothing has written yet
-  // would claim a backend nobody picked, and the patch would then be judged
-  // against a state that was never on screen. The correction is one render
-  // away, and one render is what it has always been.
+  // Read from the options as they are, never as the patch will leave them.
   const ingress = txt(o, "sv_ingress");
   const openshift = isOpenshift(o);
   return {
@@ -276,10 +125,7 @@ export function svState(
     declined,
     required,
     configured: svConfigured(o.sv_ingress),
-    // Both are about the ingress fields, so both are answered `true` / `false`
-    // for a bundle that has none: nothing is unfinished about a form that does
-    // not ask, and a stranded value behind it is an ignored option like any
-    // other -- kept, sent, and named in the bundle's README.
+    // Nothing is unfinished about ingress fields a format does not have.
     ok: !k8s || !svIncomplete(o, required, constants.backends),
     nodePortConflict: k8s && svNodePortConflict(o, constants.backends),
     ingress: o.sv_ingress == null ? null : String(o.sv_ingress),
@@ -299,55 +145,25 @@ export function svState(
     rbac: constants.backends[ingress],
     scheme: txt(o, "sv_tls_secret") ? "https" : "http",
     groupRequired: { sv: required },
-    // Both keyed to the ingress group alone, because both are sentences about
-    // it: `svDocker` has no "required" state -- there is nothing generate()
-    // refuses over it -- and "declined" is `sv_ingress: none`, a value only
-    // the group above can hold.
+    // Both are about the ingress group; svDocker has no required state.
     groupDeclined: { sv: k8s && location && declined },
     patch: correction(o, required, k8s),
   };
 }
 
-/** What has to change, given how the options arrived. Every branch here is a
- *  state the *options* can reach without anyone choosing it -- an imported
- *  profile, a preset, or a location that turned out to be an SV one after the
- *  form was filled in -- so none of them can be fixed in an onChange handler.
- *
- *  Each branch is written so that applying it makes its own condition false;
- *  that is what stops the page's one effect from writing forever.
- *
- *  service_type is deliberately not touched. This used to rewrite a NODEPORT to
- *  CLUSTERIP whenever an ingress was configured; #60 showed the pairing works,
- *  so an imported profile keeps the value it arrived with. */
+/** What has to change, for states the options reach without anyone choosing
+ *  them (an import, a preset, a location read later). Each branch makes its own
+ *  condition false once applied. service_type is never touched. */
 function correction(
     o: Options, required: boolean, k8s: boolean): OptionPatch | null {
-  // The openshift backend publishes a route.openshift.io Route, so switching
-  // the platform away from OpenShift strands sv_ingress on a value generate()
-  // now refuses -- and the option itself disappears from the select, leaving
-  // nothing on screen to explain the error. Fall back to nginx, which works
-  // anywhere.
-  //
-  // `k8s` gates it because a bundle whose format has no ingress field refuses
-  // nothing here: `platform` is one of docker's ignored options too, so this
-  // would be rewriting one ignored option on the strength of another, off a
-  // control neither of which has on that page.
+  // The openshift backend needs an OpenShift cluster; strand it and fall back
+  // to nginx. Only where the format has an ingress field at all.
   const stranded = k8s && o.sv_ingress === "openshift" && !isOpenshift(o);
-  // An imported profile sets the SV options without ever calling the group's
-  // enable(), and a row opened by `required` goes through detectGroups, so
-  // neither path would otherwise seed sv_ingress -- leaving the select showing
-  // "NGINX" off its own fallback while the state stayed null.
+  // An import or a required row never calls the group's enable(), so seed it.
   const toNginx = stranded || (required && !o.sv_ingress);
   const ingress = toNginx ? "nginx" : o.sv_ingress;
-  // Only crane's istio backend reads KUBERNETES_ISTIO_GATEWAY_NAME, so
-  // generate() refuses it anywhere else; an imported profile pairing it with
-  // another ingress would hit that error with nothing in the UI to explain it.
-  // Dropped here rather than only in the select's onChange for that reason.
+  // Only the istio backend reads a gateway name; generate() refuses it elsewhere.
   const clearGateway = !!ingress && ingress !== "istio" && !!o.sv_istio_gateway;
-  // A third branch moved the *output format*, for a bundle configured for
-  // service virtualization on a format that refused it. Nothing refuses one
-  // now (see the note above BLOCKED_FORMATS' grave), so it is gone -- and with
-  // it the only write on this page that overrode a choice made on it rather
-  // than completing one. Every branch left seeds or clears an SV option.
   if (!toNginx && !clearGateway) return null;
   return {
     ...(toNginx ? { sv_ingress: "nginx" } : {}),

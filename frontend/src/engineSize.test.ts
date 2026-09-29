@@ -2,13 +2,9 @@ import { describe, expect, test } from "vitest";
 
 import { cpuCores, memMb, sizeStatement } from "./engineSize";
 
-// The engine size is one figure and the location is where it is set (#132):
-// generate derives the bundle's limits from the location's overrideCPU /
-// overrideMemory when no explicit option names them. The configure step no
-// longer edits the size -- this module is the read-only statement it renders
-// instead: what the bundle will carry, where that came from, and where to
-// change it. The states matter more than the arithmetic: "no location to
-// read" and "the location sets nothing" must never share a representation.
+// The configure step's engine-size statement: what the bundle carries, where
+// the figure came from, and where to change it. "No location to read" and "the
+// location sets nothing" must read differently.
 
 describe("cpuCores", () => {
   test("whole cores and millicores", () => {
@@ -32,16 +28,14 @@ describe("memMb", () => {
   test("unparseable is null, never zero", () => {
     expect(memMb("")).toBeNull();
     expect(memMb("8 gigs")).toBeNull();
-    // A bare number is bytes to Kubernetes and almost never what was meant;
-    // refusing to guess beats comparing against the wrong unit.
+    // A bare number would be bytes; refused rather than guessed.
     expect(memMb("8192")).toBeNull();
   });
 });
 
 describe("sizeStatement", () => {
   test("a location's requests become the bundle's size", () => {
-    // The derivation the generator applies, restated for the screen: 4096 MB
-    // reads as Mi and lands on the Gi form, the same as format_memory.
+    // 4096 MB reads as 4Gi, as the generator formats it.
     const s = sizeStatement(null, null, { overrideCPU: 1, overrideMemory: 4096 });
     expect(s.kind).toBe("location");
     expect(s.cpu).toBe("1");
@@ -64,10 +58,7 @@ describe("sizeStatement", () => {
 
   test("an absurd overrideMemory is disregarded, and the disregard is said",
     () => {
-      // override_memory=4, typed live: the unit of the field is unreliable,
-      // and a derived 4Mi limit is an OOMKill the derivation would be
-      // introducing. The generator floors it (ENGINE_MIN_DERIVED_MEM_MB);
-      // this mirrors it, and says so rather than silently showing 8Gi.
+      // Below the generator's floor, the memory is ignored and that is said.
       const s = sizeStatement(null, null,
         { overrideCPU: 1, overrideMemory: 4 });
       expect(s.kind).toBe("location");
@@ -94,15 +85,13 @@ describe("sizeStatement", () => {
     expect(s.kind).toBe("default");
     expect(s.text).toContain("2 CPU / 8Gi");
     expect(s.text).toContain("default");
-    // ...and it names where to change it, because that is the whole point of
-    // stating it: the location is the one place the size is set.
+    // ...and names where to change it.
     expect(s.text).toContain("Location settings");
     expect(s.text).not.toContain("--");
   });
 
   test("no location to read is its own state, not the default's wording", () => {
-    // Manual entry, or the list still loading: nothing may claim the
-    // location sets nothing, because nobody could read it.
+    // No location to read: nothing claims it sets nothing.
     const s = sizeStatement(null, null, null);
     expect(s.kind).toBe("noLocation");
     expect(s.cpu).toBe("2");

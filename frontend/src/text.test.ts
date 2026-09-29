@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { counted, plural } from "./text";
 
-// The pair exists because one of them used to be asked to do both jobs:
-// `plural(n, "passed", "passed")` reads as a pluralisation and is not one.
+// `counted` exists so a non-inflecting word is not written as a plural.
 describe("plural", () => {
   it("inflects with a default -s so regular words are not spelled twice", () => {
     expect(plural(1, "warning")).toBe("1 warning");

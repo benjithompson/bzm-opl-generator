@@ -1,32 +1,12 @@
-// Step 2: what goes in the bundle.
-//
-// It opens with the platform, because that is the question every other one on
-// this page depends on. It used to be asked on the download step instead, one
-// step too late: this form asks for a namespace, a ServiceAccount, node
-// selectors and engine limits, and a docker bundle -- one agent as one
-// container -- carries none of them. The generator names what it dropped in the
-// bundle's README, which is honest and arrives after the fact; a control that
-// is not on screen cannot be believed to have applied. So the format is chosen
-// first and the form follows it, from formats.optionApplies over the
-// generator's own IGNORED_BY_FORMAT.
-//
-// The option groups split two ways and the page says which is which. Most of
-// them belong to no functionality -- registry, proxy, CA trust, scheduling, security
-// -- and are here whatever the location runs; the rest belong to one, and live
-// in that functionality's own card, which is on screen only for a functionality the
-// location actually runs. There used to be a functionality *selector* switching
-// between two views of the same six groups, so pressing it changed a single row
-// while reading as though it changed the step. Nothing is hidden by a *view*
-// now, so nothing has to be recovered: no "also in this bundle", no "not in
-// view". What the format takes off screen is a different thing entirely -- not
-// a view over a bundle's options, but options that bundle has no such thing as.
-//
-// The rail is orientation, not navigation-with-a-dot: it names what is set, so
-// "what is in this bundle" is answered without scrolling the form.
+// Step 2: what goes in the bundle. The output format comes first because it
+// decides which other fields exist (formats.optionApplies over the served
+// IGNORED_BY_FORMAT). Shared groups sit in Agent settings; a functionality's own
+// groups sit in its card, shown only for what the location runs. The rail names
+// what is set.
 import { ReactNode, useState } from "react";
 import { Functionality, Options } from "../api";
 import {
-  Button, Check, Field, inputCls, SegmentedControl,
+  Button, Callout, Check, Chevron, Field, inputCls, SegmentedControl,
 } from "../components";
 import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
@@ -36,72 +16,43 @@ import {
   runsFunctionality, SHARED_GROUPS, UnclaimedFuncIds,
 } from "../optionGroups";
 import { marker, placeholderWarning } from "../placeholder";
-// The two sentences about crane's one pod-limit pair, and the predicate for the
-// second. One rule, said differently at the two surfaces because they are
-// different questions: manual entry is *deciding* what to build and applies it,
-// where a location that already exists can only be described.
+// Crane's one pod-limit pair: stated as a rule where a location is being
+// declared, as a warning where it already exists.
 import { SV_ALONE, SV_MIXED, svMixedWithEngines } from "../sv";
 import { plural } from "../text";
 
-export interface ConfigurePanelProps {
+interface ConfigurePanelProps {
   functionalities: Functionality[];
-  /** Manual entry's declaration, one box at a time: which functionality, and
-   *  whether it is now ticked. Only manual entry calls it -- connected, what a
-   *  location runs is the account's answer and this page has no say in it
-   *  (#113). */
+  /** Manual entry's declaration, one box at a time. Only manual entry calls it. */
   declare: (id: string, on: boolean) => void;
   sourceMode: "connect" | "manual";
-  /** The funcIds this location carries that no card claims, split by why: ones
-   *  the account serves and nothing here configures, and ones the account
-   *  retired and the location predates. Two sentences, because they are two
-   *  answers (#160). */
+  /** The location's funcIds no card claims: served but unconfigured, or retired. */
   locUnclaimed: UnclaimedFuncIds;
-  /** Which functionalities this location runs, or null while nobody has answered --
-   *  see optionGroups.enabledFunctionalities. A functionality not in it is stated by its
-   *  card and configured nowhere. */
+  /** Which functionalities this location runs, or null while nobody has said
+   *  (optionGroups.enabledFunctionalities). */
   enabled: string[] | null;
   options: Options;
   set: (k: string, v: unknown) => void;
-  /** What the bundle is, and the one option this step writes as a write rather
-   *  than as a key. First on the page because it decides what the rest of it
-   *  asks: see the header. */
+  /** The output format, first on the step because it decides what the rest asks. */
   format: string;
   setFormat: (v: string) => void;
-  /* Three props stood here and all three were about a format refusing a
-     configuration: which formats this bundle may not be, why this format could
-     not serve a functionality, and the notice when the correction moved one.
-     No format refuses a virtual service now (see sv.ts), so every segment is
-     always selectable, every card that is run shows its switches, and nothing
-     on this page replaces a choice made on it. */
   /** Does this option reach anything in a bundle of this format? Everything
-   *  below hides by it -- whole groups, the placement card, Advanced, and the
-   *  individual fields inside a group's own body. From formats.ts, over the
-   *  generator's IGNORED_BY_FORMAT. */
+   *  below hides by it. */
   applies: Applies;
   grpOn: GroupFlags;
   grpRequired: Partial<GroupFlags>;
   grpDeclined: Partial<GroupFlags>;
-  /** The engine size this bundle will carry, as prose -- a statement, not an
-   *  editor (#132): the size derives from the location's engine requests and
-   *  is set there (Location settings), so there is nothing here to toggle,
-   *  fill in or leave blank. Null where the format has no such env (docker),
-   *  and it renders on one card -- see `engineSizeOn` -- in the slot the sizing
-   *  group used to hold. */
+  /** The engine size as prose; it is set on the location, so nothing here
+   *  edits it. Null where the format has no limits (docker). */
   engineNote: string | null;
   flipGroup: (id: GroupId, on: boolean) => void;
   groupBody: Record<GroupId, ReactNode>;
-  /** The environment variables, which are not a group: a list of everything
-   *  BlazeMeter documents that no group here already writes, closed by default
-   *  like Advanced. Assembled in App with the rest of the domain state; this
-   *  panel decides only where it sits. */
+  /** The environment variables area, assembled in App. Not a group. */
   envArea: ReactNode;
-  /** Groups in use but unfinished. Some of these block the step and some only
-   *  say so on their own row -- see blockingGroups. */
+  /** Groups in use but unfinished; some block the step, some only say so. */
   incomplete: OptionGroup[];
-  /** Required fields left empty, which will carry `<KEY>` for their own key
-   *  into the bundle. Not a blocker: the step advances and the bundle says of itself
-   *  that it is unfinished. Named here so the person can fill them in while
-   *  looking at them, which is the one place that is easy. */
+  /** Required fields left empty, which the bundle carries as `<KEY>`. Warned
+   *  about, never blocking. */
   blanks: string[];
   namespaceOk: boolean;
   saOk: boolean;
@@ -120,36 +71,11 @@ function rows(p: ConfigurePanelProps, gs: OptionGroup[]) {
   ));
 }
 
-/** Namespace and service account. Not behind a switch like everything else
- *  here: a deployment into a cluster has both, and putting the required half of
- *  a pair behind a toggle makes it look optional.
- *
- *  Its own card rather than the first rows of the settings list, because it is
- *  the part of this step a docker bundle does not have at all -- containers are
- *  not namespaced and there is no ServiceAccount to run as. A section that
- *  appears and disappears has to be a section. */
+/** Namespace and service account: not behind a switch, since every cluster
+ *  deployment has both. Its own card because a docker bundle has neither. */
 function CoreFields(p: ConfigurePanelProps) {
-  // **Neither field is marked required any more, and neither is red when empty.**
-  // Both used to carry the asterisk and a red border, from when an empty one
-  // refused to generate. What a blank one produces now is `<NAMESPACE>` or
-  // `<SERVICE_ACCOUNT_NAME>` in the bundle, named in the warning at the foot of
-  // this step and refused by the API server at apply time -- so red says "this
-  // is wrong" about a state the page supports and the asterisk promises a refusal
-  // that no longer happens. Amber is what this page says "unfinished, and
-  // allowed" in everywhere else, and each field's own hint is where the marker is
-  // named -- step 1's identity boxes put it in the *placeholder* because an id
-  // has no sample value to suggest, and these two do.
-  //
-  // These hints are the one place the marker is named, and that is deliberate:
-  // it is the string somebody greps the bundle for, and it belongs beside the
-  // box it is about rather than repeated wherever the state is mentioned.
-  //
-  // The rail beside the form is the third signal and the one that survives being
-  // scrolled past, so it reports the state and not the string -- amber, "not
-  // filled in". It read "needs attention" in red, which is the wording and the
-  // colour a *fault* gets -- an unfinished group, which the step really does
-  // want fixed -- over the ordinary case of generating manifests before anyone
-  // has chosen a namespace.
+  // A blank field is allowed (it becomes a marker), so it is amber, not red,
+  // and has no asterisk. Each hint names the marker the field becomes.
   const blankCls = (ok: boolean) => inputCls + (ok ? "" : " border-amber-300");
   return (
     <div className="space-y-3">
@@ -157,15 +83,11 @@ function CoreFields(p: ConfigurePanelProps) {
         <span className="text-xs font-medium text-slate-600 flex items-center gap-2">
           Namespace
         </span>
-        {/* The sample stays the placeholder here, where step 1's identity boxes
-            show the marker instead: these two have a value worth suggesting and
-            an id has none, so the box that can say `e.g. blazemeter` says it and
-            the marker is in the sentence underneath. Lower case in no brackets
-            at all, which is the documentation's rule for a sample read twice. */}
+        {/* The placeholder is a sample here; the hint names the marker. */}
         <input className={blankCls(p.namespaceOk)}
           value={String(p.options.namespace ?? "")} placeholder="e.g. blazemeter"
           onChange={(e) => p.set("namespace", e.target.value)} />
-        <span className="text-[11px] text-slate-400">
+        <span className="text-2xs text-slate-400">
           every object in the bundle is created in it — left empty, the bundle
           carries {marker("namespace")} and cannot be applied
         </span>
@@ -179,7 +101,7 @@ function CoreFields(p: ConfigurePanelProps) {
             value={String(p.options.service_account_name ?? "")}
             placeholder="e.g. crane"
             onChange={(e) => p.set("service_account_name", e.target.value)} />
-          <span className="text-[11px] text-slate-400">
+          <span className="text-2xs text-slate-400">
             what the agent runs as, and what the RoleBinding grants to — left
             empty, the bundle carries {marker("service_account_name")} rather
             than falling back to the namespace’s <code>default</code>
@@ -197,37 +119,29 @@ function CoreFields(p: ConfigurePanelProps) {
   );
 }
 
-/** A row in the settings list that has no switch: a title, a hint, and a body
- *  that is closed until it is opened.
- *
- *  Advanced was the only one, and the environment variables became the second
- *  when they stopped being a group (#131 made them one). A switch belongs on a
- *  group because OFF is an answer -- it wipes the options behind it -- and
- *  neither of these has one to give: the security posture is always set to
- *  something, and a list of variables is not on or off, its rows are.
- */
+/** A settings row with no switch: a title, a hint, and a body closed until
+ *  opened. For sections that have nothing to switch off. */
 function FoldRow(props: {
   title: string; hint: string; children: ReactNode;
-  /** A word or two visible while closed. A fold that says nothing is one you
-   *  have to open to find out whether you needed to. */
+  /** A word or two visible while closed. */
   summary?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="px-3 py-2.5">
-      <button className="w-full flex items-center gap-3 text-left"
+      <button type="button" className="w-full flex items-center gap-3 text-left"
         aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="text-slate-400 text-xs w-3">{open ? "▾" : "▸"}</span>
+        <Chevron open={open} className="text-xs w-3 text-center" />
         <span className="min-w-0 grow">
           <span className="block text-sm font-medium text-slate-500">
             {props.title}
             {props.summary && (
-              <span className="ml-2 text-[11px] font-normal text-bzm">
+              <span className="ml-2 text-2xs font-normal text-bzm">
                 {props.summary}
               </span>
             )}
           </span>
-          <span className="block text-[11px] text-slate-400">{props.hint}</span>
+          <span className="block text-2xs text-slate-400">{props.hint}</span>
         </span>
       </button>
       {open && <div className="mt-3 pl-6">{props.children}</div>}
@@ -235,23 +149,12 @@ function FoldRow(props: {
   );
 }
 
-/** Advanced, as a row in the settings list rather than a dashed box under it.
- *  It is two fields with the same weight as any other pair here; what makes it
- *  advanced is that it is closed, not that it sits outside the form.
- *
- *  The posture and the cluster are two questions, and the recommended posture is
- *  exactly where they come apart: SCC-friendly means the cluster assigns the
- *  UID, which vanilla Kubernetes does too, so `platform: openshift` was
- *  answering "is this OpenShift?" for every bundle that took the default -- and
- *  answering it yes. What that reached is everything the bundle tells somebody
- *  to *run*: a plain Kubernetes customer was handed a README, a verify block and
- *  a node-pool recipe written in `oc`. The pinned-UID posture is named `k8s` and
- *  says so, which is why the second question is asked under one of the two. */
+/** Advanced: the security posture and, under the SCC-friendly one, which
+ *  cluster the instructions are written for (the posture alone cannot say, since
+ *  vanilla Kubernetes may use it too). */
 function AdvancedRow(p: ConfigurePanelProps) {
   const posture = p.options.platform === "openshift";
-  // Absent is the default, which is on -- the same reading as the generator's,
-  // and the reason the control is a select rather than a checkbox reading
-  // Boolean(): an untouched bundle is an OpenShift one and has to show as one.
+  // Absent shows as OpenShift, and a select rather than a checkbox shows that.
   const openshift = p.options.openshift_cluster !== false;
   return (
     <FoldRow title="Advanced"
@@ -272,11 +175,8 @@ function AdvancedRow(p: ConfigurePanelProps) {
               onChange={(e) => {
                 const on = e.target.value === "openshift";
                 p.set("openshift_cluster", on);
-                // Hiding the radio is only half of it: OpenShift injection off
-                // OpenShift emits a labeled ConfigMap nothing ever fills, so the
-                // agent trusts nothing extra and the bundle looks configured.
-                // Same rule as notRunPatch -- clear what the control that
-                // wrote it can no longer show.
+                // Injection off OpenShift fills nothing, so clear it with the
+                // control that set it.
                 if (!on) p.set("ca_openshift_inject", false);
               }}>
               <option value="openshift">OpenShift — oc</option>
@@ -296,77 +196,41 @@ function AdvancedRow(p: ConfigurePanelProps) {
   );
 }
 
-/** One functionality: whether it is on, and -- only where it is -- the options it
- *  owns.
- *
- *  In connect mode every card rendered is one the location runs: the panel
- *  filters the rest out before this is reached. It has been three things in
- *  turn. Half-configurable first: the card offered "Enable on this location…",
- *  which PATCHed the location's funcIds, and its group rows sat under a div
- *  carrying both `pointer-events-none` and the click handler that opened that
- *  offer -- so the rows were simply dead. Then stated and nothing more (#113),
- *  because turning a funcId on changes what the location *is*, which is
- *  BlazeMeter's own UI's to do. Now not rendered at all, because a card that
- *  can only be read is a card that only takes up the step.
- *
- *  So `!on` here means manual entry, where the radio is the declaration rather
- *  than a report of one, and an undeclared functionality has to stay on screen to be
- *  declarable. That is why the branch below has one sentence and not two. */
+/** One functionality: its state and, where it runs, the options it owns. In
+ *  connect mode only cards the location runs reach here, so `!on` means manual
+ *  entry, where the checkbox is the declaration. */
 function FunctionalityCard(
     p: ConfigurePanelProps & {
       feat: Functionality; own: OptionGroup[];
       /** Does the engine-size statement belong on this card? Decided by the
-       *  panel, over the cards it is showing, so it renders once -- a location
-       *  runs performance and GUI functional together and both start engines,
-       *  and a per-card `id === ...` test would state the size twice. */
+       *  panel so it renders once. */
       statesEngineSize: boolean;
     }) {
   const { feat, own } = p;
-  // The engine-size statement renders where the sizing group used to sit:
-  // under a functionality whose agent carries the taurus engine. Read-only by
-  // design -- the size is the location's, and this card only states it.
+  // The statement renders under a functionality whose agent runs an engine.
   const note = p.statesEngineSize ? p.engineNote : null;
   const manual = p.sourceMode === "manual";
-  // Enabled means the location runs it -- or, in manual mode, that this is what
-  // the typed identity was declared to be. Unanswered reads as on: see
-  // runsFunctionality for why that direction is the safe one.
+  // Declared (manual) or run (connected); unanswered reads as on.
   const on = runsFunctionality(p.enabled, feat.id);
-  // Before the account has been read there is nothing to say: `enabled` is null
-  // then, and claiming "enabled" from an unanswered question is the collapse
-  // this codebase keeps refusing to make.
+  // Before the account answers there is no state to show.
   const known = p.enabled != null;
   return (
     <div id={"cfg-f-" + feat.id}
       className={"scroll-mt-4 rounded-xl border " + (on
         ? "border-bzm/40 bg-bzm/[0.03]" : "border-slate-200 bg-slate-50/70")}>
       <div className="px-3 py-2.5 border-b border-slate-100">
-        {/* State first: whether the functionality is on is what the card is about.
-            Manual mode has no account to read the answer off, so there it is
-            the control rather than a chip. */}
+        {/* Manual entry has no account to read, so the state is the control. */}
         {manual ? (
-          <label className="flex items-center gap-2 text-[11px] font-medium text-slate-600 mb-1">
-            {/* A checkbox, not a radio (#151): a location runs as many
-                functionalities as it is enabled for, and 71 of 168 in one real
-                account run performance and GUI functional together -- so a
-                control that could only say one made a bundle nobody would
-                create, and put the other one's card on screen saying it had not
-                been declared.
-
-                ...and it suggests a namespace, which the same control does not
-                do connected. The rule there is that switching a *view* must not
-                change the bundle; here the box is not a view, it is the
-                declaration -- ticking service virtualization is choosing to
-                build an SV bundle, and connected the equivalent act (picking an
-                SV location) suggests one too. It only ever replaces a namespace
-                nothing has typed over (suggestNamespace), so a hand-written one
-                still wins. Which of several ticked boxes supplies it is
-                App.suggestNsFor. */}
+          <label className="flex items-center gap-2 text-2xs font-medium text-slate-600 mb-1">
+            {/* A checkbox, not a radio: a location runs several functionalities.
+                Ticking one suggests its namespace, as picking a location does;
+                a typed namespace still wins. */}
             <input type="checkbox" checked={on}
               onChange={(e) => p.declare(feat.id, e.target.checked)} />
             Enabled
           </label>
         ) : known && (
-          <span className={"inline-block mb-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 "
+          <span className={"inline-block mb-1 text-3xs font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 "
             + (on ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500")}>
             {on ? "Enabled" : "Not enabled"}
           </span>
@@ -374,24 +238,12 @@ function FunctionalityCard(
         <p className={"text-sm font-medium " + (on ? "text-slate-900" : "text-slate-500")}>
           {feat.label}
         </p>
-        <p className="text-[11px] text-slate-400">{feat.hint}</p>
+        <p className="text-2xs text-slate-400">{feat.hint}</p>
       </div>
 
-      {/* Three answers, and they were four. Not declared (manual entry only --
-          see the docstring): which control declares it, and none of its own.
-          Run with nothing of its own: said so, rather than left blank. Run:
-          its rows.
-
-          The fourth was "run, but not by a bundle of this format", which named
-          the format that would and offered no control -- the switches would
-          have configured a bundle the generator refused. No format refuses one
-          now, so the only question left about a card is the location's.
-
-          `!on` rather than `manual && !on` on purpose: if a card the location
-          does not run ever reached this again, a sentence is the safe thing to
-          land on and live switches are not. */}
+      {/* Not declared (manual entry), nothing of its own, or its rows. */}
       {!on ? (
-        <p className="px-3 py-3 text-[11px] text-slate-500">
+        <p className="px-3 py-3 text-2xs text-slate-500">
           Not what this identity was declared to run — tick <b>Enabled</b> above
           to configure it.
         </p>
@@ -399,14 +251,14 @@ function FunctionalityCard(
         <div className="divide-y divide-slate-100">
           {rows(p, own)}
           {note && (
-            <p className="px-3 py-3 text-[11px] text-slate-500">
+            <p className="px-3 py-3 text-2xs text-slate-500">
               <span className="font-medium text-slate-700">Engine size.</span>{" "}
               {note}
             </p>
           )}
         </div>
       ) : (
-        <p className="px-3 py-3 text-[11px] text-slate-400">
+        <p className="px-3 py-3 text-2xs text-slate-400">
           nothing extra to configure — it uses the settings above
         </p>
       )}
@@ -414,78 +266,37 @@ function FunctionalityCard(
   );
 }
 
-/** Every option the placement card owns, and every option Advanced owns.
- *  Neither is a declared group, so neither can be filtered by `groupsFor`, and
- *  both own more than one key -- Advanced tested only `platform` for a while,
- *  which happened to be right and would have stopped being so the moment
- *  `run_as_user` and it parted company. */
+/** The option keys the placement card and Advanced own. Neither is a declared
+ *  group, so each hides by its keys. */
 const PLACEMENT_KEYS = ["namespace", "service_account_name",
                         "service_account_create"];
 const ADVANCED_KEYS = ["platform", "openshift_cluster", "run_as_user"];
-// One key, and it applies to every format -- the ConfigMap for manifests,
-// `extraEnv` in the overlay for helm, `--env` flags for docker. Asked anyway:
-// a section that reads the table is one that keeps agreeing with it.
+// Carried by every format, but the table is asked anyway.
 const ENV_KEYS = ["extra_env"];
 
 export function ConfigurePanel(p: ConfigurePanelProps) {
-  // Placement is a section of the form only where the bundle has one, and its
-  // groups are the format's rather than the functionality's. Both are answered once
-  // and shared with the rail below: derived twice, the rail and the form are
-  // free to disagree about what is in this bundle, which is the one thing the
-  // rail is for.
+  // Answered once and shared with the rail, so the two cannot disagree.
   const placed = keysApply(PLACEMENT_KEYS, p.applies);
-  // Which of the placement fields are blank, read off `blanks` rather than
-  // re-tested here: that is the one list every warning about a blank field is
-  // written from (placeholder.blankRequired), and it is already filtered by the
-  // format, so the rail cannot come to name a field this bundle has no such
-  // thing as. `service_account_create` is in the keys and can never be blank.
+  // The placement fields left blank, from the one list warnings use.
   const coreBlanks = p.blanks.filter((k) => PLACEMENT_KEYS.includes(k));
-  // How many variables are set, for the fold's own summary and for the rail:
-  // the environment area is not a group, so `grpOn` says nothing about it and
-  // the two would otherwise disagree about what is in this bundle -- the one
-  // job the rail has.
+  // Variables set, for the fold's summary and the rail (not a group).
   const envCount = envToRows(p.options.extra_env).length;
-  // A functionality the location does not run is not on this page at all.
-  //
-  // It used to be a card that stated it and named the funcId to add (#113) --
-  // true, and nothing the reader of this step can act on: what a location runs
-  // is BlazeMeter's own UI's to change, and this step is what the *bundle*
-  // carries. On a performance location, which is most of them, that was half
-  // the section given over to a functionality nobody asked for. The options are still
-  // cleared rather than merely hidden -- notRunPatch, in App -- because hiding a
-  // row does not empty it, and generate() refuses an sv_ingress with no
-  // subdomain whatever the location runs.
-  //
-  // Manual entry is the exception and structurally so: there the card *is* the
-  // declaration (#118) -- its radio is what says which functionality the typed
-  // identity was gathered for -- so filtering by the answer would take away the
-  // control that gives it. Unanswered (`enabled == null`) keeps every card, the
-  // same direction runsFunctionality reads it in.
+  // In connect mode a functionality the location does not run is not shown
+  // (notRunPatch in App clears its options). Manual entry keeps every card,
+  // since the card is the declaration; so does an unanswered location.
   const functionalities = p.sourceMode === "manual"
     ? p.functionalities
     : p.functionalities.filter((f) => runsFunctionality(p.enabled, f.id));
-  // Which card states the engine size: the first on screen whose agent carries
-  // the taurus engine. Once, not per card -- a location running performance
-  // and GUI functional runs one agent with one pod-limit pair, and the
-  // statement is about that pair. Undefined where no such card is on screen (an
-  // SV-only location): the limits are still carried and still sent, and what
-  // they mean for a mock pod is a sizing model that does not exist yet (#154),
-  // so nothing is stated rather than an engine size that is not there.
+  // The first card on screen whose agent runs an engine states the size, once.
+  // None on an SV-only location, where no engine size exists.
   const engineSizeOn = functionalities.find((f) => f.runs_engine)?.id;
   const secs = [
     ...functionalities.map((f) => ({
       id: "f-" + f.id, label: f.label,
-      // A functionality nobody declared owns nothing here: the card states that
-      // instead of its switches, and the rail agrees rather than listing groups
-      // the card does not show. The not-run case no longer reaches this in
-      // connect mode -- it is filtered above -- but `runsFunctionality` stays in
-      // the test for manual entry, where an undeclared functionality is still a
-      // card and must still own nothing. A format used to be able to take the
-      // groups away too; none does now (see sv.ts).
+      // An undeclared functionality owns nothing here, matching its card.
       gs: runsFunctionality(p.enabled, f.id)
         ? groupsFor(groupsOf(f.id), p.applies) : [],
-      // ...and the rail says which of the two "no groups set" is: a functionality
-      // running on defaults, or one this identity was not declared to run.
+      // Tells "running on defaults" from "not declared".
       off: p.enabled != null && !runsFunctionality(p.enabled, f.id),
       anchor: "cfg-f-" + f.id,
     })),
@@ -500,12 +311,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
   const groupsIn = (id: string) => secs.find((s) => s.id === id)?.gs ?? [];
   return (
     <div className="space-y-4">
-      {/* First on the page, and full width: it is the one choice here that
-          decides which of the others are asked at all. Every segment is always
-          selectable -- the three formats differ in what they ask for, never in
-          what they can carry. One carried a `disabledReason` from sv.ts, for a
-          bundle configured for service virtualization; see the note there for
-          where it went. */}
+      {/* First and full width: it decides which of the other fields exist. */}
       <SegmentedControl
         label="Output format"
         value={p.format}
@@ -514,15 +320,11 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
           value: f.id, label: f.label, hint: f.hint,
         }))} />
 
-      {/* Required fields nobody filled in. Amber and not red, and beside Next
-          rather than in front of it: the bundle generates, and what it carries
-          says so. Listed by option key -- the same names the bundle's README
-          and the manifests use, so the sentence here and the one in the file
-          are searchable as the same thing. */}
+      {/* Blank required fields, by option key as the bundle's README names them. */}
       {p.blanks.length > 0 && (
-        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+        <Callout tone="amber" className="text-2xs">
           {placeholderWarning(p.blanks)}
-        </p>
+        </Callout>
       )}
 
       <div className="flex gap-2 items-center flex-wrap">
@@ -537,34 +339,21 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
 
       <div className="grid grid-cols-[13rem_1fr] gap-6 items-start">
         <nav className="sticky top-4 space-y-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-2">
+          <p className="text-3xs font-semibold uppercase tracking-wide text-slate-400 px-2">
             In this bundle
           </p>
           {secs.map((s) => {
-            // The switches, not detect(): a group turned on and not yet filled
-            // in has to appear here or the rail contradicts the form beside it.
+            // The switches, not detect(): a group just switched on shows here.
             const set = s.gs.filter((g) => p.grpOn[g.id]);
-            // ...and the one thing in this section that is not a group. It has
-            // no switch to read, so what counts is what is set -- the same
-            // question, asked of the option instead of a flag.
+            // Plus the environment variables, counted from the option.
             const names = [
               ...set.map((g) => g.title),
               ...(s.id === "shared" && envCount
                 ? [plural(envCount, "environment variable")]
                 : []),
             ];
-            // Two unfinished states, and they are not the same claim. A group
-            // switched on and not filled in is a fault: the step wants it
-            // fixed, and it is red. A blank placement field is allowed -- it
-            // becomes its own marker and the bundle says so -- so it is amber,
-            // and the rail only reports the state. Red over the two boxes made
-            // the ordinary case of generating manifests before the namespace is
-            // chosen read as an error, on a step that blocks nothing.
-            //
-            // The marker itself is not here. It belongs beside the box it is
-            // about, where the hint under each field names it and the person can
-            // act on it; a rail is orientation, and repeating the string there
-            // makes the one line that has to stay short into two.
+            // An unfinished group is a fault (red); a blank placement field is
+            // allowed and becomes a marker (amber).
             const todo = s.id !== "core"
               && s.gs.some((g) => p.incomplete.includes(g));
             const gap = s.id === "core" && coreBlanks.length > 0;
@@ -586,7 +375,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   <span className="block text-xs font-medium text-slate-700">
                     {s.label}
                   </span>
-                  <span className={"block text-[10px] "
+                  <span className={"block text-3xs "
                     + (todo ? "text-red-600"
                       : gap ? "text-amber-600" : "text-slate-400")}>
                     {detail}
@@ -598,72 +387,45 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
         </nav>
 
         <div className="min-w-0 space-y-5">
-          {/* The heading goes with its cards. Nothing the account can say
-              leaves this empty -- a location with no served functionality answers
-              `enabled == null`, which keeps every card -- but a heading over
-              nothing is what the filter above would produce if that ever
-              stopped being true, and it would read as a section that failed to
-              load. */}
+          {/* The heading goes with its cards. */}
           {(functionalities.length > 0 || p.locUnclaimed.uncovered.length > 0
             || p.locUnclaimed.retired.length > 0) && (
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
               Deployment functionalities
             </h3>
-            {/* Stacked, not side by side: a card holds group rows, and two
-                columns of those read as two cramped tables. */}
+            {/* Stacked: a card holds group rows. */}
             <div className="space-y-3">
-              {/* The groups are the rail's own answer, handed over rather than
-                  worked out again here: the card and the rail listing different
-                  things is the rail failing at the only job it has. Empty is a
-                  real answer -- the engine-size statement is
-                  KUBERNETES_RESOURCES_LIMITS_*, so a docker performance card
-                  says "nothing extra to configure" rather than stating a size
-                  nothing reads. */}
+              {/* The rail's own groups, so card and rail list the same. */}
               {functionalities.map((f) => (
                 <FunctionalityCard key={f.id} {...p} feat={f}
                   statesEngineSize={f.id === engineSizeOn}
                   own={groupsIn("f-" + f.id)} />
               ))}
             </div>
-            {/* Why one of the boxes clears the others, stated whether or not it
-                has happened yet: it is a rule about what is being built, so
-                somebody deciding should read it before the click and not only
-                after one. Manual entry only -- connected there is nothing to
-                decide. */}
+            {/* Why one box clears the others, shown before the click. */}
             {p.sourceMode === "manual" && (
-              <p className="text-[11px] text-slate-500 mt-1.5">{SV_ALONE}</p>
+              <p className="text-2xs text-slate-500 mt-1.5">{SV_ALONE}</p>
             )}
-            {/* ...and the same fact about a location that already runs both.
-                Warned, never blocked: what a location *is* is BlazeMeter's own
-                UI's to change (#113 removed the one route here that did), so a
-                page that refused to generate for one would be refusing the only
-                bundle that location can have. */}
+            {/* A location that already runs both: warned, never blocked. */}
             {p.sourceMode === "connect"
               && svMixedWithEngines(p.enabled ?? [],
                                     engineFunctionalities(p.functionalities)) && (
-              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              <Callout tone="amber" className="mt-1.5 text-2xs">
                 {SV_MIXED}
-              </p>
+              </Callout>
             )}
-            {/* Ticking nothing is a real state -- a checkbox that will not
-                untick is an off-screen blocker in one control -- so it is said
-                rather than refused. Warned and not blocked, like a required
-                field left blank: the bundle generates, and what it is for is
-                what nobody has answered. Manual entry only; connected, an empty
-                answer comes from the account and this page cannot change it. */}
+            {/* Ticking nothing is allowed and said. */}
             {p.sourceMode === "manual" && p.enabled?.length === 0 && (
-              <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+              <Callout tone="amber" className="mt-1.5 text-2xs">
                 Nothing is declared, so nothing says which funcIds this identity
                 runs — and the images its bundle carries are chosen from those.
                 Tick what it runs above.
-              </p>
+              </Callout>
             )}
-            {/* Names, not ids: BlazeMeter's own display names, so this sentence
-                reads as BlazeMeter's UI reads. Not mono for that reason; "Data
-                Orchestration" set in a code face reads as something to type. */}
+            {/* BlazeMeter's display names, not ids. */}
             {p.locUnclaimed.uncovered.length > 0 && (
-              <p className="text-[11px] text-slate-500 mt-1.5">
+              <p className="text-2xs text-slate-500 mt-1.5">
                 Also runs{" "}
                 <span className="text-slate-600">
                   {p.locUnclaimed.uncovered.join(", ")}</span> —
@@ -671,14 +433,9 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                 removed.
               </p>
             )}
-            {/* ...and the other answer, which is not the one above (#160). The
-                account does not serve these at all, so the location was created
-                before they were retired -- and mono here, because a raw funcId
-                is what it is: the account has no display name left to read one
-                off. Same closing promise as above; a location is not changed by
-                being read. */}
+            {/* Retired funcIds, as raw ids: the account no longer names them. */}
             {p.locUnclaimed.retired.length > 0 && (
-              <p className="text-[11px] text-slate-500 mt-1.5">
+              <p className="text-2xs text-slate-500 mt-1.5">
                 Also carries{" "}
                 <span className="font-mono text-slate-600">
                   {p.locUnclaimed.retired.join(", ")}</span> —
@@ -691,11 +448,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
           </section>
           )}
 
-          {/* Where the agent goes in the cluster -- its own section, because a
-              docker bundle has no such place and the whole card goes with the
-              format. Titled as the rail titles it: two names for one section
-              is the rail disagreeing with the form in the smallest way it
-              can. */}
+          {/* Where the agent goes in the cluster; docker bundles have no such place. */}
           {placed && (
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
@@ -715,11 +468,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
             <div id="cfg-shared"
               className="scroll-mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100">
               {rows(p, groupsIn("shared"))}
-              {/* The environment variables: every documented agent variable
-                  the groups above do not already write, offered as a list. Not
-                  a group and not behind a switch -- see FoldRow -- and carried
-                  by every format, so it asks for its key like the rest rather
-                  than assuming so. */}
+              {/* Every documented agent variable the groups above do not write. */}
               {keysApply(ENV_KEYS, p.applies) && (
                 <FoldRow title="Environment variables"
                   hint="agent variables with no setting of their own above"
@@ -727,9 +476,7 @@ export function ConfigurePanel(p: ConfigurePanelProps) {
                   {p.envArea}
                 </FoldRow>
               )}
-              {/* Advanced is not a group either -- it is the SCC posture and
-                  the UID a pod runs as -- so it asks the predicate for the
-                  keys it writes rather than appearing in `shared`. */}
+              {/* Advanced hides by the keys it writes. */}
               {keysApply(ADVANCED_KEYS, p.applies) && <AdvancedRow {...p} />}
             </div>
           </section>
