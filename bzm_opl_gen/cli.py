@@ -21,30 +21,20 @@ import json
 import os
 import sys
 
-from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
-               livetest, plan, suggest as suggest_mod, workstation)
+from . import (api, bundle_check, core, doctor, facts as facts_mod,
+               generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
+               sv_read, workstation)
+from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
 def _client(a):
-    """The account client, from whatever --api-key this command was given.
-
-    One construction for every command, and it is core's: it reads the key file
-    itself and refuses a bad one with a CoreError -- the sentence the web page
-    and an MCP session get -- where the constructor used to read the file and
-    raise SystemExit from inside it. A command with no --api-key at all reaches
-    the environment rather than a TypeError from `open(None)`.
-    """
+    """The account client from --api-key, or the environment without one."""
     return core.client_from_key(a.api_key)
 
 
 def _resolve_account(client, a):
-    """--account-id wins; --account-name matches case-insensitive substring.
-
-    The matching is the terminal's own -- there is no other surface where an
-    account is named by typing part of it -- so it stays here. What the account
-    tree *is* comes from core, which is what turns a refused key into a
-    sentence instead of a BzmApiError nobody caught.
-    """
+    """--account-id wins; --account-name matches a case-insensitive substring;
+    otherwise the key's default account."""
     if a.account_id:
         return a.account_id
     accounts = core.accounts(client)
@@ -54,15 +44,17 @@ def _resolve_account(client, a):
             sys.exit(f"--account-name '{a.account_name}' matched {len(hits)} accounts: "
                      f"{[(x['id'], x.get('name')) for x in hits or accounts]}")
         return hits[0]["id"]
-    u = core.user(client)
-    return u["defaultProject"]["accountId"]
+    account_id = core.default_account_id(client)
+    if account_id is None:
+        sys.exit("this API key names no default account -- pass --account-id "
+                 "or --account-name")
+    return account_id
 
 
 def cmd_locations(a):
     client = _client(a)
     account_id = _resolve_account(client, a)
-    # No narrowing and no cap: a terminal scrolls, and select_locations' limit
-    # exists for the caller with a result ceiling. See its docstring.
+    # No cap: a terminal scrolls.
     locs = core.locations(client, account_id)
     print(f"account {account_id}: {len(locs)} private locations")
     for l in locs:
@@ -93,9 +85,6 @@ def cmd_create_location(a):
     print(f"created location '{h.get('name')}' harbor_id={h['id']} "
           f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, "
           f"slots={h.get('slots')}, threadsPerEngine={h.get('threadsPerEngine')})")
-    # core's sentence, not one written here: a location that cannot start a
-    # test 403s the same way whoever created it, and the web page and an MCP
-    # session had no warning at all while this one did.
     if made["warning"]:
         print(made["warning"], file=sys.stderr)
     print(f"next: bzm-opl-gen create-agent --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
@@ -108,27 +97,14 @@ def cmd_delete_location(a):
 
 
 def cmd_create_agent(a):
-    client = _client(a)
-    ship = core.create_ship(client, a.harbor_id, a.name)
-    # The ids first, then the token: the agent exists whatever the token endpoint
-    # answers, and an account that refuses the fetch would otherwise leave the
-    # only record of it in a traceback -- so the next attempt creates a second
-    # agent for the same location.
+    made = core.create_agent(_client(a), a.harbor_id, a.name)
+    ship = made["ship"]
+    # The ids first: the agent exists whatever the token endpoint answered.
     print(f"harbor_id:  {a.harbor_id}")
     print(f"ship_id:    {ship['id']}  (name: {ship.get('name')})")
-    try:
-        # core's fetch, for its refusal: the raw 403 body names no ship and no
-        # way on. Exit on it rather than raise -- the message is the answer.
-        token = core.fetch_ship_token(client, a.harbor_id, ship["id"])
-    except core.CoreError as e:
-        sys.exit(str(e))
-    print(f"auth_token: {token}")
-    # This is the one command that issues a credential as a matter of course,
-    # and its output is the only copy: nothing here stores it, and `generate`
-    # deliberately will not go and get another one -- fetching mints, and minting
-    # revokes whatever is deployed. So say the durability out loud, and hand on a
-    # next step that *takes* the token. `generate --api-key` was printed here,
-    # and after #64 that would write a placeholder bundle.
+    if made["token_error"]:
+        sys.exit(made["token_error"])
+    print(f"auth_token: {made['auth_token']}")
     print("\nKeep that auth_token: it is the durable artifact of this command. "
           "Nothing here records it, and issuing another one (reveal_token, or "
           "generate --rotate-token) invalidates this one along with any agent "
@@ -140,18 +116,9 @@ def cmd_create_agent(a):
 
 def cmd_facts(a):
     """Gather facts from the account, or -- with --manual -- build them from the
-    three values BlazeMeter shows on the agent, for a customer whose account
-    nobody here can reach."""
+    ids BlazeMeter shows on the agent, for an account nobody here can reach."""
     if a.manual:
-        # Neither id is required, and that is the same rule the form on the page
-        # keeps: a bundle is routinely wanted before the BlazeMeter location
-        # exists, and an id nobody can read off yet is a blank field like any
-        # other. facts.manual carries the marker for whichever is missing, and
-        # the note below names them.
-        #
-        # facts.manual, not core.manual_facts: it reaches nothing, so there is
-        # no refusal for core to carry, and its wrapper's second field is the
-        # gui note this command already prints for both branches at once.
+        # Either id may be blank; facts.manual writes its marker instead.
         f = facts_mod.manual(a.harbor_id, a.ship_id, func_ids=a.func_ids)
     else:
         if not a.api_key:
@@ -162,45 +129,11 @@ def cmd_facts(a):
                      "--manual takes it too, and takes it blank")
         f = core.gather_facts(_client(a), a.harbor_id)
     facts_mod.save(f, a.output)
-    # Manual facts carry no location name -- nothing knows it -- so fall back to
-    # the id rather than printing "location 'None'".
     print(f"wrote {a.output}: location '{f['harbor_name'] or f['harbor_id']}' "
           f"funcIds={f['func_ids']} ships={len(f['ships'])} "
           f"images={len(f['images'])} ({f['images_source']})")
-    # A refused image list is the one state worth a line of its own: the images
-    # below it are a catalogue's, and nothing in the count above says so. An
-    # empty answer is not this -- that is the location saying it runs nothing --
-    # and a location with no agent has nothing to refuse.
-    if facts_mod.image_list_state(f) == facts_mod.IMAGE_LIST_UNREAD:
-        print(f"note: the location's own image list could not be read "
-              f"({f['image_list']['detail']}), so the images above are the "
-              f"fallback catalogue's rather than this location's. Versions may "
-              f"be wrong and browser images are missing.", file=sys.stderr)
-    if facts_mod.gui_images_incomplete(f):
-        print("note: functionalGui needs a version-pinned browser image "
-              "(charmander/chrome_*, firefox_*, ...) that no catalogue can pick "
-              "for you. The account names it, so gather facts with an API key; "
-              "otherwise add the key to IMAGE_OVERRIDES by hand. Fine as it is "
-              "against the public registry, not against a private one.",
-              file=sys.stderr)
-    # An id nobody supplied, named here as well as in the bundle's README: this
-    # command's own output is what a reader has in front of them, and a facts
-    # file that says `<HARBOR_ID>` where an id belongs is worth one line rather
-    # than a discovery three steps later.
-    #
-    # `core.sole_ship_id` rather than the first ship: an agent is never taken by
-    # position here (see the test that reads this file), and its None covers both
-    # states that are not an id nobody supplied -- a real location with no agent
-    # yet, and one with several, neither of which has a blank to report.
-    blank = [f"{k} ({gen_mod.marker(k)})" for k, v in
-             (("harbor_id", f["harbor_id"]),
-              ("ship_id", core.sole_ship_id(f))) if gen_mod.is_placeholder(v)]
-    if blank:
-        print(f"note: {' and '.join(blank)} left blank, so every bundle "
-              f"generated from this file carries the marker instead. The "
-              f"cluster refuses it -- a marker is not a legal label value -- so "
-              f"fill it in, or re-gather once the location exists.",
-              file=sys.stderr)
+    for warning in core.facts_warnings(f):
+        print(f"note: {warning}", file=sys.stderr)
 
 
 def cmd_generate(a):
@@ -212,9 +145,7 @@ def cmd_generate(a):
     for key in ("platform", "openshift_cluster",
                 "namespace", "ship_id", "auth_token", "output_format",
                 "private_registry", "pull_secret", "service_type",
-                # Tri-state, and `is not None` is what carries it: --no-auto-update
-                # sets False, which must override a profile's true rather than
-                # read as "not given".
+                # Tri-state: --no-auto-update's False must override a profile.
                 "auto_update",
                 "service_account_name",
                 "sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway",
@@ -236,9 +167,7 @@ def cmd_generate(a):
         opts["tolerations"] = json.loads(a.tolerations)
     if a.node_selector:
         opts["node_selector"] = json.loads(a.node_selector)
-    # `is not None`, not truthiness: `--engine-node-selector '{}'` means "engines
-    # take no selector even though crane has one", which is a different bundle
-    # from not passing the flag at all (engines follow crane).
+    # `is not None`: an explicit '{}' or '[]' differs from not passing the flag.
     if a.engines_per_node is not None:
         opts["engines_per_node"] = a.engines_per_node
     if a.engine_tolerations is not None:
@@ -248,12 +177,8 @@ def cmd_generate(a):
     if a.ca_bundle:
         with open(a.ca_bundle) as fh:
             opts["ca_bundle"] = fh.read()
-    # A PEM is unpasteable on a command line, so these take a file and the
-    # option carries what was in it -- --ca-bundle's shape, and for the same
-    # reason. The key is not in profile.json (SECRET_OPTIONS), so replaying a
-    # profile means passing --sv-tls-key again; without it the bundle carries a
-    # <SV_TLS_KEY> key file and the README says so, rather than a key file that
-    # silently is not one.
+    # PEM flags take a file; the option carries its content. The key is never
+    # written to profile.json, so a replay must pass --sv-tls-key again.
     for flag, key in (("sv_tls_cert", "sv_tls_cert"),
                       ("sv_tls_key", "sv_tls_key")):
         path = getattr(a, flag, None)
@@ -262,11 +187,7 @@ def cmd_generate(a):
                 opts[key] = fh.read()
     if getattr(a, "ca_bundle_slot", False):
         opts["ca_bundle_slot"] = True
-    # A name, not a path: nothing here opens it. The file is read where the
-    # ConfigMap is built -- by `helm install` out of the chart directory, or by
-    # the `kubectl create configmap --from-file` line the README prints -- so
-    # this generator does not need the certificate to be anywhere it can see,
-    # which is what lets a bundle be produced for a cluster nobody here reaches.
+    # A file name, not a path: the ConfigMap is built from it at install time.
     if getattr(a, "ca_cert_file", None):
         opts["ca_cert_file"] = a.ca_cert_file
     if a.ca_configmap:
@@ -290,10 +211,7 @@ def cmd_generate(a):
         if v is not None:
             opts[key] = v
     if a.env:
-        # Merged over a profile's rather than replacing it, so `--profile x
-        # --env A=1` adds one variable to the bundle x describes. Everything
-        # about the *names* -- what is legal, what is already taken -- is
-        # generate.extra_env's, and it is asked once, at generate time.
+        # Merged over a profile's; names are validated at generate time.
         env = dict(opts.get("extra_env") or {})
         for item in a.env:
             name, sep, value = item.partition("=")
@@ -301,55 +219,33 @@ def cmd_generate(a):
                 sys.exit(f"--env {item}: expected NAME=VALUE")
             env[name] = value
         opts["extra_env"] = env
-    # Where the token comes from is core.resolve_auth_token's, all four
-    # branches of it. What is left here is the flags: a client is built only
-    # for the one that mints, so a bad key file is not read on a run that was
-    # never going to touch the account.
+    # A client only for the flag that mints, so a bad key file is not read on a
+    # run that never touches the account.
     client = _client(a) if a.api_key and a.rotate_token else None
     if a.api_key and not a.rotate_token:
-        print("note: --api-key has no effect on `generate`. It no longer "
-              "fetches an AUTH_TOKEN, because that fetch issues a new one and "
-              "revokes the token the running agent holds -- it is the "
-              "credential for --rotate-token, and nothing else here mints.",
+        print("note: --api-key has no effect on `generate` without "
+              "--rotate-token. Fetching an AUTH_TOKEN issues a new one and "
+              "revokes the token the running agent holds, so --api-key is only "
+              "the credential for --rotate-token.",
               file=sys.stderr)
-    # announce=print, on stdout beside the report rather than on stderr: the
-    # warning is only worth anything ahead of the mint, and two streams do not
-    # keep their order in a pipe or a CI log.
-    source = core.resolve_auth_token(f, opts, client=client,
-                                     rotate=a.rotate_token, out_dir=a.output,
-                                     announce=print)
-    # Always, for every branch, and unprefixed -- each message names the token
-    # itself. Which of the four happened decides whether an agent is still
-    # running, and the run that said nothing was the one that rotated (#64).
-    print(source.message)
-    # Beside the token line, and for the same reason: both say what the bundle
-    # about to be written cannot do yet. Generate was the one moment that said
-    # nothing about a CA slot (#241), and it is the moment the person who chose
-    # the slot is still here. None for every other bundle.
-    notice = gen_mod.ca_slot_notice(opts)
+    # announce=print on stdout, so the rotation warning keeps its place ahead of
+    # the mint in a pipe or a CI log.
+    built = core.build_bundle(f, opts, client=client, rotate=a.rotate_token,
+                              out_dir=os.path.abspath(a.output), write=True,
+                              announce=print)
+    print(built.token.message)
+    notice = ca_trust.ca_slot_notice(opts)
     if notice:
         print(notice)
-    # Through core, so every refusal generate() writes -- an engine limit that
-    # is not a quantity, a service account named as the empty string -- arrives
-    # as the sentence it was written as rather than at the foot of a traceback.
-    # The token is already in `opts`, so this resolution takes the first branch.
-    files = core.generate_bundle(f, opts)
-    written = core.write_bundle(files, os.path.abspath(a.output))
-    # `a.output` as it was typed, not the absolute path core needs: a shell is
-    # the one caller that chose its own working directory. Sorted, because that
-    # is the order this line has always listed them in -- preview_order is for
-    # a reader being shown the files, and this is a receipt.
-    print(f"wrote {len(written)} files to {a.output}/: "
-          + ", ".join(sorted(w["name"] for w in written)))
+    print(f"wrote {len(built.written)} files to {a.output}/: "
+          + ", ".join(sorted(w["name"] for w in built.written)))
 
 
 def cmd_sv_expose(a):
     """Emit a working Service+Ingress per deployed virtual service.
 
-    Runs after the virtual services are deployed, not at generate time: the
-    mocks are read off the running pods, because the v4 API exposes no
-    virtual-service endpoint and the pod carries the identity crane actually
-    used."""
+    Run after the virtual services are deployed: the mocks are read off the
+    running pods, which carry the identity crane actually used."""
     opts = gen_mod.load_profile(a.manifests) if a.manifests else {}
     for key in ("sv_subdomain", "sv_tls_secret", "namespace"):
         v = getattr(a, key, None)
@@ -358,12 +254,12 @@ def cmd_sv_expose(a):
     opts["namespace"] = opts.get("namespace") or a.namespace
     if a.ingress_class:
         opts["sv_ingress_class"] = a.ingress_class
-    mocks = livetest.sv_mocks(livetest.cli_tool(), opts["namespace"])
+    mocks = sv_read.sv_mocks(kube.cli_tool(), opts["namespace"])
     if not mocks:
         sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
                  f"deploy the virtual service in BlazeMeter first, then re-run")
-    out = gen_mod.sv_expose(mocks, opts["namespace"],
-                            gen_mod.sv_publish_cfg(opts))
+    out = service_virt.sv_expose(mocks, opts["namespace"],
+                            service_virt.sv_publish_cfg(opts))
     with open(a.output, "w") as fh:
         fh.write(out)
     names = ", ".join(f"{m['name']}:{m['port']}" for m in mocks)
@@ -373,21 +269,14 @@ def cmd_sv_expose(a):
 
 def cmd_plan(a):
     """Size the infrastructure a sizing needs, before any of it exists."""
-    # One row per model the command was given a target for, off the planner's
-    # own table -- the flags below are its `target_field`/`figure_field` names,
-    # so the namespace is already keyed the way `sizings_from` reads. `--users`
-    # stays the performance model's own flag rather than becoming
-    # --performance: it is what every existing script and every doc calls it,
-    # and the planner takes it under that name too.
+    # The per-model flags are named after SIZING_MODELS' fields, so the
+    # namespace is already keyed the way sizings_from reads it.
     sizings = plan.sizings_from(vars(a))
-    try:
-        p = core.capacity_plan(
-            a.users, vus_per_engine=a.vus_per_engine,
-            engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
-            engines_per_node=a.engines_per_node, agents=a.agents,
-            sizings=sizings)
-    except core.CoreError as e:
-        sys.exit(str(e))
+    p = core.capacity_plan(
+        a.users, vus_per_engine=a.vus_per_engine,
+        engine_cpu=a.engine_cpu_limit, engine_mem=a.engine_mem_limit,
+        engines_per_node=a.engines_per_node, agents=a.agents,
+        sizings=sizings)
     if a.json:
         print(json.dumps(p, indent=2))
         return
@@ -396,10 +285,6 @@ def cmd_plan(a):
         return
 
     eng, node = p["engine"], p["node"]
-    # A line per sizing, each in its own unit, and never a virtual-user line
-    # for a browser suite. The unmeasured one has no "at N per engine" to state
-    # and says what it has instead, because a target that produced no arithmetic
-    # is the one somebody looks for.
     for r in p["sizings"]:
         if r["per_pod"] is None:
             print(f"{r['target']:,} {r['unit']}: not sized here, no "
@@ -422,8 +307,7 @@ def cmd_plan(a):
           f"cluster; 0 between runs")
     print(f"  agent: 1 small always-on node ({p['crane']['cpu_limit']} CPU / "
           f"{p['crane']['memory_limit']})")
-    # The location block keeps BlazeMeter's own field names: it is what to type
-    # into those fields, not a description of the plan.
+    # BlazeMeter's own field names: this is what to type into them.
     print(f"  location: slots={p['location']['slots']} (engines per agent), "
           f"threadsPerEngine={p['location']['threads_per_engine']} (virtual "
           f"users per engine),")
@@ -432,8 +316,6 @@ def cmd_plan(a):
     for w in p["warnings"]:
         print(f"  ! {w}")
     if a.output:
-        # Through core so the absolute-path rule is the same one every other
-        # written artifact obeys, rather than a second opinion about paths.
         out = os.path.abspath(a.output)
         core.write_bundle({p["document_file"]: p["document"]}, out)
         print(f"\nwrote {os.path.join(out, p['document_file'])} -- the request "
@@ -452,26 +334,17 @@ def cmd_doctor(a):
         f = core.gather_facts(_client(a), a.harbor_id)
     else:
         f = facts_mod.load(a.facts)
-    # The generated profile is what the checks measure against -- engine size,
-    # nodeSelector, registry, proxy/CA. Without it we can only assume defaults.
+    # The generated profile is what the checks measure against.
     try:
         opts = gen_mod.load_profile(a.manifests)
     except FileNotFoundError:
         opts = {}
         print(f"note: no {a.manifests}/profile.json -- checking against the "
               f"documented engine size and no scheduling constraints")
-    # What is being preflighted, and against which namespace, is core's --
-    # `preflight_cluster` is the same call the web UI's panel makes, and the
-    # precedence between -n, the bundle and the file used to be stated here as
-    # well as there. An unreadable or wrong file is a CoreError, which main()
-    # exits on with the sentence doctor wrote.
     doc = (core.evidence_document(a.cluster_evidence)
            if a.cluster_evidence else None)
     imported, namespace = core.preflight_cluster(doc, opts, a.namespace)
-    # doctor.run rather than core.preflight, and that is the whole of what stays
-    # here: run() prints the verdict list and evaluate() does not, which is the
-    # split every non-terminal caller depends on. The suggestions preflight()
-    # returns alongside are `suggest`'s, which answers a different question.
+    # doctor.run rather than core.preflight: this command prints the report.
     checks = doctor.run(f, opts, namespace, evidence=imported)
     sys.exit(1 if doctor.has_failures(checks) else 0)
 
@@ -479,20 +352,10 @@ def cmd_doctor(a):
 def cmd_suggest(a):
     """Say what a cluster's evidence implies about the generate options.
 
-    Deliberately its own command rather than a flag on `doctor`: that one
-    answers whether a deployment survives this cluster and exits non-zero when
-    it would not, and this one answers how it should have been configured. Same
-    file, different question, and nothing here is applied to anything.
+    Its own command: doctor answers whether a deployment survives the cluster,
+    this answers how it should be configured. Nothing is applied. The
+    suggestions are printed bare, with no configuration to merge against.
     """
-    # The read is core's -- the same EvidenceUnreadable a browser and an MCP
-    # session get for a file that is not there or will not parse.
-    #
-    # The suggestions are not, and that is this ticket's one deliberate
-    # omission: `core.suggestions_from_evidence` merges each one against a
-    # configuration (state, current) for a panel that has one, and this command
-    # has no bundle to merge against -- `--json` is the bare suggestion, and
-    # `report` prints the objects rather than dicts. Folding the two together
-    # would change what this command answers, which #93 asked not to do.
     doc = core.evidence_document(a.cluster_evidence)
     try:
         suggestions = suggest_mod.from_evidence(doc)
@@ -508,12 +371,8 @@ def cmd_toolcheck(a):
     """Preflight the workstation against the rig flags you intend to pass."""
     opts = {"cluster": a.cluster, "local_registry": a.local_registry,
             "local_proxy": a.local_proxy}
+    # workstation.run prints the report, which is the whole of this command.
     checks = workstation.run(opts)
-    # `workstation.run`, not `core.toolcheck`, and for the reason cmd_doctor
-    # keeps doctor.run: core answers without printing, because for the MCP
-    # server stdout is the JSON-RPC channel, and the report is the whole of what
-    # this command is. It reaches no account and no cluster, so there is no
-    # refusal for core to be carrying either.
     sys.exit(0 if not doctor.has_failures(checks) else 1)
 
 
@@ -526,29 +385,18 @@ def cmd_images(a):
         print(ref)
     if not a.pull:
         return
-    # The pull/tag/push is core's, so this command and the MCP tool cannot
-    # disagree about which name the target registry gets -- and core is the only
-    # thing that shells out. This loop reports what it did; it does not do it.
-    # There used to be a `subprocess.run` after the loop, on the loop variable,
-    # guarded by a name that did not exist -- so every `images --pull` raised
-    # NameError, and had it not, it would have re-run just the last command.
+    # core runs the pull/tag/push, so this and the MCP tool agree on targets.
     for cmd in core.mirror_images(imgs, mirror=a.mirror, platform=a.platform,
                                   dry_run=a.dry_run)["commands"]:
         print(("DRY-RUN: " if a.dry_run else "+ ") + cmd)
 
 
 def _regenerator(facts, a, ship_id, auth_token):
-    """Re-render the manifests in place with extra generate() options merged
-    onto the ones they were built from (out/profile.json). Used by
-    --local-proxy, whose CA and address only exist once the rig is up.
+    """Re-render the manifests in place with extra options merged onto their
+    profile.json -- for rig flags whose values exist only once the rig is up.
 
-    `auth_token` is one value for the whole run, passed in rather than fetched
-    here. It used to call the token endpoint on every invocation, and a run
-    makes several -- the negative control renders twice, then --run-test and
-    --local-proxy each do -- so each render minted a credential that revoked the
-    one the previous deploy was running on. The agent then sat `0/1 Running`,
-    which the rig cannot tell from a slow boot; plausibly a real source of its
-    intermittent failures.
+    `auth_token` is one value for the whole run: minting per render would
+    revoke the token the previous deploy is running on.
     """
     def regenerate(overlay):
         opts = gen_mod.load_profile(a.manifests)
@@ -556,22 +404,18 @@ def _regenerator(facts, a, ship_id, auth_token):
         opts["namespace"] = a.namespace
         opts["ship_id"] = opts.get("ship_id") or ship_id
         opts["auth_token"] = auth_token
-        written = core.write_bundle(core.generate_bundle(facts, opts),
-                                    os.path.abspath(a.manifests))
-        print(f"regenerated {len(written)} files in {a.manifests}/ with "
+        built = core.build_bundle(facts, opts,
+                                  out_dir=os.path.abspath(a.manifests),
+                                  write=True)
+        print(f"regenerated {len(built.written)} files in {a.manifests}/ with "
               f"proxy + CA trust: "
-              + ", ".join(sorted(w["name"] for w in written)))
+              + ", ".join(sorted(w["name"] for w in built.written)))
     return regenerate
 
 
-# Everything on `livetest` that only a cluster has, as (what to call it in the
-# refusal, is it on). Named individually rather than counted, because "some of
-# your flags do not apply here" is a message somebody has to guess at -- and the
-# guess is expensive: these are the flags whose absence makes a pass mean less
-# than the person reading it thinks. Refused rather than ignored for that
-# reason: a run that quietly dropped --contain-egress would report a pass that
-# proved nothing about containment.
 def _cluster_shaped(a):
+    """The livetest flags only a cluster has, named for a refusal: a compose
+    run that quietly dropped one would claim something it never tested."""
     return [name for name, on in (
         (f"--cluster {a.cluster}", a.cluster != "current"),
         ("--local-registry", a.local_registry),
@@ -584,17 +428,10 @@ def _cluster_shaped(a):
 def _livetest_compose(a, client, facts, ship_id, opts):
     """`livetest` for a docker bundle: up, online, down. Exits; never returns.
 
-    The one live proof `--format docker` has. It is the cheap end of this
-    command -- a docker daemon, no cluster build, minutes rather than tens of
-    minutes -- and it is deliberately the plain shape: no re-render, so no
-    credential is minted and the bundle deployed is the bundle on disk, byte for
-    byte. What it does not prove is in docs/live-test.md.
+    Nothing is re-rendered, so no credential is minted: the bundle deployed is
+    the bundle on disk. What this does not prove is in docs/live-test.md.
     """
-    # First, exactly as on the cluster path: is this directory this agent's
-    # bundle at all? Here as well as inside run_compose, so the CLI reports it
-    # as a sentence rather than as the traceback of an exception the MCP server
-    # needs run_compose to raise.
-    bad = livetest.bundle_check(a.manifests, facts["harbor_id"], ship_id,
+    bad = bundle_check.bundle_check(a.manifests, facts["harbor_id"], ship_id,
                                 opts).report()
     if bad:
         sys.exit(bad)
@@ -608,20 +445,11 @@ def _livetest_compose(a, client, facts, ship_id, opts):
             f"NetworkPolicy, an engine pod), and a run that accepted them and "
             f"passed would be claiming things it never tested. Drop "
             f"{'them' if len(unusable) > 1 else 'it'}, or run the cluster rig "
-            f"against a --format manifests bundle. Engines on docker are "
-            f"issue #184.")
+            f"against a --format manifests bundle.")
     if a.namespace:
-        # Named rather than refused, which is the rule the docker bundle's own
-        # ignored options already keep: the value is somebody's habit from the
-        # other rig, not a claim about this run.
         print(f"note: --namespace {a.namespace} reaches nothing here -- a "
               f"docker bundle is one container on this host and has no "
               f"namespace")
-    # No mint, and so nothing above this had to be ordered around one: a compose
-    # run re-renders nothing, so issuing a token would revoke the one the bundle
-    # is carrying and deploy the bundle anyway. The credential this run uses is
-    # whatever `generate` wrote, and bundle_check refuses one still carrying the
-    # blank-value guard before the container exists.
     ok = livetest.run_compose(client, a.manifests, facts["harbor_id"], ship_id,
                               timeout=a.timeout, keep=a.keep, opts=opts)
     sys.exit(0 if ok else 1)
@@ -633,17 +461,14 @@ def cmd_livetest(a):
     ship_id = core.sole_ship_id(f, a.ship_id)
     if not ship_id:
         sys.exit(f"--ship-id required (location has {len(f['ships'])} ships)")
-    # The options the manifests were rendered from -- lets livetest check the
-    # deployed objects against what was asked for. Absent on hand-made dirs.
+    # The options the manifests were rendered from, for the read-back checks.
     try:
         opts = gen_mod.load_profile(a.manifests)
     except FileNotFoundError:
         opts = None
         print(f"note: no {a.manifests}/profile.json -- skipping the read-back "
               f"configuration checks (regenerate to enable them)")
-    # The rig applies YAML with kubectl and reads it back object by object, so a
-    # chart bundle has nothing at the top level for it to apply. Say so here
-    # rather than letting the glob come back empty and the agent never appear.
+    # A chart has nothing at the top level for kubectl to apply.
     if opts and opts.get("output_format") == "helm":
         sys.exit(
             f"{a.manifests}/ holds a Helm chart, and livetest deploys manifests "
@@ -651,35 +476,20 @@ def cmd_livetest(a):
             f"(the two render the same objects), or install the chart yourself "
             f"and watch it with: bzm-opl-gen doctor / kubectl -n "
             f"{a.namespace or '<namespace>'} logs -l role=role-crane -f")
-    # A docker bundle used to be refused here for the same reason the chart is
-    # -- no cluster, so the *.yaml glob came back empty, every object "applied",
-    # no pod was created and the run waited out its timeout. It has its own rig
-    # now (#179): one container, started with docker compose on this host. Which
-    # rig a run gets is read off the bundle rather than asked for, because a
-    # flag saying it is a second place to get it wrong and both wrong answers
-    # are that same silent run. See livetest.bundle_platform.
-    if livetest.bundle_platform(a.manifests, opts) == livetest.PLATFORM_COMPOSE:
+    # The bundle picks the rig, never a flag: see bundle_check.bundle_platform.
+    if bundle_check.bundle_platform(a.manifests, opts) == bundle_check.PLATFORM_COMPOSE:
         _livetest_compose(a, client, f, ship_id, opts)
     if not a.namespace:
-        # argparse used to require it, which was right for the one rig there was
-        # and asks a compose run for a value that reaches nothing. Required here
-        # instead, once the platform is known -- and not defaulted, because a
-        # namespace nobody chose is a namespace this rig would then create.
         sys.exit("--namespace is required for a manifests bundle: livetest "
                  "creates it and deploys into it")
-    # Is the directory this agent's bundle at all? --manifests defaults to out/,
-    # which holds whatever the last `generate` left there, and the rig applies
-    # every *.yaml in it. First of the bundle guards and before the mint below,
-    # because a run that is about to be refused must not rotate a credential
-    # some other agent is holding. See livetest.bundle_check for the incident.
-    bad = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id,
+    # The bundle guards below all run before any mint: a run about to be
+    # refused must not rotate a credential another agent is holding.
+    bad = bundle_check.bundle_check(a.manifests, f["harbor_id"], ship_id,
                                 opts).report()
     if bad:
         sys.exit(bad)
-    # Same shape of guard, for the same reason. The rig deploys into a namespace
-    # it creates itself, so a ServiceAccount the bundle does not create is never
-    # there: every object applies, no pod is ever created, and the run burns its
-    # whole timeout waiting for a heartbeat that cannot come.
+    # The rig creates the namespace, so a ServiceAccount the bundle does not
+    # create never exists and no pod ever starts.
     if opts and not opts.get("service_account_create", True):
         sa = opts.get("service_account_name")
         sys.exit(
@@ -688,35 +498,24 @@ def cmd_livetest(a):
             f"where that account will not exist. Re-generate without "
             f"--no-create-service-account, or create '{sa}' in {a.namespace} "
             f"yourself before starting the run")
-    # Third guard of the same shape, about the other object the bundle names and
-    # does not create: the CA ConfigMap of the `file` and `existing` modes. The
-    # sentence is livetest's, because which modes the rig can build is the rig's
-    # answer and the same one --ca-mode is resolved from below.
-    ca_bad = livetest.ca_configmap_refusal(opts, a.local_proxy)
+    # Likewise the CA ConfigMap of the `file` and `existing` modes.
+    ca_bad = bundle_check.ca_configmap_refusal(opts, a.local_proxy)
     if ca_bad:
         sys.exit(ca_bad)
-    # Fourth guard of the same shape, and the one the mint below cannot cover: a
-    # run that re-renders nothing deploys what is on disk, so if that bundle
-    # carries the placeholder the agent can never authenticate. Every object
-    # applies, no heartbeat arrives, and the run spends its whole 12-20 minutes
-    # reporting only that the agent never came online. Checked here because the
-    # paths that *do* re-render write a fresh token over it, so a placeholder on
-    # disk is not a problem for them -- see the mint below.
+    # A run that re-renders nothing deploys the token on disk; a placeholder
+    # there means an agent that can never authenticate.
     if not (a.local_proxy or a.run_test) and not a.auth_token \
             and gen_mod.existing_auth_token(a.manifests) is None:
         sys.exit(
             f"{a.manifests}/ carries no usable AUTH_TOKEN -- it is still the "
-            f"{gen_mod.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
+            f"{bundle_options.DEFAULT_OPTIONS['auth_token']} placeholder, and this run "
             f"re-renders nothing, so it would deploy that. The agent could not "
             f"authenticate, and the rig would wait out its whole timeout to say "
             f"only that it never came online. "
             f"{core.token_recovery_hint(opts)}")
     proxy_user = proxy_pass = None
-    # Named rather than ignored: the mode decides how the CA reaches the pod,
-    # and without --local-proxy no CA is configured at all -- so a run given
-    # --ca-mode existing alone would report a pass having deployed neither. Read
-    # off the flag as typed rather than off the resolved mode below, or a bundle
-    # generated for the file mode would be refused for a flag nobody passed.
+    # Read off the flag as typed, so a file-mode bundle is not refused for a
+    # flag nobody passed.
     if a.ca_mode and a.ca_mode != "inline" and not a.local_proxy:
         sys.exit("--ca-mode needs --local-proxy: the CA under test is the "
                  "proxy's, and a run without one configures no CA trust at all")
@@ -730,73 +529,32 @@ def cmd_livetest(a):
                      "joins that cluster's docker network)")
         if a.proxy_auth and a.proxy_auth.lower() != "none":
             proxy_user, _, proxy_pass = a.proxy_auth.partition(":")
-    # The third pairing rule, and the only one that warns (#242). The two above
-    # refuse because the flag would otherwise reach nothing; --local-registry
-    # reaches something on its own and one thing less than the reader assumes.
-    # Nothing pulls the engine image unless --run-test starts an engine, so a
-    # wrong engine reference passes here. That is how #234 lived for months: the
-    # first run to combine the two failed immediately, on the engine and nothing
-    # else, while crane pulled from the same registry in the same run. Said
-    # after every refusal above, so a run about to be refused does not narrate a
-    # gap it will never reach.
-    #
-    # ...and only where this location runs an engine at all. An SV-only agent
-    # carries crane, group-gateway and service-mock and no taurus engine, so
-    # there is no engine image for the run to miss and no --run-test that would
-    # start one: warning there would name a gap the run never had. Read through
-    # `facts.runs_engine`, which is where that answer already is. Empty funcIds
-    # are the performance case, which is what `facts.needed_categories` defaults
-    # them to, so they warn.
+    # A warning, not a refusal: --local-registry covers crane's image, but only
+    # --run-test pulls the engine image. Silent for a location with no engine
+    # (empty funcIds are the performance case).
     func_ids = f.get("func_ids") or []
     engine_here = not func_ids or any(facts_mod.runs_engine(i) for i in func_ids)
     if a.local_registry and not a.run_test and engine_here:
-        # What the run *does* cover, and no more than that. The blackhole is
-        # minikube's alone -- blackhole_public_registries prints a skip note on
-        # every other cluster -- so claiming it unconditionally would be this
-        # warning making the mistake it is about. What crane resolves an
-        # IMAGE_OVERRIDES entry by is deliberately not claimed either: #234
-        # settled where the mirror must push and left that mechanism unread.
+        # The blackhole is minikube's alone.
         covered = ("crane's own image and the public registries blackholed on "
                    "the node" if a.cluster == "minikube" else "crane's own image")
         print(f"warning: --local-registry without --run-test does not cover "
               f"the engine image. This run starts crane and no engine, so "
               f"nothing pulls the engine reference the bundle composed, and a "
               f"wrong one cannot fail here. What it does cover is {covered}. "
-              f"Add --run-test <TEST_ID> to cover the engine (#234).")
-    # Unsaid, the mode under test is the one the bundle was generated with
-    # (#251). --local-proxy re-renders the CA -- the CA under test is the
-    # proxy's own -- and this used to re-render to `inline` whatever the bundle
-    # carried, so a file-mode bundle was deployed as an inline one and passed,
-    # having proved a configuration nobody had generated. Said here rather than
-    # beside the flag guards above, so a run that is about to be refused for one
-    # of them does not narrate a CA mode first; both the resolution and the
-    # sentence are livetest's, which is also what `run()` resolves through.
-    ca_mode = livetest.resolved_ca_mode(opts, a.ca_mode)
+              f"Add --run-test <TEST_ID> to cover the engine.")
+    # Unsaid, the CA mode under test is the one the bundle was generated with.
+    ca_mode = bundle_check.resolved_ca_mode(opts, a.ca_mode)
     if a.local_proxy:
-        print(livetest.ca_mode_notice(opts, ca_mode))
-    # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
-    # the engine sizing); the callback needs a profile to merge onto, so it is
-    # only available when one was found.
-    #
-    # And a run with neither renders nothing, so it deploys the bundle exactly as
-    # it sits on disk -- which is why the mint below is inside this condition
-    # rather than at the top of the command. Issuing a token a run is never going
-    # to write would revoke the one that bundle is carrying, i.e. break the
-    # deployment this rig is here to verify.
+        print(bundle_check.ca_mode_notice(opts, ca_mode))
+    # --local-proxy and --run-test re-render onto the profile. Only they mint:
+    # a run that renders nothing deploys the bundle's own token, and minting
+    # would revoke it.
     regenerate = None
     if opts is not None and (a.local_proxy or a.run_test):
-        # One credential for the whole run, minted here rather than per render,
-        # and after every guard above so a run that is about to exit does not
-        # rotate anything first. No flag asks for it: bringing an agent online is
-        # what this command is for, so a rotation is implied by running it --
-        # --auth-token is how a caller who already holds one keeps it, and
-        # resolve_auth_token's first branch is what honours that.
-        #
-        # out_dir is deliberately not passed. Reusing whatever token
-        # a.manifests already holds looks appealing and is the wrong risk here:
-        # it may have been rotated since that bundle was written, and a dead
-        # token is exactly the `0/1 Running` this rig cannot tell from a slow
-        # boot -- so the rig would fail with no way to say why.
+        # One credential for the whole run, after every guard. Not reused from
+        # a.manifests: it may have been rotated since, and a dead token looks
+        # like a slow boot to the rig.
         token_opts = {"ship_id": ship_id}
         if a.auth_token:
             token_opts["auth_token"] = a.auth_token
@@ -805,10 +563,7 @@ def cmd_livetest(a):
                                          announce=print)
         print(source.message)
         if source.branch == core.TOKEN_PLACEHOLDER:
-            # Reachable one way: --auth-token given the placeholder string
-            # itself. Rendering it deploys an agent that can never come online,
-            # and the run's only report would be that it never did -- so the
-            # message resolve_auth_token already wrote becomes the exit.
+            # --auth-token given the placeholder string itself.
             sys.exit(source.message)
         regenerate = _regenerator(f, a, ship_id, token_opts["auth_token"])
     ok = livetest.run(client, a.manifests, a.namespace, f["harbor_id"], ship_id,
@@ -824,11 +579,7 @@ def cmd_livetest(a):
 
 
 def cmd_mcp(a):
-    """Serve the MCP tools on stdio.
-
-    No "starting..." line, and nothing else on stdout either -- see
-    mcp_server._answer for what stdout is once this is running.
-    """
+    """Serve the MCP tools on stdio. Nothing may be printed to stdout."""
     try:
         from . import mcp_server
     except ImportError:
@@ -838,9 +589,7 @@ def cmd_mcp(a):
 
 def cmd_ui(a):
     if a.install_service or a.uninstall_service:
-        # Before the server import: installing the agent needs no fastapi, and
-        # the point of the service is that *launchd's* python serves -- this
-        # process only writes the plist and hands it over.
+        # Before the server import: installing the agent needs no fastapi.
         from . import service
         try:
             if a.uninstall_service:
@@ -862,8 +611,7 @@ def cmd_ui(a):
         from . import server
     except ImportError:
         sys.exit("UI dependencies missing -- pip install 'bzm-opl-gen[ui]'")
-    # 0.0.0.0 is what was asked for, not somewhere to point a browser -- print
-    # an address that resolves.
+    # Print an address a browser can open, not the wildcard bind.
     shown = "127.0.0.1" if a.host in ("0.0.0.0", "::") else a.host
     print(f"bzm-opl-gen ui -> http://{shown}:{a.port}  (Ctrl-C to stop)",
           flush=True)
@@ -876,33 +624,20 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    # Deliberately takes no --api-key and no --facts. It answers the question
-    # that comes before both: how much cluster to ask for. Requiring either
-    # would put it behind the thing it exists to help get funded.
+    # No --api-key and no --facts: this comes before both.
     pl = sub.add_parser("plan",
                         help="how much infrastructure a load target needs "
                              "(no account, no cluster)")
-    # Not required, because it is the performance model's target rather than
-    # the only sizing there is -- a GUI Functional customer has no load target.
-    # A run with none of the three is still refused, by the planner, naming
-    # this field.
     pl.add_argument("--users", metavar="N",
                     help="virtual users the test has to reach")
-    # ...and the rest of the models, walked off plan.SIZING_MODELS rather than
-    # written out. The flag *is* the model's `target_field`, which is the name
-    # the planner's refusals use and the name `sizings_from` reads back out of
-    # the namespace, so a fourth model gets its flags by being added to that
-    # table -- as it already did for the route and the MCP tool. Performance's
-    # two are declared by hand above and below: `--users` is capacity_plan's own
-    # argument, and both carry help nothing in the table could supply.
+    # The other models' flags come from plan.SIZING_MODELS: the flag is the
+    # model's target_field, the name sizings_from and the refusals use.
     for fid, m in plan.SIZING_MODELS.items():
         if fid == plan.PERFORMANCE:
             continue
         target_help = (f"{m['unit']} to size for -- the {m['name']} sizing's "
                        f"target, in its own unit")
         if m["baseline"] is None:
-            # No measured per-pod figure, so the target is stated rather than
-            # sized from. Off `baseline`, because that is what says so.
             target_help += (f". Stated in the plan and not sized from: how "
                             f"many {m['unit']} one {m['pod']} carries has not "
                             f"been measured, and nothing is assumed in its "
@@ -915,23 +650,23 @@ def main():
                         dest=m["figure_field"], metavar="N",
                         help=f"{m['figure_unit']} (default about "
                              f"{m['baseline']} for the "
-                             f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                             f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled "
+                             f"{footprint.ENGINE_DEFAULT_CPU} CPU / "
+                             f"{footprint.ENGINE_DEFAULT_MEM} engine, scaled "
                              f"from there). An estimate from the account "
                              f"owner, not a measurement")
     pl.add_argument("--vus-per-engine", dest="vus_per_engine",
                     help=f"virtual users one engine carries (BlazeMeter's "
                          f"`threadsPerEngine`). Default is what an engine of "
                          f"the chosen size is rated for -- "
-                         f"{api.DEFAULT_THREADS_PER_ENGINE} for the "
-                         f"{gen_mod.ENGINE_DEFAULT_CPU} CPU / "
-                         f"{gen_mod.ENGINE_DEFAULT_MEM} engine, scaled from "
+                         f"{footprint.DEFAULT_THREADS_PER_ENGINE} for the "
+                         f"{footprint.ENGINE_DEFAULT_CPU} CPU / "
+                         f"{footprint.ENGINE_DEFAULT_MEM} engine, scaled from "
                          f"there. Your script decides the real number: measure "
                          f"it against one engine and re-run this")
     pl.add_argument("--engine-cpu-limit", dest="engine_cpu_limit",
-                    help=f'engine CPU limit (default {gen_mod.ENGINE_DEFAULT_CPU})')
+                    help=f'engine CPU limit (default {footprint.ENGINE_DEFAULT_CPU})')
     pl.add_argument("--engine-mem-limit", dest="engine_mem_limit",
-                    help=f'engine memory limit (default {gen_mod.ENGINE_DEFAULT_MEM})')
+                    help=f'engine memory limit (default {footprint.ENGINE_DEFAULT_MEM})')
     pl.add_argument("--agents",
                     help="agents that will serve this location (default 1). "
                          "BlazeMeter's `slots` is engines per *agent*, so the "
@@ -959,11 +694,7 @@ def main():
     cl.add_argument("--workspace-id", type=int)
     cl.add_argument("--workspace-name", help="case-insensitive substring, must match one")
     cl.add_argument("--name", required=True)
-    cl.add_argument("--func-ids", nargs="+", default=["performance"])
-    # The minimums are read out of core rather than written here: BlazeMeter
-    # refuses the create outright below one (#159), and the flag is where
-    # somebody reads what to type before typing it. Generated from the table so
-    # a second entry reaches the terminal with no edit here.
+    cl.add_argument("--func-ids", nargs="+", default=list(api.DEFAULT_FUNC_IDS))
     cl.add_argument("--slots", type=int, default=1,
                     help="concurrent engines this location's agent may run "
                          "(default 1); "
@@ -971,9 +702,9 @@ def main():
                              f"{r['label']} needs at least {r['minimum']}"
                              for r in core.SLOT_MINIMUMS.values()))
     cl.add_argument("--threads-per-engine", type=int,
-                    default=api.DEFAULT_THREADS_PER_ENGINE,
+                    default=footprint.DEFAULT_THREADS_PER_ENGINE,
                     help=f"max threads per engine (default "
-                         f"{api.DEFAULT_THREADS_PER_ENGINE}); a location with "
+                         f"{footprint.DEFAULT_THREADS_PER_ENGINE}); a location with "
                          f"this unset cannot start tests")
     cl.set_defaults(fn=cmd_create_location)
 
@@ -982,10 +713,7 @@ def main():
     dl.add_argument("--harbor-id", required=True)
     dl.set_defaults(fn=cmd_delete_location)
 
-    # `create-ship` kept as an alias: it is in the README, in docs/live-test.md,
-    # and in whatever a customer copied out of them. `ship` is the account's
-    # field name (ship_id) and nothing more -- one deployment inside a private
-    # location is an agent, which is what this creates.
+    # `create-ship` stays as an alias: it is in docs and customer scripts.
     cs = sub.add_parser("create-agent", aliases=["create-ship"],
                         help="create an agent, print id + AUTH_TOKEN")
     cs.add_argument("--api-key", required=True)
@@ -995,9 +723,7 @@ def main():
 
     f = sub.add_parser("facts", help="gather account facts -> facts.json")
     f.add_argument("--api-key")
-    # Not required by argparse any more, because --manual takes it blank: the
-    # gather branch checks for it and says so (cmd_facts), which is one message
-    # about which branch you are on rather than argparse refusing both.
+    # Not argparse-required: --manual takes it blank, and cmd_facts says so.
     f.add_argument("--harbor-id")
     f.add_argument("--manual", action="store_true",
                    help="build facts from the ids BlazeMeter shows you, without "
@@ -1008,10 +734,11 @@ def main():
                    help="the agent, with --manual. Leave either id out and the "
                         "bundle carries <HARBOR_ID>/<SHIP_ID> and names them -- "
                         "for a location BlazeMeter has not issued ids for yet")
-    f.add_argument("--func-ids", dest="func_ids", nargs="+", default=["performance"],
+    f.add_argument("--func-ids", dest="func_ids", nargs="+",
+                   default=list(api.DEFAULT_FUNC_IDS),
                    help="with --manual: the location's functionalities, which "
-                        "decide "
-                        "which images the bundle names (default: performance)")
+                        "decide which images the bundle names (default: "
+                        "performance)")
     f.add_argument("-o", "--output", default="facts.json")
     f.set_defaults(fn=cmd_facts)
 
@@ -1031,7 +758,7 @@ def main():
                         "already in -o, or stays the placeholder")
     g.add_argument("--profile", help="JSON options file (see profiles/)")
     g.add_argument("--format", dest="output_format",
-                   choices=list(gen_mod.OUTPUT_FORMATS),
+                   choices=list(bundle_options.OUTPUT_FORMATS),
                    help="manifests (default): flat YAML to kubectl apply. "
                         "helm: a chart in helm/ with values.yaml filled in from "
                         "the account -- both render the same objects. docker: a "
@@ -1040,9 +767,7 @@ def main():
                         "and virtual services are published by hostname rather "
                         "than by ingress")
     g.add_argument("--platform", choices=["openshift", "k8s"])
-    # The posture above is not the product: it installs on vanilla Kubernetes
-    # too. Only the negative has a flag, because the default posture is
-    # OpenShift's and so is the default cluster.
+    # Only the negative has a flag: the default posture and cluster are OpenShift's.
     g.add_argument("--not-openshift", dest="openshift_cluster",
                    action="store_false", default=None,
                    help="the SCC-friendly posture on a cluster that is not "
@@ -1058,9 +783,7 @@ def main():
                         "already running on it keeps working")
     g.add_argument("--private-registry", dest="private_registry")
     g.add_argument("--pull-secret", dest="pull_secret")
-    # Tri-state so profile.json records which of the two a bundle asked for,
-    # but both unset and --no-auto-update resolve the same way now: off. See
-    # generate.auto_update for why the default departs from BlazeMeter's.
+    # Tri-state so profile.json records which one a bundle asked for.
     au = g.add_mutually_exclusive_group()
     au.add_argument("--auto-update", dest="auto_update", action="store_true",
                     default=None,
@@ -1087,10 +810,10 @@ def main():
                         "reference it from the Deployment and the RBAC subjects, "
                         "but do not emit the object")
     g.add_argument("--sv-ingress", dest="sv_ingress",
-                   choices=list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE],
+                   choices=list(service_virt.SV_INGRESS_TYPES) + [service_virt.SV_INGRESS_NONE],
                    help="service virtualization: ingress controller to publish "
                         "virtual services through (required for a mockServices "
-                        f"location, or {gen_mod.SV_INGRESS_NONE} to generate such "
+                        f"location, or {service_virt.SV_INGRESS_NONE} to generate such "
                         "a location for performance testing alone)")
     g.add_argument("--sv-subdomain", dest="sv_subdomain", metavar="DOMAIN",
                    help="wildcard domain your ingress controller serves, e.g. apps.example.com")
@@ -1099,10 +822,7 @@ def main():
                         "default; required even for HTTP")
     g.add_argument("--sv-istio-gateway", dest="sv_istio_gateway", metavar="NAME",
                    help="istio only, optional: reuse this Gateway instead of one per service")
-    # The docker agent's own way of publishing the same thing. The two PEMs are
-    # files here and content in the option, exactly as --ca-bundle is: a path on
-    # a command line is convenient, a path in the *option* would mean a bundle
-    # could not be generated for a host nobody here can see.
+    # The docker agent's own way of publishing virtual services.
     g.add_argument("--sv-hostname", dest="sv_hostname", metavar="HOST",
                    help="docker only: HOSTNAME_OVERRIDE -- the hostname this "
                         "agent advertises its virtual services under")
@@ -1199,7 +919,7 @@ def main():
     e.add_argument("--ingress-class", dest="ingress_class",
                    help="IngressClass to put on the Ingress. Defaults to nginx; "
                         "on OpenShift use openshift-default and no alias is needed")
-    e.add_argument("-o", "--output", default=gen_mod.SV_EXPOSE_FILE)
+    e.add_argument("-o", "--output", default=bundle_names.SV_EXPOSE_FILE)
     e.set_defaults(fn=cmd_sv_expose)
 
     d = sub.add_parser("doctor", help="can this cluster run the location's concurrency?")
@@ -1307,16 +1027,15 @@ def main():
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "
                         "knowing whether the rig can fail at all)")
-    t.add_argument("--ca-mode", choices=livetest.RIG_CA_MODES,
+    t.add_argument("--ca-mode", choices=bundle_check.RIG_CA_MODES,
                    help="with --local-proxy: which CA-trust configuration to "
                         "deploy. 'inline' writes the MITM CA into a ConfigMap "
                         "the generator owns; 'existing' has the rig create one "
                         "under a name of its own and the bundle only reference "
-                        "it; 'file' is what the page now generates -- the "
-                        "bundle names a certificate file and creates no "
-                        "ConfigMap, and the rig builds it the way a customer's "
-                        "pipeline does. Default: the mode the bundle was "
-                        "generated for, else inline")
+                        "it; 'file' -- the bundle names a certificate file and "
+                        "creates no ConfigMap, and the rig builds it the way a "
+                        "customer's pipeline does. Default: the mode the bundle "
+                        "was generated for, else inline")
     t.add_argument("--proxy-auth", metavar="USER:PASS", default="bzm:s3cr3t",
                    help="credentials the local proxy demands ('none' for an open "
                         "proxy); they get URL-encoded into HTTP(S)_PROXY")
@@ -1351,13 +1070,8 @@ def main():
     try:
         a.fn(a)
     except core.CoreError as e:
-        # One place turns a refusal into an exit, for the same reason
-        # `server._answer` is the only thing that turns one into an
-        # HTTPException: a CoreError is already a sentence written for whoever
-        # ran the command, and a traceback around it only buries it. Commands
-        # that need to print something *before* exiting still catch it
-        # themselves -- `create-agent` does, so the agent it just made is
-        # reported whatever the token endpoint answers.
+        # The one place a core refusal becomes an exit: it is already a
+        # sentence for whoever ran the command.
         sys.exit(str(e))
 
 

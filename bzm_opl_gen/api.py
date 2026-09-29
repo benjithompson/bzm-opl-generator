@@ -9,31 +9,18 @@ import re
 import urllib.error
 import urllib.request
 
-API_BASE = "https://a.blazemeter.com/api/v4"
+from .footprint import API_BASE, DEFAULT_THREADS_PER_ENGINE
 
-# Max threads one engine will run. A location with this unset cannot start a
-# test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
-DEFAULT_THREADS_PER_ENGINE = 500
-
-# Hosts only an engine talks to: results and artifact upload. Crane itself uses
-# a.blazemeter.com. A fact about the product, so it lives here with the API host
-# rather than in the live-test rig, which is where it was first needed -- the
-# planner has to name the egress a cluster will need and cannot import the rig
-# to find out, and doctor probes the same three hosts.
-ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+# The funcIds a location is created with, or manual facts are built for, when
+# the caller names none.
+DEFAULT_FUNC_IDS = ("performance",)
 
 
 class BzmApiError(RuntimeError):
     """A call BlazeMeter refused, with the HTTP status where there was one.
 
-    `status` is None for the failures that are not a status at all -- an
-    `{"error": ...}` body, a command with no token in it -- and a reader must
-    not read that as a code it can judge. It exists because a caller deciding
-    whether the *next* call could go differently needs the code rather than the
-    sentence: 401/403/404 are properties of the token or of what was asked for,
-    and re-issuing per item is a loop that cannot succeed. Parsing "HTTP 403"
-    back out of the message would be the same fact stated twice, in the place
-    least able to be right about it.
+    `status` is None for failures that carry no status (an `{"error": ...}`
+    body, a network failure); do not read that as a code.
     """
 
     def __init__(self, message, status=None):
@@ -56,14 +43,8 @@ KEY_FILE_SHAPE = ('a JSON object with the id and secret of a BlazeMeter API '
 def read_key_file(path):
     """The (id, secret) in an api-key.json, or ValueError saying what was wrong.
 
-    A read and a refusal, and no exit: there used to be a `_or_exit` wrapper
-    beside this for the commands, and the constructor below called it, which
-    put a SystemExit inside a construction a server makes. #95 removed both, so
-    this is the only read of a key file and its caller decides what a bad one
-    means. Every way it can fail is a ValueError, and that is the contract
-    rather than a tidiness: `core.client_from_key` turns exactly that into a
-    refusal, so anything escaping as another type escapes as itself, past a
-    route's `except CoreError`, into a 500 with a traceback in it.
+    Every failure is a ValueError: `core.client_from_key` turns exactly that
+    into a refusal, and any other type would escape a route as a 500.
     """
     try:
         with open(path) as f:
@@ -71,13 +52,10 @@ def read_key_file(path):
     except FileNotFoundError:
         raise ValueError(f"no API key file at '{path}'. It is {KEY_FILE_SHAPE}")
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        # A binary file decodes before it parses, so UnicodeDecodeError is the
-        # same answer arriving one step earlier -- and it is a ValueError only
-        # by inheritance, with a message about codecs rather than about keys.
+        # A binary file fails to decode before it fails to parse.
         raise ValueError(f"API key file '{path}' is not valid JSON: {e}")
     except OSError as e:
-        # A directory, a mode nobody can read, a dead symlink: `--api-key
-        # ~/.config/bzm-opl-gen` is one keystroke from the path that works.
+        # A directory, an unreadable mode, a dead symlink.
         raise ValueError(f"could not read API key file '{path}': {e}")
     if not isinstance(d, dict) or not d.get("id") or not d.get("secret"):
         raise ValueError(f"API key file '{path}' needs both \"id\" and "
@@ -87,34 +65,17 @@ def read_key_file(path):
 
 class BzmClient:
     def __init__(self, *, credentials):
-        """An (id, secret) pair, read from wherever the caller found it.
-
-        A pair and nothing else, keyword-only, so that a path cannot be handed
-        to this at all. It used to take one and read it here, and that read
-        raised SystemExit -- right for a command, fatal for a long-running
-        server, because a BaseException is not stopped by a tool wrapper's or a
-        route's `except Exception` and takes the process down with it. #95
-        removed the branch rather than leaving it for a caller to avoid:
-        `core.client_from_key` is the one construction, it reads the file with
-        `read_key_file` above, and it refuses with a CoreError that every
-        surface already knows how to report.
-        """
+        """An (id, secret) pair. Keyword-only so a path cannot be passed:
+        `core.client_from_key` is the one construction that reads key files."""
         key_id, secret = credentials
-        # Public, and the one half of the pair that is: the page names the key
-        # it is connected with, and re-reading the file for it was three more
-        # reads of a file this construction already parsed.
         self.key_id = key_id
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 
     def _send(self, req, label, timeout):
-        """One round trip, every failure a BzmApiError.
+        """One round trip; every failure is a BzmApiError.
 
-        Not only HTTPError: a DNS failure, a refused connection, a timeout and
-        a body that is not the API's JSON envelope (a proxy's HTML page) are
-        all BlazeMeter not answering, and anything escaping as its own type
-        goes past `core._upstream` into a 500 on the page and a withheld
-        message in an MCP session. `status` stays None for those -- there was
-        no status to judge.
+        Network failures and a non-JSON body (a proxy's HTML page) included,
+        with `status` None, so nothing escapes `core._upstream` as its own type.
         """
         req.add_header("Authorization", "Basic " + self._auth)
         try:
@@ -179,41 +140,14 @@ class BzmClient:
         return self.get("/accounts?limit=1000")
 
     def workspaces(self, account_id):
-        """The account's workspaces, asked for in one big page.
-
-        Still a page, and the same failure returns above 1000 -- but the
-        endpoint honours `offset`, so the day an account has more this becomes
-        a loop rather than a bigger number. (`private-locations` cannot: it
-        ignores `offset`, which is why that one asks for 1000 and stops.)
-
-        The limit was 100, which is a real account's *middle*: one measured at
-        166, and the missing 66 held 105,270 rated VUs -- 40% of it. It
-        cost nothing visible for a long time because a truncated list only
-        looks short, and the workspace you wanted was usually in it. What
-        showed it was the account-capacity bar, which draws segments that have
-        to add up to the account total: two fifths of the account turned up in
-        a segment for locations whose workspace nobody had listed.
-        """
+        """The account's workspaces in one big page: real accounts hold more
+        than 100, and a truncated list only looks short."""
         return self.get(f"/workspaces?accountId={account_id}&limit=1000")
 
     def functionalities(self, account_id):
-        """What this account is entitled to, and what BlazeMeter calls each one.
-
-        The funcId vocabulary, from the account rather than from a table here:
+        """The account's funcId vocabulary and display names:
         `{"additionalSpace": N, "functionalities": [{"funcId", "size",
-        "displayName", "subFunctionalities"?}]}`. It is the authority on both
-        halves of the question a location's `funcIds` poses -- which exist, and
-        what they are called -- and it disagrees with a hand-written list in
-        both directions: real accounts serve funcIds this repo never listed
-        (tdm, dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle)
-        and no longer serve `functionalApi`, which locations created years ago
-        still carry.
-
-        `subFunctionalities` (functionalGui's 117 browser pins) is passed
-        through untouched -- nothing reads it yet.
-
-        Not paginated: it is an entitlement list, tens of entries at most.
-        """
+        "displayName", "subFunctionalities"?}]}`. Not paginated."""
         return self.get(f"/accounts/{account_id}/functionalities")
 
     def private_location(self, harbor_id):
@@ -222,20 +156,9 @@ class BzmClient:
     def ship_versions(self, harbor_id, ship_id):
         """The images this location is configured to run, and their versions.
 
-        `{"resources": {<resource id>: {dockerTag, version, imageRelativePath,
-        dockerRegistry, restartPolicy, minSlots, ...}}}`. It is the same call
-        crane makes at startup -- a dead token answers it 404, which is the
-        `Sleeping for 300` failure -- so the answer is what the agent will
-        actually pull, not what somebody thought it would.
-
-        **It needs no live agent.** Read against agents in state `empty` that
-        had never been online, which is what makes it usable at the moment a
-        bundle is generated: the funcIds decide the set, so a performance
-        location answers with three images and a GUI one names the exact browser
-        build its browser funcIds pin.
-
-        Per agent rather than per location because that is the route BlazeMeter
-        serves; every agent in a location answered identically.
+        `{"resources": {<resource id>: {dockerTag, version, ...}}}`. The call
+        crane makes at startup, so it is what the agent will pull; it answers
+        for an agent that has never been online.
         """
         return self.get(f"/private-locations/{harbor_id}/ships/{ship_id}/versions")
 
@@ -247,7 +170,7 @@ class BzmClient:
         return self.get(f"/private-locations?{scope}&limit=1000")
 
     def create_private_location(self, name, account_id, workspace_ids,
-                                func_ids=("performance",), slots=1,
+                                func_ids=DEFAULT_FUNC_IDS, slots=1,
                                 threads_per_engine=DEFAULT_THREADS_PER_ENGINE):
         h = self.post("/private-locations", {
             "name": name,
@@ -256,9 +179,8 @@ class BzmClient:
             "funcIds": list(func_ids),
             "slots": slots,
         })
-        # POST ignores threadsPerEngine, so a freshly created location has it
-        # null and every test start fails with 403 "Not enough available
-        # resources". PATCH it into a runnable state before handing it back.
+        # POST ignores threadsPerEngine, and a location without it 403s every
+        # test start, so PATCH it in before handing the location back.
         return self.update_private_location(
             h["id"], slots=slots, threads_per_engine=threads_per_engine)
 
@@ -267,23 +189,9 @@ class BzmClient:
                                 override_cpu=None, override_memory=None):
         """PATCH the location's settings. Only what is passed is sent.
 
-        No `funcIds`. This PATCH replaces the list wholesale, so a caller that
-        meant to add a functionality drops every other one the location runs; it
-        used
-        to take them, additively, for core.add_func_id, and that went with the
-        page affordance that was its only caller (#113). What a location runs is
-        what it *is*, and BlazeMeter's own UI is where it changes. Leaving the
-        parameter here would be the wholesale-replace hazard with nothing left
-        guarding it.
-
-        `override_cpu` / `override_memory` are the engine pod's CPU and memory
-        *requests* (memory in MB), which the scheduler and the autoscaler place
-        on -- see generate.ENGINE_DEFAULT_REQUEST_CPU for why they matter more
-        than they look. They are read back from the location by facts.gather,
-        so the field names are known; that BlazeMeter accepts them on a PATCH
-        is not something this repo has proved on every account, which is why
-        core.update_location re-reads and reports what actually changed rather
-        than assuming the body was honoured.
+        Takes no `funcIds`: this PATCH replaces that list wholesale, and what a
+        location runs is changed in BlazeMeter's own UI. `override_cpu` /
+        `override_memory` are the engine pod's requests (memory in MB).
         """
         body = {}
         if slots is not None:
@@ -314,8 +222,7 @@ class BzmClient:
         private locations as 'harbor-<harborId>'.
 
         Returns None for a taurus-script test, whose locations live in the
-        uploaded YAML: patching executions there is silently ignored, so
-        pretending it worked would be a lie the caller acts on."""
+        uploaded YAML: an executions PATCH there is silently ignored."""
         t = self.test(test_id)
         if not t.get("executions"):
             return None
@@ -325,12 +232,8 @@ class BzmClient:
         pct = {f"harbor-{harbor_id}": 100}
 
         def repoint(execs):
-            out = []
-            for e in execs or []:
-                e = dict(e, locations=loc, locationsPercents=pct,
-                         concurrency=concurrency)
-                out.append(e)
-            return out
+            return [dict(e, locations=loc, locationsPercents=pct,
+                         concurrency=concurrency) for e in execs or []]
 
         self.update_test(test_id, {
             "executions": repoint(before["executions"]),
@@ -338,9 +241,8 @@ class BzmClient:
         })
         return before
 
-    # A 1-VU Taurus scenario that makes real HTTP requests. A dummy-sampler
-    # script exercises none of the engine's egress, so it cannot show whether
-    # engines can reach a target at all -- or whether they honour the proxy.
+    # A 1-VU Taurus scenario that makes real HTTP requests: a dummy-sampler
+    # script exercises none of the engine's egress or its proxy settings.
     SMOKE_SCRIPT = """execution:
 - concurrency: 1
   hold-for: 60s
@@ -360,9 +262,8 @@ scenarios:
                           filename="opl-smoke.yml"):
         """Create a runnable 1-VU/1-min Taurus test on a private location.
 
-        The location goes in the YAML, not in the test's `executions`: for a
-        taurus-script test the API silently drops an executions PATCH, because
-        the script is the load configuration."""
+        The location goes in the YAML: for a taurus-script test the API
+        silently drops an executions PATCH."""
         t = self.post("/tests", {
             "name": name,
             "projectId": project_id,
@@ -407,7 +308,8 @@ scenarios:
         return self.post(f"/private-locations/{harbor_id}/ships/{ship_id}/docker-command")
 
     def auth_token(self, harbor_id, ship_id):
-        """The AUTH_TOKEN the agent needs, extracted from the install command."""
+        """The AUTH_TOKEN the agent needs, extracted from the install command.
+        Issuing it revokes the previous one."""
         r = self.docker_command(harbor_id, ship_id)
         cmd = r["dockerCommand"] if isinstance(r, dict) else r
         return parse_auth_token(cmd)

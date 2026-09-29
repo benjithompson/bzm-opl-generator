@@ -8,6 +8,7 @@ the node count has to survive every refactor that touches the wording.
 """
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -20,26 +21,34 @@ from test_core import _imports  # noqa: E402
 # -- what it is allowed to reach --------------------------------------------
 
 def test_plan_reaches_nothing():
-    """The requirement, asserted rather than described.
+    """The planner sizes a cluster for somebody with no cluster, no account and
+    no evidence file, so nothing it imports, directly or transitively, may be a
+    client for any of them.
 
-    "Reaches nothing" was prose in CLAUDE.md while core's equivalent rule was
-    an AST assertion, and prose is what the fifth recurrence of a rule is made
-    of. Anything that reads an account, a cluster or a file puts the *first*
-    step behind a later one, for the one user who has none of them.
-
-    `api` and `generate` are allowed and named: the planner takes constants
-    from them -- the API host for the egress list, the engine footprint and
-    node overhead doctor judges against -- and importing a constant is not
-    reaching anything. `client`, `facts`, `doctor` and `livetest` are not.
+    Checked over the whole import closure in a fresh interpreter: a direct
+    import list passed while plan reached the API client through the module
+    it took its constants from. The direct list is kept too, for the message.
     """
     imported = _imports(plan.__file__)
     reaching = imported & {"subprocess", "urllib", "http", "socket", "os",
                            "facts", "doctor", "livetest", "core", "kubectl",
-                           "requests", "json"}
+                           "requests", "json", "api", "generate"}
     assert not reaching, (
         f"plan imports {sorted(reaching)} -- it sizes a cluster for somebody "
         f"who has no cluster, no account and no evidence file, so every one of "
         f"those is a dependency that puts the first step behind a later one")
+
+    banned = ["bzm_opl_gen.api", "bzm_opl_gen.facts", "bzm_opl_gen.generate",
+              "bzm_opl_gen.cert", "urllib.request", "http.client",
+              "subprocess", "cryptography"]
+    code = ("import sys, bzm_opl_gen.plan\n"
+            f"print(' '.join(m for m in {banned!r} if m in sys.modules))")
+    root = os.path.join(os.path.dirname(__file__), "..")
+    out = subprocess.run([sys.executable, "-c", code], cwd=root, check=True,
+                         capture_output=True, text=True).stdout.split()
+    assert not out, (
+        f"importing plan loads {out} -- every module it needs has to be one "
+        f"that reaches nothing (footprint, bundle_options, quantity)")
 
 
 # -- the arithmetic ---------------------------------------------------------

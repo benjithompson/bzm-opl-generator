@@ -13,12 +13,10 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from bzm_opl_gen import core, generate, server, ui_build  # noqa: E402
+from bzm_opl_gen import core, server, ui_build  # noqa: E402
 from test_generate import FACTS  # noqa: E402
-# The same fakes tests/test_core.py and tests/test_cli.py drive, for the same
-# reason they share them: three surfaces call the same core functions, and a
-# fake per suite is how two of them end up disagreeing about what an account
-# answers. `calls` is what makes "nothing was minted" assertable at all.
+# The fakes shared with tests/test_core.py and tests/test_cli.py; `calls` is
+# what makes "nothing was minted" assertable.
 from test_core import FakeClient, RefusingClient  # noqa: E402
 
 client = TestClient(server.app)
@@ -27,20 +25,8 @@ client = TestClient(server.app)
 def connect(monkeypatch, account):
     """Put this server process in the state of being connected as `account`.
 
-    The one place this suite stands in at, and it is `server._state` rather
-    than `core.client_from_key` -- which is where tests/test_cli.py and
-    tests/test_mcp.py stand in -- because those two build a client per call and
-    this one does not. A browser session connects once, over `POST /api/key`,
-    and every route afterwards acts as whatever that left in the process; the
-    fact under test in most of what follows is "this server is connected as X",
-    which is a fact about the server and has no equivalent in core. Patching
-    the construction here would leave the state item set to None and every
-    route 401ing before core was reached.
-
-    A function rather than twenty `setitem` calls so that if that ever stops
-    being true there is one place to change. The key-lifecycle tests below set
-    the item directly on purpose: there _state is the subject, not the stand-in.
-    """
+    Stands in at `server._state`, not `core.client_from_key`: a browser session
+    connects once and every route acts as what that left in the process."""
     monkeypatch.setitem(server._state, "client", account)
     return account
 
@@ -90,9 +76,7 @@ def test_generate_zip_helm_keeps_the_chart_directory():
 
 
 def test_generate_helm_serves_a_service_virtualization_location():
-    """This was a 400 until the chart grew an ingress. It is the route the page
-    reaches for a location that serves mock services, so the answer arriving as
-    a bundle rather than as an error is what the segment being offered means."""
+    """A helm bundle for a service-virtualization location renders."""
     facts = dict(FACTS, func_ids=["mockServices"])
     r = client.post("/api/generate", json={
         "facts": facts,
@@ -118,17 +102,13 @@ def test_manual_facts_need_no_api_key():
 
 
 def test_manual_facts_need_no_ids_either():
-    """The location that does not exist yet: a customer needs the manifests to
-    get one approved, and BlazeMeter has issued neither id. Blank is the marker
-    rather than a 422 -- the page's two boxes are optional, and this route is
-    what they post to."""
+    """Manual facts take both ids blank and answer the markers, not a 422."""
     r = client.post("/api/facts/manual", json={"func_ids": ["performance"]})
     assert r.status_code == 200
     f = r.json()["facts"]
-    assert f["harbor_id"] == generate.marker("harbor_id")
-    # The agent the page reads back out of this answer. It has to be the marker
-    # rather than "", or the page has no agent at all and previews nothing.
-    assert f["ships"][0]["id"] == generate.marker("ship_id")
+    assert f["harbor_id"] == markers.marker("harbor_id")
+    # The page reads its agent back out of this answer, so it is the marker.
+    assert f["ships"][0]["id"] == markers.marker("ship_id")
 
 
 def test_manual_facts_flag_the_gui_image_gap():
@@ -138,10 +118,7 @@ def test_manual_facts_flag_the_gui_image_gap():
 
 
 def test_manual_facts_generate_without_a_token_fetch():
-    """The typed token is the bundle's, and a key left over from an earlier
-    connect must not be asked for one belonging to somebody else's agent. Free
-    now that no route mints unasked, and asserted anyway: this mode is where a
-    stray mint would be least visible, since there is no agent on screen."""
+    """Manual facts with a typed token mint nothing, even with a key connected."""
     facts = client.post("/api/facts/manual", json={
         "harbor_id": "H1", "ship_id": "S1", "func_ids": ["performance"]}).json()["facts"]
     r = client.post("/api/generate", json={
@@ -154,29 +131,19 @@ def test_manual_facts_generate_without_a_token_fetch():
 
 
 # -- what a download does to a running agent's credential ----------------------
-# The UI half of #64. Which of the four branches a token arrives by is core's
-# rule and is tested in tests/test_core.py; what these pin is that no route here
-# takes the one that mints unless it was asked to, and that the answer says which
-# one it took. The download button was the last caller that rotated a live
-# agent's credential as a side effect of being asked for a zip -- silently, and
-# the pod it broke reads as a slow boot.
+# The branch rule is core's (tests/test_core.py); these pin that no route
+# mints unless asked, and that each answer says which branch it took.
 
 @pytest.fixture
 def connected(monkeypatch):
-    """A browser session holding an API key, counting what it was asked for.
-
-    Holding one is the whole hazard: every assertion below is about a route that
-    *could* mint and must not, so a fixture with no client would pass for the
-    wrong reason.
-    """
+    """A browser session holding an API key, counting what it was asked for."""
     return connect(monkeypatch, FakeClient())
 
 
 @pytest.mark.parametrize("route", ["/api/generate", "/api/generate/zip",
                                    "/api/generate/save"])
 def test_no_route_mints_unless_it_was_asked_to(connected, route, tmp_path):
-    """All three, parametrised: the preview was already safe, and the two that
-    hand a bundle over were not. A rule that holds on one of them is the bug."""
+    """Preview, zip and save each mint nothing unless rotate_token is set."""
     r = client.post(route, json={"facts": FACTS, "out_dir": str(tmp_path / "b"),
                                  "options": {"namespace": "ns1"}})
     assert r.status_code == 200
@@ -185,10 +152,8 @@ def test_no_route_mints_unless_it_was_asked_to(connected, route, tmp_path):
 
 def test_the_preview_can_say_a_save_would_reuse_the_folder_s_token(
         connected, tmp_path):
-    """The preview took no out_dir, so its branch could never be `reused` -- and
-    the page reported "placeholder, fill it in before applying" over a folder
-    whose own token a save was about to keep. Misleading in the one direction
-    that matters: it invites a rotation nothing needed."""
+    """The preview reads out_dir, so it can report the `reused` branch a save
+    would take."""
     out = str(tmp_path / "bundle")
     ship = FACTS["ships"][0]["id"]
     client.post("/api/generate/save", json={
@@ -204,12 +169,7 @@ def test_the_preview_can_say_a_save_would_reuse_the_folder_s_token(
 
 def test_a_folder_it_will_refuse_is_refused_before_anything_is_issued(
         connected):
-    """The save route resolved the token first and hit the relative-path refusal
-    afterwards, so a rotation that was then thrown away had already killed the
-    running agent -- the exact failure #64 exists to prevent, on the one surface
-    that had no guard. `require_absolute_out_dir` says so itself, and the MCP
-    already ordered it this way; this is the missing half of "one copy of the
-    rule, two moments"."""
+    """A relative save folder is refused before any token is issued."""
     r = client.post("/api/generate/save", json={
         "facts": FACTS, "out_dir": "some/relative/dir", "rotate_token": True,
         "options": {"namespace": "ns1", "ship_id": FACTS["ships"][0]["id"]}})
@@ -218,18 +178,14 @@ def test_a_folder_it_will_refuse_is_refused_before_anything_is_issued(
 
 
 def test_a_page_still_asking_for_the_old_fetch_mints_nothing(connected):
-    """`fetch_token` is gone from the request model, and a browser holding the
-    previously-shipped bundle posts it on every download. Ignored rather than
-    refused: a 422 would break that page, and the field only ever meant mint."""
+    """A stale `fetch_token` field is ignored, not refused, and mints nothing."""
     r = client.post("/api/generate/zip", json={
         "facts": FACTS, "options": {"namespace": "ns1"}, "fetch_token": True})
     assert r.status_code == 200 and connected.calls == []
 
 
 def test_rotating_mints_once_and_names_whose_credential_it_replaced(connected):
-    """Once, not twice: the route resolves the token itself to report the branch
-    and then generates from the same options, so a resolution that did not stick
-    would issue two tokens and leave the bundle holding the older one."""
+    """A rotation mints once and names the ship whose credential it replaced."""
     r = client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"}, "rotate_token": True})
     assert connected.calls == [("auth_token", "aaa111", "bbb222")]
@@ -241,9 +197,7 @@ def test_rotating_mints_once_and_names_whose_credential_it_replaced(connected):
 
 
 def test_a_bundle_with_no_token_says_so_rather_than_looking_finished(connected):
-    """The default download for an agent nobody pasted a token for. It is a fine
-    bundle to read and an unusable one to apply, and the only thing standing
-    between those two readings is this sentence reaching the page."""
+    """A bundle with no token says so."""
     body = client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"}}).json()
     assert body["token"]["branch"] == core.TOKEN_PLACEHOLDER
@@ -251,13 +205,10 @@ def test_a_bundle_with_no_token_says_so_rather_than_looking_finished(connected):
 
 
 def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
-    """A zip's body is the bundle, so the branch travels beside the filename in
-    the headers -- wrapping the bytes in an envelope would mean the browser
-    saving something that is not a zip."""
+    """The zip carries the token branch and message in its headers."""
     r = client.post("/api/generate/zip", json={
         "facts": FACTS, "options": {"namespace": "ns1"}})
-    # The literals, because the frontend reads these two names off the response
-    # and a rename on one side loses the sentence silently rather than failing.
+    # Literal header names: the frontend reads these.
     assert (server.TOKEN_BRANCH_HEADER, server.TOKEN_MESSAGE_HEADER) == (
         "X-Bzm-Token-Branch", "X-Bzm-Token-Message")
     assert r.headers[server.TOKEN_BRANCH_HEADER] == core.TOKEN_PLACEHOLDER
@@ -270,10 +221,7 @@ def test_the_zip_says_in_its_headers_which_branch_it_took(connected):
 
 
 def test_the_download_extracts_to_the_folder_it_is_named():
-    """One name, held equal on the route rather than in each half: the header
-    the browser saves the file under and the directory every entry sits in. They
-    were computed apart, so a bundle downloaded as `bzm-opl-ns1.zip` extracted
-    to `bzm-opl/`, and two locations' bundles merged into one folder."""
+    """The download filename and the directory inside the zip are one name."""
     r = client.post("/api/generate/zip", json={
         "facts": FACTS, "options": {"namespace": "ns1"}})
     name = re.search(r'filename="([^"]+)"', r.headers["Content-Disposition"])[1]
@@ -284,12 +232,7 @@ def test_the_download_extracts_to_the_folder_it_is_named():
 
 
 def test_a_namespace_no_header_could_carry_does_not_fail_the_download(connected):
-    """Both this route's headers quote the namespace -- the token message does and
-    the zip's filename always did -- and a person types that into a browser. A
-    header is latin-1 by the HTTP spec and starlette raises on anything else, so
-    an unencodable character lost the whole download, which is a worse answer than
-    a mangled filename. Fixed by the route, not by the namespace: a namespace a
-    cluster would accept is an RFC 1123 label, so this is a typo either way."""
+    """A namespace no header can carry does not fail the download."""
     r = client.post("/api/generate/zip", json={
         "facts": FACTS, "options": {"namespace": "blazemeter-平"}})
     assert r.status_code == 200
@@ -303,32 +246,19 @@ BRANCHES = {core.TOKEN_GIVEN, core.TOKEN_ROTATED, core.TOKEN_REUSED,
 
 
 def test_the_four_branch_names_are_what_the_page_switches_on():
-    """frontend/src/api.ts declares this union rather than fetching it -- a closed
-    set, like Strength and MergeState -- so the four spellings are load-bearing
-    across two languages. Renamed here, one arrives in a browser as a branch no
-    sentence covers, and the compiler over there cannot see it."""
+    """The four branch names are the literals the page switches on."""
     assert BRANCHES == {"given", "rotated", "reused", "placeholder"}
 
 
 def test_the_page_declares_the_same_four_branches_this_does():
-    """Read out of the TypeScript, not restated here.
-
-    This test used to compare core's four constants against four literals and
-    say in its docstring that api.ts declared the same union -- which nothing
-    checked. A rename on either side left the other compiling: TypeScript cannot
-    see Python, and a literal in a Python test cannot see TypeScript. So the
-    union and the map that must cover it are parsed from the files themselves,
-    and this fails on whichever side moves first.
-    """
+    """frontend/src/api.ts declares the same four branches, read from the file."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     union = re.search(r"export type TokenBranch\s*=\s*([^;]+);",
                       (src / "api.ts").read_text())
     assert union, "TokenBranch union not found -- was it renamed or moved?"
     assert set(re.findall(r'"([^"]+)"', union.group(1))) == BRANCHES
 
-    # The map keyed by that union: every branch needs the sentence beside the
-    # button, and TypeScript's Record<TokenBranch, string> only enforces that
-    # against whatever the union happens to say.
+    # The map keyed by that union must cover every branch.
     carries = re.search(r"const CARRIES: Record<TokenBranch, string> = \{(.*?)\}",
                         (src / "token.ts").read_text(), re.S)
     assert carries, "CARRIES not found -- was it renamed or moved?"
@@ -336,35 +266,17 @@ def test_the_page_declares_the_same_four_branches_this_does():
 
 
 def test_the_page_spells_the_declined_ingress_the_way_generate_does():
-    """Read out of the TypeScript for the same reason as the union above.
-
-    optionGroups.ts is pure data functions -- `detect(o)` is handed options and
-    nothing else -- so the sentinel cannot arrive there from /api/sv-constants
-    the way `ingress_types` does; it is a literal, and a literal in one language
-    cannot see a constant in the other. Renamed on either side without this, the
-    switch writes a value generate() refuses and the group snaps back on, which
-    is the whole bug this option exists to fix.
-    """
-    from bzm_opl_gen import generate as gen_mod
+    """optionGroups.ts spells the declined ingress as generate does."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     m = re.search(r'export const SV_NONE = "([^"]+)"',
                   (src / "optionGroups.ts").read_text())
     assert m, "SV_NONE not found -- was it renamed or moved?"
-    assert m.group(1) == gen_mod.SV_INGRESS_NONE
+    assert m.group(1) == service_virt.SV_INGRESS_NONE
 
 
 def test_every_group_s_tag_is_a_functionality_this_server_serves():
-    """Read out of the TypeScript for the same reason again, and load-bearing
-    since #113.
-
-    A group tags itself with the functionality ids it belongs to; the ids
-    themselves are served from core.FUNCTIONALITIES and enumerated nowhere in
-    the frontend. A tag naming something not in that list was always a group on
-    no card -- and now it is worse than invisible: `notRunPatch` clears the
-    groups of a functionality the location does not run, and a functionality
-    nothing serves is never run, so the group's options would be wiped by a rule
-    nobody could see applying.
-    """
+    """Every group's functionality tag is one this server serves; an unknown tag
+    would have its options cleared by notRunPatch."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     body = re.search(r"export const OPTION_GROUPS: OptionGroup\[\] = \[(.*?)\n\];",
                      (src / "optionGroups.ts").read_text(), re.S)
@@ -373,8 +285,7 @@ def test_every_group_s_tag_is_a_functionality_this_server_serves():
                             " ".join(re.findall(
                                 r"^\s*functionalities: \[(.*?)\],$",
                                 body.group(1), re.M))))
-    # Not empty: every group being untagged would pass a subset check silently,
-    # and that is the shape a bad regex leaves behind.
+    # Not empty, so a regex that matched nothing cannot pass.
     assert tagged, "no tags found -- did the field move or get renamed?"
     assert tagged <= {f["id"] for f in core.FUNCTIONALITIES}
 
@@ -409,13 +320,7 @@ def test_a_key_that_stopped_working_reads_as_disconnected(monkeypatch):
 
 def test_connecting_with_a_malformed_key_file_refuses_without_exiting(monkeypatch,
                                                                       tmp_path):
-    """#91. The file is there, so the route's own existence check passes, and
-    what it hands over is unparseable. Read inside `api.BzmClient(path)` that
-    was a SystemExit -- a BaseException raised inside a route, which no `except
-    Exception` anywhere in the stack stops. The assertion is as much that this
-    call *returns* as that it says the right thing: an escaping SystemExit fails
-    it before status_code is reached.
-    """
+    """A malformed key file is a 400, not a SystemExit out of the route."""
     monkeypatch.setitem(server._state, "client", None)
     bad = tmp_path / "api-key.json"
     bad.write_text("not json")
@@ -429,8 +334,7 @@ def test_connecting_with_a_malformed_key_file_refuses_without_exiting(monkeypatc
 
 def test_connecting_with_a_good_key_file_still_reports_the_user(monkeypatch,
                                                                 tmp_path):
-    """The other half of #91: the happy path goes through the same
-    construction and is unchanged by it."""
+    """A good key file connects and reports the user."""
     monkeypatch.setitem(server._state, "client", None)
     monkeypatch.setitem(server._state, "key_id", None)
     key = tmp_path / "api-key.json"
@@ -445,9 +349,7 @@ def test_connecting_with_a_good_key_file_still_reports_the_user(monkeypatch,
 
 
 def _config_dir(monkeypatch, tmp_path):
-    """core's key directory, somewhere disposable. Never the real one: these
-    write a key file, and the developer running this has their own at
-    ~/.config/bzm-opl-gen/api-key.json."""
+    """core's key directory, somewhere disposable (never the developer's own)."""
     d = tmp_path / "config"
     monkeypatch.setattr(core, "CONFIG_DIR", str(d))
     monkeypatch.setattr(core, "SAVED_KEY_PATH", str(d / "api-key.json"))
@@ -459,11 +361,7 @@ def _config_dir(monkeypatch, tmp_path):
 
 def test_a_pasted_key_reaches_core_as_a_pair_and_never_the_disk(monkeypatch,
                                                                 tmp_path):
-    """#95. A key typed into the connect form has no file behind it, and this
-    route used to make one -- writing the secret to `.session-key.json`, calling
-    a constructor that took only a path, and unlinking it after. A secret on
-    disk to satisfy an argument list is worse than the argument, and since #92
-    the construction takes the pair."""
+    """A pasted key reaches core as a pair and touches no disk."""
     d = _config_dir(monkeypatch, tmp_path)
     seen = []
 
@@ -506,12 +404,7 @@ def test_disconnect_forgets_the_key_without_deleting_a_saved_one(connected, tmp_
 # -- issuing the credential once, where the agent is made ----------------------
 
 def test_creating_an_agent_issues_its_credential_with_it(connected):
-    """#64's point, and the reason the rest of the UI can stop minting: the token
-    is captured at the one moment it costs nothing, when the ship is new and has
-    no previous credential to invalidate. core.create_ship does not fetch,
-    because for an *existing* ship it would rotate one on an action whose name
-    says nothing about credentials; `bzm-opl-gen create-agent` fetches for exactly
-    this reason, and this is the same command with a browser in front of it."""
+    """Creating an agent issues its credential with it, for the new ship only."""
     body = client.post("/api/ships", json={
         "harbor_id": "aaa111", "name": "agent1"}).json()
     assert body["ship"]["id"] == "s2"
@@ -522,24 +415,19 @@ def test_creating_an_agent_issues_its_credential_with_it(connected):
 
 
 def test_an_agent_whose_credential_was_refused_is_still_reported(monkeypatch):
-    """The ship exists before the fetch, and some accounts refuse the token
-    endpoint outright. A 502 would leave the new agent's id nowhere but a browser
-    console -- and the next click creates a second agent in the same location."""
+    """A refused credential is reported beside the created agent, with a 200."""
     connect(monkeypatch, RefusingClient())
     r = client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     assert r.status_code == 200
     body = r.json()
     assert body["ship"]["id"] == "s2" and body["auth_token"] is None
     assert "could not be issued" in body["token_error"]
-    # The way on, not just the failure: a bundle takes a token that was read off
-    # the agent in the BlazeMeter UI just as happily as a fetched one.
+    # The way on: a token read off the BlazeMeter UI works as well.
     assert "auth_token" in body["token_error"]
 
 
 def test_issuing_a_token_is_its_own_route(connected):
-    """Not a flag on generate. Rotating as a side effect of asking for files is
-    what #64 took out; a route whose whole name is the action cannot be reached
-    by accident, and the page calling it has already said what it costs."""
+    """Issuing a token is its own route."""
     r = client.post("/api/ships/token",
                     json={"harbor_id": "aaa111", "ship_id": "s1"})
     assert r.status_code == 200
@@ -556,34 +444,19 @@ def test_issuing_a_token_reports_a_closed_endpoint(monkeypatch):
 
 
 # -- ...and remembering it, so a refresh does not throw it away ----------------
-# The other half of the two moments above. This app is shown a token exactly
-# where it mints one, and until #123 the browser's options were the only copy:
-# no API reads an AUTH_TOKEN back, so a reload dropped it for good and the next
-# bundle silently carried a placeholder for an agent created a minute earlier.
-# What these pin is that the store answers for the ship it was asked about and
-# for no other, and that "nothing here" never arrives looking like anything else.
+# No API reads an AUTH_TOKEN back, so the server keeps what it minted, by ship.
 
 @pytest.fixture(autouse=True)
 def _no_remembered_tokens():
-    """Every test starts having minted nothing.
-
-    Process-wide state shared between tests, like the cache below -- and worse
-    to leave lying about, because the value is a credential and the assertion
-    most of these make is that there is *not* one.
-    """
+    """Every test starts having minted nothing."""
     server._minted_tokens.clear()
     yield
     server._minted_tokens.clear()
 
 
 class TwoAgentAccount(FakeClient):
-    """An account where each agent is genuinely a different agent.
-
-    FakeClient answers `s2` to every create and one constant to every token
-    request, which is enough for the routes above and not enough here: a store
-    keyed by ship and a store holding only the last token it was shown look
-    identical against it.
-    """
+    """An account where each agent and its token are distinct, so a store keyed by
+    ship differs from one holding the last token."""
 
     def create_ship(self, harbor_id, name):
         return {"id": f"s-{name}", "name": name}
@@ -595,21 +468,17 @@ class TwoAgentAccount(FakeClient):
 
 def test_a_created_agent_s_credential_outlives_the_page_that_asked_for_it(
         connected):
-    """The whole of #123: the token is captured at creation, and a refresh used
-    to lose it because the browser held the only copy."""
+    """A token minted at creation can be read back after a page refresh."""
     client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     r = client.get("/api/ships/minted-token?ship_id=s2")
     assert r.status_code == 200
     assert r.json()["auth_token"] == "TOKEN-FROM-API"
-    # Read out of this process, not off the account: nothing reads a credential
-    # back from BlazeMeter, and a lookup that asked would be minting.
+    # Read from this process, not from the account (a read there would mint).
     assert connected.calls == [("auth_token", "aaa111", "s2")]
 
 
 def test_a_regenerated_credential_is_what_is_remembered_afterwards(connected):
-    """The second of the two moments. A store that only followed creation would
-    hand back the dead token after a Regenerate -- which applies cleanly and
-    leaves the agent at 0/1."""
+    """A regenerated credential replaces the remembered one."""
     client.post("/api/ships/token",
                 json={"harbor_id": "aaa111", "ship_id": "s1"})
     assert client.get("/api/ships/minted-token?ship_id=s1").json() == {
@@ -617,10 +486,7 @@ def test_a_regenerated_credential_is_what_is_remembered_afterwards(connected):
 
 
 def test_a_token_is_only_ever_found_under_the_ship_it_belongs_to(monkeypatch):
-    """Two agents in one location, and neither one's credential can be attached
-    to the other. By construction rather than by forgetting: the page used to
-    keep one token and clear it whenever the target moved, which is the same
-    guarantee held together by every caller remembering to let go."""
+    """A token is only ever found under the ship it belongs to."""
     connect(monkeypatch, TwoAgentAccount())
     for name in ("alpha", "bravo"):
         client.post("/api/ships", json={"harbor_id": "aaa111", "name": name})
@@ -631,20 +497,14 @@ def test_a_token_is_only_ever_found_under_the_ship_it_belongs_to(monkeypatch):
 
 
 def test_an_agent_this_app_never_minted_for_reads_as_no_token(connected):
-    """Null, and a 200 -- an agent that already existed is the ordinary case,
-    not a failure. Its token was issued once at creation and no API reads one
-    back, so the page shows the placeholder and says why."""
+    """An agent this app never minted for reads as null, with a 200."""
     r = client.get("/api/ships/minted-token?ship_id=s1")
     assert r.status_code == 200 and r.json() == {"auth_token": None}
     assert connected.calls == []
 
 
 def test_a_credential_that_was_refused_is_not_remembered_as_one(monkeypatch):
-    """The agent exists and its token does not. Storing the None would make an
-    entry meaning "asked, got nothing", which reads back as the same null the
-    ship nobody minted for gives -- and this is the codebase where those two
-    must not share a representation. There is nothing to remember, so nothing
-    is written, and the answer is the honest empty one."""
+    """A refused credential is not remembered."""
     connect(monkeypatch, RefusingClient())
     assert client.post(
         "/api/ships", json={"harbor_id": "aaa111", "name": "agent1"}
@@ -655,25 +515,19 @@ def test_a_credential_that_was_refused_is_not_remembered_as_one(monkeypatch):
 
 
 def test_a_token_typed_over_evicts_the_one_that_was_minted(connected):
-    """A pasted token wins, and has to go on winning after a reload -- otherwise
-    the remembered copy comes back and quietly replaces what was typed over it.
-    The page cannot store the pasted one instead (session.strip), so the
-    eviction is the whole mechanism."""
+    """A typed token evicts the minted one, so it is not restored after a reload."""
     client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     assert client.delete("/api/ships/minted-token?ship_id=s2").json() == {
         "forgotten": True}
     assert client.get("/api/ships/minted-token?ship_id=s2").json() == {
         "auth_token": None}
-    # Idempotent, because the field it is driven from is a controlled input and
-    # a second keystroke must not be an error.
+    # Idempotent: a second keystroke must not be an error.
     assert client.delete("/api/ships/minted-token?ship_id=s2").json() == {
         "forgotten": False}
 
 
 def test_disconnecting_forgets_every_credential_this_app_minted(monkeypatch):
-    """They were issued with the key being handed back, and they go with it and
-    with the account tree -- the same clear the page makes of everything read
-    under that key. Reconnecting offers a token for nothing."""
+    """Disconnecting forgets every minted credential."""
     connect(monkeypatch, FakeClient())
     client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
     assert server._minted_tokens
@@ -684,9 +538,7 @@ def test_disconnecting_forgets_every_credential_this_app_minted(monkeypatch):
 
 
 def test_forgetting_a_minted_token_is_not_a_write_to_the_account(monkeypatch):
-    """`_writes` is about the customer's account, and this changed nothing in
-    one. Dropping the cache here would say a location list read a moment ago had
-    been invalidated by somebody typing in a password field."""
+    """Forgetting a minted token does not drop the account cache."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
     connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
@@ -696,9 +548,7 @@ def test_forgetting_a_minted_token_is_not_a_write_to_the_account(monkeypatch):
 
 
 def test_the_store_is_addressed_by_ship_and_never_by_token():
-    """A secret in a query string is a secret in every access log between the
-    browser and here, and a lookup keyed by the value would have needed one. The
-    key to the entry is all either route takes."""
+    """Both token routes take the ship id and never the token."""
     for name in ("ship_minted_token", "ship_forget_minted_token"):
         params = inspect.signature(getattr(server, name)).parameters
         assert set(params) == {"ship_id"}, (
@@ -707,16 +557,12 @@ def test_the_store_is_addressed_by_ship_and_never_by_token():
 
 
 def test_a_remembered_credential_never_reaches_a_log_line(connected, caplog):
-    """Not a hypothetical: a print left in while debugging a store is a
-    credential in a terminal, in a screen share, and in whatever collects the
-    stdout of the LaunchAgent this runs under. The whole lifecycle, at the
-    loudest level anything here could log at."""
+    """A minted token never reaches a log line, including FastAPI's 422 echo."""
     with caplog.at_level(logging.DEBUG):
         client.post("/api/ships", json={"harbor_id": "aaa111", "name": "agent1"})
         client.get("/api/ships/minted-token?ship_id=s2")
         client.delete("/api/ships/minted-token?ship_id=s2")
-        # ...and the shape of a request that is not one, which is where FastAPI
-        # echoes the input back: the ship id is the only input there is.
+        # A malformed request, where FastAPI echoes the input back.
         missing = client.get("/api/ships/minted-token")
     assert "TOKEN-FROM-API" not in caplog.text
     assert missing.status_code == 422
@@ -724,34 +570,26 @@ def test_a_remembered_credential_never_reaches_a_log_line(connected, caplog):
 
 
 def test_no_route_here_turns_a_functionality_on_for_a_location(monkeypatch):
-    """POST /api/locations/func-id went with the affordance that was its only
-    caller (#113). What funcIds a location carries is what the location *is*,
-    and BlazeMeter's own UI is where that changes -- so a page that offered it
-    made a bundle's configuration a reason to edit the account. 404 rather than
-    a passthrough that has quietly stopped being reachable."""
+    """There is no route that writes a location's funcIds."""
     assert "/api/locations/func-id" not in {r.path for r in app_routes()}
     fake = FakeClient(harbor={"id": "aaa111", "funcIds": ["performance"]})
     connect(monkeypatch, fake)
     r = client.post("/api/locations/func-id",
                     json={"harbor_id": "aaa111", "func_id": "mockServices"})
-    # 405, not 404: the SPA catch-all claims every unmatched path for GET. What
-    # matters is the same either way -- refused, and nothing reached the account.
+    # 405, not 404: the SPA catch-all claims every unmatched GET. Either way
+    # nothing reached the account.
     assert r.status_code >= 400
     assert not [c for c in fake.calls if c[0] == "update_private_location"]
 
 
 def test_func_ids_mark_which_ones_change_the_images(monkeypatch):
-    """The create-location form needs every funcId the account offers; the
-    manual form needs only the ones that change the answer. Both read this one
-    response, so the distinction is served rather than re-derived in
-    TypeScript."""
+    """func-ids marks which funcIds change the bundle's images."""
     connect(monkeypatch, FakeClient())
     by_id = {r["id"]: r for r in
              client.get("/api/func-ids?account_id=123456").json()["choices"]}
     for f in ("performance", "mockServices", "proxyRecorder", "functionalGui"):
         assert by_id[f]["changes_images"] is True
-    # A funcId whose images no bundle selects on. Offered, because the location
-    # runs it and the page has to be able to name it -- see `covered`.
+    # A funcId whose images no bundle selects on is still offered.
     assert by_id["tdm"]["changes_images"] is False
 
 
@@ -766,25 +604,19 @@ def test_option_defaults_are_served():
 def test_option_defaults_carry_no_metadata():
     """Every key in this response becomes an option the UI submits, so a
     description or a type added here would arrive at generate() as one."""
-    from bzm_opl_gen import generate as gen_mod
-    assert set(client.get("/api/option-defaults").json()) == set(gen_mod.DEFAULT_OPTIONS)
+    assert set(client.get("/api/option-defaults").json()) == set(bundle_options.DEFAULT_OPTIONS)
 
 
 def test_option_docs_describe_every_option():
-    """Field help comes from the registry rather than a copy in TypeScript --
-    an option the UI renders with no description is one the registry is missing,
-    and that is a test failure, not a blank tooltip."""
-    from bzm_opl_gen import generate as gen_mod
+    """Every option has a description in the served docs."""
     body = client.get("/api/option-docs").json()
-    assert set(body) == set(gen_mod.DEFAULT_OPTIONS)
+    assert set(body) == set(bundle_options.DEFAULT_OPTIONS)
     assert all(e["summary"] for e in body.values())
     assert body["sv_ingress"]["choices"] == (
-        list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE])
+        list(service_virt.SV_INGRESS_TYPES) + [service_virt.SV_INGRESS_NONE])
     assert body["private_registry"]["nullable"] is True
-    # The UI must be able to tell which fields not to echo back into a form it
-    # might save. Two now, and the pairing is the point: `sv_tls_key` is a
-    # private key and is marked, while `sv_tls_cert` beside it is the
-    # certificate the agent hands to every client that connects and is not.
+    # `secret` marks what not to echo: the TLS key is secret, the certificate
+    # beside it is not.
     assert [k for k, e in body.items() if e["secret"]] \
         == ["auth_token", "sv_tls_key"]
     assert body["sv_tls_cert"]["secret"] is False
@@ -798,100 +630,56 @@ def test_generate_invalid_options_400():
 
 
 def test_sv_constants_are_served_from_the_generator():
-    """The UI renders the ingress picker and decides the SV group is mandatory
-    from these. Served rather than copied into TypeScript, so a new backend
-    cannot be added to generate() and silently miss the picker."""
-    from bzm_opl_gen import generate as gen_mod
+    """The SV vocabulary is served from the generator."""
     body = client.get("/api/sv-constants").json()
-    assert body["func_ids"] == list(gen_mod.SV_FUNC_IDS)
-    assert body["ingress_types"] == list(gen_mod.SV_INGRESS_TYPES)
+    assert body["func_ids"] == list(service_virt.SV_FUNC_IDS)
+    assert body["ingress_types"] == list(service_virt.SV_INGRESS_TYPES)
     assert "openshift" in body["ingress_types"]     # the newest one reaches the UI
-    # The decline is NOT here. It is not a backend, and this response is what
-    # the picker is built from -- offering it would be offering an ingress that
-    # is not one. Where a caller learns it is the option registry's `choices`,
-    # which is where the rest of what a value may be already lives.
-    assert gen_mod.SV_INGRESS_NONE not in body["ingress_types"]
-    assert gen_mod.SV_INGRESS_NONE in client.get(
+    # The `none` decline is not a backend, so it is not here; it is in the
+    # option registry's `choices`.
+    assert service_virt.SV_INGRESS_NONE not in body["ingress_types"]
+    assert service_virt.SV_INGRESS_NONE in client.get(
         "/api/option-docs").json()["sv_ingress"]["choices"]
-    # Kept out of option-defaults: that response is spread into the options the
-    # UI submits, and these are not options.
+    # Not in option-defaults, which the UI spreads into options.
     assert "ingress_types" not in client.get("/api/option-defaults").json()
 
 
 def test_ignored_options_are_served_from_the_generator():
-    """What the configure step hides, per format. Served for the same reason
-    the SV vocabulary is: the page would otherwise carry a second copy of two
-    dozen option keys, and a key added to the generator would go on being
-    offered for a format that drops it.
-
-    Keyed by format, and **every format has an entry** -- including the two
-    that drop nothing. That is what lets the page tell "read, and this format
-    drops nothing" from "nothing has been read", which are the same rendering
-    and different facts: a route that answered only the formats with keys would
-    hand a helm bundle the second one forever."""
-    from bzm_opl_gen import generate as gen_mod
+    """The ignored options are served per format, and every format has an entry
+    (so `{}` means read and nothing dropped)."""
     body = client.get("/api/ignored-options").json()
-    assert body == gen_mod.IGNORED_BY_FORMAT
-    assert set(body) == set(gen_mod.OUTPUT_FORMATS)
+    assert body == bundle_options.IGNORED_BY_FORMAT
+    assert set(body) == set(bundle_options.OUTPUT_FORMATS)
     # The four the page hides whole sections for.
     for key in ("namespace", "service_account_name", "node_selector",
                 "engine_cpu_limit"):
         assert body["docker"][key]
-    # ...and the table is symmetric now (#182): service virtualization is
-    # published with disjoint variables per platform, so each set is the
-    # other's ignored options and the two cluster formats have an entry that is
-    # no longer empty. The same table, read from both ends.
+    # Symmetric: each platform's SV options are the other's ignored options.
     assert body["helm"] == body["manifests"]
     for key in ("sv_hostname", "sv_tls_cert", "sv_tls_key"):
         assert body["helm"][key] and key not in body["docker"]
     for key in ("sv_ingress", "sv_subdomain", "sv_tls_secret",
                 "sv_istio_gateway"):
         assert body["docker"][key] and key not in body["helm"]
-    # Every key is a real option: a name that matched nothing would hide
-    # nothing, and would say so nowhere.
+    # Every key is a real option.
     options = set(client.get("/api/option-defaults").json())
     for fmt, table in body.items():
         assert not set(table) - options, fmt
 
 
 def test_the_page_knows_the_same_three_formats_the_generator_does():
-    """Read out of the TypeScript for the same reason as SV_NONE above.
-
-    The ids are a closed set of three and the labels beside them are UI prose
-    with no counterpart here, so the list is declared there rather than fetched
-    -- but a fourth format added to the generator and not to that file is a
-    control nobody can reach, and one removed is a segment that generates an
-    error. Neither shows up in a type.
-    """
-    from bzm_opl_gen import generate as gen_mod
+    """frontend/src/formats.ts knows the same formats as the generator."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     body = re.search(r"export const OUTPUT_FORMATS: OutputFormat\[\] = \[(.*?)\n\];",
                      (src / "formats.ts").read_text(), re.S)
     assert body, "OUTPUT_FORMATS not found -- was it renamed or moved?"
     assert tuple(re.findall(r'id: "([^"]+)"', body.group(1))) \
-        == gen_mod.OUTPUT_FORMATS
+        == bundle_options.OUTPUT_FORMATS
 
 
 def test_no_format_refuses_a_virtual_service():
-    """Every format generates the same SV configuration, and the page keeps no
-    table of the ones that do not.
-
-    This used to hold `sv.ts`'s BLOCKED_FORMATS equal to the formats that
-    raise. Two entries passed through it -- docker's until #182, helm's until
-    the chart grew the ingress env and its RBAC -- and the set is empty now, so
-    the page's table and everything reading it were deleted rather than left
-    empty: a segment that can never be disabled, a card that can never state a
-    refusal, and a correction that can never move a format.
-
-    Derived by asking the generator rather than by reading it, which is what
-    makes it the alarm for a *new* refusal: one added anywhere in generate()
-    fails here, and the fix is to put the page's answer back beside it.
-
-    #115 is why the options below carry no matching funcId. `_sv_cfg` refuses
-    on the *configuration* and never looks at the location's demand, so this is
-    the state where a format's refusal was invisible to a page reading the
-    demand alone.
-    """
+    """No format refuses a virtual service configuration, derived by calling
+    generate() per format; a new refusal fails here."""
     from bzm_opl_gen import generate as gen_mod
     facts = {"harbor_id": "aaa111", "func_ids": ["mockServices"],
              "crane_image": "example.invalid/blazemeter/crane:3.7.55",
@@ -899,38 +687,24 @@ def test_no_format_refuses_a_virtual_service():
     sv_opts = {"ship_id": "bbb222", "auth_token": "de" * 32,
                "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
                "sv_tls_secret": "wildcard-credential"}
-    for fmt in gen_mod.OUTPUT_FORMATS:
+    for fmt in bundle_options.OUTPUT_FORMATS:
         gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     assert "BLOCKED_FORMATS: Record" not in (src / "sv.ts").read_text(), \
         "the page has a blocked-format table again -- hold it equal to the " \
-        "formats generate() refuses, as this test used to"
+        "formats generate() refuses"
 
 
 def test_the_pages_copy_of_the_ignored_table_is_the_generators():
-    """The one copy of IGNORED_BY_FORMAT in TypeScript, held equal to this one.
-
-    It cannot be derived -- the authority is Python and the page's tests run
-    without a server -- so it is a fixture, and a fixture of a table is a table
-    free to go stale. Two of them already had: formats.test.ts and App.test.tsx
-    carried slices that differed by five keys, so the page test asserted against
-    a table the unit test would have called incomplete. Now there is one, and
-    this is what keeps it honest.
-
-    Compared per format, empties included, because that is where the fixture
-    can now be wrong in a way no page test would notice: a format left out of
-    the fixture is handed to the page as the one state that means "nothing has
-    been read", and every assertion about it still passes.
-    """
-    from bzm_opl_gen import generate as gen_mod
+    """fixtures.ts's copy of IGNORED_BY_FORMAT equals the generator's, per format
+    and empties included."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const IGNORED_BY_FORMAT: "
                      r"Record<string, Record<string, string>> = \{"
                      r"(.*?)\n\};", text, re.S)
     assert body, "IGNORED_BY_FORMAT not found -- was it renamed or moved?"
-    # Two indents: a format at 2 spaces, its option keys at 4. The continuation
-    # lines of a wrapped reason start with `+`, which is not a key.
+    # A format at 2 spaces, its option keys at 4; `+` lines continue a reason.
     found, table = {}, None
     for line in body.group(1).splitlines():
         empty = re.match(r"  (\w+): \{\},?$", line)
@@ -943,24 +717,12 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
         elif key and table is not None:
             table.add(key.group(1))
     assert found == {fmt: set(keys)
-                     for fmt, keys in gen_mod.IGNORED_BY_FORMAT.items()}
+                     for fmt, keys in bundle_options.IGNORED_BY_FORMAT.items()}
 
 
 def test_the_marker_rule_is_one_rule_in_both_languages():
-    """The page writes a marker into what it sends and the generator recognises
-    it coming back, so a marker that differed by a character would be carried
-    into the bundle as a value somebody meant -- silently, and in the one field
-    nobody filled in.
-
-    A **rule**, not a string, since #244: the marker names its own field, so
-    there is nothing to compare unless both sides are asked the same question.
-    `fixtures.ts` carries the worked examples for exactly that -- the page's own
-    test asserts its `marker` against them and this asserts `generate.marker`
-    against the same ones, so neither side can change the rule alone. Not served
-    like IGNORED_BY_FORMAT, because the page has to write a marker before any
-    response has arrived.
-    """
-    from bzm_opl_gen import generate as gen_mod
+    """The marker rule agrees between markers.marker and the worked examples in
+    fixtures.ts that the page's own tests use."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const MARKER_EXAMPLES: Record<string, string> "
@@ -968,53 +730,31 @@ def test_the_marker_rule_is_one_rule_in_both_languages():
     assert body, "MARKER_EXAMPLES not found -- was it renamed or moved?"
     found = dict(re.findall(r'^  "?([\w.]+)"?: "([^"]+)",$',
                             body.group(1), re.M))
-    # A fixture nobody kept up is the failure this pair exists to stop, so the
-    # examples have to cover every shape a key has: one word, several, a nested
-    # key and an extra_env name.
+    # The examples cover every key shape: one word, several, nested, extra_env.
     assert set(found) >= {"namespace", "auth_token", "service_account_name",
                           "proxy.https", "extra_env.FOO"}
     for key, want in found.items():
-        assert gen_mod.marker(key) == want, key
-    # ...and the recogniser takes every one of them, or the generator would
-    # write a marker it could not read back off a profile.
+        assert markers.marker(key) == want, key
+    # ...and the recogniser accepts every one of them.
     for want in found.values():
-        assert gen_mod.is_placeholder(want)
-        assert gen_mod.marker_in(f"user:pass@{want}:3128") == want
+        assert markers.is_placeholder(want)
+        assert markers.marker_in(f"user:pass@{want}:3128") == want
 
 
 def test_the_served_marker_is_the_generators_own():
-    """The download step prints the served marker on the row and sends the one
-    it built itself, so the two have to be one rule. They are -- `placeholders`
-    calls `generate.marker` -- and this is what stops that becoming a second
-    table: a per-key exception here would have the page show `<NAMESPACE>` over
-    a bundle carrying something else, in the one field nobody filled in.
-
-    Beside `test_the_marker_rule_is_one_rule_in_both_languages`, which holds the
-    *page's* copy of the rule to the generator's. This holds the *served* copy
-    to it, and there are three readers now."""
-    from bzm_opl_gen import generate as gen_mod
+    """The served markers are markers.marker's."""
     body = client.get("/api/placeholders").json()
-    assert set(body) == set(gen_mod.PLACEHOLDER_SOURCE)
+    assert set(body) == set(required_fields.PLACEHOLDER_SOURCE)
     for key, entry in body.items():
-        assert entry["marker"] == gen_mod.marker(key), key
-        # Prose, and never empty: the row renders the sentence only when it has
-        # one, so an empty string here would be a field claiming a source it
-        # does not have rather than one nobody read.
+        assert entry["marker"] == markers.marker(key), key
+        # Never empty: an empty source would claim a source it does not have.
         assert entry["source"].strip()
 
 
 def test_the_placeholder_sentences_render_the_same_two_ways():
-    """These sentences are a cell in the bundle's README, which is Markdown, and
-    a line in the download step's panel, which is text. So they are written in
-    the characters both render.
-
-    The panel is what found it: `create it -- the id is BlazeMeter's` and
-    `re-generate with \x60--auth-token\x60` went on screen with the punctuation
-    showing. `plan.py` keeps this rule for its warnings and for this reason; the
-    difference is that nothing failed when this table broke it, because until
-    now it had one surface."""
-    from bzm_opl_gen import generate as gen_mod
-    for key, source in gen_mod.PLACEHOLDER_SOURCE.items():
+    """The placeholder sentences contain no Markdown syntax: they render as a
+    README cell and as panel text."""
+    for key, source in required_fields.PLACEHOLDER_SOURCE.items():
         assert "`" not in source, f"{key}: backticks render as backticks"
         assert "--" not in source.replace("--auth-token", ""), \
             f"{key}: use an em dash"
@@ -1023,41 +763,22 @@ def test_the_placeholder_sentences_render_the_same_two_ways():
 
 
 def test_the_served_placeholders_carry_no_severity():
-    """One severity, decided on the page and enforced here.
-
-    Every marker has to be filled in before the bundle is applied. Which of
-    them the API server happens to stop first is real -- it is
-    `PLACEHOLDER_REFUSED_BY_API`, and the bundle's README is where it is said --
-    but nothing on the download step reads it, and a served field nothing reads
-    is a second copy of that set waiting to disagree with the first. The four
-    fields it names are in this payload like any other, with a source and
-    nothing else."""
-    from bzm_opl_gen import generate as gen_mod
+    """The served placeholders carry a marker and a source only, no severity."""
     body = client.get("/api/placeholders").json()
     for key, entry in body.items():
         assert set(entry) == {"marker", "source"}, key
-    for key in gen_mod.PLACEHOLDER_REFUSED_BY_API:
+    for key in required_fields.PLACEHOLDER_REFUSED_BY_API:
         assert key in body, key
 
 
 def test_reserved_env_is_served_with_the_option_that_owns_each_name():
-    """The env area on the configure step refuses a name the bundle already
-    writes, and it must not keep its own list of them -- a variable added to a
-    template would go on being offered, and the collision would surface as a
-    ConfigMap with a duplicate key rather than as a message on the row.
-
-    The owner is served beside the name because it is the answer: "set it with
-    the proxy option" beats "that one is taken"."""
-    from bzm_opl_gen import generate as gen_mod
+    """Reserved env names are served with the option that owns each."""
     body = client.get("/api/reserved-env").json()
-    assert set(body) == set(gen_mod.RESERVED_ENV)
+    assert set(body) == set(bundle_env.RESERVED_ENV)
     assert body["KUBERNETES_SERVICE_USE_TYPE"] == "service_type"
-    # Null is a real answer: the identity variables belong to no option, and
-    # naming one would be worse than saying there is not one.
+    # Null is a real answer: the identity variables belong to no option.
     assert body["SHIP_ID"] is None
-    # Every owner named is a real option, or the message sends someone to a
-    # field that does not exist. The CA trio names a one-of pair, which is what
-    # the option table itself calls them.
+    # Every named owner is a real option.
     defaults = client.get("/api/option-defaults").json()
     for owner in filter(None, body.values()):
         for name in owner.split(" | "):
@@ -1065,22 +786,14 @@ def test_reserved_env_is_served_with_the_option_that_owns_each_name():
 
 
 def test_agent_env_is_served_as_what_is_left_after_the_options():
-    """The other half of the env area: the variables it offers.
-
-    Served rather than listed in TypeScript for the reason the reserved names
-    are -- but the direction is the opposite one, and that is the point. The
-    reserved table says what may not be typed; this says what there is to
-    choose from, and it is BlazeMeter's own reference minus everything a
-    control on the configure step already writes. The two must not overlap, or
-    the page offers a row the generator refuses.
-    """
-    from bzm_opl_gen import agent_env as env_mod, generate as gen_mod
+    """agent-env offers BlazeMeter's reference minus every reserved name, so it
+    never offers a row the generator refuses."""
+    from bzm_opl_gen import agent_env as env_mod
     body = client.get("/api/agent-env").json()
     names = {v["name"] for v in body}
-    assert names == {v["name"] for v in env_mod.AGENT_ENV} - gen_mod.RESERVED_ENV
+    assert names == {v["name"] for v in env_mod.AGENT_ENV} - bundle_env.RESERVED_ENV
     assert not names & set(client.get("/api/reserved-env").json())
-    # A row the page can render: a control is chosen from `type`, and the two
-    # tables decide which bundles are offered it.
+    # A row the page can render: `type` picks the control.
     for v in body:
         assert v["type"] in env_mod.TYPES
         assert set(v["platforms"]) <= {"kubernetes", "docker"}
@@ -1089,16 +802,8 @@ def test_agent_env_is_served_as_what_is_left_after_the_options():
 
 
 def test_agent_env_is_scoped_to_what_the_location_runs():
-    """...and the other half of the same question, which the route has to be
-    asked: which functionality reads the variable (#150).
-
-    The parameter is optional and absent is not empty, which is the whole
-    reason it is a query string rather than a required field: the page asks
-    once on mount with no location chosen and gets the reference whole, then
-    asks again for the location it is generating for. An empty value is a
-    location that runs nothing this tool covers, which is a different sentence
-    and gets a different answer.
-    """
+    """agent-env is filtered by the location's funcIds; absent and empty are
+    different answers."""
     whole = {v["name"] for v in client.get("/api/agent-env").json()}
     perf = {v["name"] for v in
             client.get("/api/agent-env?func_ids=performance").json()}
@@ -1117,76 +822,55 @@ def test_agent_env_is_scoped_to_what_the_location_runs():
 
 
 def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
-    """The *names* are served; what a name may look like is not, and could not
-    usefully be -- it is a regex, and a page that had to compile a served one
-    could not typecheck it. So it is a second copy, and this is the only thing
-    that can hold it equal: a page accepting a name the generator refuses is a
-    row that goes green and a download that fails."""
-    from bzm_opl_gen import generate as gen_mod
+    """frontend/src/env.ts's env-name rule is generate's."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     pattern = re.search(r"^const NAME_RE = /(.+)/;$",
                         (src / "env.ts").read_text(), re.M)
     assert pattern, "NAME_RE not found -- was it renamed or moved?"
-    assert pattern.group(1) == gen_mod.ENV_NAME_RE.pattern
+    assert pattern.group(1) == bundle_env.ENV_NAME_RE.pattern
 
 
 def test_the_pages_copy_of_the_reserved_env_names_is_the_generators():
     """As with IGNORED_BY_FORMAT above: the page's tests run without a server, so
     the fixture is a second copy, and this is what keeps it from drifting."""
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const RESERVED_ENV: Record<string, string \| null> = \{"
                      r"(.*?)\n\};", text, re.S)
     assert body, "RESERVED_ENV not found -- was it renamed or moved?"
     assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
-        == set(gen_mod.RESERVED_ENV)
+        == set(bundle_env.RESERVED_ENV)
 
 
 def test_sv_constants_carry_what_each_backend_publishes():
-    """The UI tells the user which Role the bundle grants and what crane creates
-    with it. That is SV_INGRESS_BACKENDS -- restating it in TypeScript is the
-    same duplication the funcId list was just deleted for, and it would go stale
-    silently, because a wrong Role reads as plausible right up until the virtual
-    service stalls."""
-    from bzm_opl_gen import generate as gen_mod
+    """sv-constants carries what each backend publishes (SV_INGRESS_BACKENDS)."""
     backends = client.get("/api/sv-constants").json()["backends"]
-    assert set(backends) == set(gen_mod.SV_INGRESS_TYPES)
-    for name, b in gen_mod.SV_INGRESS_BACKENDS.items():
+    assert set(backends) == set(service_virt.SV_INGRESS_TYPES)
+    for name, b in service_virt.SV_INGRESS_BACKENDS.items():
         assert backends[name] == {"group": b.group, "resources": list(b.resources),
                                   "creates": b.creates, "nodeport_ok": b.nodeport_ok}
-    # routes/custom-host is the one nobody would guess: OpenShift gates
-    # spec.host behind it, and crane sets spec.host.
+    # routes/custom-host: OpenShift gates spec.host behind it, and crane sets it.
     assert "routes/custom-host" in backends["openshift"]["resources"]
-    # nodeport_ok is served because the UI *decides* with it -- it greys out the
-    # download rather than letting generate() refuse after the fact -- so a
-    # backend added without it would silently offer a pairing that cannot serve.
+    # nodeport_ok is served because the UI decides with it.
     assert {n: b["nodeport_ok"] for n, b in backends.items()} == {
         "nginx": True, "openshift": True, "contour": False, "istio": False}
 
 
 def test_func_id_choices_come_from_the_account_when_there_is_one(monkeypatch):
-    """A location whose funcId the UI never offers can only be created from the
-    CLI or the BlazeMeter web app -- which is what a hardcoded copy of the list
-    in TypeScript caused, and then what a hardcoded copy in Python caused after
-    it. The account is the vocabulary, so a funcId it adds is selectable with no
-    edit here and one it retires leaves the form on its own."""
+    """With an account, func-ids answers the account's own vocabulary."""
     connect(monkeypatch, FakeClient())
     body = client.get("/api/func-ids?account_id=123456").json()["choices"]
     ids = [c["id"] for c in body]
 
     assert {"mockServices", "proxyRecorder", "tdm", "delphix"} <= set(ids)
-    # Retired: the account stopped serving either, so neither is offered --
-    # without a rule here naming them.
+    # Retired funcIds are simply not in the account's list.
     assert "functionalApi" not in ids and "sv-bridge" not in ids
     assert all(c["label"] for c in body)
 
 
 def _ts_type_fields(text, name):
-    """The field names of an `export type X = {...}` in TypeScript source.
-
-    Block comments first, because a `/** ... */` inside the braces is prose and
-    prose has colons in it."""
+    """The field names of an `export type X = {...}` in TypeScript source, with
+    block comments stripped first."""
     body = re.search(rf"export type {name} = \{{(.*?)\n\}};", text, re.S)
     assert body, f"{name} not found in api.ts -- was it renamed or moved?"
     return set(re.findall(r"(?:^|;)\s*(\w+)\??:",
@@ -1194,20 +878,7 @@ def _ts_type_fields(text, name):
 
 
 def test_the_pages_type_for_the_vocabulary_is_the_shape_this_route_serves(monkeypatch):
-    """The page declares what /api/func-ids answers, and nothing but a reader's
-    memory held the two together (#160).
-
-    They came apart the moment the envelope did: the route started answering
-    `{source, choices}` and `api.ts` went on declaring an array, so the client
-    typed a payload it no longer receives. TypeScript cannot catch that -- the
-    shape is asserted at the fetch and never checked against anything -- and the
-    page's own tests cannot either, because their fake answers whatever the type
-    says. It surfaces in a browser, as a vocabulary that reads as empty.
-
-    Fields, not values: what a row *means* is tested above and on the page. This
-    is the join, and it is exactly the join `fixtures.ts` gets for the two
-    served tables that are copied rather than fetched.
-    """
+    """api.ts's type for /api/func-ids has the fields the route serves."""
     connect(monkeypatch, FakeClient())
     text = (pathlib.Path(__file__).resolve().parent.parent
             / "frontend" / "src" / "api.ts").read_text()
@@ -1215,18 +886,14 @@ def test_the_pages_type_for_the_vocabulary_is_the_shape_this_route_serves(monkey
 
     assert _ts_type_fields(text, "FuncIdVocabulary") == set(body)
     assert _ts_type_fields(text, "FuncIdChoice") == set(body["choices"][0])
-    # ...and the two answers `source` can take are the two the page branches on,
-    # because a third would land as a string nothing recognised.
+    # ...and `source` takes exactly the two values the page branches on.
     assert re.search(r'source: "account" \| "baseline";', text), \
         "FuncIdVocabulary.source no longer names both sources"
     assert {core.func_ids()["source"], body["source"]} == {"baseline", "account"}
 
 
 def test_the_vocabulary_is_reachable_with_no_account_at_all():
-    """The page asks on mount, before a key exists; manual entry never has an
-    account. `account_id` is therefore optional, and the answer with none is the
-    three funcIds this tool covers, under the names the account would give
-    them."""
+    """func-ids needs no account, and answers the covered funcIds."""
     body = client.get("/api/func-ids").json()["choices"]
     assert [(c["id"], c["label"], c["covered"]) for c in body] == [
         ("performance", "Performance", True),
@@ -1235,10 +902,7 @@ def test_the_vocabulary_is_reachable_with_no_account_at_all():
 
 
 def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
-    """The display name is the account's, so a funcId it serves without one must
-    still appear -- under the raw id, which is what a location carrying it shows
-    anyway. Dropping it would hide the functionality exactly like the hardcoded
-    list did."""
+    """A funcId served without a display name is offered under its raw id."""
     class Unnamed(FakeClient):
         def functionalities(self, account_id):
             return {"functionalities": [{"funcId": "brandNew", "size": 1}]}
@@ -1250,10 +914,7 @@ def test_an_unnamed_func_id_is_still_offered_under_its_raw_id(monkeypatch):
 
 
 def test_reading_the_vocabulary_is_not_a_write(monkeypatch):
-    """It is account-scoped, so it is cached with the other account reads -- and
-    it is a read, so it must not carry `_writes`, which drops that cache. A
-    vocabulary that dropped the cache would re-fetch the account's locations
-    every time the page reconnected."""
+    """Reading func-ids is cached and does not drop the cache."""
     fake = connect(monkeypatch, FakeClient())
     server._cache.clear()
     client.get("/api/func-ids?account_id=123456")
@@ -1263,33 +924,22 @@ def test_reading_the_vocabulary_is_not_a_write(monkeypatch):
 
 
 def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
-    """The configure step shows one functionality's options at a time and offers
-    this list. Served rather than written in TypeScript for the same reason as
-    the funcId choices: functional testing, secrets and API monitoring are
-    expected to follow, and a functionality has to become selectable by being
-    added here."""
-    from bzm_opl_gen import generate as gen_mod
+    """Functionalities are served with a label and a suggested namespace."""
     body = client.get("/api/functionalities").json()
     assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
     for f in body:
         assert f["label"] and f["namespace"]
-    # The id *is* the funcId (#149), so the join a location makes is on it and
-    # there is no second list to keep: which funcId means service
-    # virtualization is generate.SV_FUNC_IDS', the same answer
-    # /api/sv-constants serves and _sv_cfg validates against.
-    assert [f["id"] for f in body if f["id"] in gen_mod.SV_FUNC_IDS] \
-        == list(gen_mod.SV_FUNC_IDS)
-    # Distinct namespaces are the point of suggesting one per functionality:
-    # sharing a namespace is what makes redeploying one agent take the other's
-    # pods down.
+    # The id is the funcId; SV's is service_virt.SV_FUNC_IDS'.
+    assert [f["id"] for f in body if f["id"] in service_virt.SV_FUNC_IDS] \
+        == list(service_virt.SV_FUNC_IDS)
+    # Distinct namespaces, so redeploying one agent leaves the other's pods.
     assert len({f["namespace"] for f in body}) == len(body)
 
 
 def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
-    """The end-to-end shape of adding a functionality: one entry here, plus a
-    tag on whichever option groups it owns. Nothing in the frontend enumerates
-    functionalities, so this is the whole of the backend half."""
+    """Adding an entry to FUNCTIONALITIES is the whole backend half of offering a
+    functionality."""
     monkeypatch.setattr(core, "FUNCTIONALITIES", core.FUNCTIONALITIES + [
         {"id": "secretsPrivateVault", "label": "Secrets Private Vault",
          "hint": "secrets from a vault", "namespace": "blazemeter-vault"}])
@@ -1298,13 +948,9 @@ def test_a_functionality_added_to_the_vocabulary_is_offered(monkeypatch):
                         "label": "Secrets Private Vault",
                         "hint": "secrets from a vault",
                         "namespace": "blazemeter-vault",
-                        # False rather than absent, and it follows from the
-                        # entry rather than needing a second edit: nothing in
-                        # facts.CATEGORY_BY_FUNC says this agent carries an
-                        # engine, so it does not claim one.
+                        # False: no category says this agent carries an engine.
                         "runs_engine": False}
-    # ...and it is a covered funcId by the same act, because `covered` is that
-    # list read as a vocabulary rather than a second table beside it.
+    # ...and it is covered by the same act.
     assert next(r for r in client.get("/api/func-ids").json()["choices"]
                 if r["id"] == "secretsPrivateVault")["covered"] is True
 
@@ -1329,9 +975,7 @@ def test_create_location_forwards_every_selected_func_id(monkeypatch):
 
 
 def test_a_gui_functional_location_is_refused_at_one_slot(monkeypatch):
-    """#159. BlazeMeter 400s the create, so the route does -- and the write it
-    would have made never happens. 400 rather than 502 because the caller can
-    fix it: it is a number on the form."""
+    """A GUI Functional location at one slot is a 400, and nothing is written."""
     posted = []
 
     class Watching(FakeClient):
@@ -1349,19 +993,14 @@ def test_a_gui_functional_location_is_refused_at_one_slot(monkeypatch):
 
 
 def test_the_slot_minimums_are_served_so_the_form_can_say_them_first():
-    """The page must state the rule before the account does, and the number and
-    BlazeMeter's sentence are core's. Served for the reason IGNORED_BY_FORMAT is:
-    a copy in TypeScript is how a figure found on a live POST and a figure a
-    form asserts stop being the same figure."""
+    """The slot minimums are served so the form can state them first."""
     body = client.get("/api/slot-minimums").json()
     assert body == core.SLOT_MINIMUMS
     assert body["functionalGui"]["minimum"] == 2
 
 
 def test_the_pages_copy_of_the_slot_minimums_is_cores():
-    """As with IGNORED_BY_FORMAT and the sizing models: the page's tests run
-    without a server, so the fixture is a second copy and this is what holds
-    it equal."""
+    """fixtures.ts's copy of the slot minimums equals core's."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const SLOT_MINIMUMS: Record<string, SlotMinimum>"
@@ -1371,24 +1010,17 @@ def test_the_pages_copy_of_the_slot_minimums_is_cores():
     assert re.findall(r"^  (\w+): \{", body.group(1), re.M) == list(served)
     assert re.findall(r"minimum: (\d+)", body.group(1)) \
         == [str(r["minimum"]) for r in served.values()]
-    # The sentence most of all: it is BlazeMeter's own, which is what a
-    # customer meeting this in their UI reads, so a paraphrase on the page
-    # would be this tool inventing the account's words.
+    # BlazeMeter's own sentence, verbatim.
     assert re.findall(r'label: "([^"]+)"', body.group(1)) \
         == [r["label"] for r in served.values()]
-    # Wrapped across lines with `+`, which is the source's business and not
-    # the sentence's -- so the joins are closed up before the comparison.
+    # Joined across `+` continuations before comparing.
     flat = re.sub(r'"\s*\+\s*"', "", " ".join(body.group(1).split()))
     for rule in served.values():
         assert rule["message"] in flat
 
 
 def test_a_location_a_test_cannot_start_on_says_so(monkeypatch):
-    """The warning came back from the terminal only, so the page could create a
-    location that 403s every start and show nothing about it. core decides it
-    now; the field rides beside the location document rather than nesting it,
-    because the page reads `id` off this response to select what it just made.
-    """
+    """Creating an unrunnable location answers a warning beside the location."""
     made = {}
 
     class FakeClient:
@@ -1420,10 +1052,7 @@ def test_api_requires_key():
 
 
 def test_key_detection_sees_a_key_named_after_startup(monkeypatch, tmp_path):
-    """BZM_API_KEY_FILE used to be read into a module-level list at import, so
-    a value set afterwards was invisible -- and `ui --dev` sets exactly that for
-    its reloader subprocess. Asserted here as well as in test_core because this
-    is the route that answers the question."""
+    """Key detection reads BZM_API_KEY_FILE per request."""
     key = tmp_path / "api-key.json"
     key.write_text('{"id": "KID", "secret": "s"}')
     monkeypatch.setenv("BZM_API_KEY_FILE", str(key))
@@ -1433,9 +1062,7 @@ def test_key_detection_sees_a_key_named_after_startup(monkeypatch, tmp_path):
     assert "s" not in [c.get("secret") for c in body["candidates"]]
 
 
-# The routes that carried an argued paragraph before the prose moved to core.
-# Each now points /api/docs at core's docstring instead of keeping a copy;
-# what this list guards is that they still point at something.
+# Routes whose /api/docs description is core's docstring.
 DOCUMENTED_ROUTES = [
     ("get", "/api/status"), ("post", "/api/facts/manual"),
     ("post", "/api/plan"),
@@ -1448,10 +1075,7 @@ DOCUMENTED_ROUTES = [
 
 
 def test_the_routes_that_explained_themselves_still_do():
-    """These answers need prose -- what an empty sv-mocks list means, what a
-    manual fact set is for -- and it lives in core now. A route that
-    stops pointing at it empties its own /api/docs entry, which is exactly
-    where nobody would notice."""
+    """Those routes still carry a description."""
     spec = server.app.openapi()
     bare = [f"{m} {path}" for m, path in DOCUMENTED_ROUTES
             if not (spec["paths"][path][m].get("description") or "").strip()]
@@ -1466,16 +1090,11 @@ def test_a_malformed_request_is_refused_before_the_missing_key_is():
 
 
 # -- reading the cluster from the server ---------------------------------------
-# The one thing this server does that is not the BlazeMeter API. It is optional
-# everywhere: the UI is API-only by design and most people running it have no
-# kubecontext, so each way the read can fail comes back 200 with the reason
-# rather than an error the browser can only print.
+# Optional: each way the read can fail answers 200 with the reason.
 
-import json  # noqa: E402
 
-from bzm_opl_gen import livetest  # noqa: E402
-# The faked kubectl lives with the other cluster-reading tests; reused rather
-# than re-declared so both layers exercise the same stand-in binary.
+from bzm_opl_gen import kube  # noqa: E402
+# The faked kubectl shared with the other cluster-reading tests.
 from test_livetest import _fake_kubectl, _sv_pod  # noqa: E402
 
 SV_PODS = json.dumps({"items": [_sv_pod("vs1svc2", 8080, "aaa111", "bbb222"),
@@ -1484,20 +1103,16 @@ SV_PODS = json.dumps({"items": [_sv_pod("vs1svc2", 8080, "aaa111", "bbb222"),
 
 @pytest.fixture
 def fake_cluster(monkeypatch):
-    """Installs a faked kubectl/oc for one test. Yields the installer so a test
-    can choose what the binary does; always clears cli_tool()'s memo of which
-    binary exists, which otherwise outlives the monkeypatch."""
+    """Install a faked kubectl/oc for one test, clearing cli_tool()'s memo after."""
     def install(**kw):
         _fake_kubectl(monkeypatch, **kw)
     install()
     yield install
-    livetest.cli_tool.cache_clear()
+    kube.cli_tool.cache_clear()
 
 
 def test_no_cluster_access_leaves_the_rest_of_the_api_working(fake_cluster):
-    """The rule the cluster-reading routes must not break: nothing else may
-    start depending on a reachable cluster. With no kubectl on the machine at
-    all, every other route answers exactly as it does with one."""
+    """With no kubectl on the machine, every other route answers as before."""
     fake_cluster(tools=())
     assert client.post("/api/generate", json={
         "facts": FACTS, "options": {"namespace": "ns1"}}).status_code == 200
@@ -1525,10 +1140,7 @@ def test_ui_binds_loopback_unless_told_otherwise(monkeypatch, capsys):
 
 
 def test_ui_warns_when_the_bind_leaves_this_machine(monkeypatch, capsys):
-    """Widening the bind is a real exposure, and the one irreversible thing
-    behind it is the download button: fetching an AUTH_TOKEN rotates it, so a
-    stray click leaves a running agent stuck on a token that no longer works.
-    Say so at startup, where it is still cheap to reconsider."""
+    """A non-loopback bind prints a warning at startup."""
     assert _served(monkeypatch, host="0.0.0.0")["host"] == "0.0.0.0"
     warning = capsys.readouterr().out
     assert "reachable" in warning and "AUTH_TOKEN" in warning
@@ -1536,10 +1148,7 @@ def test_ui_warns_when_the_bind_leaves_this_machine(monkeypatch, capsys):
 
 def test_a_bad_api_key_flag_does_not_stop_the_server_starting(monkeypatch,
                                                               tmp_path, capsys):
-    """#91's start-up half. `--api-key` pointing at an unparseable file used to
-    SystemExit out of main() before uvicorn was ever reached. The page this
-    serves has a connect form on it, so opening unconnected with the reason on
-    stdout is a better answer than not opening."""
+    """An unreadable --api-key is reported and the server still starts."""
     monkeypatch.setitem(server._state, "client", None)
     bad = tmp_path / "api-key.json"
     bad.write_text("not json")
@@ -1559,15 +1168,11 @@ def test_a_good_api_key_flag_connects_at_startup(monkeypatch, tmp_path):
 
 
 def test_ui_dev_mode_binds_the_same_host(monkeypatch):
-    """--dev reloads through an import string, a second uvicorn.run call that
-    used to hardcode its own host -- an easy place for the flag to go missing."""
+    """--dev (a second uvicorn.run, via an import string) binds the same host."""
     assert _served(monkeypatch, host="0.0.0.0", dev=True)["host"] == "0.0.0.0"
 
 
 # -- the deployed virtual services, alongside the heartbeat --------------------
-# The agent reports idle whether or not its virtual services ever became
-# reachable, so a stall is invisible in the watch panel. This answers what is
-# deployed and at which host, cheaply enough to sit on the existing 10s poll.
 
 def test_sv_mocks_lists_what_is_deployed_and_where_it_answers(fake_cluster):
     fake_cluster(stdout=SV_PODS)
@@ -1575,16 +1180,13 @@ def test_sv_mocks_lists_what_is_deployed_and_where_it_answers(fake_cluster):
                       params={"namespace": "ns1",
                               "sv_subdomain": "apps.example.com"}).json()
     assert body["status"] == "ok"
-    # The host is the one BlazeMeter advertises, so it can be pasted straight
-    # into a browser -- and it is built by the generator, not restated here.
+    # The host is the one BlazeMeter advertises, built by the generator.
     assert body["mocks"] == [{"name": "vs1svc2", "port": 8080,
                               "host": "vs1svc2-8080-ns1.apps.example.com"}]
 
 
 def test_sv_mocks_separates_deployed_nothing_from_cannot_look(fake_cluster):
-    """An empty namespace and an unreadable cluster are different answers: one
-    says the virtual service has not deployed yet, the other says this machine
-    cannot tell you either way. The watch panel has to say which."""
+    """An empty namespace and an unreadable cluster are different answers."""
     fake_cluster(stdout=json.dumps({"items": []}))
     empty = client.get("/api/sv-mocks", params={"namespace": "ns1"}).json()
     assert empty["status"] == "no_mocks" and empty["mocks"] == []
@@ -1606,27 +1208,21 @@ def test_sv_mocks_without_a_subdomain_still_lists_the_mocks(fake_cluster):
 
 
 def test_sv_mocks_never_errors_the_poll(fake_cluster):
-    """It rides the status poll, which keeps the last good answer on failure.
-    A 4xx/5xx here would either spam the console every 10s or, worse, be
-    swallowed and read as 'no virtual services'."""
+    """sv-mocks never answers an error status: it rides the status poll."""
     fake_cluster(rc=1, stderr="error: current-context is not set")
     r = client.get("/api/sv-mocks", params={"namespace": "ns1"})
     assert r.status_code == 200 and r.json()["status"] == "no_context"
 
 
 # -- does the endpoint answer? -------------------------------------------------
-# The listed mocks are running pods, which says nothing about whether anything
-# routes to them -- crane's nginx Ingress names a port its own Service does not
-# expose, so the published endpoint 503s while the pod is healthy. This is the
-# only outbound HTTP request the server makes that is not the BlazeMeter API,
-# and every test of it fakes that request: a real one would pass or fail on
-# whatever DNS answered that day, and the failure kinds below cannot be
-# provoked from a machine that may have no network at all.
+# The request is always faked: a real one would depend on the day's DNS.
 
 import socket  # noqa: E402
 import ssl  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
+from bzm_opl_gen import (bundle_env, bundle_options, markers, required_fields,
+                         service_virt)  # noqa: E402
 
 
 class _FakeResponse:
@@ -1654,9 +1250,7 @@ def _no_real_network(monkeypatch):
 @pytest.fixture
 def fake_endpoint(monkeypatch):
     """Stand in for the virtual service's endpoint. Yields (install, calls):
-    `install` takes a status code to answer with or an exception to raise, and
-    `calls` records what the probe asked for, so the URL and the deadline are
-    assertable rather than taken on trust."""
+    `install` takes a status or an exception; `calls` records the probe."""
     calls = []
 
     def install(answer):
@@ -1681,9 +1275,7 @@ def test_sv_check_reports_the_status_code_when_the_endpoint_answers(fake_endpoin
 
 
 def test_sv_check_probes_the_host_the_panel_already_shows(fake_cluster, fake_endpoint):
-    """The one string that must not be rebuilt: what is checked has to be what
-    the row above it displays, or a green tick would be vouching for an address
-    nobody was given. Handed back from /api/sv-mocks untouched."""
+    """sv-check probes exactly the host sv-mocks returned."""
     fake_cluster(stdout=SV_PODS)
     host = client.get("/api/sv-mocks",
                       params={"namespace": "ns1",
@@ -1696,9 +1288,7 @@ def test_sv_check_probes_the_host_the_panel_already_shows(fake_cluster, fake_end
 
 
 def test_sv_check_reads_a_503_as_a_diagnosis_not_a_failure(fake_endpoint):
-    """The whole point of the button. A 503 from the ingress controller is the
-    answer -- it is what crane's port mismatch looks like from outside -- so it
-    reports the status it got and names the command that fixes it."""
+    """A 503 is reported as the diagnosis, with the command that fixes it."""
     install, _ = fake_endpoint
     install(urllib.error.HTTPError(
         "http://vs1-8080-ns1.apps.example.com/", 503, "Service Unavailable",
@@ -1723,9 +1313,8 @@ def test_sv_check_reports_any_other_http_status_it_gets(fake_endpoint):
 
 
 @pytest.mark.parametrize("status, error", [
-    # Four distinct answers because four distinct things went wrong, and each
-    # has its own way forward: no DNS record, nothing listening, a certificate
-    # this machine will not accept, or a host that never replied.
+    # Four failures, four remedies: no DNS, nothing listening, an untrusted
+    # certificate, no reply.
     ("dns", urllib.error.URLError(
         socket.gaierror(-2, "Name or service not known"))),
     ("refused", urllib.error.URLError(
@@ -1743,8 +1332,7 @@ def test_sv_check_tells_the_failure_kinds_apart(fake_endpoint, status, error):
     install, _ = fake_endpoint
     install(error)
     r = client.get("/api/sv-check", params={"host": "vs1-8080-ns1.example.com"})
-    # Never an HTTP error: the browser can only print those in red, and a host
-    # that does not answer is the expected outcome this button exists to find.
+    # Never an HTTP error: an endpoint that does not answer is a finding.
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == status
@@ -1764,9 +1352,7 @@ def test_sv_check_waits_no_longer_than_a_poll_interval(fake_endpoint):
 
 
 def test_sv_check_can_be_asked_for_https(fake_endpoint):
-    """TLS is configured per deployment (sv_tls_secret), and probing the wrong
-    scheme answers a question nobody asked -- plain http against a TLS-only
-    route, or a handshake against a listener that speaks none."""
+    """sv-check can probe over https."""
     install, calls = fake_endpoint
     install(200)
     client.get("/api/sv-check", params={"host": "h.example.com", "scheme": "https"})
@@ -1780,10 +1366,7 @@ def test_sv_check_can_be_asked_for_https(fake_endpoint):
     "",
 ])
 def test_sv_check_refuses_anything_that_is_not_a_host(fake_endpoint, bad):
-    """The host arrives from the browser, so the guard is what keeps this from
-    being a general-purpose fetcher pointed by whatever loads the page. A
-    rejected request is the user getting it wrong, so unlike an endpoint that
-    will not answer it is a 4xx."""
+    """Anything that is not a host is a 400."""
     install, calls = fake_endpoint
     install(200)
     assert client.get("/api/sv-check", params={"host": bad}).status_code == 400
@@ -1800,9 +1383,7 @@ def test_sv_check_refuses_a_scheme_it_does_not_speak(fake_endpoint, scheme):
 
 
 def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
-    """It reads nothing from kubectl -- the host was resolved when the panel
-    listed the mock. With no CLI on the machine at all it still answers, which
-    is what keeps the button from being a second thing that needs a cluster."""
+    """sv-check needs no cluster."""
     fake_cluster(tools=())
     install, _ = fake_endpoint
     install(200)
@@ -1811,11 +1392,8 @@ def test_sv_check_needs_no_cluster(fake_cluster, fake_endpoint):
 
 
 def test_group_tags_name_functionalities_the_server_actually_serves():
-    """The frontend tags each option group with the functionality ids it belongs
-    to, and those ids are the join between the two halves. Nothing else checks
-    it: the vitest suite tags against its own fixture, so renaming a served id
-    passes both suites green and silently empties a functionality's options in
-    the browser. Read the tags out of the source rather than duplicating them."""
+    """Every functionality id the frontend's groups and sv.ts name is one this
+    server serves."""
     src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "frontend", "src", "optionGroups.ts")
     with open(src) as fh:
@@ -1829,10 +1407,7 @@ def test_group_tags_name_functionalities_the_server_actually_serves():
         f"{sorted(tagged - served)}. Either the id was renamed in "
         f"core.FUNCTIONALITIES, or the tag is a typo -- the group's options would "
         f"never appear.")
-    # sv.ts keys one answer by functionality id rather than by group id -- which
-    # format cannot serve the functionality at all -- so that literal is the
-    # same join and fails the same way: the card would render its switches on a
-    # bundle that cannot carry them, and nothing would say so.
+    # sv.ts keys an answer by functionality id too.
     sv_src = os.path.join(os.path.dirname(src), "sv.ts")
     with open(sv_src) as fh:
         found = re.search(r'const SV_FUNCTIONALITY = "([^"]+)"', fh.read())
@@ -1841,8 +1416,6 @@ def test_group_tags_name_functionalities_the_server_actually_serves():
 
 
 # -- saving a bundle to disk ---------------------------------------------------
-# The zip is for handing a bundle to somebody; /api/generate/save writes the
-# same files where livetest and an MCP session can pick them up.
 
 def test_generate_save_writes_the_bundle_where_asked(tmp_path):
     out = str(tmp_path / "bundle")
@@ -1853,8 +1426,7 @@ def test_generate_save_writes_the_bundle_where_asked(tmp_path):
     body = r.json()
     assert body["out_dir"] == out
     names = [f["name"] for f in body["files"]]
-    # profile.json is the handoff: livetest re-renders from it, and an MCP
-    # session reads it to see what this bundle was configured as.
+    # profile.json is what livetest and an MCP session read.
     assert "bzm_deployment.yaml" in names and "profile.json" in names
     assert os.path.isfile(os.path.join(out, "bzm_deployment.yaml"))
     assert os.path.isfile(os.path.join(out, "profile.json"))
@@ -1882,10 +1454,7 @@ def test_generate_save_refuses_a_relative_dir():
 
 
 def test_saving_twice_into_the_same_folder_reuses_the_token(connected, tmp_path):
-    """The reuse branch, which this route only reaches because it passes the
-    directory it is about to write. Saving again -- to re-render with one option
-    changed, which is what the folder handoff is for -- must leave the agent
-    running from the last save alone, and produce the same bytes."""
+    """Saving twice into the same folder reuses the token and writes identical bytes."""
     out = str(tmp_path / "bundle")
     first = client.post("/api/generate/save", json={
         "facts": FACTS, "out_dir": out,
@@ -1903,10 +1472,7 @@ def test_saving_twice_into_the_same_folder_reuses_the_token(connected, tmp_path)
 
 def test_saving_a_bundle_for_another_agent_does_not_inherit_its_token(
         connected, tmp_path):
-    """The loud half of the same branch, and it is a refusal rather than a
-    placeholder: saving into that folder would *overwrite* the other agent's
-    bundle, and no API reads an AUTH_TOKEN back, so that folder was the only copy
-    of it outside a running cluster. Refused, and the file is intact after."""
+    """Saving into another agent's folder is refused and leaves it intact."""
     out = str(tmp_path / "bundle")
     two = dict(FACTS, ships=[dict(FACTS["ships"][0], id="b1"),
                              dict(FACTS["ships"][0], id="b2")])
@@ -1954,9 +1520,7 @@ def test_plan_refuses_a_bad_number_in_the_planner_s_own_words():
 
 
 def test_plan_takes_the_empty_strings_a_form_posts():
-    """Every optional field arrives as "" from an untouched number input, and
-    that has to mean 'not given' rather than a number that will not parse --
-    otherwise the panel refuses the very first thing anyone types."""
+    """The empty strings an untouched form posts mean "not given"."""
     r = client.post("/api/plan", json={
         "users": "5000", "vus_per_engine": "", "engine_cpu": "",
         "engine_mem": "  ", "engines_per_node": ""})
@@ -1974,9 +1538,7 @@ def test_plan_still_refuses_a_target_that_was_never_typed():
 
 
 def test_plan_sizes_the_functionalities_the_card_asked_about():
-    """The card sends one row per functionality it is sizing, each in that
-    model's own unit, and gets back one row per model plus the name of the one
-    the pool came from."""
+    """The plan returns one row per sizing and names the one that drove the pool."""
     body = client.post("/api/plan", json={
         "users": "5000",
         "sizings": [{"functionality": "functionalGui", "target": "20"},
@@ -1988,9 +1550,7 @@ def test_plan_sizes_the_functionalities_the_card_asked_about():
 
 
 def test_plan_takes_the_blanks_a_sizing_row_arrives_with():
-    """A figure box nobody typed in posts "", inside the row rather than beside
-    it -- the same rule one level down, and the one place `Blank` had nothing to
-    apply to."""
+    """A blank figure inside a sizing row is "not given" too."""
     body = client.post("/api/plan", json={
         "sizings": [{"functionality": "functionalGui", "target": "20",
                      "figure": ""}]}).json()
@@ -2008,28 +1568,20 @@ def test_plan_refuses_a_sizing_it_cannot_work_out_and_says_why():
 
 
 def test_sizing_models_are_served_with_the_account_s_own_label():
-    """The card renders a field per model, so the models are served for the
-    same reason /api/functionalities is: a fourth one has to reach the page by
-    being added to the table, not by an edit in TypeScript. The label is
-    BlazeMeter's, joined on here -- `plan` reaches nothing, including core."""
+    """Sizing models are served with BlazeMeter's label."""
     from bzm_opl_gen import plan as plan_mod
     body = client.get("/api/sizing-models").json()
     assert [m["functionality"] for m in body] == list(plan_mod.SIZING_MODELS)
     by_id = {m["functionality"]: m for m in body}
     assert by_id["mockServices"]["label"] == "Service Virtualization"
     assert by_id["performance"]["unit"] == "virtual users"
-    # The one field the card branches on: a model with no measured figure
-    # offers no figure box, and says so instead.
+    # A model with no measured figure offers no figure box.
     assert [m["measured"] for m in body] == [True, True, False]
     assert by_id["mockServices"]["figure_unit"] == "requests per second per core"
 
 
 def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
-    """As with IGNORED_BY_FORMAT and RESERVED_ENV: the page's tests run without a
-    server, so the fixture is a second copy, and this is what keeps it from
-    drifting. `measured` most of all -- the card branches on it, and a fixture
-    that quietly gave service virtualization a figure would let a test pass over
-    the exact case the card exists to get right."""
+    """fixtures.ts's copy of the sizing models equals the planner's."""
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const SIZING_MODELS: SizingModel\[\] = \[(.*?)\n\];",
@@ -2042,53 +1594,35 @@ def test_the_pages_copy_of_the_sizing_models_is_the_planner_s():
         == ["true" if m["measured"] else "false" for m in served]
     assert re.findall(r'unit: "([^"]+)"', body.group(1)) \
         == [v for m in served for v in (m["unit"], m["figure_unit"])]
-    # ...and the two the guard used to leave out, both of which render:
-    # `label` names the card and the "sized for the X sizing" line, and `pods`
-    # is the word the plan counts in -- "mock pods", never assume engines.
+    # ...including `label` and `pods`, which both render.
     assert re.findall(r'label: "([^"]+)"', body.group(1)) \
         == [m["label"] for m in served]
     assert re.findall(r'pods: "([^"]+)"', body.group(1)) \
         == [m["pods"] for m in served]
-    # The default saved sizings are built from this, so a fixture inventing one
-    # would be the page inventing a target -- the thing the served column
-    # exists to stop.
+    # The page's default sizings are built from example_target.
     assert re.findall(r"example_target: (\d+)", body.group(1)) \
         == [str(m["example_target"]) for m in served]
-    # Every field the page's type declares, so a field added to SizingModel and
-    # not to this fixture fails here rather than in whatever renders it.
+    # Every field the page's SizingModel type declares.
     assert set(re.findall(r"(\w+):", body.group(1))) == {
         "functionality", "label", "unit", "figure_unit", "pods", "measured",
         "example_target"}
 
 
 def test_the_engine_rating_is_answered_for_every_sizing_model():
-    """The card suggests a per-pod figure beside each model's box, and had one
-    number to do it with -- so it branched on `functionality === "performance"`
-    and told a browser field only what blank *meant*. The route answers per
-    model, and the model with no measured figure is null rather than missing:
-    that absence is the value, not a rule the page has to know."""
+    """engine-vus rates a pod per sizing model, null where unmeasured."""
     from bzm_opl_gen import plan as plan_mod
     body = client.get("/api/engine-vus",
                       params={"cpu": "4", "mem": "16Gi"}).json()
     assert set(body["rated"]) == set(plan_mod.SIZING_MODELS)
-    # Twice the standard engine, so twice what it is rated for -- and
-    # `supported_vus` is the same figure under the name doctor calls it by.
+    # Twice the standard engine, twice the rating; supported_vus is the same.
     assert body["rated"]["performance"] == 1000 == body["supported_vus"]
     assert body["rated"]["functionalGui"] == 8
     assert body["rated"]["mockServices"] is None
 
 
 def test_a_functionality_says_whether_its_agent_carries_an_engine():
-    """`runs_engine` was a two-id literal in the frontend
-    (`ENGINE_FUNCTIONALITIES`), which is the copy IGNORED_BY_FORMAT and the funcId
-    vocabulary are served to avoid: an id renamed here left the page deciding
-    where the engine-size statement goes, and what service virtualization is
-    exclusive with, from a list nothing could correct.
-
-    Held against the planner's own table, which knows the same fact under
-    another name: a model whose pods are engines is a functionality whose agent
-    carries one. Two tables, one answer, and this is where they have to agree.
-    """
+    """`runs_engine` agrees with the planner: a model whose pods are engines is a
+    functionality whose agent carries one."""
     from bzm_opl_gen import plan as plan_mod
     served = {f["id"]: f["runs_engine"]
               for f in client.get("/api/functionalities").json()}
@@ -2141,8 +1675,7 @@ def test_location_settings_refuses_a_field_it_does_not_own(monkeypatch):
     connect(monkeypatch, FakeClient(harbor={"id": "h1"}))
     r = client.post("/api/locations/settings",
                     json={"harbor_id": "h1", "funcIds": ["mockServices"]})
-    # Not a route argument at all, so the body is simply ignored by the model --
-    # what matters is that nothing was written.
+    # Not a model field, so it is ignored and nothing is written.
     assert r.status_code == 200
     assert r.json()["changed"] == {}
 
@@ -2155,9 +1688,7 @@ def test_location_settings_needs_a_key(monkeypatch):
 
 
 # -- the account tree, remembered for a minute --------------------------------
-# A page load is four round trips to BlazeMeter and reloading is what you do all
-# day while configuring. What these defend is not the speed -- it is that the
-# cache cannot outlive a change this server made itself.
+# The cache must not outlive a change this server made itself.
 
 @pytest.fixture(autouse=True)
 def _empty_cache():
@@ -2234,15 +1765,7 @@ def test_the_cache_expires(monkeypatch):
 
 
 def test_refresh_is_what_makes_the_button_mean_anything(monkeypatch):
-    """Without it, Refresh is served from the same cache it exists to get past.
-
-    The page holds a location list for as long as it is open and the account
-    under it moves. The button beside that list re-reads -- but a re-read alone
-    hits `_cached`, so for up to CACHE_TTL_S it returns the byte-identical list
-    and the click looks exactly like one that worked. Asserted as two reads of
-    the account rather than as an empty `_cache`, because what the user is owed
-    is the round trip, not the bookkeeping.
-    """
+    """A read after Refresh reaches the account again."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
     connect(monkeypatch, c)
     client.get("/api/locations?workspace_id=42")
@@ -2254,10 +1777,7 @@ def test_refresh_is_what_makes_the_button_mean_anything(monkeypatch):
 
 
 def test_refresh_reaches_blazemeter_by_itself_for_nothing(monkeypatch):
-    """It forgets; it does not fetch. What to re-read afterwards is the caller's
-    -- the page re-reads one list -- and re-reading the rest on its behalf would
-    be this route deciding which of the account's slow calls a click is worth
-    (the capacity rollup is 1.3s on a real account and is on another view)."""
+    """Refresh itself reads nothing from the account."""
     c = FakeClient(locations=[{"id": "h1", "name": "loc", "slots": 1}])
     connect(monkeypatch, c)
     client.post("/api/refresh")
@@ -2265,9 +1785,7 @@ def test_refresh_reaches_blazemeter_by_itself_for_nothing(monkeypatch):
 
 
 def test_refresh_needs_no_key(monkeypatch):
-    """Nothing here reaches the account, so there is nothing to be connected
-    for. 401ing would make the button's failure depend on state it never
-    reads."""
+    """Refresh needs no key."""
     server._state["client"] = None
     server._cache["locations:None:42"] = (time.monotonic() + 60, [])
     assert client.post("/api/refresh").status_code == 200
@@ -2285,15 +1803,7 @@ class DeletedLocation(FakeClient):
 
 
 def test_a_deleted_location_reaches_the_browser_as_a_404(monkeypatch):
-    """...and with a detail, which is what lets the page say which failure it is.
-
-    The browser cannot read a sentence: `stale.isGone` branches on the status
-    and on nothing else, so a deleted location arriving as the 502 it used to be
-    would have the page report "something went wrong" about the one failure it
-    has a remedy for. The detail matters too -- api.ts reads a *detail-less* 404
-    as the SPA's static mount answering for a route the server has never heard
-    of, which is a different message entirely.
-    """
+    """A deleted location is a 404 with a detail (the page branches on status)."""
     connect(monkeypatch, DeletedLocation())
     r = client.get("/api/status?harbor_id=h1&ship_id=s1")
     assert r.status_code == 404
@@ -2302,22 +1812,14 @@ def test_a_deleted_location_reaches_the_browser_as_a_404(monkeypatch):
 
 def test_an_account_that_refuses_is_not_an_account_that_deleted_anything(
         monkeypatch):
-    """The other half, one layer up from core's own test of it. An expired key
-    must not reach the page as the status that means "gone", or the page offers
-    Refresh at a problem no re-read can fix."""
+    """An expired key is not a 404."""
     from test_core import ExpiredClient
     connect(monkeypatch, ExpiredClient())
     assert client.get("/api/status?harbor_id=h1&ship_id=s1").status_code == 502
 
 
 def test_every_write_route_drops_the_cache():
-    """The rule is the decorator's, not each route's memory of it.
-
-    `/api/ships/token` is the one that had forgotten -- which is why this
-    asserts over the app's own routes rather than over a list written here.
-    Anything that POSTs to a customer's account and leaves a read cached is
-    a page showing what the account held before the click.
-    """
+    """Every route that writes to the account carries `_writes`."""
     writes = [r for r in app_routes()
               if "POST" in r.methods and r.path in {
                   "/api/locations", "/api/ships",
@@ -2344,20 +1846,8 @@ def _keys(body):
 
 
 def test_this_api_never_says_feature():
-    """The word on the wire is `functionality`, which is BlazeMeter's own.
-
-    Asserted over the app's own routes and their own answers rather than over a
-    list written here, for the reason `test_every_write_route_drops_the_cache`
-    gives: the surface a customer's browser and an MCP session read is the one
-    that has to hold to it, and a route added later is exactly the one nobody
-    would think to add to a list. Scoped to the API and nothing else -- comments
-    and docs say `feature` about plenty of things that are not this one, and
-    a rule that reached prose would be a rule about English.
-
-    Every parameterless GET is called for its body; the rest answer 422 or 401,
-    which is a body too and is checked the same way. `/api/docs` is the same
-    vocabulary once more, from FastAPI's side.
-    """
+    """No route path, response key or OpenAPI path says `feature`; the word is
+    `functionality`. Every parameterless GET is called for its body."""
     paths = [r.path for r in app_routes()]
     assert not [p for p in paths if "feature" in p.lower()]
 
@@ -2371,8 +1861,7 @@ def test_this_api_never_says_feature():
             served |= _keys(body.json())
         except ValueError:                    # the SPA's HTML, not an answer
             pass
-    # Not empty: a walk that reached nothing would pass this silently, which is
-    # the shape a changed route registry leaves behind.
+    # Not empty, so a changed route registry cannot pass silently.
     assert len(seen) > 5, f"only reached {seen} -- did the routes move?"
     assert not [k for k in served if "feature" in k.lower()], sorted(served)
 
@@ -2395,10 +1884,8 @@ def _page_and_sources(monkeypatch, tmp_path, sources=None,
                       recorded="match"):
     """Point the routes at a frontend and a built page of this test's making.
 
-    `recorded` is what the built page records: "match" for the fingerprint of
-    the sources beside it, None for a page built before #237, or any string for
-    a page built from something else.
-    """
+    `recorded` is "match" for the sources' fingerprint, None for a page that
+    records nothing, or any other string for a page built from something else."""
     frontend = tmp_path / "frontend"
     if sources is not None:
         (frontend / "src").mkdir(parents=True)
@@ -2418,11 +1905,7 @@ def _page_and_sources(monkeypatch, tmp_path, sources=None,
 
 
 def test_build_route_says_what_is_being_served(monkeypatch, tmp_path):
-    """#224. A local service serves the checkout that installed it, and nothing
-    rebuilds ui_dist -- so the page can stop matching the code behind it for
-    days. The symptom is a route answering 404, which the page correctly reads
-    as "not read yet" and responds to by showing every field. The server was
-    the last thing suspected, so it now says."""
+    """/api/build reports version, build time, staleness and commit."""
     body = client.get("/api/build").json()
     assert set(body) == {"version", "built", "stale", "commit"}
 
@@ -2435,12 +1918,7 @@ def test_build_route_says_what_is_being_served(monkeypatch, tmp_path):
 
 def test_the_route_answers_staleness_by_content_and_not_by_a_clock(
         monkeypatch, tmp_path):
-    """#238. `git pull`, `git checkout` and a branch switch rewrite the mtime of
-    every file they touch and change nothing about the build, so the old rule
-    raised the flag after a fast-forward through two merged pull requests with
-    the built output byte-identical (measured 2026-08-08). A banner that cries
-    wolf after every pull is one people learn to ignore, which is precisely what
-    the failure it exists for cannot afford."""
+    """Staleness is by content: touching the sources does not make the page stale."""
     frontend = _page_and_sources(monkeypatch, tmp_path, {"src/App.tsx": "x"})
     touched = frontend / "src" / "App.tsx"
     os.utime(touched, (10 ** 10, 10 ** 10))     # newer than the built page
@@ -2448,35 +1926,22 @@ def test_the_route_answers_staleness_by_content_and_not_by_a_clock(
 
 
 def test_a_page_that_records_nothing_is_its_own_answer(monkeypatch, tmp_path):
-    """The fourth state, and the served value is the string the page checks.
-
-    A built page from before #237 has sources beside it and records nothing
-    about which sources it came from. That is *not read*: False would claim a
-    check nobody performed, True would warn about every such checkout until
-    somebody rebuilds, and the wheel's None would make "can never be checked"
-    and "rebuild and it can be" one answer."""
+    """A page that records no fingerprint is served as "unrecorded"."""
     _page_and_sources(monkeypatch, tmp_path, {"src/App.tsx": "x"}, recorded=None)
     assert server.build_state()["stale"] == "unrecorded"
     assert client.get("/api/build").json()["stale"] == "unrecorded"
 
 
 def test_a_wheel_has_no_source_to_be_stale_against(monkeypatch, tmp_path):
-    """`stale` is None off a checkout, never False. An installed wheel ships a
-    built ui_dist and no frontend, so nothing can be compared -- and False there
-    would claim the page had been checked and found current. Distinct from the
-    unrecorded answer above: nothing anybody does to a wheel can answer this
-    question, where a rebuild answers that one. Same rule as every other unread
-    in this codebase."""
+    """A wheel (no frontend) answers None, never False."""
     _page_and_sources(monkeypatch, tmp_path, sources=None, recorded="deadbeef")
     assert server.build_state()["stale"] is None
     assert client.get("/api/build").json()["stale"] is None
 
 
 def test_only_a_stale_page_is_worded_as_a_warning(monkeypatch, capsys):
-    """The startup line, all four answers, and the trap under it: `"unrecorded"`
-    is a non-empty string, so the `if build_state()["stale"]` this used to be
-    would print the `!!` warning for one of the two states that are not one.
-    Each answer says which it is, or says nothing."""
+    """At startup only a stale page prints the `!!` warning; "unrecorded" prints
+    a notice and the other two print nothing."""
     def printed(state):
         monkeypatch.setattr(server, "build_state",
                             lambda: {"stale": state}, raising=True)

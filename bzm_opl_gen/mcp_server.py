@@ -1,36 +1,16 @@
-"""MCP over core.py: the tool for an AI session that has no checkout of this repo.
+"""MCP over core.py, for an AI session that has no checkout of this repo.
 
-`bzm-opl-gen mcp` speaks stdio JSON-RPC. The caller it is written for is an SE
-sitting in a customer's directory with a cluster, a BlazeMeter account, and none
-of this repository -- so the tool descriptions, the `instructions` block and the
-shipped docs are the entire documentation. Anything a session needs to know that
-is not in one of those three does not exist as far as it is concerned.
+`bzm-opl-gen mcp` speaks stdio JSON-RPC. The tool descriptions, INSTRUCTIONS
+and the served docs are the entire documentation such a session has. Six tools,
+each dispatching on an `action` declared as a Literal, so a wrong one is refused
+by the client's own schema validation.
 
-Six tools, each dispatching on an `action`, which is the shape the sibling
-BlazeMeter servers already use: a session that has those does not have to learn
-a second convention. The actions are a `Literal`, so they land in the schema as
-an enum and a wrong one is refused by the client's own validation, naming the
-valid ones, rather than arriving here to be guessed at.
-
-Three rules this layer keeps that core does not:
-
-  **The AUTH_TOKEN is never in a response.** It is written to disk inside the
-  Secret and that is all -- `generate` answers with file names and byte counts.
-  A response goes into a transcript, gets summarised, and is quoted back; a
-  credential that rotates on every fetch must not travel that way. `reveal_token`
-  is the single exception, and it is a whole action so that it cannot happen as
-  a side effect of something else.
-
-  **A secret is never an argument.** A *path* may be (`api_key_file`); the id
-  and secret come from the environment of whatever launched the server, because
-  arguments pass through everything between the caller and here.
-
-  **Nothing writes to a cluster, with one gated exception.** The cluster reads
-  are reads. Applying is the session's own `kubectl`, which is also the only way
-  the person watching sees what was applied. The exception is `opl_agent
-  livetest`, which deploys because that is the whole of what it does -- and is
-  why it is off unless its own variable is set, rather than sharing the
-  destructive one.
+Rules this layer keeps that core does not:
+  * the AUTH_TOKEN is never in a response, except from `reveal_token`, a whole
+    action so it cannot happen as a side effect;
+  * a secret is never an argument (a path may be);
+  * nothing writes to a cluster, except `opl_agent livetest`, which is off
+    unless its own environment variable is set.
 """
 
 import contextlib
@@ -43,15 +23,15 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import (__version__, core, evidence as evidence_mod,
-               generate as gen_mod, facts as facts_mod, livetest, plan)
+from . import (__version__, api, core, evidence as evidence_mod,
+               generate as gen_mod, livetest, plan)
+from . import bundle_names, bundle_options, ca_trust, footprint, readme_parts
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
 
-# Both gates are read at call time, not at build time. A client that sets the
-# variable and expects the next call to work is right to; refusing until the
-# server is restarted would make the message below a lie about what is needed.
+# Both gates are read at call time, so setting the variable takes effect
+# without a restart.
 ENABLE_LIVETEST_ENV = "BZM_OPL_ENABLE_LIVETEST"
 ALLOW_DESTRUCTIVE_ENV = "BZM_OPL_ALLOW_DESTRUCTIVE"
 
@@ -160,14 +140,10 @@ those happened as `token_source`; read it before you deploy.
 """
 
 
-# Filled in beside each tool's actions and dispatch function, below --
-# the description, the action list and the code that reads them are three
-# statements of the same thing, and they go stale as a set.
+# Each tool's description sits beside its action list and dispatch function.
 DESCRIPTIONS = {}
 
-# Kept together, unlike the descriptions: what a client is told about
-# side effects is a property of the whole surface, and the six want
-# reading against each other rather than one at a time.
+# Side-effect hints for all six, kept together so they read against each other.
 _ANNOTATIONS = {
     "opl_location": ToolAnnotations(read_only_hint=False, destructive_hint=True,
                                     idempotent_hint=False, open_world_hint=True),
@@ -186,14 +162,9 @@ _ANNOTATIONS = {
 # -- the docs this server serves ----------------------------------------------
 
 def docs_dir():
-    """Where the shipped documentation is.
-
-    Two places, because there are two ways this is installed. A wheel carries
-    the doc files inside the package (see the `bzm_opl_gen.docs` mapping in
-    pyproject.toml); a checkout has them at the repo root, which is where they
-    are edited and where every relative link between them resolves. One copy on
-    disk either way -- the wheel's is built from the checkout's.
-    """
+    """Where the shipped documentation is: inside the package in a wheel (the
+    `bzm_opl_gen.docs` mapping in pyproject.toml), at the repo root in a
+    checkout."""
     here = os.path.dirname(os.path.abspath(__file__))
     packaged = os.path.join(here, "docs")
     if os.path.isdir(packaged):
@@ -208,9 +179,8 @@ def doc_files():
     return sorted(f for f in os.listdir(d) if f.endswith(".md"))
 
 
-# What each doc is for, so a session can pick one without opening all of them.
-# Names not listed still ship -- the description falls back to the file name --
-# because a doc that is missing from here should be undescribed, not unserved.
+# What each doc is for. A doc missing from here is still served, described by
+# its file name.
 DOC_SUMMARIES = {
     "options.md": "Every generate option: what it does, what it defaults to, "
                   "and what breaks if it is wrong.",
@@ -228,10 +198,8 @@ DOC_SUMMARIES = {
                            "have run under it.",
     "live-test.md": "The live rig: what it proves and what it costs.",
     "web-ui.md": "The local web UI, for a human doing this by hand.",
-    # No command on that page fixes anything -- its "Fix" is a patch to crane's
-    # own source, which this audience cannot apply. The workarounds a customer
-    # can actually run are in service-virtualization.md, and the summary has to
-    # say so, or a session reads the wrong page looking for a command.
+    # That page's fix is a patch to crane's source; the runnable workarounds
+    # are elsewhere, and the summary has to say so.
     "crane-nginx-ingress-port.md": "The upstream crane defect behind a mock "
                                    "endpoint that 503s; the workarounds are in "
                                    "service-virtualization.md.",
@@ -242,11 +210,7 @@ DOC_SUMMARIES = {
 # -- argument handling ---------------------------------------------------------
 
 def _args(args):
-    """Tool arguments as a dict, whatever a client sent for "no arguments".
-
-    None and {} both happen, and a client that omits the field entirely is not
-    making a mistake worth refusing.
-    """
+    """Tool arguments as a dict; None (no arguments) is {}."""
     if args is None:
         return {}
     if not isinstance(args, dict):
@@ -256,12 +220,7 @@ def _args(args):
 
 
 def _need(args, *names):
-    """Required arguments, refused by name.
-
-    All of them named in one message rather than one per round trip: a session
-    that has to discover three missing arguments one at a time spends three
-    calls learning what one sentence could have said.
-    """
+    """Required arguments, all missing ones refused in one message."""
     missing = [n for n in names if args.get(n) in (None, "")]
     if missing:
         raise core.BadRequest(
@@ -269,21 +228,16 @@ def _need(args, *names):
     return [args[n] for n in names]
 
 
+def _given(args, key, default):
+    """`args[key]`, or `default` where it is absent or null (a client's usual
+    way of saying "unset")."""
+    value = args.get(key)
+    return default if value is None else value
+
+
 def _no_secrets(options):
-    """Refuse a credential passed as an option, rather than writing it.
-
-    `auth_token` is a real generate option and the UI sets it, so this is not
-    an impossible argument -- it is one that must not arrive *this* way. A
-    secret in a tool call has already travelled through the model, the
-    transcript and whatever logs either of those keeps; by the time it reaches
-    here the damage is upstream, and the only thing left worth doing is to
-    refuse loudly enough that nobody sends the next one.
-
-    Where the token should come from instead is the point of the refusal, and
-    since #64 that is no longer "the account, automatically" -- the alternatives
-    are a bundle already in out_dir, the value set on disk afterwards, or
-    rotate_token, which issues a new one and revokes whatever is running.
-    """
+    """Refuse a credential passed as an option: by the time it arrives it has
+    already travelled through the model and the transcript."""
     sent = sorted(set(options) & set(gen_mod.SECRET_OPTIONS))
     if sent:
         raise core.BadRequest(
@@ -297,10 +251,8 @@ def _no_secrets(options):
     return options
 
 
-# The argument this used to take. Kept named rather than dropped, because a
-# session working from a cached tool description would send it, get a bundle with
-# a placeholder in it where it expected a working credential, and be told
-# nothing. Refusing costs one round trip and says what the word is now.
+# A former argument name, refused so a session using a cached description does
+# not silently get a placeholder where it expected a credential.
 _RENAMED_TOKEN_ARG = "fetch_token"
 
 
@@ -328,17 +280,18 @@ def _client(args):
     return core.client_from_key(args.get("api_key_file"))
 
 
+def _unknown(action, valid):
+    return core.BadRequest(
+        f"unknown action {action!r}. This tool takes: {', '.join(valid)}")
+
+
+_DEFAULT_NS = bundle_options.DEFAULT_OPTIONS["namespace"]
+
+
 # -- opl_location --------------------------------------------------------------
 
-# An older spelling, kept working. One deployment inside a private location is
-# an **agent**; `ship` is the account's own field name and lives in `ship_id`
-# and nowhere else (CONTEXT.md). A session reads the current action name out of
-# the description at call time, so nothing stored goes stale by this rename --
-# but a person's saved prompt does, and an action name costs nothing to keep,
-# which is the trade `bzm-opl-gen create-ship` already made as an argparse
-# alias. Declared as a table rather than as a second branch in the dispatch, so
-# that "an old name" is distinguishable from "a name still spelling the wrong
-# vocabulary" without anybody keeping a list of exceptions.
+# Older action names, kept working. The word is "agent"; `ship` survives only
+# in `ship_id`, BlazeMeter's own field name.
 LOCATION_ALIASES = {"create_ship": "create_agent"}
 
 LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_agent",
@@ -363,7 +316,7 @@ DESCRIPTIONS["opl_location"] = (
     + "; ".join(f"{r['label']} is refused below {r['minimum']}"
                 for r in core.SLOT_MINIMUMS.values())
     + ", by BlazeMeter rather than by this tool, so ask for the number rather "
-    "than raising it for them (#159).\n"
+    "than raising it for them.\n"
     "  create_agent -- a new agent in a location {harbor_id, name}"
     + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
     "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "
@@ -378,28 +331,21 @@ DESCRIPTIONS["opl_location"] = (
 
 
 def _location(action, args):
-    # An old spelling reaches the action it was renamed from, rather than a
-    # branch of its own: two branches is two behaviours waiting to differ.
     action = LOCATION_ALIASES.get(action, action)
 
     if action == "whoami":
-        u = core.user(_client(args))
-        return {"email": u.get("email"), "display_name": u.get("displayName"),
-                "default_account_id": (u.get("defaultProject") or {}).get("accountId"),
-                "next": ["opl_location list, with that account_id"]}
+        return dict(core.whoami(_client(args)),
+                    next=["opl_location list, with that account_id"])
 
     if action == "list":
         client = _client(args)
         account_id, workspace_id = args.get("account_id"), args.get("workspace_id")
         if not account_id and not workspace_id:
-            # Rather than refusing: the account this key defaults to is almost
-            # always the one meant, and one round trip is cheaper than a
-            # refusal the session then has to work out how to satisfy.
-            account_id = (core.user(client).get("defaultProject") or {}).get("accountId")
+            # The key's default account is almost always the one meant.
+            account_id = core.default_account_id(client)
             core.require_location_scope(account_id, workspace_id)
         locs = core.locations(client, account_id, workspace_id)
-        # Uncapped is not offered on purpose: raising the cap is a number, and
-        # there is no size a session's result budget cannot be broken by.
+        # No uncapped option: there is no size a result budget cannot overflow.
         sel = core.select_locations(
             locs, name_contains=args.get("name_contains"),
             limit=_given(args, "limit", core.DEFAULT_LOCATION_LIMIT))
@@ -413,10 +359,6 @@ def _location(action, args):
                          "harbor_id of the one you want"]}
         note = _omission_note(sel, args.get("name_contains"))
         if note:
-            # In prose as well as in the counts above. A session summarising
-            # this reads the sentence; the fields are what it can compute with,
-            # and the one thing that must survive both is that the list is
-            # partial.
             body["note"] = note
         return body
 
@@ -431,36 +373,26 @@ def _location(action, args):
                                                "workspace_id")
         made = core.create_location(
             _client(args), name, account_id, workspace_id,
-            func_ids=args.get("func_ids") or ["performance"],
+            func_ids=args.get("func_ids") or list(api.DEFAULT_FUNC_IDS),
             slots=_given(args, "slots", 1),
             threads_per_engine=_given(args, "threads_per_engine",
-                                      core.api.DEFAULT_THREADS_PER_ENGINE))
+                                      footprint.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_agent with harbor_id "
                          f"{loc.get('id')!r} -- a location with no agent has "
                          f"nothing to deploy"]}
         if made["warning"]:
-            # Present only when it applies, like the listing's `note`: a
-            # location missing either field 403s every test start with a
-            # message naming neither, and a session that read the summary
-            # without this would go on to generate a bundle for it.
             body["warning"] = made["warning"]
         return body
 
     if action == "create_agent":
         harbor_id, name = _need(args, "harbor_id", "name")
-        # core.create_ship keeps its name: it is the CLI's and the HTTP route's
-        # too, and BlazeMeter's endpoint is /ships. What this surface answers
-        # with is the word a session has to reason in.
-        agent = core.create_ship(_client(args), harbor_id, name)
+        # issue_token=False: a token is never returned by this server.
+        agent = core.create_agent(_client(args), harbor_id, name,
+                                  issue_token=False)["ship"]
         return {"harbor_id": harbor_id, "agent": agent,
                 "next": [f"opl_facts gather with harbor_id {harbor_id!r}"],
-                # Not issued here on purpose: it would rotate a token on an
-                # action whose name says nothing about credentials. And nothing
-                # else issues one by accident either, so the session has to be
-                # told which action to ask for -- `generate` on its own leaves a
-                # placeholder in the Secret.
                 "note": "this call issues no AUTH_TOKEN, and neither does "
                         "opl_bundle generate unless you pass rotate_token=true "
                         "(which is how this new agent gets its first one). "
@@ -479,12 +411,7 @@ def _location(action, args):
         _gate(ALLOW_DESTRUCTIVE_ENV,
               "deleting a private location (and every agent in it)")
         gone = dict(core.delete_location(_client(args), harbor_id))
-        # core's key stays `ships_deleted` -- it is what the CLI prints and what
-        # the HTTP route answers, both outside this rename. Renamed on the way
-        # out rather than left alone, because a session reading `agents`
-        # everywhere else has no reason to look for a ship here; `pop` rather
-        # than `get`, so a core that renames it fails loudly instead of
-        # answering with an empty list nobody deleted.
+        # This surface says "agents"; pop so a renamed core key fails loudly.
         gone["agents_deleted"] = gone.pop("ships_deleted")
         return dict(gone,
                     next=["any agent still deployed for it is now orphaned: "
@@ -494,67 +421,38 @@ def _location(action, args):
 
 
 def _location_summary(loc):
-    """A location as a session needs it: the ids it will pass on, and the two
-    fields that decide whether a bundle can be generated at all.
-
-    One location's worth, for `show` and `create`. A listing uses
-    _location_brief -- per-agent detail on 171 locations is the size problem
-    this pair exists to separate.
-
-    `ship_id` keeps its name inside an agent, and is the only thing here that
-    does: it is BlazeMeter's own field, so a session that reads this and then
-    reads the account's own response should not have to translate.
-    """
+    """One location for `show` and `create`: the ids a session passes on, and
+    each agent's state. `reporting` is null where the payload carried no
+    heartbeat; opl_agent status is the authority."""
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "slots": loc.get("slots"), "func_ids": loc.get("funcIds"),
             "agents": [{"ship_id": s.get("id"), "name": s.get("name"),
                         "state": s.get("state"),
-                        # null where the payload carried no heartbeat -- see
-                        # core.ship_reporting. opl_agent status is the authority.
                         "reporting": core.ship_reporting(s)}
                        for s in loc.get("ships", [])]}
 
 
 def _location_brief(loc):
-    """One location as a *listing* entry: enough to pick one and go on.
+    """One location as a listing entry: enough to choose one, with no per-agent
+    detail (which overflowed the result budget on large accounts).
 
-    An account with 171 locations and 221 agents listed the long way came back
-    at 84,779 characters, past the caller's result ceiling, so step 1 of the
-    path never completed. Almost all of it was per-agent detail about locations
-    the caller was never going to choose -- and choosing needs only whether
-    there is an agent there and whether anything is alive. `show` pays for the
-    detail on the one that gets picked.
+    `agents_reporting` is null when no agent's state is known at all, since a
+    0 there would read as "none alive"; it counts the vouched-for ones
+    otherwise, with `agents_unknown` beside it. (core.account_capacity keeps it
+    numeric: the web page computes with it.)
     """
     agents = loc.get("ships") or []
-    reporting = [core.ship_reporting(s) for s in agents]
+    counts = core.reporting_counts(agents)
+    all_unknown = bool(agents) and counts["agents_unknown"] == len(agents)
     return {"harbor_id": loc.get("id"), "name": loc.get("name"),
             "func_ids": loc.get("funcIds"), "slots": loc.get("slots"),
             "agent_count": len(agents),
-            # Two counts, because one cannot carry both facts.
-            # `agents_reporting` counts only agents the payload vouches for, so
-            # a location with one live agent and one heartbeat-less record still
-            # shows the live one -- reporting the pair as wholly unknown lost
-            # exactly the "one of two" signal a count exists to give.
-            # `agents_unknown` is how a reader tells 0-because-we-looked from
-            # 0-because-we-could-not, so nobody redeploys a working agent on the
-            # strength of a zero. Where nothing at all is vouched for,
-            # `agents_reporting` is null rather than 0: with every agent unknown
-            # there is no count to give, and a 0 beside it would be read as
-            # "none alive".
-            "agents_reporting": (None if reporting and all(r is None
-                                                           for r in reporting)
-                                 else sum(1 for r in reporting if r)),
-            "agents_unknown": sum(1 for r in reporting if r is None)}
+            "agents_reporting": None if all_unknown else counts["agents_reporting"],
+            "agents_unknown": counts["agents_unknown"]}
 
 
 def _omission_note(sel, name_contains):
-    """The counts as a sentence, when something is missing from the list.
-
-    Absent when nothing was left out, so its presence means the list is
-    partial. A list that quietly stops reads as the whole account, and "that
-    location does not exist" about one that was merely omitted is a worse
-    answer than a response that was too big.
-    """
+    """The omitted counts as a sentence, present only when the list is partial."""
     parts = []
     if sel["omitted_by_filter"]:
         parts.append(f"{sel['omitted_by_filter']} of the account's "
@@ -593,61 +491,21 @@ def _facts(action, args):
         harbor_id, = _need(args, "harbor_id")
         facts = core.gather_facts(_client(args), harbor_id)
     elif action == "manual":
-        # Neither id is _need'ed: a bundle is routinely wanted before the
-        # location exists, and refusing here would leave this server the one
-        # surface that cannot produce what the page and the CLI both can. What
-        # is missing is not silent -- it rides into the bundle as a marker and
-        # is named in `warnings` below.
+        # Neither id is required; a blank one becomes a marker and a warning.
         facts = core.manual_facts(
             args.get("harbor_id"), args.get("ship_id"),
-            func_ids=args.get("func_ids") or ["performance"])["facts"]
+            func_ids=args.get("func_ids") or list(api.DEFAULT_FUNC_IDS))["facts"]
     else:
         raise _unknown(action, FACTS_ACTIONS)
-    # However they arrived, the answer is the same shape -- which is the point
-    # of facts.manual() returning what gather() returns.
-    return {"facts": facts, "warnings": _facts_warnings(facts),
+    return {"facts": facts, "warnings": core.facts_warnings(facts),
             "next": _after_facts(facts)}
 
 
 def _after_facts(facts):
-    return [f"opl_preflight doctor -- with a cluster evidence file, if you "
-            f"have one",
+    return ["opl_preflight doctor -- with a cluster evidence file, if you "
+            "have one",
             f"opl_bundle generate with these facts, harbor_id "
             f"{facts.get('harbor_id')!r}, and an absolute out_dir"]
-
-
-def _facts_warnings(facts):
-    """What these facts cannot tell you, said once at the point they are made.
-
-    The GUI image gap is the one that matters: the account carries 60+
-    version-pinned browser repos, and a bundle that names none of them selects
-    an image that may not be the right version. There is no default worth
-    inventing -- but the account itself knows, so this now fires only where
-    nobody could ask it.
-    """
-    out = []
-    if facts_mod.gui_images_incomplete(facts):
-        out.append(
-            "this location runs GUI/browser tests, and these facts carry no "
-            "browser image. The account names the pinned build a location uses "
-            "-- gather facts with an API key rather than by hand, or expect the "
-            "browser engines to fail to pull.")
-    # An id nobody supplied. Named here rather than left to the bundle's README,
-    # because this server's caller is a session in somebody's directory: the
-    # facts object goes straight on to opl_bundle, and a warning at the step that
-    # made it is the one that arrives before the bundle is handed over.
-    blank = [k for k, v in (("harbor_id", facts.get("harbor_id")),
-                            ("ship_id", core.sole_ship_id(facts)))
-             if gen_mod.is_placeholder(v)]
-    if blank:
-        out.append(
-            f"{' and '.join(blank)} was not supplied, so every bundle generated "
-            f"from these facts carries "
-            f"{' and '.join(gen_mod.marker(k) for k in blank)} instead. The "
-            f"cluster refuses it -- a marker is not a legal label value -- so "
-            f"this bundle is for review, and the ids have to be filled in (or "
-            f"the facts re-made) before it is applied.")
-    return out
 
 
 # -- opl_bundle ----------------------------------------------------------------
@@ -677,8 +535,6 @@ DESCRIPTIONS["opl_bundle"] = (
 
 def _bundle(action, args):
     if action == "options":
-        # Both halves together: the default is what you get, the summary is
-        # what it means, and a session picking options needs them side by side.
         docs = core.option_docs()
         return {name: dict(docs[name], default=default)
                 for name, default in core.option_defaults().items()}
@@ -686,48 +542,28 @@ def _bundle(action, args):
     if action == "generate":
         facts, out_dir = _need(args, "facts", "out_dir")
         _no_stale_fetch_token(args)
-        # Before the resolution below, not at the write: a rotation that is then
-        # thrown away by a path refusal has still killed a running agent.
-        core.require_absolute_out_dir(out_dir)
         options = _no_secrets(args.get("options") or {})
         rotate = bool(args.get("rotate_token"))
-        # Resolved here rather than left to generate_bundle so the branch can be
-        # reported: which of the four ways the token arrived decides whether an
-        # agent is still running, and this surface used to answer a rotation with
-        # `warnings: []`. A copy, because resolving mutates -- and the caller's
-        # own `args` must not come back carrying a credential.
-        resolved = dict(options)
-        # `announce` is left unset on purpose: stdout is the JSON-RPC channel
-        # here, so there is nowhere to say a thing *before* it happens. The
-        # ordering the warning exists for cannot be had, and `token_source`
-        # afterwards is what a session gets instead.
-        source = core.resolve_auth_token(
-            facts, resolved,
-            # A client only for the one branch that needs an account. Anything
-            # else must not require a key, and must not be able to spend one.
-            client=_client(args) if rotate else None,
-            rotate=rotate, out_dir=out_dir)
-        # out_dir to both, so the second resolution inside generate_bundle takes
-        # the same branch this one did rather than a different one.
-        files = core.generate_bundle(facts, resolved, out_dir=out_dir)
-        written = core.write_bundle(files, out_dir)
-        return {"out_dir": out_dir, "files": written,
-                "profile": json.loads(files[gen_mod.PROFILE_FILE]),
-                # The branch and the agent, never the value: naming the agent
-                # whose credential was just replaced is the whole point, and it
-                # is not a secret.
-                "token_source": source._asdict(),
-                "warnings": (_facts_warnings(facts) + _bundle_warnings(options)
-                             + _token_warnings(source)),
+        # No `announce`: stdout is the JSON-RPC channel, so the rotation is
+        # reported afterwards in token_source and warnings. A client only for
+        # the branch that needs an account.
+        built = core.build_bundle(
+            facts, options, client=_client(args) if rotate else None,
+            rotate=rotate, out_dir=out_dir, write=True)
+        return {"out_dir": out_dir, "files": built.written,
+                "profile": json.loads(built.files[bundle_names.PROFILE_FILE]),
+                # The branch and the ship, never the value.
+                "token_source": built.token._asdict(),
+                "warnings": (core.facts_warnings(facts)
+                             + _bundle_warnings(options)
+                             + _token_warnings(built.token)),
                 "next": _after_generate(out_dir, options)}
 
     if action == "read":
         out_dir, name = _need(args, "out_dir", "name")
+        # Redacted, or reading the Secret would be a quiet reveal_token.
         content, redacted = core.redact_tokens(
             core.read_bundle_file(out_dir, name))
-        # Otherwise this is a second way to get the token, and a quiet one:
-        # `read bzm_secret.yaml` does not look like asking for a credential the
-        # way `reveal_token` does, which is the whole reason that action exists.
         return {"out_dir": out_dir, "name": name, "content": content,
                 "redacted_fields": redacted,
                 "next": [f"kubectl apply -f {out_dir}/ -n <namespace>, when "
@@ -744,11 +580,8 @@ def _bundle(action, args):
                     "next": ["pass mirror=<registry-prefix> to copy these into "
                              "a private registry, or run the bundle's "
                              "bzm-opl-image-mirror.sh yourself"]}
-        # Not behind the destructive gate, unlike `delete`, and the difference
-        # is what the two do: mirroring *adds* images to a registry the caller
-        # named, and the worst case is repositories nobody wanted. Deleting a
-        # location destroys it and every agent in it, with nothing to restore.
-        # The tool's destructiveHint is what makes a client confirm this one.
+        # Not gated like `delete`: mirroring only adds images to a registry the
+        # caller named. The destructive hint makes a client confirm it.
         return core.mirror_images(
             refs, mirror=args.get("mirror"),
             platform=args.get("platform", "linux/amd64"),
@@ -759,18 +592,12 @@ def _bundle(action, args):
 
 def _after_generate(out_dir, options):
     if options.get("output_format") == "docker":
-        # No cluster and no namespace: the bundle is a script, and it runs on
-        # the host that is to be the private location. Same rule as the two
-        # below -- the session runs it, in a shell where the person watching
-        # sees what it does.
-        return [f"chmod +x {out_dir}/{gen_mod.DOCKER_RUN_FILE}",
-                f"{out_dir}/{gen_mod.DOCKER_RUN_FILE}   (YOU run this, on the "
+        return [f"chmod +x {out_dir}/{bundle_names.DOCKER_RUN_FILE}",
+                f"{out_dir}/{bundle_names.DOCKER_RUN_FILE}   (YOU run this, on the "
                 f"docker host itself -- nothing here reaches it)",
-                # The other route to the same container, for a host that
-                # installs with compose. Either one, never both: they share the
-                # container name, so the second refuses.
+                # Same container name, so running both refuses the second.
                 f"...or `docker compose up -d` in {out_dir}, which starts the "
-                f"same container from {gen_mod.DOCKER_COMPOSE_FILE}. One or the "
+                f"same container from {bundle_names.DOCKER_COMPOSE_FILE}. One or the "
                 f"other, not both",
                 "opl_agent status, to see whether the agent reported in"]
     if options.get("output_format") == "helm":
@@ -779,28 +606,16 @@ def _after_generate(out_dir, options):
                 f"-n {options.get('namespace', _DEFAULT_NS)} --create-namespace",
                 "opl_agent status, once the release is up"]
     ns = options.get("namespace", _DEFAULT_NS)
-    # The bundle's own command rather than a second copy of it: a plain `create
-    # namespace` fails on a namespace that already exists, and this session is
-    # about to be told to run it (#164). Merged onto the defaults because the
-    # options here are whatever the caller supplied, and `cli()` reads two keys
-    # this dict is allowed not to carry.
-    o = {**gen_mod.DEFAULT_OPTIONS, **options}
-    # ...and the apply below takes its binary from the same answer. It was
-    # hardcoded `kubectl`, which put two CLIs in one list the moment the first
-    # line said `oc` -- the failure `generate.cli` exists to stop.
-    return [gen_mod.create_namespace_cmd(o),
-            f"{gen_mod.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
+    # The bundle's own namespace command and CLI binary (kubectl or oc).
+    o = {**bundle_options.DEFAULT_OPTIONS, **options}
+    return [readme_parts.create_namespace_cmd(o),
+            f"{bundle_options.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
             f"no tool here applies anything)",
             "opl_agent status, to see whether the agent reported in"]
 
 
 def _after_doctor(report, options):
-    """Where a preflight leads, which depends on what it found.
-
-    A clean report and a failing one want opposite next moves, and the failing
-    one is where a session is most likely to carry on regardless -- so the
-    suggestion to go and change something is attached to the verdict itself.
-    """
+    """Where a preflight leads: a failing report points at changing something."""
     if not report.get("ok"):
         return ["opl_preflight suggest with the same evidence -- it says which "
                 "options this cluster settles and which it only narrows",
@@ -811,14 +626,8 @@ def _after_doctor(report, options):
 
 
 def _token_warnings(source):
-    """A rotation, in the field a session actually reads.
-
-    `token_source` says it too, but a caller that scans `warnings` for what went
-    wrong would miss the one event here that takes a working agent down -- and
-    that is exactly what happened: the issue reports a live rotation answering
-    `warnings: []`. Only the rotation warns; the other three branches change
-    nothing about what is deployed.
-    """
+    """A rotation, in `warnings` too: it is the one outcome that takes a working
+    agent down."""
     if source.branch != core.TOKEN_ROTATED:
         return []
     return [core.rotation_warning(source.ship_id)]
@@ -826,11 +635,7 @@ def _token_warnings(source):
 
 def _bundle_warnings(options):
     out = []
-    # The CLI prints this beside the token line; here it is a warning, because
-    # this surface has no "beside" and a session that generated a slot bundle
-    # and moved on to `kubectl apply` would meet the failure as a healthy pod
-    # that never comes online (#241). None for every other bundle.
-    slot = gen_mod.ca_slot_notice(options)
+    slot = ca_trust.ca_slot_notice(options)
     if slot:
         out.append(slot)
     if options.get("auto_update"):
@@ -851,12 +656,7 @@ def _bundle_warnings(options):
 
 PLAN_ACTIONS = ("capacity",)
 
-# The three sizing models, stated from the table rather than transcribed
-# beside it. #154 added two of them and this description went on describing
-# virtual users alone, which for an audience that has no other documentation is
-# not an incomplete sentence but the whole of what could be asked for: a GUI
-# Functional customer has no load target at all. Generated, so a fourth model
-# reaches this session by being added to plan.SIZING_MODELS.
+# Generated from plan.SIZING_MODELS, so a new model reaches the description.
 _PLAN_ARGS = ", ".join(
     f"{m['target_field']}?" + (f", {m['figure_field']}?" if m["figure_field"]
                                else "")
@@ -912,11 +712,7 @@ DESCRIPTIONS["opl_plan"] = (
 
 def _plan(action, args):
     if action == "capacity":
-        # `users` is no longer required, for the reason /api/plan and the
-        # command dropped it in #154: it is the performance model's target, not
-        # the only sizing there is. A call that names none of the three is
-        # still a refusal, and it is the planner's -- which names `users`,
-        # the field a caller with one sizing has.
+        # A call naming no target is refused by the planner, naming `users`.
         return core.capacity_plan(
             args.get("users"),
             vus_per_engine=args.get("vus_per_engine"),
@@ -924,10 +720,6 @@ def _plan(action, args):
             engine_mem=args.get("engine_mem"),
             engines_per_node=args.get("engines_per_node"),
             agents=args.get("agents"),
-            # One row per model this call named a target for, walked off
-            # plan.SIZING_MODELS -- the flat arguments here are that table's
-            # own field names, which is how the tool description was generated
-            # from it too.
             sizings=plan.sizings_from(args))
 
     raise _unknown(action, PLAN_ACTIONS)
@@ -963,10 +755,6 @@ def _preflight(action, args):
             options["namespace"] = args["namespace"]
         evidence = args.get("evidence")
         if evidence is None:
-            # The collector is named from doctor's own constant rather than
-            # spelled out here. This message used to offer `doctor --collect`, a
-            # flag that existed in this string and nowhere else in the tool --
-            # and a session with no checkout has no way to find that out.
             raise core.BadRequest(
                 f"doctor needs `evidence`: the JSON produced by "
                 f"{evidence_mod.SCRIPT}, which someone with cluster "
@@ -977,9 +765,8 @@ def _preflight(action, args):
                 f"is no cluster to check against -- and a preflight of no "
                 f"cluster would report nothing wrong with one you have not "
                 f"seen.")
-        # A path is resolved here rather than inside core.preflight: this is the
-        # transport whose caller shares a filesystem with the server, so it is
-        # the one that may name a local file. See core.evidence_document.
+        # This transport shares a filesystem with its caller, so it may pass a
+        # path; see core.evidence_document.
         report = core.preflight(facts, options,
                                 core.evidence_document(evidence))
         return dict(report, next=_after_doctor(report, options))
@@ -1065,51 +852,15 @@ def _after_status(st):
             "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
 
 
-def _given(args, key, default):
-    """`args[key]`, or `default` where it is absent *or null*.
-
-    `.get(key, default)` fills in only an absent key, and `{"limit": null}` is
-    an ordinary way for a client to say "unset" -- which reached core as "no
-    cap" and handed back the whole account `opl_location list` exists to keep
-    out of a result; `slots: null` created a location with it unset.
-    """
-    value = args.get(key)
-    return default if value is None else value
-
-
-_DEFAULT_NS = gen_mod.DEFAULT_OPTIONS["namespace"]
-
-
-def _unknown(action, valid):
-    return core.BadRequest(
-        f"unknown action {action!r}. This tool takes: {', '.join(valid)}")
-
-
 # -- the server ----------------------------------------------------------------
 
 def _answer(fn, action, args):
-    """Run one action and hand back its JSON.
+    """Run one action and hand back its JSON as text.
 
-    Text, not a structured result: these actions return whatever shape suits
-    the question, and the SDK's structured output wants one declared type per
-    tool. JSON in a text block is what the model reads either way.
-
-    CoreError becomes the SDK's `ToolError`, which is its one anticipated
-    failure: the message reaches the model intact -- every one of them is a
-    sentence written for whoever has to fix it. Anything else is a crash to
-    the SDK, and since mcp 2.2 a crash reaches the client as `Error executing
-    tool <name>` with the sentence withheld, which is how a plain ValueError
-    here stopped naming the variable to set.
-
-    **stdout is redirected to stderr for the duration.** On stdio transport
-    stdout *is* the JSON-RPC channel, and one stray line desynchronises the
-    session -- the client stops being able to parse anything, which does not
-    look like a print, it looks like the server died. The layers underneath
-    were written for a command line and print freely: `workstation.run` writes
-    a seven-line report, `livetest.run` narrates a whole deployment. Rather
-    than hunting those down one at a time and re-hunting them whenever
-    something new is called, the channel is protected here, once, for
-    everything. stderr is where a client shows server logs anyway.
+    CoreError becomes the SDK's ToolError, whose message reaches the model
+    intact; any other exception reaches the client with its message withheld.
+    stdout is redirected to stderr throughout, because on stdio it is the
+    JSON-RPC channel and the layers underneath print freely.
     """
     with contextlib.redirect_stdout(sys.stderr):
         try:
@@ -1119,9 +870,7 @@ def _answer(fn, action, args):
 
 
 def build():
-    """A fresh server. Built per call rather than at import so that tests get a
-    clean one and so nothing is captured from the environment at import time --
-    both gates are read when an action runs."""
+    """A fresh server. Nothing is captured from the environment at build time."""
     srv = MCPServer(name=SERVER_NAME, version=__version__,
                     instructions=INSTRUCTIONS)
 
@@ -1173,21 +922,13 @@ def build():
 
 
 def _add_doc(srv, name):
-    """Serve one doc file.
-
-    Read at call time, not at build: in a checkout these are being edited while
-    the server runs, and a resource that answers with what the file said at
-    startup is worse than one that is slightly slower.
-    """
+    """Serve one doc file, read at call time so edits show without a restart."""
     def read():
-        # `name` by closure, not as a defaulted parameter: the SDK reads a
-        # handler's parameters as URI template variables, and a resource whose
-        # URI has none is refused for declaring one.
+        # `name` by closure: the SDK reads handler parameters as URI variables.
         with open(os.path.join(docs_dir(), name), encoding="utf-8") as fh:
             return fh.read()
 
-    # The SDK derives the resource's handler identity from the function name,
-    # so nine closures all called `read` collide on registration.
+    # The SDK keys handlers by function name, so each needs its own.
     read.__name__ = "doc_" + name.replace(".", "_").replace("-", "_")
     srv.resource(f"{RESOURCE_SCHEME}://docs/{name}", name=name,
                  mime_type="text/markdown",
@@ -1195,12 +936,6 @@ def _add_doc(srv, name):
 
 
 def main():
-    """Serve on stdio.
-
-    Nothing may print to stdout here -- it is the JSON-RPC channel, and one
-    stray line makes the session unparseable to the client. Everything this
-    package prints for a human goes through the CLI, which is a different
-    entry point.
-    """
+    """Serve on stdio. Nothing may print to stdout: it is the JSON-RPC channel."""
     import anyio
     anyio.run(build().run_stdio_async)

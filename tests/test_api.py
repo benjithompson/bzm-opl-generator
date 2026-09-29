@@ -44,12 +44,7 @@ def test_create_location_threads_per_engine_override():
 
 
 def test_list_calls_ask_for_more_than_one_page():
-    """A truncated list only looks short.
-
-    The workspace limit was 100, and one real account has 166: the 66 that fell off held
-    40% of the account's rated VUs, attributed on screen to no workspace at all.
-    Locations were already asking for 1000 for the same reason.
-    """
+    """List calls ask for one big page: a truncated list only looks short."""
     c = FakeClient({})
     c.workspaces(123456)
     c.private_locations(account_id=123456)
@@ -62,12 +57,8 @@ def test_list_calls_ask_for_more_than_one_page():
 
 
 def test_the_account_is_asked_what_its_functionalities_are_called():
-    """The funcId vocabulary is the account's, not a table in this repo.
-
-    Fixtured rather than called live, but this is the shape a real account
-    answers with: BlazeMeter's own display names, five funcIds this repo never
-    listed, and no `functionalApi` -- which core.FUNC_ID_LABELS used to offer.
-    """
+    """The funcId vocabulary is read from the account's functionalities endpoint
+    (fixture recorded from a real account)."""
     c = FakeClient({("GET", "/accounts/123456/functionalities"): {
         "additionalSpace": 50,
         "functionalities": [
@@ -82,14 +73,8 @@ def test_the_account_is_asked_what_its_functionalities_are_called():
 
 
 def test_the_location_is_asked_which_images_its_agent_runs():
-    """The image list is the account's too, and it needs no live agent.
-
-    Fixtured, but recorded verbatim off a performance-only location whose agent
-    had never been online (`state: empty`): three resources, each carrying the
-    crane key (`dockerTag`), the exact version and the repo it is served from.
-    The map's own keys are BlazeMeter's resource ids -- `taurusEngineDockerImage`
-    is not a name crane resolves an override by -- so nothing may read them.
-    """
+    """The image list comes from the per-agent /versions route, which needs no live
+    agent; the map's own keys are resource ids nothing reads."""
     c = FakeClient({("GET", "/private-locations/H1/ships/S1/versions"):
                     VERSIONS_PERFORMANCE})
     body = c.ship_versions("H1", "S1")
@@ -124,9 +109,7 @@ class _Body:
     _Body(b"[1, 2]"),
 ])
 def test_every_failure_to_answer_is_a_bzm_api_error(monkeypatch, answer):
-    """Not only an HTTP status. Anything else escapes `core._upstream` as its
-    own type: a 500 with a traceback on the page, and a withheld sentence in an
-    MCP session. None of these has a status to judge, so `status` is None."""
+    """Network failures and non-JSON bodies are BzmApiError too, with status None."""
     def urlopen(req, timeout=None, **kw):
         if isinstance(answer, Exception):
             raise answer
@@ -152,11 +135,8 @@ def test_update_private_location_no_fields_is_a_read():
     assert c.calls == [("GET", "/private-locations/h1", None)]
 
 
-# A missing or half-filled key file is the first thing a new contributor hits;
-# it used to surface as a FileNotFoundError/KeyError traceback. The reading is
-# this module's; deciding what a bad file means is the caller's, which is why
-# these assert a ValueError and tests/test_core.py asserts the refusal built
-# from it.
+# The reading is this module's (ValueError); the refusal built from it is
+# core's (tests/test_core.py).
 def test_missing_api_key_file_names_the_path(tmp_path):
     missing = tmp_path / "nope.json"
     with pytest.raises(ValueError) as e:
@@ -179,12 +159,7 @@ def test_api_key_file_missing_secret(tmp_path):
 
 
 def test_a_path_cannot_be_handed_to_the_constructor_at_all(tmp_path):
-    """The construction takes a pair, keyword-only. It used to take a path and
-    read it, and that read raised SystemExit -- a BaseException, straight past
-    a route's error handling and out through the top of the server process.
-    Keyword-only is what makes "one construction" structural rather than a rule
-    each caller has to keep: a path does not fit here any more.
-    """
+    """The constructor takes a keyword-only pair, so a path cannot be passed."""
     key = tmp_path / "api-key.json"
     key.write_text(json.dumps({"id": "abc", "secret": "s"}))
     with pytest.raises(TypeError):
