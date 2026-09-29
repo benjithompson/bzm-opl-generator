@@ -56,12 +56,16 @@ The path through it:
   4. opl_bundle generate        -- write the manifests to a directory
   5. kubectl apply -f <dir>     -- YOU run this, in your own shell
   6. opl_agent status           -- did the agent come online?
+  7. opl_agent triage           -- if not, or a run hangs at BOOT_STARTING:
+                                   the known failures in the namespace, each
+                                   with its fix (see triage.md)
 
 Step 5 is deliberately not a tool. This server does not apply anything to a
 cluster: the person you are working with needs to see what is being applied to
 theirs, and `kubectl apply` in their shell is where they see it. The same goes
 for `helm install` when the bundle is a chart. (The one tool that does deploy is
-opl_agent livetest, which is off unless its own variable is set.)
+opl_agent livetest, which is off unless its own variable is set.) Step 7 reads
+the namespace with this machine's own kubectl or oc context and writes nothing.
 
 Sizing before there is a cluster: `opl_plan capacity` turns what a customer has
 to run ("5,000 virtual users", "40 browsers at once") into pods, nodes and a
@@ -102,7 +106,8 @@ you have not got one, say so -- do not report a preflight you did not run.
 
 Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
-checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md
+checks mean), triage.md (what a deployed namespace shows, and each fix),
+capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
 hardened-engines.md, live-test.md. Read the one that covers the question rather
 than guessing at an option name -- `opl_bundle options` lists them all with a
@@ -204,6 +209,8 @@ DOC_SUMMARIES = {
                                    "endpoint that 503s; the workarounds are in "
                                    "service-virtualization.md.",
     "mcp.md": "This server: its tools, its gates, and what it will not do.",
+    "triage.md": "After deploying: the known failures triage recognises in "
+                 "a namespace, and the fix for each.",
 }
 
 
@@ -732,7 +739,7 @@ PREFLIGHT_ACTIONS = ("doctor", "suggest", "toolcheck")
 DESCRIPTIONS["opl_preflight"] = (
     "Will this land? Checks that run before anything is applied.\n"
     "  doctor    -- the cluster against this configuration {facts, "
-    "evidence, options?, namespace?}. This server never runs kubectl "
+    "evidence, options?, namespace?}. It never runs kubectl "
     "itself.\n"
     "  suggest   -- what that same evidence implies the options should "
     "be {evidence, options?}\n"
@@ -761,7 +768,7 @@ def _preflight(action, args):
                 f"access runs read-only and sends back "
                 f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
                 f"for). Pass the path of the file they sent, or the object "
-                f"itself. This server never runs kubectl, so without one there "
+                f"itself. Doctor never runs kubectl, so without one there "
                 f"is no cluster to check against -- and a preflight of no "
                 f"cluster would report nothing wrong with one you have not "
                 f"seen.")
@@ -790,12 +797,18 @@ def _preflight(action, args):
 
 # -- opl_agent -----------------------------------------------------------------
 
-AGENT_ACTIONS = ("status", "livetest")
+AGENT_ACTIONS = ("status", "triage", "livetest")
 
 DESCRIPTIONS["opl_agent"] = (
     "The deployed agent.\n"
     "  status   -- is it reporting? {harbor_id, ship_id}. State alone "
     "reads as healthy forever, so this is really about the heartbeat.\n"
+    "  triage   -- why not, or why a run hangs at BOOT_STARTING {namespace, "
+    "since?, crane_log_lines?}. Reads events, pods and crane's log with "
+    "this machine's kubectl or oc context and writes nothing. Each "
+    "finding names the option or action that fixes it; `unread` lists "
+    "reads the cluster refused, which are not findings, and "
+    "`unrecognised` lists warnings no rule knows. Report both.\n"
     "  livetest -- deploy a bundle to a cluster and wait for the agent "
     "{manifests, namespace, harbor_id, ship_id, cluster?, timeout?}. "
     "Off unless " + ENABLE_LIVETEST_ENV + "=1, blocks for minutes, and "
@@ -813,6 +826,12 @@ def _agent(action, args):
         harbor_id, ship_id = _need(args, "harbor_id", "ship_id")
         st = core.agent_status(_client(args), harbor_id, ship_id)
         return dict(st, next=_after_status(st))
+
+    if action == "triage":
+        namespace, = _need(args, "namespace")
+        report = core.triage(namespace, since=args.get("since"),
+                             log_lines=args.get("crane_log_lines"))
+        return dict(report, next=_after_triage(report))
 
     if action == "livetest":
         _gate(ENABLE_LIVETEST_ENV,
@@ -847,9 +866,29 @@ def _after_status(st):
         return ["no heartbeat ever: the agent has not reached BlazeMeter. "
                 "Check the pod is running and its AUTH_TOKEN is current -- a "
                 "stale token logs 404 on /ships/<id>/status and sits at 0/1.",
-                "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
+                "opl_agent triage with the namespace, where this machine has "
+                "cluster access: it names the known failures and their fixes"]
     return ["the agent reported once and has gone quiet.",
-            "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
+            "opl_agent triage with the namespace, where this machine has "
+            "cluster access: it names the known failures and their fixes"]
+
+
+def _after_triage(report):
+    """Where a triage leads: a finding's fix, else what the report could not
+    see."""
+    if not report["ok"]:
+        return ["apply the fix each FAIL names, regenerating with opl_bundle "
+                "generate where it names an option, then run this again"]
+    steps = []
+    if report["unread"]:
+        steps.append("some reads were refused, so a clean report is not a "
+                     "clean namespace: ask someone with read access to events, "
+                     "pods and pods/log in it to run bzm-opl-gen triage")
+    if report["unrecognised"]:
+        steps.append("no rule knows the unrecognised warnings: pass them on "
+                     "as found rather than guessing a cause")
+    return steps or ["nothing known is wrong in the namespace. opl_agent "
+                     "status says whether the agent is reporting"]
 
 
 # -- the server ----------------------------------------------------------------

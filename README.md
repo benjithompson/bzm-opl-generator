@@ -126,6 +126,9 @@ bzm-opl-gen doctor --facts facts.json --manifests out/ -n my-project
 #    and the bundle README prints the same line
 kubectl get namespace my-project >/dev/null 2>&1 || kubectl create namespace my-project
 kubectl apply -n my-project -f out/
+
+# 6. agent offline, or a run stuck at BOOT_STARTING? name the cause and the fix
+bzm-opl-gen triage -n my-project
 ```
 
 Step 0 needs no account and no cluster — that is the case it exists for, since
@@ -215,6 +218,7 @@ option or only narrows it
 | [docs/docker.md](docs/docker.md) | `--format docker`, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
+| [docs/triage.md](docs/triage.md) | `triage` — after deploying, the known failures in a namespace and the fix for each |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |
 | [docs/crane-nginx-ingress-port.md](docs/crane-nginx-ingress-port.md) | write-up of crane's nginx Ingress port defect |

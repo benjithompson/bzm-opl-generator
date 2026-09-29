@@ -62,17 +62,18 @@ def kget(cli, namespace, kind, name=None):
     return kget_named(cli, namespace, kind, name) or {}
 
 
-def kget_named(cli, namespace, kind, name=None):
+def kget_named(cli, namespace, kind, name=None, timeout=None):
     """`kget`, but {} only when the API server answered NotFound and None for
-    every other failure (Forbidden, no cluster, no binary)."""
+    every other failure (Forbidden, no cluster, no binary, no answer within
+    `timeout` seconds)."""
     cmd = [cli, "get", kind, "-o", "json"]
     if name:
         cmd.insert(3, name)
     if namespace:
         cmd[1:1] = ["-n", namespace]
     try:
-        out = quiet(cmd)
-    except OSError:
+        out = quiet(cmd, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode == 0 and out.stdout.strip():
         return json.loads(out.stdout)
