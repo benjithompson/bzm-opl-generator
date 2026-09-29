@@ -11,7 +11,7 @@ actual BlazeMeter account** instead of hand-edited templates.
 
 ```
         BlazeMeter API                customer parameters
-   (harbor, ships, funcIds,        (namespace, registry, platform,
+   (location, agents, funcIds,     (namespace, registry, platform,
     live image inventory)           functionality, secret policy, ...)
               \                        /
                v                      v
@@ -226,7 +226,7 @@ option or only narrows it
 
 ```
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest tests -q          # ~3s, no cluster, must end "N passed"
+.venv/bin/pytest tests -q          # no cluster; must end "N passed", nothing skipped
 ```
 
 You need no BlazeMeter account to work on the generator — `examples/facts.example.json`

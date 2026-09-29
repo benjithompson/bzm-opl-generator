@@ -1,11 +1,10 @@
 # Service virtualization
 
 **Two publishing shapes, one per platform.** A virtual service is only useful
-once something outside the cluster — or outside the host — can reach it, and how
-the agent arranges that is entirely different on Kubernetes and on Docker.
-BlazeMeter say why themselves: *"Kubernetes agents automatically return DNS-based
-URLs. As an end-user, you do not have to set a hostname override for a
-Kubernetes agent."*
+once something outside the cluster — or outside the host — can reach it, and the
+agent arranges that differently on Kubernetes and on Docker. As BlazeMeter put
+it: *"Kubernetes agents automatically return DNS-based URLs. As an end-user, you
+do not have to set a hostname override for a Kubernetes agent."*
 
 | | Kubernetes (`--format manifests`, `--format helm`) | Docker (`--format docker`) |
 |---|---|---|
@@ -14,27 +13,17 @@ Kubernetes agent."*
 | the variables | `KUBERNETES_WEB_EXPOSE_*` | `HOSTNAME_OVERRIDE`, `TLS_CERT`, `TLS_KEY` |
 | what you provide | an ingress controller, a wildcard DNS record, a wildcard TLS Secret | a DNS record for the hostname, and a certificate covering it |
 
-Each set is meaningless on the other platform, so each is in the other format's
-ignored-options table: the configure page shows exactly one of them, and a
-profile written for one platform and generated for the other keeps its values,
-carries them in `profile.json`, and has the bundle's README name what it could
-not apply. Nothing is silently dropped, and nothing is refused for being the
-wrong platform's.
-
-`--format helm` is the Kubernetes column, in a chart. The same four options
-become the `sv.*` values, the chart writes the same `KUBERNETES_WEB_EXPOSE_*`
-and grants the same one API group, and `tests/helm_parity.py` renders every
-backend both ways and requires the same objects — see
-[below](#the-same-thing-as-a-chart).
+Each set is ignored by the other platform's formats: the web UI shows one of
+them, and a profile generated for the other platform keeps its values in
+`profile.json` while the bundle's README names what it could not apply.
 
 ## Kubernetes: an ingress per virtual service
 
 A location whose funcIds include `mockServices` needs an ingress before any
-virtual service will work. The generator refuses to render without one, because
-the failure is otherwise invisible: the manifests apply cleanly, the agent goes
-`idle`, the mock pod runs `1/1` — and every deploy hangs at
-`WAITING_FOR_DOMAIN` forever with no error, because crane has no domain to hand
-the service.
+virtual service will work, and the generator refuses to render without an answer.
+Otherwise the failure is invisible: the manifests apply, the agent goes `idle`,
+the mock pod runs `1/1` — and every deploy hangs at `WAITING_FOR_DOMAIN` with no
+error, because crane has no domain to hand the service.
 
 ```
 bzm-opl-gen generate --facts facts.json --auth-token <token> \
@@ -46,17 +35,16 @@ bzm-opl-gen generate --facts facts.json --auth-token <token> \
 
 | what | why |
 |---|---|
-| `--sv-ingress nginx\|istio\|contour\|openshift` | one at a time; the controller must already be installed (`openshift` needs no install — the cluster router is already there) |
+| `--sv-ingress nginx\|istio\|contour\|openshift` | one at a time; the controller must already be installed (`openshift` uses the cluster router) |
 | `--sv-subdomain` | endpoints become `<service>-<port>-<namespace>.<subdomain>` |
-| `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even when the virtual service speaks plain HTTP, and even on istio, where nothing ever reads it (see below) |
+| `--sv-tls-secret` | crane validates it at startup and crash-loops on `TLS secret name is empty` — required even for plain HTTP, and even on istio, which never reads it (see below) |
 
 **Optional:** `--sv-istio-gateway` reuses one Gateway instead of creating one
 per virtual service. It is rejected with any other `--sv-ingress`, because only
-crane's istio backend reads it — setting it elsewhere would silently do nothing.
+crane's istio backend reads it.
 
-**Provided by you, not generated** — the **agent's own namespace** needs a
-wildcard TLS secret for `*.<subdomain>`, and with `--sv-istio-gateway` that
-Gateway must already exist (the generator names it, it does not create it).
+**Provided by you, not generated** — a wildcard TLS secret for `*.<subdomain>`
+in the **agent's own namespace**, and with `--sv-istio-gateway`, that Gateway.
 
 ```
 kubectl -n <agent-namespace> create secret tls <name> --cert=<file> --key=<file>
@@ -69,9 +57,8 @@ Not `default`, which is what [Bring your own certificate][byoc] says — see
 
 ## Docker: a hostname and a certificate
 
-A docker agent has no cluster to create an ingress in, so it serves the
-endpoints itself. What it needs is a name to advertise them under and,
-optionally, a certificate to serve them with:
+A docker agent serves the endpoints itself. It needs a name to advertise them
+under and, optionally, a certificate to serve them with:
 
 ```
 bzm-opl-gen generate --facts facts.json --format docker \
@@ -81,124 +68,76 @@ bzm-opl-gen generate --facts facts.json --format docker \
 
 | what | why |
 |---|---|
-| `--sv-hostname` | `HOSTNAME_OVERRIDE`. BlazeMeter's Asset Catalog builds endpoint URLs from *"the combination of hostname and port"*; without it they are built from this host's IP address and port instead, which works and is worse. It has to resolve to the host from wherever the clients are — that is a DNS record you own, and no bundle can make one. |
+| `--sv-hostname` | `HOSTNAME_OVERRIDE`. BlazeMeter builds endpoint URLs from *"the combination of hostname and port"*; without it they use this host's IP address, which may be routable from nowhere. It must resolve to the host from wherever the clients are — a DNS record you own. |
 | `--sv-tls-cert` | the X509 certificate, PEM. **Optional** — without the pair the endpoints are plain HTTP. |
 | `--sv-tls-key` | its private key, PEM with **PKCS#8** syntax. |
 
-Both are read as *content*, not as paths: the file you name on the command line
-is read and written into the bundle, as `sv-tls.crt` and `sv-tls.key`, and
-mounted at `/etc/ssl/certs/public.pem` and `/etc/ssl/certs/privatekey.pem` —
-BlazeMeter's own paths, which `TLS_CERT` and `TLS_KEY` then name. This is
-`--ca-bundle`'s shape, for `--ca-bundle`'s reason: a path-valued *option* could
-not produce a working bundle for a host nobody here can see, which is the whole
-premise of generating from typed-in facts. Both files stay overridable at run
-time — set `SV_TLS_CERT` / `SV_TLS_KEY` (or `CA_BUNDLE`) to a path the host
-already keeps, and the script and the compose file both use it.
+The files you name are read and written into the bundle as `sv-tls.crt` and
+`sv-tls.key`, mounted at BlazeMeter's paths `/etc/ssl/certs/public.pem` and
+`/etc/ssl/certs/privatekey.pem`, which `TLS_CERT` and `TLS_KEY` name. Both stay
+overridable at run time: set `SV_TLS_CERT` / `SV_TLS_KEY` (or `CA_BUNDLE`) to a
+path the host already keeps, and the script and compose file both use it.
 
-**Two things are checked when the bundle is generated**, because both fail
-silently on a running agent — it starts, reports online, publishes the endpoint,
-and every client rejects it:
+**Two things are checked at generate time**, because both fail silently on a
+running agent — it reports online, publishes the endpoint, and every client
+rejects it:
 
-- **The key must be PKCS#8.** BlazeMeter: *"Base64 encoded private key in PEM
-  format with PKCS#8 syntax."* A PKCS#1 key (`-----BEGIN RSA PRIVATE KEY-----`)
-  is the common `openssl genrsa` export and is refused by name:
+- **The key must be PKCS#8.** A PKCS#1 key (`-----BEGIN RSA PRIVATE KEY-----`,
+  the usual `openssl genrsa` output) is refused with the conversion:
   `openssl pkcs8 -topk8 -nocrypt -in key.pem -out key.pk8.pem`. So is an
-  encrypted key — nothing here can give the agent a passphrase.
-- **The hostname must match the certificate.** BlazeMeter: *"the hostname of the
-  request has to match ... one of the DNSName entries in the Subject Alternative
-  Name extension"* or *"the Common Name field"*. The certificate you supply is
-  parsed and the hostname checked against both; wildcards cover one label, as
-  they do for every client. A mismatch is refused, naming what the certificate
-  does carry.
+  encrypted key — the agent cannot be given a passphrase.
+- **The hostname must match the certificate** — a DNS name in its Subject
+  Alternative Name or its Common Name; wildcards cover one label. A mismatch is
+  refused, naming what the certificate does carry.
 
-  **What is not checked:** expiry, who signed it, whether the chain is
-  complete, and whether the key beside it is that certificate's key. This is a
-  name check and nothing else. If the certificate cannot be parsed at all, the
-  hostname is **not checked** — that is not the same as passing, and the
-  bundle's README says which of the two happened, rather than going quiet and
-  reading like one that was verified.
+Nothing else is checked: not expiry, the signer, the chain, or whether the key
+belongs to the certificate. If the certificate cannot be parsed, the hostname is
+**not checked**, and the bundle's README says so.
 
-`--sv-hostname` gets no other format validation. BlazeMeter's own example value
-is `C123ABCXYZ` and nothing they publish says what shape it has to be, so
-nothing here invents one; a blank one left behind by the web UI becomes
-`<SV_HOSTNAME>`, which the generated script and the compose file both refuse
-before they start a container.
+`--sv-hostname` has no format rules beyond that. Left blank in the web UI it
+becomes `<SV_HOSTNAME>`, which the script and compose file both refuse before
+starting a container.
 
-**The key is not written to `profile.json`.** A profile is the file people
-commit, diff and paste into tickets, so it carries every resolved option except
-credentials — and a private key is one. The certificate beside it is *not*
-excluded: it is what the agent hands to every client that connects, so dropping
-it would make a replay need two things supplied for no gain. The consequence:
-`generate --profile` on a docker bundle that serves HTTPS needs `--auth-token`
-**and** `--sv-tls-key`. Without the key the replayed bundle writes
-`<SV_TLS_KEY>` into `sv-tls.key` and names it at the top of its README.
+**The key is not written to `profile.json`** (the certificate is). So
+`generate --profile` on a docker bundle serving HTTPS needs `--auth-token`
+**and** `--sv-tls-key`; without the key the bundle writes `<SV_TLS_KEY>` into
+`sv-tls.key` and names it at the top of its README.
 
 ### What a live run showed
 
-Run once, end to end (#184): a scratch `mockServices` location, a docker bundle
-installed with `docker compose up -d` on a host with a docker daemon and no
-cluster, and a real virtual service deployed onto it. It serves — 200 and the
-transaction's body at `https://sv.bzm-opl.test:10001/hello`, over TLS whose
-certificate is byte-for-byte the one the bundle supplied (SHA-256 fingerprints
-compared), 404 on an unmatched path, and a verification failure under any other
-hostname. So the pair works, and the shape below is what it works *by*. Four of
-these contradict what was assumed when the options were written, and one of them
-will stop a first install.
+A docker bundle installed with `docker compose up -d`, with a real virtual
+service deployed onto it, served `200` and the transaction's body over TLS with
+exactly the certificate the bundle supplied, `404` on an unmatched path, and a
+verification failure under any other hostname. What that run established:
 
-- **Crane does not pull.** It composes the image name and calls the docker
-  daemon's *create* directly; if the image is not already on the host it retries
-  for about ninety seconds and the deploy ends `FAILED`, with
-  `Failed to find a deployed container` on the BlazeMeter side and
-  `No such image` only in `docker logs`. Neither message names a pull. This
-  bites hardest with a private `DOCKER_REGISTRY`, because crane prefixes it onto
-  BlazeMeter's own unqualified image name and the result is a tag the host has
-  never seen — the tag exists and `docker pull` fetches it in seconds, but
-  nothing asks. **Pre-pull the mock images on any host that will serve virtual
-  services**, or the first deploy fails for a reason that reads like a broken
-  agent.
+- **Crane does not pull.** It asks the docker daemon to *create* the container;
+  if the image is not already on the host it retries for about ninety seconds
+  and the deploy ends `FAILED`, with `Failed to find a deployed container` in
+  BlazeMeter and `No such image` only in `docker logs`. **Pre-pull the mock
+  images on any host that will serve virtual services.**
 - **The image a docker agent runs is `:latest`, not the pinned tag.**
   BlazeMeter's deploy command names `blazemeter/service-mock:latest` even where
-  the location's own `/versions` pins `6.0.30.4`. `DOCKER_REGISTRY` is applied to
-  that name as a prefix, so what actually runs is
-  `<registry>/blazemeter/service-mock:latest`. That is the tag to pre-pull; the
-  pinned one from the image list is not what gets started.
-- **`DOCKER_PORT_RANGE` does not reach virtual services.** The agent reports
-  `10000-32000` to BlazeMeter as its port range whatever that variable says, and
-  BlazeMeter's deploy command carries the same figure; the mock in this run
-  landed on 10001. The variable governs engines. Do not size a firewall rule
-  from it.
-- **The mock is a bridge container with a published port**, not a host-networked
-  one. Only crane runs with `--net=host`. So the endpoint's port is a
-  *published* port on the host, and the range above is the range to open.
-- **Crane replicates its own bind mounts onto the mock.** The mock container
-  gets `TLS_CERT` and `TLS_KEY` in its environment pointing at
-  `/etc/ssl/certs/public.pem` and `/etc/ssl/certs/privatekey.pem`, and the two
-  files arrive by crane re-mounting *its own* host paths onto the new container.
-  This is why the pair have to be real files at a path on the host rather than
-  content crane holds in memory, and it is what the bundle's volume lines exist
-  to provide.
-- **`HOSTNAME_OVERRIDE` never reaches the mock.** It stays crane-side, and is
-  used to compose the advertised endpoint and to set the mock's
-  `BZM_ACCESS_HOSTNAME_OVERRIDE` label. The endpoint BlazeMeter published was
-  exactly the hostname and the published port — *"the combination of hostname
-  and port"*, as their page says. Without the override that same field is the
-  host's own address, and in this run that was a docker bridge IP: routable from
-  nowhere.
+  the location pins a version, and `DOCKER_REGISTRY` is prefixed onto that name.
+  `<registry>/blazemeter/service-mock:latest` is the tag to pre-pull.
+- **`DOCKER_PORT_RANGE` does not apply to virtual services.** The agent reports
+  `10000-32000` whatever that variable says; it governs engines only. Do not
+  size a firewall rule from it.
+- **The mock is a bridge container with a published port**; only crane runs
+  with `--net=host`. Open the `10000-32000` range on the host.
+- **Crane re-mounts its own bind mounts onto the mock**, which is how the
+  mock receives `TLS_CERT`/`TLS_KEY`. That is why the pair must be real files
+  on the host.
+- **`HOSTNAME_OVERRIDE` stays crane-side**, composing the advertised endpoint
+  (hostname plus published port). Without it the endpoint was a docker bridge
+  IP.
 
-**Two things this run did not settle**, and neither should be written up as
-though it had. Whether BlazeMeter itself refuses a PKCS#1 key is still only
-their documentation's word — the key supplied here was PKCS#8, so their
-requirement was met rather than tested, and the generator's own refusal is what
-stands between a customer and finding out. And nothing here ran the container as
-a non-root user: `-u 0` came from BlazeMeter's generated command, the socket
-path it exists for did run for the first time in this test, but the failure mode
-without it remains untested.
+Not established by that run: whether BlazeMeter itself rejects a PKCS#1 key (the
+generator refuses one first), and how the container behaves without `-u 0`.
 
 ## The same thing as a chart
 
-`--format helm` publishes virtual services the way `--format manifests` does,
-because the chart is the manifests expressed twice. The four options become
-four values:
+`--format helm` publishes virtual services the way `--format manifests` does.
+The four options become four values:
 
 ```
 helm install crane ./helm -n my-sv -f bzm-opl-values.yaml
@@ -212,25 +151,18 @@ sv:
   istioGateway: ""        # istio only
 ```
 
-The chart writes the same `KUBERNETES_WEB_EXPOSE_*` into its ConfigMap, grants
-the same single API group in its Role, and refuses the same combinations in the
-same words — a backend that cannot survive `NODEPORT`, an OpenShift Route on a
-plain Kubernetes API server, a gateway name no backend but istio reads. Those
-refusals are restated in the chart rather than left to the generator because a
-chart is also installed by hand, with no generator in front of it.
+The chart writes the same `KUBERNETES_WEB_EXPOSE_*`, grants the same API group
+in its Role, and refuses the same combinations — a backend that cannot work on
+`NODEPORT`, an OpenShift Route on a plain Kubernetes API server, a gateway name
+only istio reads — because a chart can also be installed by hand.
 
-Two things stay the customer's on both formats, and neither is created by the
-bundle: the wildcard DNS record, and the TLS Secret in the agent's namespace.
-
-This was a refusal until the chart carried the ingress env and its RBAC — a
-limit of *our* chart, which the upstream Blazemeter/helm-crane chart never had.
-A bundle generated by an older version says so, and re-generating is the fix.
+On both formats the wildcard DNS record and the TLS Secret in the agent's
+namespace are yours to create.
 
 ## Not using it on a location that offers it
 
-Accounts routinely have locations carrying `mockServices` alongside
-`performance` because somebody enabled both when the location was created, and
-then run nothing but tests on them. `--sv-ingress none` is that, said out loud:
+Locations often carry `mockServices` beside `performance` and only ever run
+tests. `--sv-ingress none` says so:
 
 ```
 bzm-opl-gen generate --facts facts.json --auth-token <token> \
@@ -238,135 +170,98 @@ bzm-opl-gen generate --facts facts.json --auth-token <token> \
 ```
 
 The bundle is then the performance one — no ingress, no SV RBAC, no TLS secret,
-and no `KUBERNETES_WEB_EXPOSE_*` in the ConfigMap — in whichever format, the
-chart included (its `sv:` block is simply not written). What you give up is what
-the refusal above was protecting: deploy a virtual service to this location and
-it will stall at `WAITING_FOR_DOMAIN`, exactly as described above.
+no `KUBERNETES_WEB_EXPOSE_*` — in either Kubernetes format. A virtual service
+deployed to this location will stall at `WAITING_FOR_DOMAIN`. The images are
+unchanged: the mock image is still in `IMAGE_OVERRIDES`, because which images
+the agent runs is a fact about the location.
 
-`--sv-ingress none` says nothing about a docker bundle, and never did: that
-option is one of docker's ignored ones. A docker bundle for a `mockServices`
-location publishes virtual services if `--sv-hostname` is set and does not if it
-is not, and neither is refused — endpoints under this host's IP address are
-degraded rather than broken, which is BlazeMeter's own framing of the hostname
-override. Nothing else changes, including the images — which image set the agent
-runs is a fact about the location, so the mock image is still in
-`IMAGE_OVERRIDES`.
+Leaving `sv_ingress` unset is *not* the same: it is refused for such a location,
+so the question is answered before anyone spends an afternoon on a mock pod that
+never serves. In the web UI, turning off the **Service virtualization** group is
+the same decision.
 
-Unset is *not* this. An `sv_ingress` nobody has answered is still refused for
-such a location: the whole value of the refusal is that it arrives before an
-afternoon has gone into a healthy-looking mock pod that never serves, and it
-would be worth nothing if the way past it were to say nothing. In the web UI
-the switch on the **Service virtualization** group is the same decision — it
-now turns off on such a location, and the row says what was given up rather
-than going quiet.
+On docker, `--sv-ingress` does not apply. A docker bundle for a `mockServices`
+location publishes under `--sv-hostname` if set, and under the host's IP address
+if not; neither is refused.
 
 ## Which one to pick
 
-**Prefer anything but `nginx`** — on the default `service_type: CLUSTERIP`,
-which is what this section assumes throughout. Crane ships a separate expose
-implementation per type, and only the `nginx` one writes a port reference that
-is wrong by the Ingress spec. It happens to work on `ingress-nginx`, which
-forgives it — but it is working on tolerance no API guarantees, and it fails
-outright on a controller that follows the spec. On OpenShift, use `openshift`.
-
-`NODEPORT` inverts this, which is why it has [its own
-section](#service_type-and-the-backend-you-chose): it makes the `nginx`
-reference correct and stops `contour` and `istio` working at all. The table
-below is the CLUSTERIP picture.
+**Prefer anything but `nginx`** on the default `service_type: CLUSTERIP`, which
+this section assumes. Only crane's `nginx` implementation writes a port
+reference that is wrong by the Ingress spec; `ingress-nginx` tolerates it, but a
+controller that follows the spec does not. On OpenShift, use `openshift`.
+`NODEPORT` changes the picture — see [its own
+section](#service_type-and-the-backend-you-chose).
 
 | | `nginx` | `istio` | `contour` | `openshift` |
 |---|---|---|---|---|
 | crane creates | `networking.k8s.io` Ingress | `networking.istio.io` Gateway + VirtualService | `projectcontour.io` HTTPProxy | `route.openshift.io` Route |
 | backend port | `8080` — **spec-wrong**, the Service publishes `80` | omitted; Istio resolves it | `80` — correct | `8080` — correct *for a Route* |
 | endpoint serves as-is | **depends on the controller** — see below | **yes** | **yes** | **yes** |
-| needs an `IngressClass` | yes, named `nginx` | no — none of these controllers registers one at all | no | no |
+| needs an `IngressClass` | yes, named `nginx` | no | no | no |
 | `--sv-tls-secret` | referenced; must exist in the agent namespace | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
 | Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
 | requires | – | – | – | an OpenShift cluster: `--platform openshift` and not `--not-openshift` |
 
 **Why nginx's row is a "depends".** Crane's Ingress backend says
-`port.number: 8080` while the Service crane created publishes `port: 80`
-(`targetPort: 8080`). The Kubernetes API defines `port.number` as the Service's
-`spec.ports[].port`, so by spec that reference resolves to nothing — but
-`ingress-nginx` matches leniently, accepting `Port`, `TargetPort` *or* `Name`,
-and the `targetPort` clause rescues it. Measured on a real controller:
+`port.number: 8080` while the Service it created publishes `port: 80`
+(`targetPort: 8080`). By spec `port.number` is the Service's
+`spec.ports[].port`, so the reference resolves to nothing — but `ingress-nginx`
+also accepts a `targetPort` match. Measured:
 
 | controller | crane's `8080` | a bogus `9999` (control) |
 |---|---|---|
 | `ingress-nginx` v1.14.3, k8s 1.32 | **200** — tolerated | 503 |
 | OpenShift `ingress-to-route` | **503**, no Route created | 503 |
 
-So on a stock `ingress-nginx` cluster the endpoint works and
-[`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) is **not**
-needed. On a strict controller it 503s while the mock sits healthy at `1/1`.
-Controllers other than these two are untested and may go either way, which is
-the reason to prefer another backend rather than to rely on the tolerance.
+So on stock `ingress-nginx` the endpoint works and
+[`sv-expose`](#reaching-a-virtual-service-from-outside-sv-expose) is not needed;
+on a strict controller it returns 503 while the mock sits healthy at `1/1`.
+Other controllers are untested. To check one without BlazeMeter or crane,
+`kubectl apply -f docs/repro/nginx-ingress-port.yaml`; the full write-up is
+[crane-nginx-ingress-port.md](crane-nginx-ingress-port.md).
 
-To settle a controller you have not tested — before telling anyone whether they
-are affected — `kubectl apply -f docs/repro/nginx-ingress-port.yaml` reproduces
-the shapes without BlazeMeter or crane. The full write-up, suitable for filing
-against crane, is [crane-nginx-ingress-port.md](crane-nginx-ingress-port.md).
+The `openshift` port is not the same bug: a Route's `spec.port.targetPort`
+resolves against the Service's *targetPort*, where an Ingress backend resolves
+against `spec.ports[].port`.
 
-The `openshift` port deserves a note, because it looks like the nginx bug and is
-not. A **Route**'s `spec.port.targetPort` resolves against the Service's
-*targetPort*; an **Ingress** backend resolves against `spec.ports[].port`. Same
-number, opposite meaning — crane is correct in both places by the rules of the
-object it is writing, which is what makes the nginx case a real defect rather
-than a consistent misunderstanding.
+`routes/custom-host` is required: crane sets `spec.host`, and without that grant
+the create fails with `422 spec.host: Forbidden`, no Route appears, and the
+virtual service stalls. `oc auth can-i create routes/custom-host` answers **yes**
+whether or not the grant is present, so only a deploy tells.
 
-`routes/custom-host` in that Role is not padding. Crane sets `spec.host`, and
-OpenShift gates that field behind its own create: with `routes` alone the create
-comes back `422 spec.host: Forbidden: you do not have permission to set the host
-field of the route`, no Route appears, and the virtual service stalls while the
-mock pod sits healthy at `1/1`. Worth knowing that `oc auth can-i create
-routes/custom-host` answers **yes** whether or not the grant is present, so it
-cannot be used to check this — only a deploy tells the truth.
+Only the API group the chosen backend writes is granted.
 
-Only the API group the chosen backend actually writes is granted — crane picks
-one implementation and never touches the others, so anything else would be
-permission that can only go unused.
-
-The TLS secret is inert on istio because crane writes the `:443` server as
-`tls.mode: PASSTHROUGH` with no `credentialName`. Nothing loads a certificate,
-so the secret does not need to exist in `istio-system` and does not need to be
-valid — but crane still refuses to start without the *name*, so you must pass
-it. It also means an **HTTPS** virtual service on istio terminates TLS in the
-mock pod itself, not at the gateway. Contour is the opposite: its HTTPProxy
+The TLS secret is unused on istio because crane writes the `:443` server as
+`tls.mode: PASSTHROUGH` with no `credentialName`, so an **HTTPS** virtual
+service on istio terminates TLS in the mock pod itself. Crane still refuses to
+start without the secret's *name*. Contour is the opposite: its HTTPProxy
 carries `tls.secretName`, and Contour validates it.
+
+One value crane accepts is **not** offered: `INGRESS`, in BlazeMeter's variable
+reference, creates no object and stalls at `WAITING_FOR_DOMAIN`.
+
+All three non-nginx paths were verified end to end with namespaced RBAC only:
+Istio 1.30.3 and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift
+Local. A `nodes ... is forbidden` warning in the crane log is expected and
+harmless on all of them (see
+`bzm_opl_gen/templates/clusterrole.yaml` for the optional grant).
 
 ### Which namespace the TLS secret goes in
 
-The **agent's own**, and BlazeMeter's page disagrees. [Bring your own
-certificate][byoc] says `crane-tls` "must exist in default namespace unless
-ingress configuration is modified", and its step is a `kubectl create secret tls`
-with no `-n` at all. Settled live on 2026-08-07 against crane 3.7.56 and
-ingress-nginx v1.11.3 (k8s 1.32, minikube), reading crane's *own* Ingress rather
-than a reconstruction of it:
-
-```yaml
-kind: Ingress
-metadata:
-  name: ing-vs345759svc445708-8080
-  namespace: bzm-agent185            # <- the agent's namespace
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts: [vs345759svc445708-8080-bzm-agent185.apps.bzm-opl.test]
-      secretName: wildcard-credential
-```
-
-An Ingress resolves `tls.secretName` **in its own namespace** — that is the API,
-not a controller's choice — and crane creates its Ingress where it runs, because
-the only grant it has is a namespaced Role. So the two namespaces are the same
-one, and there is nothing to configure that would make `default` work:
+The **agent's own**, although BlazeMeter's [Bring your own certificate][byoc]
+page says `default`. Crane creates its Ingress in the namespace it runs in, and
+an Ingress resolves `tls.secretName` in its own namespace — that is the
+Kubernetes API, not a controller's choice. Measured on crane 3.7.56 and
+ingress-nginx v1.11.3:
 
 | where `wildcard-credential` was | certificate the endpoint served |
 |---|---|
 | nowhere | `CN=Kubernetes Ingress Controller Fake Certificate` |
-| `default` only — BlazeMeter's step, verbatim | unchanged: the fake certificate |
-| the agent's namespace | **ours**, `ssl_verify=0`, transaction body returned |
+| `default` only — BlazeMeter's step, verbatim | the fake certificate |
+| the agent's namespace | **ours**, verified |
 
-with the controller naming the namespace it looked in, once per sync:
+with the controller naming where it looked:
 
 ```
 Error getting SSL certificate "bzm-agent185/wildcard-credential": local SSL
@@ -374,163 +269,62 @@ certificate bzm-agent185/wildcard-credential was not found. Using default
 certificate
 ```
 
-**The first two rows are the reason this matters**, and they are worse than the
-option's own documentation used to claim. A missing secret does not stop the
-endpoint serving: `curl -k` gets `200` and the right body, the mock sits `1/1`,
-the deploy reports `FINISHED` and BlazeMeter advertises the endpoint. Only a
-client that actually verifies ever finds out — which, for a virtual service, is
-the test that was the point of the exercise. So the bundle's README now names
-the secret and the namespace, and says this.
+**A missing secret does not stop the endpoint serving**: `curl -k` gets `200`,
+the deploy reports `FINISHED`, and only a client that verifies TLS finds out.
+The bundle's README names the secret and the namespace for that reason.
 
-**What their sentence is actually about.** "Unless ingress configuration is
-modified" is a real thing, and it is the controller-wide
-`--default-ssl-certificate=<namespace>/<name>` flag: one certificate served for
-every host whose per-Ingress secret is missing. Measured — with it pointed at
-`default/wildcard-credential` and nothing in the agent's namespace, our
-certificate came back. That flag takes any namespace, so `default` is a
-coincidence of where their walkthrough installs the agent, and it is a
-cluster-wide decision belonging to whoever runs the ingress controller rather
-than to a private location. There is no cross-namespace *lookup* to turn on.
+BlazeMeter's "unless ingress configuration is modified" refers to the
+controller-wide `--default-ssl-certificate=<namespace>/<name>` flag, which
+serves one certificate for every host whose own secret is missing. It takes any
+namespace and is a cluster-wide decision for whoever runs the controller.
 
 `kubectl apply -f docs/repro/sv-tls-secret-namespace.yaml` puts the question to
-another controller without BlazeMeter or crane; the file carries the commands and
-what was measured here.
-
-All three working paths were verified end to end with namespaced RBAC only and
-real transactions returning `200` at the host BlazeMeter advertises: Istio 1.30.3
-and Contour v1.33.5 on minikube (k8s 1.32), and Routes on OpenShift Local. The
-`nodes ... is forbidden` warning in the crane log is expected and harmless on all
-of them, and on `nginx` under `NODEPORT` (see below). Nothing a performance
-location does depends on that lookup — it is capacity awareness (see
-`bzm_opl_gen/templates/clusterrole.yaml`).
-
-One value crane accepts is **not** offered here: `INGRESS`, which BlazeMeter's
-env-var reference documents, creates no object at all and stalls at
-`WAITING_FOR_DOMAIN`.
+another controller without BlazeMeter or crane.
 
 ## `service_type` and the backend you chose
 
-`NODEPORT` alongside `sv_ingress` was refused outright, on the reasoning that
-NODEPORT forces a cluster-scoped Node read a namespaced Role cannot grant. That
-reasoning is wrong — and the refusal was still half right, for a different
-reason nobody had looked for. All four backends were deployed live on
-2026-07-28 to settle it, crane 3.7.55 and service-mock 6.0.29.6 throughout, RBAC
-a namespaced Role and RoleBinding with no ClusterRoleBinding naming the account.
+With `service_type: NODEPORT`, two backends work and two are refused. Measured
+on crane 3.7.55 with a namespaced Role only:
 
 | backend | port crane writes | on `NODEPORT` |
 |---|---|---|
 | `nginx` | `port.number: 8080` — a constant | **works** |
 | `openshift` | `port.targetPort: 8080` — a constant | **works** |
-| `contour` | the Service's **nodePort** (`30598`) | **fails** |
-| `istio` | Gateway `port.number:` the **nodePort** (`32430`) | **fails** |
+| `contour` | the Service's **nodePort** (`30598`) | **fails** — refused |
+| `istio` | Gateway `port.number:` the **nodePort** (`32430`) | **fails** — refused |
 
-The generator refuses the two that fail, and `--service-type NODEPORT` is
-accepted with `nginx` and `openshift`.
+**The two that work write a constant.** `NODEPORT` moves the Service's `port`
+from `80` to `8080`, so nginx's reference becomes exactly right; a Route
+resolves against `targetPort`, which is `8080` either way.
 
-One istio configuration is refused without having been measured, on purpose.
-With `--sv-istio-gateway` set crane reuses a Gateway you already own instead of
-creating one, and the Gateway is the object that carried the bad port — the
-VirtualService names no port at all. That combination may work. It is refused
-with the rest because "istio does not do NODEPORT" is a rule you can predict
-from the backend alone, and `CLUSTERIP` costs you nothing: it is the default,
-it is the more widely permitted of the two under cluster policy, and it changes
-nothing else about an istio deployment. [#63](https://github.com/benjithompson/bzm-opl-generator/issues/63)
-settles it if anyone needs the narrower rule.
+**The two that fail take the nodePort**, which nothing reaches the ingress on.
+Both fail silently — object written, mock `1/1`, endpoint advertised, nothing
+serving. Contour marks the HTTPProxy `invalid` (`unresolved service reference`)
+and returns 503 (reproduced without crane by
+[`docs/repro/contour-nodeport-port.yaml`](repro/contour-nodeport-port.yaml)).
+Istio's gateway listens on the nodePort and nothing on 80 or 443. Istio with
+`--sv-istio-gateway` (your own Gateway) is refused as well, untested.
 
-**The two that work do so because crane writes a constant.** `8080` is the
-mock's container port. An Ingress backend resolves against the Service's
-`port`, which `NODEPORT` moves from `80` to `8080` — so crane's reference, which
-is *wrong* under `CLUSTERIP` and tolerated only by lenient controllers (see
-[Which one to pick](#which-one-to-pick)), becomes exactly right. A Route
-resolves against `targetPort`, which is `8080` either way. Neither was designed
-for this; both survive it.
+Crane's node read is denied under `NODEPORT` on all four backends, including the
+two that work: it logs `nodes "<node>" is forbidden` and `Setting default ip
+127.0.0.1`. That address belongs to crane's pool of pre-created Services, which
+the ingress path never consults, so it is harmless here. The warning appears only
+once a virtual service exists.
 
-Measured: `nginx` on minikube (kicbase v0.0.46, k8s 1.32, ingress-nginx
-v1.11.3), `openshift` on OpenShift 4.22.1. Deployment `FINISHED`, virtual
-service `RUNNING`, BlazeMeter published `http://<vs>-8080-<ns>.<subdomain>` —
-no `WAITING_FOR_DOMAIN` — and all three transactions answered there:
-`GET /health` → `200`, `GET /api/v1/orders/1001` → `200`,
-`POST /api/v1/orders` → `201`; unmatched path `404`, unknown host `404`
-(ingress-nginx) / `503` (the router). The nginx case was reproduced across a
-stop and a second deploy.
+Switching an existing agent between service types does not retype the Services
+crane already created, so `kubectl get svc` does not reliably show the
+configured type. Do not delete them by hand — crane holds them in a pool, and
+removing one desynchronises the agent. Stop the virtual service and let crane
+rebuild.
 
-**The two that fail derive the port from the Service and take its nodePort**,
-which is not a port anything reaches the ingress on. Both fail *silently* in the
-way this page keeps warning about — object written, mock `1/1`, endpoint
-advertised, nothing serving:
-
-- **contour** wrote `services: [{name: crane-b3696-…, port: 30598}]`. Contour
-  rejected it — `unresolved service reference: port "30598" on service … not
-  matched`, HTTPProxy `invalid` — and the endpoint returned **503** while the
-  mock answered `200` on its nodePort directly. Confirmed without crane by
-  [`docs/repro/contour-nodeport-port.yaml`](repro/contour-nodeport-port.yaml):
-  the same `port: 80` reference is valid against a `CLUSTERIP` Service and
-  invalid against a `NODEPORT` one.
-- **istio** wrote a Gateway server on `port.number: 32430`. Istio accepted it,
-  and the ingress gateway's envoy came up listening on `15021`, `15090` and
-  `32430` — **nothing on 80 or 443**, which is where the published host resolves.
-  Both ports refused the connection outright.
-
-This is why the refusal is per backend rather than per service type, and why it
-could not have been settled by reasoning about node reads: crane's node read is
-denied under `NODEPORT` on all four, including both that work.
-
-Crane's node read **is** denied, exactly as the old rationale said:
-`_get_final_ip` logs `nodes "<node>" is forbidden ... at the cluster scope` and
-then `Setting default ip 127.0.0.1`. What the rationale got wrong is the
-consequence. That address belongs to crane's *Service pool* — it pre-creates
-NodePort Services and binds one to a mock by setting its selector at deploy time
-— and the web-expose path never consults it. The endpoint comes from
-`KUBERNETES_WEB_EXPOSE_SUB_DOMAIN`, which needs no cluster-scoped read at all.
-
-Worth knowing when that warning is expected, because it is easy to read as a
-symptom: it is the *pool* that reads Node, so it appears only once a virtual
-service exists. The same agent on the same `NODEPORT` config logged it **0**
-times across ten hours idle, and once per status update from the moment the mock
-deployed. A performance location that never deploys a mock never reaches this
-code at all — which is why #49 could report a clean log for `NODEPORT` and this
-run a denied read, with neither contradicting the other.
-
-If you switch an existing agent between the two service types, note that crane
-does **not** retype the pool Services it already created — it keeps them and
-adds new ones of the current type, binding whichever it picks. Observed on the
-OpenShift agent above: after switching back to `CLUSTERIP` the virtual service
-served correctly from a Service still typed `NodePort`. Harmless, but it means
-`kubectl get svc` is not a reliable reading of the configured service type, and
-the stale members hold node ports until something removes them. They are
-crane-managed: deleting one by hand while the pool holds it desynchronises the
-agent, and the virtual service then deploys a pod with no Service and no
-endpoint. Stop the virtual service and let crane rebuild instead.
-
-None of this is a reason to switch. `NODEPORT` does make crane's `nginx`
-reference correct by spec, but it fixes that on one backend, costs a node port
-per virtual service, and the three others either never had the problem or are
-refused. `CLUSTERIP` remains the default and the smaller ask of a cluster.
-
-What is still untested is `NODEPORT` on an SV location with **no** ingress —
-where the pool's address is all there is to publish, so the `127.0.0.1` fallback
-would plausibly be the endpoint. Nobody has run it: the generator refuses an SV
-location without an ingress whatever the service type, and gives
-`WAITING_FOR_DOMAIN` as the reason, which is a different claim from this one.
+`CLUSTERIP` remains the default and the smaller ask of a cluster.
 
 ## Reaching a virtual service from outside: `sv-expose`
 
-**A fallback, and a narrow one.** Every backend other than `nginx` routes
-correctly on its own, and `nginx` itself works on `ingress-nginx` (see [Which one
-to pick](#which-one-to-pick)) — so most clusters never need this. What is left
-is the case where crane's Ingress is claimed by a controller strict enough to
-reject its port reference. On OpenShift, which is the strict controller in
-practice, `--sv-ingress openshift` is the better answer and this command is a
-last resort.
-
-Where it does apply, the cause is that crane's backend says
-`port.number: 8080` while the Service crane created exposes `port: 80`, and the
-Ingress spec resolves a backend against `spec.ports[].port`. A strict controller
-builds no route from it, so the endpoint BlazeMeter advertises returns **503** —
-while the mock is healthy and serving inside the cluster. On OpenShift there is a
-second, earlier reason: crane writes `ingressClassName: nginx` with no env to
-change it, and the only class shipped is `openshift-default`, so nothing claims
-the Ingress at all.
+**A narrow fallback.** Every backend other than `nginx` routes correctly on its
+own, and `nginx` works on `ingress-nginx` — so most clusters never need this.
+It is for crane's Ingress claimed by a controller strict enough to reject its
+port reference. On OpenShift, `--sv-ingress openshift` is the better answer.
 
 Rather than patch objects crane rewrites on every deploy, emit a parallel pair
 that works, once the virtual services are deployed:
@@ -540,44 +334,25 @@ bzm-opl-gen sv-expose --manifests out/ -n my-sv --ingress-class openshift-defaul
 kubectl apply -n my-sv -f bzm_sv_expose.yaml
 ```
 
-`sv_ingress_class` is **not** a `generate` option — nothing about it reaches the
-agent, there is no `--sv-ingress-class` on `generate`, and no bundle this tool
-writes carries it. `sv-expose` loads `profile.json` for the rest of its
-settings (`sv_subdomain`, `sv_tls_secret`, `namespace`) and would honour an
-`sv_ingress_class` found there, but only a hand-edited profile has one — so in
-practice pass `--ingress-class` on each `sv-expose` run.
+`--ingress-class` is an `sv-expose` flag, not a `generate` option; pass it on
+each run. The rest (`sv_subdomain`, `sv_tls_secret`, `namespace`) is read from
+`profile.json`.
 
-It reads the deployed mocks off their pods rather than from the API — the
-virtual-service API is on a separate host (`mock.blazemeter.com/api/v1`, not
-`a.blazemeter.com/api/v4`) and does not report the harbor/ship labels crane
-actually stamped. It writes one Service + Ingress per mock:
+It reads the deployed mocks off their pods and writes one Service + Ingress per
+mock:
 
-- `port == targetPort`, so the backend reference resolves and the mismatch
-  never arises;
+- `port == targetPort`, so the backend reference resolves;
 - the Service selects the pod's **identity labels** (`BZM_CONTAINER_NAME`,
-  `BZM_HARBOR_ID`, `BZM_SHIP_ID`) rather than crane's Service name, which
-  carries a per-deploy hash — so the pair keeps working across redeploys
-  without being reapplied;
-- the host matches the endpoint BlazeMeter publishes, so the UI link keeps
-  working;
-- because you own this Ingress, `--ingress-class` names whatever class the
-  cluster actually has. On OpenShift that means `openshift-default` and **no
-  cluster-admin IngressClass alias is needed** — nothing here is cluster-scoped,
-  and no policy engine or admission webhook is involved.
+  `BZM_HARBOR_ID`, `BZM_SHIP_ID`) rather than crane's per-deploy Service name,
+  so the pair keeps working across redeploys;
+- the host matches the endpoint BlazeMeter publishes, so the UI link works;
+- `--ingress-class` names whatever class the cluster has — on OpenShift,
+  `openshift-default`, with no cluster-scoped objects needed.
 
-Crane's own Ingress is left alone; it stays unclaimed and creates no competing
-route. Re-run `sv-expose` after adding a virtual service; existing pairs are
-unaffected.
+Crane's own Ingress is left alone. Re-run `sv-expose` after adding a virtual
+service. It works the same under either `service_type`.
 
-`doctor` still preflights the `nginx` IngressClass (see
-[Preflight](preflight.md)), which is what crane's own Ingress needs. If you
-publish with `sv-expose` and its `--ingress-class`, treat that **FAIL** as
-advisory — but note it is a real FAIL with a non-zero exit, because `doctor`
-reads only the profile and has no way to know you intend to run `sv-expose`. If
-that matters in CI, gate on the other checks or use a non-nginx `sv_ingress`.
-
-`sv-expose` is indifferent to `service_type`: it selects the mock's pod by the
-identity labels crane stamps, not through crane's Service, so it works the same
-whether that Service is `CLUSTERIP` or `NODEPORT`. Either way the whole
-deployment stays inside namespaced RBAC — no ClusterRole required (see
-[`service_type` and the backend you chose](#service_type-and-the-backend-you-chose)).
+`doctor` still checks for the `nginx` IngressClass that crane's own Ingress
+needs, and reports a **FAIL** (non-zero exit) when it is missing, because it
+cannot know you intend to use `sv-expose`. In CI, gate on the other checks or
+use a non-nginx `sv_ingress`.

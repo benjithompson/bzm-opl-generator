@@ -1,9 +1,8 @@
 # Docker output format
 
-`--format docker` is the other platform, not another way of writing the same
-one. A private location on Docker is **one agent as one container** on a host
-with a docker daemon; crane starts each engine as a sibling container on that
-same host, through the socket it is given.
+`--format docker` targets a different platform. A private location on Docker is
+**one agent as one container** on a host with a docker daemon; crane starts each
+engine as a sibling container on that same host, through the docker socket.
 
 ```
 bzm-opl-gen generate --format docker --auth-token <token> -o out/
@@ -26,118 +25,76 @@ The bundle is:
 
 ## Where the command comes from
 
-BlazeMeter generates this command themselves — the **Docker Command** tab on an
-agent, and `POST /private-locations/{harbor}/ships/{ship}/docker-command`, which
-this repo already calls to mint a token. The shape here is theirs, from their
-[Docker installation
+The shape is BlazeMeter's own — the **Docker Command** tab on an agent, and
+`POST /private-locations/{harbor}/ships/{ship}/docker-command` — as described on
+their [Docker installation
 page](https://help.blazemeter.com/docs/guide/private-locations-install-blazemeter-agent-for-docker.html)
-and their [agent environment
+and [agent environment
 variables](https://help.blazemeter.com/docs/guide/private-locations-blazemeter-agent-environment-variables.html)
-reference; what this adds is the bundle's own settings, which their generated
-command cannot know.
+reference, plus the bundle's own settings. It is built locally rather than
+fetched, so a bundle can be produced for an account you cannot log in to.
 
-It is **built** rather than fetched, for the same reason every other format is:
-`generate` reaches nothing, so a bundle can be produced for an account nobody
-here can log in to — which is what `facts.manual()` exists for.
+Two things in BlazeMeter's generated command are not mentioned on those pages,
+and the bundle carries both:
 
-That has a cost, and it has been paid once: **their generated command carries
-two things their documentation does not mention**, and building from the docs
-alone missed both.
-
-- **`-u 0`.** The crane image runs as a non-root user and `/var/run/docker.sock`
-  is `root:docker 0660` on a stock daemon, so the container started, reached the
-  socket and died with `PermissionError(13, 'Permission denied')` out of
-  `docker/transport/unixconn` — a traceback naming neither the uid that could
-  not open it nor the flag that would have. Starting engines through that socket
-  is the only thing the agent does.
+- **`-u 0`.** The crane image runs as a non-root user and
+  `/var/run/docker.sock` is `root:docker 0660` on a stock daemon; without it the
+  container dies with `PermissionError(13, 'Permission denied')` from
+  `docker/transport/unixconn`.
 - **`DOCKER_PORT_RANGE`.** `--net=host` makes an engine's ports the host's
-  ports, and their command always names the range. This bundle emits
-  `6000-7000` — 1000 host ports, which must be free on the host and reachable
-  by anything the engines serve.
-
-So when checking this format against BlazeMeter, check it against the **command
-their API returns**, not against the pages describing it.
+  ports. This bundle uses `6000-7000` — 1000 host ports that must be free on
+  the host and reachable by anything the engines serve.
 
 ## Most options mean nothing here
 
-There is no namespace, no ServiceAccount, no toleration, no pod. Two dozen of
-this generator's options are Kubernetes vocabulary, and a docker agent has
-nowhere to put them.
+There is no namespace, no ServiceAccount, no toleration, no pod. Nearly thirty
+options are Kubernetes vocabulary, and a docker agent has nowhere to put them.
+`run_as_user` is ignored because the answer is fixed: the container runs as root
+(`-u 0`) to open the docker socket.
 
-`run_as_user` is the one to read twice: it is ignored *because the answer is
-fixed*, not because the container has no user. It runs as root (`-u 0`), which
-is what opens the docker socket.
+Ignored options are **named rather than refused**: the bundle's README lists,
+under **Set here, but not carried**, the ones you set away from their default.
+The web UI hides them for this format. A format never rejects a value it
+ignores, so an empty service account or a second CA mode does not stop a docker
+bundle.
 
-They are **named rather than refused**, per bundle: the README lists only the
-ones set away from their default, so it says what *this* bundle asked for and
-did not get. A note that listed all of them every time would be read as
-boilerplate, and the one line that matters — "you asked for a node selector and
-it is not here" — would be buried in it.
-
-The table is the generator's own (`generate.IGNORED_BY_FORMAT`) and is **served
-as `/api/ignored-options`**, keyed by format, so the web UI hides what this
-format cannot carry without keeping a second copy of two dozen option names —
-a key added to the generator stops being offered there with no edit on either
-side. It is a table per format rather than docker's alone: `manifests` and
-`helm` ignore the three options a docker agent publishes virtual services with,
-which is the same rule read from the other end.
-
-Named rather than refused cuts the other way too, and the generator holds to it:
-**a format never rejects a value it says it ignores.** An unnamed service
-account, a malformed engine limit or a second CA mode all refuse a Kubernetes
-bundle and none of them refuses this one — the web UI hides those fields here,
-so a refusal would be a block with nothing on screen to clear it.
-
-Seven options do reach it:
+These options do reach it:
 
 - **`auth_token`, `private_registry`** — identity and where engine images come
-  from (`DOCKER_REGISTRY`). `registry_auth` does not: its stubs are ConfigMap
-  lines, and a docker host authenticates a pull with its own `docker login`.
+  from (`DOCKER_REGISTRY`). `registry_auth` does not: a docker host
+  authenticates a pull with its own `docker login`.
 - **`proxy`** — `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`, credentials embedded
-  in the URL exactly as the Kubernetes path does. `NO_PROXY` defaults to
-  `127.0.0.1,localhost` here rather than the cluster default, which names
-  `kubernetes.default` — the API service, and nothing a docker host resolves.
-  Those two entries are required by BlazeMeter's proxy page or transaction-based
-  virtual services break against their own local calls.
+  in the URL. `NO_PROXY` defaults to `127.0.0.1,localhost`, which BlazeMeter's
+  proxy page requires for transaction-based virtual services.
 - **`ca_bundle`** — written beside the script and mounted at
   `/etc/ssl/certs/ca-certificates.crt`, where `REQUESTS_CA_BUNDLE` and
-  `AWS_CA_BUNDLE` point. It **replaces** the container's CA store rather than
-  adding to it, so it must be a full bundle — your CA and the public roots — or
-  the agent stops trusting BlazeMeter. The other two CA modes name a ConfigMap
-  and have nothing to read here.
-- **`extra_env`** — the free-form agent variables, as `--env NAME=value` flags
-  on the command. Not Kubernetes vocabulary, so it is not in the ignored table
-  and the web UI keeps the area for this format. The reserved names it refuses
-  are the union across formats, though, so a `KUBERNETES_*` variable is refused
-  here too: it would reach nothing on a docker host either, and accepting it
-  would read as a setting that had been made. See
+  `AWS_CA_BUNDLE` point. It **replaces** the container's CA store, so it must be
+  a full bundle — your CA and the public roots — or the agent stops trusting
+  BlazeMeter. `ca_bundle_slot` with `ca_cert_file` mounts a file you supply
+  the same way; the ConfigMap modes do not apply.
+- **`extra_env`** — as `--env NAME=value` flags. Names the generator writes in
+  any format, including `KUBERNETES_*`, are refused. See
   [Options](options.md#agent-environment).
 - **`use_secret`** — see below.
-- **`auto_update`** — `AUTO_UPDATE`, which is the Docker variable;
-  `AUTO_KUBERNETES_UPDATE` is a different one and inert here. Left unset unless
-  it was answered, unlike the Kubernetes path which forces it off: what it does
-  here is pull a newer crane image for a container the operator started, and
-  there is no Deployment for it to fight over — the specific hazard the
-  Kubernetes default departs from BlazeMeter for. See [Helm](helm.md).
+- **`auto_update`** — `AUTO_UPDATE`, the Docker variable (not
+  `AUTO_KUBERNETES_UPDATE`). Left unset unless you answer it: there is no
+  Deployment for a self-update to conflict with. See [Helm](helm.md).
+
+Service virtualization has its own three options on this format; see
+[below](#service-virtualization).
 
 ## `use_secret` is `--env-file`
 
-It means what it means for Kubernetes — the credential lives apart from the
-configuration — and docker's mechanism for it is `--env-file`. The difference is
-not cosmetic: a value passed with `--env` is in the host's process list for
-anyone running `ps`, and in the shell history of whoever ran it.
-
-With it off you get BlazeMeter's own shape, `--env AUTH_TOKEN=...` inline and no
-second file. A proxy URL carrying `user:password` moves into the env file too,
-by the same rule the Kubernetes Secret follows.
+The credential lives apart from the configuration, in `bzm-opl-agent.env`. A
+value passed with `--env` is visible in the host's process list and in the shell
+history of whoever ran it. With `use_secret` off you get BlazeMeter's own shape,
+`--env AUTH_TOKEN=...` inline. A proxy URL carrying `user:password` follows the
+same rule.
 
 ## Docker Compose
 
-`compose.yaml` sits beside the script and describes the same container. It is
-**not** a fourth `--format`: a format is a platform, and these are two syntaxes
-for one. It buys no capability either — for a single container compose adds
-nothing `docker run` cannot do — and it is here because some customers install
-with compose and will not take a script.
+`compose.yaml` sits beside the script and describes the same container, for
+customers who install with compose:
 
 ```
 cd out/
@@ -145,160 +102,67 @@ docker compose up -d            # needs `docker compose version` 2 or newer
 docker compose logs -f crane
 ```
 
-The name is `compose.yaml` because that is what compose looks for: the customer
-unzips and runs `docker compose up -d` with no `-f`. There is no `version:` key
-(obsolete since v2, and warned about), and the top-level `name:` is stated
-rather than left to compose, which otherwise takes the project name from
-whatever directory the bundle was unzipped into.
+It has no `version:` key, and states the project `name:` rather than taking it
+from the directory the bundle was unzipped into. BlazeMeter publishes no compose
+file, so it is generated to match the script exactly — same image, environment,
+mounts, user, network mode, restart policy, working directory and command.
 
-BlazeMeter publishes no compose file — their install page and their
-`docker-command` endpoint both return a `docker run` — so the rule above, *check
-it against the command their API returns*, has no counterpart here. What holds
-it honest instead is parity with the script beside it: `user`, `network_mode`,
-`restart`, `volumes`, `working_dir` and `command` are the generator's own
-constants, read by both renderers, and the environment comes from
-`docker_split_env()` for both.
-
-### Two checks, and neither covers the other
-
-A constant both renderers read makes the comparison cheap; it is not what
-performs it, and a value written into one file alone would have no constant to
-be caught by. So the bundle's two files are checked twice, and the questions are
-different:
-
-| check | where | what it answers |
-|---|---|---|
-| **parity** | `tests/test_generate.py::test_compose_and_docker_run_describe_the_same_container` | do the two files describe the *same container*? |
-| **validity** | the `docker` job in `.github/workflows/tests.yml` | is `compose.yaml` a file *compose will accept*? |
-
-Parity parses `compose.yaml` and the generated `bzm-opl-agent.sh` and holds them
-against each other — same image, same environment by name and by value, same
-mounts, same user, network mode, restart policy, working directory and command —
-over `helm_parity.py`'s own option matrix plus every branch this format has of
-its own. It is pytest rather than a script beside `helm_parity.py` because both
-sides are built in Python from one call to `generate()`: there is no binary to
-be missing, so nothing can skip. Two differences are representation rather than
-substance and are undone before comparing: compose doubles every `$` in its own
-values, and the split credential is in neither file's inline set. The one
-licensed difference is a value nobody supplied — the marker to the script, which
-greps for it, and `${...:?}` to compose, which has no shell to check anything in
-— and that is asserted in both directions rather than skipped.
-
-Validity is `docker compose config -q` over generated bundles, in CI. Parity
-cannot answer it: two python dicts can agree perfectly about a document compose
-refuses to parse. The job runs it over the default shape, over the branches the
-default does not render (token inline, CA mount, private registry), and once in
-the negative — a bundle with a field left blank has to be *refused*, naming the
-variable and the file, or compose would start an agent the script beside it
-refuses.
-
-### Either/or, and docker enforces it
-
-Both files start one agent for one `ship_id`, and running both would put two
-cranes on one agent identity — which BlazeMeter reports as **duplicated results
-rather than as an error**. So both name the container `bzm-crane-<shipId>` and
-the second one to start refuses:
+**Use one or the other.** Both name the container `bzm-crane-<shipId>`, so the
+second to start fails:
 
 ```
 Error response from daemon: Conflict. The container name
 "/bzm-crane-<shipId>" is already in use by container "482fff816b3c..."
 ```
 
-A README warning fails at "why are my results duplicated"; a name collision
-fails at `compose up`.
+Two cranes on one agent identity would otherwise make BlazeMeter report
+**duplicated results rather than an error**.
 
-### Never a file called `.env`
+**Never rename the env file to `.env`.** Compose auto-loads `.env` for variable
+interpolation *into `compose.yaml`*, not into the container, so a token there
+would never reach crane. For the same reason every inline value is written with
+`$` doubled (`a$b` as `a$$b`). The one deliberate interpolation is
+`${CA_BUNDLE:-./ca-bundle.crt}`, matching the script's overridable `CA_BUNDLE`
+for a host that already keeps a trust bundle.
 
-`use_secret` writes the credential to `bzm-opl-agent.env`, and compose reads
-that same file through `env_file:`. The name matters: compose auto-loads a file
-called `.env` for **variable interpolation into `compose.yaml`**, not into the
-container. An `AUTH_TOKEN` moved there would never reach crane while looking
-exactly as though it had, and a `$` in a proxy password would be substituted on
-the way past. The compose file carries that as a comment, because renaming it is
-the tidy-up somebody will reach for.
+A field left blank is refused by compose itself, naming the variable and file.
 
-The same interpolation is why every value the compose file carries inline is
-written with `$` doubled — `a$b` is emitted as `a$$b`, which arrives in the
-container as `a$b`. Escaped rather than moved into the env file: which variables
-live there is `use_secret`'s answer, and a value that changed file depending on
-its punctuation is a bundle nobody could reason about. The one deliberate
-interpolation is the CA mount, `${CA_BUNDLE:-./ca-bundle.crt}`, which is the
-counterpart of the script's overridable `CA_BUNDLE` — a host may already keep
-the trust bundle its platform team maintains.
+## Service virtualization
+
+A docker agent publishes virtual services with `HOSTNAME_OVERRIDE` and a
+`TLS_CERT`/`TLS_KEY` pair: `--sv-hostname`, `--sv-tls-cert` and `--sv-tls-key`.
+The two PEMs are written into the bundle and mounted like `ca-bundle.crt`. See
+[Service virtualization](service-virtualization.md#docker-a-hostname-and-a-certificate)
+for the checks made at generate time. The four Kubernetes `sv_*` options are
+ignored here.
 
 ## Worth knowing
 
-- **The socket is the point, and it is root.** Crane starts engines through
-  `/var/run/docker.sock`; access to it is effectively root on the machine.
-  BlazeMeter's own instructions say the same.
+- **The socket is root.** Crane starts engines through `/var/run/docker.sock`;
+  access to it is effectively root on the machine, as BlazeMeter's own
+  instructions say.
 - **Size the host for the location, not for crane.** Every engine is another
   container on it. `bzm-opl-gen plan` sizes the whole thing.
-- **One agent per host.** The container is named `bzm-crane-<shipId>`, as
-  BlazeMeter names it, and neither route replaces an existing one — that
-  container may be the agent currently serving this location. `docker rm -f` it
-  deliberately.
-- **Crane does not pull here.** It composes the image name and asks the daemon
-  to *create* the container, so an image the host does not already hold ends the
-  deploy `FAILED` about ninety seconds later, with no message on either side
-  mentioning a pull. A bundle generated with `--private-registry` names
-  the exact `docker pull` commands in its README — the `:latest` forms under
-  `DOCKER_REGISTRY`, which are not the tags the location pins. What was seen
-  live, and why the tag differs, is in
+- **One agent per host.** Neither route replaces an existing
+  `bzm-crane-<shipId>` container — it may be the agent currently serving this
+  location. `docker rm -f` it deliberately.
+- **Crane does not pull here.** It asks the daemon to *create* each container,
+  so an image the host does not already hold ends the deploy `FAILED` about
+  ninety seconds later, with no message mentioning a pull — for engines and mock
+  services alike. A bundle generated with `--private-registry` lists the exact
+  `docker pull` commands in its README (the `:latest` forms under
+  `DOCKER_REGISTRY`, not the tags the location pins); see
   [Service virtualization](service-virtualization.md#what-a-live-run-showed).
-  **Engines as well as mocks**: a docker performance agent was measured asking
-  for `<registry>/taurus-cloud:latest` and failing exactly the same way.
-- **A bundle with no registry configured carries the warning and not the list.**
-  `DOCKER_REGISTRY` is written only when you mirror, which is what BlazeMeter's
-  own generated command does — so without one the prefix crane composes with is
-  *its* default rather than this bundle's, and nothing here has read it. The
-  README names the image keys and says the registry is not ours to state: a
-  plausible-looking pull list would be indistinguishable from the measured one a
-  flag away.
-- **...and `--private-registry` mirrors them to that same composed name.** There
-  is no `IMAGE_OVERRIDES` on this format — it is a Kubernetes variable — so
-  nothing maps a mirrored path back to the name crane builds, and the mirror
-  script pushes the images to `<registry>/<key>:latest`, the crane key and its
-  org segment where it has one. The script says which of its two destination
-  shapes is which, because crane's own image keeps the short one: this bundle's
-  `bzm-opl-agent.sh` and `compose.yaml` name that reference themselves, so there
-  the two agree by construction. The mirror's push list and the README's pull
-  list are one set, built from one function rather than by two renderers
-  agreeing.
-
-  The Kubernetes formats compose too, from the repo path rather than from the
-  key, and their mirror and their `IMAGE_OVERRIDES` are held to it by the same
-  kind of function. What used to be written here — that the map makes any
-  destination correct over there — is false. It cost an ImagePullBackOff on the
-  first test of an air-gapped cluster, after the agent was already online.
+  Without a registry, the README names the image keys and says the prefix is
+  crane's default rather than guessing it.
+- **`--private-registry` mirrors to the name crane composes.** There is no
+  `IMAGE_OVERRIDES` on docker, so the mirror script pushes each image to
+  `<registry>/<key>:latest`. Crane's own image is named directly by the script
+  and compose file.
 - **Docker Desktop for Mac 4.3.0+** additionally needs `--privileged -v
   /sys/fs/cgroup:/sys/fs/cgroup:rw`, per BlazeMeter's installation page. The
-  generated script does not add them: they are a property of that one runtime,
-  not of the bundle.
-
-Two things differ from the Kubernetes formats, both deliberate:
-
-- **Service virtualization is published a different way here, not left out.**
-  This bundle used to refuse an SV configuration outright, and the refusal was
-  always narrower than it read: a docker agent serves virtual services perfectly
-  well, and the gap was in this generator rather than in the agent. It is closed
-  ([#182](https://github.com/benjithompson/bzm-opl-generator/issues/182)) —
-  `--sv-hostname`, `--sv-tls-cert` and `--sv-tls-key` write `HOSTNAME_OVERRIDE`,
-  `TLS_CERT` and `TLS_KEY`, and the two PEMs are written into the bundle and
-  mounted the way `ca-bundle.crt` is. The full shape, and the two checks that
-  run when the bundle is generated, are in
-  [Service virtualization](service-virtualization.md#docker-a-hostname-and-a-certificate).
-
-  The four Kubernetes `sv_*` options are ignored here rather than refused: they
-  write `KUBERNETES_WEB_EXPOSE_*`, which a container agent never reads. Set one
-  and the bundle names it under **Set here, but not carried**, like every other
-  ignored option. `--format helm` is now the only format that refuses a virtual
-  service, and that is a limit of *our chart*.
-- **`livetest` takes a docker bundle, through the compose file.** It used to
-  refuse one outright — the rig applies YAML to a cluster, and this bundle is a
-  container on a host — which left `--format docker` the one format never live
-  tested at all. It now brings the bundle up with `docker compose up -d`, waits
-  for the agent to report online in the account, and takes it down again: no
-  namespace, no cluster, no `--local-registry`/`--local-proxy`/`--contain-egress`
-  /`--run-test` (each of those is cluster-shaped and is refused rather than
-  ignored). It never starts an engine, so `-u 0` and `DOCKER_PORT_RANGE` are
-  still unproven there — see [Live test](live-test.md#what-the-compose-path-does-not-prove).
+  script does not add them; they are a property of that runtime.
+- **`livetest` takes a docker bundle** through the compose file: it runs
+  `docker compose up -d`, waits for the agent to report online, and takes it
+  down. The cluster-only flags are refused. It never starts an engine — see
+  [Live test](live-test.md#what-the-compose-path-does-not-prove).

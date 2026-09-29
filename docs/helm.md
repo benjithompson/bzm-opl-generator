@@ -10,80 +10,63 @@ helm install crane ./out/helm -n my-project --create-namespace \
     -f out/bzm-opl-values.yaml
 ```
 
-`out/helm/` is the chart, byte-identical for every customer.
-`out/bzm-opl-values.yaml` is the overlay, and the only file generated from the
-account. It is an overlay rather than a rewritten `helm/values.yaml` on purpose:
-the chart's own values file holds defaults the generator does not own — crane's
-resources, the probe timings — and writing a complete file would mean restating
-them where they could drift. Re-generating replaces the overlay and leaves the
-chart untouched. `helm show values ./out/helm` documents every key.
+`out/helm/` is the chart, identical for every customer. `out/bzm-opl-values.yaml`
+is the overlay, and the only file generated from the account. It is an overlay
+rather than a rewritten `helm/values.yaml` so the chart's own defaults — crane's
+resources, the probe timings — stay in one place. Re-generating replaces the
+overlay and leaves the chart untouched. `helm show values ./out/helm` documents
+every key.
 
 Both formats render **the same objects** — same ConfigMap data, RBAC rules,
-container spec — so the choice is about how you install and upgrade,
-not about what ends up in the cluster. `tests/helm_parity.py` renders 29 option
-combinations both ways and requires them to agree; it runs as its own CI job
-because it is the one check that needs the `helm` binary.
+container spec — so the choice is about how you install and upgrade, not about
+what ends up in the cluster.
 
-`extraEnv` in the overlay is the one place a value crosses it as arbitrary text
-— agent variables this generator has no setting of its own for. It is rendered
-into the ConfigMap last and can shadow nothing above it, because `extra_env`
-refuses every name the chart writes before the overlay is written. A values file
-written by hand has no such guard, and naming one there renders a ConfigMap with
-a duplicate key.
+`extraEnv` in the overlay carries agent variables that have no option of their
+own. It is rendered into the ConfigMap last; `extra_env` refuses every name the
+chart already writes, so it cannot shadow anything. A values file written by
+hand has no such guard, and naming one there renders a ConfigMap with a
+duplicate key.
 
 ## Managing the release with Helm
 
-`helm upgrade` works, because `autoUpdate` is **off by default** — a departure
-from BlazeMeter's own Kubernetes manifest, which ships it on.
+`helm upgrade` works because `autoUpdate` is **off by default** — unlike
+BlazeMeter's own Kubernetes manifest, which ships it on.
 
-Generate with `--auto-update` (or set `autoUpdate: true`) and you get theirs:
-crane takes ownership of its own Deployment within seconds of install, rewriting
-the image to the version BlazeMeter currently ships and `.spec.strategy` from
-`Recreate` to `RollingUpdate`, and Helm's server-side apply then fails the next
-upgrade on a field-ownership conflict, half-applied. `--force-conflicts` does not
-rescue it, because the chart never declares `strategy.rollingUpdate` and crane's
-copy survives beside the forced `type: Recreate`. With auto-update on, changing
-anything means uninstall + install.
+With `--auto-update` (or `autoUpdate: true`), crane takes ownership of its own
+Deployment within seconds of install, rewriting the image to BlazeMeter's
+current version and `.spec.strategy` from `Recreate` to `RollingUpdate`. Helm's
+server-side apply then fails the next upgrade on a field-ownership conflict,
+half-applied, and `--force-conflicts` does not recover it. With auto-update on,
+changing anything means uninstall + install.
 
-The default's cost is that keeping the agent current is your job — re-generate,
-or bump `image.tag` and upgrade — and an agent far enough behind loses support.
-Both behaviours were confirmed against a live cluster and a real agent.
+With it off, keeping the agent current is your job — re-generate, or bump
+`image.tag` and upgrade — and an agent far enough behind loses support.
 
-`autoUpdate` here is BlazeMeter's `AUTO_KUBERNETES_UPDATE`. Its `AUTO_UPDATE` is
-a different variable — the Docker-side switch, inert on a Kubernetes agent — so
-neither this chart nor the manifests emit it. The [docker](docker.md) format
-does, off the same option, and leaves it unset unless it was answered: there is
-no Deployment there for a self-update to fight over.
+`autoUpdate` is BlazeMeter's `AUTO_KUBERNETES_UPDATE`. `AUTO_UPDATE` is the
+Docker-side switch and does nothing on a Kubernetes agent, so neither this chart
+nor the manifests emit it; the [docker](docker.md) format does.
 
-**Service virtualization is carried here too.** `--sv-ingress` and the three
-options under it become the chart's `sv.ingress`, `sv.subdomain`,
-`sv.tlsSecret` and `sv.istioGateway`; the ConfigMap gets the same
-`KUBERNETES_WEB_EXPOSE_*`, and the Role grants the single API group the chosen
+## Service virtualization
+
+`--sv-ingress` and the three options under it become the chart's `sv.ingress`,
+`sv.subdomain`, `sv.tlsSecret` and `sv.istioGateway`; the ConfigMap gets the
+same `KUBERNETES_WEB_EXPOSE_*`, and the Role grants the API group the chosen
 backend publishes into. The chart refuses the same combinations the generator
-does, in its own copy of them, because a chart is also installed by hand:
-`istio` and `contour` under `serviceType: NODEPORT`, an OpenShift Route on a
-plain Kubernetes API server, a gateway name only istio reads. See
+does, because a chart can also be installed by hand: `istio` and `contour` under
+`serviceType: NODEPORT`, an OpenShift Route on a plain Kubernetes API server, a
+gateway name only istio reads. See
 [service virtualization](service-virtualization.md#the-same-thing-as-a-chart).
 
-This was the chart's one gap, and it was the chart's rather than the agent's —
-publishing needed an ingress backend, its RBAC and a wildcard TLS secret, and
-the chart carried none of the three, so `--format helm` refused a bundle
-*configured* for service virtualization instead of emitting one that deploys,
-reports idle and stalls at `WAITING_FOR_DOMAIN`. A bundle generated by a version
-that refused it says so; re-generate to get the `sv:` block.
+The docker format's three SV options (`sv_hostname`, `sv_tls_cert`,
+`sv_tls_key`) are ignored here, since a chart has nowhere to put them.
 
-The docker format publishes virtual services its own way, and the three options
-it does that with (`sv_hostname`, `sv_tls_cert`, `sv_tls_key`) are ignored here
-rather than refused, since a chart has nowhere to put them.
-
-One thing still differs:
+## Differences from manifests
 
 - **`livetest` does not take a chart directory.** The rig applies YAML with
-  kubectl and reads it back object by object; it exits with that message rather
-  than globbing an empty top level. Re-generate as manifests to live-test, then
-  ship whichever format you prefer — parity is what makes that safe.
+  kubectl and exits with that message. Re-generate as manifests to live-test,
+  then ship whichever format you prefer — they render the same objects.
 
 The chart is also usable on its own, without generating anything — see
 `bzm_opl_gen/templates/helm/README.md`. Standalone it floats the crane image tag
 on `latest` and needs `imageOverrides` written by hand for a private registry;
-generating fills both in from the account, which is the main reason to.
+generating fills both in from the account.

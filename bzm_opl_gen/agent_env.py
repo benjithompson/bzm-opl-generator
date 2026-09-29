@@ -8,7 +8,7 @@ so the `extra_env` form can offer each variable with a control per type rather
 than asking for a name and a value blind.
 
 Every documented variable is declared, including the ones the generator writes
-itself: `core.agent_env()` subtracts `generate.RESERVED_ENV` when serving, so an
+itself: `core.agent_env()` subtracts `bundle_env.RESERVED_ENV` when serving, so an
 option removed later hands its variable back. Each row names its platforms
 (the page has a Docker table and a Kubernetes table) and the functionalities
 that read it (empty meaning every location); `core.agent_env()` filters by both.

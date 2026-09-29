@@ -66,11 +66,9 @@ json_str() {
         | awk 'BEGIN{ORS=""; print "\""} {print (NR>1 ? "\\n" : "") $0} END{print "\""}'
 }
 
-# `get -o json` verbatim, or JSON null when the command failed. Emitting the
-# untouched kubectl document matters twice over: a reviewer can see nothing was
-# rewritten on the way out, and normalising it is the importer's job, where it
-# is testable. null vs an empty list is the load-bearing distinction -- "we were
-# denied" must not arrive looking like "the cluster has none".
+# `get -o json` verbatim (so a reviewer can see nothing was rewritten), or JSON
+# null when the command failed -- "we were denied" must never look like "the
+# cluster has none".
 get_json() {
     key="$1"; shift
     out=$("$CLI" get "$@" -o json 2>/tmp/bzm-ev-err.$$)
@@ -88,9 +86,7 @@ get_json() {
 # there is nothing here that needs quoting.
 get_names() {
     key="$1"; shift
-    # Same note-on-failure as get_json: a null with no note is a section that
-    # silently disappears from "what could not be read", and the reader then
-    # presents a partial file as a complete one.
+    # Record the failure, as get_json does, so the null is reported as unread.
     out=$("$CLI" get "$@" -o custom-columns=N:.metadata.name --no-headers 2>/tmp/bzm-ev-err.$$)
     if [ $? -ne 0 ]; then
         note "$key: $(head -c 300 /tmp/bzm-ev-err.$$ | tr '\n' ' ')"
@@ -128,14 +124,8 @@ has_api() {
 # -- the document -----------------------------------------------------------
 #
 # Everything below writes the evidence file, one key per line at an indent that
-# is its depth. Those keys are also stated in bzm_opl_gen/evidence.py, which is
-# where the tool that reads this file gets them from -- and renaming one here
-# alone does not fail anything at all: every reader treats a section it cannot
-# find as one nobody could read, so the report says "could not read nodes"
-# about a section sitting right there in the file. So the two are held together
-# by a test: tests/test_cluster_evidence.py parses this half of the script from
-# the marker above and compares the keys it writes against that table. Rename a
-# section in either place and it names the section.
+# is its depth. The keys must match bzm_opl_gen/evidence.py;
+# tests/test_cluster_evidence.py parses this half of the script and compares.
 
 printf '{\n'
 printf '  "schema": "bzm-opl-cluster-evidence/1",\n'
@@ -184,12 +174,11 @@ printf '\n  },\n'
 # cluster-scoped rows decide only whether the bundle's *optional* ClusterRole
 # can be applied. They say nothing about serviceType: crane resolves its
 # advertised address from its own network interfaces, not from the Node object,
-# and NODEPORT has run green with namespaced RBAC only (issue #49).
+# and NODEPORT works with namespaced RBAC only.
 #
-# Note for whoever reads this file: a `false` below is "the API server said no"
-# only when the command reached it -- `auth can-i` and `api-resources` both
-# report failure as no. `versions.serverVersion` is what tells the two apart,
-# and bzm_opl_gen/suggest.py will not suggest anything without it.
+# A `false` below means "the API server said no" only if the command reached
+# it -- `auth can-i` and `api-resources` both report failure as no.
+# `versions.serverVersion` tells the two apart.
 printf '  "permissions": {\n'
 printf '    "namespaced": {\n'
 can_i "create serviceaccounts" create serviceaccounts ; printf ',\n'
