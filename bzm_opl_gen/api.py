@@ -100,6 +100,10 @@ class BzmClient:
         surface already knows how to report.
         """
         key_id, secret = credentials
+        # Public, and the one half of the pair that is: the page names the key
+        # it is connected with, and re-reading the file for it was three more
+        # reads of a file this construction already parsed.
+        self.key_id = key_id
         self._auth = base64.b64encode(f"{key_id}:{secret}".encode()).decode()
 
     def _send(self, req, label, timeout):
@@ -389,9 +393,6 @@ scenarios:
 
     def master_status(self, master_id):
         return self.get(f"/masters/{master_id}/status")
-
-    def master(self, master_id):
-        return self.get(f"/masters/{master_id}")
 
     def stop_master(self, master_id):
         return self.post(f"/masters/{master_id}/stop")

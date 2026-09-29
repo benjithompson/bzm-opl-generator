@@ -697,7 +697,7 @@ def why_nothing(doc):
                 f"api-group answers are all `false` because the commands failed "
                 f"rather than because the cluster said no. Nothing here "
                 f"describes a cluster to suggest from -- re-collect with "
-                f"{doctor.EVIDENCE_SCRIPT} pointed at it")
+                f"{evidence_mod.SCRIPT} pointed at it")
     return ("nothing in this evidence constrains the generate options -- the "
             "collector read the cluster, and none of what it saw decides or "
             "narrows one")

@@ -9,8 +9,7 @@ import textwrap
 from string import Template
 from urllib.parse import quote
 
-from .facts import (image_category, image_refs, key_base, needed_categories,
-                    runs_engine, select_images)
+from .facts import image_refs, key_base, runs_engine, select_images
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")

@@ -43,8 +43,8 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import (__version__, core, doctor, generate as gen_mod,
-               facts as facts_mod, livetest, plan)
+from . import (__version__, core, evidence as evidence_mod,
+               generate as gen_mod, facts as facts_mod, livetest, plan)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -969,7 +969,7 @@ def _preflight(action, args):
             # and a session with no checkout has no way to find that out.
             raise core.BadRequest(
                 f"doctor needs `evidence`: the JSON produced by "
-                f"{doctor.EVIDENCE_SCRIPT}, which someone with cluster "
+                f"{evidence_mod.SCRIPT}, which someone with cluster "
                 f"access runs read-only and sends back "
                 f"({RESOURCE_SCHEME}://docs/preflight.md has what to ask them "
                 f"for). Pass the path of the file they sent, or the object "

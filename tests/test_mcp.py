@@ -20,7 +20,7 @@ import anyio
 import mcp
 import pytest
 
-from bzm_opl_gen import core, generate as gen_mod, mcp_server, plan
+from bzm_opl_gen import core, evidence, generate as gen_mod, mcp_server, plan
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
@@ -950,11 +950,11 @@ def test_asking_for_evidence_names_a_collector_that_exists():
     against doctor's own constant and the invented flag against its absence."""
     from test_doctor import FACTS as LOC_FACTS
     text = err("opl_preflight", "doctor", {"facts": LOC_FACTS})
-    assert core.doctor.EVIDENCE_SCRIPT in text
+    assert evidence.SCRIPT in text
     assert "--collect" not in text
     assert "path" in text, "and it should say the file may be named, not pasted"
     assert os.path.isfile(os.path.join(os.path.dirname(__file__), "..",
-                                       core.doctor.EVIDENCE_SCRIPT))
+                                       evidence.SCRIPT))
 
 
 def test_the_preflight_description_offers_both_forms():

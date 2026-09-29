@@ -14,7 +14,7 @@ import textwrap
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import doctor, facts as facts_mod, generate as gen  # noqa: E402
+from bzm_opl_gen import doctor, evidence, facts as facts_mod, generate as gen  # noqa: E402
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -1468,7 +1468,7 @@ def test_every_declared_section_is_one_the_cluster_data_actually_carries(
     merges it in, and no producer of cluster data has it."""
     if carrier == "evidence":
         carried = set(doctor.cluster_from_evidence(
-            {"schema": doctor.EVIDENCE_SCHEMA}).cluster)
+            {"schema": evidence.SCHEMA}).cluster)
     else:
         monkeypatch.setattr(doctor.livetest, "kget", lambda *a, **k: {})
         carried = set(doctor.gather_cluster("kubectl", "ns1"))

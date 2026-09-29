@@ -952,7 +952,7 @@ def check_engine_packing(facts, opts, cluster):
                       + f"; assuming ~{TYPICAL_SYSTEM_PODS} system pods a node "
                       f"against its allocatable.pods, which you can count with "
                       f"`kubectl get pods -A --field-selector "
-                      f"spec.nodeName=<NODE>`")]
+                      f"spec.nodeName=<node>`")]
 
     name, packs, runs, ceiling = worst
     lever = (f"allocatable.pods={ceiling}, less ~{TYPICAL_SYSTEM_PODS} for "
@@ -976,7 +976,7 @@ def check_engine_packing(facts, opts, cluster):
                      f"/ {mem // (1024 ** 2)}MB) closes this.")
                   + f" Failing that, cap the engine pool's maxPods at the pods "
                   f"a node of it actually runs plus one -- counted with "
-                  f"`kubectl get pods -A --field-selector spec.nodeName=<NODE>`, "
+                  f"`kubectl get pods -A --field-selector spec.nodeName=<node>`, "
                   f"not `get ds`, which counts nodeAffinity-gated variants that "
                   f"never land. No manifest can set maxPods, so it belongs on "
                   f"the node pool (see the generated {NODEPOOLS_FILE})")]
@@ -1502,8 +1502,6 @@ def gather_cluster(cli, namespace):
 # The file's own vocabulary, under the names every caller of this module already
 # reads them by. What they say is stated with the rest of the document's shape,
 # in `evidence`, so the collector and this reader cannot drift apart.
-EVIDENCE_SCHEMA = evidence_mod.SCHEMA
-EVIDENCE_SCRIPT = evidence_mod.SCRIPT
 
 # What an import produces: cluster data in gather_cluster()'s shape, the probes
 # it cannot supply, and the verdicts about the file itself.
@@ -1520,18 +1518,18 @@ def load_evidence(path):
     except FileNotFoundError:
         raise ValueError(
             f"no cluster evidence file at '{path}'. Have someone with access to "
-            f"the cluster run {EVIDENCE_SCRIPT} (read-only) and send back its "
-            f"output:\n  ./{EVIDENCE_SCRIPT} -n <namespace> > cluster-evidence.json")
+            f"the cluster run {evidence_mod.SCRIPT} (read-only) and send back its "
+            f"output:\n  ./{evidence_mod.SCRIPT} -n <namespace> > cluster-evidence.json")
     except json.JSONDecodeError as e:
         raise ValueError(f"'{path}' is not valid JSON ({e}). It should be the "
-                         f"unedited output of {EVIDENCE_SCRIPT}")
+                         f"unedited output of {evidence_mod.SCRIPT}")
     except OSError as e:
         # A directory, an unreadable file, a dead symlink. Named rather than
         # raised: every caller of this turns a ValueError into a sentence
         # somebody can act on, and an IsADirectoryError traceback out of a
         # server is the one shape none of them expected.
         raise ValueError(f"'{path}' could not be read ({e}). It should be the "
-                         f"file {EVIDENCE_SCRIPT} wrote on the customer's "
+                         f"file {evidence_mod.SCRIPT} wrote on the customer's "
                          f"machine")
 
 
@@ -1587,17 +1585,17 @@ def _validate_evidence(doc):
     if not isinstance(doc, dict):
         found = "a JSON array" if isinstance(doc, list) else type(doc).__name__
         raise ValueError(f"cluster evidence must be a JSON object; found {found}. "
-                         f"Expected the output of {EVIDENCE_SCRIPT} "
-                         f"(schema {EVIDENCE_SCHEMA})")
+                         f"Expected the output of {evidence_mod.SCRIPT} "
+                         f"(schema {evidence_mod.SCHEMA})")
     schema = doc.get(evidence_mod.SCHEMA_FIELD)
     if not schema:
         raise ValueError(f"this file has no 'schema' field, so it is not cluster "
-                         f"evidence -- expected {EVIDENCE_SCHEMA}, the output of "
-                         f"{EVIDENCE_SCRIPT}. (Account facts go to --facts.)")
-    if schema != EVIDENCE_SCHEMA:
+                         f"evidence -- expected {evidence_mod.SCHEMA}, the output of "
+                         f"{evidence_mod.SCRIPT}. (Account facts go to --facts.)")
+    if schema != evidence_mod.SCHEMA:
         raise ValueError(f"unrecognised cluster evidence: found schema "
-                         f"'{schema}', expected '{EVIDENCE_SCHEMA}'. Re-collect "
-                         f"with the {EVIDENCE_SCRIPT} shipped with this version "
+                         f"'{schema}', expected '{evidence_mod.SCHEMA}'. Re-collect "
+                         f"with the {evidence_mod.SCRIPT} shipped with this version "
                          f"rather than trusting a partial read of a shape this "
                          f"doctor does not know")
 
@@ -1609,7 +1607,7 @@ def _evidence_checks(doc, namespace):
     this one, which is why it is a Check and not a printed aside."""
     collected = doc.get(evidence_mod.COLLECTED_AT) or "an unrecorded time"
     doc_ns = doc.get(evidence_mod.NAMESPACE)
-    parts = [f"cluster read by {EVIDENCE_SCRIPT} at {collected} for namespace "
+    parts = [f"cluster read by {evidence_mod.SCRIPT} at {collected} for namespace "
              f"{doc_ns or 'an unnamed namespace'}, not from a live cluster"]
     if describes_elsewhere(doc_ns, namespace):
         # Most of what follows is per-namespace -- LimitRanges, quotas,

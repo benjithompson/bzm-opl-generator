@@ -327,7 +327,7 @@ def test_an_unrecognised_schema_is_refused_by_name(doc, found):
     with pytest.raises(ValueError) as e:
         doctor.cluster_from_evidence(doc)
     assert found in str(e.value)
-    assert doctor.EVIDENCE_SCHEMA in str(e.value)     # and what was expected
+    assert evidence.SCHEMA in str(e.value)     # and what was expected
 
 
 def test_a_hand_edited_section_is_refused_by_name():
@@ -468,7 +468,7 @@ def test_doctor_refuses_a_file_that_is_not_cluster_evidence(monkeypatch,
     """The likeliest wrong file is facts.json, and it must not traceback."""
     code = _run(monkeypatch, "doctor", "--facts", EXAMPLE_FACTS, "--manifests", "",
                 "--cluster-evidence", EXAMPLE_FACTS)
-    assert doctor.EVIDENCE_SCHEMA in str(code)
+    assert evidence.SCHEMA in str(code)
     assert "no 'schema' field" in str(code)
 
 
