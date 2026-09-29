@@ -311,8 +311,6 @@ export function Switch({ on, onChange, label }: {
   );
 }
 
-/** A step within a numbered Section -- same heading shape, no number of its
- *  own. Used where several former steps were folded into one. */
 /** One panel of a step: a bordered card with a header, optionally collapsible.
  *
  *  A card rather than a rule between blocks. Three sections separated by a

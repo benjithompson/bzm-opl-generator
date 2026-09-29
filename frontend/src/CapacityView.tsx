@@ -30,6 +30,7 @@ import {
 } from "./capacity";
 import { Button, cardCls, inputCls } from "./components";
 import { useFoldSet } from "./foldSet";
+import { plural } from "./text";
 
 const n = (x: number) => x.toLocaleString();
 
@@ -265,7 +266,7 @@ function WorkspaceCard(props: {
             </span>
           )}
           <span className="text-xs text-slate-400">
-            {w.locs.length} location{w.locs.length === 1 ? "" : "s"}
+            {plural(w.locs.length, "location")}
           </span>
           <span className="grow" />
           <span className="text-sm font-bold tabular-nums">{n(w.total)}</span>
