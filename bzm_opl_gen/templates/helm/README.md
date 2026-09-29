@@ -102,11 +102,12 @@ Crane itself is small; engines use the capacity. Each concurrent engine needs
 2 CPU + 8Gi RAM by default, plus about 60GB of disk (40GB of it `/tmp`).
 `bzm-opl-gen doctor` checks a cluster against these figures.
 
-`engine.cpuLimit` / `engine.memoryLimit` set the engine pod's **limits**. Its
-**requests** come from the location's `overrideCPU` / `overrideMemory`
-(Settings → Private Locations), default 250m/256Mi. The scheduler places pods by
-requests, so set those overrides to match the limits, or several engines may
-share a node and report skewed results. A LimitRange cannot change them.
+`engine.cpuLimit` / `engine.memoryLimit` set the engine pod's **limits**, and
+`engine.cpuRequest` / `engine.memoryRequestMi` its **requests** (empty: equal to
+the limits; memory in MiB). The scheduler places pods by requests, so keeping
+them equal to the limits stops engines sharing a node and skewing results. A
+location's `overrideCPU` / `overrideMemory`, if set in BlazeMeter, replace the
+requests.
 
 An existing LimitRange in the namespace must allow both the engine size and
 crane's own limits (1 CPU / 2Gi), or the pod is rejected at admission.

@@ -1004,7 +1004,7 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
 
     fireEvent.click(await screen.findByRole("radio", { name: /Separate nodes/ }));
     // The separate-nodes choice states its cost beside it.
-    expect(await screen.findByText(/autoscalers grow pools by what pods request/))
+    expect(await screen.findByText(/grows this pool by one node per engine/))
       .toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
@@ -1235,7 +1235,7 @@ test("a location holding no engine requests is stated as the default, never blan
     // with the location named as the place that changes it.
     const note = await screen.findByText(/2 CPU \/ 8Gi/);
     expect(note.textContent).toContain("default");
-    expect(note.textContent).toContain("Location settings");
+    expect(note.textContent).toContain("Engines request the same");
   });
 
 test("a location running two engine functionalities states the engine size once",

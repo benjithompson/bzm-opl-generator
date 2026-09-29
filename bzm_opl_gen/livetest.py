@@ -860,10 +860,11 @@ LIMIT_RANGER_ANNOTATION = "kubernetes.io/limit-ranger"
 def engine_request_gap(pod):
     """The gap between an engine's limits and its requests, or None.
 
-    Reported, not asserted: requests come from the location's
-    overrideCPU/overrideMemory (250m/256Mi when unset), which no manifest sets,
-    and crane sets them explicitly so a LimitRange's defaultRequest cannot fill
-    them either. The scheduler packs nodes on requests."""
+    Reported, not asserted: requests come from the bundle's
+    KUBERNETES_RESOURCES_DEFAULT_* (equal to the limits) unless the location's
+    overrideCPU/overrideMemory replace them. Crane sets them explicitly, so a
+    LimitRange's defaultRequest cannot fill them. The scheduler packs on
+    requests."""
     for c in pod["spec"].get("containers", []):
         res = c.get("resources") or {}
         req, lim = res.get("requests") or {}, res.get("limits") or {}
@@ -878,9 +879,10 @@ def engine_request_gap(pod):
                 f"namespace LimitRange did not and cannot change them)")
             return (f"engine {c.get('name')} requests {dict(req)} against limits "
                     f"{dict(lim)} -- the scheduler packs on requests, so engines "
-                    f"pack {'; '.join(short)} tighter than they run. Raise the "
-                    f"location's overrideCPU/overrideMemory to match the limits "
-                    f"to close it{note}")
+                    f"pack {'; '.join(short)} tighter than they run. Check the "
+                    f"ConfigMap carries KUBERNETES_RESOURCES_DEFAULT_CPU/_MEM "
+                    f"and that the location's overrideCPU/overrideMemory, which "
+                    f"replace them, are unset or match the limits{note}")
     return None
 
 

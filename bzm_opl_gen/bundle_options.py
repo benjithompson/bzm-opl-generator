@@ -184,6 +184,21 @@ def engine_size(o):
                       "engine_mem_limit" in ignored))
 
 
+def engine_request(o):
+    """(cpu, memory MiB) crane requests for each engine: the engine limits, so
+    the scheduler and autoscaler place engines by what they actually use.
+    Emitted as KUBERNETES_RESOURCES_DEFAULT_CPU/_MEM (memory is an integer in
+    MiB, as BlazeMeter's own chart writes it)."""
+    cpu, mem = engine_size(o)
+    return format_cpu(cpu), str(mem // (1024 ** 2))
+
+
+def engine_request_quantities(o):
+    """engine_request as Kubernetes quantities, for comparing and printing."""
+    cpu, mib = engine_request(o)
+    return cpu, f"{mib}Mi"
+
+
 def resolve_engine_limits(facts, o):
     """The engine limits the location implies, as an options patch.
 

@@ -72,9 +72,9 @@ const LABELS: Record<keyof Draft, string> = {
 const HINTS: Record<keyof Draft, string> = {
   slots: "BlazeMeter's `slots` — one agent's engines, not the location's total",
   threads_per_engine: "unset, every test start fails with 403",
-  override_cpu: "match the engine's CPU — 2 for a standard engine. Blank = 250m",
-  override_memory: "match the engine's memory in MB — 8192 for a standard "
-    + "engine. Blank = 256Mi",
+  override_cpu: "replaces the bundle's engine CPU request — blank keeps it",
+  override_memory: "replaces the bundle's engine memory request, in MB — "
+    + "blank keeps it",
 };
 
 export function LocationSettings(props: {
@@ -211,12 +211,11 @@ export function LocationSettings(props: {
       </p>
 
       <p className="text-2xs text-slate-500">
-        The two requests are what the Kubernetes scheduler and the autoscaler
-        place engines on; the limits they run at come from the manifests. Left
-        blank they default to <b>250m / 256Mi</b>, so every engine asks for a
-        fraction of what it uses, the autoscaler adds one node, and a whole run
-        packs onto it. Setting them to the engine&apos;s own size is what keeps
-        the engines apart.
+        The bundle sets each engine&apos;s requests equal to its limits, which
+        is what the Kubernetes scheduler and the autoscaler place engines on.
+        These two, if set, replace those requests: leave them blank or set them
+        to the engine&apos;s own size. Set lower, engines pack onto fewer nodes
+        than they need.
       </p>
 
       {/* One button, always live: Confirm (writes nothing, moves on) when

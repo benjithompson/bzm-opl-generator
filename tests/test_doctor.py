@@ -61,6 +61,11 @@ def _find(checks, needle):
     return hits[0]
 
 
+# Location overrides below the 2 CPU / 8Gi engine: they replace the bundle's
+# requests, which is the only way engines request less than their limits.
+LOW_OVERRIDES = {**FACTS, "override_cpu": 1, "override_memory": 1024}
+
+
 def _statuses(checks):
     return {c.status for c in checks}
 
@@ -412,15 +417,26 @@ def test_packing_uses_the_locations_requests_not_the_default():
 
 
 def test_packing_names_the_location_overrides_as_the_fix():
-    """The old advice was maxPods, which is a backstop. The direct fix is the
-    location's overrides, and the verdict has to say so."""
+    """Location overrides below the limits replace the bundle's requests; the
+    verdict names them and the value that closes the gap."""
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
     node = _engine_node("e1", cpu="16", mem="64Gi", pods=110)
-    c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
+    c = _find(doctor.check_engine_packing(LOW_OVERRIDES, opts, {"nodes": [node]}),
               "engine packing")
     assert c.status == doctor.WARN
     assert "overrideCPU/overrideMemory" in c.detail
     assert "8192MB" in c.detail          # the value to set, in the field's unit
+
+
+def test_packing_passes_on_the_bundles_own_requests():
+    """With no location overrides the bundle's requests equal the limits, so a
+    node sized for one engine accepts one, whatever its pod ceiling."""
+    opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
+    node = _engine_node("e1", cpu="3", mem="10Gi", pods=110)
+    c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
+              "engine packing")
+    assert c.status == doctor.PASS
+    assert "KUBERNETES_RESOURCES_DEFAULT" in c.detail
 
 
 # -- check_crane_pool -------------------------------------------------------
@@ -513,11 +529,12 @@ def test_capacity_does_not_spend_crane_out_of_a_pool_it_is_not_on():
 
 def test_engine_packing_warns_when_requests_let_engines_pile_onto_one_node():
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
-    # 16 CPU / 64Gi runs 8 engines but *accepts* 64 by requests.
-    checks = doctor.check_engine_packing(FACTS, opts, {"nodes": [_engine_node("e1")]})
+    # 16 CPU / 64Gi runs 8 engines but *accepts* 16 by the location's requests.
+    checks = doctor.check_engine_packing(LOW_OVERRIDES, opts,
+                                         {"nodes": [_engine_node("e1")]})
     c = _find(checks, "engine packing")
     assert c.status == doctor.WARN
-    assert "250m" in c.detail and "maxPods" in c.detail
+    assert "1/1024Mi" in c.detail and "maxPods" in c.detail
     # Never a FAIL: the engines do start, and the cost is the validity of the
     # numbers rather than the run.
     assert c.status != doctor.FAIL
@@ -558,9 +575,9 @@ def test_the_recipe_builds_a_pool_the_checker_passes():
     c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
               "engine packing")
     assert c.status == doctor.PASS
-    # ...and the same node without the ceiling is exactly what it warns about.
+    # ...and without the ceiling, under low location overrides, it warns.
     loose = _engine_node("e2", cpu="3", mem="10Gi", pods=110)
-    assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [loose]}),
+    assert _find(doctor.check_engine_packing(LOW_OVERRIDES, opts, {"nodes": [loose]}),
                  "engine packing").status == doctor.WARN
 
 
@@ -673,10 +690,10 @@ def test_disk_ignores_ineligible_nodes():
 
 # -- check_limitrange -------------------------------------------------------
 
-def test_limitrange_absent_warns_about_cranes_defaults():
+def test_limitrange_absent_warns_that_nothing_caps_the_namespace():
     c = doctor.check_limitrange(FACTS, {}, {"limitranges": []})[0]
     assert c.status == doctor.WARN
-    assert "250m" in c.detail and "256Mi" in c.detail
+    assert "nothing caps" in c.detail
 
 
 def test_limitrange_matching_passes():
@@ -691,24 +708,34 @@ def test_limitrange_max_below_engine_fails():
     assert "team-caps" in c.detail                      # name the object
 
 
-def test_limitrange_min_above_the_stamped_request_fails():
-    """A LimitRange min above crane's stamped request FAILs."""
+def test_limitrange_min_above_the_request_fails():
+    """A LimitRange min above the request crane sets (here the location's
+    overrides) FAILs."""
     lr = {"metadata": {"name": "floor"},
-          "spec": {"limits": [{"type": "Container", "min": {"cpu": "1", "memory": "1Gi"}}]}}
-    c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
+          "spec": {"limits": [{"type": "Container",
+                               "min": {"cpu": "1500m", "memory": "2Gi"}}]}}
+    c = doctor.check_limitrange(LOW_OVERRIDES, {}, {"limitranges": [lr]})[0]
     assert c.status == doctor.FAIL
-    assert "min cpu" in c.detail and "250m" in c.detail
+    assert "min cpu" in c.detail
 
 
 def test_limitrange_ratio_tighter_than_the_engines_own_gap_fails():
-    """The engine limits 8Gi while requesting 256Mi -- a 32x ratio. Any
-    maxLimitRequestRatio below that rejects it."""
+    """Location overrides of 1 / 1024MB against 2 / 8Gi limits are a 2x and 8x
+    ratio; a maxLimitRequestRatio below that rejects the engine."""
     lr = {"metadata": {"name": "ratio"},
           "spec": {"limits": [{"type": "Container",
-                               "maxLimitRequestRatio": {"cpu": "4", "memory": "4"}}]}}
-    c = doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})[0]
+                               "maxLimitRequestRatio": {"cpu": "1.5", "memory": "4"}}]}}
+    c = doctor.check_limitrange(LOW_OVERRIDES, {}, {"limitranges": [lr]})[0]
     assert c.status == doctor.FAIL
     assert "maxLimitRequestRatio" in c.detail
+
+
+def test_limitrange_ratio_of_one_passes_on_the_bundles_requests():
+    """The bundle's requests equal its limits, so even a 1:1 ratio admits it."""
+    lr = {"metadata": {"name": "ratio"},
+          "spec": {"limits": [{"type": "Container",
+                               "maxLimitRequestRatio": {"cpu": "1", "memory": "1"}}]}}
+    assert _statuses(doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})) == {doctor.PASS}
 
 
 def test_limitrange_ratio_wide_enough_passes():
@@ -716,13 +743,6 @@ def test_limitrange_ratio_wide_enough_passes():
           "spec": {"limits": [{"type": "Container",
                                "maxLimitRequestRatio": {"cpu": "16", "memory": "64"}}]}}
     assert _statuses(doctor.check_limitrange(FACTS, {}, {"limitranges": [lr]})) == {doctor.PASS}
-
-
-def test_limitrange_absent_does_not_promise_a_fix_it_cannot_deliver():
-    """Crane stamps the engine's requests explicitly, so no LimitRange can raise
-    them -- the WARN must not tell a customer that emitting one would."""
-    detail = doctor.check_limitrange(FACTS, {}, {"limitranges": []})[0].detail
-    assert "cannot override" in detail
 
 
 def test_limitrange_conflicting_defaults_warn():

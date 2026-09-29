@@ -85,8 +85,8 @@ describe("sizeStatement", () => {
     expect(s.kind).toBe("default");
     expect(s.text).toContain("2 CPU / 8Gi");
     expect(s.text).toContain("default");
-    // ...and names where to change it.
-    expect(s.text).toContain("Location settings");
+    // ...and that engines request what they are limited to.
+    expect(s.text).toContain("Engines request the same");
     expect(s.text).not.toContain("--");
   });
 
@@ -124,8 +124,8 @@ describe("sizeStatement", () => {
       { overrideCPU: null, overrideMemory: null });
     expect(s.kind).toBe("bundle");
     expect(s.text).toContain("4 CPU / 16Gi");
-    // The packing gap: requests stay at their default while limits are set.
-    expect(s.text).toContain("no engine requests");
+    // The bundle's requests follow its limits, so there is no packing gap.
+    expect(s.text).toContain("Engines request the same");
   });
 
   test("options with nothing to read stay a plain statement", () => {

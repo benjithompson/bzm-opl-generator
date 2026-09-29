@@ -13,6 +13,14 @@ anything that breaks.
 
 ### Added
 
+- **Engines request what they are limited to.** Manifests and the Helm chart
+  now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
+  beside the engine limits, so each engine requests 2 CPU / 8Gi by default
+  instead of crane's 250m/256Mi, and the scheduler and autoscaler place engines
+  by their real size. They follow `engine_cpu_limit` / `engine_mem_limit`; the
+  chart exposes `engine.cpuRequest` and `engine.memoryRequestMi`. A location's
+  `overrideCPU` / `overrideMemory`, if set in BlazeMeter, still replace them.
+
 - **`generate --openshift`** says the target cluster is OpenShift: commands
   use `oc`, `sv_ingress=openshift` (a Route) is allowed, and the injected
   cluster trust bundle is offered. The cluster defaults to plain Kubernetes, so

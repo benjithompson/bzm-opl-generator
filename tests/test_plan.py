@@ -538,8 +538,8 @@ def test_document_states_the_override_fields_and_why():
     cluster that gets used."""
     doc = plan.plan_document(plan.capacity_plan(5000))
     assert "overrideCPU" in doc and "overrideMemory" in doc
-    assert "250m" in doc and "256Mi" in doc
-    assert "scheduler places pods on requests" in doc
+    assert "requests equal to its limits" in doc
+    assert "replace those" in doc
 
 
 def test_document_warns_when_the_engine_is_too_small_for_the_threads():

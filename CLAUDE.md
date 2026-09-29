@@ -266,9 +266,16 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 - CA bundles can exceed kubectl's last-applied annotation cap; manifests over
   200KB apply `--server-side`.
 - `PATCH /tests/{id}` silently drops `executions` for a taurus-script test.
-- No LimitRange is emitted: crane sets engine requests from the location's
-  `overrideCPU/overrideMemory` (250m/256Mi when unset), and a LimitRange only
-  hits crane's `test-job-*` pods. `doctor` still reads an existing one.
+- **Engine requests are set by the bundle**: `KUBERNETES_RESOURCES_DEFAULT_CPU`
+  and `_MEM` (memory integer MiB), equal to the limits
+  (`bundle_options.engine_request`). They are missing from BlazeMeter's
+  environment-variable page but are what BlazeMeter's own `helm-crane` chart
+  writes for `resourcesExecutors.requests`. A location's
+  `overrideCPU/overrideMemory`, when set, replace them (measured: 1/4096 gave
+  requests {1, 4Gi}); unset everywhere, crane uses 250m/256Mi. Not yet verified
+  on a live engine: run `livetest --run-test` and read `ENGINE SIZING:`.
+- No LimitRange is emitted: crane sets requests explicitly, so a LimitRange
+  only hits crane's `test-job-*` pods. `doctor` still reads an existing one.
 - Crane requests 250m/512Mi and limits 1 CPU/2Gi: the scheduler places on the
   request. `doctor` measures against node allocatable — say "upper bound".
 - List calls ask for one big page (1000); a truncated list only looks short.

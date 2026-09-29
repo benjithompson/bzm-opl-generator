@@ -5,6 +5,7 @@ tests/helm_parity.py.
 
 import json
 import os
+import pathlib
 import re
 import sys
 
@@ -302,12 +303,31 @@ def test_chart_carries_the_default_engine_limits_too():
         assert f'default "{default}" .Values.{values_key}' in defn, defn
 
 
-def test_overlay_offers_no_engine_request_knob():
-    """The overlay has no engine request value, and says why."""
-    v, files = _values(engine_cpu_limit="4", engine_mem_limit="16Gi")
-    assert "cpuRequest" not in v["engine"]
-    assert "memoryRequest" not in v["engine"]
-    assert "not settable" in files[bundle_names.HELM_VALUES_FILE]
+def test_overlay_sets_engine_requests_equal_to_the_limits():
+    """Engine requests follow the limits: written out beside explicit limits
+    (memory as integer MiB), left to the chart's default otherwise."""
+    v, _ = _values(engine_cpu_limit="4", engine_mem_limit="16Gi")
+    assert v["engine"]["cpuRequest"] == "4"
+    assert v["engine"]["memoryRequestMi"] == "16384"
+    v, _ = _values()
+    assert v["engine"]["cpuRequest"] == "" and v["engine"]["memoryRequestMi"] == ""
+
+
+CHART = pathlib.Path(bundle_names.HELM_DIR)
+
+
+def test_the_chart_derives_or_demands_the_memory_request():
+    """The chart's own defaults carry the request helpers, and a memory limit it
+    cannot turn into MiB is refused by name rather than guessed."""
+    helpers = (CHART / "templates" / "_helpers.tpl").read_text()
+    assert 'define "bzm-opl.engineMemoryRequestMi"' in helpers
+    assert "set engine.memoryRequestMi" in helpers
+    values = yaml.safe_load((CHART / "values.yaml").read_text())
+    assert values["engine"]["cpuRequest"] == ""
+    assert values["engine"]["memoryRequestMi"] == ""
+    cm = (CHART / "templates" / "configmap.yaml").read_text()
+    assert "KUBERNETES_RESOURCES_DEFAULT_CPU" in cm
+    assert "KUBERNETES_RESOURCES_DEFAULT_MEM" in cm
 
 
 def test_auto_update_is_left_to_the_chart_when_unset():

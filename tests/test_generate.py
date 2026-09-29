@@ -384,8 +384,9 @@ def test_nodepool_recipe_only_when_the_pools_differ():
     # pool this bundle selects rather than a worked example of a different one.
     assert "pool=bzm-engines" in md
     assert "bzm.io/engines=true:NoSchedule" in md
-    # The stamped-request trap and the only lever that closes it.
-    assert footprint.ENGINE_DEFAULT_REQUEST_CPU in md and "maxPods" in md
+    # Requests equal to limits, the override that replaces them, and maxPods.
+    assert "requests equal to its limits" in md and "overrideCPU" in md
+    assert "maxPods" in md
     for flavour in ("GKE", "EKS", "AKS", "OpenShift", "kubeadm"):
         assert flavour in md
 
@@ -903,7 +904,7 @@ def test_readme_is_short_and_actionable():
     assert "apply -f bzm_deployment.yaml" in readme
     assert "rollout status deploy/crane" in readme
     assert "online" in readme
-    assert footprint.ENGINE_DEFAULT_REQUEST_CPU in readme     # the engine request gap
+    assert "KUBERNETES_RESOURCES_DEFAULT_CPU" in readme      # the engine requests
     assert "bzm_limitrange.yaml" not in readme
 
 
@@ -3183,3 +3184,17 @@ def test_every_configmap_value_survives_whatever_it_holds(use_secret):
                    if d and "HTTP_PROXY" in (d.get("stringData") or d.get("data") or {}))
     assert ((carrier.get("stringData") or carrier.get("data"))["HTTP_PROXY"]
             == bundle_env.proxy_env(o)["HTTP_PROXY"])
+
+
+@pytest.mark.parametrize("over, cpu, mem", [
+    ({}, "2", "8192"),
+    ({"engine_cpu_limit": "4", "engine_mem_limit": "16Gi"}, "4", "16384"),
+    ({"engine_cpu_limit": "1500m", "engine_mem_limit": "6144Mi"}, "1500m", "6144"),
+])
+def test_engines_request_what_they_are_limited_to(over, cpu, mem):
+    """KUBERNETES_RESOURCES_DEFAULT_CPU/_MEM carry the engine requests, equal to
+    the limits, memory as integer MiB (the unit BlazeMeter's chart writes)."""
+    cm = yaml.safe_load(gen.generate(FACTS, {"namespace": "ns1", **over})
+                        ["bzm_configmap.yaml"])["data"]
+    assert cm["KUBERNETES_RESOURCES_DEFAULT_CPU"] == cpu
+    assert cm["KUBERNETES_RESOURCES_DEFAULT_MEM"] == mem

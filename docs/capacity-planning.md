@@ -141,12 +141,13 @@ The plan's `location` block is what has to be set in BlazeMeter under
 | Virtual users per engine (`threadsPerEngine`) | the figure the plan used; unset, every start fails 403 *Not enough available resources* |
 | overrideCPU / overrideMemory | the engine's **requests**, matched to the limits the bundle sets |
 
-The last two are the difference between the cluster being used and being wasted.
-The bundle's `KUBERNETES_RESOURCES_LIMITS_*` set the engine's *limits*; these
-two set its *requests*, and the scheduler and the autoscaler place pods on
-requests. Left at their `250m`/`256Mi` default, every engine asks for a fraction
-of what it uses, the autoscaler adds **one** node, and the whole run packs onto
-it — against a pool that was sized, bought and approved for one engine each.
+The bundle sets each engine's requests equal to its limits
+(`KUBERNETES_RESOURCES_DEFAULT_*` beside `KUBERNETES_RESOURCES_LIMITS_*`), and
+the scheduler and autoscaler place pods on requests. The last two fields, if set
+on the location, replace those requests: leave them unset or set them to the
+engine size. Set lower, every engine asks for a fraction of what it uses, the
+autoscaler adds **one** node, and the run packs onto it — against a pool that was
+sized, bought and approved for one engine each.
 [preflight.md](preflight.md#engine-requests-where-they-come-from-and-why-no-limitrange)
 and the `nodepools.md` in a generated bundle have the rest.
 

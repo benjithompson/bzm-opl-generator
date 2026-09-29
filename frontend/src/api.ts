@@ -11,8 +11,8 @@ export interface Location {
   id: string; name: string; funcIds?: string[]; slots?: number; ships?: Ship[];
   workspacesId?: number[];
   /** The concurrency settings beyond `slots`, in BlazeMeter's names.
-   *  `overrideCPU`/`overrideMemory` are the engine pod's requests (memory in
-   *  MB); null means crane's 250m/256Mi. */
+   *  `overrideCPU`/`overrideMemory` replace the engine requests the bundle
+   *  sets (memory in MB); null leaves the bundle's. */
   threadsPerEngine?: number | null;
   overrideCPU?: number | null;
   overrideMemory?: number | null;
