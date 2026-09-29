@@ -594,14 +594,14 @@ def test_the_lookup_summary_says_read_partial_or_unread(monkeypatch):
                "unread": {"registry_state": "unread", "registry_detail": "refused (403)",
                           "digest": None, "size_mb": None, "newest_tag": None,
                           "update_available": None, "resolves_to": None}}
-    monkeypatch.setattr(registry_client, "lookup", lambda ref: answers["read"])
+    monkeypatch.setattr(registry_client, "lookup", lambda ref, **kw: answers["read"])
     assert core.image_catalog(OLD_FACTS)["registry_lookup"] == {
         "state": "read", "detail": None}
     monkeypatch.setattr(registry_client, "lookup",
-                        lambda ref: answers["unread" if "torero" in ref else "read"])
+                        lambda ref, **kw: answers["unread" if "torero" in ref else "read"])
     summary = core.image_catalog(OLD_FACTS)["registry_lookup"]
     assert summary["state"] == "partial" and "1 of 5" in summary["detail"]
-    monkeypatch.setattr(registry_client, "lookup", lambda ref: answers["unread"])
+    monkeypatch.setattr(registry_client, "lookup", lambda ref, **kw: answers["unread"])
     out = core.image_catalog(OLD_FACTS)
     assert out["registry_lookup"]["state"] == "unread"
     assert all(set(i) == IMAGE_KEYS for i in out["images"])
@@ -943,3 +943,59 @@ def test_the_catalogue_view_pins_only_when_it_asks_the_registry(releases):
     assert rows["blazemeter/crane"]["tag"] == "3.8.1"
     assert rows["blazemeter/crane"]["source"] == "registry-newest"
     assert rows["blazemeter/torero"]["source"] == "catalogue"
+
+
+# -- one release rule for pins and for "newest tag" ---------------------------
+
+MOCKS = ("service-mock", "group-gateway", "mock-pc-service")
+
+
+def _sv_registry(registry, *extra_tags):
+    """The three mock images with a release 6.0.34.3 and a newer CI build
+    6.0.35.2347, as BlazeMeter's registry holds them."""
+    tags = ["6.0.30.4", "6.0.34.3", "6.0.35.2347", "6.0.34", "latest", *extra_tags]
+    manifests = {}
+    for m in MOCKS:
+        for t in tags:
+            manifests[(f"{GCR}/blazemeter/{m}", t)] = _digest(f"sha256:{m}{t}")
+    return registry(manifests=manifests,
+                    tags={**{p: [t] for p, t in RELEASE_TAGS.items()},
+                          **{f"{GCR}/blazemeter/{m}": [tags] for m in MOCKS}})
+
+
+def test_the_catalogue_view_never_offers_the_build_the_pin_rule_excludes(registry):
+    _sv_registry(registry)
+    rows = {image_catalog.repo_path(r["repo"]): r
+            for r in core.image_catalog(None, lookup=True)["images"]}
+    for m in MOCKS:
+        r = rows[f"blazemeter/{m}"]
+        assert r["tag"] == "6.0.34.3" and r["source"] == "registry-newest"
+        assert (r["newest_tag"], r["update_available"]) == ("6.0.34.3", False)
+
+
+def _sv_location(tag):
+    return {"harbor_id": "h", "harbor_name": "L", "func_ids": ["mockServices"],
+            "crane_image": f"{PUBLIC}/blazemeter/crane:3.8.1",
+            "images": [{"key": f"blazemeter/service-mock:{tag}",
+                        "repo": f"{PUBLIC}/blazemeter/service-mock", "tag": tag,
+                        "category": "mock", "source": "location-versions"}],
+            "images_source": "location image list"}
+
+
+@pytest.mark.parametrize("tag,update", [("6.0.30.4", True),
+                                        ("6.0.34.3", False),
+                                        # A location on a CI build is not behind.
+                                        ("6.0.35.2347", False)])
+def test_a_location_sees_the_newest_release_not_a_ci_build(registry, tag, update):
+    _sv_registry(registry)
+    rows = core.image_catalog(_sv_location(tag), lookup=True)["images"]
+    mock = next(r for r in rows if "service-mock" in r["repo"])
+    assert (mock["newest_tag"], mock["update_available"]) == ("6.0.34.3", update)
+
+
+def test_the_pin_and_the_newest_tag_are_one_rule():
+    tags = RELEASE_TAGS[f"{GCR}/blazemeter/service-mock"]
+    rule = image_catalog.release_rule(f"{PUBLIC}/blazemeter/service-mock")
+    assert image_catalog.release_tag("blazemeter/service-mock", tags) == \
+        registry_client.newest_release(tags, rule) == "6.0.34.3"
+    assert image_catalog.release_rule(f"{PUBLIC}/blazemeter/torero") is None

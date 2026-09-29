@@ -52,22 +52,16 @@ RELEASE_SERIES = {
 }
 
 
+def release_rule(repo):
+    """RELEASE_SERIES's rule for a repository (full or below the public
+    registry), or None."""
+    return RELEASE_SERIES.get(repo_path(repo))
+
+
 def release_tag(path, tags):
     """The newest tag in `path`'s release series, or None when the repository
     has no series here or no tag in it."""
-    rule = RELEASE_SERIES.get(path)
-    if rule is None:
-        return None
-    best = None
-    for t in tags or []:
-        s = registry_client.series(t)
-        if not s or s[1] != rule["suffix"] or len(s[0]) != rule["parts"]:
-            continue
-        if "last_below" in rule and s[0][-1] >= rule["last_below"]:
-            continue
-        if best is None or s[0] > best[0]:
-            best = (s[0], t)
-    return best[1] if best else None
+    return registry_client.newest_release(tags, RELEASE_SERIES.get(path))
 
 
 def release_repos():

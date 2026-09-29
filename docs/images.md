@@ -88,7 +88,10 @@ bzm-opl-gen images --facts facts.json --explain --lookup
 
 A series is the tag's version with the same suffix: `2.4.533-reduced` compares
 with `2.4.538-reduced`, and not with a branch build such as
-`2.4.537-MOB-...-reduced`.
+`2.4.537-MOB-...-reduced`. For an image with a release shape (see
+[Without an account](#without-an-account)), the newest tag is the newest
+release in that shape, the same tag a bundle made without an account pins. A
+CI build such as `6.0.35.2347` is never offered as an update.
 
 A floating tag (`latest`) has no version of its own. `--lookup` names the
 version it is now (`resolves_to`): it compares the tag's digest with the
