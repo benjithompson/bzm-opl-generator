@@ -3,8 +3,9 @@
 // field that was not read is said to be unread, never shown as empty or zero.
 import { ImageRow, ImagesAnswer } from "./api";
 
-/** A funcId's display name, or the funcId where nothing names it. */
-export type LabelOf = (funcId: string) => string;
+/** A funcId's served display name, or null where nothing served names it
+ *  (an uncovered funcId with no account connected). */
+export type LabelOf = (funcId: string) => string | null;
 
 /** The rows by category, in the order the server sent them. */
 export function groupByCategory(rows: ImageRow[]): { category: string; rows: ImageRow[] }[] {
@@ -53,9 +54,22 @@ export function tagNotes(row: ImageRow): TagNote[] {
   if (row.tag_mutable) {
     notes.push({ kind: "mutable",
       text: `the tag ${row.tag} names a different image after each release;`
-        + " mirror by digest or re-check after an upgrade" });
+        + " mirror by digest or check again after an upgrade" });
   }
   return notes.length ? notes : [{ kind: "pinned", text: "pinned" }];
+}
+
+/** What a mutable tag points at now, or null where there is nothing to say:
+ *  a pinned tag, or a server that does not resolve tags. "No match" is said
+ *  only where the registry was read. */
+export function resolvedText(row: ImageRow): string | null {
+  if (!row.tag_mutable || row.resolves_to === undefined) return null;
+  if (row.resolves_to) return `${row.tag} = ${row.resolves_to}`;
+  switch (row.registry_state) {
+    case "read": return `no version tag has the digest of ${row.tag}`;
+    case "unread": return `the version behind ${row.tag} was not read`;
+    default: return `the version behind ${row.tag} was not asked`;
+  }
 }
 
 /** Every reference, one per line, for a pull script or a ticket. */
@@ -121,17 +135,29 @@ export const SOURCE_TEXT: Record<ImageRow["source"], string> = {
 const requiredText = (r: ImageRow) =>
   r.required === null ? "" : r.required ? "yes" : "no";
 
+/** The funcIds as served names where there are ones, in `fmt` where not, so
+ *  a funcId never passes for a name. */
+export function functionalityNames(
+  r: ImageRow, labelOf: LabelOf, fmt: (id: string) => string = (id) => id,
+): string[] {
+  return r.functionalities.map((f) => labelOf(f) ?? fmt(f));
+}
+
 const CSV_COLUMNS: [string, (r: ImageRow, labelOf: LabelOf) => string][] = [
   ["ref", (r) => r.ref],
   ["repo", (r) => r.repo],
   ["tag", (r) => r.tag],
   ["category", (r) => r.category],
-  ["functionalities", (r, labelOf) => r.functionalities.map(labelOf).join("; ")],
+  // The funcIds, stable for a script, and the names beside them.
+  ["func_ids", (r) => r.functionalities.join("; ")],
+  ["functionalities", (r, labelOf) => functionalityNames(r, labelOf).join("; ")],
   ["purpose", (r) => r.purpose],
   ["purpose_verified", (r) => (r.verified ? "yes" : "no")],
   ["pulled_when", (r) => r.pulled_when],
   ["required", requiredText],
   ["tag_mutable", (r) => (r.tag_mutable ? "yes" : "no")],
+  // Blank unless resolved; registry_state says whether blank is unread.
+  ["resolves_to", (r) => r.resolves_to ?? ""],
   ["tag_source", (r) => r.source],
   // Beside the registry fields, so a blank one is read against it.
   ["registry_state", (r) => r.registry_state],
@@ -173,17 +199,18 @@ export function toMarkdown(answer: ImagesAnswer, labelOf: LabelOf,
   for (const g of groupByCategory(answer.images)) {
     out.push(`## ${g.category}`, "");
     out.push("| Image | Functionalities | Purpose | Pulled | Size | Digest | Tag |"
-      + (showRequired ? " Required |" : ""));
-    out.push("|---|---|---|---|---|---|---|" + (showRequired ? "---|" : ""));
+      + " Resolves to |" + (showRequired ? " Required |" : ""));
+    out.push("|---|---|---|---|---|---|---|---|" + (showRequired ? "---|" : ""));
     for (const r of g.rows) {
       const cells = [
         `\`${r.ref}\``,
-        r.functionalities.map(labelOf).join(", "),
+        functionalityNames(r, labelOf, (id) => `\`${id}\``).join(", "),
         r.purpose + (r.verified ? "" : " (inferred)"),
         r.pulled_when,
         sizeText(r),
         r.digest && r.registry_state === "read" ? `\`${r.digest}\`` : digestText(r),
         tagNotes(r).map((t) => t.text).join("; "),
+        r.resolves_to ? `\`${r.resolves_to}\`` : resolvedText(r) ?? "",
       ];
       if (showRequired) cells.push(requiredText(r));
       out.push("| " + cells.map(mdCell).join(" | ") + " |");

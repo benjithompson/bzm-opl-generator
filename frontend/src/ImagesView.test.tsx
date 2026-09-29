@@ -12,17 +12,23 @@ import { CatalogueReason, ImagesView } from "./ImagesView";
 afterEach(cleanup);
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-const labelOf = (id: string) => ({ performance: "Performance" }[id] ?? id);
+// Only a covered funcId is named with no account connected.
+const labelOf = (id: string) =>
+  ({ performance: "Performance" } as Record<string, string>)[id] ?? null;
 
+/** The view. A catalogue answer is asked for with no location, so its reason
+ *  defaults to "disconnected"; a location's has none. */
 function view(answer: ImagesAnswer | null, over: {
   all?: boolean; setAll?: (v: boolean) => void; error?: string | null;
-  busy?: boolean; registry?: string | null; reason?: CatalogueReason;
+  busy?: boolean; registry?: string | null; reason?: CatalogueReason | null;
 } = {}) {
+  const reason = over.reason !== undefined ? over.reason
+    : answer?.source === "catalogue" ? "disconnected" : null;
   return render(
     <ImagesView answer={answer} busy={over.busy ?? false} error={over.error ?? null}
       all={over.all ?? false} setAll={over.setAll ?? (() => {})}
       labelOf={labelOf} registry={over.registry ?? null}
-      catalogueReason={over.reason ?? "disconnected"} />);
+      catalogueReason={reason} />);
 }
 
 /** Clipboard writes, recorded. */
@@ -53,8 +59,39 @@ test("catalogue mode says so, and says how to get a location's versions", () => 
   expect(screen.getByText(/Connect an account and choose a location/)).toBeTruthy();
   // Nobody can say what a location requires, so there is no column for it.
   expect(screen.queryByRole("columnheader", { name: "required" })).toBeNull();
-  // The mutable tag is a warning, not "pinned".
+  // The mutable tag is a warning, not "pinned", and says what it is now.
   expect(screen.getByText(/latest names a different image/)).toBeTruthy();
+  expect(screen.getByText("latest = 1.16.30")).toBeTruthy();
+  // Nothing in the catalogue is required of a location, so there is no
+  // Required-only filter to offer, and the page says why.
+  expect(screen.queryByRole("radiogroup")).toBeNull();
+  expect(screen.getByText(/catalogue lists every image it knows/)).toBeTruthy();
+});
+
+test("a mutable tag nobody resolved says unread or no match, never one for the other", () => {
+  const latest = { tag: "latest", ref: "v4:latest", tag_mutable: true,
+                   resolves_to: null };
+  view(locationImages({ images: [
+    imageRow({ ...latest }),
+    imageRow({ ...latest, key: "b", ref: "b:latest", registry_state: "unread",
+               registry_detail: "HTTP 429", digest: null, size_mb: null }),
+  ] }));
+  const rows = within(screen.getByRole("table")).getAllByRole("row");
+  expect(within(rows[1]).getByText("no version tag has the digest of latest"))
+    .toBeTruthy();
+  const unread = within(rows[2]).getByText("the version behind latest was not read");
+  expect(unread.getAttribute("title")).toBe("HTTP 429");
+  expect(rows[2].textContent).not.toMatch(/no version tag/);
+});
+
+test("a funcId nothing served names is shown as the funcId, in code type", () => {
+  view(locationImages({ images: [
+    imageRow({ functionalities: ["performance", "functionalApi"] })] }));
+  const named = screen.getByText("Performance");
+  const raw = screen.getByText("functionalApi");
+  expect(named.className).not.toMatch(/font-mono/);
+  expect(raw.className).toMatch(/font-mono/);
+  expect(raw.getAttribute("title")).toMatch(/connect an account/);
 });
 
 test("the catalogue hint follows why there is no location", () => {

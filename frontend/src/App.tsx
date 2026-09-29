@@ -175,7 +175,9 @@ export default function App({ api }: { api: Api }) {
   // nothing from an account, so it is the catalogue too.
   const imagesHarbor = sourceMode === "connect" && who ? harborId : null;
   const [imagesAll, setImagesAll] = useState(false);
-  const images = useImages(api, view === "images", imagesHarbor, imagesAll);
+  // The catalogue answers the same list either way, so it is not re-read.
+  const images = useImages(api, view === "images", imagesHarbor,
+                           imagesHarbor ? imagesAll : false);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
   const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
   // Null until decided: the defaults are one per served model and are seeded
@@ -787,13 +789,15 @@ export default function App({ api }: { api: Api }) {
     enginesPerNode: raw("engines_per_node"),
   };
 
-  // BlazeMeter's name for a funcId: the account's vocabulary, then the served
-  // functionalities, then the funcId itself.
+  // BlazeMeter's name for a funcId: the account's vocabulary (every funcId it
+  // has), then the served functionalities (the covered ones). Null where
+  // neither names it: unconnected, an uncovered funcId has no served name.
   const funcLabel = useCallback((id: string) =>
     funcIds.choices.find((c) => c.id === id)?.label
-      ?? functionalities.find((f) => f.id === id)?.label ?? id,
+      ?? functionalities.find((f) => f.id === id)?.label ?? null,
   [funcIds.choices, functionalities]);
-  const catalogueReason: CatalogueReason = sourceMode === "manual" ? "manual"
+  const catalogueReason: CatalogueReason | null = imagesHarbor ? null
+    : sourceMode === "manual" ? "manual"
     : who ? "no-location" : "disconnected";
 
   const { cap, capErr, capRefreshing, refreshCapacity } = capacity;

@@ -283,14 +283,21 @@ The view reads the location again when you choose another one under Generate.
 
 - **Image**: the full reference, with **Copy** beside it, the functionalities
   that pull it, and where its tag came from (the location's version list, a
-  running agent's inventory, or the catalogue).
+  running agent's inventory, or the catalogue). A functionality shows
+  BlazeMeter's name for it. Without a connected account, the tool has names
+  only for the functionalities it configures, so the view shows any other one
+  as its funcId (for example `functionalApi`), in code type.
 - **Purpose** and **pulled**: what the image does and when crane pulls it.
   *(inferred)* marks a purpose that nobody has seen on a running agent.
 - **Size** and **digest**: the compressed size and the digest from the public
   registry. Click the short digest to copy the full one.
 - **Tag**: *pinned*; a warning for a tag such as `latest`, which names a
   different image after each release; or *newer tag available*, where
-  BlazeMeter's registry holds a newer tag in the same series.
+  BlazeMeter's registry holds a newer tag in the same series. For a tag such as
+  `latest`, the view also shows the version tag that has the same digest now,
+  for example `latest = 2.4.538-reduced`. When no version tag has that digest,
+  the view says so. When the registry could not be read, the view says the
+  version was not read.
 - **Required**: only for a location. The catalogue cannot say what a location
   needs, so it has no such column.
 
@@ -299,13 +306,15 @@ you point at it. It is never blank and never `0`. A notice above the table says
 when the location's version list could not be read, when the location has no
 agent yet, and when the public registry did not answer for some or all images.
 
-**Show** switches between **Required only** and **All** (every image the
-location's functionalities can pull).
+For a location, **Show** switches between **Required only** and **All** (every
+image the location's functionalities can pull). The catalogue has no such
+choice, because it always lists every image it knows.
 
 **Copy** puts every reference on the clipboard, one per line. **CSV** and
 **Markdown** download the rows on screen; the page makes them itself and sends
-no further request. The CSV has a `registry_state` column, so a blank digest or
-size is read against it.
+no further request. Both have a column for the version a tag resolves to. The
+CSV has a `func_ids` column beside the names, and a `registry_state` column,
+so a blank digest, size or resolved version is read against it.
 
 Tags follow BlazeMeter's releases, so a mirror goes out of date after an
 upgrade. Check it again after each one:

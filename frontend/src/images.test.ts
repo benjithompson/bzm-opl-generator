@@ -4,11 +4,41 @@ import { expect, test } from "vitest";
 
 import { catalogueImages, imageRow, locationImages } from "./fakeApi";
 import {
-  digestText, driftNote, fileStem, groupByCategory, listNotice, refsText,
-  registryNotice, sizeText, sourceHeading, tagNotes, toCsv, toMarkdown,
+  digestText, driftNote, fileStem, functionalityNames, groupByCategory,
+  listNotice, refsText, registryNotice, resolvedText, sizeText, sourceHeading,
+  tagNotes, toCsv, toMarkdown,
 } from "./images";
 
-const labelOf = (id: string) => ({ performance: "Performance" }[id] ?? id);
+// Only a covered funcId is named with no account connected.
+const labelOf = (id: string) =>
+  ({ performance: "Performance" } as Record<string, string>)[id] ?? null;
+
+test("a funcId nothing served names stays a funcId, in the caller's format", () => {
+  const r = imageRow({ functionalities: ["performance", "functionalApi"] });
+  expect(functionalityNames(r, labelOf)).toEqual(["Performance", "functionalApi"]);
+  expect(functionalityNames(r, labelOf, (id) => `\`${id}\``))
+    .toEqual(["Performance", "`functionalApi`"]);
+});
+
+test("a mutable tag says what it resolves to, and unread is never no match", () => {
+  const latest = { tag: "latest", tag_mutable: true };
+  expect(resolvedText(imageRow({ ...latest, resolves_to: "2.4.538-reduced" })))
+    .toBe("latest = 2.4.538-reduced");
+  expect(resolvedText(imageRow({ ...latest, resolves_to: null })))
+    .toBe("no version tag has the digest of latest");
+  expect(resolvedText(imageRow({ ...latest, resolves_to: null,
+                                 registry_state: "unread" })))
+    .toBe("the version behind latest was not read");
+  expect(resolvedText(imageRow({ ...latest, resolves_to: null,
+                                 registry_state: "not-asked" })))
+    .toMatch(/not asked/);
+  // A server that does not resolve tags says nothing, so neither does the page.
+  const older = imageRow({ ...latest });
+  delete older.resolves_to;
+  expect(resolvedText(older)).toBeNull();
+  // A pinned tag has nothing to resolve.
+  expect(resolvedText(imageRow())).toBeNull();
+});
 
 test("rows group by category in the order the server sent them", () => {
   const rows = [imageRow({ ref: "a", category: "Agent" }),
@@ -98,20 +128,26 @@ test("the drift check names the bundle's registry, or a lower-case sample", () =
 
 test("CSV quotes what needs it and keeps the registry state beside blank fields", () => {
   const rows = [
-    imageRow({ purpose: 'Runs "the" test, and more' }),
+    imageRow({ purpose: 'Runs "the" test, and more',
+               functionalities: ["performance", "functionalApi"] }),
     imageRow({ ref: "x:1", registry_state: "unread", digest: null, size_mb: null,
                newest_tag: null, update_available: null, required: false }),
+    imageRow({ ref: "y:latest", tag: "latest", tag_mutable: true,
+               resolves_to: "2.4.538-reduced" }),
   ];
   const lines = toCsv(rows, labelOf).split("\r\n");
   const head = lines[0].split(",");
   expect(head).toContain("registry_state");
   expect(lines[1]).toContain('"Runs ""the"" test, and more"');
-  expect(lines[1]).toContain(",Performance,");
+  const first = lines[1].split(",");
+  expect(first[head.indexOf("func_ids")]).toBe("performance; functionalApi");
+  expect(first[head.indexOf("functionalities")]).toBe("Performance; functionalApi");
   const unread = lines[2].split(",");
   expect(unread[head.indexOf("registry_state")]).toBe("unread");
   expect(unread[head.indexOf("size_mb")]).toBe("");
   expect(unread[head.indexOf("required")]).toBe("no");
-  expect(lines[3]).toBe("");
+  expect(lines[3].split(",")[head.indexOf("resolves_to")]).toBe("2.4.538-reduced");
+  expect(lines[4]).toBe("");
 });
 
 test("CSV leaves required blank in catalogue mode, where nobody can say", () => {
@@ -123,13 +159,18 @@ test("CSV leaves required blank in catalogue mode, where nobody can say", () => 
 test("Markdown has the heading, the notices, a table per category and the drift check", () => {
   const md = toMarkdown(locationImages({
     image_list_state: "unread",
-    images: [imageRow({ purpose: "a | b", verified: false }),
+    images: [imageRow({ purpose: "a | b", verified: false,
+                        functionalities: ["performance", "proxyRecorder"] }),
              imageRow({ ref: "c:1", category: "Agent", update_available: true,
-                        newest_tag: "2" })],
+                        newest_tag: "2" }),
+             imageRow({ ref: "d:latest", category: "Agent", tag: "latest",
+                        tag_mutable: true, resolves_to: "2.4.538-reduced" })],
   }), labelOf, "registry.corp");
   expect(md).toMatch(/^# Images for location Dublin/);
   expect(md).toMatch(/> The location's version list could not be read/);
-  expect(md).toMatch(/## Engines\n\n\| Image .* Required \|/);
+  expect(md).toMatch(/## Engines\n\n\| Image .* Resolves to \| Required \|/);
+  expect(md).toContain("Performance, `proxyRecorder`");
+  expect(md).toContain("| `2.4.538-reduced` |");
   expect(md).toMatch(/## Agent/);
   expect(md).toContain("a \\| b (inferred)");
   expect(md).toContain("newer tag available: 2");

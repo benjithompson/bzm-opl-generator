@@ -10,7 +10,7 @@ import {
 } from "./components";
 import {
   digestText, driftNote, fileStem, groupByCategory, LabelOf, listNotice,
-  refsText, registryNotice, sizeText, SOURCE_TEXT, sourceHeading, TagNote,
+  refsText, registryNotice, resolvedText, sizeText, SOURCE_TEXT, sourceHeading, TagNote,
   tagNotes, toCsv, toMarkdown,
 } from "./images";
 import { plural } from "./text";
@@ -46,7 +46,8 @@ export function ImagesView(props: {
   /** The bundle's Registry option, or null where it is not set; it fills the
    *  check command. */
   registry: string | null;
-  catalogueReason: CatalogueReason;
+  /** Why the catalogue is what is asked for, or null where a location is. */
+  catalogueReason: CatalogueReason | null;
 }) {
   const { answer } = props;
   // What the last copy did, keyed by what was copied, so one button says so.
@@ -77,8 +78,8 @@ export function ImagesView(props: {
             </h2>
             {answer?.source === "catalogue" && (
               <p className="text-xs text-slate-500 mt-0.5">
-                Built-in list; tags can be <code className="font-mono">latest</code>.{" "}
-                {CATALOGUE_HINT[props.catalogueReason]}
+                Built-in list; tags can be <code className="font-mono">latest</code>.
+                {props.catalogueReason && <> {CATALOGUE_HINT[props.catalogueReason]}</>}
               </p>
             )}
             {answer?.source === "location" && (
@@ -95,15 +96,23 @@ export function ImagesView(props: {
           )}
         </div>
 
-        <SegmentedControl label="Show"
-          value={props.all ? "all" : "required"}
-          onChange={(v) => props.setAll(v === "all")}
-          options={[
-            { value: "required", label: "Required only",
-              hint: "What the location needs to run." },
-            { value: "all", label: "All",
-              hint: "Every image its functionalities can pull." },
-          ]} />
+        {/* The catalogue is one list: nothing in it is required of a location. */}
+        {props.catalogueReason === null ? (
+          <SegmentedControl label="Show"
+            value={props.all ? "all" : "required"}
+            onChange={(v) => props.setAll(v === "all")}
+            options={[
+              { value: "required", label: "Required only",
+                hint: "What this location needs to run." },
+              { value: "all", label: "All",
+                hint: "Every image its functionalities can pull." },
+            ]} />
+        ) : (
+          <p className="text-xs text-slate-500">
+            The catalogue lists every image it knows, for every functionality.
+            A location&apos;s list also says which images that location requires.
+          </p>
+        )}
 
         {answer && answer.images.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -142,7 +151,7 @@ export function ImagesView(props: {
 
       {answer && answer.images.length === 0 && (
         <p className="text-sm text-slate-500">
-          {props.all ? "No images are listed."
+          {props.all || props.catalogueReason !== null ? "No images are listed."
             : "No images are listed as required. Choose All to see every image"
               + " its functionalities can pull."}
         </p>
@@ -227,6 +236,7 @@ function Row(props: {
   const gapCls = unread ? "text-amber-700" : "text-slate-400";
   const refKey = `ref:${r.ref}`;
   const digestKey = `digest:${r.ref}`;
+  const resolved = resolvedText(r);
   return (
     <tr className={"align-top " + (props.i % 2 ? "bg-slate-50/60" : "")}>
       <th scope="row" className="text-left font-normal px-3 py-1.5">
@@ -239,12 +249,19 @@ function Row(props: {
           </button>
         </span>
         <span className="flex flex-wrap gap-1 mt-1">
-          {r.functionalities.map((f) => (
-            <span key={f}
-              className="text-3xs rounded bg-slate-100 text-slate-600 px-1.5 py-0.5">
-              {props.labelOf(f)}
-            </span>
-          ))}
+          {r.functionalities.map((f) => {
+            const label = props.labelOf(f);
+            // A funcId nothing served names is shown as the funcId, in code
+            // type, so it never passes for BlazeMeter's name.
+            return (
+              <span key={f} title={label ? f : "the funcId; connect an account"
+                + " for BlazeMeter's name for it"}
+                className={"text-3xs rounded bg-slate-100 text-slate-600 px-1.5 py-0.5"
+                  + (label ? "" : " font-mono")}>
+                {label ?? f}
+              </span>
+            );
+          })}
         </span>
         <span className="block text-3xs text-slate-400 mt-0.5">
           tag from {SOURCE_TEXT[r.source]}
@@ -282,6 +299,13 @@ function Row(props: {
       </td>
       <td className="px-2 py-1.5">
         <code className="font-mono text-slate-700">{r.tag}</code>
+        {resolved && (
+          <span className={"block text-2xs "
+            + (r.resolves_to ? "font-mono text-slate-700" : gapCls)}
+            title={unread && !r.resolves_to ? r.registry_detail ?? undefined : undefined}>
+            {resolved}
+          </span>
+        )}
         {tagNotes(r).map((t) => (
           <span key={t.kind} className={"block text-2xs " + TAG_TONE[t.kind]}>
             {t.text}

@@ -26,7 +26,7 @@ export function imageRow(over: Partial<ImageRow> = {}): ImageRow {
     ref: "blazemeter/v4:1.16.30", category: "Engines",
     functionalities: ["performance"],
     purpose: "Runs the load test.", pulled_when: "when a test starts",
-    verified: true, required: true, tag_mutable: false,
+    verified: true, required: true, tag_mutable: false, resolves_to: null,
     source: "location-versions",
     registry_state: "read", registry_detail: null,
     digest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -54,7 +54,8 @@ export function catalogueImages(over: Partial<ImagesAnswer> = {}): ImagesAnswer 
     source: "catalogue", location: null, image_list_state: "not-asked",
     registry_lookup: { state: "read", detail: null },
     images: [imageRow({ tag: "latest", ref: "blazemeter/v4:latest",
-                        required: null, tag_mutable: true, source: "catalogue" })],
+                        required: null, tag_mutable: true,
+                        resolves_to: "1.16.30", source: "catalogue" })],
     ...over,
   };
 }

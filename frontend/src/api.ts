@@ -393,7 +393,8 @@ export interface ImageRow {
   /** The full reference crane pulls: repo and tag. */
   ref: string;
   category: string;
-  /** The funcIds that pull it. */
+  /** The funcIds that pull it. Some are funcIds this tool does not cover
+   *  (`functionalApi`, `proxyRecorder`), named only by an account's vocabulary. */
   functionalities: string[];
   purpose: string;
   pulled_when: string;
@@ -403,6 +404,11 @@ export interface ImageRow {
   required: boolean | null;
   /** A tag such as `latest`, which names a different image after a release. */
   tag_mutable: boolean;
+  /** For a mutable tag, the version tag that has the same digest now
+   *  (`latest` -> `2.4.538-reduced`). Null is not resolved, and
+   *  `registry_state` says whether that is unread or no match. Absent from
+   *  servers that do not resolve tags, which says nothing either way. */
+  resolves_to?: string | null;
   /** Where the tag came from. */
   source: "location-versions" | "agent-inventory" | "catalogue";
   registry_state: ReadState;
