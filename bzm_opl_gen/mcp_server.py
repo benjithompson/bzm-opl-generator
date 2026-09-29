@@ -294,7 +294,7 @@ _DEFAULT_NS = bundle_options.DEFAULT_OPTIONS["namespace"]
 # in `ship_id`, BlazeMeter's own field name.
 LOCATION_ALIASES = {"create_ship": "create_agent"}
 
-LOCATION_ACTIONS = ("list", "show", "whoami", "create", "create_agent",
+LOCATION_ACTIONS = ("list", "show", "whoami", "create", "update", "create_agent",
                     "reveal_token", "delete") + tuple(LOCATION_ALIASES)
 
 DESCRIPTIONS["opl_location"] = (
@@ -316,7 +316,13 @@ DESCRIPTIONS["opl_location"] = (
     + "; ".join(f"{r['label']} is refused below {r['minimum']}"
                 for r in core.SLOT_MINIMUMS.values())
     + ", by BlazeMeter rather than by this tool, so ask for the number rather "
-    "than raising it for them.\n"
+    "than raising it for them. A location that runs engines gets "
+    f"override_cpu={footprint.ENGINE_OVERRIDE_CPU} and "
+    f"override_memory={footprint.ENGINE_OVERRIDE_MEMORY_MB} (MB) unless given: "
+    "they are the engine pod's requests, and no bundle can set them.\n"
+    "  update       -- change a location's settings {harbor_id, slots?, "
+    "threads_per_engine?, override_cpu?, override_memory?}; unset ones are left "
+    "alone. Returns before and after as BlazeMeter stores them.\n"
     "  create_agent -- a new agent in a location {harbor_id, name}"
     + "".join(f" (also accepted as {old})" for old in LOCATION_ALIASES) + "\n"
     "  reveal_token -- the agent's AUTH_TOKEN {harbor_id, ship_id}. "
@@ -324,7 +330,7 @@ DESCRIPTIONS["opl_location"] = (
     "running on it goes to 0/1. Use only when re-applying that agent.\n"
     "  delete       -- delete a location and every agent in it "
     "{harbor_id}. Off unless " + ALLOW_DESTRUCTIVE_ENV + "=1.\n"
-    "create/create_agent/delete change a real customer account -- "
+    "create/update/create_agent/delete change a real customer account -- "
     "confirm with the person before calling them.\n"
     "`ship_id` is BlazeMeter's own name for an agent's id, spelled as the "
     "account spells it, so what you read here matches what its API answers.")
@@ -376,7 +382,9 @@ def _location(action, args):
             func_ids=args.get("func_ids") or list(api.DEFAULT_FUNC_IDS),
             slots=_given(args, "slots", 1),
             threads_per_engine=_given(args, "threads_per_engine",
-                                      footprint.DEFAULT_THREADS_PER_ENGINE))
+                                      footprint.DEFAULT_THREADS_PER_ENGINE),
+            override_cpu=args.get("override_cpu"),
+            override_memory=args.get("override_memory"))
         loc = made["location"]
         body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_agent with harbor_id "
@@ -385,6 +393,14 @@ def _location(action, args):
         if made["warning"]:
             body["warning"] = made["warning"]
         return body
+
+    if action == "update":
+        harbor_id, = _need(args, "harbor_id")
+        res = core.update_location(
+            _client(args), harbor_id,
+            **{k: args.get(k) for k in core.LOCATION_SETTINGS})
+        return {"harbor_id": harbor_id, "before": res["before"],
+                "after": res["after"], "ignored": res["ignored"]}
 
     if action == "create_agent":
         harbor_id, name = _need(args, "harbor_id", "name")

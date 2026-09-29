@@ -210,15 +210,35 @@ def sizing_bullet(facts, o):
             f"pair to every pod it creates -- and the agent needs {egress}")
 
 
+def engine_request_target(o):
+    """(overrideCPU, overrideMemory) that make an engine request what this
+    bundle limits it to; overrideCPU is None where the limit is not whole
+    cores, which the setting cannot express."""
+    cpu, mem = engine_size(o)
+    return (cpu // 1000 if cpu % 1000 == 0 else None), mem // (1024 ** 2)
+
+
 def requests_bullet(facts, o):
-    """Where the pod's requests come from (the location's overrides). Measured
-    on engines only, and said so for a location without one.
+    """Where the pod's requests come from (the location's overrides), whether
+    this location's already match the limits, and the command that sets them.
+    Measured on engines only, and said so for a location without one.
     """
     m = sizing_vocab(facts, o)
     if m is None or m["engine"]:
-        return (f"- Engine *requests* come from the location's `overrideCPU` / `overrideMemory`\n"
-                f"  (Settings -> Private Locations), default {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Set them to match\n"
-                f"  the limits above, or engines share nodes and compete for CPU.")
+        want_cpu, want_mem = engine_request_target(o)
+        have_cpu, have_mem = facts.get("override_cpu"), facts.get("override_memory")
+        if want_cpu is not None and have_cpu == want_cpu and have_mem == want_mem:
+            return (f"- Engine requests match the limits: the location sets "
+                    f"`overrideCPU` {have_cpu} and `overrideMemory` {have_mem} (MB).")
+        have = (f"`overrideCPU` {have_cpu or 'unset'}, `overrideMemory` "
+                f"{have_mem or 'unset'}" if (have_cpu or have_mem)
+                else f"neither is set, so engines request "
+                     f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}")
+        cpu_arg = (f"--override-cpu {want_cpu} " if want_cpu is not None else "")
+        return (f"- **Set the location's engine requests to match the limits**: {have}, and no\n"
+                f"  bundle can set them. Settings -> Private Locations, or `bzm-opl-gen update-location\n"
+                f"  --api-key api-key.json --harbor-id {facts.get('harbor_id')} {cpu_arg}--override-memory {want_mem}`.\n"
+                f"  Otherwise engines share nodes and compete for CPU.")
     return (f"- *Requests* come from the location too -- `overrideCPU` and `overrideMemory`\n"
             f"  under Settings -> Private Locations, defaulting to "
             f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Those were\n"

@@ -24,7 +24,8 @@ from .quantity import format_cpu, format_memory
 from .quoting import yq
 from .readme_parts import (bundle_table, ca_slot_block, deploy_steps,
                            ignored_block, location_bullet,
-                           placeholder_block, sa_bullet, sizing_bullet,
+                           placeholder_block, requests_bullet, sa_bullet,
+                           sizing_bullet,
                            sv_bullet, verify_block)
 from .service_virt import SV_INGRESS_BACKENDS, sv_cfg
 
@@ -196,8 +197,9 @@ def _helm_values(facts, o):
         f"# need {format_cpu(cpu_limit)} CPU + {format_memory(mem_limit)} each, plus ~{ENGINE_DISK_GB}GB disk ({ENGINE_TMP_GB}GB of it /tmp).",
         "#",
         "# Engine requests are not settable here: they come from the location's",
-        "# overrideCPU/overrideMemory (Settings -> Private Locations), default",
-        f"# {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. Set them to match these limits.",
+        "# overrideCPU/overrideMemory (default "
+        f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}). Set them to match",
+        "# these limits; README.md has the command.",
         "engine:",
         f"  cpuLimit: {yq(o['engine_cpu_limit'] or '')}",
         f"  memoryLimit: {yq(o['engine_mem_limit'] or '')}",
@@ -325,6 +327,7 @@ helm install crane ./{CHART_DIR} -n {ns} --create-namespace -f {HELM_VALUES_FILE
 ## Worth knowing
 
 {sizing_bullet(facts, o)}{location_bullet(facts, o)}{sa_bullet(o)}{sv_bullet(facts, o)}
+{requests_bullet(facts, o)}
 {_upgrade_bullet(o)}
 - `{HELM_VALUES_FILE}` holds everything specific to you; `{CHART_DIR}/` is the same
   chart for everyone. `helm show values ./{CHART_DIR}` lists every option.

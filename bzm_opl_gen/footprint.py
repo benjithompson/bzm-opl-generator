@@ -50,6 +50,13 @@ CRANE_EPHEMERAL_STORAGE = "1Gi"
 ENGINE_DEFAULT_REQUEST_CPU = "250m"
 ENGINE_DEFAULT_REQUEST_MEM = "256Mi"
 
+# The overrides this tool sets on a location that runs engines, so an engine
+# requests what it is limited to (ENGINE_DEFAULT_CPU / ENGINE_DEFAULT_MEM).
+# overrideCPU is whole cores, overrideMemory MB. No agent variable sets engine
+# requests; the location is the only place they come from.
+ENGINE_OVERRIDE_CPU = 2
+ENGINE_OVERRIDE_MEMORY_MB = 8192
+
 
 def engine_requests(facts):
     """(cpu, memory) an engine pod requests, given the location's overrides.

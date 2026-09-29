@@ -266,9 +266,14 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
 - CA bundles can exceed kubectl's last-applied annotation cap; manifests over
   200KB apply `--server-side`.
 - `PATCH /tests/{id}` silently drops `executions` for a taurus-script test.
-- No LimitRange is emitted: crane sets engine requests from the location's
-  `overrideCPU/overrideMemory` (250m/256Mi when unset), and a LimitRange only
-  hits crane's `test-job-*` pods. `doctor` still reads an existing one.
+- **Engine requests come only from the location's `overrideCPU` /
+  `overrideMemory`** (250m/256Mi when unset); no agent variable sets them and no
+  bundle can (a diff of bundles with and without overrides shows no object
+  change). So `create_location` sets them to the engine size for a location
+  that runs engines, `update-location` fixes an existing one, and the bundle
+  README prints that command when they differ from the limits.
+- No LimitRange is emitted: crane sets engine requests explicitly, and a
+  LimitRange only hits crane's `test-job-*` pods. `doctor` still reads one.
 - Crane requests 250m/512Mi and limits 1 CPU/2Gi: the scheduler places on the
   request. `doctor` measures against node allocatable — say "upper bound".
 - List calls ask for one big page (1000); a truncated list only looks short.

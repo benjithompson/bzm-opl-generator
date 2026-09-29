@@ -80,14 +80,34 @@ def cmd_create_location(a):
         wsid = hits[0]["id"]
     made = core.create_location(client, a.name, account_id, wsid,
                                 func_ids=a.func_ids, slots=a.slots,
-                                threads_per_engine=a.threads_per_engine)
+                                threads_per_engine=a.threads_per_engine,
+                                override_cpu=a.override_cpu,
+                                override_memory=a.override_memory)
     h = made["location"]
     print(f"created location '{h.get('name')}' harbor_id={h['id']} "
           f"(account {account_id}, workspace {wsid}, funcIds={a.func_ids}, "
-          f"slots={h.get('slots')}, threadsPerEngine={h.get('threadsPerEngine')})")
+          f"slots={h.get('slots')}, threadsPerEngine={h.get('threadsPerEngine')}, "
+          f"overrideCPU={h.get('overrideCPU')}, "
+          f"overrideMemory={h.get('overrideMemory')})")
     if made["warning"]:
         print(made["warning"], file=sys.stderr)
     print(f"next: bzm-opl-gen create-agent --api-key {a.api_key} --harbor-id {h['id']} --name <agent-name>")
+
+
+def cmd_update_location(a):
+    res = core.update_location(
+        _client(a), a.harbor_id, slots=a.slots,
+        threads_per_engine=a.threads_per_engine,
+        override_cpu=a.override_cpu, override_memory=a.override_memory)
+    for key, api_name in core.LOCATION_SETTINGS.items():
+        was, now = res["before"][key], res["after"][key]
+        mark = "" if was == now else "  (changed)"
+        print(f"{api_name:17} {was if was is not None else 'not set'} -> "
+              f"{now if now is not None else 'not set'}{mark}")
+    if res["ignored"]:
+        print("BlazeMeter accepted but did not store: "
+              + ", ".join(core.LOCATION_SETTINGS[k] for k in res["ignored"]),
+              file=sys.stderr)
 
 
 def cmd_delete_location(a):
@@ -706,7 +726,28 @@ def main():
                     help=f"max threads per engine (default "
                          f"{footprint.DEFAULT_THREADS_PER_ENGINE}); a location with "
                          f"this unset cannot start tests")
+    cl.add_argument("--override-cpu", type=int,
+                    help=f"engine pod CPU request in whole cores (default "
+                         f"{footprint.ENGINE_OVERRIDE_CPU} for a location that "
+                         f"runs engines, matching the engine limit)")
+    cl.add_argument("--override-memory", type=int,
+                    help=f"engine pod memory request in MB (default "
+                         f"{footprint.ENGINE_OVERRIDE_MEMORY_MB} for a location "
+                         f"that runs engines)")
     cl.set_defaults(fn=cmd_create_location)
+
+    ul = sub.add_parser(
+        "update-location",
+        help="change a location's slots, threadsPerEngine or engine requests")
+    ul.add_argument("--api-key", required=True)
+    ul.add_argument("--harbor-id", required=True)
+    ul.add_argument("--slots", type=int)
+    ul.add_argument("--threads-per-engine", type=int)
+    ul.add_argument("--override-cpu", type=int,
+                    help="engine pod CPU request in whole cores")
+    ul.add_argument("--override-memory", type=int,
+                    help="engine pod memory request in MB")
+    ul.set_defaults(fn=cmd_update_location)
 
     dl = sub.add_parser("delete-location", help="delete a private location and its ships")
     dl.add_argument("--api-key", required=True)

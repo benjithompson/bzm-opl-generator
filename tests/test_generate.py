@@ -892,12 +892,12 @@ def test_readme_is_short_and_actionable():
     for fids in [[f] for f in plan_mod.SIZING_MODELS] + [["tdm"], []]:
         long = gen.generate({**FACTS, "func_ids": fids, "slots": 2,
                              "threads_per_engine": 500}, opts)["README.md"]
-        assert len(long.splitlines()) < 48, (
+        assert len(long.splitlines()) < 50, (
             f"README for {fids} is {len(long.splitlines())} lines")
     readme = gen.generate(
         FACTS, {"namespace": "ns1", "auth_token": "de" * 32})["README.md"]
     assert "not finished" not in readme
-    assert len(readme.splitlines()) < 48, "README is getting long"
+    assert len(readme.splitlines()) < 50, "README is getting long"
     # The four things someone needs: what this is, how to deploy, how to check,
     # and what it costs to run.
     assert "apply -f bzm_deployment.yaml" in readme
@@ -3183,3 +3183,18 @@ def test_every_configmap_value_survives_whatever_it_holds(use_secret):
                    if d and "HTTP_PROXY" in (d.get("stringData") or d.get("data") or {}))
     assert ((carrier.get("stringData") or carrier.get("data"))["HTTP_PROXY"]
             == bundle_env.proxy_env(o)["HTTP_PROXY"])
+
+
+def test_the_readme_says_whether_the_location_already_requests_the_engine_size():
+    """Engine requests come only from the location's overrides; the README gives
+    the command that sets them to the bundle's limits, or says they match."""
+    unset = gen.generate(FACTS, {"namespace": "ns1"})["README.md"]
+    assert "update-location" in unset
+    assert "--override-cpu 2 --override-memory 8192" in unset
+    matched = gen.generate({**FACTS, "override_cpu": 2, "override_memory": 8192},
+                           {"namespace": "ns1"})["README.md"]
+    assert "Engine requests match the limits" in matched
+    assert "update-location" not in matched
+    helm = gen.generate(FACTS, {"namespace": "ns1",
+                                "output_format": "helm"})["README.md"]
+    assert "update-location" in helm
