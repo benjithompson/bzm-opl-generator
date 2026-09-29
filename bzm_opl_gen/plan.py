@@ -32,8 +32,8 @@ API_HOST = API_BASE.split("/")[2]
 # tighter of the CPU and memory ratios.
 BASELINE_VUS = DEFAULT_THREADS_PER_ENGINE
 
-# Browser instances on the same engine: the account owner's rough estimate, not
-# a measurement, and it scales the same way.
+# Browser instances on the same engine: a rough estimate, not a measurement,
+# and it scales the same way.
 BASELINE_BROWSERS = 4
 DOCUMENT_FILE = "capacity-request.md"
 PERFORMANCE, GUI, SV = "performance", "functionalGui", "mockServices"
@@ -382,8 +382,8 @@ def _warnings(rows, driver, cpu, mem, per_node, supported):
         out.append(
             f"{gui['per_pod']} browser instances on a {format_cpu(cpu)} CPU / "
             f"{format_memory(mem)} engine is more than that size is assumed to "
-            f"carry, which is about {gui['rated']}. That assumption is the "
-            f"account owner's rather than a measurement, so a higher figure may "
+            f"carry, which is about {gui['rated']}. That figure is an estimate "
+            f"rather than a measurement, so a higher figure may "
             f"well be right, but a browser that runs out of memory fails the "
             f"test it was running rather than reporting a slow one.")
     # `perf and ...`, not a 0 sentinel: an absent figure must not become a
@@ -633,8 +633,8 @@ def _browser_assumption(row):
             "",
         ]
     return [
-        f"**{row['per_pod']:,} browser instances per engine is an estimate from "
-        f"the account owner,",
+        f"**{row['per_pod']:,} browser instances per engine is a rough "
+        f"estimate,",
         "not a measurement of our suite.** How many browsers one engine carries",
         "depends on what the pages under test do — a single-page application "
         "holding a",
