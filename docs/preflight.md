@@ -3,7 +3,8 @@
 Sizing a cluster you do not have yet is a different command —
 [`plan`](capacity-planning.md) turns a load target into engines, nodes and a
 machine size, and needs neither an account nor a cluster. What follows assumes
-both exist.
+both exist. After the bundle is applied, [`triage`](triage.md) reads what went
+wrong in the namespace.
 
 Manifests that apply cleanly say nothing about whether an engine can be
 *scheduled*. When it can't, the customer sees a run stuck in "initializing" —

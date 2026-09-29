@@ -60,7 +60,7 @@ servers use.
 | `opl_bundle` | `generate` · `read` · `options` · `images` |
 | `opl_plan` | `capacity` |
 | `opl_preflight` | `doctor` · `suggest` · `toolcheck` |
-| `opl_agent` | `status` · `livetest`\* |
+| `opl_agent` | `status` · `triage` · `livetest`\* |
 
 \* off unless an environment variable is set — see [The gates](#the-gates).
 
@@ -119,6 +119,14 @@ cluster-evidence JSON the customer sent — read on the machine running the
 server — or as the parsed object. Prefer the path: a real collector file is
 several KB. A file that could not be read and one with no recognised `schema`
 are separate refusals, each naming its remedy.
+
+### After deploying
+
+`opl_agent triage` with `{namespace}` reads the namespace's events, pods and
+crane log with the kubectl or oc context of the machine that runs the server.
+It writes nothing. Each finding names its fix; `unread` lists the reads the
+cluster refused, which are not findings; `unrecognised` lists the warnings no
+rule knows. [triage.md](triage.md) has the rule table.
 
 ### Bundles and docs
 

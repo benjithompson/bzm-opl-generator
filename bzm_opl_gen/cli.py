@@ -9,6 +9,7 @@ Subcommands:
                functionalities)
   generate     render manifests from facts + customer parameters
   doctor       preflight a cluster: can it schedule the location's concurrency?
+  triage       after deploying: name the known failures in the namespace, with fixes
   suggest      what a cluster's evidence implies about the generate options
   ca-check     does a CA bundle verify the chain this network presents?
   sv-expose    emit a working Service+Ingress per deployed virtual service
@@ -26,7 +27,7 @@ import sys
 
 from . import (api, bundle_check, ca_check, core, doctor, facts as facts_mod,
                generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
-               sv_read, verdict, workstation)
+               sv_read, triage as triage_mod, verdict, workstation)
 from . import bundle_names, bundle_options, ca_trust, footprint, service_virt
 
 
@@ -444,6 +445,19 @@ def cmd_suggest(a):
         print(json.dumps([suggest_mod.as_dict(s) for s in suggestions], indent=2))
     else:
         suggest_mod.report(doc, suggestions)
+
+
+def cmd_triage(a):
+    """Read a deployed agent's namespace and name the known failures in it.
+
+    Exit 1 for a known failure only: a denied read or an unrecognised warning
+    is reported and exits 0, as in doctor."""
+    doc = core.triage(a.namespace, since=a.since, log_lines=a.crane_log_lines)
+    if a.json:
+        print(json.dumps(doc, indent=2))
+    else:
+        triage_mod.report(doc)
+    sys.exit(0 if doc["ok"] else 1)
 
 
 def cmd_toolcheck(a):
@@ -1143,6 +1157,23 @@ def main():
                    help="the suggestions as data -- option, strength, value, "
                         "candidates, the evidence each came from")
     s.set_defaults(fn=cmd_suggest)
+
+    tr = sub.add_parser("triage",
+                        help="after deploying: read the namespace and name "
+                             "each known failure with its fix")
+    tr.add_argument("-n", "--namespace", required=True,
+                    help="the namespace the agent was deployed to")
+    tr.add_argument("--since", default="1h",
+                    help="how far back to read events and crane's log, e.g. "
+                         "30m, 1h, 2h (default 1h; events expire after about "
+                         "an hour on most clusters)")
+    tr.add_argument("--crane-log-lines", type=int, default=500, metavar="N",
+                    help="read at most the last N lines of each crane log "
+                         "(default 500)")
+    tr.add_argument("--json", action="store_true",
+                    help="the report as data: findings, unrecognised "
+                         "warnings, and what could not be read")
+    tr.set_defaults(fn=cmd_triage)
 
     w = sub.add_parser("toolcheck",
                        help="does this workstation have what livetest shells "

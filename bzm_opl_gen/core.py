@@ -24,9 +24,10 @@ from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
                bundle_options, ca_check as ca_check_mod, ca_trust, doctor,
                evidence as evidence_mod, facts as facts_mod, footprint,
                generate as gen_mod, image_catalog as image_catalog_mod,
-               image_registry, markers, options as options_mod, plan,
+               image_registry, kube, markers, options as options_mod, plan,
                quantity, registry_client, required_fields, service_virt,
-               suggest as suggest_mod, sv_read, verdict, workstation)
+               suggest as suggest_mod, sv_read, triage as triage_mod, verdict,
+               workstation)
 
 
 # -- failures ------------------------------------------------------------------
@@ -1204,6 +1205,35 @@ SV_READ_MESSAGES = {
         "That namespace holds no virtual-service pods. Deploy the virtual "
         "service in BlazeMeter first; this list refreshes on the poll.",
 }
+
+
+def triage(namespace, since=None, log_lines=None, cli=None, now=None):
+    """The known failures in a deployed agent's namespace, each with its fix.
+
+    Reads events, pods and crane's log with this machine's kubectl or oc
+    context and writes nothing. A read the cluster refused is listed in
+    `unread`, never read as empty; `ok` is false only for a known failure."""
+    since = since or triage_mod.DEFAULT_SINCE
+    log_lines = triage_mod.DEFAULT_LOG_LINES if log_lines is None else log_lines
+    try:
+        since_s = triage_mod.parse_since(since)
+    except ValueError as e:
+        raise BadRequest(str(e))
+    if not isinstance(log_lines, int) or isinstance(log_lines, bool) or log_lines < 1:
+        raise BadRequest(f"crane log lines must be a positive whole number, "
+                         f"not {log_lines!r}")
+    if not namespace:
+        raise BadRequest("triage needs the namespace the agent was deployed to")
+    if cli is None:
+        try:
+            cli = kube.cli_tool()
+        except RuntimeError as e:
+            gathered = triage_mod.Gathered(None, None, None, [],
+                                           [("cluster", str(e))])
+            return triage_mod.as_dict(
+                triage_mod.evaluate(gathered, namespace, since, now))
+    gathered = triage_mod.gather(cli, namespace, since_s, log_lines)
+    return triage_mod.as_dict(triage_mod.evaluate(gathered, namespace, since, now))
 
 
 def sv_read_message(read):

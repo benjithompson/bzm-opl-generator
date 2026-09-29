@@ -71,6 +71,18 @@ anything that breaks.
   the MCP server's `warnings` and the web preview's `warnings`). A failure is
   warned loudly; the bundle is still written, as before.
 
+- **`bzm-opl-gen triage -n <namespace>` names what went wrong after a
+  deploy.** When BlazeMeter shows the agent offline or a run stuck at
+  `BOOT_STARTING`, the cause is usually only in Kubernetes events, container
+  statuses and crane's log. `triage` reads those three and matches them against
+  a table of known failures: image pulls, CA trust, proxy, scheduling, quota,
+  Pod Security, SCC, admission webhooks, RBAC, OOMKilled, eviction and a revoked
+  AUTH_TOKEN. Each finding names the option or action that fixes it. A read the
+  cluster refuses is reported as unread, never as empty, and a warning no rule
+  knows is listed as found. It exits 1 only for a known failure. `--json` gives
+  the report as data, and the MCP server has it as `opl_agent triage`. See
+  [docs/triage.md](docs/triage.md).
+
 - **Engines request what they are limited to.** Manifests and the Helm chart
   now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
   beside the engine limits, so each engine requests 2 CPU / 8Gi by default
