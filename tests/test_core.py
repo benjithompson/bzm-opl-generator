@@ -23,7 +23,7 @@ import zipfile
 import pytest
 import yaml
 
-from bzm_opl_gen import api, core, generate as gen
+from bzm_opl_gen import api, core, generate as gen, kube
 from test_generate import FACTS
 
 
@@ -1009,7 +1009,7 @@ def test_preflight_refuses_a_file_that_is_not_evidence():
 def test_preflight_reaches_no_cluster(monkeypatch):
     """The file is the cluster read. A preflight that shelled out would be
     answering about the machine serving the page."""
-    monkeypatch.setattr(core.livetest, "cli_tool",
+    monkeypatch.setattr(kube, "cli_tool",
                         lambda *a, **k: pytest.fail("preflight ran a cluster CLI"))
     assert core.preflight(LOC_FACTS, {"namespace": "blazemeter"}, _evidence())["checks"]
 

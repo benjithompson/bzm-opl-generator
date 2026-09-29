@@ -1,29 +1,12 @@
 """One cluster-evidence document for every test that reads one.
 
-There used to be two builders for this schema -- one in `test_cluster_evidence`
-and one in `test_suggest` -- with different defaults for the same file: one
-described a cluster read whole by a collector that never reached an API server,
-the other a half-read cluster on a machine that did. `test_server` imported both
-and had to keep straight which of the two it was asking. Neither was wrong; they
-simply disagreed, and a document that disagrees with itself is no baseline to
-override one section of.
-
-So there is one document here, and it is the honest baseline: a collector that
-reached the cluster and was refused nothing. Everything a test wants to say is
-said by overriding one section of it -- `document(raw=raw(nodes=None))` is a
-denied `get nodes`, `document(versions=None)` is a machine that never reached
-the API server -- which is the granularity the collector actually fails at.
-
-Beside it are the files a collector really wrote, which is the other half: the
-all-null degraded one, and two *half-read* ones. Half-read is what the
-unread-vs-empty rule is about -- a document where some sections are null and
-others are not is the one where a reader can confuse the two and still look
-right -- and a fixture built by hand tends to be all of one or all of the other.
-
-The cluster objects come from `test_doctor`, deliberately: the imported and the
-live paths must be fed literally the same objects, or the parity test compares
-two things that were never the same cluster.
-"""
+`document()` is a collector that reached the cluster and was refused
+nothing; a test overrides one section (`document(raw=raw(nodes=None))` is a
+denied `get nodes`, `document(versions=None)` a machine that never reached
+the API server). Beside it are the collected files: the all-null degraded
+one and two half-read ones, the case where unread and empty are easiest to
+confuse. Cluster objects come from `test_doctor`, so the live and imported
+paths are fed the same objects."""
 
 import json
 import os

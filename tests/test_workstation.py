@@ -1,13 +1,10 @@
-"""Offline counterparts for the workstation preflight.
-
-Every check is a pure function over gather()'s dict, so the failure modes are
-covered here without needing a machine that is actually missing kubectl.
-"""
+"""Offline counterparts for the workstation preflight: every check is a pure
+function over gather()'s dict."""
 
 import pytest
 
 from bzm_opl_gen import workstation as ws
-from bzm_opl_gen.doctor import PASS, WARN, FAIL, has_failures
+from bzm_opl_gen.verdict import PASS, WARN, FAIL, has_failures
 from bzm_opl_gen.livetest import PROXY_IMAGE, REGISTRY_IMAGE
 
 # A workstation with everything present, on amd64. Checks below vary one field.
@@ -48,7 +45,7 @@ def test_healthy_workstation_has_no_failures():
 # -- the tools livetest shells out to -----------------------------------------
 
 def test_no_kube_cli_is_a_failure():
-    """livetest.cli_tool() raises for this, but only after the cluster is up."""
+    """kube.cli_tool() would raise for this, but only after the cluster is up."""
     assert _status(FULL_RIG, _env(kubectl=None, oc=None), "kube cli") == [FAIL]
 
 

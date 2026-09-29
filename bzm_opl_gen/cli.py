@@ -21,8 +21,9 @@ import json
 import os
 import sys
 
-from . import (api, core, doctor, facts as facts_mod, generate as gen_mod,
-               livetest, plan, suggest as suggest_mod, workstation)
+from . import (api, bundle_check, core, doctor, facts as facts_mod,
+               generate as gen_mod, kube, livetest, plan, suggest as suggest_mod,
+               sv_read, workstation)
 
 
 def _client(a):
@@ -358,7 +359,7 @@ def cmd_sv_expose(a):
     opts["namespace"] = opts.get("namespace") or a.namespace
     if a.ingress_class:
         opts["sv_ingress_class"] = a.ingress_class
-    mocks = livetest.sv_mocks(livetest.cli_tool(), opts["namespace"])
+    mocks = sv_read.sv_mocks(kube.cli_tool(), opts["namespace"])
     if not mocks:
         sys.exit(f"no virtual-service pods in namespace {opts['namespace']} -- "
                  f"deploy the virtual service in BlazeMeter first, then re-run")
@@ -594,7 +595,7 @@ def _livetest_compose(a, client, facts, ship_id, opts):
     # bundle at all? Here as well as inside run_compose, so the CLI reports it
     # as a sentence rather than as the traceback of an exception the MCP server
     # needs run_compose to raise.
-    bad = livetest.bundle_check(a.manifests, facts["harbor_id"], ship_id,
+    bad = bundle_check.bundle_check(a.manifests, facts["harbor_id"], ship_id,
                                 opts).report()
     if bad:
         sys.exit(bad)
@@ -657,8 +658,8 @@ def cmd_livetest(a):
     # now (#179): one container, started with docker compose on this host. Which
     # rig a run gets is read off the bundle rather than asked for, because a
     # flag saying it is a second place to get it wrong and both wrong answers
-    # are that same silent run. See livetest.bundle_platform.
-    if livetest.bundle_platform(a.manifests, opts) == livetest.PLATFORM_COMPOSE:
+    # are that same silent run. See bundle_check.bundle_platform.
+    if bundle_check.bundle_platform(a.manifests, opts) == bundle_check.PLATFORM_COMPOSE:
         _livetest_compose(a, client, f, ship_id, opts)
     if not a.namespace:
         # argparse used to require it, which was right for the one rig there was
@@ -671,8 +672,8 @@ def cmd_livetest(a):
     # which holds whatever the last `generate` left there, and the rig applies
     # every *.yaml in it. First of the bundle guards and before the mint below,
     # because a run that is about to be refused must not rotate a credential
-    # some other agent is holding. See livetest.bundle_check for the incident.
-    bad = livetest.bundle_check(a.manifests, f["harbor_id"], ship_id,
+    # some other agent is holding. See bundle_check.bundle_check for the incident.
+    bad = bundle_check.bundle_check(a.manifests, f["harbor_id"], ship_id,
                                 opts).report()
     if bad:
         sys.exit(bad)
@@ -692,7 +693,7 @@ def cmd_livetest(a):
     # does not create: the CA ConfigMap of the `file` and `existing` modes. The
     # sentence is livetest's, because which modes the rig can build is the rig's
     # answer and the same one --ca-mode is resolved from below.
-    ca_bad = livetest.ca_configmap_refusal(opts, a.local_proxy)
+    ca_bad = bundle_check.ca_configmap_refusal(opts, a.local_proxy)
     if ca_bad:
         sys.exit(ca_bad)
     # Fourth guard of the same shape, and the one the mint below cannot cover: a
@@ -771,9 +772,9 @@ def cmd_livetest(a):
     # beside the flag guards above, so a run that is about to be refused for one
     # of them does not narrate a CA mode first; both the resolution and the
     # sentence are livetest's, which is also what `run()` resolves through.
-    ca_mode = livetest.resolved_ca_mode(opts, a.ca_mode)
+    ca_mode = bundle_check.resolved_ca_mode(opts, a.ca_mode)
     if a.local_proxy:
-        print(livetest.ca_mode_notice(opts, ca_mode))
+        print(bundle_check.ca_mode_notice(opts, ca_mode))
     # Both --local-proxy and --run-test re-render the manifests (the proxy's CA,
     # the engine sizing); the callback needs a profile to merge onto, so it is
     # only available when one was found.
@@ -1307,7 +1308,7 @@ def main():
                    help="with --local-proxy, skip the pre-run deploy that strips "
                         "the CA and must fail (saves ~2 min, at the cost of not "
                         "knowing whether the rig can fail at all)")
-    t.add_argument("--ca-mode", choices=livetest.RIG_CA_MODES,
+    t.add_argument("--ca-mode", choices=bundle_check.RIG_CA_MODES,
                    help="with --local-proxy: which CA-trust configuration to "
                         "deploy. 'inline' writes the MITM CA into a ConfigMap "
                         "the generator owns; 'existing' has the rig create one "
