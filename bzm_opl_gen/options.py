@@ -1,35 +1,16 @@
-"""What each generate option *means*, in one place.
+"""What each generate option means, in one place.
 
-`generate.DEFAULT_OPTIONS` says what an option defaults to; nothing said what it
-was for except prose in `docs/options.md`, written by hand, and ten of the
-thirty-one keys had no row there at all. Every new consumer wanting a
-description -- the UI's help text, an MCP tool schema -- had to either restate
-one or ship without it, and a restated description is one that drifts.
+`generate.DEFAULT_OPTIONS` holds the default value; this registry holds what the
+option is for, in two lengths: `summary` (at most 20 words; it lands in every
+MCP session's schema and in the UI's field help) and `doc` (the
+`docs/options.md` cell). tests/test_options.py holds the two key sets equal.
 
-So the description lives here and the doc is generated from it. The registry is
-deliberately *not* the source of the default value: `DEFAULT_OPTIONS` stays that,
-and `tests/test_options.py` holds the two key sets equal in both directions, so
-a new option added to either side fails the suite rather than arriving
-undocumented.
-
-Two description fields, because the consumers want different lengths and one
-field would have to fail one of them:
-
-  `summary`  one line, at most 20 words. This is what goes in an MCP tool's
-             JSON schema, where all thirty-six land in every session's context
-             whether or not the option is used, and in the UI's field help.
-  `doc`      the full argued paragraph, cross-links and all. This is the
-             `docs/options.md` cell, read one at a time by someone who has
-             already decided to care about that option.
-
-`docs/options.md` is regenerated with:
+The table block in docs/options.md is generated from here:
 
     python -m bzm_opl_gen.options
 
-which rewrites only the block between the generated-table markers; the prose
-around it is still written by hand. The test asserts that regenerating is a
-no-op, so an edit to a table cell in the doc fails rather than being silently
-overwritten later.
+which rewrites only the text between the markers; editing inside them fails
+the test.
 """
 
 import os
@@ -40,11 +21,8 @@ from . import generate as gen
 
 
 class Option:
-    """One `generate` option: its shape, and what it is for.
-
-    `default` is not stored -- it is read from `generate.DEFAULT_OPTIONS` at
-    render time so there is exactly one copy of it.
-    """
+    """One `generate` option: its shape, and what it is for. The default is
+    read from `generate.DEFAULT_OPTIONS`, never stored here."""
 
     def __init__(self, name, type, group, summary, doc,
                  choices=None, default_note=None):
@@ -62,22 +40,18 @@ class Option:
 
     @property
     def secret(self):
-        """Whether the value is a credential -- read from `generate`, not
-        declared here, so profile.json's exclusion list and this one cannot
-        disagree about which options are safe to echo."""
+        """Whether the value is a credential (generate.SECRET_OPTIONS)."""
         return self.name in gen.SECRET_OPTIONS
 
     @property
     def nullable(self):
-        """A `None` default is this generator's "not asked", and every consumer
-        needs to be able to send it back."""
+        """A `None` default means "not asked", which a caller must be able to
+        send back."""
         return gen.DEFAULT_OPTIONS[self.name] is None
 
 
-# Section headings for the generated table, in the order they are emitted. The
-# intro is prose the table cannot carry -- a constraint *between* options, which
-# is exactly what the old single flat table had nowhere to say, and why the CA
-# options shared one row with `|` between them.
+# Section headings for the generated table, in order. The intro states what a
+# row cannot: a constraint between options.
 GROUPS = [
     ("Platform and output", None),
     ("Credentials", None),
@@ -645,9 +619,7 @@ OPTIONS = [
 
 BY_NAME = {o.name: o for o in OPTIONS}
 
-# The words the summary limit is enforced at. Long enough for a real sentence,
-# short enough that all thirty-six together stay a small fraction of an MCP
-# session's context -- which is the only reason the limit exists.
+# Every summary lands in every MCP session's context, hence the cap.
 SUMMARY_MAX_WORDS = 20
 
 DOC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -657,12 +629,7 @@ END = "<!-- END GENERATED OPTIONS TABLE -->"
 
 
 def _cell(text):
-    """Prose into one markdown table cell.
-
-    Pipes are escaped rather than forbidden -- several options enumerate their
-    choices with `a | b | c`, which reads better than the alternatives -- and
-    the registry writes ordinary text without thinking about the table.
-    """
+    """Prose into one markdown table cell, pipes escaped."""
     return re.sub(r"\s+", " ", text).strip().replace("|", "\\|")
 
 

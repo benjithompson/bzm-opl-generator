@@ -1,15 +1,8 @@
 """The MCP server, driven over the SDK's in-memory transport.
 
-A real client talking to the real server, with no subprocess and no socket, so
-this stays inside the ~1s offline suite. What it is checking is mostly not
-"does the call work" -- core is tested next door -- but the things only this
-layer decides: what a model is told, what it is allowed to do, and what must
-never come back in a response.
-
-Nothing here skips. `mcp` is in the `[test]` extra and CI asserts it imports,
-for the same reason fastapi is: a suite that skips when a dependency is missing
-reports a clean pass having tested nothing.
-"""
+Checks what only this layer decides: what a model is told, what it may do, and
+what must never come back in a response. Nothing here skips (`mcp` is a test
+extra)."""
 
 import json
 import os
@@ -27,11 +20,7 @@ from test_generate import FACTS
 # The one ship in FACTS, and the ship a rotation therefore names.
 SHIP = FACTS["ships"][0]["id"]
 
-# What each tool promises a client about side effects. Asserted as a whole
-# table rather than a few hand-picked cells: a client that asks before running
-# something reads every row, and the interesting property is how they compare --
-# that the read-only ones really are, and that the two that can change a
-# customer's account say so.
+# What each tool promises a client about side effects, asserted as a table.
 EXPECTED_ANNOTATIONS = {
     "opl_location":  {"read_only": False, "destructive": True},
     "opl_facts":     {"read_only": True,  "destructive": False},
@@ -44,11 +33,7 @@ EXPECTED_ANNOTATIONS = {
 _SERVER = []      # the module's one server, installed by the fixture below
 
 
-# Building a server costs ~5ms of pydantic schema generation and buys nothing
-# per test: both env gates are read when an action runs, not when the server is
-# built, so a shared instance sees a monkeypatched variable exactly as a fresh
-# one would -- which test_the_gates_are_read_when_called_not_when_built is what
-# holds true.
+# One shared server: both env gates are read when an action runs, not at build.
 @pytest.fixture(scope="module")
 def server():
     return mcp_server.build()
@@ -115,15 +100,7 @@ def test_the_tools_are_the_agreed_surface():
 
 
 def test_every_tool_enumerates_its_actions_in_the_schema():
-    """The action list is machine-readable, not prose: a wrong one is then
-    refused by the client's own validation, naming the valid ones, instead of
-    arriving here to be guessed at.
-
-    A one-action tool schematises as `const` rather than `enum` -- pydantic
-    collapses a single-member Literal -- and that is the same guarantee said in
-    the narrower way, not a tool that failed to declare itself. Both are
-    accepted; neither being present is the failure.
-    """
+    """Every tool's actions are an enum in the schema (`const` for a single action)."""
     for name, tool in listing()["tools"].items():
         action = tool.input_schema["properties"]["action"]
         assert action.get("enum") or action.get("const"), \
@@ -131,9 +108,7 @@ def test_every_tool_enumerates_its_actions_in_the_schema():
 
 
 def test_every_tool_says_whether_it_changes_anything():
-    """Annotations are how a client decides what to confirm before running. A
-    tool with none is treated as unknown, which in practice means treated as
-    safe -- so the whole table is asserted, not a few cells of it."""
+    """Every tool carries the expected side-effect annotations."""
     tools = listing()["tools"]
     assert set(tools) == set(EXPECTED_ANNOTATIONS)
     got = {name: {"read_only": t.annotations and t.annotations.read_only_hint,
@@ -177,10 +152,7 @@ def test_the_server_survives_a_missing_key():
 
 
 def test_a_credential_passed_as_an_option_is_refused(fake_account, tmp_path):
-    """The rule, enforced rather than stated. `args` is an open object, so a
-    schema check could never fail -- and `auth_token` is a real generate option
-    the UI sets, so it is not an impossible argument, just one that must not
-    arrive this way."""
+    """A credential passed as an option is refused."""
     text = err("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": str(tmp_path),
                 "options": {"auth_token": "PASTED-BY-A-MODEL"}})
@@ -201,20 +173,14 @@ def test_only_a_path_may_name_a_key(fake_account, tmp_path):
     """api_key_file names a file to read; it is not the credential itself."""
     key = tmp_path / "k.json"
     key.write_text('{"id": "KID", "secret": "s"}')
-    # Accepted as an argument, and it is a path -- the fixture stands in for
-    # what client_from_key would build from it.
+    # A path is accepted; the fixture stands in for the client built from it.
     assert ok("opl_location", "whoami", {"api_key_file": str(key)})["email"]
 
 
 # -- the token, which is the one thing that must not leak ---------------------
 
 def test_generating_a_bundle_never_returns_the_token(fake_account, tmp_path):
-    """The Secret is written to disk with the token in it. The *response* is
-    file names and sizes, so a token cannot end up in a transcript.
-
-    `rotate_token` is what puts a real token in the bundle at all now, so it is
-    what this has to pass to have anything to leak.
-    """
+    """generate answers file names and sizes, never the token, even after a rotation."""
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True,
                "options": {"namespace": "ns1"}})
@@ -236,10 +202,7 @@ def test_only_reveal_token_reveals_the_token(fake_account):
 
 
 def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
-    """This is the caller the raw 403 stranded: a session with no checkout to
-    read, whose whole view of the failure is the text of the tool error. So the
-    refusal has to carry the alternative itself -- ask for the token, and pass
-    it as an option -- or the model has nowhere to go."""
+    """A refused token reaches the session with the way forward."""
     monkeypatch.setattr(core, "client_from_key",
                         lambda *a, **k: RefusingClient())
     text = err("opl_location", "reveal_token",
@@ -250,9 +213,7 @@ def test_a_refused_token_reaches_the_session_with_a_way_forward(monkeypatch):
 
 def test_reading_the_secret_back_does_not_hand_over_the_token(fake_account,
                                                              tmp_path):
-    """`read bzm_secret.yaml` was a second, quieter way to get the credential:
-    it does not look like asking for one, which is exactly why reveal_token is
-    a whole action. The file is readable, the value is not."""
+    """Reading the Secret back redacts the token; the file on disk is intact."""
     ok("opl_bundle", "generate",
        {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
     body = ok("opl_bundle", "read",
@@ -286,16 +247,11 @@ def test_a_file_with_no_token_is_returned_untouched(fake_account, tmp_path):
 
 
 # -- and the one thing that must not happen as a side effect ------------------
-# #64 on this surface. The harm is not secrecy -- crane logs the token in
-# plaintext -- it is that minting *revokes* the previous one, and a session with
-# no terminal to read gets no hint that it happened. So the default must be the
-# branch that mints nothing, and the argument that does is named for the effect.
+# Minting revokes the running agent's token, so only rotate_token mints.
 
 def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
                                                                 tmp_path):
-    """Zero calls to the token endpoint, counted rather than inferred. Holding
-    an API key is no longer permission to replace a running agent's credential;
-    the bundle comes out with the placeholder in it and says so."""
+    """generate without rotate_token calls the token endpoint zero times."""
     body = ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
     assert fake_account.calls == []
     assert (gen_mod.DEFAULT_OPTIONS["auth_token"]
@@ -307,10 +263,7 @@ def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
 
 def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
         fake_account, tmp_path):
-    """This surface has no "beside" -- the CLI prints the slot line next to the
-    token one, and a session reads a JSON body. A session that generated a slot
-    bundle and moved on to `kubectl apply` would meet the failure as a pod that
-    runs and never comes online (#241), so it is a warning."""
+    """A CA slot bundle carries the slot notice in `warnings`."""
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path),
                "options": {"ca_bundle_slot": True}})
@@ -323,9 +276,8 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
 
 def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
                                                               tmp_path):
-    """The explicit ask on the issue: the one action that silently revokes a
-    running agent's credential was the one that said least about it, answering
-    `warnings: []`. The token still never travels -- the ship does."""
+    """A rotation names the ship in token_source and in warnings; the token never
+    travels."""
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
     assert [c[0] for c in fake_account.calls] == ["auth_token"]
@@ -338,10 +290,7 @@ def test_rotating_names_the_ship_whose_credential_it_replaced(fake_account,
 
 def test_generating_twice_into_the_same_directory_mints_once(fake_account,
                                                             tmp_path):
-    """The branch this surface could not reach at all: regenerating into a
-    directory that already holds this ship's bundle reads that token back. One
-    mint across two calls, and the second bundle is byte-identical -- so an
-    agent deployed from the first keeps working."""
+    """Generating twice into the same directory mints once and is byte-identical."""
     ok("opl_bundle", "generate",
        {"facts": FACTS, "out_dir": str(tmp_path), "rotate_token": True})
     first = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
@@ -354,10 +303,7 @@ def test_generating_twice_into_the_same_directory_mints_once(fake_account,
 
 def test_the_old_fetch_token_argument_is_refused_rather_than_ignored(
         fake_account, tmp_path):
-    """A session working from a cached description would otherwise send
-    `fetch_token: true`, get a placeholder bundle, and have been told nothing.
-    Refused by name, because the caller meant to mint and needs to know the
-    word changed -- and refused before anything is written or issued."""
+    """`fetch_token` is refused by name, before anything is written or issued."""
     text = err("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": str(tmp_path), "fetch_token": True})
     assert "fetch_token" in text and "rotate_token" in text
@@ -366,9 +312,7 @@ def test_the_old_fetch_token_argument_is_refused_rather_than_ignored(
 
 
 def test_a_relative_out_dir_is_refused_before_anything_is_issued(fake_account):
-    """The refusal already existed, at the write -- by which point the mint had
-    happened and a running agent was already broken, for a mistake in an argument
-    that had nothing to do with the credential. Checked first now."""
+    """A relative out_dir is refused before any token is issued."""
     text = err("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": "out", "rotate_token": True})
     assert "absolute" in text
@@ -383,24 +327,16 @@ def test_the_generate_description_names_the_argument_that_rotates():
 
 
 # -- listing an account somebody actually has ---------------------------------
-# The account this was built against holds two locations. A customer's holds
-# 171 with 221 ships between them, which came back as 84,779 characters: past
-# the caller's tool-result ceiling, truncated to a file, never read -- and step
-# 1 of the documented path is the one that broke, so everything after it was
-# blocked too (#78).
+# Real accounts hold 170+ locations; a full listing overflows a result.
 
 LOCATION_COUNT, SHIP_COUNT = 171, 221
 
-# What a client will accept in one tool result, in characters. Well under any
-# real ceiling on purpose: this is a listing a session reads and then keeps in
-# context while it does five more calls.
+# What a client should accept in one tool result, in characters (conservative).
 RESULT_CEILING = 25_000
 
 
 def _big_account():
-    """171 locations, 221 ships, with ids and names the length real ones are --
-    most of the 84,779 characters was per-ship detail on locations the caller
-    was never going to pick."""
+    """171 locations and 221 ships with realistic id and name lengths."""
     locs = []
     for i in range(LOCATION_COUNT):
         # The first 50 have two agents each, which is what makes 221.
@@ -428,10 +364,7 @@ def big_account(monkeypatch):
 
 def test_a_real_account_s_listing_fits_in_a_result_and_says_what_it_left_out(
         big_account):
-    """Both halves together, because either alone is a bug: a response that
-    fits by stopping early reads as the whole account, and acting on "that
-    location does not exist" when it was merely omitted is worse than the size
-    problem this fixes."""
+    """A large account's listing fits in a result and counts what it left out."""
     r = call("opl_location", "list")
     assert not r.is_error, r.content[0].text
     text = r.content[0].text
@@ -442,15 +375,12 @@ def test_a_real_account_s_listing_fits_in_a_result_and_says_what_it_left_out(
     assert body["returned"] == len(body["locations"]) < LOCATION_COUNT
     assert (body["omitted_by_limit"]
             == LOCATION_COUNT - body["returned"]) > 0
-    # And in prose as well as in a field, because the number is the thing a
-    # session has to act on rather than one key of many.
+    # ...in prose too, since the number is what a session acts on.
     assert str(body["omitted_by_limit"]) in body["note"]
 
 
 def test_a_listing_entry_carries_what_choosing_a_location_needs(big_account):
-    """id to pass on, name to recognise, funcIds to know a bundle can be
-    generated at all, and whether there is an agent there and it is alive.
-    Not the ships themselves -- 221 of those is the size problem."""
+    """A listing entry has what choosing a location needs, not its ships."""
     entry = ok("opl_location", "list")["locations"][0]
     assert entry["harbor_id"].startswith("harbor-")
     assert entry["name"].startswith("acme-")
@@ -469,30 +399,20 @@ def test_a_listing_with_no_heartbeats_reports_unknown_rather_than_none_alive(
 
 
 def test_an_explicit_null_limit_still_gets_the_default_cap(big_account):
-    """`{"limit": null}` is an ordinary way for a client to say "unset".
-
-    `args.get("limit", DEFAULT)` only defaults an *absent* key, so an explicit
-    null arrived as `limit=None`, which core reads as "no cap" -- handing back
-    the whole 171-location account this tool exists to keep out of a result.
-    """
+    """`{"limit": null}` gets the default cap, not "no cap"."""
     body = ok("opl_location", "list", {"limit": None})
     assert body["returned"] == core.DEFAULT_LOCATION_LIMIT
     assert body["omitted_by_limit"] == 171 - core.DEFAULT_LOCATION_LIMIT
 
 
 def test_a_limit_that_is_not_a_number_is_refused_not_a_crash(big_account):
-    """A model writing `"10"` is likelier than a model writing 10.
-
-    Compared against 1, a string raises TypeError, which is not a CoreError and
-    so escapes `_answer` as an SDK internal error rather than a sentence."""
+    """A non-integer limit is a refusal sentence, not a TypeError."""
     assert "limit" in err("opl_location", "list", {"limit": "10"}).lower()
     assert "limit" in err("opl_location", "list", {"limit": 1.5}).lower()
 
 
 def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
-    """`agents_reporting` went null if *any* agent lacked a heartbeat, so a
-    location with a working agent and a heartbeat-less record reported wholly
-    unknown -- losing the "one of two" signal the count exists to give."""
+    """One live agent still counts when another's state is unknown."""
     c = FakeClient(locations=[{"id": "h9", "name": "mixed", "slots": 2,
                                "funcIds": ["performance"], "ships": [
         {"id": "live", "state": "idle", "lastHeartBeat": int(time.time())},
@@ -505,9 +425,7 @@ def test_one_live_agent_is_not_hidden_by_one_of_unknown_state(monkeypatch):
 
 
 def test_never_reported_and_gone_quiet_get_different_next_steps(monkeypatch):
-    """Both answer `online: false`, so the pair with `heartbeat_age_s` is what
-    keeps them apart -- and only a test keeps that structural. Redeploying is
-    the answer to one and not the other."""
+    """Never reported and gone quiet get different next steps."""
     def status_of(ship):
         c = FakeClient(harbor={"id": "h1", "name": "loc", "ships": [ship]})
         monkeypatch.setattr(core, "client_from_key", lambda *a, **k: c)
@@ -545,10 +463,7 @@ def test_a_cap_that_returns_nothing_is_refused(big_account):
 
 
 def test_creating_a_location_still_answers_in_full(fake_account):
-    """`create` returns one location, so it has no size problem, and the detail
-    is the confirmation that what exists is what was asked for. It happens to
-    have shared a helper with the listing -- compacting that must not reach
-    here, hence the shape is pinned rather than left to the helper."""
+    """`create` answers the location in full."""
     body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
                                          "workspace_id": 99})
     loc = body["location"]
@@ -559,11 +474,8 @@ def test_creating_a_location_still_answers_in_full(fake_account):
 
 
 def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
-    """The warning was the terminal's alone, so a session that created a
-    location this way got one that 403s every start with nothing anywhere
-    saying why. It comes from core.create_location now, like the location
-    itself, and rides beside the summary rather than inside it -- present only
-    when it applies, as the listing's `note` is."""
+    """Creating an unrunnable location carries a warning, present only when it
+    applies."""
     body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
                                          "workspace_id": 99})
     assert "403" in body["warning"]
@@ -571,9 +483,7 @@ def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
 
 
 def test_an_explicit_null_slots_still_gets_the_default(fake_account):
-    """Same rule as `limit`: null is a client saying "unset", and `.get(key,
-    default)` fills in only an absent key -- so `slots: null` reached core as
-    None and created a location with it unset."""
+    """`slots: null` gets the default."""
     body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
                                          "workspace_id": 99, "slots": None,
                                          "threads_per_engine": None})
@@ -582,10 +492,7 @@ def test_an_explicit_null_slots_still_gets_the_default(fake_account):
 
 def test_a_gui_functional_location_is_refused_at_the_default_slots(
         fake_account):
-    """#159. `slots` defaults to 1 here as it does everywhere, and BlazeMeter
-    400s a GUI Functional location at 1 -- so a session that took the default
-    got the account's error after the write was attempted, rather than an
-    argument to change."""
+    """A GUI Functional location at the default one slot is refused before the write."""
     text = err("opl_location", "create",
                {"name": "scratch", "account_id": 7, "workspace_id": 99,
                 "func_ids": ["functionalGui"]})
@@ -596,19 +503,14 @@ def test_a_gui_functional_location_is_refused_at_the_default_slots(
 
 
 def test_the_create_action_says_the_minimum_before_it_is_called():
-    """The tool description is the whole documentation a session gets, so the
-    rule has to be readable without making the call -- and it is read out of
-    core.SLOT_MINIMUMS, not written beside it."""
+    """The create description states each slot minimum, from core.SLOT_MINIMUMS."""
     desc = listing()["tools"]["opl_location"].description
     for rule in core.SLOT_MINIMUMS.values():
         assert rule["label"] in desc and str(rule["minimum"]) in desc
 
 
 def test_the_listing_names_the_account_it_actually_listed(fake_account):
-    """Neither id given means the key's default account, and that default is
-    easy to be wrong about -- the key to hand defaults to a two-location
-    account while the one wanted holds 171. An empty list has to be
-    distinguishable from the wrong account being read."""
+    """A listing with neither id names the default account it read."""
     assert ok("opl_location", "list")["account_id"] == 7
 
 
@@ -623,32 +525,17 @@ def test_per_agent_detail_is_reachable_for_the_location_that_was_picked(
 
 
 # -- the word for one deployment inside a location ----------------------------
-# It is an **agent**, and `ship` is the account's own field name -- `ship_id`,
-# `SHIP_ID` -- which CONTEXT.md keeps there and nowhere else. This surface is
-# where that matters most: the tool descriptions, the instructions block and
-# the served docs are the entire documentation a session gets, so one that reads
-# "a location with no ship has nothing to deploy to" has to guess what a ship is
-# before it can act, and nothing here will tell it (#156).
+# It is an agent; `ship` survives only in `ship_id`, BlazeMeter's field name.
 
 
 @pytest.mark.parametrize("spelling", ["create_agent", "create_ship"])
 def test_creating_an_agent_answers_with_an_agent(fake_account, spelling):
-    """The action, the key it answers with, and the old spelling that still
-    reaches both.
-
-    `create_ship` stays accepted for the reason `bzm-opl-gen create-ship` does
-    after #155: a session reads the current action name out of the description
-    at call time, so nothing stored goes stale -- but a person's saved prompt
-    does, and it costs nothing to keep. Driven through the real client rather
-    than stopped at the dispatch, because what is under test is the answer as
-    well as the route to it.
-    """
+    """create_agent (and its old name create_ship) answers with an agent, and
+    issues no credential."""
     body = ok("opl_location", spelling, {"harbor_id": "h1", "name": "agent1"})
     assert body["agent"] == {"id": "s2", "name": "agent1"}
     assert "ship" not in body
-    # And the rule the rename is likeliest to nudge: this action issues no
-    # credential, so there is none in the answer and none spent on the account.
-    # `reveal_token` is a whole action precisely so that cannot happen here.
+    # No credential issued, none in the answer.
     assert "SECRET-TOKEN-VALUE" not in json.dumps(body)
     assert fake_account.calls == []
 
@@ -661,30 +548,17 @@ def test_the_alias_is_offered_as_an_action_a_client_may_send():
 
 
 def _ship_words(text):
-    """Every `ship` left in a string once the two names that may say it are out.
-
-    `ship_id` is BlazeMeter's own field name: this tool's word for a field must
-    not differ from the word in the response it was read out of. The alias is
-    the action name kept for a saved prompt. Both are declared in the module, so
-    a *new* name that says ship fails this rather than being exempted by a list
-    somebody has to maintain here.
-    """
+    """Every `ship` left in a string once `ship_id` and the declared aliases are
+    removed."""
     for name in mcp_server.LOCATION_ALIASES:
-        # ...in the command line's spelling too: `create-ship` is the same
-        # kept name, and docs/mcp.md says so beside this one.
+        # ...and the CLI's `create-ship` alias.
         text = text.replace(name, "").replace(name.replace("_", "-"), "")
     return re.findall(r"\bships?\b", text.replace("ship_id", ""), re.I)
 
 
 def test_nothing_this_server_tells_a_session_says_ship():
-    """Over the whole documentation surface, not a page of it.
-
-    The instructions, all six descriptions, the summary a session picks a doc
-    by, and `docs/mcp.md` read back through the resource a session actually
-    reads it through -- gathered from the module's own tables in the spirit of
-    `test_server.py::test_this_api_never_says_feature`, so a seventh tool or a
-    tenth doc is covered by existing.
-    """
+    """Nothing on the documentation surface (instructions, descriptions, doc
+    summaries, docs/mcp.md) says "ship"."""
     async def served(name):
         async with mcp.Client(_SERVER[0]) as c:
             got = await c.read_resource(f"{mcp_server.RESOURCE_SCHEME}://docs/{name}")
@@ -697,8 +571,7 @@ def test_nothing_this_server_tells_a_session_says_ship():
     surface.update({f"the summary of {n}": s
                     for n, s in mcp_server.DOC_SUMMARIES.items()})
 
-    # Not vacuous: a surface that stopped being gathered would pass silently,
-    # which is the shape a moved table leaves behind.
+    # Not vacuous: every surface was gathered.
     assert set(mcp_server.DESCRIPTIONS) == set(EXPECTED_ANNOTATIONS)
     assert len(surface["docs/mcp.md"]) > 2000, "the served page came back empty"
 
@@ -717,14 +590,8 @@ def _keys(body):
 
 def test_no_answer_from_opl_location_calls_an_agent_a_ship(fake_account,
                                                            monkeypatch):
-    """Every action this tool has, driven, and every key it answers with.
-
-    Scoped to `opl_location` because that is where the rename lands: `opl_facts`
-    hands back the facts document, whose shape is the bundle's and the CLI's,
-    and `ship_id` is the account's field name wherever it appears. The argument
-    table is checked against the action list rather than trusted, so an action
-    added later fails here instead of going undriven.
-    """
+    """No key in any opl_location answer says "ship" (other than `ship_id`); every
+    action is driven."""
     monkeypatch.setenv(mcp_server.ALLOW_DESTRUCTIVE_ENV, "1")
     args = {
         "whoami": {},
@@ -772,9 +639,7 @@ def test_read_refuses_a_path_out_of_the_bundle(fake_account, tmp_path):
 
 
 def test_generate_warns_about_the_gap_it_cannot_close(tmp_path):
-    """A GUI location's browser image is version-pinned and only a live agent
-    says which one. Manually-entered facts cannot know it, so the bundle is
-    generated and the gap is carried as a warning rather than guessed at."""
+    """A GUI location's missing browser image is a warning on facts and on generate."""
     facts = ok("opl_facts", "manual",
                {"harbor_id": "H1", "ship_id": "S1",
                 "func_ids": ["performance", "functionalGui"]})
@@ -792,9 +657,8 @@ def test_options_are_described_without_any_credential():
     body = ok("opl_bundle", "options")
     assert body["namespace"]["default"] == "blazemeter"
     assert body["namespace"]["summary"]
-    # The four backends, and the third state that says "this location runs
-    # mockServices and I want the performance bundle anyway" -- a session with
-    # no checkout has only this schema to learn that from.
+    # The four backends, plus `none` for a mockServices location generated for
+    # performance alone.
     assert body["sv_ingress"]["choices"] == ["nginx", "istio", "contour",
                                              "openshift", "none"]
 
@@ -828,18 +692,12 @@ def test_manual_facts_need_no_account():
 
 
 def test_manual_facts_need_no_ids_and_say_which_are_missing():
-    """A location BlazeMeter has not issued ids for. The facts are produced --
-    refusing here would leave this server the one surface that cannot generate
-    what the page and the CLI both can -- and what is missing is in `warnings`,
-    where a session reads it before the bundle is handed on. A response that
-    carried the markers and said nothing would be a bundle described as
-    deployable."""
+    """Manual facts take no ids and name the missing ones in `warnings`."""
     body = ok("opl_facts", "manual", {})
     assert body["facts"]["harbor_id"] == gen_mod.marker("harbor_id")
     assert body["facts"]["ships"][0]["id"] == gen_mod.marker("ship_id")
     said = " ".join(body["warnings"])
-    assert "harbor_id and ship_id" in said
-    assert "<HARBOR_ID>" in said and "<SHIP_ID>" in said
+    assert "harbor_id (<HARBOR_ID>) and ship_id (<SHIP_ID>)" in said
     # ...and an id that was supplied is not reported as missing.
     one = ok("opl_facts", "manual", {"harbor_id": "H1"})
     assert one["warnings"] == [] or "harbor_id" not in " ".join(one["warnings"])
@@ -864,10 +722,7 @@ def test_suggest_answers_the_other_question_about_the_same_file():
 
 
 # -- evidence as the file the customer sent -----------------------------------
-# The artifact is a file, and this is the surface whose audience was *sent* one
-# and has no checkout. Inlining it means several KB of node lists and permission
-# maps travelling through the model to reach a check that only needed the path,
-# which is why `api_key_file` is a path here too.
+# A path is accepted, so the file need not travel through the model.
 
 def _evidence_file(tmp_path, **kw):
     from evidence_fixtures import document as _evidence
@@ -925,9 +780,7 @@ def test_a_file_that_is_not_json_names_the_read_rather_than_the_schema(tmp_path)
 
 
 def test_a_facts_file_is_refused_as_the_wrong_document(tmp_path):
-    """The likely mistake, and the one where half-parsing would produce
-    verdicts about a cluster nobody described. Distinct from the refusals
-    above: this file was read, and what it says is that it is not evidence."""
+    """A facts file passed as evidence is refused as the wrong document."""
     from test_cluster_evidence import EXAMPLE_FACTS
     from test_doctor import FACTS as LOC_FACTS
     text = err("opl_preflight", "doctor",
@@ -937,17 +790,13 @@ def test_a_facts_file_is_refused_as_the_wrong_document(tmp_path):
 
 
 def test_an_inlined_value_that_is_no_document_at_all_is_still_refused():
-    """The refusal the issue was raised against must survive for values that
-    are neither a path nor an object."""
+    """A value that is neither a path nor an object is still refused."""
     text = err("opl_preflight", "suggest", {"evidence": [1, 2, 3]})
     assert "JSON object" in text
 
 
 def test_asking_for_evidence_names_a_collector_that_exists():
-    """This refusal used to send the session to `bzm-opl-gen doctor --collect`,
-    a flag that appeared in that one string and nowhere else in the tool. With
-    no checkout there is nothing to check it against, so the name is asserted
-    against doctor's own constant and the invented flag against its absence."""
+    """The missing-evidence refusal names the collector script that exists."""
     from test_doctor import FACTS as LOC_FACTS
     text = err("opl_preflight", "doctor", {"facts": LOC_FACTS})
     assert evidence.SCRIPT in text
@@ -958,10 +807,7 @@ def test_asking_for_evidence_names_a_collector_that_exists():
 
 
 def test_the_preflight_description_offers_both_forms():
-    """The description is the whole documentation this session has, so one that
-    calls `evidence` a file while refusing a path is the bug itself (#77).
-    Both forms named, since a session told only about the path would read a
-    document it already holds back out to a file to pass one."""
+    """The preflight description offers both a path and an object."""
     text = listing()["tools"]["opl_preflight"].description.lower()
     assert "path" in text and "object" in text, text
 
@@ -1035,17 +881,13 @@ def test_status_of_a_ship_that_is_not_there_says_so(fake_account):
 # -- the docs, which are half of what a session is given ----------------------
 
 def test_the_docs_resolve_in_a_checkout():
-    """Two locations, because there are two installs: a wheel carries them
-    inside the package, a checkout has them at the repo root. The wheel half is
-    asserted by the release workflow, which is the only place a wheel exists."""
+    """docs_dir resolves in a checkout (the wheel is checked by the release workflow)."""
     assert os.path.isdir(mcp_server.docs_dir())
     assert "options.md" in mcp_server.doc_files()
 
 
 def test_no_summary_describes_a_doc_that_is_not_there():
-    """A renamed page leaves its description behind, pointing at nothing. The
-    other direction is allowed on purpose -- a new doc should ship undescribed
-    rather than not ship."""
+    """No summary describes a doc that is not served."""
     stale = [n for n in mcp_server.DOC_SUMMARIES if n not in mcp_server.doc_files()]
     assert not stale, f"summaries for missing docs: {stale}"
 
@@ -1061,9 +903,7 @@ def test_every_doc_the_instructions_name_is_actually_served():
 
 
 def test_mirroring_images_is_annotated_rather_than_gated(fake_account):
-    """Unlike `delete`. Mirroring adds images to a registry the caller named;
-    the tool's destructiveHint is what makes a client confirm it. A gate here
-    would put a routine private-registry setup behind an env var."""
+    """Mirroring is annotated destructive rather than gated."""
     body = ok("opl_bundle", "images",
               {"facts": FACTS, "mirror": "reg.local/bzm", "dry_run": True})
     assert body["dry_run"] is True
@@ -1090,26 +930,17 @@ def test_only_the_gated_action_can_reach_a_cluster_write(monkeypatch):
 
 
 # -- the JSON-RPC channel -----------------------------------------------------
-# On stdio, stdout *is* the protocol. A stray print desynchronises the session,
-# and to the client that does not look like a print -- it looks like the server
-# died. Two defences, and they are tested at different depths on purpose.
+# On stdio, stdout is the protocol; a stray print desynchronises the session.
 
 @pytest.fixture
 def quiet_workstation(monkeypatch):
-    """A probed workstation without the probing -- gather() shells out to
-    docker, kubectl and helm, which is seconds the offline suite must not
-    spend. The same fixture the workstation tests use for the same reason."""
+    """A probed workstation without shelling out (docker, kubectl, helm)."""
     from test_workstation import OK_ENV
     monkeypatch.setattr(core.workstation, "gather", lambda opts: OK_ENV)
 
 
 def test_the_toolcheck_path_prints_nothing_at_all(quiet_workstation, capsys):
-    """Asserted against core directly, *outside* the server's redirect --
-    inside it, this could not fail however much anything printed.
-
-    core is not a terminal, and `workstation.run` prints a seven-line report,
-    so the fix was to call `workstation.evaluate` rather than to hide the
-    output. If that regresses, the redirect would mask it everywhere else."""
+    """The toolcheck path prints nothing, asserted outside the server's redirect."""
     checks = core.toolcheck(cluster="minikube")
     assert checks["checks"]
     assert capsys.readouterr().out == ""
@@ -1117,9 +948,7 @@ def test_the_toolcheck_path_prints_nothing_at_all(quiet_workstation, capsys):
 
 def test_the_redirect_still_catches_a_layer_that_does_print(monkeypatch,
                                                             capsys):
-    """The belt, for `livetest.run` -- which narrates a deployment for minutes
-    and is not worth unwinding. Proved with something that deliberately prints,
-    so removing the redirect fails this."""
+    """The stdout redirect catches a layer that does print."""
     def noisy(*a, **k):
         print("a line that would desynchronise the session")
         return {"ok": True}
@@ -1140,10 +969,7 @@ def test_toolcheck_answers_rather_than_exiting(quiet_workstation):
 # -- opl_plan ------------------------------------------------------------------
 
 def test_plan_needs_no_credential_at_all(monkeypatch):
-    """Every other tool that answers something useful either holds a client or
-    reads a file the customer sent. This one is reached by a session that has
-    neither, which is the whole reason it is a tool rather than a note in the
-    instructions."""
+    """opl_plan needs no credential."""
     monkeypatch.setattr(core, "client_from_key", lambda *a, **k: pytest.fail(
         "opl_plan asked for a BlazeMeter client"))
     body = ok("opl_plan", "capacity", {"users": 5000})
@@ -1168,13 +994,7 @@ def test_plan_marks_the_assumption_a_model_would_otherwise_report_as_fact():
 
 
 def test_a_session_can_size_each_model_in_its_own_unit():
-    """Three models since #154, and this surface offered one.
-
-    A GUI Functional customer has no load target at all, so `users` being the
-    only argument was not a description that was merely incomplete -- it was the
-    whole of what could be asked for. Each model's target is named by the field
-    the table declares, which is the word the refusals and the CLI flags use.
-    """
+    """Each sizing model is asked for by its own target field."""
     browsers = plan.SIZING_MODELS[plan.GUI]["target_field"]
     body = ok("opl_plan", "capacity", {browsers: 40})
     assert body["driven_by"] == plan.GUI
@@ -1185,9 +1005,7 @@ def test_a_session_can_size_each_model_in_its_own_unit():
 
 
 def test_a_supplied_per_pod_figure_is_not_reported_as_assumed():
-    """The rule `vus_per_engine_assumed` carries, one model along: what a pod
-    of that size is rated for is an assumption, and what the caller measured is
-    not."""
+    """A supplied per-pod figure is reported as supplied, not assumed."""
     m = plan.SIZING_MODELS[plan.GUI]
     body = ok("opl_plan", "capacity",
               {m["target_field"]: 40, m["figure_field"]: 10})
@@ -1197,10 +1015,7 @@ def test_a_supplied_per_pod_figure_is_not_reported_as_assumed():
 
 
 def test_sizing_service_virtualization_alone_is_a_refusal_not_a_number():
-    """The third state, on the surface likeliest to report it as a fact: how
-    many requests per second one core of a mock pod serves has never been
-    measured here, and a figure invented in a tool response arrives as a
-    cluster somebody buys."""
+    """Sizing service virtualization alone is a refusal, not a number."""
     text = err("opl_plan", "capacity",
                {plan.SIZING_MODELS[plan.SV]["target_field"]: 5000})
     assert "has not been measured" in text
@@ -1208,10 +1023,7 @@ def test_sizing_service_virtualization_alone_is_a_refusal_not_a_number():
 
 
 def test_the_capacity_description_states_all_three_models_and_the_missing_figure():
-    """This audience has the description and nothing else, so one that speaks
-    only of virtual users answers two of the three customers about somebody
-    else's workload -- and would leave the unmeasured figure looking like an
-    argument nobody had found yet rather than a figure nobody has."""
+    """The capacity description names every model and the unmeasured figure."""
     text = listing()["tools"]["opl_plan"].description
     for m in plan.SIZING_MODELS.values():
         assert m["target_field"] in text, m
@@ -1222,10 +1034,7 @@ def test_the_capacity_description_states_all_three_models_and_the_missing_figure
 
 
 def test_the_two_actions_that_take_func_ids_say_which_ones_exist():
-    """A funcId decides what a location is and which images its bundle carries,
-    and both actions took one with nothing anywhere naming a valid value. The
-    vocabulary is the account's since #148 and this tool covers three of it, so
-    the three are named from `covered_func_ids` rather than transcribed."""
+    """opl_location and opl_facts name the covered funcIds."""
     tools = listing()["tools"]
     for name in ("opl_location", "opl_facts"):
         text = tools[name].description

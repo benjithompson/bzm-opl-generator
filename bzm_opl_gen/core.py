@@ -1,35 +1,8 @@
-"""What the tool does, with nothing about how it was asked.
+"""What the tool does, independent of how it was asked.
 
-Everything here was inside a FastAPI route handler. That was fine while the web
-UI was the only caller, and stopped being fine for two reasons.
-
-The first is testing. The decisions worth checking -- which ship a token is
-fetched for, which namespace a preflight is about, what counts as an agent
-being online -- were reachable only through a TestClient, so `tests/test_server`
-importorskips fastapi and a venv without it reported a clean pass having tested
-none of them.
-
-The second is that a second caller is coming. An MCP server speaks JSON-RPC over
-stdin, has no request object and no status codes, and would otherwise have had
-to restate this orchestration -- which is how the token-fetch rule came to exist
-twice already, once here and once in `cli.py`, each looking obviously right.
-
-So: no fastapi, no pydantic, no request or response objects, stdlib and this
-package only. Failures are `CoreError`, which carries the status code the web
-layer answers with -- the code belongs to the refusal, not to the route, or the
-same refusal answers 400 on one endpoint and 500 on another.
-
-What is deliberately *not* here: holding a client. Each transport owns its own
-credential lifetime and the remedy it names when there is none -- a browser
-posts to a form, a stdio server is restarted with a different environment.
-
-A bundle's *delivery* is here, which reads like an exception and is not. Which
-container it arrives in is the transport's (the UI streams a zip, the CLI
-prints what it wrote), but `zip_bundle`, `write_bundle`, `read_bundle_file` and
-`redact_tokens` carry rules no transport should get to re-decide: that a name
-cannot escape the directory it is read from, that a written path is absolute,
-that a token is blanked on the way out. Those are the same rules for every
-caller, and the one that has them wrong is the one that would never say so.
+The CLI, the web server and the MCP server are thin transports over this
+module. It imports no web framework and holds no client. Failures are
+`CoreError` subclasses carrying the HTTP status a web layer answers with.
 """
 
 import collections
@@ -55,16 +28,8 @@ from . import (agent_env as agent_env_mod, api, doctor,
 # -- failures ------------------------------------------------------------------
 
 class CoreError(Exception):
-    """A refusal, with the HTTP status the web layer answers it with.
-
-    Carried rather than decided per route so that a caller with no status codes
-    at all -- stdio JSON-RPC -- still gets the distinction between "you sent
-    the wrong thing" and "BlazeMeter did".
-
-    500 on the base, not 400: a subclass that names no status is a mistake in
-    here, and blaming the caller for it is how a bug gets reported as bad
-    input. Raise one of the subclasses.
-    """
+    """A refusal, with its HTTP status. Raise a subclass: the base's 500 means
+    a bug here, not bad input."""
     status = 500
 
 
@@ -77,48 +42,24 @@ class NotFound(CoreError):
 
 
 class NotConfigured(CoreError):
-    """No usable credential, and the message says how to supply one.
-
-    Its own type rather than a BadRequest because what to do about it is not
-    "you sent the wrong thing" -- nothing about the call was wrong. 401 is what
-    a web layer would answer, though only the MCP server raises it today: the
-    UI holds its client in session state and decides this for itself, since the
-    remedy there is a form rather than an environment.
-    """
+    """No usable credential; the message says how to supply one."""
     status = 401
 
 
 class EvidenceUnreadable(CoreError):
-    """A cluster-evidence file the caller named and nothing could be read from.
-
-    Its own type, and deliberately neither a BadRequest nor a NotFound, because
-    "could not read it" and "read it and it is not evidence" are the pair this
-    package has collapsed four times over. They have opposite remedies -- fix
-    the path, or get the file sent at all, versus stop pointing this at a facts
-    file -- so a transport catching one type for both would answer with
-    whichever sentence it happened to be holding.
-
-    400 rather than 404: the file is often there and merely unparseable, and
-    what the caller has to change is the argument either way.
-    """
+    """A cluster-evidence file that could not be read at all -- distinct from
+    one that was read and is not evidence (a BadRequest)."""
     status = 400
 
 
 class UpstreamError(CoreError):
-    """BlazeMeter answered, and what it said was an error. 502 because the
-    caller's request was fine; something upstream of us was not."""
+    """BlazeMeter answered with an error; the caller's request was fine."""
     status = 502
 
 
 class TokenRefused(UpstreamError):
-    """BlazeMeter would not issue an agent credential.
-
-    An UpstreamError because that is what it is -- nothing the caller sent was
-    wrong, and on an account that restricts the token endpoint no argument to it
-    would have worked -- but its own type so the message can be written here
-    instead of being the endpoint's body. `.upstream` keeps that body, because
-    the point is to say more than it does, not less: see fetch_ship_token.
-    """
+    """BlazeMeter would not issue an agent credential. `.upstream` keeps the
+    API's own body, which is the only clue the account restricts the endpoint."""
 
     def __init__(self, message, upstream):
         super().__init__(message)
@@ -126,20 +67,8 @@ class TokenRefused(UpstreamError):
 
 
 def _upstream(fn, *args, **kw):
-    """A BlazeMeter call, with its refusal turned into one of ours.
-
-    404 is the one status that becomes a different type, and the reason is the
-    rule this package keeps everywhere else: a location somebody deleted and a
-    BlazeMeter nobody can reach must not share a representation. Both used to
-    arrive as a 502 carrying whatever sentence the API wrote, so the only
-    remedy either could offer was "something went wrong" -- while the two
-    remedies are opposites (re-read the account, versus wait and try again).
-    `api.BzmApiError` has carried the code all along; it was thrown away here.
-
-    Only 404. A 401 is an expired key and a 403 is an account that restricts
-    the endpoint: neither says the thing asked for is gone, and both are what
-    they always were.
-    """
+    """A BlazeMeter call, its refusal turned into ours. Only 404 is NotFound
+    (re-read the account); anything else is UpstreamError (retry later)."""
     try:
         return fn(*args, **kw)
     except api.BzmApiError as e:
@@ -157,10 +86,8 @@ SAVED_KEY_PATH = os.path.join(CONFIG_DIR, "api-key.json")
 def key_candidates():
     """The paths an api-key.json is looked for, in precedence order.
 
-    A function rather than a constant because BZM_API_KEY_FILE is read from the
-    environment: as a module-level list it froze at import, which is wrong for
-    anything that sets the variable after startup -- `ui --dev` does exactly
-    that, passing the key to its reloader subprocess.
+    A function because BZM_API_KEY_FILE may be set after import (`ui --dev`
+    passes the key to its reloader that way).
     """
     return [os.environ.get("BZM_API_KEY_FILE"),
             "api-key.json",
@@ -174,66 +101,17 @@ KEY_FILE_ENV = "BZM_API_KEY_FILE"
 
 
 def client_from_key(api_key_file=None, *, key_id=None, secret=None):
-    """The construction: a BzmClient from a path, an id and secret, or the
-    environment -- and a CoreError, never anything else, when there is none.
+    """The one construction of a BzmClient; raises CoreError, never SystemExit.
 
-    Precedence, and each step is somebody's real input: the path in the
-    argument (a `--api-key` flag, an MCP tool argument, a file picked in the
-    page), then an id and secret in the argument (typed into the connect form,
-    where there is no file), then KEY_FILE_ENV, then the id/secret pair in the
-    environment. Nothing is discovered from the working directory -- see the
-    comment at the refusal for why that matters here and not for a command.
-
-    Widened rather than joined by a sibling (#92). The promise worth having in
-    one place is the one this already made -- never SystemExit, because the
-    file-reading constructor raised one and a BaseException walks past every
-    `except Exception` between a route and the top of a server process -- and a
-    second function making the same promise about a different input is the
-    thirteen constructions again, one order of magnitude down. That promise is
-    structural now rather than a habit: #95 deleted the constructor's path
-    branch, so `api.BzmClient` takes a keyword-only pair and there is no
-    exiting read left anywhere to creep back into a caller.
-
-    `_from_env` until #95, when the callers moved and the name could follow.
-    The environment is the *last* of three places looked, and a name saying it
-    was the only one was read as one -- `--api-key` and a pasted pair reach the
-    same function, and the tests that stand in for an account stand in here.
-
-    That widening spends a rule this docstring used to state: that a secret is
-    never an argument. It still holds where it was argued -- `mcp_server`
-    passes a path and nothing else, and an argument there has travelled through
-    a model's context to get here. It does not hold for the UI, whose key
-    arrives pasted into a form with no file behind it: `key_set` used to write
-    it to a temp file purely to have a path for a constructor that took only
-    one, and a secret written to disk to satisfy an argument list is worse than
-    the argument. #95 passes the pair and that write is gone -- a `save: true`
-    still writes SAVED_KEY_PATH, which is a key the user asked to keep rather
-    than a detour through the filesystem.
-
-    Not "connected" in the sense of having reached BlazeMeter -- there is no
-    connection to make, the client is stateless HTTP Basic. Proving the
-    credential works is `user(client)`, one call, made by the callers that need
-    the proof; making it here would put a network round-trip inside every
-    construction and a second one inside most.
+    Precedence: the path argument, an id and secret argument, KEY_FILE_ENV,
+    then the environment's id/secret pair. The key is not verified here.
     """
-    # Every branch below decides a *credential*; the construction itself is the
-    # single line at the end. Three returns each building their own was three
-    # places for a fourth to be added beside, and the guard in tests/test_core.py
-    # counts constructions rather than trusting that they all say the same thing.
     if key_id or secret:
         if api_key_file:
-            # Both, in one call, and only ever as arguments -- a key in the
-            # environment losing to one the caller named is precedence, but two
-            # in the same call is a caller that does not know which account it
-            # is about, and taking one silently is how a bundle gets built
-            # against the wrong one with nothing anywhere saying so.
+            # Two keys in one call is a caller unsure which account it means.
             raise BadRequest("give an API key file path, or an id and secret, "
                              "not both")
         if not (key_id and secret):
-            # Half a pair gets its own sentence: this caller plainly has a key
-            # and is one field short, and the "no API key anywhere" message
-            # below -- which talks about environment variables -- answers a
-            # question it did not ask.
             missing = "secret" if key_id else "id"
             raise BadRequest(f"an API key needs both an id and a secret; "
                              f"the {missing} is missing")
@@ -244,12 +122,6 @@ def client_from_key(api_key_file=None, *, key_id=None, secret=None):
             try:
                 credentials = api.read_key_file(os.path.expanduser(path))
             except ValueError as e:
-                # Every failure read_key_file has is a ValueError,
-                # deliberately: an OSError or a UnicodeDecodeError escaping as
-                # itself is a bare exception out of a route. The second
-                # sentence is what the exiting wrapper used to add for the
-                # terminal alone -- a bad path is the same mistake on every
-                # surface, so it is said on all of them.
                 raise NotConfigured(
                     f"{e}. Create the key under Settings -> API Keys in "
                     f"BlazeMeter.")
@@ -257,14 +129,9 @@ def client_from_key(api_key_file=None, *, key_id=None, secret=None):
             env_id = os.environ.get(KEY_ID_ENV)
             env_secret = os.environ.get(KEY_SECRET_ENV)
             if not (env_id and env_secret):
-                # Deliberately no fall back to detect_keys(): its first
-                # candidate is `./api-key.json`, which is fine for a command
-                # someone ran in their own checkout and wrong for a server
-                # whose working directory is wherever a client launched it -- a
-                # customer's project, quite possibly holding an api-key.json
-                # that is theirs. Asking is cheap; using the wrong account is
-                # not. The UI does its own detection, where the person can see
-                # the path.
+                # No fallback to detect_keys(): a server's working directory is
+                # wherever a client launched it, and an api-key.json there may
+                # belong to somebody else's account.
                 raise NotConfigured(
                     f"no BlazeMeter API key. Set {KEY_FILE_ENV} to the path of "
                     f"an api-key.json ({api.KEY_FILE_SHAPE}), or {KEY_ID_ENV} "
@@ -276,11 +143,8 @@ def client_from_key(api_key_file=None, *, key_id=None, secret=None):
 
 
 def detect_keys():
-    """Which of those exist and parse, with the key id each holds.
-
-    The secret is never read back out -- only the id, which is what identifies
-    a key without being able to act as one.
-    """
+    """Which key candidates exist and parse, with the key id each holds (never
+    the secret)."""
     found = []
     for p in key_candidates():
         if not p:
@@ -299,9 +163,20 @@ def detect_keys():
 # -- the account tree ----------------------------------------------------------
 
 def user(client):
-    """Who this key is. Also the cheapest call that proves it works, which is
-    what every caller uses it for."""
+    """Who this key is. Also the cheapest call that proves it works."""
     return _upstream(client.user)
+
+
+def whoami(client):
+    """The key's user and default account, as every surface reports it."""
+    u = user(client)
+    return {"email": u.get("email"), "display_name": u.get("displayName"),
+            "default_account_id": (u.get("defaultProject") or {}).get("accountId")}
+
+
+def default_account_id(client):
+    """The account this key defaults to, or None if the user record names none."""
+    return whoami(client)["default_account_id"]
 
 
 def accounts(client):
@@ -313,14 +188,8 @@ def workspaces(client, account_id):
 
 
 def require_location_scope(account_id=None, workspace_id=None):
-    """A locations listing has to be scoped to something.
-
-    Separate from locations(), rather than only inside it, because /api/locations
-    has a credential to check as well and the order between the two is visible:
-    a request naming neither scope is malformed with or without a key, so
-    answering "no API key" sends the person off to configure one and then
-    refuses them anyway. Asking this first is what keeps that 400 a 400.
-    """
+    """A locations listing needs a scope. Separate from locations() so a caller
+    can refuse a malformed request before asking for a credential."""
     if not account_id and not workspace_id:
         raise BadRequest("account_id or workspace_id required")
 
@@ -331,48 +200,28 @@ def locations(client, account_id=None, workspace_id=None):
 
 
 def location(client, harbor_id):
-    """One location with its ships -- the per-ship detail a listing leaves out,
-    paid for on the one the caller has chosen."""
+    """One location with its ships in full."""
     return _upstream(client.private_location, harbor_id)
 
 
-# How many locations a listing hands back when the caller did not say. The
-# account this was built against has two; a customer's has 171 with 221 ships,
-# which came back as 84,779 characters -- past an MCP caller's result ceiling,
-# so it was truncated to a file and never read. A cap is only safe because
-# select_locations counts what it left out; see its docstring.
+# Locations a listing returns when the caller did not say. Real accounts hold
+# 170+, which overflows an MCP caller's result budget.
 DEFAULT_LOCATION_LIMIT = 50
 
 
 def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
-    """Narrow a listing, and account for every location that does not come back.
+    """Narrow a listing, counting every location that does not come back.
 
-    The counts are the point, not decoration. A caller handed 50 of 171 with no
-    numbers reads the account as having 50, and then reports a location that is
-    right there as missing -- which is a worse failure than the response being
-    too big, because it looks like an answer. Filter and cap are counted apart:
-    one is what the caller asked for and the other is not, so only the numbers
-    say which is worth undoing.
-
-    Here rather than in a response layer because what a partial answer owes its
-    caller is the same wherever the request came from, while how each entry is
-    *shaped* differs by caller and belongs to them. The CLI deliberately does
-    not narrow -- a terminal scrolls, and it is the caller with a result ceiling
-    that cannot afford 171 of these -- so `limit=None` (no cap at all) exists
-    for it and for anyone else who genuinely wants the lot.
+    The counts are what stop a partial list reading as the whole account; the
+    filter and the cap are counted apart. `limit=None` means no cap.
     """
     if limit is not None:
-        # Before the comparison, because a model writing `"10"` is likelier
-        # than one writing 10, and `"10" < 1` is a TypeError -- not a CoreError,
-        # so it escapes the transports as an internal error instead of a
-        # sentence. bool is an int subclass and `limit=True` is nobody's intent.
+        # bool is an int subclass, and "10" < 1 would be a TypeError.
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise BadRequest(
                 f"limit must be a whole number, not {limit!r}. Omit it for the "
                 f"default of {DEFAULT_LOCATION_LIMIT}")
         if limit < 1:
-            # `limit=0` means "no limit" to whoever passed it and "nothing
-            # matched" in the answer; nothing good is downstream of guessing.
             raise BadRequest("limit must be at least 1, or omitted for the "
                              f"default of {DEFAULT_LOCATION_LIMIT}")
     needle = (name_contains or "").strip().lower()
@@ -387,13 +236,8 @@ def select_locations(locs, name_contains=None, limit=DEFAULT_LOCATION_LIMIT):
             "omitted_by_limit": len(matched) - len(kept)}
 
 
-# What BlazeMeter needs before it will hand a run to a location, and what it
-# says when one of them is missing. The 403 names neither field -- it reads as
-# an account that is busy rather than a location that was never finished -- and
-# `threadsPerEngine` is exactly where this goes wrong, because POST
-# /private-locations accepts the field and does not store it (see
-# api.create_private_location's follow-up PATCH). So the moment to say it is the
-# one where the location is made, on every surface that can make one.
+# BlazeMeter's 403 for a location missing slots or threadsPerEngine names
+# neither field, so every surface that creates a location says it.
 LOCATION_UNRUNNABLE = (
     "WARNING: location is not runnable -- tests will fail to start with "
     "403 'Not enough available resources'. Set the missing field(s) in "
@@ -401,30 +245,14 @@ LOCATION_UNRUNNABLE = (
 
 
 def location_runnable(location):
-    """Whether a location has both the fields a test start needs.
-
-    Both, rather than the one that usually goes missing: either alone produces
-    the same 403, and a check that looked at one would vouch for the other.
-    """
+    """Whether a location has both fields a test start needs."""
     return bool(location.get("slots") and location.get("threadsPerEngine"))
 
 
-# The slots a functionality needs before BlazeMeter will create the location at
-# all, keyed by funcId. One entry, found on a live POST (#159): the constraint
-# is not in the private-location object's documentation, and every fixture here
-# answers a create the account never saw, so nothing offline could have found
-# it. `slots=1` is this tool's default on all three surfaces, so every GUI
-# Functional location it made was refused.
-#
-# `message` is BlazeMeter's own sentence, transcribed rather than paraphrased,
-# because a customer who meets this in BlazeMeter's UI meets those words -- and
-# the two halves either side of it are ours, since the sentence says what is
-# wrong and not what to do about it ("greater than 1" is one reading away from
-# 1.5). Raising the default instead was the tempting fix and is the one this
-# must not be: `slots` is engines per *agent* and a real cost (accounts run 17
-# agents at slots=1), so a location that quietly asked for twice the
-# concurrency somebody chose would be the silent setting IGNORED_BY_FORMAT exists
-# to prevent.
+# Slots a functionality needs before BlazeMeter will create the location at
+# all, by funcId. Found on a live create, not documented. `message` is
+# BlazeMeter's own sentence. The default is not raised to meet it: slots is a
+# real per-agent cost the caller chooses.
 SLOT_MINIMUMS = {
     "functionalGui": {
         "label": "GUI Functional",
@@ -438,25 +266,13 @@ SLOT_MINIMUMS = {
 
 def slot_minimums():
     """The per-functionality slot minimums, as {funcId: {label, minimum,
-    message}}.
-
-    Served (`/api/slot-minimums`) rather than restated by each caller, for the
-    reason IGNORED_BY_FORMAT is: the create-location form has to state the rule
-    *before* the account does, and a copy in TypeScript is how a number found
-    live and a number typed on a page stop being the same number.
-    """
+    message}}, served so a form can state the rule before the account does."""
     return SLOT_MINIMUMS
 
 
 def slots_refusal(func_ids, slots):
-    """Why BlazeMeter would refuse this location, or None if it would not.
-
-    A function of the two things the form holds -- the funcIds chosen and the
-    number typed -- so the answer is the same one whether it is reached before
-    a POST here or on a keystroke in the browser. None rather than "" for the
-    same reason `create_location`'s warning is: the caller shows what it is
-    given and does not decide when the sentence applies.
-    """
+    """Why BlazeMeter would refuse a location with these funcIds and slots, or
+    None if it would not."""
     for func_id in func_ids or ():
         rule = SLOT_MINIMUMS.get(func_id)
         if rule and (slots or 0) < rule["minimum"]:
@@ -467,22 +283,12 @@ def slots_refusal(func_ids, slots):
 
 
 def create_location(client, name, account_id, workspace_id,
-                    func_ids=("performance",), slots=1,
+                    func_ids=api.DEFAULT_FUNC_IDS, slots=1,
                     threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
     """Create a private location, and say whether a test can start on it.
 
-    The verdict travels with the location rather than being left for each
-    caller to work out: it was the CLI's alone, so the two surfaces that create
-    a location without a terminal -- the web page and an MCP session -- made
-    one that 403s every start and said nothing about it.
-
-    `warning` is None for a runnable location, so a caller shows what it is
-    given rather than deciding when the sentence applies.
-
-    A slot minimum is the other half and is a *refusal* rather than a warning,
-    because the account will not make this location at all -- see
-    SLOT_MINIMUMS. Before the POST, so the sentence names the field instead of
-    being BlazeMeter's 400 relayed after a write that did not happen.
+    Returns {location, runnable, warning}; `warning` is None for a runnable
+    location. A slot minimum is refused before the POST.
     """
     refusal = slots_refusal(func_ids, slots)
     if refusal:
@@ -499,17 +305,28 @@ def create_ship(client, harbor_id, name):
     return _upstream(client.create_ship, harbor_id, name)
 
 
-# The location settings this tool will change, as {name: the field BlazeMeter
-# calls it}. A closed set on purpose: BlazeMeter's PATCH replaces `funcIds`
-# wholesale, so a general "PATCH whatever you send" would let a caller that
-# meant to add a functionality drop every other one the location runs.
-#
-# `funcIds` is not in the set and there is no other call here that writes it
-# (#113). There was -- add_func_id, additive by construction, behind an "Enable
-# on this location…" affordance on the configure page. What funcIds a location
-# carries is what the location *is*, which is BlazeMeter's own UI's to change;
-# `api.update_private_location` no longer accepts them either, so the rule is
-# structural rather than a closed set anybody has to remember.
+def create_agent(client, harbor_id, name, issue_token=True):
+    """Create an agent, and by default issue its first AUTH_TOKEN with it.
+
+    Returns {ship, auth_token, token_error}. A new agent has no previous token
+    to revoke, so issuing here is free. A refused token endpoint is reported in
+    `token_error` rather than raised: the agent exists either way, and losing
+    its id invites a second one. `issue_token=False` issues nothing (the MCP
+    server never returns a token).
+    """
+    ship = create_ship(client, harbor_id, name)
+    token = refused = None
+    if issue_token:
+        try:
+            token = fetch_ship_token(client, harbor_id, ship["id"])
+        except CoreError as e:
+            refused = str(e)
+    return {"ship": ship, "auth_token": token, "token_error": refused}
+
+
+# The location settings this tool changes, as {name: BlazeMeter's field}. A
+# closed set: BlazeMeter's PATCH replaces `funcIds` wholesale, so a passthrough
+# could drop functionalities nobody named. funcIds are changed in BlazeMeter's UI.
 LOCATION_SETTINGS = {
     "slots": "slots",
     "threads_per_engine": "threadsPerEngine",
@@ -521,30 +338,9 @@ LOCATION_SETTINGS = {
 def update_location(client, harbor_id, **settings):
     """Change a location's concurrency settings, and report what actually took.
 
-    The case this exists for: the location and its agent were set up, a test
-    was planned against 500 virtual users per engine, and the real figure turns
-    out to be 1,000. That is a change to the *location*, not to the bundle --
-    none of these four values appears in a manifest, so nothing has to be
-    regenerated, re-applied or restarted for a new one to take effect on the
-    next test start.
-
-    **Reads back rather than trusting the write.** The answer names, per field,
-    what it was, what was asked for and what the location says afterwards --
-    because this API has already been caught accepting a field and not storing
-    it: `create_private_location` sends threadsPerEngine to POST, which ignores
-    it, and the location comes back null and 403s every test start. A UI that
-    reported the request as the outcome would show the number the user typed
-    while the account held something else, which is the same failure wearing a
-    tick. `ignored` is what came back unchanged.
-
-    Unknown settings are refused rather than passed through: a typo in a field
-    name would otherwise be a silent no-op that this function then reported as
-    "nothing changed", which reads as the account rejecting a legitimate value.
-
-    `None` means "leave this one alone", so there is deliberately no way to
-    *clear* a setting here -- an override that has been set can be changed but
-    not unset. Clearing one is a different intent from not mentioning it, and
-    collapsing the two is how a partial update wipes a field nobody named.
+    The location is re-read after the write: `before`/`after` per field, and
+    `ignored` for what BlazeMeter accepted without storing. None means "leave
+    alone", so nothing can be cleared. Unknown settings are refused.
     """
     unknown = sorted(set(settings) - set(LOCATION_SETTINGS))
     if unknown:
@@ -555,20 +351,11 @@ def update_location(client, harbor_id, **settings):
             f"anything else are BlazeMeter's own UI")
     wanted = {k: v for k, v in settings.items() if v is not None}
     before = _upstream(client.private_location, harbor_id)
-    # Snapshotted here, not after the write. Reading the four values out of
-    # `before` further down would be right only for as long as the client hands
-    # back a document nothing else holds a reference to -- and "what it was" is
-    # the one thing that cannot be re-derived once the PATCH has landed.
     was = _settings_of(before)
     if not wanted:
-        # Not an error: a form submitted with nothing changed is a no-op, and
-        # answering with the location keeps one shape for every caller.
         return {"location": before, "changed": {}, "ignored": [],
                 "before": was, "after": dict(was)}
     _upstream(client.update_private_location, harbor_id, **wanted)
-    # A second GET rather than the PATCH's own body: the response to a write is
-    # what the write claimed, and what this has to report is what the account
-    # now holds.
     after = _upstream(client.private_location, harbor_id)
     now = _settings_of(after)
     changed = {k: now[k] for k in wanted if now[k] != was[k]}
@@ -582,65 +369,63 @@ def _settings_of(location):
     return {name: location.get(field) for name, field in LOCATION_SETTINGS.items()}
 
 
-def issue_auth_token(client, harbor_id, ship_id):
-    """Mint a new AUTH_TOKEN for an existing agent, and return it.
-
-    Named for the effect, like rotate_auth_token: the endpoint is a fetch and
-    what it does to an agent already running on the previous credential is
-    revoke it. Separated from resolve_auth_token's rotation branch because the
-    two answer different questions -- that one asks what a *bundle* should
-    carry, this one is a person deciding to replace a credential nobody kept,
-    with nothing generated yet.
-
-    The caller is expected to have said what it costs first; core does not
-    confirm, it performs.
-    """
-    return fetch_ship_token(client, harbor_id, ship_id)
-
-
 def gather_facts(client, harbor_id):
     return _upstream(facts_mod.gather, client, harbor_id)
 
 
-def manual_facts(harbor_id=None, ship_id=None, func_ids=("performance",)):
-    """Facts from the three values BlazeMeter shows on the agent, with no API
-    key involved -- the case where you are producing manifests for a customer's
-    cluster and have access to neither their account nor their cluster.
+def manual_facts(harbor_id=None, ship_id=None, func_ids=api.DEFAULT_FUNC_IDS):
+    """Facts from ids read off the BlazeMeter UI, with no API key.
 
-    Takes no client on purpose: requiring one here would defeat the point. It
-    reads nothing and writes nothing; it only fills in the shape `gather` would
-    have returned.
-
-    The ids are not validated. There is nothing here to validate them against,
-    and a guess at their format would reject input that is correct.
-
-    Neither is required. A customer who wants the manifests before their private
-    location exists has no id to give, and blank is answered with the marker for
-    that field rather than with a refusal -- see facts.manual, which is where
-    that argument lives.
+    Neither id is required or validated: a blank one becomes its marker (see
+    facts.manual), for a location that does not exist yet.
     """
     facts = facts_mod.manual(harbor_id, ship_id, func_ids=list(func_ids))
     return {"facts": facts,
-            # Carried rather than left for the caller to notice -- see
-            # facts.gui_images_incomplete for what it means.
             "gui_images_incomplete": facts_mod.gui_images_incomplete(facts)}
 
 
-# How stale a heartbeat may be and still count as online. Two poll intervals of
-# the agent's own reporting: one missed beat is a slow network, two is an agent
-# that has stopped.
+def facts_warnings(facts):
+    """What these facts cannot tell a bundle, as sentences for whoever made them.
+
+    A refused image list (the images are the catalogue's), a GUI location with
+    no browser image, and ids left blank (the bundle carries markers).
+    """
+    out = []
+    if facts_mod.image_list_state(facts) == facts_mod.IMAGE_LIST_UNREAD:
+        out.append(
+            f"the location's own image list could not be read "
+            f"({facts['image_list']['detail']}), so the images are the fallback "
+            f"catalogue's rather than this location's. Versions may be wrong "
+            f"and browser images are missing.")
+    if facts_mod.gui_images_incomplete(facts):
+        out.append(
+            "this location runs GUI/browser tests, and these facts carry no "
+            "version-pinned browser image (charmander/chrome_*, firefox_*, ...). "
+            "The account names the pinned build: gather facts with an API key, "
+            "or add the key to IMAGE_OVERRIDES by hand. Fine against the public "
+            "registry; against a private one the browser engines fail to pull.")
+    blank = [f"{k} ({gen_mod.marker(k)})" for k, v in
+             (("harbor_id", facts.get("harbor_id")),
+              ("ship_id", sole_ship_id(facts))) if gen_mod.is_placeholder(v)]
+    if blank:
+        out.append(
+            f"{' and '.join(blank)} left blank, so every bundle generated from "
+            f"these facts carries the marker instead. The cluster refuses it -- "
+            f"a marker is not a legal label value -- so the bundle is for "
+            f"review until the ids are filled in, or the facts re-made once the "
+            f"location exists.")
+    return out
+
+
+# A heartbeat counts as fresh for two of the agent's reporting intervals.
 HEARTBEAT_FRESH_S = 120
 ONLINE_STATES = ("idle", "running")
 
 
 def ship_reporting(ship):
-    """Whether one ship is reporting now -- or None where the payload cannot say.
+    """Whether one ship is reporting now, or None where the payload cannot say.
 
-    None is not "no". A locations *listing* is not the same read as a single
-    location, and a payload that never carried `lastHeartBeat` is no evidence
-    that an agent has stopped: answering False there would have a session
-    redeploy an agent that is working. Present-and-stale is False; absent is
-    unknown, and the caller has to go and ask.
+    A listing payload may omit `lastHeartBeat`; absent is unknown, not "no".
     """
     if "lastHeartBeat" not in ship:
         return None
@@ -649,13 +434,20 @@ def ship_reporting(ship):
                 and ship.get("state") in ONLINE_STATES)
 
 
-def agent_status(client, harbor_id, ship_id):
-    """Is this agent actually reporting, as opposed to merely remembered?
+def reporting_counts(ships):
+    """{agents_reporting, agents_unknown} over a location's ships.
 
-    `state` alone would read as healthy forever: an agent that stops reporting
-    keeps whatever state it last had, so the heartbeat is what separates a live
-    agent from a record of one.
+    Reporting counts only agents the payload vouches for; unknown counts those
+    it says nothing about, so a zero can be read as looked-and-none or not.
     """
+    states = [ship_reporting(s) for s in ships or ()]
+    return {"agents_reporting": sum(1 for r in states if r),
+            "agents_unknown": sum(1 for r in states if r is None)}
+
+
+def agent_status(client, harbor_id, ship_id):
+    """Is this agent reporting now (a fresh heartbeat, not just a state)?
+    `heartbeat_age_s` is None if it never reported, a number if it went quiet."""
     harbor = _upstream(client.private_location, harbor_id)
     ship = next((s for s in harbor.get("ships", []) if s["id"] == ship_id), None)
     if not ship:
@@ -663,37 +455,14 @@ def agent_status(client, harbor_id, ship_id):
     hb = ship.get("lastHeartBeat") or 0
     return {
         "state": ship.get("state"),
-        # None, not a huge number: an agent that has never reported is a
-        # different thing from one that reported a long time ago, and the two
-        # want different next steps.
         "heartbeat_age_s": int(time.time() - hb) if hb else None,
         "installed_version": ship.get("installedVersion"),
-        # A bool, and it does not carry the third case on its own: an agent that
-        # has never reported answers False here exactly as one that went quiet
-        # does. `heartbeat_age_s` above is what separates them -- null for the
-        # first, a number for the second -- and it is the pair a caller reads,
-        # which is why the two get different `next` steps and why a test pins
-        # that rather than this comment promising it. Not widened to null:
-        # `online` is a boolean in the web API's own contract, and squeezing
-        # "unknown" into it would break a consumer that already branches on it.
         "online": bool(ship_reporting(ship)),
     }
 
 
 # -- the agent credential ------------------------------------------------------
 
-# The way forward when the fetch cannot happen at all. Worth stating in the
-# refusal rather than left to the reader: BlazeMeter shows the token on the agent
-# itself, and a bundle built with one supplied fetches nothing (token_ship_id
-# returns None), so a closed endpoint stops nothing except the convenience.
-#
-# There is one sentence for this and it is token_recovery_hint, below. There were
-# two, and `resolve_auth_token` used one in its no-client branch and the other
-# everywhere else -- so which sources a caller was told about depended on which
-# way the same function had failed. The refusal path was the worse of the two: it
-# named the BlazeMeter UI and not the agent already deployed, which is the one
-# source needing no account access, and an account that just refused the endpoint
-# is exactly the thing the caller cannot rely on.
 TOKEN_CANNOT_BE_FETCHED = (
     "The AUTH_TOKEN can be supplied instead of fetched, and a bundle built with "
     "one supplied fetches nothing, so a closed endpoint costs only the "
@@ -701,20 +470,8 @@ TOKEN_CANNOT_BE_FETCHED = (
 
 
 def fetch_ship_token(client, harbor_id, ship_id):
-    """The ship's AUTH_TOKEN, or a refusal that says what to do without one.
-
-    The single place the token endpoint is called, because what is interesting
-    about it is the failure. Some accounts refuse /docker-command outright --
-    observed as `HTTP 403 {"message": "Forbidden: Should access from Private-Data
-    gateway"}` -- and through the generic upstream wrapper that body was the
-    whole message: it names no ship, does not distinguish the credential fetch
-    failing from the operation the caller asked for being wrong, and offers
-    nothing to do next, so an MCP session that hit it could not get past it.
-
-    The body still travels, in the message and on `.upstream`. It is the only
-    clue that the account is configured this way deliberately, and a refusal
-    that hid it would just be a differently-unhelpful message.
-    """
+    """Issue the ship's AUTH_TOKEN (revoking the previous one) and return it.
+    Some accounts refuse the endpoint outright; the refusal names the way on."""
     try:
         return client.auth_token(harbor_id, ship_id)
     except api.BzmApiError as e:
@@ -731,47 +488,23 @@ def fetch_ship_token(client, harbor_id, ship_id):
 # -- generating a bundle -------------------------------------------------------
 
 def sole_ship_id(facts, explicit=None):
-    """The ship an operation is about, when the caller did not name one.
-
-    None means "say which", never "the first one": a location with two agents
-    has no default, and every caller of this does something to the ship it gets
-    back -- fetch its token, deploy against it, watch it -- so picking one by
-    position acts on an agent nobody mentioned. Three call sites had their own
-    copy of this, which agreed, which is the only reason it was not a bug.
-    """
+    """The ship an operation is about: `explicit`, else the only ship, else
+    None. A location with two agents has no default."""
     ships = facts.get("ships") or []
     return explicit or (ships[0]["id"] if len(ships) == 1 else None)
 
 
 def token_ship_id(facts, options):
-    """Which ship an AUTH_TOKEN would be *rotated* for, or None for no rotation.
-
-    Minting a token rotates it -- the previous one stops working, and whatever
-    agent holds it sits at 0/1 Running -- so this adds one clause to
-    sole_ship_id: a token already in the options is the caller's, and must never
-    be replaced by a fresh one that breaks their running agent.
-
-    Where the ship is ambiguous nothing is minted; resolve_auth_token refuses
-    the ambiguity by name when a rotation was actually asked for, and otherwise
-    generate() refuses it, with a sentence naming both ships.
-    """
+    """Which ship an AUTH_TOKEN would be rotated for, or None. A token already
+    in the options is the caller's and is never replaced."""
     if options.get("auth_token"):
         return None
     return sole_ship_id(facts, options.get("ship_id"))
 
 
 def rotate_auth_token(client, facts, options):
-    """Put a freshly-minted AUTH_TOKEN into `options`, if one is wanted.
-
-    Returns the ship it was minted for, or None if nothing was -- which is what
-    a caller that wants to say so out loud needs, and is why the call is here
-    rather than inlined into the resolution. It mutates `options`, because every
-    caller's next move is to render from them.
-
-    Named for what it does to the account rather than for the HTTP verb: the
-    endpoint is a fetch and the effect is a rotation, and it was the verb that
-    made `fetch_token=True` read like a harmless default for years.
-    """
+    """Mint a fresh AUTH_TOKEN into `options` (mutated) if one is wanted, and
+    return the ship it was minted for, or None."""
     ship_id = token_ship_id(facts, options)
     if ship_id:
         options["auth_token"] = fetch_ship_token(client, facts["harbor_id"],
@@ -779,41 +512,21 @@ def rotate_auth_token(client, facts, options):
     return ship_id
 
 
-# Which of the four ways a bundle's AUTH_TOKEN arrived. Named, and reported, so
-# that every caller can say which happened without restating the rule: the four
-# have wildly different consequences for an agent that is already running, and
-# the one that revokes its credential used to be the default and to say nothing
-# at all (the MCP surface answered `warnings: []`).
+# Which of four ways a bundle's AUTH_TOKEN arrived. Every caller reports it,
+# because the four differ in what happens to an agent already running.
 TOKEN_GIVEN = "given"
 TOKEN_ROTATED = "rotated"
 TOKEN_REUSED = "reused"
 TOKEN_PLACEHOLDER = "placeholder"
 
-# `message` is always a sentence for whoever asked -- there is no branch worth
-# taking silently. `ship_id` is the ship the token belongs to where that is
-# known, following rotate_auth_token's precedent of handing the ship back for a
-# caller that wants to name it (an affordance that existed and was discarded by
-# both callers, which is how a rotation got reported as `warnings: []`).
-#
-# Serialisable as it stands -- `_asdict()` is what both transports answer with,
-# rather than either of them listing the three fields again. All three are safe
-# to put in a response: none of the four messages carries a token value, which is
-# the only reason this can be a response field at all, and a transport composing
-# its own summary from `branch` would be a second copy of the rule above in
-# whatever language it was written in.
+# `message` is a sentence for whoever asked; `ship_id` is the token's ship where
+# known. No field ever carries the token value, so `_asdict()` is safe to return.
 TokenSource = collections.namedtuple("TokenSource", "branch ship_id message")
 
 
 def rotation_warning(ship_id):
-    """What a rotation is about to do, for a caller to say *before* it happens.
-
-    Before, because afterwards this is a post-mortem: the credential is already
-    dead and the pod is already broken. And it has to be said at all because the
-    failure is silent at every layer -- crane answers a dead token with 404 on
-    /versions, logs `Sleeping for 300` and never starts its health service, so
-    the pod sits `0/1 Running` and reads as a slow boot rather than as a revoked
-    credential. That cost a live debugging session.
-    """
+    """What a rotation is about to do, to say before it happens: an agent on a
+    dead token sits `0/1 Running`, which looks like a slow boot."""
     return (
         f"ROTATING the AUTH_TOKEN for ship {ship_id}: BlazeMeter issues a new "
         f"one and the previous one stops working immediately. Any agent already "
@@ -823,22 +536,9 @@ def rotation_warning(ship_id):
 
 
 def token_recovery_hint(options=None):
-    """Where a real AUTH_TOKEN comes from, for a bundle that has no token.
-
-    Two sources, and neither of them is this tool going and getting one: what
-    `create-agent` printed when the agent was made -- the durable copy, and the
-    reason that command prints it -- or the Secret of an agent already running.
-    The kubectl for the second is *named*, never run: nothing in this package
-    reads a cluster to build a bundle, and the person at the terminal is the one
-    who can see what their own cluster answers.
-    """
+    """Where a real AUTH_TOKEN comes from, in words every surface can show."""
     o = options or {}
     ns = o.get("namespace") or gen_mod.DEFAULT_OPTIONS["namespace"]
-    # Named in every register, because this sentence is not the CLI's: the web UI
-    # renders it verbatim under the download button and an MCP session quotes it
-    # back. A tail that said only `--auth-token` told a browser to type a flag it
-    # has no prompt for -- so the *option* leads, and each surface's own spelling
-    # of it follows in brackets.
     return (
         f"A real one comes from what was shown when the agent was created "
         f"(`create-agent` prints it; the web page puts it in the field) -- keep "
@@ -855,58 +555,33 @@ def token_recovery_hint(options=None):
 
 
 def _bundle_ship_id(out_dir):
-    """Which ship the bundle in `out_dir` was generated for, or None.
-
-    Absent and unreadable collapse into None here, deliberately: both mean the
-    ship cannot be *confirmed*, and the remedy for both is the same -- do not
-    reuse that directory's token. What must stay apart, and does, is either of
-    those from a ship id that is present and different, which is the value
-    itself and gets a refusal naming both ships.
-    """
+    """Which ship the bundle in `out_dir` was generated for, or None where that
+    cannot be confirmed (no profile, or one that does not parse)."""
     try:
         return gen_mod.load_profile(out_dir).get("ship_id") or None
     except (OSError, ValueError):
-        # FileNotFoundError for a directory no generate has written, ValueError
-        # for a profile.json that will not parse.
         return None
 
 
 def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
                        announce=None):
-    """Put the AUTH_TOKEN into `options`, and say which of four ways it arrived.
+    """Put the AUTH_TOKEN into `options` (mutated), and say how it arrived.
 
-    The one copy of #64's rule, in precedence order:
+    Precedence:
+      1. a token already in the options wins, and nothing is issued;
+      2. `rotate` mints a new one (needs `client`) -- the only branch that does;
+      3. otherwise a bundle in `out_dir` for the same ship lends its token;
+         a bundle there for another (or an unknown) ship is refused, because
+         overwriting it would lose a credential BlazeMeter cannot return;
+      4. otherwise the placeholder stays, with where a real token comes from.
 
-      1. a token already in the options wins outright -- it is the caller's, and
-         replacing it is what broke running agents;
-      2. `rotate` mints a new one, and is the only thing here that does;
-      3. otherwise the token already written into `out_dir` is reused, but only
-         if that bundle names the same ship;
-      4. otherwise the placeholder stays, with a message saying where a real
-         token comes from.
-
-    `announce` is called with `rotation_warning(...)` immediately before the
-    mint. A parameter rather than something each caller remembers to do first,
-    because the ordering is the whole value of the warning and only this
-    function knows when the call is about to happen. A caller with nowhere to say
-    it -- JSON-RPC, where stdout is the protocol -- leaves it unset and reports
-    `.message` afterwards.
-
-    Idempotent: resolving twice takes branch 1 the second time, which is what
-    lets a caller that wants the report resolve here and still hand the options
-    to generate_bundle.
-
-    `out_dir` need not exist and need not be absolute -- it is read, not
-    written; write_bundle is where the absolute-path rule belongs.
+    `announce` is called with `rotation_warning(...)` just before a mint.
+    Idempotent: a second call takes branch 1. `out_dir` is only read here.
     """
     placeholder = gen_mod.DEFAULT_OPTIONS["auth_token"]
     held = options.get("auth_token")
     if held and held != placeholder:
-        # A rotation asked for *alongside* a token is a contradiction with one
-        # safe reading, so it is answered rather than refused: minting and then
-        # writing the supplied value over it would kill the agent holding the
-        # supplied one and put nothing usable in the bundle. Said out loud,
-        # because a flag that was quietly dropped is the shape of this whole bug.
+        # Rotating alongside a supplied token would revoke the one supplied.
         ignored = (" --rotate-token was NOT acted on: rotating would have "
                    "revoked the very token you passed." if rotate else "")
         return TokenSource(TOKEN_GIVEN, sole_ship_id(facts,
@@ -952,20 +627,6 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
                 f"nothing was issued, so this bundle is byte-identical to the "
                 f"last one and the agent running from it is unaffected.")
         if found:
-            # Refused, not warned. Reusing across ships would write another
-            # agent's credential into this bundle -- but simply declining to
-            # reuse is not enough, because the next thing that happens is
-            # write_bundle overwriting this directory, and the API only ever
-            # mints: that bundle was the only copy of that token outside a
-            # running cluster. So carrying on with a warning trades one silent
-            # 0/1 for a credential nothing can get back, which is worse. The
-            # escape is to say what *this* bundle's token is -- a supplied or
-            # rotated token never reads the directory at all -- so replacing
-            # another ship's bundle stays available to whoever means it.
-            # Three ways to get here, and each names what is actually unknown.
-            # `want` is None when the location has several agents and none was
-            # named -- reporting that as "not None" invents a ship and buries the
-            # remedy, which is to say which one this bundle is for.
             if theirs and not want:
                 named = (f"a bundle for ship {theirs}, and nothing here says "
                          f"which ship the new one is for -- this location has "
@@ -995,41 +656,46 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
         f"as it stands. {token_recovery_hint(options)}")
 
 
+# What build_bundle returns: the files, how the token arrived, and what was
+# written ([{name, bytes}], or None when nothing was).
+Bundle = collections.namedtuple("Bundle", "files token written")
+
+
+def build_bundle(facts, options=None, *, client=None, rotate=False,
+                 out_dir=None, write=False, announce=None):
+    """Resolve the AUTH_TOKEN, render the bundle, and optionally write it.
+
+    With `write`, the absolute-path check on `out_dir` runs before any mint.
+    `client` is needed only for `rotate`; `options` is not mutated.
+    """
+    if write:
+        if not out_dir:
+            raise BadRequest("out_dir is required to write a bundle")
+        require_absolute_out_dir(out_dir)
+    opts = dict(options or {})
+    source = resolve_auth_token(facts, opts, client=client, rotate=rotate,
+                                out_dir=out_dir, announce=announce)
+    try:
+        files = gen_mod.generate(facts, opts)
+    except (ValueError, KeyError) as e:
+        # generate()'s refusals are sentences for whoever set the option. A
+        # rotation that already happened must not be lost with them.
+        tail = f" ({source.message})" if source.branch == TOKEN_ROTATED else ""
+        raise BadRequest(f"{e}{tail}")
+    written = write_bundle(files, out_dir) if write else None
+    return Bundle(files, source, written)
+
+
 def generate_bundle(facts, options=None, client=None, rotate_token=False,
                     out_dir=None):
-    """The manifests, as {name: content}.
-
-    `client=None` is a first-class case, not a degraded one: the manual-entry
-    path has no account to ask, and holding a client is no longer permission to
-    mint -- `rotate_token=True` is, and it is the caller saying "replace the
-    credential of whatever is running", which is why it defaults to off.
-
-    `out_dir` is where the bundle is about to be written, and is read for the
-    token its predecessor holds. A caller that wants to report which branch the
-    resolution took calls resolve_auth_token itself and passes the options on;
-    doing both is harmless, since a resolved token wins outright the second time.
-    """
-    opts = dict(options or {})
-    resolve_auth_token(facts, opts, client=client, rotate=rotate_token,
-                       out_dir=out_dir)
-    try:
-        return gen_mod.generate(facts, opts)
-    except (ValueError, KeyError) as e:
-        # Every refusal generate() makes is a sentence written for the person
-        # who set the option, so it travels as-is rather than being summarised.
-        raise BadRequest(str(e))
+    """The manifests, as {name: content}. See build_bundle."""
+    return build_bundle(facts, options, client=client, rotate=rotate_token,
+                        out_dir=out_dir).files
 
 
 def preview_order(files):
-    """Which file to read first, and the rest after it.
-
-    A generator decision, not a presentation one -- a helm bundle leads with
-    the values overlay because it is the only file in a chart that came from
-    the account -- so it is offered here rather than left for each caller to
-    remember to reach past core for. A `def` rather than
-    `preview_order = gen_mod.preview_order`, because an alias is a second name
-    that stops tracking the first one the moment anything replaces it.
-    """
+    """Which file to read first, and the rest after it (a helm bundle leads
+    with its values overlay)."""
     return gen_mod.preview_order(files)
 
 
@@ -1037,11 +703,8 @@ ZIP_PREFIX = "bzm-opl"
 
 
 def zip_bundle(files, prefix):
-    """`prefix` is `zip_stem(options)`, and has no default on purpose: a
-    default is what let the archive and the folder inside it drift apart."""
+    """The bundle as a zip whose entries sit under `prefix/` (use zip_stem)."""
     buf = io.BytesIO()
-    # Names may carry directories (the helm format emits a chart), which zip
-    # stores as-is -- the slash is the path separator in the archive too.
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for name in preview_order(files):
             info = zipfile.ZipInfo(f"{prefix}/{name}")
@@ -1052,13 +715,8 @@ def zip_bundle(files, prefix):
 
 
 def zip_stem(options):
-    """The one name a downloaded bundle has -- the archive's and the directory
-    it extracts to, which are the same string or the download is one name and
-    the folder another (two bundles for two locations both extracting to
-    `bzm-opl/`, the second silently merging into the first). A blank namespace
-    falls back rather than producing `bzm-opl-`, and the placeholder marker's
-    angle brackets are dropped: no extractor on Windows will write a directory
-    carrying them, and the bundle names the field anyway."""
+    """`bzm-opl-<namespace>`: the archive's name and its top directory, with
+    characters an extractor may refuse (a marker's brackets) dropped."""
     ns = (options or {}).get("namespace") or "blazemeter"
     ns = re.sub(r"[^A-Za-z0-9._-]", "", ns) or "blazemeter"
     return f"{ZIP_PREFIX}-{ns}"
@@ -1069,19 +727,8 @@ def zip_filename(options):
 
 
 def require_absolute_out_dir(out_dir):
-    """Refuse a relative bundle directory, and say why it cannot be one.
-
-    Absolute paths only. Every caller of this but a shell is somewhere it did
-    not choose -- a server's working directory is whatever launched it -- so a
-    relative path resolves against a directory nobody named, and the files turn
-    up somewhere the caller then cannot describe.
-
-    Reachable on its own, and not only from write_bundle, because a caller that
-    might *rotate* the AUTH_TOKEN has to fail this before it mints: the refusal
-    used to arrive at the write, by which point a running agent's credential had
-    already been revoked over a mistake in an argument that has nothing to do
-    with the credential. One copy of the rule, two moments it can be applied.
-    """
+    """Refuse a relative bundle directory: a server's working directory is
+    whatever launched it, not anywhere the caller chose."""
     if not os.path.isabs(out_dir):
         raise BadRequest(
             f"out_dir must be an absolute path, not {out_dir!r} -- a relative "
@@ -1091,21 +738,14 @@ def require_absolute_out_dir(out_dir):
 
 
 def write_bundle(files, out_dir):
-    """Write a generated bundle to `out_dir`, and say what landed where.
-
-    Returns [{name, bytes}] rather than the content: a bundle is ~40KB of YAML
-    with a CA bundle sometimes far larger, and a caller that wanted to read one
-    file should read that one file.
-    """
+    """Write a bundle to an absolute `out_dir`; returns [{name, bytes}]."""
     require_absolute_out_dir(out_dir)
     gen_mod.write(files, out_dir)
     return [{"name": n, "bytes": len(files[n].encode())} for n in preview_order(files)]
 
 
-# Matched by field name rather than by value, because a reader has no idea what
-# the value is. The names come from generate.TOKEN_FIELDS -- the module that
-# writes them -- rather than being restated here, which is how the reader and
-# the redactor came to know different sets in the first place.
+# Matched by field name, since a reader does not know the value. The names come
+# from the module that writes them.
 _TOKEN_FIELDS = re.compile(
     r'^(?P<lead>\s*(?:' + "|".join(gen_mod.TOKEN_FIELDS) +
     r')\s*:\s*)(?P<quote>["\']?)(?P<value>.+?)(?P=quote)\s*$', re.M)
@@ -1113,27 +753,13 @@ REDACTED = "<redacted -- opl_location reveal_token>"
 
 
 def redact_tokens(text):
-    """Blank out any AUTH_TOKEN a bundle file carries, and say how many.
-
-    For readers that hand a whole file to somebody: the point of keeping the
-    token out of responses is that responses are transcribed and quoted back,
-    and that is no less true of one fetched by name. What a reader actually
-    wants from the Secret is that it is there and shaped right, which survives
-    redaction; the value itself has a call of its own that says out loud that
-    asking for it rotates it.
-    """
+    """Blank any AUTH_TOKEN a bundle file carries; returns (text, count)."""
     return _TOKEN_FIELDS.subn(lambda m: f"{m.group('lead')}\"{REDACTED}\"", text)
 
 
 def read_bundle_file(out_dir, name):
-    """One file out of a written bundle, by the name write_bundle reported.
-
-    The name is joined and then checked to be inside `out_dir`, because it
-    arrives from outside: `../../.ssh/id_rsa` is a name too, and this would
-    otherwise be a general-purpose file reader with a bundle-shaped argument.
-    Checked after normalising rather than by scanning for "..", which misses
-    symlinks and absolute names.
-    """
+    """One file of a written bundle. `name` comes from outside, so the resolved
+    path (symlinks included) must stay inside `out_dir`."""
     if not os.path.isabs(out_dir):
         raise BadRequest(f"out_dir must be an absolute path, not {out_dir!r}")
     root = os.path.realpath(out_dir)
@@ -1150,24 +776,10 @@ def read_bundle_file(out_dir, name):
 
 
 def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
-    """Pull each image and, with `mirror`, push it under that prefix.
+    """Pull each image and, with `mirror`, tag and push it under that prefix.
 
-    The push is why this is not a read: it writes to somebody's registry. The
-    pull is not free either -- BlazeMeter images are amd64-only and large, and
-    `platform` is explicit because on an arm64 host docker will otherwise pick
-    a manifest that does not exist and fail halfway through the set.
-
-    Returns what it ran, so a dry run is a plan somebody can read and then run
-    by hand -- which is what the bundle's own mirror script is for.
-
-    The destinations are the **Kubernetes** ones (#234): crane composes an
-    engine's reference from DOCKER_REGISTRY and the image's repo path rather
-    than reading IMAGE_OVERRIDES, so a mirror that drops the path pushes where
-    nothing looks. This is handed references and not facts, so it cannot build
-    docker's composed names -- those come from the crane *key*, which a
-    reference does not carry -- and a docker agent's mirror is the bundle's own
-    `bzm-opl-image-mirror.sh`. Crane's own image keeps the short form, which is
-    the reference every bundle writes into its Deployment, chart or run script.
+    Returns the commands (a dry run is a readable plan). Targets are the names
+    a Kubernetes agent composes from DOCKER_REGISTRY and the repo path.
     """
     ran = []
     for ref in refs:
@@ -1195,8 +807,7 @@ def _docker(args, dry_run):
 
 
 def bundle_images(facts, all_images=False):
-    """Every image reference this location's bundle will pull. See
-    facts.image_refs, which is where the crane-first rule lives."""
+    """Every image reference this location's bundle will pull (crane first)."""
     return facts_mod.image_refs(facts, all_images=all_images)
 
 
@@ -1205,31 +816,15 @@ def bundle_images(facts, all_images=False):
 def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
                   engine_mem=None, engines_per_node=None, agents=None,
                   sizings=None):
-    """What a load target needs, as numbers and as a document to request it with.
-
-    The only thing here that reaches nothing at all -- no key, no account, no
-    cluster, no evidence file. That is deliberate and it is the whole case:
-    this is used *before* there is an account to connect to or a cluster to
-    preflight, by somebody who has to raise a ticket for the infrastructure the
-    rest of this tool assumes. Putting it behind a credential would put the
-    first step behind the last one.
-
-    The document comes back with the numbers rather than from a second call.
-    Both describe one plan, and two round trips is two answers that can end up
-    describing different ones -- the same reason preflight() returns its
-    suggestions alongside its verdicts.
-    """
+    """What a sizing needs, as numbers plus `document`, a request to hand to
+    whoever provisions the cluster. Needs no key, account or cluster."""
     try:
-        # Blanks are forwarded as they arrive: what "not given" defaults to is
-        # plan's, and restating it here was a second copy that could drift.
         p = plan.capacity_plan(
             users, vus_per_engine=vus_per_engine,
             engine_cpu=engine_cpu, engine_mem=engine_mem,
             engines_per_node=engines_per_node, agents=agents,
             sizings=sizings)
     except ValueError as e:
-        # Every one of these is the caller's number rather than a failure here,
-        # and each names the field it is about. 400, not 500.
         raise BadRequest(str(e))
     return dict(p,
                 document=plan.plan_document(p),
@@ -1237,24 +832,8 @@ def capacity_plan(users=None, vus_per_engine=None, engine_cpu=None,
 
 
 def sizing_models():
-    """What each covered functionality is sized in, for the card that asks.
-
-    `plan.SIZING_MODELS` with BlazeMeter's own label joined on. The join is here
-    and not there because `plan` reaches nothing -- including this module -- so
-    it carries prose of its own rather than the account's display names, and a
-    surface that shows a card next to a location's settings wants the words the
-    location's settings use.
-
-    Served for the reason `functionalities()` is: the page renders a field per
-    model, and a fourth model has to reach it by being added to the table rather
-    than by an edit in TypeScript.
-
-    `measured` is the whole point of the list on the page. False means no figure
-    for that unit has ever been measured here, so there is no per-pod box to
-    offer and nothing to default -- which is a different answer from a figure
-    the caller has not supplied yet, and the two must not share a control any
-    more than they share a value.
-    """
+    """What each covered functionality is sized in. `measured` False means no
+    per-pod figure exists for that unit at all."""
     labels = covered_func_ids()
     return [{"functionality": fid,
              "label": labels.get(fid, m["name"]),
@@ -1264,35 +843,13 @@ def sizing_models():
              "figure_unit": m["figure_unit"],
              "measured": m["baseline"] is not None,
              "pods": m["pods"],
-             # A sizing to offer before anybody has typed one. Served rather
-             # than written on the page for the reason the units are: a fourth
-             # model has to arrive with an example of its own, and a number
-             # invented in TypeScript for a unit it has just been told about is
-             # a recommendation nobody made.
              "example_target": m["example_target"]}
             for fid, m in plan.SIZING_MODELS.items()]
 
 
 def engine_vus(engine_cpu=None, engine_mem=None):
-    """What a pod of this size is rated for, in each model's own unit.
-
-    The same ratios capacity_plan assumes from and doctor judges against, asked
-    on their own so a form can *suggest* the figure beside the field rather than
-    leaving "virtual users per engine" as a number the user has to know. 500 is
-    only right for the 2 CPU / 8Gi engine, which is exactly the mistake the
-    planner's own default used to make.
-
-    `rated` is per functionality, and **None** where that model has no measured
-    per-pod figure -- which is service virtualization, and is why the card can
-    render this answer beside any model rather than branching on which one is
-    performance. The card did branch, having only the one number to render, so
-    a GUI Functional field said "blank uses what a pod of this size is rated
-    for" about a figure this route could already have given it.
-
-    `supported_vus` stays beside it: it is the performance model under the name
-    `doctor` and `threadsPerEngine` call it by, which is a different question
-    from "what may this field suggest".
-    """
+    """What a pod of this size is rated for, per model (`rated`, None where
+    unmeasured); `supported_vus` is the performance figure."""
     try:
         cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
                                         "engine_mem_limit": engine_mem})
@@ -1306,30 +863,13 @@ def engine_vus(engine_cpu=None, engine_mem=None):
 
 
 def account_capacity(client, account_id):
-    """Rated virtual-user capacity across an account, by workspace.
+    """Rated virtual-user capacity across an account, per location.
 
-    "Rated", not "allowed", and the distinction was measured rather than
-    assumed. A live run settled two halves of it on a location with 2 agents,
-    slots=1 and threadsPerEngine=50:
-
-      * `agents x slots` is the **engine** count, and it is enforced -- asking
-        for 3 engines allocated 2, and a start while those 2 are busy is
-        refused with 403 "Not enough available resources".
-      * `x threadsPerEngine` is what those engines are *sized* for, and is not
-        a gate: 101 virtual users started happily, packed onto the same 2
-        engines. So this number is what the location is built to serve well,
-        not a ceiling BlazeMeter enforces.
-
-    A location in several workspaces is *shared*: its capacity is claimable
-    from either, so adding it into both workspace totals counts engines that
-    cannot run twice. It is flagged, and the account total counts it once --
-    which is why the account figure is not the sum of the workspace figures.
+    `agents x slots` engines (enforced) `x threadsPerEngine` (sized for, not
+    enforced). `rated_vus` is None where a field is unset; a `shared` location
+    counts once in the account total.
     """
-    # Both at once: they are independent reads and the locations one is the
-    # slow half (1.3s on a 171-location account), so in series the workspace
-    # names were pure added wait on every cold view. Threads rather than async
-    # because the client is stdlib urllib and every caller here is synchronous
-    # -- and because two of them is the whole concurrency this needs.
+    # The two reads are independent and the locations one is slow.
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         want_locs = pool.submit(_upstream, client.private_locations,
                                 account_id=account_id)
@@ -1346,21 +886,9 @@ def account_capacity(client, account_id):
             "id": l["id"], "name": l.get("name"),
             "func_ids": l.get("funcIds") or [],
             "agents": len(ships),
-            # Two counts, for the reason mcp_server's listing carries two: a
-            # locations *listing* need not carry `lastHeartBeat` at all, and
-            # `ship_reporting` answers None there rather than False. Folding
-            # that into "not reporting" would print "1 not reporting" about an
-            # agent nothing had looked at -- the collapse this package has made
-            # four times. Reporting is what the payload vouches for; unknown is
-            # what it declined to say.
-            "agents_reporting": sum(1 for s in ships if ship_reporting(s)),
-            "agents_unknown": sum(1 for s in ships
-                                  if ship_reporting(s) is None),
+            **reporting_counts(ships),
             "slots": slots, "threads_per_engine": tpe,
             "engines": engines,
-            # None, not 0: a location with slots or threadsPerEngine unset has
-            # no rating to state, and 0 would read as "no capacity" when the
-            # truth is "nobody has said".
             "rated_vus": engines * tpe if (slots and tpe) else None,
             "workspace_ids": ws,
             "workspace_names": [spaces.get(w, str(w)) for w in ws],
@@ -1376,66 +904,19 @@ def account_capacity(client, account_id):
 # -- preflight -----------------------------------------------------------------
 
 def evidence_document(evidence):
-    """The evidence document, from either a path to the collector's file or the
-    parsed contents of one.
-
-    A path is accepted for the same reason `api_key_file` is: what a customer
-    sends back is a *file*, and the caller most likely to be holding one is the
-    one furthest from a shell. Inlining it costs several KB of node lists and
-    permission maps travelling through a model to reach a check that only needed
-    somewhere to read them from (#77).
-
-    Whose call this is, is the transport's -- the MCP server passes what its
-    caller sent, because that caller shares this filesystem; the web UI does not
-    offer it, since a browser has already parsed the file it uploaded and a path
-    posted from one would be read on the machine serving the page. Same division
-    as api_key_file: the rule and the refusals live here, offering the argument
-    does not.
-
-    A string is always a path and never JSON text. Reading it as either would
-    make a mistyped path come back as a complaint about JSON syntax, and no
-    caller has the text without the object -- one that parsed it passes the
-    object.
-
-    Anything else travels on untouched, so a list, a number or a facts file's
-    contents is refused further down by the check that names what it found. Only
-    the read is decided here, which is why its failure has a type of its own.
-    """
+    """The evidence document from a path (a string is always a path) or the
+    parsed object, which passes through to be judged by the checks."""
     if not isinstance(evidence, str):
         return evidence
     try:
         return doctor.load_evidence(os.path.expanduser(evidence))
     except ValueError as e:
-        # Both of load_evidence's sentences -- no file there, and not JSON --
-        # mean nothing was read, so nothing can yet be said about whether what
-        # was named is evidence. That is the distinction this type carries.
         raise EvidenceUnreadable(str(e))
 
 
 def preflight_cluster(evidence, options=None, namespace=None):
-    """The cluster read a preflight works from, and the namespace it is about.
-
-    Two answers from one function because the second decides the first:
-    `cluster_from_evidence` is told which namespace is being preflighted so it
-    can report a file collected for a different one, rather than adopting it.
-
-    The precedence, and each step is somebody's input: a namespace asked for
-    outright (`doctor -n`, which the options cannot carry -- the bundle's
-    namespace is what it was *generated* for), then the configuration's, then
-    the one the evidence was collected for, then the documented default.
-
-    Reachable on its own, and not only from preflight(), because one caller
-    prints its own report: `doctor --cluster-evidence` runs doctor.run, which
-    writes to stdout, and core is not a terminal. That command restated this
-    precedence line for line, comment included, so a change to one rule was a
-    change to one of its two copies.
-
-    A falsy `evidence` is a run against a cluster this machine can reach, and
-    comes back as the empty Evidence -- which says exactly what doctor's own
-    defaults say: no cluster data, no probes, and no verdicts reached before
-    the checks ran. Not a refusal, and not a None the call site then has to
-    test three times over.
-    """
+    """(Evidence, namespace) for a preflight. Namespace precedence: argument,
+    options, the evidence's own, default. Falsy `evidence` is a live cluster."""
     options = options or {}
     doc_ns = (evidence.get(evidence_mod.NAMESPACE)
               if isinstance(evidence, dict) else None)
@@ -1446,69 +927,31 @@ def preflight_cluster(evidence, options=None, namespace=None):
     try:
         imported = doctor.cluster_from_evidence(evidence, want)
     except ValueError as e:
-        # Every way a file can be the wrong one is a sentence doctor already
-        # writes, and it carries no verdicts -- so whatever the caller was
-        # already showing stays on screen.
         raise BadRequest(str(e))
     return imported, doctor.resolve_namespace(want, options)
 
 
 def preflight(facts, options, evidence):
-    """The verdicts `doctor --cluster-evidence` prints, for one configuration.
-
-    Reaches nothing: no BlazeMeter account and no cluster. That is the whole
-    case it exists for -- the customer whose account and cluster are both out
-    of reach -- and it is why the imported evidence has to supply both the
-    cluster read and the probes, which is what stops doctor.evaluate looking
-    for a kubectl on this machine.
-
-    Everything the file carries beyond the cluster read -- when it was
-    collected, which namespace for, what the collector was refused -- arrives
-    as the leading Check rather than as a second field beside the verdicts,
-    because it qualifies every one of them.
-    """
+    """The verdicts `doctor --cluster-evidence` prints, plus the suggestions the
+    same file implies. Reaches no account and no cluster."""
     options = options or {}
     imported, namespace = preflight_cluster(evidence, options)
     try:
         checks = doctor.evaluate(facts, options, namespace, evidence=imported)
     except (ValueError, KeyError) as e:
-        # An engine limit that does not parse, say. This re-runs on every
-        # keystroke in those fields, so it answers the way generate does.
         raise BadRequest(str(e))
-    # What the same file implies about the options, and how each implication
-    # stands against the ones that were sent. Here rather than in a call of its
-    # own: it is one file judged against one configuration, both halves move on
-    # every option change, and two round trips is two answers that can end up
-    # describing different configurations in the same panel. Nothing is applied
-    # -- `state` says what applying would mean, and the choice is the caller's.
-    # It is reached through `suggestions_from_evidence` rather than called
-    # here: that is where a malformed file becomes a BadRequest, and a second
-    # call at this level answered the same question outside that guard.
     return {"namespace": namespace,
             **_verdicts(checks),
-            # The list in one sentence, in doctor's words -- the line the
-            # command prints under its report. A caller that renders a header
-            # rather than a report needs the same sentence, and composing it
-            # from the counts is where the rule for when to state the
-            # consequence gets decided a second time.
             "summary": doctor.summary_line(checks),
-            # The same facts the leading check states in prose, apart from it:
-            # a caller can put them in a header, where they cannot be read
-            # past. Which namespace the *file* describes is not `namespace`
-            # above -- that is the one being preflighted, and the difference is
-            # the point, so doctor is asked for it rather than left to a
-            # caller comparing the two fields.
+            # Which namespace the file describes, which may differ from the one
+            # being preflighted.
             "evidence": doctor.evidence_summary(evidence, namespace),
             **suggestions_from_evidence(evidence, options)}
 
 
 def suggestions_from_evidence(evidence, options=None):
-    """What a cluster's evidence implies about the generate options.
-
-    The other half of preflight(), asked on its own: `doctor` answers whether a
-    deployment survives this cluster, and this answers how it should have been
-    configured. Same file, different question, and nothing is applied.
-    """
+    """What a cluster's evidence implies about the generate options, each
+    merged against `options`. Nothing is applied."""
     try:
         suggestions = suggest_mod.from_evidence(evidence)
     except ValueError as e:
@@ -1520,12 +963,7 @@ def suggestions_from_evidence(evidence, options=None):
 
 
 def toolcheck(cluster=None, local_registry=None, local_proxy=False):
-    """The workstation preflight, for the rig flags you mean to pass.
-
-    Evaluates rather than runs, and answers rather than exits: `workstation.run`
-    prints its report, and core is not a terminal -- for the MCP server stdout
-    is the JSON-RPC channel. `ok` is the caller's to act on.
-    """
+    """The workstation preflight for the rig flags you mean to pass, as data."""
     checks = workstation.evaluate({"cluster": cluster,
                                    "local_registry": local_registry,
                                    "local_proxy": local_proxy})
@@ -1533,13 +971,7 @@ def toolcheck(cluster=None, local_registry=None, local_proxy=False):
 
 
 def _verdicts(checks):
-    """Checks as data, with the one summary every caller recomputes.
-
-    `ok` is not "no FAILs" spelled out at each call site: doctor's contract is
-    that a denied read is a WARN and only an answered one can FAIL, so a caller
-    that treated WARN as failure would report a locked-down cluster as a broken
-    one.
-    """
+    """Checks as data. `ok` means no FAIL; a WARN (a denied read) is not one."""
     return {"checks": [c._asdict() for c in checks],
             "ok": not doctor.has_failures(checks)}
 
@@ -1547,13 +979,8 @@ def _verdicts(checks):
 # -- the location, as something that gets changed -----------------------------
 
 def reveal_token(client, harbor_id, ship_id):
-    """The ship's AUTH_TOKEN, as the answer rather than as a side effect.
-
-    **This rotates it.** The previous token stops working, and an agent already
-    running on it starts logging 404 on /ships/<id>/status while sitting at 0/1
-    -- which reads like a deleted ship, not like a credential problem. So it is
-    its own named call and never something another action does on the way past.
-    """
+    """The ship's AUTH_TOKEN as the answer. **This rotates it**: an agent on the
+    previous token logs 404 and sits at 0/1."""
     return {"harbor_id": harbor_id, "ship_id": ship_id,
             "auth_token": fetch_ship_token(client, harbor_id, ship_id),
             "warning": "this issued a NEW token and invalidated the previous "
@@ -1562,11 +989,7 @@ def reveal_token(client, harbor_id, ship_id):
 
 
 def delete_location(client, harbor_id):
-    """Delete a private location and every ship in it.
-
-    Reads it first so the answer can name what went, which is the only record
-    anyone will have afterwards.
-    """
+    """Delete a private location and every ship in it, naming what went."""
     harbor = _upstream(client.private_location, harbor_id)
     ships = harbor.get("ships", [])
     _upstream(client.delete_private_location, harbor_id)
@@ -1576,17 +999,11 @@ def delete_location(client, harbor_id):
 
 # -- what is deployed in the namespace ----------------------------------------
 
-# What each unreadable cluster means, in the user's terms -- a reason without a
-# way forward is the dead panel the watch list must never become.
 SV_READ_MESSAGES = {
     sv_read.SV_READ_NO_CLI:
         "No kubectl or oc on this machine, so the namespace cannot be read "
         "from here. Nothing else in this tool needs one.",
-    # One message for several causes -- no kubeconfig, no current context, a
-    # server that refused, one that never answered, output that would not
-    # parse. The way forward is the same for all of them, and the raw reason
-    # travels alongside as `detail`; what it must not do is name only one of
-    # them, which reads as false to anyone whose context is fine but slow.
+    # One message for several causes; the raw reason travels as `detail`.
     sv_read.SV_READ_NO_CONTEXT:
         "kubectl/oc is installed, but no cluster could be read -- no context "
         "is configured, or the one that is did not answer.",
@@ -1600,29 +1017,14 @@ SV_READ_MESSAGES = {
 
 
 def sv_read_message(read):
-    """The sentence shown for an unreadable cluster.
-
-    `.get`, not `[]`, because sv_read owns the set of reasons -- a fifth one
-    should degrade to the raw detail, not raise out of the one call whose
-    contract is that it never returns a bare error.
-    """
+    """The sentence for an unreadable cluster; an unknown reason falls back to
+    the raw detail."""
     return SV_READ_MESSAGES.get(read.status, read.detail)
 
 
 def sv_mocks(namespace, sv_subdomain=None):
-    """What is deployed in `namespace`, and the host each one answers at.
-
-    This rides the UI's existing status poll: the agent reports idle whether or
-    not its virtual services ever became reachable, so a deploy stalled at
-    WAITING_FOR_DOMAIN looks identical to a healthy one in the watch panel.
-
-    Reading a cluster is the only thing this tool does beyond the BlazeMeter
-    API, and it is optional: an unreadable cluster comes back saying which of
-    the four reasons applied, never as a raised error. A poll that fails every
-    ten seconds either fills the console or gets swallowed by the caller's
-    catch and silently reads as "nothing deployed", which is the one answer
-    this must never fake.
-    """
+    """What is deployed in `namespace` and the host each answers at. An
+    unreadable cluster is a `status`, never an exception or an empty list."""
     read = sv_read.sv_read(namespace)
     return {
         "status": read.status,
@@ -1635,11 +1037,9 @@ def sv_mocks(namespace, sv_subdomain=None):
 
 
 # -- does the published endpoint answer? --------------------------------------
-# The list above is pods, and a Running pod says nothing about whether anything
-# routes to it: crane's nginx Ingress backend names port 8080 while the Service
-# it created exposes port 80, so a strict controller builds no route and the
-# published endpoint 503s while the mock serves happily inside the cluster.
-# That 503 is the finding, not a failure of the check.
+# A Running mock pod says nothing about routing: crane's nginx Ingress names
+# port 8080 while its Service exposes 80, so a strict controller routes nothing
+# and the endpoint 503s. That 503 is the finding.
 
 SV_CHECK_OK = "ok"
 SV_CHECK_DNS = "dns"
@@ -1648,20 +1048,11 @@ SV_CHECK_TLS = "tls"
 SV_CHECK_TIMEOUT = "timeout"
 SV_CHECK_ERROR = "error"
 
-# Deliberately under the watch panel's 10s poll: this runs inside that panel, so
-# a deadline longer than the interval would leave answers landing against a list
-# that has already been replaced, and a hung endpoint holding a worker thread
-# across two ticks. Nothing legitimate needs longer -- a controller that routes
-# answers in milliseconds, and the 503 this exists to catch is written by the
-# controller itself without ever reaching a backend. 5s leaves room for one slow
-# DNS lookup and still returns well inside the tick.
+# Under the watch panel's 10s poll, so an answer never lands after the next tick.
 SV_CHECK_TIMEOUT_S = 5
 
-# What BlazeMeter publishes is <name>-<port>-<namespace>.<domain>, plus an
-# optional port. Anything else is refused rather than fetched: this string
-# arrives from outside -- a browser, or a model deciding what to probe -- and a
-# URL carrying a path, credentials or a second word would turn a reachability
-# probe into a general-purpose fetcher aimed by whatever supplied it.
+# <name>-<port>-<namespace>.<domain>[:port] and nothing else: the host arrives
+# from outside, and a path or credentials would make this a general fetcher.
 _SV_HOST_RE = re.compile(r"^[A-Za-z0-9.\-]+(:\d+)?$")
 
 SV_CHECK_MESSAGES = {
@@ -1673,9 +1064,6 @@ SV_CHECK_MESSAGES = {
         "The host resolves but nothing accepted a connection. What it resolves "
         "to is not the ingress controller, or the controller is not listening "
         "on this scheme's port.",
-    # One message for the whole handshake, because the two causes look the same
-    # from here and the raw reason (CERTIFICATE_VERIFY_FAILED vs
-    # WRONG_VERSION_NUMBER) travels alongside as the detail.
     SV_CHECK_TLS:
         "Something answered but the TLS handshake failed: either the "
         "certificate served for that host is not one this machine trusts -- "
@@ -1687,8 +1075,6 @@ SV_CHECK_MESSAGES = {
         "than the virtual service.",
 }
 
-# The one status code with a diagnosis attached, because on this endpoint it has
-# exactly one cause and a command that fixes it.
 SV_CHECK_503 = (
     "HTTP 503 -- the endpoint is published but nothing routes to it, while the "
     "mock pod itself is healthy. That is this cluster rejecting crane's Ingress: "
@@ -1698,61 +1084,36 @@ SV_CHECK_503 = (
 
 
 def sv_check_reason(err):
-    """Classify a probe that never got a status line, in the same terms as
-    sv_read._sv_read_reason: by inspecting what came back, because these four
-    have four different fixes and "could not connect" has none."""
+    """Classify a probe that got no status line; the four have four fixes."""
     e = getattr(err, "reason", err)      # URLError wraps; a read timeout does not
     if isinstance(e, ssl.SSLError):
-        # CERTIFICATE_VERIFY_FAILED and the rest of the handshake failures.
-        # First, because SSLError is itself an OSError like the two below.
+        # First: SSLError is itself an OSError.
         return SV_CHECK_TLS
     if isinstance(e, socket.gaierror):
         return SV_CHECK_DNS
-    # socket.timeout is an alias of TimeoutError from 3.10, which is the floor,
-    # so one name catches both. It was two separate classes on 3.9 and matching
-    # on either alone silently dropped half the timeouts -- worth remembering
-    # if the floor ever moves back down.
-    if isinstance(e, TimeoutError):
+    if isinstance(e, TimeoutError):      # socket.timeout is an alias on 3.10+
         return SV_CHECK_TIMEOUT
     if isinstance(e, ConnectionRefusedError):
         return SV_CHECK_REFUSED
-    # Reset connections, a proxy that hung up, an http.client parse failure.
-    # One bucket rather than a fifth guess, with the raw reason alongside.
     return SV_CHECK_ERROR
 
 
 def sv_check(host, scheme="http"):
-    """Ask whether the endpoint a deployed virtual service publishes answers.
-
-    `host` is the string sv_mocks handed back, passed in rather than rebuilt
-    here: what gets probed has to be what the caller was shown and what
-    BlazeMeter advertises, or a green tick would be vouching for an address
-    nobody was given.
-
-    Returns a verdict whatever happened, for the same reason the cluster reads
-    do: an endpoint that does not answer is the expected finding, not a broken
-    request. The two refusals are inputs that are not an endpoint at all.
-    """
+    """Whether a virtual service's published endpoint (a host sv_mocks
+    returned) answers. Only an input that is not an endpoint is refused."""
     if scheme not in ("http", "https"):
         raise BadRequest(f"scheme must be http or https, not {scheme!r}")
     if not _SV_HOST_RE.match(host or ""):
         raise BadRequest(f"not an endpoint host: {host!r}")
     url = f"{scheme}://{host}/"
     try:
-        # Redirects are followed, as they would be by the browser this is
-        # standing in for -- so a router configured to redirect http to https is
-        # reported by what the https leg said, including its certificate. The
-        # 503 this exists to catch is written by the controller directly and
-        # never redirects, so the diagnosis below is unaffected either way.
+        # Redirects are followed, as a browser would.
         with urllib.request.urlopen(url, timeout=SV_CHECK_TIMEOUT_S) as r:
             code, detail = r.status, ""
     except urllib.error.HTTPError as e:
-        # Not an error here: a status line means something routed to this host
-        # and replied, which is the whole question. 503 included -- especially.
+        # A status line means something routed and replied -- 503 included.
         code, detail = e.code, str(e)
     except (OSError, http.client.HTTPException) as e:
-        # OSError covers URLError and everything it wraps, plus a bare
-        # TimeoutError from a read that stalls after the connect succeeded.
         status = sv_check_reason(e)
         detail = str(e) or repr(e)
         return {"status": status, "code": None, "url": url, "detail": detail,
@@ -1766,21 +1127,13 @@ def sv_check(host, scheme="http"):
 # -- the vocabulary ------------------------------------------------------------
 
 def option_defaults():
-    """Bare option -> default, and nothing else.
-
-    The UI spreads this straight into the options it submits and diffs against
-    it, so any metadata key added here would arrive at generate() as an option
-    named after it. The descriptions are option_docs() for that reason.
-    """
+    """Bare option -> default, and nothing else: the UI spreads this into the
+    options it submits, so any extra key would become an option."""
     return gen_mod.DEFAULT_OPTIONS
 
 
 def option_docs():
-    """What each option is for, from the registry docs/options.md is built from.
-
-    The one-line `summary`, not the full argued paragraph: this is help beside
-    a control or in a tool schema, and the long version is a doc link away.
-    """
+    """What each option is for: its one-line summary, group, type and choices."""
     return {o.name: {"summary": o.summary,
                      "group": o.group,
                      "type": o.type,
@@ -1790,43 +1143,11 @@ def option_docs():
             for o in options_mod.OPTIONS}
 
 
-# The functionalities a bundle can be configured for -- BlazeMeter's own word
-# for what a private location is enabled to do. The configure step shows a card
-# each and the option groups tag themselves with an `id`, so a functionality
-# becomes offered by being added here; the frontend enumerates nothing. The
-# other half of adding one is tagging whichever option groups it owns; a
-# functionality no group names still gets a card, saying it has nothing of its
-# own beyond the groups every deployment gets (registry, proxy, CA trust,
-# scheduling) -- "nothing to configure" and "not shown" being different answers.
-#
-# **One entry per covered funcId, and `id` is the funcId** (#149). It was two
-# entries and `performance` claimed four funcIds -- performance, functionalApi,
-# functionalGui, proxyRecorder -- so its label had to name all of them:
-# "Performance & functional testing", printed over a location whose only funcId
-# is `performance`. A per-functionality list of funcIds is a translation table
-# between this tool's ids and BlazeMeter's, and the 1:1 mapping is what exists
-# instead of one -- a location's funcId *is* the id, read in either direction
-# with nothing to look up.
-#
-# Three, deliberately: an account offers nine, and the difference is the whole
-# reason a funcId row has to say which kind it is (`covered`, below). The two
-# that lost their card are the retired `functionalApi` and `proxyRecorder`,
-# which have no options here; a location carrying only those claims no
-# functionality, which the page reads as nobody having answered and names on
-# screen rather than folding into a card.
-#
-# The labels are the account's, transcribed from
-# GET /accounts/{id}/functionalities, because they are also the words the
-# customer sees in their own location settings. Written down rather than fetched
-# because this is the **keyless** answer: the page asks for the vocabulary on
-# mount, before a key has been pasted let alone an account chosen
-# (App.test.tsx drives the entire page that way), and manual entry never has an
-# account at all. Using BlazeMeter's own words is what keeps the handover
-# silent -- nothing renames itself when an account arrives.
-#
-# `namespace` is a suggestion, applied only while the field still holds one --
-# a namespace per functionality is what keeps redeploying one agent from taking
-# the other's pods down with it, and typing over it has to win.
+# The functionalities a bundle can be configured for, one per covered funcId
+# (`id` is the funcId). The configure step shows a card each. Labels are the
+# account's own display names, written down because this is the keyless answer.
+# `namespace` is only a suggestion: one namespace per functionality keeps
+# redeploying one agent from touching the other's pods.
 FUNCTIONALITIES = [
     {
         "id": "performance",
@@ -1837,9 +1158,6 @@ FUNCTIONALITIES = [
     {
         "id": "functionalGui",
         "label": "GUI Functional",
-        # Read off a real single-functionality location's
-        # /private-locations/{h}/ships/{s}/versions: apm, crane, v4, doduo and a
-        # pinned charmander browser -- the taurus engine plus the grid.
         "hint": "browser tests -- a Selenium grid and browser pods "
                 "beside the engine",
         "namespace": "blazemeter-gui",
@@ -1854,104 +1172,33 @@ FUNCTIONALITIES = [
 
 
 def functionalities():
-    """The functionalities the configure step offers, in card order.
-
-    `runs_engine` says whether this functionality's agent carries a taurus
-    engine, which is what makes "engine size" a true statement about its pod
-    limits. Derived from `facts.CATEGORY_BY_FUNC` rather than declared beside
-    the rows: that table already holds the answer, read off real
-    single-functionality locations' /versions. It is served for the reason the
-    list itself is -- the page kept the same two ids as a literal of its own,
-    and a copy in TypeScript of a table Python owns is what `IGNORED_BY_FORMAT`
-    exists to keep from happening again.
-
-    Derived here rather than stored on FUNCTIONALITIES so the two cannot fall
-    out of step, and so a test that monkeypatches the list is followed --
-    `covered_func_ids` is a function for the same reason.
-    """
+    """The functionalities the configure step offers, in card order, each with
+    `runs_engine` (whether its agent carries a taurus engine)."""
     return [{**f, "runs_engine": facts_mod.runs_engine(f["id"])}
             for f in FUNCTIONALITIES]
 
 
 def covered_func_ids():
-    """The funcIds this tool covers, as {funcId: label} -- which is the
-    functionalities read as a vocabulary.
-
-    Derived rather than declared beside them: `covered` on a funcId row and
-    having a card on the configure step are the same fact, and two tables of it
-    are two answers to the one question a row exists to ask. A function rather
-    than a module constant so a test that monkeypatches FUNCTIONALITIES is
-    followed here too -- the aliasing trap `server` is kept clear of, one module
-    in.
-    """
+    """The funcIds this tool covers, as {funcId: label}. A function so a
+    monkeypatched FUNCTIONALITIES is followed."""
     return {f["id"]: f["label"] for f in FUNCTIONALITIES}
 
 
 def func_ids(client=None, account_id=None):
-    """The funcId vocabulary: what a location can be created with, what each
-    funcId a location already carries is called, and which of them are not
-    funcIds in their own right at all.
+    """The funcId vocabulary: `{"source": "account" | "baseline", "choices":
+    [{id, label, changes_images, covered, sub_func_ids}]}`.
 
-    `{"source": "account" | "baseline", "choices": [...]}`.
-
-    The account's, where there is one -- BlazeMeter serves the list and the
-    display names, and a table written here disagreed with it in both
-    directions: it was missing five funcIds real locations carry (tdm,
-    dataPublisher, delphix, secretsPrivateVault, enableSecretsToggle) and it
-    offered `functionalApi`, which the account has retired. Dropping it from
-    what a location can be *created* with therefore needs no rule: it is simply
-    not in the answer. Reading it off a location that already has one is
-    untouched, and 43 of one account's 168 locations still do.
-
-    With no account -- no key yet, or manual entry, which never has one -- the
-    answer is covered_func_ids(): the three this tool configures, under the
-    names the account would give them.
-
-    **`source` is which of those two this answer is**, and it exists because a
-    funcId missing from the list means opposite things in them (#160). Against
-    the account, missing is *retired*: BlazeMeter stopped serving it, and the
-    locations that predate the removal still carry it. Against the baseline,
-    missing means nothing whatsoever -- six of the account's nine funcIds are
-    missing from the baseline too. A caller that had to remember which call it
-    made would be one refactor from saying "retired" about a vocabulary nobody
-    read, which is this repo's oldest bug wearing a new noun.
-
-    **`sub_func_ids` is what a funcId is a *parameter* of its parent by.**
-    `functionalGui` carries 117 of them -- `chrome:default`, `firefox:139`,
-    `safari:15` -- and they arrive in a location's `funcIds` beside the parent,
-    which is what made 43% of one account's 171 locations look like they ran
-    something this tool has no options for. A pin says which browser GUI
-    Functional uses; it is not a capability the location has on its own, and
-    nothing here will ever grow options for one apart from its parent. Served
-    under the parent rather than flattened into the list: the row that knows
-    which functionality a pin belongs to is the only one that can say, and a
-    flat set could not answer it.
-
-    `covered` says whether this tool configures an entry. A row it can only
-    name is still served, because a page that dropped it would say nothing
-    about a functionality the location runs, and silence there reads as
-    coverage.
-
-    `changes_images` marks the ones worth offering where a funcId's only job is
-    to pick images -- the manual-entry form. Two funcIds needing the same image
-    categories generate byte-identical manifests, so offering both there is a
-    choice with no consequence. Answered here rather than filtered by the
-    caller for the same reason the list itself is served: a copy in the
-    frontend is how a vocabulary and the thing it describes drift apart.
+    The account's list where there is one, else the covered funcIds. Missing
+    from an account list means retired; missing from the baseline means
+    nothing. `sub_func_ids` are browser pins under their parent.
     """
     covered = covered_func_ids()
     if client is None or account_id is None:
-        # No pins, because only the account knows them -- and `source` is what
-        # keeps that from reading as an account whose GUI Functional has none.
         source, rows = "baseline", [(f, label, []) for f, label in covered.items()]
     else:
         source = "account"
         served = _upstream(client.functionalities, account_id) or {}
-        # `displayName` falling back to the funcId rather than to a table here:
-        # an entry the account added and never named is offered under its raw
-        # id, which is exactly what a location carrying it would show. A pin is
-        # taken by `id` alone -- its own displayName ("Chrome Default") names a
-        # browser rather than a functionality, and nothing offers or asks for one.
+        # An unnamed entry is offered under its raw id, as a location shows it.
         rows = [(f["funcId"], f.get("displayName") or f["funcId"],
                  [s["id"] for s in f.get("subFunctionalities") or [] if s.get("id")])
                 for f in served.get("functionalities") or [] if f.get("funcId")]
@@ -1965,85 +1212,25 @@ def func_ids(client=None, account_id=None):
 
 
 def ignored_options():
-    """The options each output format cannot carry, as {format: {option: why}}.
-
-    Served for the same reason as the SV vocabulary: a caller that hides what a
-    format drops must not keep its own list of it. The configure step does
-    exactly that -- a docker bundle has no namespace, no ServiceAccount and no
-    scheduling, so the fields for them are not on screen -- and the bundle's
-    README states the same table for whatever was set anyway.
-
-    **Every format has an entry, and the two empties are different facts.** A
-    format whose entry is `{}` ignores nothing, and that has been read; the
-    whole mapping missing -- not fetched yet, or a caller that could not reach
-    this route -- is nobody having read anything, and it is the only one of the
-    two that is a guess. Both show every field, because that is the only safe
-    way to be wrong about this: a reader that cannot see the table shows a
-    field too many rather than hiding one that matters. Keeping them apart is
-    what lets a reader say which it is looking at without the format's own
-    entry having to carry a flag.
-    """
+    """{format: {option: why}} for options a format cannot carry. Every format
+    has an entry; `{}` ignores nothing."""
     return {fmt: dict(table)
             for fmt, table in gen_mod.IGNORED_BY_FORMAT.items()}
 
 
 def reserved_env():
-    """The environment variable names a bundle writes for itself, and the
-    option that writes each one where there is one, as {NAME: option | null}.
-
-    Served for the same reason as ignored_options(): `extra_env` is refused for
-    every one of these at generate time, and a form that let somebody type one
-    and only learned it was taken when the download failed would be an
-    off-screen blocker with the field right there on screen. A caller that
-    checks a name must not keep its own copy of the list -- a variable added to
-    a template would go on being offered.
-
-    `null` for a name no single option owns (the identity, the fixed posture):
-    the refusal is real either way, and inventing an option to name would be
-    worse than saying there is not one.
-    """
+    """Environment names a bundle writes for itself, as {NAME: owning option or
+    None}. `extra_env` refuses every one of them."""
     return {name: gen_mod.ENV_OWNER.get(name)
             for name in sorted(gen_mod.RESERVED_ENV)}
 
 
 def agent_env(func_ids=None):
-    """The agent variables `extra_env` can usefully carry on a location running
-    `func_ids`: BlazeMeter's own documented reference, minus every name this
-    generator already writes, minus everything that reaches a functionality this
-    location does not run.
+    """The agent variables `extra_env` can usefully carry: BlazeMeter's
+    reference minus RESERVED_ENV and minus other functionalities' variables.
 
-    The subtraction is the point, and both halves of it happen here rather than
-    in the table. `agent_env.AGENT_ENV` is the reference whole -- AUTH_TOKEN,
-    the proxy trio, the engine limits and the rest of RESERVED_ENV included --
-    because each of those already has a control of its own on the configure
-    step, and this list is what is *left*: the variables with no setting here,
-    which is the only reason `extra_env` exists. Declaring only the leftovers
-    would be the same table kept twice, and an option removed later would take
-    its variable out of the reference instead of handing it back. Filtering by
-    functionality at the same point is what puts the CLI, the MCP server and the
-    page on one answer: a table declared per location would be the reference
-    written once per location.
-
-    `func_ids` is the location's own -- functionality ids *are* funcIds
-    (#149) -- and the three states are three:
-
-    - `None` for nobody having said, which offers everything. It is what the
-      page mounts in, before a key is pasted or a location picked, and it is
-      the direction that shows a field too many rather than hiding one somebody
-      needs. `runsFunctionality` reads an unanswered enablement the same way.
-    - a list, which offers the variables no functionality claims plus the ones
-      claimed by a functionality in it. An id nothing claims -- `tdm`,
-      `delphix`, the funcIds real accounts carry that this tool has no options
-      for -- narrows nothing, because the filter reads what a tag claims rather
-      than what a location holds.
-    - `[]`, which is a location running nothing this tool covers. It still runs
-      an agent, so the agent-wide variables stay and the tagged ones go.
-
-    Each record carries the name, the type a control is chosen from, which
-    platforms document it, which functionalities read it, the agent's own
-    default and an example. Types are `agent_env.TYPES`; a caller that meets one
-    it does not know should fall back to a text box rather than hide the row,
-    for the reason an unread ignored_options() means "everything applies".
+    `func_ids` None offers everything; a list (even `[]`) offers the untagged
+    variables plus those tagged for its funcIds.
     """
     runs = None if func_ids is None else set(func_ids)
     return [dict(v) for v in agent_env_mod.AGENT_ENV
@@ -2053,50 +1240,20 @@ def agent_env(func_ids=None):
 
 
 def placeholders():
-    """Every field a bundle can carry a marker for, as
-    {option: {marker, source}}.
-
-    Served for the same reason as ignored_options() and reserved_env(): the
-    marker's *shape* is a rule a caller can apply on its own -- the page builds
-    one before any response has arrived -- but where the value comes from is
-    prose this generator owns, and it reached a browser nowhere. It was in the
-    bundle's README, which is a file somebody opens after the download rather
-    than a sentence beside the field.
-
-    `source` is the whole answer for a field, and there is no severity beside
-    it. `PLACEHOLDER_REFUSED_BY_API` deliberately does **not** appear here: the
-    four fields the API server stops are the README's subject, and a served
-    field nothing renders is a second copy of that set waiting to disagree with
-    the first.
-
-    Keyed by the option, including the two dotted ones and the two that are not
-    options at all (`harbor_id` is a fact, `ship_id` is resolved out of one) --
-    a caller holding a blank field knows it by that name, and the marker is
-    what it will have to look for in the files afterwards.
-    """
+    """Every field a bundle can carry a marker for, as {option: {marker,
+    source}}, keyed by option (plus `harbor_id` and `ship_id`). `source` says
+    where the real value comes from."""
     return {key: {"marker": gen_mod.marker(key), "source": source}
             for key, source in gen_mod.PLACEHOLDER_SOURCE.items()}
 
 
 def sv_constants():
-    """The two service-virtualization enumerations a caller must not hardcode.
-
-    Kept apart from option_defaults() because that is spread straight into the
-    options the UI submits, and these are not options. Answering them at all is
-    what stops a fifth expose backend from being added to generate() and
-    silently missing from the picker -- the funcId list in particular was
-    duplicated in TypeScript with a comment asking the next person to keep it
-    in step by hand.
-    """
+    """The service-virtualization enumerations a caller must not hardcode:
+    funcIds, ingress types, and what each backend publishes."""
     return {"func_ids": list(gen_mod.SV_FUNC_IDS),
             "ingress_types": list(gen_mod.SV_INGRESS_TYPES),
-            # What each backend publishes, so a caller can name the Role the
-            # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
-            # -- which is mechanical, unlike the prose around it. Only the four
-            # fields the UI renders; via_ingress_class is doctor's, and serving
-            # it here would be a field nothing reads. nodeport_ok is here
-            # because the UI decides something with it -- whether to offer
-            # NODEPORT beside this backend -- not merely to display it.
+            # The fields the UI uses; nodeport_ok decides whether NODEPORT is
+            # offered beside a backend.
             "backends": {name: {"group": b.group,
                                 "resources": list(b.resources),
                                 "creates": b.creates,
