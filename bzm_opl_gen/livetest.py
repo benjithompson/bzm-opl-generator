@@ -326,7 +326,7 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
     mode = {
         "existing": {"ca_existing_configmap": bundle_check.CA_RIG_CONFIGMAP,
                      "ca_configmap_key": bundle_check.CA_RIG_KEY},
-        # Not `ca-bundle.crt`, _ca_cfg's fallback, so the key must really land.
+        # Not `ca-bundle.crt` (the fallback), so the key must really land.
         "file": {"ca_bundle_slot": True, "ca_cert_file": bundle_check.CA_RIG_KEY},
         "inline": {"ca_bundle": ca_pem},
     }[ca_mode]

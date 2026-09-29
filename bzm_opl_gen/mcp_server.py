@@ -259,10 +259,10 @@ _RENAMED_TOKEN_ARG = "fetch_token"
 def _no_stale_fetch_token(args):
     if _RENAMED_TOKEN_ARG in args:
         raise core.BadRequest(
-            f"{_RENAMED_TOKEN_ARG} is no longer an argument -- it is "
-            f"`rotate_token`, and it defaults to false. The rename is the "
-            f"warning: that call POSTs for a new AUTH_TOKEN and the previous one "
-            f"stops working, so any agent running on it sits at 0/1 Running "
+            f"{_RENAMED_TOKEN_ARG} is not an argument -- use `rotate_token`, "
+            f"which defaults to false. Rotating POSTs for a new AUTH_TOKEN and "
+            f"the previous one stops working, so any agent running on it sits "
+            f"at 0/1 Running "
             f"until the bundle is re-applied. Pass rotate_token=true only to "
             f"replace a credential on purpose; leave it out to generate without "
             f"touching the account.")

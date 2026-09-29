@@ -328,12 +328,12 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
 # -- CA trust modes the rig can deploy ----------------------------------------
 
 # The rig's own trust-bundle ConfigMap for `--ca-mode existing`. The key is not
-# `ca-bundle.crt`, _ca_cfg's fallback, or a run would pass whether or not the
-# configured key reached anything.
+# `ca-bundle.crt` (ca_trust.ca_cfg's fallback), or a run would pass whether or
+# not the configured key reached anything.
 CA_RIG_CONFIGMAP = "bzm-opl-livetest-trust"
 CA_RIG_KEY = "corp-root.pem"
 
-# generate's CA modes minus `inject`, which the OpenShift network operator
+# The CA modes (ca_trust) minus `inject`, which the OpenShift network operator
 # performs and nothing here can. Also `--ca-mode`'s choices.
 RIG_CA_MODES = ("inline", "existing", "file")
 

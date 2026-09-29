@@ -1,29 +1,21 @@
-"""Gather deployment-relevant facts about a customer's private location.
+"""Facts about a private location that come from the BlazeMeter account: the
+location and its funcIds, its agents, and the images it runs.
 
-Facts = everything the generator needs that comes from the BlazeMeter account
-rather than from the customer's cluster team:
-  - harbor (location) id/name, funcIds (which functionalities are enabled)
-  - ships (agents): id, name, installed crane version
-  - the images this location runs (ground truth for private-registry
-    mirroring), classified performance vs other
-
-Three sources answer that last one, per key and in order: the location's own
-image list, a running agent's inventory, and the catalogue below.
-`images_source` names which contributed; `image_list` says how the account read
-went.
+Images come from three sources, per key and in order: the location's own image
+list, a running agent's inventory, and the catalogue below. `images_source`
+names which contributed; `image_list` says how the account read went.
 """
 
 import json
 
 from .api import DEFAULT_FUNC_IDS, BzmApiError
+from .markers import or_marker
 
-# The one directory under the project that holds browser images, all of them
-# version-pinned (`charmander/chrome_136.0.7103.113`), so no catalogue can
-# carry a default for them.
+# Where the version-pinned browser images live (`charmander/chrome_136...`);
+# no catalogue can carry a default for them.
 BROWSER_DIR = "charmander"
 
-# Image classification: substring -> functional category. Anything unmatched
-# is a core performance/engine image.
+# Repo substring -> category; anything unmatched is a performance image.
 IMAGE_CATEGORY = {
     "doduo": "gui",            # grid proxy (GUI functional / Selenium)
     BROWSER_DIR: "gui",        # browser image (GUI functional)
@@ -33,10 +25,8 @@ IMAGE_CATEGORY = {
     "proxy-recorder": "recorder",
 }
 
-# Location funcIds -> image categories that functionality needs, read off real
-# single-functionality locations' /versions. Browser-pin funcIds
-# ("chrome:default") ride along with functionalGui; tdm/dataPublisher/delphix
-# need no engine images of their own.
+# funcId -> the image categories its agent runs, read off real locations'
+# /versions. Other funcIds (tdm, delphix, "chrome:default", ...) add none.
 CATEGORY_BY_FUNC = {
     "performance": {"performance"},
     "functionalApi": {"performance"},          # API tests run in the taurus engine
@@ -65,7 +55,6 @@ def image_distinct_funcs():
     return out
 
 
-# The category the taurus engine is in.
 ENGINE_CATEGORY = "performance"
 
 
@@ -91,37 +80,31 @@ def select_images(facts, all_images=False):
     ]
 
 
-# The keys neither live source named: all of manual entry's images, and the
-# few keys no /versions response carries. Keys are the local tags crane
-# resolves IMAGE_OVERRIDES by; repos were read off live agent inventories and
-# do not follow a naming rule (taurus-cloud is `v4`, apm-image is `apm`).
+# Images for keys neither live source names. Keys are what crane resolves
+# IMAGE_OVERRIDES by; repos were read off live inventories and follow no naming
+# rule (taurus-cloud is `v4`, apm-image is `apm`).
 FALLBACK_IMAGES = [
     # performance: the taurus engine and its APM sidecar.
     {"key": "taurus-cloud:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/v4", "tag": "latest", "category": "performance"},
     {"key": "apm-image:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/apm", "tag": "latest", "category": "performance"},
-    # Reported by live Kubernetes agents (the container manager's, not the
-    # location's) and named by no /versions response. A key crane cannot find
-    # in a sealed cluster is an ImagePullBackOff mid-test, so they stay here.
+    # Kubernetes crane pulls these, and no /versions response names them.
     {"key": "torero:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/torero", "tag": "latest", "category": "performance"},
     {"key": "richrach:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/richrach", "tag": "latest", "category": "performance"},
     # mock services.
     {"key": "blazemeter/service-mock:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/service-mock", "tag": "latest", "category": "mock"},
     {"key": "blazemeter/group-gateway:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/group-gateway", "tag": "latest", "category": "mock"},
-    # Not observed live, but follows the regular `blazemeter/<name>` shape;
-    # omitting it would let crane fall back to the public registry silently.
+    # Not observed live; follows the regular `blazemeter/<name>` shape.
     {"key": "blazemeter/mock-pc-service:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/mock-pc-service", "tag": "latest", "category": "mock"},
     # proxy recorder.
     {"key": "blazemeter/proxy-recorder:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/proxy-recorder", "tag": "latest", "category": "recorder"},
-    # GUI functional: the grid proxy. Browser images are deliberately absent;
-    # the location's image list names the pinned one (see gui_images_incomplete).
+    # GUI functional: the grid proxy (browsers come from the image list).
     {"key": "blazemeter/doduo:latest", "repo": "gcr.io/verdant-bulwark-278/blazemeter/doduo", "tag": "latest", "category": "gui"},
 ]
 
 CRANE_REPO = "gcr.io/verdant-bulwark-278/blazemeter/crane"
 BLAZEMETER_PROJECT = "gcr.io/verdant-bulwark-278/blazemeter"
 
-# Keys whose repo is not their own name and is not in the catalogue, observed in
-# live inventories.
+# Keys, seen in live inventories, whose repo is not their own name.
 KEY_REPO_EXCEPTIONS = {
     "blazemeter": "v3",
     "secrets-image": "secrets",
@@ -151,9 +134,8 @@ def repo_for_key(key):
     return f"{BLAZEMETER_PROJECT}/{KEY_REPO_EXCEPTIONS.get(name, name)}"
 
 
-# How the read of the location's own image list went
-# (`GET /private-locations/{h}/ships/{s}/versions`). Four answers, because all
-# four leave the same fallback images behind:
+# How the read of the location's image list (`GET .../ships/{s}/versions`)
+# went. All four leave the same fallback images, so the state tells them apart:
 #   read      the account answered; `count` may be 0.
 #   unread    the request failed or was refused; `detail` says how. Never a count.
 #   no-agent  the route is per agent and the location has none.
@@ -163,7 +145,7 @@ IMAGE_LIST_UNREAD = "unread"
 IMAGE_LIST_NO_AGENT = "no-agent"
 IMAGE_LIST_NOT_ASKED = "not-asked"
 
-# The three image sources, in the order they outrank each other.
+# The image sources, highest precedence first.
 VERSIONS_SOURCE = "location image list"
 INVENTORY_SOURCE = "live agent inventory"
 CATALOGUE_SOURCE = "fallback-catalogue"
@@ -186,14 +168,12 @@ def _image_list_entries(body):
         repo = f"{registry.rstrip('/')}/{path}" if registry and path \
             else repo_for_key(tag)
         out.append({"key": f"{tag}:{version}", "repo": repo, "tag": version,
-                    # The account states versions, not sizes.
                     "size_mb": None, "category": image_category(repo)})
     return out
 
 
-# Statuses that settle the image list for the whole location, so later agents
-# are not asked (locations with hundreds of agents exist). Other failures may
-# differ per agent and are retried on the next one.
+# Statuses that answer for the whole location, so later agents are not asked;
+# other failures are retried on the next agent.
 IMAGE_LIST_SETTLED_BY = (401, 403, 404)
 
 
@@ -240,13 +220,12 @@ def _inventory_entries(ships):
                 continue
             seen.add(ref)
             out.append({
-                # None where the agent reports no local tag (crane's own image
-                # on Docker): nothing to override, but its version still pins
-                # the Deployment.
+                # None for crane's own image on Docker: nothing to override,
+                # but its tag still pins the Deployment.
                 "key": key,
                 "repo": repo,
                 "tag": tag,
-                # Kubernetes reports 0 for every image; None means unknown.
+                # Kubernetes reports 0 for every image: unknown.
                 "size_mb": round(img["Size"] / 1e6) if img.get("Size") else None,
                 "category": image_category(repo),
             })
@@ -261,17 +240,13 @@ def gather(client, harbor_id):
         "harbor_name": harbor.get("name"),
         "func_ids": harbor.get("funcIds", []),
         "slots": harbor.get("slots"),
-        # Null on a location created via the API, and then every test start
-        # 403s, so doctor treats it as a hard failure.
+        # Unset, every test start 403s; doctor FAILs on it.
         "threads_per_engine": harbor.get("threadsPerEngine"),
-        # The engine pod's requests; the bundle's engine limits are derived from
-        # them when no option names them. overrideCPU is whole cores;
-        # overrideMemory's unit varies across real locations, so it is carried
-        # verbatim and read as Mi where derived.
+        # The engine's requests (whole cores; memory carried verbatim, read as
+        # Mi), from which unset engine limits are derived.
         "override_cpu": harbor.get("overrideCPU"),
         "override_memory": harbor.get("overrideMemory"),
-        # The engine's JVM heap, checked against its limit (a heap above the
-        # limit is an OOMKill mid-run).
+        # The engine's JVM heap, which doctor checks against its limit.
         "engine_xmx_mb": harbor.get("engineXmx"),
         "engine_xms_mb": harbor.get("engineXms"),
         "ships": [{
@@ -285,22 +260,18 @@ def gather(client, harbor_id):
     resources, state, detail = _read_image_list(client, harbor_id, ships)
     facts["image_list"] = {
         "state": state,
-        # Only a read has a count.
         "count": len(resources) if resources is not None else None,
         "detail": detail,
     }
 
-    # Per key, the first source to name it keeps it: the location's image list
-    # (exact versions, no agent needed), the agents' inventory (includes keys
-    # like torero the list does not carry), then the catalogue.
+    # Per key, the first source to name it keeps it.
     entries, sources = {}, []
     inventory = _inventory_entries(ships)
 
     def take(label, items):
         taken = False
         for e in items:
-            # Crane's own image runs the Deployment rather than being
-            # overridden, and an entry with no key cannot be overridden.
+            # Crane's image is not overridden, and a keyless entry cannot be.
             if not e["key"] or e["repo"] == CRANE_REPO:
                 continue
             base = key_base(e["key"])
@@ -315,8 +286,7 @@ def gather(client, harbor_id):
     take(INVENTORY_SOURCE, inventory)
     take(CATALOGUE_SOURCE, [dict(i, size_mb=None) for i in FALLBACK_IMAGES])
 
-    # Crane is pinned from the two live sources, identified by its repo (a
-    # private-mirror reference is not what a fresh bundle should run).
+    # Crane is pinned from a live source, matched by the public repo.
     facts["crane_image"] = next(
         (f"{CRANE_REPO}:{e['tag']}"
          for source in (resources or [], inventory)
@@ -356,22 +326,14 @@ def gui_images_incomplete(facts):
 
 
 def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
-    """Facts from the ids BlazeMeter shows, for an account nobody here can reach.
-
-    The same shape `gather` returns, so nothing downstream knows which way the
-    facts arrived; unknowns come from the catalogue and crane `:latest`. The
-    ids are not validated. A blank id becomes its marker (`<HARBOR_ID>`,
-    `<SHIP_ID>`) for a location that does not exist yet; the API server refuses
-    it, which makes the gap loud.
-    """
-    # Function-level: generate imports this module.
-    from .markers import or_marker
+    """Facts from typed ids, for an account this tool cannot reach: the shape
+    `gather` returns, with catalogue images and crane `:latest`. Ids are not
+    validated; a blank one becomes its marker (`<HARBOR_ID>`, `<SHIP_ID>`)."""
     return {
         "harbor_id": or_marker(harbor_id, "harbor_id"),
         "harbor_name": harbor_name or None,
         "func_ids": list(func_ids or DEFAULT_FUNC_IDS),
-        # Unknown without the API; doctor reports them as unknown rather than
-        # judging them (see from_manual_entry).
+        # Unknown without the account; doctor reports them as such.
         "slots": None,
         "threads_per_engine": None,
         "override_cpu": None,
