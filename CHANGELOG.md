@@ -13,6 +13,11 @@ anything that breaks.
 
 ### Added
 
+- **`generate --openshift`** says the target cluster is OpenShift: commands
+  use `oc`, `sv_ingress=openshift` (a Route) is allowed, and the injected
+  cluster trust bundle is offered. The cluster defaults to plain Kubernetes, so
+  `--not-openshift` alone could only restate the default.
+
 - **`--format helm` now covers service virtualization.** The chart was refused
   for a bundle configured to publish virtual services, because it carried
   neither the `KUBERNETES_WEB_EXPOSE_*` environment nor the RBAC the chosen
@@ -84,6 +89,11 @@ anything that breaks.
   material moved to `CONTRIBUTING.md`.
 
 ### Fixed
+
+- **The web UI showed an unanswered cluster as OpenShift** while the bundle
+  was generated for plain Kubernetes. The Advanced selector now shows what the
+  generator does, and the generator's own fallback for a partially resolved
+  option set agrees with its default.
 
 - **A `no_proxy` such as `*.corp.example` made the manifests bundle
   unparseable.** A bare leading `*` is a YAML alias; every ConfigMap value is

@@ -513,6 +513,14 @@ def test_ca_existing_configmap_referenced_not_created():
         "REQUESTS_CA_BUNDLE=corp-trust=trust.pem:AWS_CA_BUNDLE=corp-trust=trust.pem")
 
 
+def test_an_unanswered_cluster_is_not_openshift_even_in_a_partial_dict():
+    """is_openshift's fallback agrees with DEFAULT_OPTIONS for callers that
+    pass options without every key resolved."""
+    assert not bundle_options.is_openshift({"platform": "openshift"})
+    assert bundle_options.is_openshift(
+        {"platform": "openshift", "openshift_cluster": True})
+
+
 def test_ca_openshift_inject():
     files = gen.generate(FACTS, {"namespace": "ns1", "ca_openshift_inject": True})
     _all_yaml_parse(files)

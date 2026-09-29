@@ -688,8 +688,8 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
     const asked: Options[] = [];
     render(<App api={accountOf([loc("h-0", "Dublin",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
-      // The generator's own defaults, which is where the posture arrives from:
-      // both questions start where DEFAULT_OPTIONS leaves them.
+      // A profile that answered OpenShift; the generator's default is plain
+      // Kubernetes (see the test below).
       optionDefaults: async () => ({
         namespace: "blazemeter", service_account_name: "crane",
         output_format: "manifests", platform: "openshift",
@@ -727,6 +727,30 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
     // The posture is untouched: it is the other question, and the one this
     // customer still wants answered the recommended way.
     expect(asked[asked.length - 1]?.platform).toBe("openshift");
+  });
+
+test("an unanswered cluster is shown as plain Kubernetes, as the generator reads it",
+  async () => {
+    // openshift_cluster absent: the select must not claim OpenShift while the
+    // bundle is generated with kubectl and the OpenShift-only CA mode is hidden.
+    render(<App api={accountOf([loc("h-0", "Dublin",
+      [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
+      optionDefaults: async () => ({
+        namespace: "blazemeter", service_account_name: "crane",
+        output_format: "manifests", platform: "openshift",
+      }),
+      generate: async () => ({ files: [], token: {
+        branch: "placeholder" as const, ship_id: "s-1", message: "" } }),
+    })} />);
+
+    fireEvent.click(await screen.findByText("Dublin"));
+    fireEvent.click(await screen.findByRole("button", { name: /agent-1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Advanced/ }));
+    const cluster = screen.getByLabelText<HTMLSelectElement>(/^Cluster/);
+    expect(cluster.value).toBe("k8s");
+    fireEvent.click(screen.getByRole("switch", { name: "Custom CA trust" }));
+    expect(screen.queryByLabelText(/OpenShift cluster trust bundle/)).toBeNull();
   });
 
 test("the CA group asks for a file name, and a blank one is not a blocker",
