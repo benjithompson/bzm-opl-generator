@@ -27,14 +27,11 @@ spec:
       readOnlyRootFilesystem: false
 ```
 
-**This is a Kubernetes posture, and `--format docker` has none.** `restrict_engines`
-is in docker's entry of the generator's `IGNORED_BY_FORMAT` table: a docker
-bundle has no pod spec to
-stamp, so neither key is emitted and nothing on this page applies to it. The
-bundle's README names the option as ignored when it was set away from its
-default. A docker agent's engines are containers on the host, run by the agent
-through the docker socket — the container that opens that socket runs as root
-(`-u 0`), which is the opposite trade and is argued in [docker.md](docker.md).
+**This is a Kubernetes posture; `--format docker` ignores it.** A docker bundle
+has no pod spec to stamp, so neither key is emitted and nothing on this page
+applies to it. A docker agent's engines are containers on the host, started
+through the docker socket by a container running as root (`-u 0`) — see
+[docker.md](docker.md).
 
 ## Why this is verified per image, not per cluster
 
@@ -71,10 +68,6 @@ OpenShift rows are `platform: openshift`, which leaves it to the SCC.
 | `charmander/chrome_136.0.7103.113:2.10.45` (browser) | the same run: crane created the `grid-r-sg-*` pod, and the engine drove it as a remote WebDriver | `uid=1337 gid=1337` | real session: navigated demoblaze.com and clicked through to "Add to cart" |
 | `torero:4.6.182` | direct probe — no run creates one (below) | `uid=1337(blazemeter) gid=1337` | starts, exits on missing `TEST_ID` |
 | `richrach:1.0.81` | direct probe — no run creates one (below) | `uid=1337(blazemeter) gid=1337` | starts, exits on missing `COMMAND` |
-
-Three rows are the earlier verification, from when the default changed and
-issue #69 recorded them: the GKE engine run (20 samples), chromedriver inside
-the engine, and `service-mock`. Every other row was measured while closing it.
 
 Nothing needed a capability, so nothing motivates turning the restriction off.
 That matters because the escape hatch is all-or-nothing: `--no-restrict-engines`
@@ -149,8 +142,7 @@ the namespace's range, and pinning 1337 there would be rejected); `platform: k8s
 pins `run_as_user`. Either way crane passes *its own* UID down, so this is the
 one platform difference the engines see.
 
-The OpenShift half was re-checked after the default changed: on CRC, crane comes
-up as `uid=1000680000 gid=0(root)` under `restricted-v2`, and the engine pod
+On OpenShift (CRC), crane comes up as `uid=1000680000 gid=0(root)` under `restricted-v2`, and the engine pod
 crane spawned for a real run came up as the same `uid=1000680000 gid=0`, all
 capabilities dropped, returning 23 samples with 0 failures. Inheritance works
 when the UID is assigned, not just when it is pinned.

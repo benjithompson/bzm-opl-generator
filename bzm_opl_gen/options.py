@@ -1,8 +1,8 @@
 """What each generate option means, in one place.
 
-`generate.DEFAULT_OPTIONS` holds the default value; this registry holds what the
-option is for, in two lengths: `summary` (at most 20 words; it lands in every
-MCP session's schema and in the UI's field help) and `doc` (the
+`bundle_options.DEFAULT_OPTIONS` holds the default value; this registry holds
+what the option is for, in two lengths: `summary` (at most 20 words; it lands in
+every MCP session's schema and in the UI's field help) and `doc` (the
 `docs/options.md` cell). tests/test_options.py holds the two key sets equal.
 
 The table block in docs/options.md is generated from here:
@@ -23,7 +23,7 @@ from . import bundle_options, footprint, service_virt
 
 class Option:
     """One `generate` option: its shape, and what it is for. The default is
-    read from `generate.DEFAULT_OPTIONS`, never stored here."""
+    read from `bundle_options.DEFAULT_OPTIONS`, never stored here."""
 
     def __init__(self, name, type, group, summary, doc,
                  choices=None, default_note=None):
@@ -51,8 +51,8 @@ class Option:
         return bundle_options.DEFAULT_OPTIONS[self.name] is None
 
 
-# Section headings for the generated table, in order. The intro states what a
-# row cannot: a constraint between options.
+# Section headings for the generated table, in order, each with an optional
+# intro for what a row cannot say: a constraint between options.
 GROUPS = [
     ("Platform and output", None),
     ("Credentials", None),
@@ -61,32 +61,29 @@ GROUPS = [
     ("Security and RBAC", None),
     ("Networking", None),
     ("Service virtualization",
-     "Only meaningful for a location whose funcIds include `mockServices`, and "
-     "**two sets, one per platform**: the four `sv_ingress` options are "
-     "Kubernetes' `KUBERNETES_WEB_EXPOSE_*` and the three below them are the "
-     "docker agent's `HOSTNAME_OVERRIDE` and `TLS_CERT`/`TLS_KEY`. Each set is "
-     "the other format's ignored option, so only one of them is ever on the "
-     "page. For a `mockServices` location generated as manifests or a chart, "
-     "`sv_ingress` is **required** -- either a backend, or `none` to generate "
-     "it for performance testing alone; see "
+     "Only meaningful for a location whose funcIds include `mockServices`. There "
+     "are **two sets, one per platform**: the four `sv_ingress` options are "
+     "Kubernetes' `KUBERNETES_WEB_EXPOSE_*`, and the three below them are the "
+     "docker agent's `HOSTNAME_OVERRIDE` and `TLS_CERT`/`TLS_KEY`. Each format "
+     "ignores the other's set. For a `mockServices` location generated as "
+     "manifests or a chart, `sv_ingress` is **required** -- a backend, or `none` "
+     "for performance testing only; see "
      "[Service virtualization](service-virtualization.md)."),
     ("CA trust",
-     "Pick **exactly one** of the four modes -- inline PEM, a PEM slot to fill "
-     "in later, an existing ConfigMap, or OpenShift injection. More than one is "
-     "refused rather than resolved. All four mount at `/var/cm` and propagate "
-     "to engines via `KUBERNETES_CA_BUNDLE_MOUNT`."),
+     "Pick **exactly one** of the four modes -- inline PEM, a certificate file "
+     "supplied later, an existing ConfigMap, or OpenShift injection. More than "
+     "one is refused. All four mount at `/var/cm` and reach engines via "
+     "`KUBERNETES_CA_BUNDLE_MOUNT`."),
     ("Scheduling", None),
     ("Engine and agent sizing",
      "All unset by default: crane has its own defaults and this generator only "
      "overrides them when asked. `bzm-opl-gen doctor` checks whatever you set "
      "against real node capacity."),
     ("Cluster checks",
-     "Objects that check the cluster rather than serve tests on it. They are "
-     "not part of the agent: applying the bundle without them deploys exactly "
-     "the same agent."),
+     "Objects that check the cluster rather than serve tests on it. Applying "
+     "the bundle without them deploys exactly the same agent."),
     ("Agent environment",
-     "The escape hatch. BlazeMeter's agent-environment reference is much wider "
-     "than the options above, and this is how the rest is reached without "
+     "For BlazeMeter agent variables that have no option above, without "
      "hand-editing a generated file that the next `generate` overwrites."),
 ]
 
@@ -97,86 +94,66 @@ OPTIONS = [
         "platform", "string", "Platform and output",
         choices=["openshift", "k8s"],
         summary="Target platform: openshift leaves the UID to the SCC, k8s pins runAsUser.",
-        doc="`openshift` = SCC-friendly (no `runAsUser`, engines inherit the "
-            "SCC-assigned UID); `k8s` = pinned `runAsUser` "
-            f"{bundle_options.DEFAULT_OPTIONS['run_as_user']}. The difference is which side "
-            "chooses the UID: OpenShift's SCC assigns one from the namespace's "
-            "range and rejects a pod that pins its own, while plain Kubernetes "
-            "assigns nothing and a restricted PodSecurity namespace then refuses "
-            "the pod for running as root. So neither setting is a superset of the "
-            "other, and the wrong one fails at admission rather than at generate "
-            "time. It is a posture, not a product: the OpenShift default installs "
-            "on vanilla Kubernetes too wherever the namespace assigns UIDs -- "
-            "which is what `openshift_cluster` is for."),
+        doc="Which side chooses the pod UID. `openshift` sets no `runAsUser`, so "
+            "the SCC assigns one from the namespace's range and engines inherit "
+            "it; `k8s` pins `runAsUser` "
+            f"{bundle_options.DEFAULT_OPTIONS['run_as_user']}, because plain "
+            "Kubernetes assigns none and a restricted PodSecurity namespace "
+            "refuses a pod running as root. The wrong one fails at admission, "
+            "not at generate time. It is a posture, not a product: `openshift` "
+            "also installs on any Kubernetes cluster whose namespaces assign "
+            "UIDs -- say which product it is with `openshift_cluster`."),
     Option(
         "openshift_cluster", "boolean", "Platform and output",
         summary="Is the target cluster OpenShift? Decides oc vs kubectl, Routes and trust injection.",
-        doc="The product, where `platform` is only the posture. Default `false`: "
-            "it used to match the default posture, which read the product off "
-            "the posture -- the very thing this pair was split to stop -- and "
-            "handed plain-Kubernetes customers a bundle written in `oc`. Leave "
-            "it `false` for the SCC-friendly posture on a cluster that is not "
-            "OpenShift, and three things follow: "
-            "every command the bundle tells you to run is written with `kubectl` "
-            "rather than `oc`; `sv_ingress: openshift` is refused, because a plain "
-            "API server serves no `route.openshift.io` Route and the agent would "
-            "deploy cleanly and then stall with nothing to create; and "
-            "`ca_openshift_inject` is not offered, because nothing outside "
-            "OpenShift fills a labeled ConfigMap in. Ignored with `platform: k8s`, "
-            "which is the pinned-UID posture and names its own cluster."),
+        doc="The product, where `platform` is the posture. Leave it `false` for "
+            "the SCC-friendly posture on a cluster that is not OpenShift, and "
+            "the bundle's commands are written with `kubectl` rather than `oc`, "
+            "`sv_ingress: openshift` is refused (a plain API server serves no "
+            "Route, so the agent would deploy and then stall), and "
+            "`ca_openshift_inject` is not offered (nothing outside OpenShift "
+            "fills the labeled ConfigMap). Ignored with `platform: k8s`."),
     Option(
         "output_format", "string", "Platform and output",
         choices=["manifests", "helm", "docker"],
         summary="Flat YAML for kubectl, the Helm chart plus a values overlay, or a docker bundle.",
         doc="`manifests` = flat YAML to `kubectl apply`; `helm` = the chart plus "
-            "a values overlay -- see [Helm](helm.md). The same deployment "
-            "expressed twice rather than two codebases, which `tests/helm_parity.py` "
-            "is what holds it to. `docker` is the other platform entirely: one "
-            "agent as one container on a host with a docker daemon, emitted as a "
-            "`docker run` script in BlazeMeter's own documented shape *and* a "
-            "`compose.yaml` describing the same container, which are either/or "
-            "-- see [Docker](docker.md). Most options here are Kubernetes vocabulary and "
-            "reach nothing in it, and its README names the ones this bundle set. "
-            "All three publish virtual services and each does it in its own "
-            "vocabulary -- the two cluster formats through a Kubernetes ingress "
-            "(`sv_ingress` and the two options under it, which the chart takes "
-            "as its `sv.*` values), `docker` through the agent's own "
-            "`sv_hostname` and TLS pair -- so each set is the other's ignored "
-            "options and no format refuses a bundle configured for one."),
+            "a values overlay that renders the same objects -- see "
+            "[Helm](helm.md). `docker` is a different platform: one agent as one "
+            "container on a host with a docker daemon, as a `docker run` script "
+            "in BlazeMeter's documented shape and an equivalent `compose.yaml` "
+            "(use one or the other) -- see [Docker](docker.md). Most options "
+            "are Kubernetes vocabulary and reach nothing there; the bundle's "
+            "README names the ones you set. All three formats publish virtual "
+            "services, each with its own options."),
     Option(
         "namespace", "string", "Platform and output",
         summary="Namespace every generated object is placed in, and the one crane's Role covers.",
         doc="The namespace every generated object carries, and the one crane's "
             "Role and RoleBinding are scoped to. Crane creates engine pods here, "
-            "so it is also where the tests run. **No manifest in the bundle is "
-            "the namespace** -- owning it would let a later `kubectl delete -f .` "
-            "take the namespace and everything else in it -- so the "
-            "bundle's README creates it in its first command instead, and that "
-            "command succeeds whether or not it is already there. `doctor -n` "
+            "so it is also where the tests run. The bundle does **not** contain "
+            "the namespace object -- so a later `kubectl delete -f .` cannot "
+            "take the namespace with it -- and its README creates it with a "
+            "command that succeeds whether or not it already exists. `doctor -n` "
             "overrides it for a check without re-generating."),
 
     # ---- Credentials ---------------------------------------------------
     Option(
         "auth_token", "string", "Credentials",
-        summary="The ship's AUTH_TOKEN. Never minted unless you ask; --rotate-token is the ask.",
-        doc="The agent's `AUTH_TOKEN`, which is what identifies this deployment "
-            "as that ship. Resolved in four steps, and only the second one calls "
-            "BlazeMeter: `--auth-token` wins outright; `--rotate-token` (with "
-            "`--api-key`) issues a **new** one; otherwise the token already "
-            "written into the output directory is reused, provided that bundle's "
-            "`profile.json` names the same ship; otherwise the marker "
-            "`<AUTH_TOKEN>` stays and the command says where a real token comes "
-            "from. It is the one "
-            "option stripped from `out/profile.json`, and it stays stripped -- a "
-            "profile is a file people commit and hand over. **Minting invalidates "
-            "the previous token**, and an agent left holding a stale one does not "
-            "report an auth error: crane answers `404`, logs `Sleeping for 300` "
-            "and never starts its health service, so the pod sits `0/1 Running` "
-            "and reads as a slow boot. Re-apply the whole bundle, Secret "
-            "included, after any rotation. Supplying the token is also the way "
-            "past an account that refuses the fetch outright -- some allow the "
-            "token endpoint only from BlazeMeter's own gateway, and the agent's "
-            "install command in the BlazeMeter UI carries the same value."),
+        summary="The agent's AUTH_TOKEN. Never minted unless you ask; --rotate-token is the ask.",
+        doc="The agent's `AUTH_TOKEN`, which identifies this deployment as that "
+            "agent. Resolved in order, and only the second step calls "
+            "BlazeMeter: `--auth-token` wins; `--rotate-token` (with "
+            "`--api-key`) issues a **new** one; otherwise the token already in "
+            "the output directory is reused if that bundle's `profile.json` "
+            "names the same agent; otherwise the marker `<AUTH_TOKEN>` is "
+            "written and the command says where to get a real one. Never "
+            "written to `profile.json`. **Minting invalidates the previous "
+            "token**, and an agent holding a stale one reports no auth error: "
+            "crane answers `404`, logs `Sleeping for 300` and the pod sits "
+            "`0/1 Running`. Re-apply the whole bundle, Secret included, after "
+            "any rotation. The agent's install command in the BlazeMeter UI "
+            "carries the same value, for accounts that refuse the token API."),
     Option(
         "use_secret", "boolean", "Credentials",
         summary="Put AUTH_TOKEN in a Secret; off puts it in the ConfigMap instead.",
@@ -189,15 +166,13 @@ OPTIONS = [
         "private_registry", "string", "Private registry",
         summary="Registry prefix to pull every image from, e.g. registry.example.com/blazemeter.",
         doc="Sets `DOCKER_REGISTRY`, builds `IMAGE_OVERRIDES` from the facts, and "
-            "rewrites the crane image. Every image the location needs must already "
-            "be mirrored under this prefix -- a key missing from `IMAGE_OVERRIDES` "
-            "does not fail, it silently falls back to the public registry, which is "
-            "the failure `livetest --local-registry` exists to make loud. Run the "
-            "bundle's own `bzm-opl-image-mirror.sh` to fill it: on Kubernetes crane "
-            "composes an engine's reference as `<registry>/<repo path>:<tag>` and "
-            "does not resolve the override for it, so an image mirrored to any "
-            "other path is an ImagePullBackOff on the first test, long after the "
-            "agent reports online."),
+            "rewrites the crane image. Every image the location needs must be "
+            "mirrored under this prefix: a missing one silently falls back to "
+            "the public registry. Fill it with the bundle's own "
+            "`bzm-opl-image-mirror.sh` -- on Kubernetes crane composes an "
+            "engine's reference as `<registry>/<repo path>:<tag>`, so an image "
+            "mirrored to any other path fails with ImagePullBackOff on the "
+            "first test, after the agent already reports online."),
     Option(
         "pull_secret", "string", "Private registry",
         summary="Name of an existing docker-registry Secret used to pull the crane image.",
@@ -209,12 +184,10 @@ OPTIONS = [
         "registry_auth", "boolean", "Private registry",
         summary="Emit commented-out DOCKER_REGISTRY_USERNAME/PASSWORD lines for crane to fill in.",
         doc="Emit commented `DOCKER_REGISTRY_USERNAME` / `DOCKER_REGISTRY_PASSWORD` "
-            "entries. Commented, not set: these are credentials, and a generator "
-            "that wrote them would put them in a file people paste into tickets. "
-            "The lines are there so the shape is right and someone editing the "
-            "bundle does not have to guess the variable names. `pull_secret` is the "
-            "better answer for the crane image itself; this pair is what crane uses "
-            "for the images *it* pulls."),
+            "entries, so the variable names are in place for you to fill in. "
+            "Commented rather than set, so no credential is ever written to a "
+            "generated file. `pull_secret` covers the crane image itself; this "
+            "pair is what crane uses for the images *it* pulls."),
 
     # ---- Agent lifecycle -----------------------------------------------
     Option(
@@ -222,54 +195,49 @@ OPTIONS = [
         default_note="unset -> off",
         summary="Let crane rewrite its own Deployment when BlazeMeter ships a newer agent.",
         doc="`AUTO_KUBERNETES_UPDATE`: does crane rewrite its own Deployment when "
-            "BlazeMeter ships a newer agent? **Off, which is a deliberate departure "
-            "from BlazeMeter's own Kubernetes manifest** -- theirs ships `'true'`, "
-            "and with it on crane takes field ownership of its Deployment within "
-            "seconds of install, so the next `helm upgrade` fails on a conflict "
-            "`--force-conflicts` cannot resolve and changing anything means "
-            "uninstall + install ([Helm](helm.md#managing-the-release-with-helm)). "
-            "The cost of the default is that keeping the agent current is your job "
-            "-- re-generate and re-apply -- and one far enough behind loses support. "
-            "`--auto-update` hands that back to crane on those terms. (BlazeMeter's "
-            "`AUTO_UPDATE` is the Docker-side switch and does nothing on a "
-            "Kubernetes agent, so nothing here emits it.)"),
+            "BlazeMeter releases a newer agent? **Off by default, unlike "
+            "BlazeMeter's own manifest**: with it on, crane takes field ownership "
+            "of its Deployment, so the next `helm upgrade` fails on a conflict "
+            "and changing anything means uninstall + install "
+            "([Helm](helm.md#managing-the-release-with-helm)). With it off, "
+            "keeping the agent current is your job -- re-generate and re-apply. "
+            "(BlazeMeter's `AUTO_UPDATE` is the Docker-side switch and does "
+            "nothing on a Kubernetes agent, so it is not emitted.)"),
 
     # ---- Security and RBAC ---------------------------------------------
     Option(
         "service_account_name", "string", "Security and RBAC",
         summary="The account crane runs as and the RoleBinding grants to. Required, never empty.",
         doc="The account the agent runs as, and the one the RoleBinding (and "
-            "ClusterRoleBinding) grants to. Used whether or not the bundle creates "
-            "it, and **required** -- an empty one is refused rather than resolved to "
-            "the namespace's `default` account, which would bind crane's Role to "
-            "every pod in the namespace. See [the service account](#the-service-account)."),
+            "ClusterRoleBinding) grants to, whether or not the bundle creates it. "
+            "**Required**: left blank it becomes `<SERVICE_ACCOUNT_NAME>` rather "
+            "than the namespace's `default` account, which would bind crane's "
+            "Role to every pod in the namespace. See "
+            "[the service account](#the-service-account)."),
     Option(
         "service_account_create", "boolean", "Security and RBAC",
         summary="Emit the ServiceAccount object; off assumes your platform team already owns it.",
         doc="Emit the ServiceAccount object. `--no-create-service-account` leaves "
-            "it out for an account your platform team already owns; everything still "
-            "references `service_account_name`, so it must exist before you apply. If "
-            "it does not, nothing fails at apply time -- the Deployment is accepted "
-            "and no pod is ever created. `doctor` checks for it, and `livetest` "
-            "refuses a profile with this off, because the rig creates its own "
-            "namespace and would wait out its whole timeout."),
+            "it out for an account your platform team already owns; everything "
+            "still references `service_account_name`, so it must exist before "
+            "you apply. If it does not, nothing fails at apply time -- the "
+            "Deployment is accepted and no pod is ever created. `doctor` checks "
+            "for it, and `livetest` refuses a profile with this off."),
     Option(
         "cluster_rbac", "boolean", "Security and RBAC",
         summary="Include the optional read-only nodes ClusterRole and binding.",
         doc="Include the optional read-only nodes ClusterRole/Binding. Not required "
             "for performance tests -- it lets crane read node capacity to place "
-            "engines, which is a nicety, and cluster-scoped RBAC is the thing a "
-            "platform team is most likely to refuse. Left off, the rest of the "
-            "bundle is entirely namespace-scoped."),
+            "engines, and cluster-scoped RBAC is what a platform team is most "
+            "likely to refuse. Left off, the bundle is entirely namespace-scoped."),
     Option(
         "run_as_user", "integer", "Security and RBAC",
         summary="UID for the crane pod on platform k8s. Ignored on OpenShift, where the SCC assigns one.",
         doc="The UID crane's pod runs as, on `platform: k8s` only. On OpenShift "
-            "the SCC assigns a UID from the namespace's range and a pinned one is "
-            "rejected at admission, so nothing is emitted there. 1337 is arbitrary "
-            "beyond being non-root, which is what restricted PodSecurity requires. "
-            "With `restrict_engines` on, this is also the UID:GID the engines "
-            "inherit."),
+            "the SCC assigns a UID from the namespace's range and rejects a "
+            "pinned one, so nothing is emitted there. Any non-root UID satisfies "
+            "restricted PodSecurity. With `restrict_engines` on, this is also "
+            "the UID:GID the engines inherit."),
     Option(
         "restrict_engines", "boolean", "Security and RBAC",
         summary="Engines crane spawns drop all capabilities and inherit crane's UID:GID.",
@@ -278,9 +246,9 @@ OPTIONS = [
             "is a privileged engine pod, which restricted PodSecurity, OpenShift SCC "
             "and GKE Autopilot all reject -- after the agent is online, so the run "
             "hangs at `BOOT_STARTING`. `--no-restrict-engines` only for an image that "
-            "needs a capability -- and it removes the posture from every container "
-            "crane creates, so see which images have run under it in "
-            "[Hardened engines](hardened-engines.md) first."),
+            "needs a capability; it removes the posture from every container "
+            "crane creates, so check [Hardened engines](hardened-engines.md) "
+            "first."),
 
     # ---- Networking ----------------------------------------------------
     Option(
@@ -291,17 +259,18 @@ OPTIONS = [
             "often disallowed. With `sv_ingress`, only `nginx` and `openshift` "
             "publish over NODEPORT -- [the other two are "
             "refused](service-virtualization.md#service_type-and-the-backend-you-chose). "
-            "Changing it later does not restyle the Services crane already pooled, so "
-            "`kubectl get svc` will not report what is configured."),
+            "Changing it later does not change the Services crane already "
+            "created, so `kubectl get svc` may not show what is configured."),
     Option(
         "proxy", "object", "Networking",
         summary="HTTP(S)_PROXY / NO_PROXY for the agent, with optional credentials.",
         doc="`HTTP(S)_PROXY` / `NO_PROXY`; optional `username`/`password` are "
             "URL-encoded into the proxy URL (BlazeMeter has no separate proxy-auth "
-            "envs) and the credentialed URLs live in the Secret when `use_secret` is "
-            "on. Keys: `http`, `https`, `no_proxy`, `username`, `password`. Note that "
-            "**JMeter ignores these for sampler traffic** -- the proxy an engine uses "
-            "to reach the system under test has to be set in the test itself."),
+            "variables) and the credentialed URLs live in the Secret when "
+            "`use_secret` is on. Keys: `http`, `https`, `no_proxy`, `username`, "
+            "`password`. **JMeter ignores these for sampler traffic** -- the "
+            "proxy an engine uses to reach the system under test has to be set "
+            "in the test itself."),
 
     # ---- Service virtualization ----------------------------------------
     Option(
@@ -312,11 +281,11 @@ OPTIONS = [
             "`mockServices` location; `openshift` needs `platform: openshift`; "
             "`contour` and `istio` are refused with `service_type: NODEPORT`. Each "
             "backend grants a different set of resources in crane's Role, so this "
-            "picks the RBAC as well as the objects. `none` is the third state and "
-            "means *performance only*: a location carrying `mockServices` "
-            "generates without any of the above, and virtual services deployed to "
-            "it stall at `WAITING_FOR_DOMAIN`. Unset is not that -- it is nobody "
-            "having answered, which is what such a location is refused for."),
+            "picks the RBAC as well as the objects. `none` means *performance "
+            "only*: the location generates without an ingress, and virtual "
+            "services deployed to it stall at `WAITING_FOR_DOMAIN`. Unset is "
+            "not `none` -- it is an unanswered question, and such a location is "
+            "refused until it is answered."),
     Option(
         "sv_subdomain", "string", "Service virtualization",
         summary="Wildcard domain your ingress controller serves; the endpoint host suffix.",
@@ -328,15 +297,13 @@ OPTIONS = [
         "sv_tls_secret", "string", "Service virtualization",
         summary="Wildcard TLS secret in the agent's own namespace, not default. Required with sv_ingress, even for HTTP.",
         doc="Wildcard TLS secret; required with `sv_ingress`, **even for HTTP** -- "
-            "crane names it unconditionally. It goes in the **agent's own "
-            "namespace**, which is where crane creates the object that references "
-            "it, and a Kubernetes Ingress resolves `tls.secretName` in its own "
-            "namespace: nothing reads one from another. BlazeMeter's page says "
-            "`default`, which is only where their walkthrough installs the agent. "
-            "An ingress referencing a Secret that is not there is accepted and "
-            "then **serves anyway** -- measured on ingress-nginx, the endpoint "
-            "answers 200 over the controller's own fake certificate, so the "
-            "failure lands on whoever verifies rather than at deploy time."),
+            "crane always names it. Create it in the **agent's own namespace**: "
+            "a Kubernetes Ingress resolves `tls.secretName` in its own namespace "
+            "only, and BlazeMeter's page says `default` only because their "
+            "walkthrough installs the agent there. An ingress naming a missing "
+            "Secret still serves -- over the controller's own fake certificate "
+            "on ingress-nginx -- so the failure shows up for whoever verifies "
+            "TLS, not at deploy time."),
     Option(
         "sv_istio_gateway", "string", "Service virtualization",
         summary="Existing istio Gateway to attach to; unset means crane creates one per virtual service.",
@@ -348,31 +315,27 @@ OPTIONS = [
     Option(
         "sv_hostname", "string", "Service virtualization",
         summary="Docker only: the hostname this agent advertises its virtual services under.",
-        doc="**Docker only** -- `HOSTNAME_OVERRIDE`, and the docker agent's "
-            "answer to the whole `sv_ingress` group above. BlazeMeter's Asset "
-            "Catalog builds endpoint URLs from the combination of hostname and "
-            "port; without it they are built from this host's IP address and "
-            "port, which works and is worse. No default and no format is "
-            "imposed -- BlazeMeter's own example value is `C123ABCXYZ` and "
-            "nothing they publish says what shape it has to be -- but it has "
-            "to resolve to this host from wherever the clients are, and with "
+        doc="**Docker only** -- `HOSTNAME_OVERRIDE`, the docker agent's "
+            "counterpart to the `sv_ingress` group. BlazeMeter builds endpoint "
+            "URLs from this hostname and the port; without it they use this "
+            "host's IP address. Any form BlazeMeter accepts, but it has to "
+            "resolve to this host from wherever the clients are, and with "
             "`sv_tls_cert` set it is checked against that certificate at "
-            "generate time. Ignored by the Kubernetes formats: a Kubernetes "
-            "agent returns a DNS-based URL and needs no hostname override."),
+            "generate time. Ignored by the Kubernetes formats, whose agents "
+            "return a DNS-based URL."),
     Option(
         "sv_tls_cert", "string", "Service virtualization",
         summary="Docker only: inline PEM certificate the agent serves its virtual services with.",
         doc="**Docker only** -- the X509 certificate, inline PEM, written into "
             "the bundle as `sv-tls.crt`, mounted at `/etc/ssl/certs/public.pem` "
-            "and named there by `TLS_CERT`. Content rather than a path, exactly "
-            "as `ca_bundle` is, because a bundle has to be generatable for a "
-            "host nobody here can see; the script's `SV_TLS_CERT` still "
-            "overrides to a file the host already keeps. Optional: without the "
-            "pair the endpoints are plain HTTP. The hostname in `sv_hostname` "
-            "is checked against this certificate's Subject Alternative Name "
-            "and Common Name when it generates -- a mismatch is refused there, "
-            "because from the agent's end it looks like a healthy agent whose "
-            "endpoint every client rejects."),
+            "and named by `TLS_CERT`. Content rather than a path, like "
+            "`ca_bundle`, so a bundle can be generated for a host you cannot "
+            "see; the script's `SV_TLS_CERT` still points it at a file the host "
+            "already keeps. Optional: without the pair the endpoints are plain "
+            "HTTP. `sv_hostname` is checked against this certificate's Subject "
+            "Alternative Name and Common Name at generate time, and a mismatch "
+            "is refused -- otherwise the agent looks healthy while every client "
+            "rejects its endpoint."),
     Option(
         "sv_tls_key", "string", "Service virtualization",
         summary="Docker only: inline PEM private key for sv_tls_cert. PKCS#8 syntax, and never in profile.json.",
@@ -380,54 +343,42 @@ OPTIONS = [
             "written as `sv-tls.key` and mounted at "
             "`/etc/ssl/certs/privatekey.pem` for `TLS_KEY`. BlazeMeter require "
             "**PKCS#8 syntax** (`-----BEGIN PRIVATE KEY-----`); a PKCS#1 key "
-            "(`-----BEGIN RSA PRIVATE KEY-----`) is the common export and is "
-            "refused here, naming the conversion -- `openssl pkcs8 -topk8"
-            " -nocrypt`. It is a credential, so it is **not** written to "
-            "`profile.json`: `generate --profile` on such a bundle needs "
-            "`--auth-token` and `--sv-tls-key` supplied again. `sv_tls_cert` "
-            "beside it is not a credential and stays in the profile."),
+            "(`-----BEGIN RSA PRIVATE KEY-----`) is refused, naming the "
+            "conversion -- `openssl pkcs8 -topk8 -nocrypt`. A credential, so "
+            "**not** written to `profile.json`: `generate --profile` on such a "
+            "bundle needs `--auth-token` and `--sv-tls-key` again."),
 
     # ---- CA trust ------------------------------------------------------
     Option(
         "ca_bundle", "string", "CA trust",
         summary="Inline PEM; the generator creates the ConfigMap holding it.",
-        doc="Inline PEM -- the generator creates the ConfigMap. The simplest mode "
-            "and the one that goes stale: nothing rotates it for you. Bundles are "
-            "large enough that the manifest crosses the 256KB cap on kubectl's "
-            "last-applied-configuration annotation, which is why anything over 200KB "
+        doc="Inline PEM -- the generator creates the ConfigMap. The simplest mode, "
+            "and the one that goes stale: nothing rotates it for you. A large "
+            "bundle can push the manifest past the 256KB cap on kubectl's "
+            "last-applied-configuration annotation, so anything over 200KB "
             "applies `--server-side`."),
     Option(
         "ca_bundle_slot", "boolean", "CA trust",
         summary="The certificate is a file you supply; name it with ca_cert_file.",
         doc="The certificate is a **file**, named by `ca_cert_file`, and the "
-            "bundle carries no PEM anywhere. This is the convention BlazeMeter's "
-            "own agent documentation follows, and their helm chart with it -- "
-            "`ca_bundle.request_ca_bundle` there is a file name, not content. "
-            "What each format does with the name differs, because the platforms "
-            "genuinely differ: the chart reads the file out of the chart "
-            "directory at install (`caBundle.file`, Helm's own `.Files.Get`), a "
-            "manifests bundle prints the `kubectl create configmap "
-            "--from-file=<key>=<file>` line its README leads with, and a docker "
-            "bundle mounts the file beside its run script. All three end at the "
-            "same crane Deployment. Refused beside `ca_bundle` -- naming a file "
-            "and supplying the certificate are two answers to one question."),
+            "bundle carries no PEM -- the convention BlazeMeter's own agent "
+            "documentation and helm chart follow. The chart reads the file from "
+            "the chart directory at install (`caBundle.file`), a manifests "
+            "bundle's README leads with the `kubectl create configmap "
+            "--from-file=<key>=<file>` line, and a docker bundle mounts the "
+            "file beside its run script. Refused together with `ca_bundle`."),
     Option(
         "ca_cert_file", "string", "CA trust",
         default_note="unset -> <CA_CERT_FILE>",
         summary="The certificate's file name, used everywhere the file appears.",
         doc="The certificate's file name, and the only field the file mode asks "
-            "for. One field rather than two: BlazeMeter's chart takes "
-            "`request_ca_bundle` and `aws_ca_bundle` separately and one "
-            "certificate may serve both, which is what this generator writes. "
-            "The name reaches the key inside the ConfigMap, the file mounted "
-            "under `ca_configmap_key`'s mount path, the chart-directory file "
-            "helm reads, and the `--from-file=` key -- one file, named once. "
-            "Left blank it becomes `<CA_CERT_FILE>`, because a bundle is "
-            "routinely generated before anybody knows what the certificate will "
-            "be called and a name invented here would read as one somebody "
-            "chose. With `ca_bundle` instead -- the certificate in hand -- it "
+            "for. It names the key inside the ConfigMap, the mounted file, the "
+            "chart-directory file helm reads, and the `--from-file=` key. One "
+            "certificate serves both of BlazeMeter's `request_ca_bundle` and "
+            "`aws_ca_bundle`. Left blank it becomes `<CA_CERT_FILE>`, to be "
+            "filled in once the file is known. With `ca_bundle` instead it "
             "defaults to `ca-bundle.crt`, since the bundle writes that file "
-            "itself and the name is genuinely the generator's to pick."),
+            "itself."),
     Option(
         "ca_existing_configmap", "string", "CA trust",
         summary="Reference a trust-bundle ConfigMap your platform team owns and rotates.",
@@ -441,13 +392,12 @@ OPTIONS = [
         default_note="unset -> ca-bundle.crt",
         summary="Which key within ca_existing_configmap holds the bundle. Defaults to ca-bundle.crt.",
         doc="The bundle file key within `ca_existing_configmap`. Unset means "
-            "`ca-bundle.crt`, which is the convention both OpenShift and most "
-            "cert-manager setups follow. Set it when yours does not -- the mount "
-            "path engines are given is built from it, so a wrong key mounts an "
-            "empty file rather than failing. That is why the README's create "
-            "command writes `--from-file=<key>=<path>` rather than the bare "
-            "`--from-file=<path>` BlazeMeter document, which keys the entry on "
-            "the file's own name."),
+            "`ca-bundle.crt`, the convention OpenShift and most cert-manager "
+            "setups follow. Set it when yours differs: the engines' mount path "
+            "is built from it, and a wrong key mounts an empty file rather than "
+            "failing. That is why the README's create command writes "
+            "`--from-file=<key>=<path>` rather than the bare `--from-file=<path>` "
+            "BlazeMeter document, which keys the entry on the file's own name."),
     Option(
         "ca_openshift_inject", "boolean", "CA trust",
         summary="Emit a labeled empty ConfigMap; OpenShift injects and rotates the cluster trust bundle.",
@@ -461,11 +411,11 @@ OPTIONS = [
         "tolerations", "array", "Scheduling",
         summary="Kubernetes toleration list, applied to the crane pod and to every engine.",
         doc="A Kubernetes toleration list, applied to the crane pod **and** passed "
-            "to the engines crane spawns. Both by default, because on a one-pool "
-            "cluster a taint that keeps crane off a node pool keeps the engines off "
-            "it too, and a bundle that tolerated one but not the other schedules the "
-            "agent and then leaves every test Pending. Set `engine_tolerations` to "
-            "aim the engines at a different pool. JSON, e.g. "
+            "to the engines crane spawns: on a one-pool cluster, a taint that "
+            "keeps crane off a pool keeps the engines off it too, and tolerating "
+            "only one would schedule the agent and leave every test Pending. "
+            "Set `engine_tolerations` to aim the engines at a different pool. "
+            "JSON, e.g. "
             "`[{\"key\":\"lifecycle\",\"operator\":\"Equal\",\"value\":\"spot\",\"effect\":\"NoSchedule\"}]`."),
     Option(
         "node_selector", "object", "Scheduling",
@@ -473,53 +423,43 @@ OPTIONS = [
         doc="A label map applied to the crane pod and passed to the engines, for "
             "the same reason as `tolerations`. JSON, e.g. `{\"pool\":\"loadtest\"}`. "
             "`doctor` measures capacity against the nodes that match it, so a "
-            "selector matching nothing is reported as no capacity rather than as a "
-            "typo."),
+            "selector matching nothing is reported as no capacity."),
     Option(
         "engine_node_selector", "object", "Scheduling",
         summary="Label selector for engines only, overriding node_selector -- the dedicated engine pool.",
         doc="A label map applied to the engines **only**, overriding "
-            "`node_selector` for them and leaving it to place the crane pod. This "
-            "is the two-pool shape: crane is one small always-on pod, an engine is "
-            "1-n large pods that exist only during a run, and a pool that suits "
-            "one suits the other badly. Unset means engines follow crane, which is "
-            "what every bundle did before this option. An explicit `{}` is "
-            "different from unset and is worth having: it says engines take no "
-            "selector even though crane has one, for a crane pinned to a tainted "
-            "infra pool with engines free to land anywhere. **The dedicated pool "
-            "does not by itself give engines the size they are configured for** -- "
-            "engine *requests* come from the location (overrideCPU/overrideMemory) "
-            "and default to 250m/256Mi when it sets neither, "
-            "and both the scheduler and the cluster autoscaler work on requests, "
-            "so a pool without a `maxPods` ceiling packs many engines onto one "
-            "node. The generated `nodepools.md` carries the per-flavour recipe."),
+            "`node_selector` for them. This is the two-pool shape: crane is one "
+            "small always-on pod, engines are large pods that exist only during "
+            "a run. Unset means engines follow crane; an explicit `{}` means "
+            "engines take no selector even though crane has one. **A dedicated "
+            "pool does not by itself give engines their configured size**: "
+            "engine *requests* come from the location (overrideCPU/"
+            "overrideMemory, 250m/256Mi when unset), the scheduler and "
+            "autoscaler work on requests, and a pool without a `maxPods` "
+            "ceiling packs many engines onto one node. The generated "
+            "`nodepools.md` carries the per-provider recipe."),
     Option(
         "engines_per_node", "integer", "Scheduling",
         default_note="unset -> 1",
         summary="How many engines a node of the engine pool should hold. Sizes the node pool recipe.",
         doc="How many engines one node of the engine pool is meant to hold. It "
-            "reaches no manifest -- it sizes the generated `nodepools.md` "
-            "(`maxPods` and the machine type together) and is what `doctor`'s "
-            "engine-packing check judges against. Unset means 1, the "
-            "conservative answer: engines are measuring instruments, and two "
-            "sharing a node contend for CPU, NIC and cache in ways that surface "
-            "as latency the load generator invented rather than latency the "
-            "system produced. Raising it is legitimate and cheaper -- every node "
-            "spends about a CPU and 2Gi on system pods before an engine arrives, "
-            "so one large node beats several small ones -- provided the node is "
-            "sized for that many engines at their **limits**, which the recipe "
-            "does for you. Note that a platform floor can override it: GKE "
-            "refuses `--max-pods-per-node` below 8, which after ~6 system pods "
-            "leaves room for 2 engines whatever this says, and the recipe sizes "
-            "the node for the larger number rather than pretending otherwise."),
+            "reaches no manifest: it sizes the generated `nodepools.md` "
+            "(`maxPods` and the machine type) and is what `doctor`'s "
+            "engine-packing check judges against. Unset means 1: engines are "
+            "measuring instruments, and two on one node contend for CPU, NIC and "
+            "cache, which shows up as latency the load generator added. Raising "
+            "it is cheaper -- every node spends about a CPU and 2Gi on system "
+            "pods -- provided the node is sized for that many engines at their "
+            "**limits**, which the recipe does. A platform floor can override "
+            "it: GKE refuses `--max-pods-per-node` below 8, and the recipe sizes "
+            "for the larger number."),
     Option(
         "engine_tolerations", "array", "Scheduling",
         summary="Toleration list for engines only, overriding tolerations -- lets the engine pool be tainted.",
         doc="A toleration list applied to the engines **only**, overriding "
             "`tolerations` for them. The companion to `engine_node_selector`: a "
-            "taint on the engine pool is what keeps everything else in the cluster "
-            "off nodes that exist to be empty between runs, and this is what lets "
-            "the engines past it. Unset means engines follow crane; an explicit "
+            "taint keeps everything else off the engine pool, and this lets the "
+            "engines past it. Unset means engines follow crane; an explicit "
             "`[]` means they tolerate nothing even though crane does."),
 
     # ---- Sizing --------------------------------------------------------
@@ -528,33 +468,31 @@ OPTIONS = [
         default_note="BlazeMeter documents 2",
         summary="KUBERNETES_RESOURCES_LIMITS_CPU -- the CPU limit crane stamps on every engine.",
         doc="`KUBERNETES_RESOURCES_LIMITS_CPU` -- the CPU limit crane stamps on "
-            "every engine it spawns. Unset, it derives from the location's "
-            "`overrideCPU` (the engine's *request*, so the two halves of one "
-            "figure agree by construction), else BlazeMeter's documented default "
-            "of 2 -- the env is always carried, because doctor certifies that "
-            "figure and a ConfigMap without it ran engines with no limits at "
-            "all. Worth lowering on an emulated arm64 runtime, where a 2-CPU "
-            "engine stays Pending. This generator emits no LimitRange "
-            "and will not: crane sets engine requests explicitly, so a "
-            "`defaultRequest` never reaches them."),
+            "every pod it spawns. Unset, it derives from the location's "
+            "`overrideCPU` (the engine's *request*), else BlazeMeter's "
+            "documented default of 2; the variable is always written, so "
+            "engines never run without a limit. Worth lowering on an emulated "
+            "arm64 runtime, where a 2-CPU engine stays Pending. No LimitRange "
+            "is emitted: crane sets engine requests explicitly, so a "
+            "`defaultRequest` would never reach them."),
     Option(
         "engine_mem_limit", "string", "Engine and agent sizing",
         default_note="BlazeMeter documents 8Gi",
         summary="KUBERNETES_RESOURCES_LIMITS_MEMORY -- the memory limit crane stamps on every engine.",
         doc="`KUBERNETES_RESOURCES_LIMITS_MEMORY` -- the memory limit crane stamps "
-            "on every engine it spawns. Unset, it derives from the location's "
+            "on every pod it spawns. Unset, it derives from the location's "
             "`overrideMemory` (MB, read as Mi), else the documented default of "
-            "8Gi -- always carried, for the same reason as the CPU limit. "
-            "`livetest --run-test` prints what an engine actually used as "
-            "`ENGINE SIZING:`, which is the number to size from."),
+            "8Gi -- always written, like the CPU limit. `livetest --run-test` "
+            "prints what an engine actually used as `ENGINE SIZING:`, which is "
+            "the number to size from."),
     Option(
         "engine_ephemeral_request_mb", "integer", "Engine and agent sizing",
         summary="KUBERNETES_REQUESTS_EPHEMERAL_STORAGE in MB, per engine pod.",
         doc="`KUBERNETES_REQUESTS_EPHEMERAL_STORAGE`, in MB. Matters most on GKE "
             "Autopilot, which sizes the node's boot disk from what the pod requests "
-            "and gives an engine that requests nothing a share too small for the "
+            "and gives an engine that requests nothing too little room for the "
             "artifacts a run produces. BlazeMeter documents roughly 60GB of disk and "
-            "40GB of `/tmp` per concurrent engine; requesting the whole of that on a "
+            "40GB of `/tmp` per concurrent engine; requesting all of that on a "
             "shared cluster is usually wrong, so set it from what a real run used."),
     Option(
         "engine_ephemeral_limit_mb", "integer", "Engine and agent sizing",
@@ -568,52 +506,36 @@ OPTIONS = [
         "crane_hook", "boolean", "Cluster checks",
         summary="Add crane-hook: a one-shot Pod that checks the cluster before the agent runs.",
         doc="Adds [crane-hook](https://github.com/Blazemeter/crane-hook) to the "
-            "bundle -- a one-shot Pod, plus its own read-only Role and RoleBinding, "
-            "that checks node capacity, egress to BlazeMeter and the registries, the "
-            "RBAC the agent needs, and (for service virtualization) the ingress and "
-            "its TLS secret. It exits 0 or 1 and stops; `kubectl logs cranehook` is "
-            "the report, and it is yours to delete when you have read it. Off by "
-            "default because it is a check rather than part of the agent. Under "
-            "`--format helm` it becomes the chart's `helm test` hook, so `helm test "
-            "<release>` runs it and nothing runs at install time. With "
-            "`private_registry` its image is added to the mirror script -- it is not "
-            "in the location's inventory, so an air-gapped bundle would otherwise "
-            "carry the one object that cannot pull."),
+            "bundle -- a one-shot Pod with its own read-only Role and "
+            "RoleBinding that checks node capacity, egress to BlazeMeter and the "
+            "registries, the RBAC the agent needs, and (for service "
+            "virtualization) the ingress and its TLS secret. It exits 0 or 1; "
+            "`kubectl logs cranehook` is the report, and you delete it when "
+            "done. Under `--format helm` it becomes the chart's `helm test` "
+            "hook, run by `helm test <release>`. With `private_registry` its "
+            "image is added to the mirror script, since it is not in the "
+            "location's image list."),
     # ---- Agent environment ---------------------------------------------
     Option(
         "extra_env", "object", "Agent environment",
         summary="Extra agent environment variables, as NAME: value. Refuses any name the bundle already writes.",
-        doc="Agent environment variables this generator has no option of its "
-            "own for -- `{\"PREFERRED_INTERFACE\": \"eth1\"}`. BlazeMeter's "
-            "agent-environment reference is far wider than the options above, "
-            "and the alternative was editing the generated ConfigMap by hand, "
-            "which the next `generate` silently reverts. Carried by all three "
+        doc="Agent environment variables with no option of their own -- "
+            "`{\"PREFERRED_INTERFACE\": \"eth1\"}`. Carried by all three "
             "formats: ConfigMap entries for `manifests`, `extraEnv` in the "
-            "values overlay for `helm`, `--env` flags in the `docker` script. "
-            "It reaches the **agent**: crane's pod reads it, and the engines "
-            "crane spawns do not, because crane builds their environment from "
-            "the `KUBERNETES_*` variables rather than passing its own down. "
-            "Every name the generator writes for itself is **refused**, "
-            "naming the option that owns it -- two values for one key is a "
-            "duplicate ConfigMap entry, and which one wins is not the one the "
-            "form that set it shows. The refused set is the union across "
-            "formats, so a Kubernetes variable is refused in a docker bundle "
-            "too: it reaches nothing there either, and accepting it would read "
-            "as a setting that had been made. What is left to set is served as "
-            "`/api/agent-env` -- BlazeMeter's documented reference minus every "
-            "name an option above writes, and minus everything that reaches a "
-            "functionality the location does not run -- so the web UI offers "
-            "the variables as a list with a control per type rather than "
-            "asking for a name typed from memory. Offering is not refusing: a "
-            "variable the list leaves out is still accepted here and still "
-            "carried by the bundle."),
+            "values overlay for `helm`, `--env` flags for `docker`. They reach "
+            "the **agent** only: crane builds the engines' environment from the "
+            "`KUBERNETES_*` variables rather than passing its own down. Every "
+            "name the generator writes itself is **refused**, naming the option "
+            "that owns it, in every format -- set it there instead. The web UI "
+            "lists BlazeMeter's documented variables that are left to set for "
+            "this location; a variable not on that list is still accepted."),
     Option(
         "crane_ephemeral_storage", "string", "Engine and agent sizing",
         default_note=footprint.CRANE_EPHEMERAL_STORAGE,
         summary="Crane's own ephemeral-storage request and limit. One value sets both.",
         doc="Crane's own pod, e.g. `2Gi`. One value sets **both** the request and "
-            "the limit, deliberately: crane's disk use is its image plus logs, and a "
-            "request below the limit on a cluster that sizes nodes from requests just "
+            "the limit: crane's disk use is its image plus logs, and a request "
+            "below the limit on a cluster that sizes nodes from requests just "
             "moves the eviction somewhere harder to see. Unset uses "
             f"`{footprint.CRANE_EPHEMERAL_STORAGE}`."),
 ]
