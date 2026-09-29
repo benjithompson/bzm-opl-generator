@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 from bzm_opl_gen import api, core, generate as gen
+from bzm_opl_gen import bundle_names, bundle_options, image_registry
 from test_generate import FACTS
 
 
@@ -420,7 +421,7 @@ def test_generate_mints_nothing_by_default_even_holding_a_key():
     c = FakeClient()
     files = core.generate_bundle(FACTS, {"namespace": "ns1"}, client=c)
     assert c.calls == []
-    assert gen.DEFAULT_OPTIONS["auth_token"] in files["bzm_secret.yaml"]
+    assert bundle_options.DEFAULT_OPTIONS["auth_token"] in files["bzm_secret.yaml"]
 
 
 def test_a_token_in_the_options_wins_outright_and_a_rotation_is_not_silent():
@@ -577,11 +578,11 @@ def test_a_bundle_whose_ship_cannot_be_confirmed_is_refused_too(tmp_path):
     given differs, because so does the remedy: pass the token rather than go
     looking at another directory."""
     _bundle(tmp_path, auth_token="TOKENVALUE")
-    os.remove(os.path.join(str(tmp_path), gen.PROFILE_FILE))
+    os.remove(os.path.join(str(tmp_path), bundle_names.PROFILE_FILE))
     opts = {"namespace": "ns1"}
     with pytest.raises(core.BadRequest) as caught:
         core.resolve_auth_token(FACTS, opts, out_dir=str(tmp_path))
-    assert gen.PROFILE_FILE in str(caught.value)
+    assert bundle_names.PROFILE_FILE in str(caught.value)
     assert "auth_token" not in opts
     assert "TOKENVALUE" in (tmp_path / "bzm_secret.yaml").read_text()
 
@@ -800,7 +801,7 @@ def test_mirroring_by_hand_pushes_where_the_bundle_will_look():
     files = gen.generate(FACTS, {"namespace": "ns1", "private_registry": reg})
     overrides = json.loads(yaml.safe_load(
         files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
-    assert pushed == set(overrides.values()) | {gen._crane_image(
+    assert pushed == set(overrides.values()) | {image_registry.crane_image(
         FACTS, {"private_registry": reg})}
 
 
@@ -1473,13 +1474,11 @@ def test_detect_never_reads_a_secret_back_out(monkeypatch, tmp_path):
 # -- the vocabulary -----------------------------------------------------------
 
 def test_option_defaults_are_the_generator_s_own():
-    from bzm_opl_gen import generate as gen_mod
-    assert core.option_defaults() == gen_mod.DEFAULT_OPTIONS
+    assert core.option_defaults() == bundle_options.DEFAULT_OPTIONS
 
 
 def test_option_docs_cover_every_option():
-    from bzm_opl_gen import generate as gen_mod
-    assert set(core.option_docs()) == set(gen_mod.DEFAULT_OPTIONS)
+    assert set(core.option_docs()) == set(bundle_options.DEFAULT_OPTIONS)
 
 
 # -- the funcId vocabulary, and where it comes from ----------------------------

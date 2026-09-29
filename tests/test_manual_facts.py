@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import api  # noqa: E402
 from bzm_opl_gen import facts as facts_mod  # noqa: E402
 from bzm_opl_gen import generate as gen  # noqa: E402
+from bzm_opl_gen import bundle_names, markers as markers_mod, required_fields  # noqa: E402
 
 from test_generate import FACTS  # noqa: E402
 from versions_fixtures import (VERSIONS_GUI, VERSIONS_PERFORMANCE,  # noqa: E402
@@ -97,8 +98,8 @@ def test_a_full_bundle_generates_from_nothing_else():
 
 def test_it_also_generates_a_chart():
     files = _gen(facts_mod.manual(H, S), output_format="helm")
-    assert gen.HELM_VALUES_FILE in files
-    v = yaml.safe_load(files[gen.HELM_VALUES_FILE])
+    assert bundle_names.HELM_VALUES_FILE in files
+    v = yaml.safe_load(files[bundle_names.HELM_VALUES_FILE])
     assert v["harborId"] == H and v["shipId"] == S and v["authToken"] == "TOK"
 
 
@@ -137,15 +138,15 @@ def test_an_id_nobody_has_is_its_own_marker(harbor, ship, marked):
     f = facts_mod.manual(harbor, ship)
     got = [k for k, v in (("harbor_id", f["harbor_id"]),
                           ("ship_id", f["ships"][0]["id"]))
-           if gen.is_placeholder(v)]
+           if markers_mod.is_placeholder(v)]
     assert got == marked
     # Each names its own field, which is the half a shared marker never had: the
     # bundle is handed on, and `<SHIP_ID>` in the labels says which id is missing
     # without the README being the only thing that does.
     if "harbor_id" in marked:
-        assert f["harbor_id"] == gen.marker("harbor_id")
+        assert f["harbor_id"] == markers_mod.marker("harbor_id")
     if "ship_id" in marked:
-        assert f["ships"][0]["id"] == gen.marker("ship_id")
+        assert f["ships"][0]["id"] == markers_mod.marker("ship_id")
 
 
 def test_a_bundle_for_a_location_that_does_not_exist_yet():
@@ -153,16 +154,16 @@ def test_a_bundle_for_a_location_that_does_not_exist_yet():
     and the README names both fields. What stops it is the cluster: a marker is
     not a legal label value, so the crane Deployment is refused with the field
     named -- measured with `kubectl apply --dry-run=server` (see
-    generate.PLACEHOLDER_REFUSED_BY_API)."""
+    required_fields.PLACEHOLDER_REFUSED_BY_API)."""
     f = facts_mod.manual("", "")
     files = _gen(f)
     cm = _cm(files)
-    assert cm["HARBOR_ID"] == gen.marker("harbor_id")
-    assert cm["SHIP_ID"] == gen.marker("ship_id")
+    assert cm["HARBOR_ID"] == markers_mod.marker("harbor_id")
+    assert cm["SHIP_ID"] == markers_mod.marker("ship_id")
     dep = yaml.safe_load(files["bzm_deployment.yaml"])
-    assert dep["metadata"]["labels"]["harbor_id"] == gen.marker("harbor_id")
-    assert dep["spec"]["selector"]["matchLabels"]["ship_id"] == gen.marker("ship_id")
-    assert gen.placeholder_fields(f, {"ship_id": gen.marker("ship_id")}) == [
+    assert dep["metadata"]["labels"]["harbor_id"] == markers_mod.marker("harbor_id")
+    assert dep["spec"]["selector"]["matchLabels"]["ship_id"] == markers_mod.marker("ship_id")
+    assert required_fields.placeholder_fields(f, {"ship_id": markers_mod.marker("ship_id")}) == [
         "harbor_id", "ship_id"]
     readme = files["README.md"]
     assert "not finished" in readme
@@ -178,10 +179,10 @@ def test_the_profile_records_the_agent_and_not_the_location():
     blank, and must not be made to look as though it could: livetest reads
     HARBOR_ID out of the ConfigMap for the same reason."""
     files = _gen(facts_mod.manual("", ""))
-    prof = json.loads(files[gen.PROFILE_FILE])
+    prof = json.loads(files[bundle_names.PROFILE_FILE])
     assert "harbor_id" not in prof
-    assert prof["ship_id"] == gen.marker("ship_id")
-    assert gen.placeholder_options(prof) == ["ship_id"]
+    assert prof["ship_id"] == markers_mod.marker("ship_id")
+    assert required_fields.placeholder_options(prof) == ["ship_id"]
 
 
 def test_a_second_real_agent_is_still_a_refusal_rather_than_a_marker():
@@ -358,7 +359,7 @@ def test_the_helm_format_serves_a_mock_location_typed_by_hand():
     f = facts_mod.manual(H, S, func_ids=["mockServices"])
     files = _gen(f, output_format="helm", sv_ingress="nginx",
                  sv_subdomain="apps.example.com", sv_tls_secret="wc")
-    assert "ingress: \"nginx\"" in files[gen.HELM_VALUES_FILE]
+    assert "ingress: \"nginx\"" in files[bundle_names.HELM_VALUES_FILE]
 
 
 # -- reading a real agent's inventory -----------------------------------------

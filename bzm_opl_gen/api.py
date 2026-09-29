@@ -9,18 +9,7 @@ import re
 import urllib.error
 import urllib.request
 
-API_BASE = "https://a.blazemeter.com/api/v4"
-
-# Max threads one engine will run. A location with this unset cannot start a
-# test at all; 500 matches BlazeMeter's own default for a 2 CPU / 8Gi engine.
-DEFAULT_THREADS_PER_ENGINE = 500
-
-# Hosts only an engine talks to: results and artifact upload. Crane itself uses
-# a.blazemeter.com. A fact about the product, so it lives here with the API host
-# rather than in the live-test rig, which is where it was first needed -- the
-# planner has to name the egress a cluster will need and cannot import the rig
-# to find out, and doctor probes the same three hosts.
-ENGINE_UPLOAD_HOSTS = ("data.blazemeter.com", "storage.blazemeter.com")
+from .footprint import API_BASE, DEFAULT_THREADS_PER_ENGINE
 
 
 class BzmApiError(RuntimeError):

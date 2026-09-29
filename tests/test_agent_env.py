@@ -10,14 +10,15 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from bzm_opl_gen import agent_env, core, generate  # noqa: E402
+from bzm_opl_gen import agent_env, core  # noqa: E402
+from bzm_opl_gen import bundle_env  # noqa: E402
 
 
 def test_every_record_is_one_a_form_can_render():
     """Name, type, platforms and a summary -- a row missing any of them is a
     row with nothing to show or no way to show it."""
     for v in agent_env.AGENT_ENV:
-        assert generate.ENV_NAME_RE.match(v["name"]), v["name"]
+        assert bundle_env.ENV_NAME_RE.match(v["name"]), v["name"]
         assert v["type"] in agent_env.TYPES, v
         assert v["platforms"], v["name"]
         assert set(v["platforms"]) <= set(agent_env.BOTH), v["name"]
@@ -73,7 +74,7 @@ def test_a_location_is_offered_only_the_variables_it_has_a_reader_for():
     # each. Asserted here because the two halves are far apart and a variable
     # that stopped being offered without becoming reserved is a hole.
     assert not sv & {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"}
-    assert {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"} <= generate.RESERVED_ENV
+    assert {"HOSTNAME_OVERRIDE", "TLS_CERT", "TLS_KEY"} <= bundle_env.RESERVED_ENV
 
     # A location running both is offered both halves, rather than the
     # intersection: the tag is what reads the variable, not what claims it.
@@ -128,11 +129,11 @@ def test_the_reference_is_whole_and_the_subtraction_is_at_the_serving_end():
     declared = {v["name"] for v in agent_env.AGENT_ENV}
     # The identity and the credential are documented, and are the generator's.
     assert {"AUTH_TOKEN", "SHIP_ID", "HARBOR_ID"} <= declared
-    assert declared & generate.RESERVED_ENV
+    assert declared & bundle_env.RESERVED_ENV
 
     offered = {v["name"] for v in core.agent_env()}
-    assert not offered & generate.RESERVED_ENV
-    assert offered == declared - generate.RESERVED_ENV
+    assert not offered & bundle_env.RESERVED_ENV
+    assert offered == declared - bundle_env.RESERVED_ENV
     # ...and something is actually left, or the area this feeds is empty and
     # the form has nothing to offer at all.
     assert {"VERIFY_SSL", "KUBERNETES_LABELS", "PREFERRED_INTERFACE"} <= offered
@@ -140,7 +141,7 @@ def test_the_reference_is_whole_and_the_subtraction_is_at_the_serving_end():
     # that runs everything is still offered nothing an option here writes.
     everything = [f["id"] for f in core.FUNCTIONALITIES]
     assert not {v["name"] for v in core.agent_env(everything)} \
-        & generate.RESERVED_ENV
+        & bundle_env.RESERVED_ENV
 
 
 def test_a_reserved_name_is_refused_with_the_same_words_wherever_it_arrives():
@@ -151,7 +152,7 @@ def test_a_reserved_name_is_refused_with_the_same_words_wherever_it_arrives():
         assert name in agent_env.AGENT_ENV_BY_NAME
         assert name not in {v["name"] for v in core.agent_env()}
         try:
-            generate.extra_env({"extra_env": {name: "x"}})
+            bundle_env.extra_env({"extra_env": {name: "x"}})
         except ValueError as e:
             assert name in str(e)
         else:

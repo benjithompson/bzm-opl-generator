@@ -44,15 +44,19 @@ import subprocess
 import tempfile
 import time
 
-from . import generate
+from . import (bundle_names, bundle_options, ca_trust,
+               markers as markers_mod, render_docker, required_fields,
+               service_virt)
+from .bundle_names import CA_CONFIGMAP, CA_CONFIGMAP_FILE, CONFIGMAP_FILE, CONFIGMAP_NAME
+from .bundle_options import engine_scheduling, engine_size, separate_pools
+from .ca_trust import CA_MOUNT_PATH
 from .facts import image_refs, select_images
-from .generate import (CA_CONFIGMAP, CA_MOUNT_PATH, cluster_composed_targets,
-                       engine_scheduling, engine_size, separate_pools)
+from .image_registry import cluster_composed_targets
 from .quantity import format_cpu, format_memory, parse_cpu, parse_memory
 # Which hosts an engine uploads to is a fact about BlazeMeter, not about this
 # rig -- doctor probes them and the planner names them as required egress, and
 # neither should have to import the deploy rig to find out.
-from .api import ENGINE_UPLOAD_HOSTS
+from .footprint import ENGINE_UPLOAD_HOSTS
 
 KIND_CLUSTER = "bzm-opl-test"
 MINIKUBE_PROFILE = "bzm-opl-test"
@@ -385,7 +389,7 @@ def proxy_overlay(host, port, ca_pem, user=None, password=None,
         "file": {"ca_bundle_slot": True, "ca_cert_file": CA_RIG_KEY},
         "inline": {"ca_bundle": ca_pem},
     }[ca_mode]
-    return {"proxy": proxy, **generate.no_ca(), **mode}
+    return {"proxy": proxy, **ca_trust.no_ca(), **mode}
 
 
 # The CA-trust modes this rig can deploy, which is `generate`'s four minus
@@ -415,7 +419,7 @@ def rig_ca_mode(profile):
     by `ca_configmap_refusal`, which every caller of this runs first, so the
     unresolved case never reaches the choice this makes.
     """
-    mode = generate.ca_mode(profile)
+    mode = ca_trust.ca_mode(profile)
     return mode if mode in RIG_CA_MODES else None
 
 
@@ -459,7 +463,7 @@ def ca_mode_notice(profile, chosen):
         return (f"note: this bundle is generated for the {carried} CA mode, and "
                 f"--ca-mode {chosen} replaces it -- the run tests {chosen}, not "
                 f"what is on disk")
-    mode = generate.ca_mode(profile)
+    mode = ca_trust.ca_mode(profile)
     why = ("is generated for OpenShift trust injection, which this rig cannot "
            "deploy -- nothing here injects a trust bundle"
            if mode == "inject" else
@@ -502,17 +506,17 @@ def ca_configmap_refusal(profile, local_proxy):
     never runs, and `--cluster current` may well be pointed at an OpenShift
     where it is filled.
     """
-    ca = generate.resolved_ca(profile)
-    if ca is generate.CA_UNRESOLVED:
+    ca = ca_trust.resolved_ca(profile)
+    if ca is ca_trust.CA_UNRESOLVED:
         # Refused whatever the flags are, and before either of them can matter:
         # a re-rendering run raises out of generate() once the cluster is up,
         # and a lean one deploys manifests whose own profile contradicts them.
-        return (f"{generate.PROFILE_FILE} sets more than one CA mode, and the "
+        return (f"{bundle_names.PROFILE_FILE} sets more than one CA mode, and the "
                 f"generator takes one: a run that re-renders would raise out of "
                 f"generate() with the cluster already built, and one that does "
                 f"not would deploy manifests whose own profile disagrees with "
                 f"them. Re-generate the bundle with a single CA mode set "
-                f"({', '.join(generate.CA_MODES)})")
+                f"({', '.join(ca_trust.CA_MODES)})")
     if local_proxy or not ca or ca["mode"] not in ("file", "existing"):
         return None
     # Each mode names its own object and its own owner, and the run that builds
@@ -532,7 +536,7 @@ def ca_configmap_refusal(profile, local_proxy):
         instead = ("creates a trust ConfigMap of the rig's own and re-renders "
                    "the bundle to reference it")
     return (
-        f"{generate.PROFILE_FILE} says this bundle {carries}. livetest creates "
+        f"{bundle_names.PROFILE_FILE} says this bundle {carries}. livetest creates "
         f"no such ConfigMap, and deploys into a namespace it has usually just "
         f"made itself: the crane pod would sit at ContainerCreating naming it, "
         f"no heartbeat could arrive, and the run would spend its whole timeout "
@@ -972,7 +976,7 @@ def assert_engine_config(pod, opts):
     # slot or OpenShift-injected bundle run with --run-test and no --local-proxy
     # skipped both checks and passed having verified neither (#250). The proxy
     # path hid it, proxy_overlay always writing `ca_bundle`.
-    if any(opts.get(k) for k in generate.CA_MODES):
+    if any(opts.get(k) for k in ca_trust.CA_MODES):
         # Crane mounts the ConfigMap as a directory at /var/cm; the engine gets
         # the bundle file itself (/var/cm/ca-bundle.crt, subPath). Accept both.
         mounts = [m for c in containers for m in c.get("volumeMounts", [])
@@ -1200,9 +1204,9 @@ def assert_live_config(cli, namespace, facts, opts):
     them. A manifest that renders, and even one whose agent comes online, is not
     the same as one that is configured correctly."""
     fails = []
-    cm = kget(cli, namespace, "configmap", "blazemeter-configmap").get("data", {})
+    cm = kget(cli, namespace, "configmap", CONFIGMAP_NAME).get("data", {})
     if not cm:
-        return ["blazemeter-configmap not found in the cluster"]
+        return [f"{CONFIGMAP_NAME} not found in the cluster"]
 
     if opts.get("use_secret", True):
         if "AUTH_TOKEN" in cm:
@@ -1218,7 +1222,7 @@ def assert_live_config(cli, namespace, facts, opts):
     # The default resolves to false under a private registry, so the case this
     # check was written for -- auto-update pulling from the public registry the
     # rig has blackholed -- still fires.
-    want_auto = "true" if generate.auto_update(opts) else "false"
+    want_auto = "true" if bundle_options.auto_update(opts) else "false"
     if cm.get("AUTO_KUBERNETES_UPDATE") != want_auto:
         fails.append(f"AUTO_KUBERNETES_UPDATE is {cm.get('AUTO_KUBERNETES_UPDATE')!r}, "
                      f"expected {want_auto!r} for these options")
@@ -1305,8 +1309,8 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
     CA configured at all -- listing the keys is how the slot was missed for a
     whole mode's lifetime (#250)."""
     print("negative control: deploying without the CA bundle, expecting TLS failure")
-    regenerate({**overlay, **generate.no_ca()})
-    stale = os.path.join(manifest_dir, "bzm_cacerts.yaml")
+    regenerate({**overlay, **ca_trust.no_ca()})
+    stale = os.path.join(manifest_dir, CA_CONFIGMAP_FILE)
     if os.path.exists(stale):
         os.remove(stale)          # else deploy() re-applies the previous render
     cli = cli_tool()
@@ -1341,7 +1345,6 @@ def negative_control(regenerate, overlay, manifest_dir, namespace, cluster,
 # The cluster build and the 300s rollout are the expensive part of that failure.
 # Everything needed to refuse it was in two files on disk the whole time.
 
-CONFIGMAP_FILE = "bzm_configmap.yaml"
 
 # HARBOR_ID / SHIP_ID as templates/configmap writes them. A regex rather than a
 # YAML parse, and the reason is no longer "this package has no runtime
@@ -1406,8 +1409,8 @@ def emitted_yaml_files():
     in a directory since re-rendered as manifests. Applying it is a kubectl
     error at best.
     """
-    return frozenset(generate.APPLY_ORDER) | {generate.HOOK_FILE,
-                                              generate.SV_EXPOSE_FILE}
+    return frozenset(bundle_names.APPLY_ORDER) | {bundle_names.HOOK_FILE,
+                                              bundle_names.SV_EXPOSE_FILE}
 
 
 def bundle_yaml(manifest_dir):
@@ -1462,7 +1465,7 @@ def bundle_platform(manifest_dir, profile=None):
 
 
 def compose_path(manifest_dir):
-    return os.path.join(manifest_dir, generate.DOCKER_COMPOSE_FILE)
+    return os.path.join(manifest_dir, bundle_names.DOCKER_COMPOSE_FILE)
 
 
 # container_name, as _docker_compose_yaml writes it (_compose_value quotes every
@@ -1473,7 +1476,7 @@ _COMPOSE_NAME_RE = re.compile(r'^\s*container_name:\s*"?([^"\s]+)"?\s*$', re.M)
 # rather than the whole expression -- the message beside it is a sentence with
 # spaces in, and what a refusal here has to name is the variable.
 _COMPOSE_UNSET_RE = re.compile(
-    r'\$\{' + re.escape(generate.COMPOSE_UNSET_PREFIX) + r'([A-Za-z0-9_]+):\?')
+    r'\$\{' + re.escape(render_docker.COMPOSE_UNSET_PREFIX) + r'([A-Za-z0-9_]+):\?')
 
 
 def _file_text(path):
@@ -1530,7 +1533,7 @@ def compose_unset(manifest_dir):
     one a profile can never report.
     """
     names = set()
-    for name in (generate.DOCKER_COMPOSE_FILE, generate.DOCKER_ENV_FILE):
+    for name in (bundle_names.DOCKER_COMPOSE_FILE, bundle_names.DOCKER_ENV_FILE):
         text = _file_text(os.path.join(manifest_dir, name)) or ""
         names.update(m.group(1) for m in _COMPOSE_UNSET_RE.finditer(text))
     return sorted(names)
@@ -1576,7 +1579,7 @@ def compose_blank_mounts(manifest_dir):
     them.
     """
     blank, unread = [], []
-    for m in generate.DOCKER_FILE_MOUNTS:
+    for m in render_docker.DOCKER_FILE_MOUNTS:
         override = os.environ.get(m.var)
         path = override or os.path.join(manifest_dir, m.file)
         if not override and not os.path.exists(path):
@@ -1585,7 +1588,7 @@ def compose_blank_mounts(manifest_dir):
         if text is None:
             unread.append((m, path))
             continue
-        mark = generate.marker_in(text)
+        mark = markers_mod.marker_in(text)
         if mark:
             blank.append(BlankMount(m, path, mark))
     return BlankMounts(blank, unread)
@@ -1665,7 +1668,7 @@ def _profile_refusals(manifest_dir, ship_id, profile):
     """What profile.json alone says is wrong, on either platform. Shared because
     the file is the same file and neither question is about kubectl."""
     refusals = []
-    path = os.path.join(manifest_dir, generate.PROFILE_FILE)
+    path = os.path.join(manifest_dir, bundle_names.PROFILE_FILE)
     # profile.json is what the re-rendering paths merge their overlay onto, and
     # _regenerator prefers the ship_id it finds there over the one on the command
     # line -- so a stale profile deploys the wrong agent even on a path that does
@@ -1683,12 +1686,12 @@ def _profile_refusals(manifest_dir, ship_id, profile):
     # minutes reporting that the agent never came online. The same shape as the
     # three guards around it, and cheaper than all of them: it is one read of a
     # file already open.
-    blank = generate.placeholder_options(profile or {})
+    blank = required_fields.placeholder_options(profile or {})
     if blank:
         # Each field beside its own marker, because the two are what somebody
         # then greps the bundle with -- the field names the box on the form and
         # the marker names the string in the file.
-        named = ", ".join(f"{k} ({generate.marker(k)})" for k in blank)
+        named = ", ".join(f"{k} ({markers_mod.marker(k)})" for k in blank)
         refusals.append(
             f"{path} was generated with {named} left blank, so the bundle "
             f"carries {'those markers' if len(blank) > 1 else 'that marker'} "
@@ -1719,12 +1722,12 @@ def _compose_bundle_check(manifest_dir, harbor_id, ship_id, profile):
         # #177), or a directory somebody tidied. There is nothing to start.
         return BundleCheck([
             f"{manifest_dir}/ is a docker bundle with no "
-            f"{generate.DOCKER_COMPOSE_FILE} in it, and this run starts a "
+            f"{bundle_names.DOCKER_COMPOSE_FILE} in it, and this run starts a "
             f"docker bundle with `docker compose up`. Re-generate it: "
-            f"{generate.DOCKER_RUN_FILE} on its own is the other route, and "
+            f"{bundle_names.DOCKER_RUN_FILE} on its own is the other route, and "
             f"the two are either/or rather than interchangeable here"], [])
     claimed = compose_identity(manifest_dir)
-    want_name = generate.docker_container_name(ship_id) if ship_id else None
+    want_name = bundle_names.docker_container_name(ship_id) if ship_id else None
     # The file is there -- the refusal above is the only answer to it not being
     # -- so None here is a file nothing could open or decode. That is one note
     # and no per-field ones: a file nobody read names no field, and saying it
@@ -2045,7 +2048,7 @@ def run_compose(client, manifest_dir, harbor_id, ship_id, timeout=600,
     bad = bundle_check(manifest_dir, harbor_id, ship_id, opts).report()
     if bad:
         raise BundleMismatch(bad)
-    name = generate.docker_container_name(ship_id)
+    name = bundle_names.docker_container_name(ship_id)
     ok = False
     try:
         compose_up(manifest_dir)
@@ -2180,7 +2183,7 @@ def run(client, manifest_dir, namespace, harbor_id, ship_id,
             # to delete what this run made and the two modes make different
             # names. A boolean was enough while only one mode created anything.
             if ca_mode in ("existing", "file"):
-                cm_name = generate.CA_CONFIGMAP if ca_mode == "file" else CA_RIG_CONFIGMAP
+                cm_name = bundle_names.CA_CONFIGMAP if ca_mode == "file" else CA_RIG_CONFIGMAP
                 ensure_ca_configmap(cli_tool(), namespace, ca_pem, name=cm_name)
                 owned = owned._replace(ca_configmap=cm_name)
             regenerate(overlay)
@@ -2251,16 +2254,16 @@ def _sv_mocks(pods):
     found = {}
     for pod in pods:
         labels = (pod.get("metadata") or {}).get("labels") or {}
-        name = labels.get(generate.SV_POD_NAME_LABEL)
+        name = labels.get(service_virt.SV_POD_NAME_LABEL)
         if not name:
             continue                      # crane itself, engines, test jobs
-        harbor = labels.get(generate.SV_POD_HARBOR_LABEL)
+        harbor = labels.get(service_virt.SV_POD_HARBOR_LABEL)
         ports = [p.get("containerPort")
                  for c in (pod.get("spec") or {}).get("containers") or []
                  for p in c.get("ports") or [] if p.get("containerPort")]
         if ports:
             found[name] = {"name": name, "port": ports[0], "harbor": harbor,
-                           "ship": labels.get(generate.SV_POD_SHIP_LABEL)}
+                           "ship": labels.get(service_virt.SV_POD_SHIP_LABEL)}
     return [found[n] for n in sorted(found)]
 
 

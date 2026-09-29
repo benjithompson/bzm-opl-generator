@@ -43,8 +43,9 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import (__version__, core, evidence as evidence_mod,
-               generate as gen_mod, facts as facts_mod, livetest, plan)
+from . import (__version__, bundle_names, bundle_options, ca_trust, core,
+               evidence as evidence_mod, footprint, generate as gen_mod,
+               facts as facts_mod, livetest, markers, plan, readme_parts)
 
 SERVER_NAME = "bzm-opl-gen"
 RESOURCE_SCHEME = "bzm-opl"
@@ -434,7 +435,7 @@ def _location(action, args):
             func_ids=args.get("func_ids") or ["performance"],
             slots=_given(args, "slots", 1),
             threads_per_engine=_given(args, "threads_per_engine",
-                                      core.api.DEFAULT_THREADS_PER_ENGINE))
+                                      footprint.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_agent with harbor_id "
@@ -638,12 +639,12 @@ def _facts_warnings(facts):
     # made it is the one that arrives before the bundle is handed over.
     blank = [k for k, v in (("harbor_id", facts.get("harbor_id")),
                             ("ship_id", core.sole_ship_id(facts)))
-             if gen_mod.is_placeholder(v)]
+             if markers.is_placeholder(v)]
     if blank:
         out.append(
             f"{' and '.join(blank)} was not supplied, so every bundle generated "
             f"from these facts carries "
-            f"{' and '.join(gen_mod.marker(k) for k in blank)} instead. The "
+            f"{' and '.join(markers.marker(k) for k in blank)} instead. The "
             f"cluster refuses it -- a marker is not a legal label value -- so "
             f"this bundle is for review, and the ids have to be filled in (or "
             f"the facts re-made) before it is applied.")
@@ -712,7 +713,7 @@ def _bundle(action, args):
         files = core.generate_bundle(facts, resolved, out_dir=out_dir)
         written = core.write_bundle(files, out_dir)
         return {"out_dir": out_dir, "files": written,
-                "profile": json.loads(files[gen_mod.PROFILE_FILE]),
+                "profile": json.loads(files[bundle_names.PROFILE_FILE]),
                 # The branch and the agent, never the value: naming the agent
                 # whose credential was just replaced is the whole point, and it
                 # is not a secret.
@@ -743,7 +744,7 @@ def _bundle(action, args):
             return {"images": refs,
                     "next": ["pass mirror=<registry-prefix> to copy these into "
                              "a private registry, or run the bundle's "
-                             "bzm-opl-image-mirror.sh yourself"]}
+                             f"{bundle_names.MIRROR_SCRIPT_FILE} yourself"]}
         # Not behind the destructive gate, unlike `delete`, and the difference
         # is what the two do: mirroring *adds* images to a registry the caller
         # named, and the worst case is repositories nobody wanted. Deleting a
@@ -763,19 +764,19 @@ def _after_generate(out_dir, options):
         # the host that is to be the private location. Same rule as the two
         # below -- the session runs it, in a shell where the person watching
         # sees what it does.
-        return [f"chmod +x {out_dir}/{gen_mod.DOCKER_RUN_FILE}",
-                f"{out_dir}/{gen_mod.DOCKER_RUN_FILE}   (YOU run this, on the "
+        return [f"chmod +x {out_dir}/{bundle_names.DOCKER_RUN_FILE}",
+                f"{out_dir}/{bundle_names.DOCKER_RUN_FILE}   (YOU run this, on the "
                 f"docker host itself -- nothing here reaches it)",
                 # The other route to the same container, for a host that
                 # installs with compose. Either one, never both: they share the
                 # container name, so the second refuses.
                 f"...or `docker compose up -d` in {out_dir}, which starts the "
-                f"same container from {gen_mod.DOCKER_COMPOSE_FILE}. One or the "
+                f"same container from {bundle_names.DOCKER_COMPOSE_FILE}. One or the "
                 f"other, not both",
                 "opl_agent status, to see whether the agent reported in"]
     if options.get("output_format") == "helm":
         return [f"helm install bzm-opl {out_dir}/helm "
-                f"-f {out_dir}/bzm-opl-values.yaml "
+                f"-f {out_dir}/{bundle_names.HELM_VALUES_FILE} "
                 f"-n {options.get('namespace', _DEFAULT_NS)} --create-namespace",
                 "opl_agent status, once the release is up"]
     ns = options.get("namespace", _DEFAULT_NS)
@@ -784,12 +785,12 @@ def _after_generate(out_dir, options):
     # about to be told to run it (#164). Merged onto the defaults because the
     # options here are whatever the caller supplied, and `cli()` reads two keys
     # this dict is allowed not to carry.
-    o = {**gen_mod.DEFAULT_OPTIONS, **options}
+    o = {**bundle_options.DEFAULT_OPTIONS, **options}
     # ...and the apply below takes its binary from the same answer. It was
     # hardcoded `kubectl`, which put two CLIs in one list the moment the first
     # line said `oc` -- the failure `generate.cli` exists to stop.
-    return [gen_mod.create_namespace_cmd(o),
-            f"{gen_mod.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
+    return [readme_parts.create_namespace_cmd(o),
+            f"{bundle_options.cli(o)} apply -f {out_dir}/ -n {ns}   (YOU run this -- "
             f"no tool here applies anything)",
             "opl_agent status, to see whether the agent reported in"]
 
@@ -830,7 +831,7 @@ def _bundle_warnings(options):
     # this surface has no "beside" and a session that generated a slot bundle
     # and moved on to `kubectl apply` would meet the failure as a healthy pod
     # that never comes online (#241). None for every other bundle.
-    slot = gen_mod.ca_slot_notice(options)
+    slot = ca_trust.ca_slot_notice(options)
     if slot:
         out.append(slot)
     if options.get("auto_update"):
@@ -1077,7 +1078,7 @@ def _given(args, key, default):
     return default if value is None else value
 
 
-_DEFAULT_NS = gen_mod.DEFAULT_OPTIONS["namespace"]
+_DEFAULT_NS = bundle_options.DEFAULT_OPTIONS["namespace"]
 
 
 def _unknown(action, valid):

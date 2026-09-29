@@ -14,7 +14,8 @@ import textwrap
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from bzm_opl_gen import doctor, evidence, facts as facts_mod, generate as gen  # noqa: E402
+from bzm_opl_gen import doctor, evidence, facts as facts_mod  # noqa: E402
+from bzm_opl_gen import bundle_options, ca_trust, footprint  # noqa: E402
 
 
 # -- fixtures ---------------------------------------------------------------
@@ -435,15 +436,13 @@ def _engine_node(name="e1", cpu="16", mem="64Gi", pods=None):
 # sets requests. 250m/256Mi is only what an unset location defaults to.
 
 def test_engine_requests_come_from_the_location_when_set():
-    from bzm_opl_gen import generate as gen
-    assert gen.engine_requests({"override_cpu": 1, "override_memory": 4096}) \
+    assert footprint.engine_requests({"override_cpu": 1, "override_memory": 4096}) \
         == ("1", "4096Mi")
 
 
 def test_engine_requests_fall_back_to_cranes_default():
-    from bzm_opl_gen import generate as gen
-    assert gen.engine_requests({}) == (gen.ENGINE_DEFAULT_REQUEST_CPU,
-                                       gen.ENGINE_DEFAULT_REQUEST_MEM)
+    assert footprint.engine_requests({}) == (footprint.ENGINE_DEFAULT_REQUEST_CPU,
+                                       footprint.ENGINE_DEFAULT_REQUEST_MEM)
 
 
 def test_packing_uses_the_locations_requests_not_the_default():
@@ -547,7 +546,7 @@ def test_eligible_nodes_follows_the_engine_pool_not_cranes():
     nodes = [crane_node, engine_node]
     assert [n["metadata"]["name"] for n in doctor.eligible_nodes(nodes, SPLIT)] == ["e1"]
     # ...and crane's own placement still resolves to crane's node when asked for.
-    from bzm_opl_gen.generate import crane_scheduling
+    from bzm_opl_gen.bundle_options import crane_scheduling
     assert [n["metadata"]["name"] for n in
             doctor.eligible_nodes(nodes, SPLIT, crane_scheduling(SPLIT))] == ["c1"]
 
@@ -588,14 +587,13 @@ def test_engine_packing_passes_when_maxpods_caps_the_node():
     """The lever that actually closes it, as the node reports it. A pool capped
     at the system pods a node of it actually runs, plus one, takes exactly one
     engine however little that engine asked for."""
-    from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
     # Derived, not the literal it used to be: the ceiling that admits exactly
     # one engine is a function of how many system pods land on the node, and a
     # test that hardcodes the sum silently stops testing the property when that
     # number is corrected -- which is exactly what happened when measurement
     # moved it from 8 to 6.
-    caps_at_one = gen.TYPICAL_SYSTEM_PODS + 1
+    caps_at_one = footprint.TYPICAL_SYSTEM_PODS + 1
     checks = doctor.check_engine_packing(
         FACTS, opts, {"nodes": [_engine_node("e1", pods=caps_at_one)]})
     assert _find(checks, "engine packing").status == doctor.PASS
@@ -606,16 +604,15 @@ def test_engine_packing_allows_the_engines_the_pool_was_designed_for():
     against raw capacity would WARN on a pool built exactly to spec -- and on
     GKE, whose maxPods floor of 8 forces 2 engines a node, that verdict would
     fire on every correctly-built pool there is."""
-    from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi",
                 engines_per_node=2)
     node = _engine_node("e1", cpu="8", mem="32Gi",
-                        pods=gen.TYPICAL_SYSTEM_PODS + 2)
+                        pods=footprint.TYPICAL_SYSTEM_PODS + 2)
     assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
                  "engine packing").status == doctor.PASS
     # ...and one designed for 2 but ceilinged for 4 is still over-packed.
     loose = _engine_node("e2", cpu="8", mem="32Gi",
-                         pods=gen.TYPICAL_SYSTEM_PODS + 4)
+                         pods=footprint.TYPICAL_SYSTEM_PODS + 4)
     assert _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [loose]}),
                  "engine packing").status == doctor.WARN
 
@@ -625,9 +622,8 @@ def test_the_recipe_builds_a_pool_the_checker_passes():
     the recipe's maxPods, on a node sized as the recipe says, has to come back
     PASS. They share TYPICAL_SYSTEM_PODS precisely so the advice and the
     verdict cannot drift into contradicting each other."""
-    from bzm_opl_gen import generate as gen
     opts = dict(SPLIT, engine_cpu_limit="2", engine_mem_limit="8Gi")
-    recipe_max_pods = gen.TYPICAL_SYSTEM_PODS + 1
+    recipe_max_pods = footprint.TYPICAL_SYSTEM_PODS + 1
     # The recipe's node: one engine's limits plus the kubelet's reservations.
     node = _engine_node("e1", cpu="3", mem="10Gi", pods=recipe_max_pods)
     c = _find(doctor.check_engine_packing(FACTS, opts, {"nodes": [node]}),
@@ -1183,14 +1179,14 @@ def test_probe_egress_cannot_honour_a_ca_without_crane(monkeypatch):
     assert set(probes.values()) == {None}
 
 
-@pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
+@pytest.mark.parametrize("mode", sorted(ca_trust.CA_MODES))
 def test_a_bundle_with_any_ca_mode_probes_with_that_ca(monkeypatch, mode):
     """`--cacert` is decided by whether CA trust is configured at all, and the
     predicate read three of the four modes: a slot bundle whose PEM had been
     pasted in probed *without* it, so an intercepting proxy's certificate was
     rejected and `check_egress` FAILed over a namespace that reaches
     BlazeMeter. Read off CA_MODES, so a fifth mode cannot repeat it (#250)."""
-    opts = {mode: True if gen.DEFAULT_OPTIONS[mode] is False else "x"}
+    opts = {mode: True if bundle_options.DEFAULT_OPTIONS[mode] is False else "x"}
     targets = doctor.egress_targets(opts)
     seen = _crane(monkeypatch, True, "\n".join(f"{t} rc=0" for t in targets))
     doctor.probe_egress("kubectl", "ns1", opts)

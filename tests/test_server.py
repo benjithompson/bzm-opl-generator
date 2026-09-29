@@ -13,7 +13,9 @@ import pytest
 pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from bzm_opl_gen import core, generate, server, ui_build  # noqa: E402
+from bzm_opl_gen import core, server, ui_build  # noqa: E402
+from bzm_opl_gen import (bundle_env, bundle_options, markers,  # noqa: E402
+                         required_fields, service_virt)
 from test_generate import FACTS  # noqa: E402
 # The same fakes tests/test_core.py and tests/test_cli.py drive, for the same
 # reason they share them: three surfaces call the same core functions, and a
@@ -125,10 +127,10 @@ def test_manual_facts_need_no_ids_either():
     r = client.post("/api/facts/manual", json={"func_ids": ["performance"]})
     assert r.status_code == 200
     f = r.json()["facts"]
-    assert f["harbor_id"] == generate.marker("harbor_id")
+    assert f["harbor_id"] == markers.marker("harbor_id")
     # The agent the page reads back out of this answer. It has to be the marker
     # rather than "", or the page has no agent at all and previews nothing.
-    assert f["ships"][0]["id"] == generate.marker("ship_id")
+    assert f["ships"][0]["id"] == markers.marker("ship_id")
 
 
 def test_manual_facts_flag_the_gui_image_gap():
@@ -345,12 +347,11 @@ def test_the_page_spells_the_declined_ingress_the_way_generate_does():
     switch writes a value generate() refuses and the group snaps back on, which
     is the whole bug this option exists to fix.
     """
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     m = re.search(r'export const SV_NONE = "([^"]+)"',
                   (src / "optionGroups.ts").read_text())
     assert m, "SV_NONE not found -- was it renamed or moved?"
-    assert m.group(1) == gen_mod.SV_INGRESS_NONE
+    assert m.group(1) == service_virt.SV_INGRESS_NONE
 
 
 def test_every_group_s_tag_is_a_functionality_this_server_serves():
@@ -766,20 +767,18 @@ def test_option_defaults_are_served():
 def test_option_defaults_carry_no_metadata():
     """Every key in this response becomes an option the UI submits, so a
     description or a type added here would arrive at generate() as one."""
-    from bzm_opl_gen import generate as gen_mod
-    assert set(client.get("/api/option-defaults").json()) == set(gen_mod.DEFAULT_OPTIONS)
+    assert set(client.get("/api/option-defaults").json()) == set(bundle_options.DEFAULT_OPTIONS)
 
 
 def test_option_docs_describe_every_option():
     """Field help comes from the registry rather than a copy in TypeScript --
     an option the UI renders with no description is one the registry is missing,
     and that is a test failure, not a blank tooltip."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/option-docs").json()
-    assert set(body) == set(gen_mod.DEFAULT_OPTIONS)
+    assert set(body) == set(bundle_options.DEFAULT_OPTIONS)
     assert all(e["summary"] for e in body.values())
     assert body["sv_ingress"]["choices"] == (
-        list(gen_mod.SV_INGRESS_TYPES) + [gen_mod.SV_INGRESS_NONE])
+        list(service_virt.SV_INGRESS_TYPES) + [service_virt.SV_INGRESS_NONE])
     assert body["private_registry"]["nullable"] is True
     # The UI must be able to tell which fields not to echo back into a form it
     # might save. Two now, and the pairing is the point: `sv_tls_key` is a
@@ -801,17 +800,16 @@ def test_sv_constants_are_served_from_the_generator():
     """The UI renders the ingress picker and decides the SV group is mandatory
     from these. Served rather than copied into TypeScript, so a new backend
     cannot be added to generate() and silently miss the picker."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/sv-constants").json()
-    assert body["func_ids"] == list(gen_mod.SV_FUNC_IDS)
-    assert body["ingress_types"] == list(gen_mod.SV_INGRESS_TYPES)
+    assert body["func_ids"] == list(service_virt.SV_FUNC_IDS)
+    assert body["ingress_types"] == list(service_virt.SV_INGRESS_TYPES)
     assert "openshift" in body["ingress_types"]     # the newest one reaches the UI
     # The decline is NOT here. It is not a backend, and this response is what
     # the picker is built from -- offering it would be offering an ingress that
     # is not one. Where a caller learns it is the option registry's `choices`,
     # which is where the rest of what a value may be already lives.
-    assert gen_mod.SV_INGRESS_NONE not in body["ingress_types"]
-    assert gen_mod.SV_INGRESS_NONE in client.get(
+    assert service_virt.SV_INGRESS_NONE not in body["ingress_types"]
+    assert service_virt.SV_INGRESS_NONE in client.get(
         "/api/option-docs").json()["sv_ingress"]["choices"]
     # Kept out of option-defaults: that response is spread into the options the
     # UI submits, and these are not options.
@@ -829,10 +827,9 @@ def test_ignored_options_are_served_from_the_generator():
     drops nothing" from "nothing has been read", which are the same rendering
     and different facts: a route that answered only the formats with keys would
     hand a helm bundle the second one forever."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/ignored-options").json()
-    assert body == gen_mod.IGNORED_BY_FORMAT
-    assert set(body) == set(gen_mod.OUTPUT_FORMATS)
+    assert body == bundle_options.IGNORED_BY_FORMAT
+    assert set(body) == set(bundle_options.OUTPUT_FORMATS)
     # The four the page hides whole sections for.
     for key in ("namespace", "service_account_name", "node_selector",
                 "engine_cpu_limit"):
@@ -863,13 +860,12 @@ def test_the_page_knows_the_same_three_formats_the_generator_does():
     control nobody can reach, and one removed is a segment that generates an
     error. Neither shows up in a type.
     """
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     body = re.search(r"export const OUTPUT_FORMATS: OutputFormat\[\] = \[(.*?)\n\];",
                      (src / "formats.ts").read_text(), re.S)
     assert body, "OUTPUT_FORMATS not found -- was it renamed or moved?"
     assert tuple(re.findall(r'id: "([^"]+)"', body.group(1))) \
-        == gen_mod.OUTPUT_FORMATS
+        == bundle_options.OUTPUT_FORMATS
 
 
 def test_no_format_refuses_a_virtual_service():
@@ -899,7 +895,7 @@ def test_no_format_refuses_a_virtual_service():
     sv_opts = {"ship_id": "bbb222", "auth_token": "de" * 32,
                "sv_ingress": "nginx", "sv_subdomain": "apps.example.com",
                "sv_tls_secret": "wildcard-credential"}
-    for fmt in gen_mod.OUTPUT_FORMATS:
+    for fmt in bundle_options.OUTPUT_FORMATS:
         gen_mod.generate(facts, {**sv_opts, "output_format": fmt})
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     assert "BLOCKED_FORMATS: Record" not in (src / "sv.ts").read_text(), \
@@ -922,7 +918,6 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
     the fixture is handed to the page as the one state that means "nothing has
     been read", and every assertion about it still passes.
     """
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const IGNORED_BY_FORMAT: "
@@ -943,7 +938,7 @@ def test_the_pages_copy_of_the_ignored_table_is_the_generators():
         elif key and table is not None:
             table.add(key.group(1))
     assert found == {fmt: set(keys)
-                     for fmt, keys in gen_mod.IGNORED_BY_FORMAT.items()}
+                     for fmt, keys in bundle_options.IGNORED_BY_FORMAT.items()}
 
 
 def test_the_marker_rule_is_one_rule_in_both_languages():
@@ -955,12 +950,11 @@ def test_the_marker_rule_is_one_rule_in_both_languages():
     A **rule**, not a string, since #244: the marker names its own field, so
     there is nothing to compare unless both sides are asked the same question.
     `fixtures.ts` carries the worked examples for exactly that -- the page's own
-    test asserts its `marker` against them and this asserts `generate.marker`
+    test asserts its `marker` against them and this asserts `markers.marker`
     against the same ones, so neither side can change the rule alone. Not served
     like IGNORED_BY_FORMAT, because the page has to write a marker before any
     response has arrived.
     """
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const MARKER_EXAMPLES: Record<string, string> "
@@ -974,29 +968,28 @@ def test_the_marker_rule_is_one_rule_in_both_languages():
     assert set(found) >= {"namespace", "auth_token", "service_account_name",
                           "proxy.https", "extra_env.FOO"}
     for key, want in found.items():
-        assert gen_mod.marker(key) == want, key
+        assert markers.marker(key) == want, key
     # ...and the recogniser takes every one of them, or the generator would
     # write a marker it could not read back off a profile.
     for want in found.values():
-        assert gen_mod.is_placeholder(want)
-        assert gen_mod.marker_in(f"user:pass@{want}:3128") == want
+        assert markers.is_placeholder(want)
+        assert markers.marker_in(f"user:pass@{want}:3128") == want
 
 
 def test_the_served_marker_is_the_generators_own():
     """The download step prints the served marker on the row and sends the one
     it built itself, so the two have to be one rule. They are -- `placeholders`
-    calls `generate.marker` -- and this is what stops that becoming a second
+    calls `markers.marker` -- and this is what stops that becoming a second
     table: a per-key exception here would have the page show `<NAMESPACE>` over
     a bundle carrying something else, in the one field nobody filled in.
 
     Beside `test_the_marker_rule_is_one_rule_in_both_languages`, which holds the
     *page's* copy of the rule to the generator's. This holds the *served* copy
     to it, and there are three readers now."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/placeholders").json()
-    assert set(body) == set(gen_mod.PLACEHOLDER_SOURCE)
+    assert set(body) == set(required_fields.PLACEHOLDER_SOURCE)
     for key, entry in body.items():
-        assert entry["marker"] == gen_mod.marker(key), key
+        assert entry["marker"] == markers.marker(key), key
         # Prose, and never empty: the row renders the sentence only when it has
         # one, so an empty string here would be a field claiming a source it
         # does not have rather than one nobody read.
@@ -1013,8 +1006,7 @@ def test_the_placeholder_sentences_render_the_same_two_ways():
     showing. `plan.py` keeps this rule for its warnings and for this reason; the
     difference is that nothing failed when this table broke it, because until
     now it had one surface."""
-    from bzm_opl_gen import generate as gen_mod
-    for key, source in gen_mod.PLACEHOLDER_SOURCE.items():
+    for key, source in required_fields.PLACEHOLDER_SOURCE.items():
         assert "`" not in source, f"{key}: backticks render as backticks"
         assert "--" not in source.replace("--auth-token", ""), \
             f"{key}: use an em dash"
@@ -1032,11 +1024,10 @@ def test_the_served_placeholders_carry_no_severity():
     is a second copy of that set waiting to disagree with the first. The four
     fields it names are in this payload like any other, with a source and
     nothing else."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/placeholders").json()
     for key, entry in body.items():
         assert set(entry) == {"marker", "source"}, key
-    for key in gen_mod.PLACEHOLDER_REFUSED_BY_API:
+    for key in required_fields.PLACEHOLDER_REFUSED_BY_API:
         assert key in body, key
 
 
@@ -1048,9 +1039,8 @@ def test_reserved_env_is_served_with_the_option_that_owns_each_name():
 
     The owner is served beside the name because it is the answer: "set it with
     the proxy option" beats "that one is taken"."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/reserved-env").json()
-    assert set(body) == set(gen_mod.RESERVED_ENV)
+    assert set(body) == set(bundle_env.RESERVED_ENV)
     assert body["KUBERNETES_SERVICE_USE_TYPE"] == "service_type"
     # Null is a real answer: the identity variables belong to no option, and
     # naming one would be worse than saying there is not one.
@@ -1074,10 +1064,10 @@ def test_agent_env_is_served_as_what_is_left_after_the_options():
     control on the configure step already writes. The two must not overlap, or
     the page offers a row the generator refuses.
     """
-    from bzm_opl_gen import agent_env as env_mod, generate as gen_mod
+    from bzm_opl_gen import agent_env as env_mod
     body = client.get("/api/agent-env").json()
     names = {v["name"] for v in body}
-    assert names == {v["name"] for v in env_mod.AGENT_ENV} - gen_mod.RESERVED_ENV
+    assert names == {v["name"] for v in env_mod.AGENT_ENV} - bundle_env.RESERVED_ENV
     assert not names & set(client.get("/api/reserved-env").json())
     # A row the page can render: a control is chosen from `type`, and the two
     # tables decide which bundles are offered it.
@@ -1122,25 +1112,23 @@ def test_the_pages_copy_of_the_env_name_rule_is_the_generators():
     could not typecheck it. So it is a second copy, and this is the only thing
     that can hold it equal: a page accepting a name the generator refuses is a
     row that goes green and a download that fails."""
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     pattern = re.search(r"^const NAME_RE = /(.+)/;$",
                         (src / "env.ts").read_text(), re.M)
     assert pattern, "NAME_RE not found -- was it renamed or moved?"
-    assert pattern.group(1) == gen_mod.ENV_NAME_RE.pattern
+    assert pattern.group(1) == bundle_env.ENV_NAME_RE.pattern
 
 
 def test_the_pages_copy_of_the_reserved_env_names_is_the_generators():
     """As with IGNORED_BY_FORMAT above: the page's tests run without a server, so
     the fixture is a second copy, and this is what keeps it from drifting."""
-    from bzm_opl_gen import generate as gen_mod
     src = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "src"
     text = (src / "fixtures.ts").read_text()
     body = re.search(r"export const RESERVED_ENV: Record<string, string \| null> = \{"
                      r"(.*?)\n\};", text, re.S)
     assert body, "RESERVED_ENV not found -- was it renamed or moved?"
     assert set(re.findall(r"^  (\w+):", body.group(1), re.M)) \
-        == set(gen_mod.RESERVED_ENV)
+        == set(bundle_env.RESERVED_ENV)
 
 
 def test_sv_constants_carry_what_each_backend_publishes():
@@ -1149,10 +1137,9 @@ def test_sv_constants_carry_what_each_backend_publishes():
     same duplication the funcId list was just deleted for, and it would go stale
     silently, because a wrong Role reads as plausible right up until the virtual
     service stalls."""
-    from bzm_opl_gen import generate as gen_mod
     backends = client.get("/api/sv-constants").json()["backends"]
-    assert set(backends) == set(gen_mod.SV_INGRESS_TYPES)
-    for name, b in gen_mod.SV_INGRESS_BACKENDS.items():
+    assert set(backends) == set(service_virt.SV_INGRESS_TYPES)
+    for name, b in service_virt.SV_INGRESS_BACKENDS.items():
         assert backends[name] == {"group": b.group, "resources": list(b.resources),
                                   "creates": b.creates, "nodeport_ok": b.nodeport_ok}
     # routes/custom-host is the one nobody would guess: OpenShift gates
@@ -1268,7 +1255,6 @@ def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
     the funcId choices: functional testing, secrets and API monitoring are
     expected to follow, and a functionality has to become selectable by being
     added here."""
-    from bzm_opl_gen import generate as gen_mod
     body = client.get("/api/functionalities").json()
     assert [f["id"] for f in body] == [f["id"] for f in core.FUNCTIONALITIES]
     assert body[0]["id"] == "performance"       # the common case is the default
@@ -1276,10 +1262,10 @@ def test_functionalities_are_served_with_a_label_and_a_suggested_namespace():
         assert f["label"] and f["namespace"]
     # The id *is* the funcId (#149), so the join a location makes is on it and
     # there is no second list to keep: which funcId means service
-    # virtualization is generate.SV_FUNC_IDS', the same answer
+    # virtualization is service_virt.SV_FUNC_IDS', the same answer
     # /api/sv-constants serves and _sv_cfg validates against.
-    assert [f["id"] for f in body if f["id"] in gen_mod.SV_FUNC_IDS] \
-        == list(gen_mod.SV_FUNC_IDS)
+    assert [f["id"] for f in body if f["id"] in service_virt.SV_FUNC_IDS] \
+        == list(service_virt.SV_FUNC_IDS)
     # Distinct namespaces are the point of suggesting one per functionality:
     # sharing a namespace is what makes redeploying one agent take the other's
     # pods down.

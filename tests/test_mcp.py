@@ -21,6 +21,7 @@ import mcp
 import pytest
 
 from bzm_opl_gen import core, evidence, generate as gen_mod, mcp_server, plan
+from bzm_opl_gen import bundle_names, bundle_options, markers as markers_mod
 from test_core import FakeClient, RefusingClient
 from test_generate import FACTS
 
@@ -298,7 +299,7 @@ def test_generate_mints_nothing_unless_a_session_asks_to_rotate(fake_account,
     the bundle comes out with the placeholder in it and says so."""
     body = ok("opl_bundle", "generate", {"facts": FACTS, "out_dir": str(tmp_path)})
     assert fake_account.calls == []
-    assert (gen_mod.DEFAULT_OPTIONS["auth_token"]
+    assert (bundle_options.DEFAULT_OPTIONS["auth_token"]
             in (tmp_path / "bzm_secret.yaml").read_text())
     assert body["token_source"]["branch"] == core.TOKEN_PLACEHOLDER
     # And where a real one comes from, since this bundle cannot be applied yet.
@@ -314,7 +315,7 @@ def test_a_ca_slot_is_a_warning_here_rather_than_a_line_beside_the_token(
     body = ok("opl_bundle", "generate",
               {"facts": FACTS, "out_dir": str(tmp_path),
                "options": {"ca_bundle_slot": True}})
-    assert any(gen_mod.CA_CONFIGMAP in w for w in body["warnings"]), \
+    assert any(bundle_names.CA_CONFIGMAP in w for w in body["warnings"]), \
         body["warnings"]
     plain = ok("opl_bundle", "generate",
                {"facts": FACTS, "out_dir": str(tmp_path)})
@@ -835,8 +836,8 @@ def test_manual_facts_need_no_ids_and_say_which_are_missing():
     carried the markers and said nothing would be a bundle described as
     deployable."""
     body = ok("opl_facts", "manual", {})
-    assert body["facts"]["harbor_id"] == gen_mod.marker("harbor_id")
-    assert body["facts"]["ships"][0]["id"] == gen_mod.marker("ship_id")
+    assert body["facts"]["harbor_id"] == markers_mod.marker("harbor_id")
+    assert body["facts"]["ships"][0]["id"] == markers_mod.marker("ship_id")
     said = " ".join(body["warnings"])
     assert "harbor_id and ship_id" in said
     assert "<HARBOR_ID>" in said and "<SHIP_ID>" in said

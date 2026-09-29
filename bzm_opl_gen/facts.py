@@ -588,7 +588,7 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
     stated once; imported inside the function because `generate` imports this
     module, and the pair is acyclic one way only.
     """
-    from .generate import or_marker
+    from .markers import or_marker
     return {
         "harbor_id": or_marker(harbor_id, "harbor_id"),
         "harbor_name": harbor_name or None,

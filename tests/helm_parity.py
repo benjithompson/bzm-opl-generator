@@ -32,6 +32,7 @@ import yaml
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 from bzm_opl_gen import generate as gen  # noqa: E402
+from bzm_opl_gen import bundle_names, service_virt  # noqa: E402
 
 from test_generate import FACTS  # noqa: E402
 
@@ -164,7 +165,7 @@ CASES = {
                      "sv_ingress": "openshift",
                      "sv_subdomain": "apps.example.com",
                      "sv_tls_secret": "wildcard-mocks"},
-    "sv-declined": {"platform": "k8s", "sv_ingress": gen.SV_INGRESS_NONE},
+    "sv-declined": {"platform": "k8s", "sv_ingress": service_virt.SV_INGRESS_NONE},
     "sv-nginx-crane-hook": {"platform": "k8s", "crane_hook": True,
                             "sv_ingress": "nginx",
                             "sv_subdomain": "mocks.example.com",
@@ -214,8 +215,8 @@ def _by_name(docs):
 
 
 def _helm_docs(outdir, namespace):
-    chart = os.path.join(outdir, gen.CHART_DIR)
-    values = os.path.join(outdir, gen.HELM_VALUES_FILE)
+    chart = os.path.join(outdir, bundle_names.CHART_DIR)
+    values = os.path.join(outdir, bundle_names.HELM_VALUES_FILE)
     for cmd in ([HELM, "lint", "--strict", chart, "-f", values],
                 [HELM, "template", "crane", chart, "-n", namespace, "-f", values]):
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -354,8 +355,8 @@ def overrides_stay_consistent():
     problems = []
     try:
         gen.write(gen.generate(FACTS, {**opts, "output_format": "helm"}), outdir)
-        chart = os.path.join(outdir, gen.CHART_DIR)
-        values = os.path.join(outdir, gen.HELM_VALUES_FILE)
+        chart = os.path.join(outdir, bundle_names.CHART_DIR)
+        values = os.path.join(outdir, bundle_names.HELM_VALUES_FILE)
         for cpu, mem in (("2", "6Gi"), ("4", "16Gi"), ("500m", "1Gi")):
             r = subprocess.run(
                 [HELM, "template", "crane", chart, "-n", opts["namespace"],
@@ -380,7 +381,7 @@ def overrides_stay_consistent():
 
 
 # The service-virtualization combinations the chart refuses, and the words it
-# has to refuse them in. They are `generate._sv_cfg`'s, restated in Go for a
+# has to refuse them in. They are `service_virt.sv_cfg`'s, restated in Go for a
 # chart somebody installs by hand -- and a restatement is exactly the thing that
 # rots quietly, because the cases above render only configurations that are
 # *accepted*. Each of these fails silently on a cluster: the objects apply, the

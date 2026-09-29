@@ -46,9 +46,11 @@ import urllib.error
 import urllib.request
 import zipfile
 
-from . import (agent_env as agent_env_mod, api, doctor,
-               evidence as evidence_mod, facts as facts_mod,
-               generate as gen_mod, livetest, options as options_mod, plan,
+from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
+               bundle_options, doctor, evidence as evidence_mod,
+               facts as facts_mod, footprint, generate as gen_mod,
+               image_registry, livetest, markers, options as options_mod, plan,
+               quantity, required_fields, service_virt,
                suggest as suggest_mod, workstation)
 
 
@@ -468,7 +470,7 @@ def slots_refusal(func_ids, slots):
 
 def create_location(client, name, account_id, workspace_id,
                     func_ids=("performance",), slots=1,
-                    threads_per_engine=api.DEFAULT_THREADS_PER_ENGINE):
+                    threads_per_engine=footprint.DEFAULT_THREADS_PER_ENGINE):
     """Create a private location, and say whether a test can start on it.
 
     The verdict travels with the location rather than being left for each
@@ -833,7 +835,7 @@ def token_recovery_hint(options=None):
     who can see what their own cluster answers.
     """
     o = options or {}
-    ns = o.get("namespace") or gen_mod.DEFAULT_OPTIONS["namespace"]
+    ns = o.get("namespace") or bundle_options.DEFAULT_OPTIONS["namespace"]
     # Named in every register, because this sentence is not the CLI's: the web UI
     # renders it verbatim under the download button and an MCP session quotes it
     # back. A tail that said only `--auth-token` told a browser to type a flag it
@@ -845,7 +847,7 @@ def token_recovery_hint(options=None):
         f"it, nothing here stores it -- or from the agent's install command in "
         f"the BlazeMeter UI (Settings -> Private Locations -> the location -> "
         f"the agent), or out of an agent already deployed:\n"
-        f"    kubectl -n {ns} get secret {gen_mod.SECRET_NAME} "
+        f"    kubectl -n {ns} get secret {bundle_names.SECRET_NAME} "
         f"-o jsonpath='{{.data.AUTH_TOKEN}}' | base64 -d\n"
         f"  Supply it as the bundle's auth_token -- `--auth-token` on the "
         f"command line, the AUTH_TOKEN field on the web page -- and the bundle "
@@ -899,7 +901,7 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
     `out_dir` need not exist and need not be absolute -- it is read, not
     written; write_bundle is where the absolute-path rule belongs.
     """
-    placeholder = gen_mod.DEFAULT_OPTIONS["auth_token"]
+    placeholder = bundle_options.DEFAULT_OPTIONS["auth_token"]
     held = options.get("auth_token")
     if held and held != placeholder:
         # A rotation asked for *alongside* a token is a contradiction with one
@@ -973,7 +975,7 @@ def resolve_auth_token(facts, options, client=None, rotate=False, out_dir=None,
             elif theirs:
                 named = f"a bundle for ship {theirs}, not {want}"
             else:
-                named = (f"a bundle whose {gen_mod.PROFILE_FILE} does not say "
+                named = (f"a bundle whose {bundle_names.PROFILE_FILE} does not say "
                          f"which ship its AUTH_TOKEN belongs to")
             remedy = ("Pass --auth-token (auth_token) to say what this "
                       "bundle's credential is, or --rotate-token to issue a "
@@ -1176,7 +1178,7 @@ def mirror_images(refs, mirror=None, platform="linux/amd64", dry_run=False):
             repo, _, tag = ref.rpartition(":")
             target = (f"{mirror.rstrip('/')}/{ref.rsplit('/', 1)[-1]}"
                       if repo == facts_mod.CRANE_REPO else
-                      gen_mod.composed_image_ref(repo, tag, mirror))
+                      image_registry.composed_image_ref(repo, tag, mirror))
             ran.append(_docker(["tag", ref, target], dry_run))
             ran.append(_docker(["push", target], dry_run))
     return {"mirror": mirror, "platform": platform, "dry_run": bool(dry_run),
@@ -1294,12 +1296,12 @@ def engine_vus(engine_cpu=None, engine_mem=None):
     from "what may this field suggest".
     """
     try:
-        cpu, mem = gen_mod.engine_size({"engine_cpu_limit": engine_cpu,
+        cpu, mem = bundle_options.engine_size({"engine_cpu_limit": engine_cpu,
                                         "engine_mem_limit": engine_mem})
     except ValueError as e:
         raise BadRequest(str(e))
-    return {"cpu": gen_mod.format_cpu(cpu),
-            "memory": gen_mod.format_memory(mem),
+    return {"cpu": quantity.format_cpu(cpu),
+            "memory": quantity.format_memory(mem),
             "supported_vus": plan.supported_vus(cpu, mem),
             "rated": {fid: plan.per_pod_capacity(fid, cpu, mem)
                       for fid in plan.SIZING_MODELS}}
@@ -1627,7 +1629,7 @@ def sv_mocks(namespace, sv_subdomain=None):
     return {
         "status": read.status,
         "mocks": [{"name": m["name"], "port": m["port"],
-                   "host": gen_mod.sv_endpoint_host(
+                   "host": service_virt.sv_endpoint_host(
                        m["name"], m["port"], namespace, sv_subdomain)}
                   for m in read.mocks],
         "message": sv_read_message(read),
@@ -1772,7 +1774,7 @@ def option_defaults():
     it, so any metadata key added here would arrive at generate() as an option
     named after it. The descriptions are option_docs() for that reason.
     """
-    return gen_mod.DEFAULT_OPTIONS
+    return bundle_options.DEFAULT_OPTIONS
 
 
 def option_docs():
@@ -1984,7 +1986,7 @@ def ignored_options():
     entry having to carry a flag.
     """
     return {fmt: dict(table)
-            for fmt, table in gen_mod.IGNORED_BY_FORMAT.items()}
+            for fmt, table in bundle_options.IGNORED_BY_FORMAT.items()}
 
 
 def reserved_env():
@@ -2002,8 +2004,8 @@ def reserved_env():
     the refusal is real either way, and inventing an option to name would be
     worse than saying there is not one.
     """
-    return {name: gen_mod.ENV_OWNER.get(name)
-            for name in sorted(gen_mod.RESERVED_ENV)}
+    return {name: bundle_env.ENV_OWNER.get(name)
+            for name in sorted(bundle_env.RESERVED_ENV)}
 
 
 def agent_env(func_ids=None):
@@ -2047,7 +2049,7 @@ def agent_env(func_ids=None):
     """
     runs = None if func_ids is None else set(func_ids)
     return [dict(v) for v in agent_env_mod.AGENT_ENV
-            if v["name"] not in gen_mod.RESERVED_ENV
+            if v["name"] not in bundle_env.RESERVED_ENV
             and (runs is None or not v["functionalities"]
                  or bool(runs & set(v["functionalities"])))]
 
@@ -2074,8 +2076,8 @@ def placeholders():
     a caller holding a blank field knows it by that name, and the marker is
     what it will have to look for in the files afterwards.
     """
-    return {key: {"marker": gen_mod.marker(key), "source": source}
-            for key, source in gen_mod.PLACEHOLDER_SOURCE.items()}
+    return {key: {"marker": markers.marker(key), "source": source}
+            for key, source in required_fields.PLACEHOLDER_SOURCE.items()}
 
 
 def sv_constants():
@@ -2088,8 +2090,8 @@ def sv_constants():
     duplicated in TypeScript with a comment asking the next person to keep it
     in step by hand.
     """
-    return {"func_ids": list(gen_mod.SV_FUNC_IDS),
-            "ingress_types": list(gen_mod.SV_INGRESS_TYPES),
+    return {"func_ids": list(service_virt.SV_FUNC_IDS),
+            "ingress_types": list(service_virt.SV_INGRESS_TYPES),
             # What each backend publishes, so a caller can name the Role the
             # bundle grants without keeping its own copy of SV_INGRESS_BACKENDS
             # -- which is mechanical, unlike the prose around it. Only the four
@@ -2101,4 +2103,4 @@ def sv_constants():
                                 "resources": list(b.resources),
                                 "creates": b.creates,
                                 "nodeport_ok": b.nodeport_ok}
-                         for name, b in gen_mod.SV_INGRESS_BACKENDS.items()}}
+                         for name, b in service_virt.SV_INGRESS_BACKENDS.items()}}

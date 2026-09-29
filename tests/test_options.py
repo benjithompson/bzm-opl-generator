@@ -11,11 +11,12 @@ import re
 import pytest
 
 from bzm_opl_gen import generate as gen
+from bzm_opl_gen import bundle_options, ca_trust, service_virt
 from bzm_opl_gen import options as opt
 
 
 def test_registry_covers_every_default_option():
-    missing = sorted(set(gen.DEFAULT_OPTIONS) - set(opt.BY_NAME))
+    missing = sorted(set(bundle_options.DEFAULT_OPTIONS) - set(opt.BY_NAME))
     assert not missing, (
         f"new option(s) {missing} in DEFAULT_OPTIONS with no registry entry -- "
         f"add one to bzm_opl_gen/options.py so the doc, the UI help and the MCP "
@@ -23,7 +24,7 @@ def test_registry_covers_every_default_option():
 
 
 def test_registry_invents_no_options():
-    extra = sorted(set(opt.BY_NAME) - set(gen.DEFAULT_OPTIONS))
+    extra = sorted(set(opt.BY_NAME) - set(bundle_options.DEFAULT_OPTIONS))
     assert not extra, (
         f"registry entries {extra} name options generate() does not have -- a "
         f"renamed or removed key leaves a row documenting nothing")
@@ -88,10 +89,10 @@ def test_choices_track_generate_enumerations():
     here is the drift the registry exists to prevent, so they are read from
     generate -- this asserts nothing added a third copy by hand."""
     assert opt.BY_NAME["sv_ingress"].choices == (
-        tuple(gen.SV_INGRESS_TYPES) + (gen.SV_INGRESS_NONE,))
+        tuple(service_virt.SV_INGRESS_TYPES) + (service_virt.SV_INGRESS_NONE,))
     # The sentinel is offered but is not a backend: anything iterating the
     # backends to pick one must not find it among them.
-    assert gen.SV_INGRESS_NONE not in gen.SV_INGRESS_TYPES
+    assert service_virt.SV_INGRESS_NONE not in service_virt.SV_INGRESS_TYPES
 
 
 def test_secret_options_are_the_ones_profile_json_omits():
@@ -100,13 +101,13 @@ def test_secret_options_are_the_ones_profile_json_omits():
     profile.json means by it."""
     secret = {o.name for o in opt.OPTIONS if o.secret}
     assert secret == set(gen.SECRET_OPTIONS)
-    written = gen._profile_json(dict(gen.DEFAULT_OPTIONS))
+    written = gen.profile_json(dict(bundle_options.DEFAULT_OPTIONS))
     for name in secret:
         assert f'"{name}"' not in written
 
 
 def test_ca_options_are_the_ones_this_registry_files_under_ca_trust():
-    """`generate.CA_OPTIONS` is what a caller clears to leave CA trust
+    """`ca_trust.CA_OPTIONS` is what a caller clears to leave CA trust
     unconfigured -- livetest's negative control, and the proxy overlay that
     replaces whatever mode a profile already carried. Both went on clearing
     three keys after `ca_bundle_slot` made a fourth mode (#250), so the set is
@@ -115,14 +116,14 @@ def test_ca_options_are_the_ones_this_registry_files_under_ca_trust():
     it is not in `CA_OPTIONS` it fails here rather than in a 12-20 minute live
     run that proves nothing."""
     ca = {o.name for o in opt.OPTIONS if o.group == "CA trust"}
-    assert ca == set(gen.CA_OPTIONS)
+    assert ca == set(ca_trust.CA_OPTIONS)
 
 
 def test_clearing_the_ca_options_leaves_no_mode_configured():
     """The other half of it: cleared to what? `no_ca()` answers with each
     option's own default, so `_ca_cfg` resolves to no CA at all."""
-    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True,
-                        **gen.no_ca()}) is None
+    assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, "ca_bundle_slot": True,
+                        **ca_trust.no_ca()}) is None
 
 
 def test_a_nullable_option_is_the_one_whose_default_is_none():
@@ -145,7 +146,7 @@ def test_generated_table_is_what_the_doc_carries():
 
 def test_every_option_has_a_row_in_the_rendered_doc():
     table = opt.render_table()
-    for name in gen.DEFAULT_OPTIONS:
+    for name in bundle_options.DEFAULT_OPTIONS:
         assert f"| `{name}` |" in table
 
 

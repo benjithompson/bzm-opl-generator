@@ -33,7 +33,7 @@ from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, BeforeValidator
 
-from . import api, core, ui_build
+from . import core, footprint, ui_build
 
 app = FastAPI(title="bzm-opl-gen", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
@@ -349,7 +349,7 @@ class LocationIn(BaseModel):
     workspace_id: int
     func_ids: list[str] = ["performance"]
     slots: int = 1
-    threads_per_engine: int = api.DEFAULT_THREADS_PER_ENGINE
+    threads_per_engine: int = footprint.DEFAULT_THREADS_PER_ENGINE
 
 
 @app.post("/api/locations")

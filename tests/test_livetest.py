@@ -12,6 +12,9 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bzm_opl_gen import generate as gen, livetest  # noqa: E402
+from bzm_opl_gen import (bundle_names, bundle_options, ca_trust,  # noqa: E402
+                         image_registry, markers, required_fields,
+                         service_virt)
 from tests.test_generate import FACTS  # noqa: E402
 from tests.tls_fixtures import SV_CERT, SV_HOST, SV_KEY  # noqa: E402
 
@@ -106,7 +109,7 @@ def test_the_rig_mirrors_where_the_bundle_it_deploys_will_look(monkeypatch):
     overrides = json.loads(yaml.safe_load(
         files["bzm_configmap.yaml"])["data"]["IMAGE_OVERRIDES"])
     wanted = {r.split("/", 1)[1] for r in overrides.values()}
-    wanted.add(gen._crane_image(FACTS, {
+    wanted.add(image_registry.crane_image(FACTS, {
         "private_registry": f"host.minikube.internal:{port}"}).split("/", 1)[1])
     assert {p.split("/", 1)[1] for p in pushed} == wanted
 
@@ -295,7 +298,7 @@ def test_engine_config_catches_missing_ca_propagation():
     assert any("REQUESTS_CA_BUNDLE" in f for f in fails)
 
 
-@pytest.mark.parametrize("mode", sorted(gen.CA_MODES))
+@pytest.mark.parametrize("mode", sorted(ca_trust.CA_MODES))
 def test_engine_config_checks_the_ca_whichever_mode_configured_it(mode):
     """The gate read two of the four modes, so a slot bundle (or an
     OpenShift-injected one) run with `--run-test` and no `--local-proxy` skipped
@@ -303,7 +306,7 @@ def test_engine_config_checks_the_ca_whichever_mode_configured_it(mode):
     proxy path hides it -- proxy_overlay always writes `ca_bundle` -- which is
     why this is read off CA_MODES rather than off the run the rig usually
     makes."""
-    value = True if gen.DEFAULT_OPTIONS[mode] is False else "x"
+    value = True if bundle_options.DEFAULT_OPTIONS[mode] is False else "x"
     opts = {**ENGINE_OPTS, "ca_bundle": None, mode: value}
     fails = livetest.assert_engine_config(_engine_pod(ca=False), opts)
     assert any("KUBERNETES_CA_BUNDLE_MOUNT did not propagate" in f for f in fails)
@@ -628,7 +631,7 @@ def test_bundle_check_catches_a_stale_ship_in_the_profile(tmp_path):
     d = _bundle(tmp_path)
     prof = {**gen.load_profile(d), "ship_id": "ddd444"}
     r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals)
-    assert "ddd444" in r and "bbb222" in r and gen.PROFILE_FILE in r
+    assert "ddd444" in r and "bbb222" in r and bundle_names.PROFILE_FILE in r
 
 
 def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
@@ -639,12 +642,12 @@ def test_bundle_check_refuses_a_bundle_with_a_field_left_blank(tmp_path):
     guards above, and the same reason for being one."""
     d = _bundle(tmp_path, service_account_name="")
     prof = gen.load_profile(d)
-    assert prof["service_account_name"] == gen.marker("service_account_name")
+    assert prof["service_account_name"] == markers.marker("service_account_name")
     r = " ".join(livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals)
     # Both halves: the field somebody has to fill in, and the string they will
     # find in the bundle when they go looking.
     assert "service_account_name" in r
-    assert gen.marker("service_account_name") in r
+    assert markers.marker("service_account_name") in r
 
 
 def test_bundle_check_refuses_a_yaml_this_generator_does_not_emit(tmp_path):
@@ -786,7 +789,7 @@ def test_bundle_platform_reads_the_directory_when_there_is_no_profile(tmp_path):
     bundle carries a compose file. The wrong answer here is the silent run this
     whole check exists to prevent, so it is read rather than defaulted."""
     d = _docker_bundle(tmp_path)
-    os.remove(os.path.join(d, gen.PROFILE_FILE))
+    os.remove(os.path.join(d, bundle_names.PROFILE_FILE))
     assert livetest.bundle_platform(d) == livetest.PLATFORM_COMPOSE
     assert livetest.bundle_platform(str(tmp_path / "empty")) == \
         livetest.PLATFORM_MANIFESTS
@@ -798,11 +801,11 @@ def test_bundle_platform_does_not_let_a_stray_compose_file_win(tmp_path):
     unknown *.yaml, which is the refusal that fits. Routing it to compose
     instead would deploy one file out of a bundle of nine."""
     d = _bundle(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write("services: {}\n")
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "w").write("services: {}\n")
     prof = gen.load_profile(d)
     assert livetest.bundle_platform(d, prof) == livetest.PLATFORM_MANIFESTS
     refusals = livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals
-    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+    assert any(bundle_names.DOCKER_COMPOSE_FILE in r for r in refusals)
 
 
 def test_compose_bundle_check_passes_this_generators_own_output(tmp_path):
@@ -818,8 +821,8 @@ def test_compose_bundle_check_refuses_another_agents_container(tmp_path):
     register and the run waits out its whole timeout saying only that."""
     d = _docker_bundle(tmp_path)
     refusals = livetest.bundle_check(d, "aaa111", "ccc333").refusals
-    assert any(gen.docker_container_name("bbb222") in r
-               and gen.docker_container_name("ccc333") in r for r in refusals)
+    assert any(bundle_names.docker_container_name("bbb222") in r
+               and bundle_names.docker_container_name("ccc333") in r for r in refusals)
 
 
 def test_compose_bundle_check_refuses_another_locations_harbor(tmp_path):
@@ -834,10 +837,10 @@ def test_compose_bundle_check_refuses_a_directory_with_no_compose_file(tmp_path)
     -- a bundle from before #177, or one somebody tidied. There is nothing for
     `compose up` to start, and it would say so several layers into a run."""
     d = _docker_bundle(tmp_path)
-    os.remove(os.path.join(d, gen.DOCKER_COMPOSE_FILE))
+    os.remove(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE))
     refusals = livetest.bundle_check(d, "aaa111", "bbb222",
                                      gen.load_profile(d)).refusals
-    assert any(gen.DOCKER_COMPOSE_FILE in r for r in refusals)
+    assert any(bundle_names.DOCKER_COMPOSE_FILE in r for r in refusals)
 
 
 def test_compose_bundle_check_refuses_a_bundle_nobody_finished(tmp_path):
@@ -856,7 +859,7 @@ def test_compose_bundle_check_notes_an_identity_it_could_not_read(tmp_path):
     hand-assembled compose file that names no container is a note, and the run
     goes ahead."""
     d = str(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "w").write(
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "w").write(
         "services:\n  crane:\n    image: x\n")
     assert livetest.compose_identity(d) == {}           # read, and names none
     check = livetest.bundle_check(d, "aaa111", "bbb222")
@@ -880,7 +883,7 @@ def test_compose_bundle_check_tells_an_unread_file_from_one_that_names_nothing(
     a DER file saved over a PEM is exactly what the certificate check next door
     exists to catch."""
     d = str(tmp_path)
-    open(os.path.join(d, gen.DOCKER_COMPOSE_FILE), "wb").write(b"\xff\xfe\x00x")
+    open(os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE), "wb").write(b"\xff\xfe\x00x")
     assert livetest.compose_identity(d) is None         # not {}: nobody read it
     check = livetest.bundle_check(d, "aaa111", "bbb222")
     assert check.refusals == []
@@ -910,10 +913,10 @@ def test_compose_bundle_check_refuses_a_mounted_file_left_blank(tmp_path):
     d = _sv_docker_bundle(tmp_path, sv_tls_key="")
     prof = gen.load_profile(d)
     # Neither of the two things this check already read can see it.
-    assert gen.placeholder_options(prof) == [] and livetest.compose_unset(d) == []
+    assert required_fields.placeholder_options(prof) == [] and livetest.compose_unset(d) == []
     refusals = livetest.bundle_check(d, "aaa111", "bbb222", prof).refusals
-    assert any(gen.DOCKER_SV_KEY_FILE in r
-               and gen.marker("sv_tls_key") in r
+    assert any(bundle_names.DOCKER_SV_KEY_FILE in r
+               and markers.marker("sv_tls_key") in r
                and "sv_tls_key" in r for r in refusals)
 
 
@@ -946,10 +949,10 @@ def test_compose_bundle_check_notes_a_mounted_file_it_could_not_read(tmp_path):
     about whether it carries the marker, and a run refused on that would be
     "could not read" wearing "there is nothing there"."""
     d = _docker_bundle(tmp_path, ca_bundle=CA_PEM)
-    open(os.path.join(d, gen.DOCKER_CA_FILE), "wb").write(b"\xff\xfe\x00x")
+    open(os.path.join(d, bundle_names.DOCKER_CA_FILE), "wb").write(b"\xff\xfe\x00x")
     check = livetest.bundle_check(d, "aaa111", "bbb222", gen.load_profile(d))
     assert check.refusals == []
-    assert any(gen.DOCKER_CA_FILE in n and "could not be read" in n
+    assert any(bundle_names.DOCKER_CA_FILE in n and "could not be read" in n
                for n in check.notes)
 
 
@@ -961,11 +964,11 @@ def test_run_compose_refuses_a_blank_mounted_file_before_it_starts_anything(
     d = _sv_docker_bundle(tmp_path, sv_tls_key="")
     for name in ("compose_up", "compose_down", "compose_tool"):
         monkeypatch.setattr(livetest, name, lambda *a, **kw: pytest.fail(
-            f"{name} ran on a bundle with a blank {gen.DOCKER_SV_KEY_FILE}"))
+            f"{name} ran on a bundle with a blank {bundle_names.DOCKER_SV_KEY_FILE}"))
     with pytest.raises(livetest.BundleMismatch) as caught:
         livetest.run_compose(None, d, "aaa111", "bbb222",
                              opts=gen.load_profile(d))
-    assert gen.DOCKER_SV_KEY_FILE in str(caught.value)
+    assert bundle_names.DOCKER_SV_KEY_FILE in str(caught.value)
 
 
 def test_bundle_check_reports_its_notes_and_hands_back_its_refusals(capsys):
@@ -989,7 +992,7 @@ def test_run_compose_refuses_before_it_starts_anything(monkeypatch, tmp_path):
             f"{name} ran on a bundle built for another agent"))
     with pytest.raises(livetest.BundleMismatch) as caught:
         livetest.run_compose(None, d, "aaa111", "ccc333")
-    assert gen.docker_container_name("ccc333") in str(caught.value)
+    assert bundle_names.docker_container_name("ccc333") in str(caught.value)
 
 
 def test_run_refuses_a_compose_bundle_rather_than_deploying_nothing(
@@ -1064,7 +1067,7 @@ def test_teardown_removes_a_container_compose_down_left_behind(monkeypatch,
     out from under it, and the leftover then holds the name the next run needs.
     Named leftovers are the one thing this rig promises not to leave."""
     d = _docker_bundle(tmp_path)
-    name = gen.docker_container_name("bbb222")
+    name = bundle_names.docker_container_name("bbb222")
     cmds = _fake_daemon(monkeypatch, present=[name])
     livetest.compose_down(d, name)
     assert ["docker", "rm", "-f", name] in cmds
@@ -1074,7 +1077,7 @@ def test_teardown_removes_nothing_by_name_when_down_worked(monkeypatch,
                                                            tmp_path):
     d = _docker_bundle(tmp_path)
     cmds = _fake_daemon(monkeypatch, present=[])
-    livetest.compose_down(d, gen.docker_container_name("bbb222"))
+    livetest.compose_down(d, bundle_names.docker_container_name("bbb222"))
     assert not any(c[:3] == ["docker", "rm", "-f"] for c in cmds)
 
 
@@ -1096,7 +1099,7 @@ def test_compose_file_relative_paths_resolve_against_the_bundle(monkeypatch,
     cmds = _fake_daemon(monkeypatch)
     livetest.run_compose(_FakeBzm(), d, "aaa111", "bbb222")
     up = next(c for c in cmds if c[-2:] == ["up", "-d"])
-    assert up[2] == "-f" and up[3] == os.path.join(d, gen.DOCKER_COMPOSE_FILE)
+    assert up[2] == "-f" and up[3] == os.path.join(d, bundle_names.DOCKER_COMPOSE_FILE)
 
 
 def test_profile_json_roundtrip(tmp_path):
@@ -1111,14 +1114,14 @@ def test_profile_json_roundtrip(tmp_path):
     # Replaying it reproduces the manifests.
     again = gen.generate(FACTS, {**prof, "auth_token": "tok"})
     assert again["bzm_deployment.yaml"] == files["bzm_deployment.yaml"]
-    assert json.loads(again[gen.PROFILE_FILE]) == prof
+    assert json.loads(again[bundle_names.PROFILE_FILE]) == prof
 
 
 # -- sv_mocks ---------------------------------------------------------------
 
 def _sv_pod(name, port, harbor="h1", ship="s1", extra=None):
-    labels = {gen.SV_POD_NAME_LABEL: name, gen.SV_POD_HARBOR_LABEL: harbor,
-              gen.SV_POD_SHIP_LABEL: ship} if name else {}
+    labels = {service_virt.SV_POD_NAME_LABEL: name, service_virt.SV_POD_HARBOR_LABEL: harbor,
+              service_virt.SV_POD_SHIP_LABEL: ship} if name else {}
     return {"metadata": {"labels": {**labels, **(extra or {})}},
             "spec": {"containers": [
                 {"ports": [{"containerPort": port}] if port else []}]}}
@@ -1536,7 +1539,7 @@ def test_the_existing_mode_overlay_names_the_rigs_own_configmap():
 
 def test_the_rigs_key_is_not_the_generators_default():
     """Or the run would pass with `ca_configmap_key` reaching nothing."""
-    assert livetest.CA_RIG_KEY != gen.CA_FILENAME
+    assert livetest.CA_RIG_KEY != ca_trust.CA_FILENAME
 
 
 def test_the_existing_mode_still_carries_the_proxy():
@@ -1626,8 +1629,8 @@ def test_teardown_removes_the_name_this_run_made_not_a_constant(
     monkeypatch.setattr(livetest, "_run", lambda cmd, **kw: cmds.append(cmd))
     monkeypatch.setattr(livetest, "cli_tool", lambda: "kubectl")
     livetest.teardown(str(tmp_path), "ns1", "kind",
-                      livetest.Owned(ca_configmap=gen.CA_CONFIGMAP))
-    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+                      livetest.Owned(ca_configmap=bundle_names.CA_CONFIGMAP))
+    assert ["kubectl", "-n", "ns1", "delete", "cm", bundle_names.CA_CONFIGMAP,
             "--ignore-not-found"] in cmds
     assert not any(livetest.CA_RIG_CONFIGMAP in c for c in cmds)
 
@@ -1665,7 +1668,7 @@ def test_the_negative_control_deletes_the_name_the_file_mode_depends_on(
     overlay = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
     livetest.negative_control(lambda o: None, overlay, str(tmp_path), "ns1",
                               "kind", timeout=0)
-    assert ["kubectl", "-n", "ns1", "delete", "cm", gen.CA_CONFIGMAP,
+    assert ["kubectl", "-n", "ns1", "delete", "cm", bundle_names.CA_CONFIGMAP,
             "--ignore-not-found"] in cmds
 
 
@@ -1714,9 +1717,9 @@ def test_the_negative_control_clears_every_ca_option_the_generator_has(
     overlay = {**livetest.proxy_overlay("h", 8080, CA_PEM), "ca_bundle_slot": True}
     livetest.negative_control(lambda o: seen.update(o), overlay,
                               str(tmp_path), "ns1", "kind", timeout=0)
-    for key in gen.CA_OPTIONS:
-        assert seen[key] == gen.DEFAULT_OPTIONS[key], key
-    assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, **seen}) is None
+    for key in ca_trust.CA_OPTIONS:
+        assert seen[key] == bundle_options.DEFAULT_OPTIONS[key], key
+    assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **seen}) is None
 
 
 def test_the_proxy_overlay_replaces_every_ca_mode_too():
@@ -1726,9 +1729,9 @@ def test_the_proxy_overlay_replaces_every_ca_mode_too():
     the deploy, which is louder and just as wrong."""
     for mode in ("inline", "existing", "file"):
         o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode=mode)
-        for key in gen.CA_OPTIONS:
+        for key in ca_trust.CA_OPTIONS:
             assert key in o, f"{mode}: {key} is left for the profile to answer"
-        assert gen._ca_cfg({**gen.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
+        assert ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, "ca_bundle_slot": True, **o})
 
 
 def test_the_file_mode_names_the_configmap_the_bundle_itself_writes():
@@ -1741,10 +1744,10 @@ def test_the_file_mode_names_the_configmap_the_bundle_itself_writes():
     so a run using it would pass whether or not `ca_cert_file` reached
     anything -- the same trap `existing` avoids with the same key."""
     o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
-    ca = gen._ca_cfg({**gen.DEFAULT_OPTIONS, **o})
+    ca = ca_trust.ca_cfg({**bundle_options.DEFAULT_OPTIONS, **o})
     assert ca["mode"] == "file"
-    assert ca["cm"] == gen.CA_CONFIGMAP
-    assert ca["key"] == livetest.CA_RIG_KEY != gen.CA_FILENAME
+    assert ca["cm"] == bundle_names.CA_CONFIGMAP
+    assert ca["key"] == livetest.CA_RIG_KEY != ca_trust.CA_FILENAME
 
 
 def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with():
@@ -1756,11 +1759,11 @@ def test_the_file_mode_bundle_creates_no_configmap_for_the_rig_to_collide_with()
     from test_generate import FACTS
     o = livetest.proxy_overlay("h", 8080, CA_PEM, ca_mode="file")
     files = gen.generate(FACTS, {"namespace": "ns1", "ship_id": "bbb222", **o})
-    assert gen.CA_CONFIGMAP_FILE not in files
+    assert bundle_names.CA_CONFIGMAP_FILE not in files
     # ...and the Deployment still mounts it, which is the half that makes the
     # rig-created object reachable at all.
     dep = files["bzm_deployment.yaml"]
-    assert gen.CA_CONFIGMAP in dep and livetest.CA_RIG_KEY in \
+    assert bundle_names.CA_CONFIGMAP in dep and livetest.CA_RIG_KEY in \
         files["bzm_configmap.yaml"]
 
 
@@ -1798,7 +1801,7 @@ def test_every_rig_ca_mode_is_one_the_overlay_can_build():
 
 @pytest.mark.parametrize("options,names", [
     ({"ca_bundle_slot": True, "ca_cert_file": "corp-root.pem"},
-     (gen.CA_CONFIGMAP, "corp-root.pem", "--ca-mode file")),
+     (bundle_names.CA_CONFIGMAP, "corp-root.pem", "--ca-mode file")),
     ({"ca_existing_configmap": "corp-trust"},
      ("corp-trust", "--ca-mode existing")),
 ])
@@ -1821,7 +1824,7 @@ def test_a_bundle_that_leaves_the_certificate_unnamed_is_refused_by_its_marker()
     refusal quotes."""
     said = livetest.ca_configmap_refusal({"namespace": "ns1",
                                           "ca_bundle_slot": True}, False)
-    assert gen.marker("ca_cert_file") in said
+    assert markers.marker("ca_cert_file") in said
 
 
 @pytest.mark.parametrize("options", [
@@ -1853,7 +1856,7 @@ def test_the_proxy_is_what_makes_those_two_modes_deployable(options):
 
 @pytest.mark.parametrize("local_proxy", [False, True])
 def test_a_profile_setting_two_ca_modes_is_refused_either_way(local_proxy):
-    """The third answer `generate.ca_mode` keeps separate, arriving where it
+    """The third answer `ca_trust.ca_mode` keeps separate, arriving where it
     matters: a re-rendering run would raise out of generate() with the cluster
     already built, and a lean one would deploy manifests whose own profile
     disagrees with them. Refused before either can happen, and not read as a
@@ -1861,7 +1864,7 @@ def test_a_profile_setting_two_ca_modes_is_refused_either_way(local_proxy):
     said = livetest.ca_configmap_refusal(
         {"namespace": "ns1", "ca_bundle_slot": True, "ca_bundle": CA_PEM},
         local_proxy)
-    assert said and gen.PROFILE_FILE in said and "CA mode" in said
+    assert said and bundle_names.PROFILE_FILE in said and "CA mode" in said
 
 
 @pytest.mark.parametrize("asked,carried,resolved", [

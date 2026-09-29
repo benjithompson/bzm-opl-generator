@@ -38,8 +38,9 @@ from . import doctor
 # tuple and in _decisive/_suggestive's signature.
 from . import evidence as evidence_mod
 from .doctor import CRANE_INGRESS_CLASS
-from .generate import (CA_MODES, DEFAULT_OPTIONS, SV_INGRESS_NONE,
-                       SV_INGRESS_TYPES)
+from .bundle_options import DEFAULT_OPTIONS
+from .ca_trust import CA_MODES
+from .service_virt import SV_INGRESS_NONE, SV_INGRESS_TYPES
 
 # option:     the generate option this is about
 # strength:   DECISIVE | SUGGESTIVE (see the module docstring)
