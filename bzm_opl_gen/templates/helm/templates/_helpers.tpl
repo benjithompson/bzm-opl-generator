@@ -1,9 +1,7 @@
 {{/*
-Names. The defaults are the fixed names `bzm-opl-gen generate` emits rather than
-release-derived ones, so a location can move between the generated manifests and
-this chart without renaming objects, and so the selectors in BlazeMeter's own
-docs (-l role=role-crane) keep matching. fullnameOverride is there for anyone
-who does want release-scoped names.
+Names default to the fixed names of the generated manifests, so a location can
+move between the two without renaming objects. fullnameOverride makes them
+release-scoped.
 */}}
 {{- define "bzm-opl.name" -}}
 {{- default "crane" .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
@@ -14,12 +12,8 @@ who does want release-scoped names.
 {{- end -}}
 
 {{/*
-One name whether or not we create the account: `create` decides only whether
-serviceaccount.yaml renders. Deliberately NOT the `helm create` scaffold, which
-falls back to the namespace's `default` account when create is false -- that
-renders, installs, runs, and silently binds crane's Role to the account every
-other pod in the namespace runs as. serviceAccount.name is required instead when
-create is false; see bzm-opl.validate.
+The ServiceAccount name, used whether or not the chart creates it. There is no
+fallback to the namespace's default account; see bzm-opl.validate.
 */}}
 {{- define "bzm-opl.serviceAccountName" -}}
 {{- default (include "bzm-opl.fullname" .) .Values.serviceAccount.name -}}
@@ -33,11 +27,8 @@ create is false; see bzm-opl.validate.
 {{- define "bzm-opl.roleBindingName" -}}role-binding-{{ include "bzm-opl.fullname" . }}{{- end -}}
 
 {{/*
-Cluster-scoped names carry the namespace, unlike the rest. Two locations in two
-namespaces are a normal thing to have, and a bare `cluster-role-binding-crane`
-would make the second install collide with the first -- Helm refuses to adopt an
-object another release owns, so it fails at install rather than quietly
-repointing the first location's binding.
+Cluster-scoped names include the namespace, so two locations in two namespaces
+do not collide.
 */}}
 {{- define "bzm-opl.clusterRoleName" -}}
 {{- printf "cluster-role-%s-%s" (include "bzm-opl.fullname" .) .Release.Namespace | trunc 63 | trimSuffix "-" -}}
@@ -55,10 +46,8 @@ blazemeter-cacerts
 {{- end -}}
 
 {{/*
-Selector labels. harbor_id/ship_id are part of the selector in the generated
-manifests, so they are here too -- but selectors are immutable, which means
-repointing a deployment at a different agent needs a delete, not an upgrade.
-NOTES.txt says so.
+Selector labels include the agent identity. Selectors are immutable, so
+pointing an install at a different agent needs uninstall + install.
 */}}
 {{- define "bzm-opl.selectorLabels" -}}
 role: {{ include "bzm-opl.roleName" . }}
@@ -76,9 +65,8 @@ app.kubernetes.io/part-of: blazemeter
 {{- end -}}
 
 {{/*
-Images. BlazeMeter's public project is the default registry; a private registry
-replaces it wholesale, and crane's own image moves with it (the generator does
-the same rewrite, keeping the tag).
+Images. A private registry replaces BlazeMeter's public one, crane's image
+included.
 */}}
 {{- define "bzm-opl.dockerRegistry" -}}
 {{- default "gcr.io/verdant-bulwark-278" .Values.privateRegistry | trimSuffix "/" -}}
@@ -91,19 +79,13 @@ the same rewrite, keeping the tag).
 {{- else if .Values.privateRegistry -}}
 {{- printf "%s/crane:%s" (trimSuffix "/" .Values.privateRegistry) $tag -}}
 {{- else -}}
-{{/* The public project keeps a `blazemeter/` segment that a mirror does not,
-which is why this is not simply <registry>/crane. The root itself comes from
-the one helper that carries it. */}}
+{{/* The public registry keeps a blazemeter/ path segment. */}}
 {{- printf "%s/blazemeter/crane:%s" (include "bzm-opl.dockerRegistry" .) $tag -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-crane-hook's image and its own Role. The image follows privateRegistry like
-everything else BlazeMeter ships; the Role is named for the tool that made it
-rather than upstream's `test-hookrole`, so a stray one is traceable in six
-months. Both names are also written into the Pod's env -- crane-hook is told
-what it is called -- which is why they are helpers and not literals.
+crane-hook's image and Role name. Both are also passed to the hook as env.
 */}}
 {{- define "bzm-opl.hookRoleName" -}}bzm-cranehook{{- end -}}
 
@@ -112,18 +94,14 @@ what it is called -- which is why they are helpers and not literals.
 {{- end -}}
 
 {{/*
-Engine sizing. BlazeMeter's documented footprint is the fallback. Only limits
-are settable: crane stamps the engine pod's *requests* itself, and nothing this
-chart can emit changes them.
+Engine limits, defaulting to 2 CPU / 8Gi. Engine requests are set by crane from
+the location's settings, not here.
 */}}
 {{- define "bzm-opl.engineCpuLimit" -}}{{- default "2" .Values.engine.cpuLimit -}}{{- end -}}
 {{- define "bzm-opl.engineMemoryLimit" -}}{{- default "8Gi" .Values.engine.memoryLimit -}}{{- end -}}
 
 {{/*
-A proxy URL carrying credentials (scheme://user:pass@host) must not land in a
-ConfigMap. Detecting it from the URL is the whole check -- BlazeMeter has no
-separate proxy-auth env vars, so userinfo in the URL is the only form
-credentials can take.
+Whether a proxy URL carries credentials (scheme://user:pass@host).
 */}}
 {{- define "bzm-opl.proxyHasCreds" -}}
 {{- $userinfo := "^[A-Za-z][A-Za-z0-9+.-]*://[^/@]+@" -}}
@@ -131,17 +109,13 @@ credentials can take.
           (regexMatch $userinfo (.Values.proxy.https | toString)) -}}true{{- end -}}
 {{- end -}}
 
-{{/* Where the proxy URLs go: the Secret when they carry credentials and a
-Secret is in play, the ConfigMap otherwise. */}}
+{{/* Proxy URLs with credentials go in the Secret when the chart creates one. */}}
 {{- define "bzm-opl.proxyInSecret" -}}
 {{- if and .Values.proxy.enabled (include "bzm-opl.proxyHasCreds" .) .Values.useSecret (not .Values.existingSecret) -}}true{{- end -}}
 {{- end -}}
 
 {{/*
-Whether crane updates itself. Unset is OFF -- this chart departing from
-BlazeMeter's own Kubernetes manifest, because on breaks the chart's own upgrade
-path. The live evidence and the cost of the default are in values.yaml, beside
-the setting somebody actually reads.
+Whether crane updates itself. Unset is false; see autoUpdate in values.yaml.
 */}}
 {{- define "bzm-opl.autoUpdate" -}}
 {{- if kindIs "bool" .Values.autoUpdate -}}
@@ -152,25 +126,9 @@ false
 {{- end -}}
 
 {{/*
-Service virtualization: crane's web-expose backends, one entry per value
-KUBERNETES_WEB_EXPOSE_TYPE takes.
-
-This block is generate.SV_INGRESS_BACKENDS restated -- a Go template cannot
-import a Python table -- and tests/test_helm.py parses it as YAML and holds the
-two equal, field by field. Restated rather than resolved into the values file
-because a chart installed by hand has no generator to resolve anything for it,
-and the RBAC a backend needs is not a thing an installer should have to know.
-
-`group` and `resources` are what the Role grants: crane runs one implementation
-and never touches the others, so granting a second group is permission that can
-only go unused. `nodeportOk` records whether the backend survives
-serviceType: NODEPORT, which two of them do not (see values.yaml).
-`tlsSecretRead` records whether the published object references the TLS Secret
-at all -- every backend requires the *name*, and only two read it.
-
-`via_ingress_class`, the sixth field of the Python table, is deliberately not
-here: it is what `bzm-opl-gen doctor` preflights a cluster with, and nothing
-this chart renders reads it.
+Service virtualization backends, one per KUBERNETES_WEB_EXPOSE_TYPE value.
+group/resources: what the Role grants. nodeportOk: whether the backend works
+with serviceType NODEPORT. tlsSecretRead: whether it reads sv.tlsSecret.
 */}}
 {{- define "bzm-opl.svBackends" -}}
 nginx:
@@ -200,12 +158,7 @@ openshift:
 {{- end -}}
 
 {{/*
-Is this agent publishing virtual services? Empty is a performance-only agent,
-and so is the generator's own third state, `none` -- which means "asked, and
-answered no" rather than "nobody has said". The two are one answer *here*,
-because what the chart renders is identical either way; they are two answers in
-bzm-opl-gen, which refuses to generate for a mockServices location that has not
-been asked.
+Whether this agent publishes virtual services. Empty and "none" both mean no.
 */}}
 {{- define "bzm-opl.svEnabled" -}}
 {{- $t := trim (toString (default "" .Values.sv.ingress)) -}}
@@ -225,47 +178,14 @@ been asked.
 {{- end -}}
 
 {{/*
-Preflight. Every combination rejected here fails *silently* on a cluster: the
-manifests apply, the pod runs, and the agent simply never comes online -- or
-comes online pulling images from somewhere you thought you had cut off. Refusing
-to render is the only signal that arrives before someone has spent an afternoon
-on it, so each message names the fix.
+Refuses values that would deploy an agent that cannot work, naming the fix.
 */}}
 {{- define "bzm-opl.validate" -}}
 {{/*
-The generator writes a marker into a value somebody left blank, so that a bundle
-handed on unfinished says so instead of carrying an empty string. A marker is
-<KEY> -- the option's own key in upper case -- and the test below is the shape
-rather than one string, because the key differs per field and a chart may also
-be installed from a bundle an older version of the generator wrote. The pattern
-is generate.MARKER_PATTERN, restated here because Go templates cannot import it,
-and tests/test_helm.py holds the two equal.
-
-The API server stops a marked *name* -- no marker is a legal RFC 1123 name --
-and nothing stops a marked *value*: authToken, caBundle.pem, privateRegistry
-and the proxy URLs are a Secret entry, a ConfigMap entry and environment
-variables, and all of them apply cleanly (measured, #230). So `helm install` is
-the only thing between those and an agent that deploys and then fails, which is
-why this list is the values rather than the names.
-
-harborId and shipId are the pair that is *not* here for that same reason, and it
-is worth saying so: they may be blank now (a bundle generated before the
-BlazeMeter location exists), and the marker then lands in the crane Deployment's
-labels and selector, which the API server refuses in the same breath as a name --
-measured, `metadata.labels: Invalid value: "<HARBOR_ID>"`. The two emptiness
-checks below still cover a chart installed by hand with no values at all.
-
-caBundle.file carries a marker where nobody named the certificate, and it is
-refused here for the reason every marker is: installing as it stands deploys an
-agent that trusts nothing extra. bzm-opl-gen no longer writes a marker into
-caBundle.pem -- the certificate is a *file* now (#256), so pem is empty in every
-generated overlay -- but a chart installed by hand may still be given one, and
-the check costs nothing. The flat manifests refuse the same bundle from
-somewhere else: they carry no ConfigMap at all, so the kubelet stops the pod at
-ContainerCreating naming the ConfigMap it cannot mount.
-First, and before the emptiness checks below, because
-"you left this blank" is the more specific answer and the one that names the
-form it was left blank on.
+A value of the form <KEY> is a field left blank when the bundle was generated.
+Refuse it here: as a value it would otherwise apply cleanly and fail at run
+time. harborId and shipId are not listed, because the API server already
+rejects a marker in the Deployment's labels.
 */}}
 {{- $blank := dict
       "authToken" .Values.authToken
@@ -280,29 +200,23 @@ form it was left blank on.
 {{- range $field, $value := $blank -}}
 {{- $held := trim (toString (default "" $value)) -}}
 {{- if regexMatch "^<[A-Z][A-Z0-9_]*>$" $held -}}
-{{/*
-The marker is printed from the value rather than built from $field, and the two
-are not the same string: $field is this chart's own path (serviceAccount.name)
-while the marker names the generator's option (<SERVICE_ACCOUNT_NAME>). Both
-belong in the message -- the path is what you set, the marker is what you grep.
-*/}}
-{{- fail (printf "%s was left blank when this bundle was generated and still holds %s. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in -- installing as it stands would deploy an agent that cannot work" $field $held $field) -}}
+{{- fail (printf "%s was left blank when this bundle was generated and still holds %s. Set it in bzm-opl-values.yaml (or with --set-string %s=...), or re-generate the bundle with it filled in" $field $held $field) -}}
 {{- end -}}
 {{- end -}}
 {{- if not .Values.harborId -}}
-{{- fail "harborId is required -- get it from `bzm-opl-gen locations --account-name \"<account>\"` or the private location's page in the BlazeMeter UI" -}}
+{{- fail "harborId is required -- the private location's id, from its page in BlazeMeter (Settings -> Private Locations)" -}}
 {{- end -}}
 {{- if not .Values.shipId -}}
-{{- fail "shipId is required -- a location can have several agents, and this deployment is one of them. `bzm-opl-gen locations` lists the ships per location" -}}
+{{- fail "shipId is required -- the id of the agent this deployment runs, from the private location's page in BlazeMeter" -}}
 {{- end -}}
 {{- if and (not .Values.authToken) (not .Values.existingSecret) -}}
-{{- fail "authToken is required -- generate one on the private location in the BlazeMeter UI. Pass it with --set-string authToken=... rather than committing it, or create the Secret yourself and set existingSecret" -}}
+{{- fail "authToken is required -- pass the agent's token with --set-string authToken=..., or create the Secret yourself and set existingSecret" -}}
 {{- end -}}
 {{- if and (not .Values.serviceAccount.create) (not .Values.serviceAccount.name) -}}
-{{- fail "serviceAccount.name is required when serviceAccount.create is false -- with nothing creating an account, the name is the only thing saying which existing one crane runs as and which one the RoleBinding grants to. Leaving it empty would fall back to the namespace's `default` account, which installs cleanly and hands crane's permissions to every other pod in the namespace" -}}
+{{- fail "serviceAccount.name is required when serviceAccount.create is false -- name the existing account crane runs as. The namespace's default account is never used, because binding crane's Role to it would grant every pod in the namespace the same permissions" -}}
 {{- end -}}
 {{- if and .Values.existingSecret (not .Values.useSecret) -}}
-{{- fail "existingSecret needs useSecret: true -- with useSecret false the token is expected in the ConfigMap and the Secret is never referenced" -}}
+{{- fail "existingSecret needs useSecret: true -- with useSecret false the Secret is never referenced" -}}
 {{- end -}}
 {{- if not (has .Values.platform (list "k8s" "openshift")) -}}
 {{- fail (printf "platform must be k8s or openshift, got %q" .Values.platform) -}}
@@ -310,13 +224,6 @@ belong in the message -- the path is what you set, the marker is what you grep.
 {{- if not (has .Values.serviceType (list "CLUSTERIP" "NODEPORT")) -}}
 {{- fail (printf "serviceType must be CLUSTERIP or NODEPORT, got %q" .Values.serviceType) -}}
 {{- end -}}
-{{/*
-NODEPORT deliberately has no clusterRbac requirement here. It used to, on the
-theory that crane read the Node object to build its advertised address; a live
-performance location with namespaced RBAC only came online, created its
-NodePort Service through the namespaced Role, and ran an engine to completion.
-See the serviceType comment in values.yaml.
-*/}}
 {{- if not (has .Values.caBundle.mode (list "none" "inline" "existing" "openshiftInject")) -}}
 {{- fail (printf "caBundle.mode must be one of none|inline|existing|openshiftInject, got %q" .Values.caBundle.mode) -}}
 {{- end -}}
@@ -324,16 +231,8 @@ See the serviceType comment in values.yaml.
 {{- fail "caBundle.mode is inline but neither caBundle.pem nor caBundle.file resolved to a PEM. caBundle.file is read from the chart directory -- copy the .crt in beside Chart.yaml, or use --set-file caBundle.pem=/path/to/ca.crt" -}}
 {{- end -}}
 {{- if and (eq .Values.caBundle.mode "openshiftInject") (ne .Values.platform "openshift") -}}
-{{- fail "caBundle.mode openshiftInject requires platform: openshift -- the ConfigMap is filled in by OpenShift's cluster network operator, and on plain Kubernetes it stays empty, so crane would mount an empty trust bundle and fail every TLS handshake" -}}
+{{- fail "caBundle.mode openshiftInject requires platform: openshift -- only OpenShift fills the injected ConfigMap; elsewhere it stays empty and every TLS handshake fails" -}}
 {{- end -}}
-{{/*
-Service virtualization, and every one of these is generate._sv_cfg's -- the
-same combinations, refused in the same words, because both formats are one
-deployment and a chart installed by hand gets no generator to refuse them
-first. Each fails *silently* on a cluster: the objects apply, the agent reports
-idle, the mock pod runs 1/1, and the endpoint BlazeMeter advertises does not
-serve.
-*/}}
 {{- if include "bzm-opl.svEnabled" . -}}
 {{- $backends := include "bzm-opl.svBackends" . | fromYaml -}}
 {{- $type := trim (toString .Values.sv.ingress) -}}
@@ -342,29 +241,22 @@ serve.
 {{- fail (printf "sv.ingress must be one of %s (or empty for a performance-only agent), got %q" (join "|" (keys $backends | sortAlpha)) $type) -}}
 {{- end -}}
 {{- if or (not .Values.sv.subdomain) (not .Values.sv.tlsSecret) -}}
-{{- fail (printf "sv.ingress %s also requires sv.subdomain and sv.tlsSecret. The subdomain is the wildcard domain the endpoint is published under, and the TLS secret is mandatory even for HTTP virtual services -- crane refuses to start without it" $type) -}}
+{{- fail (printf "sv.ingress %s also requires sv.subdomain and sv.tlsSecret -- the wildcard domain endpoints are published under, and a TLS secret name, which crane requires even for HTTP virtual services" $type) -}}
 {{- end -}}
 {{- if and (ne .Values.serviceType "CLUSTERIP") (not $backend.nodeportOk) -}}
-{{- fail (printf "sv.ingress %s requires serviceType: CLUSTERIP, got %s. Crane fills this backend's port field from the Service's nodePort, which nothing reaches the ingress on: the %s is written, the mock runs 1/1, BlazeMeter advertises the endpoint, and the endpoint does not serve" $type .Values.serviceType $backend.creates) -}}
+{{- fail (printf "sv.ingress %s requires serviceType: CLUSTERIP, got %s -- under NODEPORT the %s crane publishes points at a port the ingress cannot reach, and the endpoint does not serve" $type .Values.serviceType $backend.creates) -}}
 {{- end -}}
 {{- if and (eq $type "openshift") (ne .Values.platform "openshift") -}}
-{{- fail (printf "sv.ingress openshift requires platform: openshift, got %q. That backend publishes a route.openshift.io Route, which a plain Kubernetes API server does not serve -- the agent would deploy cleanly and then stall with nothing to create" .Values.platform) -}}
+{{- fail (printf "sv.ingress openshift requires platform: openshift, got %q -- a Route needs an OpenShift cluster" .Values.platform) -}}
 {{- end -}}
 {{- if and .Values.sv.istioGateway (ne $type "istio") -}}
-{{- fail (printf "sv.istioGateway is only meaningful with sv.ingress istio, not %s. Crane reads KUBERNETES_ISTIO_GATEWAY_NAME in the istio backend alone, so setting it here would silently do nothing" $type) -}}
+{{- fail (printf "sv.istioGateway is only meaningful with sv.ingress istio, not %s" $type) -}}
 {{- end -}}
-{{/*
-No `else` refusing a gateway name on an agent that publishes nothing, and the
-omission is deliberate: generate._sv_cfg returns early there and ignores the
-name, so refusing it here would be this chart judging a values file the
-generator would have written -- one refusal, one place, whichever half the
-customer installs from.
-*/}}
 {{- end -}}
 {{- if and .Values.privateRegistry (not .Values.imageOverrides) -}}
-{{- fail "privateRegistry is set but imageOverrides is empty -- crane resolves engine images per key, and a key it cannot find falls back to BlazeMeter's public registry without logging anything. Generate the map for this location with `bzm-opl-gen generate --private-registry <registry>` and copy IMAGE_OVERRIDES out of out/bzm_configmap.yaml" -}}
+{{- fail "privateRegistry is set but imageOverrides is empty -- generate the values for this location with bzm-opl-gen generate --format helm --private-registry <registry>, which writes the map" -}}
 {{- end -}}
 {{- if and .Values.imageOverrides (not .Values.privateRegistry) -}}
-{{- fail "imageOverrides is set but privateRegistry is not -- IMAGE_OVERRIDES is only emitted alongside DOCKER_REGISTRY, so these overrides would be silently dropped" -}}
+{{- fail "imageOverrides is set but privateRegistry is not -- set both, or neither" -}}
 {{- end -}}
 {{- end -}}

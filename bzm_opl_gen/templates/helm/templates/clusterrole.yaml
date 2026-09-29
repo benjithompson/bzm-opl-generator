@@ -1,13 +1,6 @@
 {{- if .Values.clusterRbac }}
-# OPTIONAL -- cluster-scoped, and required by nothing this chart renders. Crane
-# uses node reads for capacity awareness only: without them it logs a
-# "forbidden: nodes" warning and proceeds.
-#
-# serviceType NODEPORT does not change that, though this chart once refused the
-# pairing on the theory that it did. Crane resolves its advertised address from
-# its own network interfaces, and creates the NodePort Service through the
-# namespaced Role. Leave clusterRbac off unless you want the capacity warning
-# gone.
+# Optional. Node reads let crane report capacity; without them it logs a
+# "forbidden: nodes" warning and carries on.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

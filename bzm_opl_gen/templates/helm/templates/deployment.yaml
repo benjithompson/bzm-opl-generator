@@ -12,8 +12,7 @@ spec:
   selector:
     matchLabels:
       {{- include "bzm-opl.selectorLabels" . | nindent 6 }}
-  # Recreate, not RollingUpdate: two cranes for the same ship would both claim
-  # the agent against BlazeMeter.
+  # Recreate: two cranes for one agent would both register with BlazeMeter.
   strategy:
     type: Recreate
   template:
@@ -24,9 +23,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        # Roll the pod when the agent's configuration changes. Crane reads its
-        # env once at startup, so without these a `helm upgrade` that only
-        # touches the ConfigMap leaves the old settings running.
+        # Restart crane when its configuration changes; it reads env only at startup.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if and .Values.useSecret (not .Values.existingSecret) }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
@@ -59,10 +56,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             runAsNonRoot: true
-            {{- /*
-              A UID only off openshift, where the restricted-v2 SCC assigns an
-              in-range one and naming our own costs portability for nothing.
-            */}}
+            {{- /* On OpenShift the SCC assigns the UID. */}}
             {{- if ne .Values.platform "openshift" }}
             runAsUser: {{ .Values.runAsUser }}
             runAsGroup: {{ .Values.runAsUser }}
@@ -71,10 +65,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          # Crane is the lightweight always-running orchestrator; values per the
-          # official helm-crane chart (resourcesCrane). The engines it spawns
-          # need {{ include "bzm-opl.engineCpuLimit" . }} CPU + {{ include "bzm-opl.engineMemoryLimit" . }} each -- size worker nodes for those,
-          # not for this pod.
+          # Crane's own resources. Engines are sized separately ({{ include "bzm-opl.engineCpuLimit" . }} CPU / {{ include "bzm-opl.engineMemoryLimit" . }} each).
           resources:
             {{- toYaml .Values.crane.resources | nindent 12 }}
           {{- if .Values.probes.enabled }}
@@ -94,9 +85,7 @@ spec:
             {{- end }}
           {{- if include "bzm-opl.caEnabled" . }}
           volumeMounts:
-            # A directory mount, deliberately. Engines mount the same ConfigMap
-            # as a single file (subPath) via KUBERNETES_CA_BUNDLE_MOUNT; crane
-            # wants the directory.
+            # Crane mounts the directory; engines mount the file.
             - name: cacerts
               mountPath: {{ .Values.caBundle.mountPath }}
               readOnly: true

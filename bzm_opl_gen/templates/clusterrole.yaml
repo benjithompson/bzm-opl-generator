@@ -1,22 +1,6 @@
-# OPTIONAL -- cluster-scoped. Not required to run performance tests, and not
-# required for service virtualization over an ingress (see sv_ingress, which
-# exists so this file can stay unapplied).
-#
-# For performance, crane uses node reads for capacity awareness only: without
-# them it logs a "forbidden: nodes" warning and proceeds.
-#
-# KUBERNETES_SERVICE_USE_TYPE NODEPORT does not need it either, though this file
-# used to say it did. Crane resolves the advertised address from its own network
-# interfaces (crane_updater/machine_ip_finder.py), and creates the NodePort
-# Service through the namespaced Role's `services` rule. A performance location
-# ran NODEPORT green with no ClusterRole in the cluster at all.
-#
-# On a service-virtualization location you will see the "forbidden: nodes"
-# warning even on NODEPORT, and it is still expected: deploying a virtual
-# service starts crane's Service pool, which does look the node up and makes do
-# with a loopback address when refused. The published endpoint comes from
-# KUBERNETES_WEB_EXPOSE_SUB_DOMAIN instead, so the virtual service serves
-# regardless -- verified on a live deploy with this file unapplied.
+# Optional, cluster-scoped. Node reads let crane report capacity; without them
+# it logs a "forbidden: nodes" warning and works normally, including with
+# NODEPORT and service virtualization.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: { name: cluster-role-crane }

@@ -56,21 +56,17 @@ def _configmap(facts, o):
     ]
     if not o["use_secret"]:
         lines += [
-            "  # Simplified: AUTH_TOKEN in ConfigMap. Hardened option: move to a Secret",
-            "  # (regenerate with use_secret=true).",
+            "  # Readable by anyone who can read ConfigMaps; use_secret=true moves it to a Secret.",
             f"  AUTH_TOKEN: {yq(o['auth_token'])}",
         ]
     lines += ["  CONTAINER_MANAGER_TYPE: KUBERNETES"]
     # Crane's default engine pod is privileged, which restricted PodSecurity,
-    # OpenShift's SCC and GKE Autopilot's Warden all refuse; the run then hangs
-    # at BOOT_STARTING with crane healthy. The per-image evidence is in
-    # docs/hardened-engines.md.
+    # OpenShift's SCC and GKE Autopilot all refuse; the run then hangs at
+    # BOOT_STARTING with crane healthy.
     if o["restrict_engines"]:
         lines += [
-            "  # Engines inherit crane's UID:GID and drop all capabilities, so the",
-            "  # pods crane spawns pass restricted PodSecurity, OpenShift's",
-            "  # restricted-v2 SCC and GKE Autopilot's Warden. Turn off only for an",
-            "  # image that genuinely needs a capability (--no-restrict-engines).",
+            "  # Engines run as crane's UID:GID with no capabilities, which restricted",
+            "  # PodSecurity, OpenShift's restricted-v2 SCC and GKE Autopilot require.",
             "  INHERIT_RUNNING_USER_AND_GROUP: 'true'",
             "  KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{\"drop\": [\"ALL\"]}'",
         ]
@@ -81,13 +77,11 @@ def _configmap(facts, o):
     sv = sv_cfg(facts, o)
     if sv:
         lines += [
-            "  # Service virtualization ingress. The endpoint crane advertises is",
-            "  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain",
-            "  # must be the wildcard domain your ingress controller already serves.",
+            "  # Service virtualization. Endpoints are",
+            "  # <virtual-service>-<port>-<namespace>.<subdomain>.",
             f"  KUBERNETES_WEB_EXPOSE_TYPE: {yq(sv['type'].upper())}",
             f"  KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {yq(sv['subdomain'])}",
-            "  # Required even for HTTP virtual services -- crane validates it at",
-            "  # startup and crash-loops when it is empty.",
+            "  # Required even for HTTP virtual services.",
             f"  KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {yq(sv['tls_secret'])}",
         ]
         if sv["type"] == "istio":
@@ -100,14 +94,13 @@ def _configmap(facts, o):
     if o["private_registry"]:
         overrides = image_overrides(facts, o)
         lines += [
-            "  # Private registry: images resolved from the account, not from a",
-            f"  # table here ({facts.get('images_source', 'unknown')}).",
+            f"  # Private registry. Images from: {facts.get('images_source', 'unknown')}.",
             f"  DOCKER_REGISTRY: {yq(o['private_registry'])}",
             f"  IMAGE_OVERRIDES: {yq(json.dumps(overrides))}",
         ]
         if o["registry_auth"]:
             lines += [
-                "  # Crane-side auth for engine image pulls (or use cluster pull secrets):",
+                "  # Registry credentials for engine image pulls (or use cluster pull secrets):",
                 "  # DOCKER_REGISTRY_USERNAME: <user>",
                 "  # DOCKER_REGISTRY_PASSWORD: <password>",
                 "  # DOCKER_REGISTRY_EMAIL: <email>",
@@ -116,31 +109,25 @@ def _configmap(facts, o):
         lines.append(f"  DOCKER_REGISTRY: {yq(PUBLIC_REGISTRY)}")
     if auto_update(o):
         lines += [
-            "  # Auto-update ON (--auto-update). Crane rewrites this Deployment --",
-            "  # its image, and .spec.strategy to RollingUpdate -- when BlazeMeter",
-            "  # ships a newer agent. It takes field ownership doing so, which is",
-            "  # what makes a later `helm upgrade` conflict; with kubectl, expect",
-            "  # the image you apply to be replaced by whatever is current."
-            + ("\n  # The newer tag has to be in your registry before crane looks"
-               "\n  # for it." if o["private_registry"] else ""),
+            "  # Auto-update on: crane replaces its own image when BlazeMeter",
+            "  # releases a newer agent."
+            + ("\n  # Mirror the newer tag into your registry first."
+               if o["private_registry"] else ""),
             "  AUTO_KUBERNETES_UPDATE: 'true'",
         ]
     else:
         lines += [
-            "  # Crane leaves this Deployment alone, so the image above is the",
-            "  # version that runs until you re-generate and re-apply. Keeping the",
-            "  # agent current is your job -- one far enough behind loses support.",
-            "  # --auto-update hands that back to crane, at the cost of it owning",
-            "  # fields Helm and kubectl then fight it for.",
+            "  # Auto-update off: the agent keeps its image until you re-generate",
+            "  # and re-apply. An agent far behind loses support.",
             "  AUTO_KUBERNETES_UPDATE: 'false'",
         ]
     if o["proxy"]:
         if proxy_has_creds(o) and o["use_secret"]:
-            lines.append(f"  # HTTP(S)_PROXY embed credentials -> kept in {SECRET_NAME}.")
+            lines.append(f"  # HTTP(S)_PROXY carry credentials and are in {SECRET_NAME}.")
         else:
             if proxy_has_creds(o):
-                lines.append("  # WARNING: proxy credentials below are plaintext -- anyone who can")
-                lines.append("  # read ConfigMaps sees them. Regenerate with use_secret=true.")
+                lines.append("  # WARNING: plaintext proxy credentials. Regenerate with"
+                             " use_secret=true to move them to a Secret.")
             lines += [f"  {k}: {yq(v)}" for k, v in proxy_env(o).items()
                       if k != "NO_PROXY"]
         lines.append(f"  NO_PROXY: {yq(proxy_env(o)['NO_PROXY'])}")
@@ -148,13 +135,13 @@ def _configmap(facts, o):
     split = separate_pools(o)
     if eng_tol:
         lines += [
-            "  # Tolerations crane stamps on the engines it spawns." if split else
-            "  # Engines inherit the crane pod's tolerations via this env.",
+            "  # Tolerations for the engine pods." if split else
+            "  # Engines get the crane pod's tolerations.",
             f"  KUBERNETES_TOLERATIONS_JSON: {yq(json.dumps(eng_tol))}",
         ]
     if eng_sel:
         if split:
-            lines.append("  # Engines are pinned to their own node pool, separate from crane's.")
+            lines.append("  # Engines run on their own node pool; see nodepools.md.")
         lines.append(f"  KUBERNETES_NODE_SELECTOR_JSON: {yq(json.dumps(eng_sel))}")
     # Always emitted, defaults included, so engines run at the engine_size()
     # doctor and the planner certify rather than with no limits.
@@ -169,20 +156,19 @@ def _configmap(facts, o):
     ca = ca_cfg(o)
     if ca:
         ca_comment = {
-            "inline": "  # Corporate CA bundle (generator-created ConfigMap).",
+            "inline": f"  # Corporate CA bundle, from {CA_CONFIGMAP_FILE}.",
             "file": f"  # Corporate CA bundle -- the {ca['cm']} ConfigMap, which you",
-            "existing": f"  # CA bundle from existing ConfigMap '{ca['cm']}' -- the platform",
-            "inject": "  # OpenShift cluster trust bundle (operator-injected ConfigMap).",
+            "existing": f"  # CA bundle from the existing ConfigMap '{ca['cm']}', which",
+            "inject": "  # OpenShift cluster trust bundle, injected by OpenShift.",
         }[ca["mode"]]
         lines.append(ca_comment)
         if ca["mode"] == "existing":
-            lines.append("  # team owns and rotates it; these manifests only reference it.")
+            lines.append("  # these manifests only read.")
         if ca["mode"] == "file":
             lines.append(f"  # create from {ca['key']} -- see the README.")
         path = f"{CA_MOUNT_PATH}/{ca['key']}"
         lines += [
-            "  # Mounted into crane; engines get the same ConfigMap mounted via",
-            "  # KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).",
+            "  # Mounted into crane; engines get it via KUBERNETES_CA_BUNDLE_MOUNT.",
             f"  REQUESTS_CA_BUNDLE: {yq(path)}",
             f"  AWS_CA_BUNDLE: {yq(path)}",
             "  KUBERNETES_CA_BUNDLE_MOUNT: " + yq(
@@ -193,10 +179,8 @@ def _configmap(facts, o):
     # them.
     env = extra_env(o)
     if env:
-        lines.append("  # Set for this bundle (extra_env). Read by the crane pod"
-                     " via envFrom;")
-        lines.append("  # the engines crane spawns get their environment from"
-                     " crane, not from here.")
+        lines.append("  # Additional agent variables. They reach crane, not the"
+                     " engines.")
         lines += [f"  {k}: {json.dumps(v)}" for k, v in env.items()]
     return "\n".join(lines) + "\n"
 
@@ -233,9 +217,7 @@ metadata:
   name: {CA_CONFIGMAP}
   namespace: {o['namespace']}
   labels:
-    # OpenShift's network operator injects the cluster-wide trust bundle
-    # (proxy/custom CAs configured at cluster level) as ca-bundle.crt.
-    # Nobody hand-manages PEMs; rotation is the cluster's job.
+    # OpenShift fills this ConfigMap with the cluster-wide trust bundle.
     config.openshift.io/inject-trusted-cabundle: "true"
 """
     pem = "\n".join("    " + line for line in o["ca_bundle"].strip().splitlines())
@@ -254,7 +236,7 @@ def _proxy_secret_block(o):
     """The proxy URLs for the Secret, where they carry credentials."""
     if not (proxy_has_creds(o) and o["use_secret"]):
         return ""
-    lines = ["  # Proxy URLs embed credentials (user:pass@host) -> kept out of the ConfigMap."]
+    lines = ["  # Proxy URLs carrying credentials."]
     lines += [f"  {k}: {yq(v)}" for k, v in proxy_env(o).items() if k != "NO_PROXY"]
     return "\n".join(lines) + "\n"
 
@@ -266,8 +248,7 @@ def _security_context(o):
     if o["platform"] == "openshift":
         return (
             "          securityContext:\n"
-            "            # restricted-v2 SCC assigns an in-range UID; leave runAsUser\n"
-            "            # unset for portability.\n"
+            "            # The restricted-v2 SCC assigns the UID.\n"
             "            runAsNonRoot: true\n"
             "            allowPrivilegeEscalation: false\n"
             "            capabilities:\n"
@@ -363,8 +344,8 @@ def _readme(facts, o, files):
 {apply_lines}
 ```
 
-The first line creates the namespace only where it is missing and changes nothing
-about one that exists. No file here owns it, so `{kc} delete -f .` leaves it.
+The first line creates the namespace if it is missing. No file here owns it, so
+`{kc} delete -f .` leaves it in place.
 
 {verify_block(o)}
 ## Worth knowing

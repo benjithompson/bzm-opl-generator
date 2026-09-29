@@ -35,9 +35,7 @@ ${SCHEDULING_BLOCK}${PULL_SECRETS_BLOCK}      restartPolicy: Always
           image: "${CRANE_IMAGE}"
           imagePullPolicy: Always
 ${SECURITY_CONTEXT_BLOCK}
-          # Crane is the lightweight always-running orchestrator; values per the
-          # official helm-crane chart (resourcesCrane). Engines it spawns need
-          # 2 CPU + 8Gi RAM each -- size worker nodes accordingly.
+          # Crane's own resources. Engines are sized separately; see README.md.
           resources:
             requests:
               cpu: ${CRANE_CPU_REQUEST}
@@ -46,9 +44,7 @@ ${SECURITY_CONTEXT_BLOCK}
             limits:
               cpu: "${CRANE_CPU_LIMIT}"
               memory: ${CRANE_MEM_LIMIT}
-              # Deliberately the same value as the request -- GKE Autopilot
-              # rewrites this limit down to the request, so a gap here is
-              # headroom the customer does not actually get.
+              # Keep equal to the request: GKE Autopilot lowers the limit to it.
               ephemeral-storage: ${CRANE_EPHEMERAL_STORAGE}
           livenessProbe:
             failureThreshold: 3
