@@ -699,7 +699,9 @@ export default function App({ api }: { api: Api }) {
     setWorkspaces([]); setWorkspaceId(null);
     if (!accountId || !who) return;
     setWorkspacesBusy(true);
+    let live = true;
     api.workspaces(accountId).then((ws) => {
+      if (!live) return;
       setWorkspaces(ws);
       const want = pendingWorkspace.current;
       pendingWorkspace.current = null;
@@ -707,8 +709,9 @@ export default function App({ api }: { api: Api }) {
       // The list is what answers for a held workspace id -- including when the
       // account has none, which is the empty answer rather than no answer.
       release("workspaceId");
-    }).catch((e) => setLocErr(e.message))
-      .finally(() => setWorkspacesBusy(false));
+    }).catch((e) => { if (live) setLocErr(e.message); })
+      .finally(() => { if (live) setWorkspacesBusy(false); });
+    return () => { live = false; };
   }, [accountId, who]);
 
   // The funcId vocabulary again, now that there is an account to ask. The mount
@@ -722,7 +725,10 @@ export default function App({ api }: { api: Api }) {
   // all cannot even name what a location runs.
   useEffect(() => {
     if (!accountId || !who) return;
-    api.funcIdVocabulary(accountId).then(setFuncIds).catch(() => {});
+    let live = true;
+    api.funcIdVocabulary(accountId)
+      .then((f) => { if (live) setFuncIds(f); }).catch(() => {});
+    return () => { live = false; };
   }, [accountId, who]);
 
   // The agent variables that are left, scoped to what this location runs
@@ -743,8 +749,10 @@ export default function App({ api }: { api: Api }) {
   // name/value editor alone with it.
   const enabledKey = enabled === null ? null : enabled.join(",");
   useEffect(() => {
+    let live = true;
     api.agentEnv(enabledKey === null ? null : enabledKey.split(",").filter(Boolean))
-      .then(setAgentEnv).catch(() => {});
+      .then((e) => { if (live) setAgentEnv(e); }).catch(() => {});
+    return () => { live = false; };
   }, [enabledKey, api]);
 
   useEffect(() => {
@@ -754,7 +762,9 @@ export default function App({ api }: { api: Api }) {
     // An empty workspace and an unfetched one look identical, so the list says
     // which it is rather than showing nothing and meaning two things.
     setLocBusy(true);
+    let live = true;
     api.locations(workspaceId).then((ls) => {
+      if (!live) return;
       setLocations(ls);
       const want = pendingHarbor.current;
       pendingHarbor.current = null;
@@ -771,8 +781,9 @@ export default function App({ api }: { api: Api }) {
       } else {
         release("harborId", "shipId");
       }
-    }).catch((e) => setLocErr(e.message))
-      .finally(() => setLocBusy(false));
+    }).catch((e) => { if (live) setLocErr(e.message); })
+      .finally(() => { if (live) setLocBusy(false); });
+    return () => { live = false; };
   }, [workspaceId]);
 
   // What is currently being fetched. Two flags rather than one: they are two
@@ -805,11 +816,15 @@ export default function App({ api }: { api: Api }) {
     forgetToken();
     if (!harborId) return;
     setFactsBusy(true);
-    api.facts(harborId).then(setFacts)
+    // Guarded like every fetch keyed on a selection: pick A then B, and A's
+    // facts arriving last would configure B's bundle with A's images.
+    let live = true;
+    api.facts(harborId).then((f) => { if (live) setFacts(f); })
       // A 404 here is the location itself, and it says so rather than relaying
       // BlazeMeter's sentence about a harbor id nobody typed.
-      .catch((e) => setShipErr(goneNotice(e, "location") ?? e.message))
-      .finally(() => setFactsBusy(false));
+      .catch((e) => { if (live) setShipErr(goneNotice(e, "location") ?? e.message); })
+      .finally(() => { if (live) setFactsBusy(false); });
+    return () => { live = false; };
   }, [harborId]);
 
   useEffect(() => {
@@ -947,11 +962,6 @@ export default function App({ api }: { api: Api }) {
     }
   };
 
-  // The debounced live preview is further down, with the rest of what depends
-  // on `sentOptions` -- it has to send what the download sends, and the blank
-  // fields that go into that are not known until the group switches are.
-  const previewTimer = useRef<number | undefined>(undefined);
-
   // agent status polling. An SV deployment also reads the namespace on the same
   // tick: the agent reports idle whether or not its virtual services ever
   // became reachable, so the heartbeat alone stays green through a deploy
@@ -1066,7 +1076,6 @@ export default function App({ api }: { api: Api }) {
   // Manual facts are rebuilt from the typed values rather than held separately,
   // so there is one `facts` for the rest of the page whichever mode is on.
   // Debounced for the same reason the preview is: this runs on every keystroke.
-  const manualTimer = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (sourceMode !== "manual") return;
     // Nothing is built from a value that is not the shape an id comes in. The
@@ -1079,17 +1088,22 @@ export default function App({ api }: { api: Api }) {
                         String(options.auth_token ?? ""))) {
       setFacts(null); setShipId(null); return;
     }
-    window.clearTimeout(manualTimer.current);
-    manualTimer.current = window.setTimeout(() => {
+    // The timer and the answer both belong to this run of the effect: an edit
+    // that lands inside the debounce, or while the request is out, must not let
+    // the previous id's facts arrive after it.
+    let live = true;
+    const timer = window.setTimeout(() => {
       api.manualFacts({
         harbor_id: manual.harbor_id.trim(),
         ship_id: manual.ship_id.trim(),
         func_ids: manualFuncIds,
       }).then((r: ManualFactsOut) => {
+        if (!live) return;
         setFacts(r.facts);
         setShipId(r.facts.ships[0].id);
-      }).catch((e) => setGenErr(String(e.message)));
+      }).catch((e) => { if (live) setGenErr(String(e.message)); });
     }, 250);
+    return () => { live = false; window.clearTimeout(timer); };
   }, [sourceMode, manual, manualFuncIds, options.auth_token]);
 
   // Switching modes drops what the other one established. Leaving a connected
@@ -1440,11 +1454,15 @@ export default function App({ api }: { api: Api }) {
     // used to spend a 400 on saying so. The preview waits for the agent
     // instead; the empty preview reads as "not yet", which is what it is.
     if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
-    window.clearTimeout(previewTimer.current);
-    previewTimer.current = window.setTimeout(async () => {
+    // Per run, like the manual-facts effect: a timer left pending after the
+    // agent changed, or an older generate resolving after a newer one, would
+    // put the previous bundle -- and its token report -- back on screen.
+    let live = true;
+    const timer = window.setTimeout(async () => {
       try {
         const opts = { ...sentOptions, ship_id: shipId ?? undefined };
         const r = await api.generate(facts, opts);
+        if (!live) return;
         setFiles(r.files);
         setPreviewToken(r.token);
         setGenErr(null);
@@ -1453,13 +1471,9 @@ export default function App({ api }: { api: Api }) {
         // stops being generated at all.
         setActiveFile((a) => (a && r.files.some((f) => f.name === a)
           ? a : r.files[0]?.name ?? null));
-      } catch (e) { setGenErr(String((e as Error).message)); }
+      } catch (e) { if (live) setGenErr(String((e as Error).message)); }
     }, 250);
-    // No save folder in the dependencies any more: the page used to send one, so
-    // that a directory already holding this ship's bundle made the token branch
-    // `reused`, and the preview said so. Saving to a folder is the CLI's and the
-    // MCP server's now (`bzm-opl-gen generate -o`, `opl_bundle`), so from here
-    // the branch is unreachable and there is nothing to debounce it against.
+    return () => { live = false; window.clearTimeout(timer); };
   }, [facts, sentOptions, shipId]);
 
   // -- is the published endpoint answering? ----------------------------------

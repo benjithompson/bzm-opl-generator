@@ -314,6 +314,14 @@ export class ApiError extends Error {
 }
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
+  return (await send(method, url, body)).json();
+}
+
+/** The round trip and every way it can be refused, for a caller that reads the
+ *  body its own way -- the zip, whose answer is bytes. One copy of the error
+ *  branch: the download had its own, which dropped the status (so a gone agent
+ *  was not recognisable as one) and read a static-mount 405 as JSON. */
+async function send(method: string, url: string, body?: unknown): Promise<Response> {
   const r = await fetch(url, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -342,7 +350,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     // asked for rather than about which routes exist.
     throw new ApiError(detail ?? r.statusText, r.status);
   }
-  return r.json();
+  return r;
 }
 
 export const api = {
@@ -560,25 +568,16 @@ export const api = {
     req<SvCheckOut>("GET", "/api/sv-check?" + new URLSearchParams({ host, scheme })),
   /** Download the bundle, and report what that did to the credential.
    *
-   *  Here rather than beside `saveBlob` below, which is where it used to be: it
-   *  is a route, and a route outside this object is outside the seam -- the
-   *  only way to drive it from a test was to stub `fetch`, so the one path that
-   *  can revoke a running agent's credential was the one path not drivable the
-   *  way every other route is (#104).
-   *
-   *  `credential` is token.downloadPlan's, spread into the body as it stands.
-   *  It used to be a boolean defaulting to true -- downloading a bundle to read
-   *  it revoked a working agent's credential, and the pod that broke looked
-   *  like a slow boot (#64). */
+   *  A route on this object like every other, so the one path that can revoke
+   *  a running agent's credential is drivable through the seam. `credential`
+   *  is token.downloadPlan's, spread into the body as it stands: never a
+   *  default, because downloading a bundle to read it must not revoke the
+   *  credential a working agent runs on (#64). */
   downloadZip: async (
     facts: Facts, options: Options, credential: TokenRequest,
   ): Promise<TokenReport> => {
-    const r = await fetch("/api/generate/zip", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ facts, options, ...credential }),
-    });
-    if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
+    const r = await send("POST", "/api/generate/zip",
+                         { facts, options, ...credential });
     // Read before the bytes: a zip cannot carry a JSON envelope and still be a
     // zip, so what happened to the credential travels beside the
     // Content-Disposition.
