@@ -1,15 +1,8 @@
 import { Check, Field, inputCls } from "../components";
 import { Applies } from "../formats";
 
-/** The two wordings for the two platforms.
- *
- *  Both controls that survive a format with no cluster mean the same thing on
- *  each and are *named* differently by BlazeMeter -- the credential lives in a
- *  Secret or in an --env-file, and self-update is AUTO_KUBERNETES_UPDATE or
- *  AUTO_UPDATE, which are one word apart and different mechanisms. Side by side
- *  in one table rather than interleaved as six ternaries through the markup:
- *  what differs is prose, and prose is easier to keep honest when both versions
- *  are on the same screen. */
+/** The wording for each platform: the credential lives in a Secret or an
+ *  env file, and self-update is AUTO_KUBERNETES_UPDATE or AUTO_UPDATE. */
 const WORDS = {
   cluster: {
     token: "AUTH_TOKEN in a Secret",
@@ -29,32 +22,19 @@ const WORDS = {
   },
 };
 
-/** Security & RBAC, sole owner of `service_type`. The SV group used to force
- *  CLUSTERIP and this select hid NODEPORT whenever an ingress was configured;
- *  #60 ran that pairing live and it publishes fine on namespaced RBAC, so both
- *  values are offered whatever else is on.
- *
- *  Two of these five survive a format with no cluster in it (see WORDS); the
- *  RBAC, the Service type and the engine security context are pod and cluster
- *  fields and go. */
+/** Security & RBAC, the sole owner of `service_type` (both values work with an
+ *  SV ingress). Only the credential and self-update survive a docker bundle. */
 export function SecurityGroup(props: {
   applies: Applies;
-  /** Is this bundle deployed into a cluster? Which of the two vocabularies the
-   *  prose is in, and nothing else -- `applies` decides what is on screen.
-   *
-   *  Handed down rather than inferred here from `applies("cluster_rbac")`,
-   *  which is what it was: that reads one option's presence as a fact about the
-   *  platform, so the day `cluster_rbac` leaves the ignored table four labels
-   *  silently change language. App knows the format; this is App saying so. */
+  /** Is this bundle deployed into a cluster? Picks the wording only; `applies`
+   *  decides what is on screen. */
   cluster: boolean;
   useSecret: boolean;
   clusterRbac: boolean;
   restrictEngines: boolean;
   serviceType: string;
-  /** Tri-state, and null is a value: it means the bundle has not said, so the
-   *  default (off) applies. A checkbox cannot hold that -- it would have to
-   *  show the resolved answer as if someone had chosen it, and ticking it
-   *  would then write a key that was never there. */
+  /** Tri-state: null means the bundle has not said, so the default (off)
+   *  applies and no key is written. */
   autoUpdate: boolean | null;
   onUseSecret: (v: boolean) => void;
   onClusterRbac: (v: boolean) => void;
@@ -76,11 +56,8 @@ export function SecurityGroup(props: {
             onChange={props.onClusterRbac} />
         )}
       </div>
-      {/* On by default, and the only one here whose *unchecked* state is the
-          dangerous one -- crane's own default engine pod is privileged, which
-          restricted PodSecurity, OpenShift SCC and GKE Autopilot all refuse
-          after the agent is already online. The hint says what unchecking
-          costs rather than what checking buys. */}
+      {/* On by default; unchecking it is the dangerous state (crane's default
+          engine pod is privileged, which restricted clusters refuse). */}
       {props.applies("restrict_engines") && (
         <Check label="Engines drop privileges"
           hint="uncheck only for an image needing a capability — it applies to every container crane creates. Privileged engines are refused by restricted PodSecurity, OpenShift SCC and GKE Autopilot"
@@ -97,13 +74,8 @@ export function SecurityGroup(props: {
           </select>
         </Field>
       )}
-      {/* Three options because the option has three states -- "" writes no key
-          and takes the default, which is off. On is the one that costs
-          something and the hint says what: crane takes ownership of its own
-          Deployment within seconds of install, and any later apply -- kubectl
-          or helm -- fails on a conflict --force-conflicts cannot resolve. That
-          hazard is the Kubernetes one's alone, which is why the wording is
-          per-platform: there is no Deployment on a docker host to fight over. */}
+      {/* Three states: "" writes nothing (default off). On Kubernetes, on means
+          crane takes over its Deployment and later applies conflict. */}
       <Field label={w.update} hint={w.updateHint}>
         <select className={inputCls}
           value={props.autoUpdate == null ? "" : String(props.autoUpdate)}

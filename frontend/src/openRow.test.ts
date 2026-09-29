@@ -12,8 +12,7 @@ test("a second toggle on the open row closes it", () => {
 
   act(() => result.current.toggle("a"));
   expect(result.current.open).toBe("a");
-  // The whole point: the same header both opens and closes. Before this, the
-  // location list could only be folded by choosing a different location.
+  // The same header opens and closes.
   act(() => result.current.toggle("a"));
   expect(result.current.open).toBeNull();
 });
@@ -24,8 +23,7 @@ test("the row on its way out stays on screen, and only until it has gone", () =>
 
   act(() => result.current.setOpen("a"));
   act(() => result.current.setOpen("b"));
-  // Both, for the length of the transition: unmounting "a" in the frame "b"
-  // opens is the jump the animation exists to remove.
+  // Both shown during the transition.
   expect(result.current.shown("a")).toBe(true);
   expect(result.current.shown("b")).toBe(true);
 
@@ -40,8 +38,7 @@ test("closing to nothing still animates the row out", () => {
 
   act(() => result.current.setOpen("a"));
   act(() => result.current.toggle("a"));
-  // Closed, but not yet gone -- which is what makes a fold look like a fold
-  // rather than a disappearance.
+  // Closed, but still shown until the animation ends.
   expect(result.current.open).toBeNull();
   expect(result.current.shown("a")).toBe(true);
 

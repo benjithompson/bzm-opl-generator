@@ -1,25 +1,15 @@
 import { Field, inputCls, TextInput } from "../components";
-import { SvPrereqs, svProse } from "../SvPrereqs";
+import { SvPrereqs, svProse } from "./SvPrereqs";
 import { Sv } from "../sv";
 
-// Display names only. The set of values is served from generate.SV_INGRESS_TYPES
-// -- an unlabelled backend falls back to its raw name and still appears, which
-// is the failure mode worth having.
+// Display names only; the values are served. An unlabelled backend shows its raw name.
 const SV_INGRESS_LABELS: Record<string, string> = {
   nginx: "NGINX", istio: "Istio", contour: "Contour", openshift: "OpenShift Route",
 };
 
-/** Service virtualization: which ingress crane publishes through, and the
- *  wildcard domain and TLS secret it needs to do it.
- *
- *  Everything it reads is the one SV record (see sv.ts) and everything it
- *  writes is one of the four handlers -- it decides nothing itself, which is
- *  why the backends it offers and the sentence under a blocked configuration
- *  are values here rather than tests written out in the markup. `sv.ingress` is
- *  null until one is chosen: the select still shows its nginx default, but
- *  nothing is claimed about a backend nobody picked, so the hints fall back to
- *  the generic wording instead of inheriting nginx's.
- */
+/** Service virtualization: the ingress crane publishes through, and the
+ *  wildcard domain and TLS secret it needs. Reads the SV record and decides
+ *  nothing. `sv.ingress` is null until chosen, and then the hints stay generic. */
 export function SvGroup(props: {
   sv: Sv;
   onIngress: (v: string) => void;
@@ -29,18 +19,14 @@ export function SvGroup(props: {
 }) {
   const sv = props.sv;
   const chosen = (sv.ingress ?? "").trim();
-  // Everything said about the chosen backend, from the one place it is written
-  // down. Undefined for a backend nobody has written up: the fields below then
-  // fall back to the generic wording rather than showing another backend's.
+  // The chosen backend's prose; undefined falls back to the generic wording.
   const prose = svProse(chosen);
   return (
     <>
       <Field label="Ingress controller"
         hint={prose?.controllerHint
           ?? "must already be installed and serving the wildcard domain below"}>
-        {/* Which backends may be offered here is the record's: a plain API
-            server serves no route.openshift.io, and generate() refuses that
-            combination rather than producing a bundle that stalls. */}
+        {/* The offered backends are the record's (no OpenShift Route off OpenShift). */}
         <select className={inputCls} value={sv.ingress ?? "nginx"}
           onChange={(e) => props.onIngress(e.target.value)}>
           {sv.ingressTypes.map((t) => (
@@ -72,7 +58,7 @@ export function SvGroup(props: {
         </Field>
       )}
       {!sv.ok && (
-        <p className="text-[11px] text-amber-700">
+        <p className="text-2xs text-amber-700">
           {sv.nodePortConflict
             ? `Service type must be CLUSTERIP for this backend — crane writes the
                Service's nodePort into the ${sv.rbac?.creates ?? "published object"},

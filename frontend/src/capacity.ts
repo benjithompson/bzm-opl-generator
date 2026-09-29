@@ -1,6 +1,4 @@
-// Grouping the account's locations by workspace, away from the view that draws
-// them -- the arithmetic here is the part worth arguing about, and a component
-// is not where an argument can be tested.
+// The account rollup's arithmetic, kept out of the view so it can be tested.
 import { Capacity, CapLocation } from "./api";
 
 export interface WorkspaceRollup {
@@ -13,14 +11,9 @@ export interface WorkspaceRollup {
   sharedVus: number;
 }
 
-/** A location in more than one workspace is claimable from either, so adding it
- *  into both totals counts engines that cannot run twice. It is flagged in each,
- *  and counted once in the account figure -- which is why the workspace numbers
- *  add up to more than the account's.
- *
- *  Grouping only. Filtering is `matching` below, so the view can group once per
- *  account and filter that -- this walks every location for every workspace,
- *  which on a real account is 171 x 166 and was being redone per keystroke. */
+/** Locations grouped by workspace, largest first, empty workspaces dropped. A
+ *  shared location is in each of its workspaces' totals, so those add up to
+ *  more than the account's. */
 export function byWorkspace(cap: Capacity): WorkspaceRollup[] {
   return cap.workspaces
     .map((w) => {
@@ -37,25 +30,19 @@ export function byWorkspace(cap: Capacity): WorkspaceRollup[] {
         sharedVus: shared.reduce((t, l) => t + (l.rated_vus ?? 0), 0),
       };
     })
-    // A workspace holding no location is not a row with a zero in it: the
-    // account has ~100 of them and they said "100 workspaces" about the 54
-    // that carry anything.
+    // An empty workspace is not a row with a zero in it.
     .filter((w) => w.locs.length > 0)
     .sort((a, b) => b.total - a.total);
 }
 
-/** The rows a search matches.
- *
- *  On the *workspace*, which is the grouping. Matching locations instead would
- *  leave a workspace on screen showing a total its visible rows do not add up
- *  to. Blank matches everything -- a search nobody has typed is not a search
- *  that excludes everything. */
+/** The workspaces a search matches, by workspace name so totals stay whole.
+ *  Blank matches everything. */
 export function matching(rows: WorkspaceRollup[], filter: string) {
   const q = filter.trim().toLowerCase();
   return q ? rows.filter((w) => w.name.toLowerCase().includes(q)) : rows;
 }
 
-export interface AccountBand {
+interface AccountBand {
   /** Workspace id, or one of the two synthetic buckets below. */
   key: string;
   name: string;
@@ -66,18 +53,9 @@ export interface AccountBand {
   orphan?: boolean;
 }
 
-/** The account's total, split into segments that add up to it.
- *
- *  Not the workspace totals: those double-count, because a shared location is
- *  claimable from either workspace and appears in both. Adding them into a
- *  single bar would draw more capacity than the account has, which is the one
- *  thing the account figure is there to avoid. So each workspace's segment is
- *  what only it can claim, and everything shared is one segment of its own --
- *  counted once, like the account total counts it.
- *
- *  A location in no workspace at all gets a segment too rather than being
- *  dropped: it is capacity the account has, and a bar quietly shorter than its
- *  own headline is worse than an awkward segment. */
+/** The account total as segments that add up to it: what only each workspace
+ *  can claim, then everything shared (counted once), then anything in no
+ *  workspace. */
 export function accountBands(cap: Capacity): AccountBand[] {
   const byId = new Map(cap.workspaces.map((w) => [w.id, w.name]));
   const own = new Map<number, number>();

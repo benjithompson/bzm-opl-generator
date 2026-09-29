@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Capacity, CapLocation } from "./api";
 import { accountBands, byWorkspace, matching } from "./capacity";
 
-// How the account's locations become workspace rows. The figures themselves are
-// core.account_capacity's and are tested in tests/test_core.py; what is
-// decided here is which workspace a location lands in, in what order, and what
-// the filter does to the totals beside it.
+// Which workspace a location lands in, in what order, and what the filter does.
+// The figures themselves are core's.
 
 const loc = (over: Partial<CapLocation> = {}): CapLocation => ({
   id: "l1", name: "one", func_ids: ["taurus"], agents: 1,
@@ -68,8 +66,7 @@ describe("byWorkspace", () => {
   });
 
   it("reports a shared location with no agents as shared and worth nothing", () => {
-    // The case that produced "0 of 2,650 is claimable" on the real account: a
-    // location shared with another workspace that has never been deployed to.
+    // A shared location never deployed to.
     const rows = byWorkspace(cap([
       loc({ id: "a", rated_vus: 500, workspace_ids: [1] }),
       loc({ id: "s", agents: 0, agents_reporting: 0, engines: 0, rated_vus: 0,
@@ -99,9 +96,7 @@ describe("byWorkspace", () => {
 });
 
 describe("accountBands", () => {
-  // The property the whole bar rests on: it is drawn as a share of the account
-  // total, so segments that summed to anything else would draw an account
-  // bigger or smaller than its own headline.
+  // The bands must sum to the account total.
   const sums = (c: Capacity) =>
     accountBands(c).reduce((t, b) => t + b.vus, 0);
 
@@ -114,8 +109,7 @@ describe("accountBands", () => {
   });
 
   it("counts a shared location once, in its own segment", () => {
-    // Both workspaces can claim it, so neither owns it -- adding it to both
-    // would draw 400 of capacity out of an account that has 250.
+    // Shared: counted once, in its own band.
     const c: Capacity = {
       account_id: 1,
       workspaces: [{ id: 1, name: "Alpha" }, { id: 2, name: "Beta" }],
@@ -134,15 +128,13 @@ describe("accountBands", () => {
   });
 
   it("keeps capacity that is in no workspace rather than dropping it", () => {
-    // A bar quietly shorter than the headline above it is worse than an
-    // awkward segment.
+    // Unattributed capacity still gets a band.
     const c: Capacity = {
       account_id: 1, workspaces: [{ id: 1, name: "Alpha" }],
       locations: [
         loc({ id: "a", rated_vus: 60, workspace_ids: [1] }),
         loc({ id: "x", rated_vus: 40, workspace_ids: [], workspace_names: [] }),
-        // In a workspace the listing does not name, which is the same
-        // situation from the other side.
+        // In a workspace the listing does not name.
         loc({ id: "y", rated_vus: 10, workspace_ids: [99] }),
       ],
       rated_vus: 110, unrated: 0,

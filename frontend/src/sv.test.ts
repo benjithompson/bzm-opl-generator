@@ -1,32 +1,17 @@
-// Service virtualization, as one answer rather than twelve.
-//
-// Everything here is data in, data out -- what the location runs, the current
-// options, the served constants -- so it is tested the way the option groups
-// are, with no DOM. The state this file exists for is the one the page could
-// not test at all: an effect that WROTE `sv_ingress` and another that READ it
-// to decide the same question. `patch` is that write as a value, so the loop
-// can be run to a standstill here in a millisecond instead of being watched in
-// a browser.
+// Service virtualization as one record, tested as data. `patch` is the write
+// the page applies, so its settling is checked here directly.
 import { describe, expect, it } from "vitest";
 import { Options, SvConstants } from "./api";
 import { IGNORED_BY_FORMAT } from "./fixtures";
 import { optionApplies } from "./formats";
 import { SV_NONE, toggleDeclared } from "./optionGroups";
-// SV_FUNCTIONALITY is not imported: the only assertion that read it here was
-// that a blocked format keyed its refusal by the funcId, and no format is
-// blocked now. What the constant *is* stays pinned to the generator's own
-// vocabulary, in tests/test_server.py, which is where the two can disagree.
 import { exclusiveWith, svMixedWithEngines, svState } from "./sv";
 
-// The funcId a location carries to mean "runs mockServices" is served, not
-// spelled here -- the same reason the page reads it off /api/sv-constants.
+// The funcId meaning "runs mockServices" is served, not spelled out here.
 const CONST: SvConstants = {
   func_ids: ["mock-services"],
   ingress_types: ["nginx", "istio", "contour", "openshift"],
-  // Shape only, deliberately not the real backend names: which backends
-  // publish over NODEPORT is the server's fact, pinned against the generator
-  // in tests/test_server.py. What this file owns is whether the record
-  // consults the table it is handed.
+  // Shape-only names: the real table is pinned in test_server.py.
   backends: {
     nginx: { group: "networking.k8s.io", resources: ["ingresses"],
              creates: "Ingress", nodeport_ok: true },
@@ -48,11 +33,7 @@ const CONFIGURED: Options = {
   sv_tls_secret: "wildcard-credential",
 };
 
-/** The predicate the page hands in: does this option reach anything in a
- *  bundle of the format these options name? Derived from the served table
- *  rather than from a format test, because that is what App does and because
- *  since #182 it is what decides which platform's SV options this record is
- *  about at all -- the two sets are each other's ignored ones. */
+/** The page's `applies` for the format these options name. */
 const appliesIn = (o: Options) => (k: string) =>
   optionApplies(k, String(o.output_format ?? "manifests"), IGNORED_BY_FORMAT);
 
@@ -76,8 +57,7 @@ describe("whether the location demands service virtualization", () => {
   });
 
   it("is not required once the demand has been answered no", () => {
-    // A location can carry mockServices and be wanted for performance alone.
-    // generate() accepts that, so the demand is answered rather than pending.
+    // Wanted for performance alone: the demand is answered.
     const s = sv(SV_LOC, { sv_ingress: SV_NONE });
     expect(s.location).toBe(true);
     expect(s.declined).toBe(true);
@@ -85,8 +65,7 @@ describe("whether the location demands service virtualization", () => {
   });
 
   it("does not read a decline on a location that never asked as declining", () => {
-    // The row's declined hint is about giving something up; a performance
-    // location has nothing to give up.
+    // A performance location has nothing to decline.
     expect(sv(PERF_LOC, { sv_ingress: SV_NONE }).groupDeclined.sv).toBe(false);
     expect(sv(SV_LOC, { sv_ingress: SV_NONE }).groupDeclined.sv).toBe(true);
   });
@@ -110,8 +89,6 @@ describe("whether the location demands service virtualization", () => {
 });
 
 // -- is it finished? ---------------------------------------------------------
-// One rule, stated in the group declaration and read from here -- the page used
-// to reach through the group table with a non-null assertion to ask it.
 
 describe("whether the configuration is finished", () => {
   it("is finished when nothing asks for it", () => {
@@ -119,8 +96,7 @@ describe("whether the configuration is finished", () => {
   });
 
   it("is unfinished on an SV location with nothing set", () => {
-    // ...as the options stand. The page seeds a backend for exactly this
-    // state; see `patch` below.
+    // ...as the options stand; `patch` seeds a backend.
     expect(sv(SV_LOC).ok).toBe(false);
   });
 
@@ -146,8 +122,7 @@ describe("whether the configuration is finished", () => {
   });
 
   it("does not call an empty field a service-type conflict", () => {
-    // Computed, not deduced from the absence of other reasons: the panel would
-    // otherwise show the nodePort sentence for an empty domain.
+    // Computed on its own, so an empty domain does not show the nodePort sentence.
     expect(sv(SV_LOC, { sv_ingress: "contour" }).nodePortConflict).toBe(false);
   });
 });
@@ -156,13 +131,7 @@ describe("whether the configuration is finished", () => {
 
 describe("the formats a virtual service may be generated as", () => {
   it("takes no format away from an SV location", () => {
-    // Two entries stood here and both are gone. Docker's went in #182 -- it
-    // said a docker agent "does not carry" HOSTNAME_OVERRIDE and a TLS pair,
-    // which was true of the bundle and never of the agent. Helm's was true of
-    // the chart, and the chart carries the ingress env and its RBAC now, so
-    // `Sv` has no `blockedFormats` and no `functionalityBlocked` for anything
-    // to read. What is left is the correction below, which never moves a
-    // format.
+    // No format refuses a virtual service, and the correction never moves one.
     for (const fmt of ["manifests", "helm", "docker"]) {
       expect(sv(SV_LOC, { ...CONFIGURED, output_format: fmt }).patch?.output_format)
         .toBeUndefined();
@@ -170,10 +139,8 @@ describe("the formats a virtual service may be generated as", () => {
   });
 
   it("leaves a configuration nobody demanded on the format it arrived with", () => {
-    // #115's state, which used to be the second reader of that table: an
-    // imported profile carrying a full SV configuration for a location whose
-    // funcIds name no served functionality. The configuration is generatable
-    // as any of the three, so nothing about the format needs correcting.
+    // A full SV configuration on a location running no served functionality
+    // needs no format correction.
     const s = sv(PERF_LOC, { ...CONFIGURED, output_format: "helm" });
     expect(s.required).toBe(false);
     expect(s.patch).toBeNull();
@@ -195,8 +162,7 @@ describe("the prerequisite context", () => {
   });
 
   it("keeps the fields as typed for the inputs themselves", () => {
-    // Trimmed for the lookups, untrimmed for the controlled inputs -- trimming
-    // one of those would stop the user typing a space.
+    // Untrimmed for the controlled inputs.
     expect(sv(SV_LOC, { sv_subdomain: "apps.x.com " }).fields.subdomain)
       .toBe("apps.x.com ");
     expect(sv(SV_LOC, {}).fields).toEqual(
@@ -215,30 +181,23 @@ describe("the prerequisite context", () => {
   });
 
   it("offers a Route backend only on OpenShift", () => {
-    // generate() refuses the combination -- a plain API server serves no
-    // route.openshift.io -- so it is not on the select to be picked.
+    // No OpenShift Route off OpenShift: generate() refuses it.
     expect(sv(SV_LOC, { platform: "k8s" }).ingressTypes)
       .toEqual(["nginx", "istio", "contour"]);
-    // `openshift_cluster` stated, never left to the default: it defaults to
-    // false now (#256), so the posture alone no longer makes a cluster.
+    // `openshift_cluster` stated: it defaults to false.
     expect(sv(SV_LOC, { platform: "openshift", openshift_cluster: true })
       .ingressTypes).toEqual(CONST.ingress_types);
-    // ...and the SCC-friendly posture is not the same answer: it is recommended
-    // on vanilla Kubernetes too, which is where a Route would have been offered
-    // for every bundle that took the default.
+    // The SCC-friendly posture alone does not make a cluster OpenShift.
     expect(sv(SV_LOC, { platform: "openshift", openshift_cluster: false })
       .ingressTypes).toEqual(["nginx", "istio", "contour"]);
   });
 });
 
-// -- the write that used to be a loop ----------------------------------------
-// Two effects: one wrote sv_ingress, the other read it to decide the same
-// question. Here it is one value, and the test that matters is that applying
-// it settles.
+// -- the correction ------------------------------------------------------------
+// Applying `patch` must settle.
 
 describe("the option patch", () => {
-  /** Apply the patch until there is none, or give up. A loop that does not
-   *  settle is the bug this shape exists to make visible. */
+  /** Apply the patch until there is none, or give up. */
   const settle = (funcIds: string[] | undefined, o: Options, runs = true) => {
     let cur = o;
     for (let i = 0; i < 5; i += 1) {
@@ -256,47 +215,35 @@ describe("the option patch", () => {
   });
 
   it("seeds a backend for a location that demands one", () => {
-    // Neither an imported profile nor the row opening via `required` goes
-    // through the group's enable(), so without this the select shows its nginx
-    // default over a state that is still null.
+    // Imports and required rows never call enable(), so the ingress is seeded.
     expect(sv(SV_LOC).patch).toEqual({ sv_ingress: "nginx" });
     expect(settle(SV_LOC, {}).sv_ingress).toBe("nginx");
   });
 
   it("seeds nothing for a bundle that no longer carries the functionality", () => {
-    // The other writer's turn. `notRunPatch` clears these options through the
-    // group's own disable() the moment the bundle stops carrying mockServices,
-    // and this used to re-seed an ingress from a demand read off funcIds that
-    // had not caught up -- two writers, one question, two sources, and an
-    // effect loop that never settled. In manual entry that is not a race but
-    // the normal case: `runs` is the declaration and the funcIds are the facts
-    // fetched for the previous one, a debounce behind it (#151).
+    // When the bundle no longer carries SV (notRunPatch is clearing it), no
+    // re-seed, or the two writes would loop. In manual entry the facts trail the
+    // declaration, so this is the normal case.
     expect(sv(SV_LOC, {}, false).patch).toBeNull();
     expect(sv(SV_LOC, {}, false).required).toBe(false);
     expect(sv(SV_LOC, {}, false).groupRequired.sv).toBe(false);
   });
 
   it("rescues a profile stranded on the OpenShift backend", () => {
-    // An imported profile can arrive with sv_ingress "openshift" while the
-    // platform is not OpenShift, which generate() refuses -- and the option
-    // disappears from the select, leaving nothing on screen to explain the
-    // error. nginx works anywhere.
+    // An openshift ingress off OpenShift falls back to nginx.
     expect(sv(PERF_LOC, { sv_ingress: "openshift", platform: "k8s" }).patch)
       .toEqual({ sv_ingress: "nginx" });
     expect(sv(SV_LOC, { sv_ingress: "openshift", platform: "openshift",
                         openshift_cluster: true }).patch)
       .toBeNull();
-    // The other way to stop being OpenShift, which the cluster toggle is: same
-    // stranding, and the same rescue.
+    // Likewise when the cluster toggle says not OpenShift.
     expect(sv(PERF_LOC, { sv_ingress: "openshift", platform: "openshift",
                           openshift_cluster: false }).patch)
       .toEqual({ sv_ingress: "nginx" });
   });
 
   it("drops a gateway no backend will read", () => {
-    // Only crane's istio backend reads KUBERNETES_ISTIO_GATEWAY_NAME, so
-    // generate() refuses it anywhere else -- and an imported profile pairing
-    // the two would hit that with nothing in the UI to explain it.
+    // A gateway name is dropped for any backend but istio.
     expect(sv(SV_LOC, { ...CONFIGURED, sv_istio_gateway: "gw" }).patch)
       .toEqual({ sv_istio_gateway: null });
     expect(sv(SV_LOC, { ...CONFIGURED, sv_ingress: "istio",
@@ -304,18 +251,13 @@ describe("the option patch", () => {
   });
 
   it("clears the gateway the seeded backend cannot read either", () => {
-    // Both halves in one pass: the seed decides the backend, and it is the
-    // seeded one the gateway is judged against.
+    // Both in one pass, the gateway judged against the seeded backend.
     expect(sv(SV_LOC, { sv_istio_gateway: "gw" }).patch)
       .toEqual({ sv_ingress: "nginx", sv_istio_gateway: null });
   });
 
   it("never moves the format the bundle was asked for", () => {
-    // There was a branch here that did, for a bundle configured for service
-    // virtualization on a format that refused it -- the one write on this page
-    // that overrode a choice made on it. No format refuses one now, so a chart
-    // is corrected exactly as the manifests are: its ingress is seeded, and the
-    // format it arrived with is left alone.
+    // The format is never changed.
     expect(sv(SV_LOC, { ...CONFIGURED, output_format: "helm" }).patch).toBeNull();
     expect(sv(SV_LOC, { output_format: "helm" }).patch)
       .toEqual({ sv_ingress: "nginx" });
@@ -325,16 +267,11 @@ describe("the option patch", () => {
   });
 
   it("seeds no ingress into a bundle whose format has no such field", () => {
-    // The demand is the location's either way, but the ingress group is not
-    // where a docker bundle answers it -- the `svDocker` three are (#182). So
-    // the seed is gated on the format having the field at all: writing
-    // `sv_ingress: nginx` here would set an ignored option off a control that
-    // format's page does not show, and then report it as set-and-not-carried.
+    // A docker bundle has no ingress field, so nothing is seeded.
     expect(sv(SV_LOC, { output_format: "docker" }).patch).toBeNull();
     expect(sv(SV_LOC, { output_format: "docker" }).required).toBe(false);
     expect(sv(SV_LOC, { output_format: "docker" }).groupRequired.sv).toBe(false);
-    // ...and the location still demands it. `location` is what the funcIds say
-    // and does not move with the format.
+    // ...while the location still demands SV.
     expect(sv(SV_LOC, { output_format: "docker" }).location).toBe(true);
   });
 
@@ -342,8 +279,7 @@ describe("the option patch", () => {
     expect(settle(SV_LOC, { output_format: "helm", sv_istio_gateway: "gw" }))
       .toEqual({ output_format: "helm", sv_ingress: "nginx",
                  sv_istio_gateway: null });
-    // Docker settles at once and untouched: the format is not refused and the
-    // ingress is not its field to seed.
+    // Docker settles at once, untouched.
     expect(settle(SV_LOC, { output_format: "docker" }))
       .toEqual({ output_format: "docker" });
     expect(settle(PERF_LOC, { sv_ingress: "openshift", platform: "k8s",
@@ -353,8 +289,7 @@ describe("the option patch", () => {
   });
 
   it("leaves a declined location's format alone", () => {
-    // Declining is an answer, and the chart -- or the container -- is
-    // generated for the performance bundle it leaves behind.
+    // A decline settles on any format.
     expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "helm" }))
       .toEqual({ sv_ingress: SV_NONE, output_format: "helm" });
     expect(settle(SV_LOC, { sv_ingress: SV_NONE, output_format: "docker" }))
@@ -362,35 +297,24 @@ describe("the option patch", () => {
   });
 
   it("keeps the format of a bundle whose SV options are being cleared", () => {
-    // The regression the `runs` input exists to stop. A location known to run
-    // something else has notRunPatch clearing these options through the
-    // group's own disable(); resetting the format on the way past would take
-    // away a docker choice that was valid all along, and the options it was
-    // reset for are gone by the next render.
+    // A location running something else: the format is kept while notRunPatch
+    // clears the options.
     expect(settle(PERF_LOC, { ...CONFIGURED, output_format: "docker" }, false))
       .toEqual({ ...CONFIGURED, output_format: "docker" });
-    // ...including the stranded backend, which is a correction of its own and
-    // must not become a format reset by the back door.
+    // ...and a stranded backend does not reset it either.
     expect(settle(PERF_LOC, { sv_ingress: "openshift", platform: "k8s",
                               output_format: "docker" }, false).output_format)
       .toBe("docker");
   });
 });
 
-// -- and the one thing SV is not: something to share a location with ----------
-// #151. Crane applies one KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY pair to every
-// pod it creates, so a location running both an engine and a mock has one
-// number for two sizing problems. Where the location is being *decided* -- manual
-// entry, the new-location form -- the opinion is free and the rule is enforced;
-// where it already exists nothing on this page can un-mix it, so it is warned
-// about and never refused.
+// -- SV does not share a location ----------------------------------------------
+// Crane applies one limit pair to every pod: enforced where a location is
+// being decided, warned about where it exists.
 
 describe("service virtualization on a location of its own", () => {
   const ORDER = ["performance", "functionalGui", "mockServices"];
-  // The funcIds whose agent carries a taurus engine, as /api/functionalities
-  // serves them (`runs_engine`). The rule takes them rather than knowing them:
-  // the answer is facts.CATEGORY_BY_FUNC's, and test_server.py holds the served
-  // pair to the planner's own table.
+  // The funcIds whose agent runs an engine, as served (`runs_engine`).
   const ENGINES = ["performance", "functionalGui"];
   const tick = (d: string[], id: string, on: boolean) =>
     toggleDeclared(d, id, on, ORDER, exclusiveWith(ENGINES));
@@ -401,33 +325,26 @@ describe("service virtualization on a location of its own", () => {
   });
 
   it("...and is cleared by either of them", () => {
-    // Both ways round, because both are the same statement about one limit
-    // pair: whichever is ticked second is the one somebody just asked for.
+    // Both ways round: the latest tick wins.
     expect(tick(["mockServices"], "performance", true)).toEqual(["performance"]);
     expect(tick(["mockServices"], "functionalGui", true))
       .toEqual(["functionalGui"]);
   });
 
   it("leaves the two engine functionalities alone together", () => {
-    // The pair the exclusivity is not about: one agent, one engine pod size,
-    // and 71 of 168 locations in one real account run exactly this.
+    // Two engine functionalities share a location fine.
     expect(tick(["performance"], "functionalGui", true))
       .toEqual(["performance", "functionalGui"]);
   });
 
   it("says nothing about a funcId neither side names", () => {
-    // tdm, dataPublisher, delphix: real funcIds this tool models no
-    // functionality for. Nothing here knows what they cost, so nothing here
-    // clears anything for them -- the create-location form offers the account's
-    // whole vocabulary and must not edit what it cannot judge.
+    // Unmodelled funcIds exclude nothing.
     expect(tick(["mockServices"], "tdm", true)).toEqual(["mockServices", "tdm"]);
     expect(exclusiveWith(ENGINES)("tdm")).toEqual([]);
   });
 
   it("names a location that already mixes the two, and only such a one", () => {
-    // Connect mode's answer. A location that exists is BlazeMeter's own UI's to
-    // change -- #113 removed the one route here that did -- so this is a
-    // sentence, never a refusal, and it is only true of the mixture.
+    // Connect mode's warning: true only of the mixture.
     expect(svMixedWithEngines(["performance", "mockServices"], ENGINES)).toBe(true);
     expect(svMixedWithEngines(["functionalGui", "mockServices"], ENGINES)).toBe(true);
     expect(svMixedWithEngines(["mockServices"], ENGINES)).toBe(false);

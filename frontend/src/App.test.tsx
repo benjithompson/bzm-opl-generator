@@ -1,27 +1,10 @@
 // @vitest-environment jsdom
 //
-// The page's effects, driven through the seam.
-//
-// Every effect below has gone wrong once, and none of the failures is visible
-// in a type or in a review: each needs two things outstanding at the same time,
-// or a timer that has not fired yet. `deferred` is what holds an answer open;
-// vi's clock is what holds a debounce or a poll interval open. The four the
-// page documents in prose are all pinned here -- the account-capacity guard
-// (the slower answer landing under the newer account's name), the session
-// restore ordering, the preview debounce and its dependency on the save
-// folder, and the status poll's target.
-//
-// Driven through the real controls rather than by poking state: switching
-// account is the menu at the foot of the drawer, and a test that reached
-// setAccountId directly would keep passing if that control stopped calling it.
-//
-// Under fake timers, nothing from testing-library that waits may be used:
-// `waitFor` and every `findBy*` poll on a real interval, and this jsdom's
-// testing-library only recognises jest's clock, so it would spin against a
-// clock nothing is advancing. The tests below therefore set up under the real
-// clock and install the fake one at the point the behaviour under test starts
-// -- which for the poll has to be before the interval is created, or it is a
-// real interval vi will never advance.
+// The page's effects, driven through the real controls and the fake API.
+// `deferred` holds an answer open and vi's clock holds a debounce or poll open.
+// Under fake timers, `waitFor` and `findBy*` must not be used (they poll a real
+// interval), so tests set up on the real clock and switch to the fake one where
+// the behaviour under test starts.
 import {
   act, cleanup, fireEvent, render, screen, waitFor, within,
 } from "@testing-library/react";
@@ -37,9 +20,7 @@ import { deferred, fakeApi } from "./fakeApi";
 import {
   AGENT_ENV, IGNORED_BY_FORMAT, RESERVED_ENV, SIZING_MODELS, SLOT_MINIMUMS,
 } from "./fixtures";
-// The snapshot writer the page itself uses. A literal forged here would be a
-// second declaration of the shape, and one that starts passing for the wrong
-// reason the first time the version is bumped -- see session.VERSION.
+// The page's own snapshot writer, so forged snapshots track session.VERSION.
 import * as session from "./session";
 // The marker rule, from the page's own copy of it: a fake that spelled
 // "<SHIP_ID>" out by hand would stop agreeing with the generator silently.
@@ -50,28 +31,19 @@ import { EMPTY_PLAN_INPUTS } from "./usePlan";
 import { defaultSizings } from "./sizings";
 const DEFAULT_SIZINGS = defaultSizings(SIZING_MODELS);
 
-/** The funcId vocabulary as /api/func-ids answers it: the rows, and which of
- *  the two lists they are. Written out rather than defaulted, because `source`
- *  is load-bearing -- the account's list makes a funcId missing from it
- *  *retired*, and the baseline's makes it nothing at all (#160). A test whose
- *  subject is elsewhere passes the baseline with no rows, which is honestly
- *  what a fake that answers the same thing to both calls has read. */
+/** The funcId vocabulary as /api/func-ids answers it. `source` matters: against
+ *  the account a missing funcId is retired, against the baseline it is nothing. */
 const vocabulary = (choices: FuncIdChoice[],
                     source: FuncIdVocabulary["source"]): FuncIdVocabulary =>
   ({ source, choices });
 const NO_VOCABULARY = vocabulary([], "baseline");
 
-// Registered before `cleanup` so that it runs *after* it: hooks run in
-// reverse, and unmounting writes. The page persists its selections on the way
-// out, so clearing first left the storage repopulated by the very unmount that
-// followed -- and the next test restored a session it never saved. React 18
-// never showed it, because the write did not land before the clear.
+// Registered before `cleanup`, so it runs after it: unmounting saves the
+// session, and clearing first would leave that save for the next test.
 afterEach(() => { sessionStorage.clear(); localStorage.clear(); });
 afterEach(cleanup);
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
-// Before cleanup, which unmounts: hooks run in reverse, and an effect cleanup
-// clearing a faked interval on the way out is one more thing to get right for
-// nothing.
+// Before cleanup, which unmounts and clears the faked interval.
 afterEach(() => { vi.useRealTimers(); });
 
 /** Let the fake clock run, with React's own work flushed around it. */
@@ -119,10 +91,8 @@ test("a slow capacity answer for the previous account never lands under the new 
 
     render(<App api={api} />);
 
-    // Connected, on account 1, looking at the rollup -- which is what puts the
-    // first (slow) capacity read in flight.
-    // Disabled until the key answers -- there is no account to roll up before
-    // that, so the click has to wait for the same thing the user does.
+    // Connected, on account 1, looking at the rollup: the first (slow) read is
+    // in flight. The tab is disabled until the key answers.
     const capacityTab = await screen.findByRole<HTMLButtonElement>(
       "button", { name: /Account capacity/ });
     await waitFor(() => expect(capacityTab.disabled).toBe(false));
@@ -141,12 +111,8 @@ test("a slow capacity answer for the previous account never lands under the new 
     bravo.settle(capacityOf(2, "Bravo workspace"));
     expect(await screen.findByText("Bravo workspace")).toBeTruthy();
 
-    // ...and only then does the first account's, which is the ordering the
-    // guard exists for. Settled inside `act` and awaited to the end of its own
-    // handlers: the unguarded version lands one microtask later, so an
-    // assertion made before that flush passes over a page about to be wrong --
-    // and a `waitFor` would be worse, since it returns on its first successful
-    // check, which is that same too-early moment.
+    // ...and only then the first account's. Settled inside `act` and awaited,
+    // so the unguarded version would have landed before the assertion.
     await act(async () => {
       alpha.settle(capacityOf(1, "Alpha workspace"));
       await alpha.promise;
@@ -156,9 +122,7 @@ test("a slow capacity answer for the previous account never lands under the new 
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
   });
 
-/** The account tree, with the rollup answering from `capacity`. Shared by the
- *  two Refresh tests below: the rollup needs no workspace, no location and no
- *  location list -- it is one read of the whole account. */
+/** An account whose rollup answers from `capacity`; nothing else is needed. */
 function rollupApi(extra: Partial<Api>) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -216,10 +180,7 @@ test("Refresh on the rollup drops the server's cache before re-reading", async (
 
 test("a refreshed rollup for the previous account never lands under the new one",
   async () => {
-    // The same guard the view's own effect has, in the shape a callback can
-    // have it: `live` is a closure over one run of an effect and a button
-    // outlives all of them. 1.3s on a 171-location account is plenty of time to
-    // change account in the drawer.
+    // A refresh outlives any effect run, so its guard is a ref on the account.
     const pending: { id: number; settle: (c: Capacity) => void }[] = [];
     render(<App api={rollupApi({
       refresh: async () => null,
@@ -247,20 +208,14 @@ test("a refreshed rollup for the previous account never lands under the new one"
     await act(async () => { pending[2].settle(capacityOf(2, "Bravo workspace")); });
     expect(await screen.findByText("Bravo workspace")).toBeTruthy();
 
-    // ...and only then does the refresh, which is the ordering the guard is
-    // for. Awaited to the end of its own handlers: the unguarded version lands
-    // one microtask later, so an assertion made before that flush passes over a
-    // page about to be wrong.
+    // ...and only then the refresh, awaited to the end of its handlers.
     await act(async () => { pending[1].settle(capacityOf(1, "Alpha workspace")); });
     expect(screen.queryByText("Alpha workspace")).toBeNull();
     expect(screen.queryByText("Bravo workspace")).not.toBeNull();
   });
 
 test("the account menu stays up while both of its pickers are used", async () => {
-  // It is one control narrowed twice -- an account, then a workspace inside it
-  // -- so choosing the first is the middle of the job, not the end of it.
-  // Closing there meant reopening the menu to answer the question the first
-  // answer had just revealed.
+  // Choosing an account is the middle of the job, not the end of it.
   render(<App api={accountOf([], {
     accounts: async () => [{ id: 1, name: "Alpha" }, { id: 2, name: "Bravo" }],
     workspaces: async () => [{ id: 10, name: "WS one" }, { id: 11, name: "WS two" }],
@@ -286,16 +241,10 @@ test("the account menu stays up while both of its pickers are used", async () =>
 
 
 // -- service virtualization, through the page --------------------------------
-// sv.ts is tested as plain data (sv.test.ts) -- what needs a page is the wiring
-// it replaced: an effect that WROTE the ingress option and another that READ it
-// back. The bundle really carrying the seeded value, and doing so once, is the
-// thing neither a type nor the module's own tests can show.
+// That the seeded ingress reaches the bundle, once.
 
-/** An account holding one location that runs virtual services, ready to
- *  generate for. `record` collects the options every preview is asked for --
- *  the bundle as the server would see it, rather than what the form shows.
- *  `extra` is what the test under way adds: the watch routes, which only the
- *  poll calls. */
+/** An account with one location that runs virtual services. `record` collects
+ *  the options every preview asks for; `extra` adds the watch routes. */
 function svAccount(record: Options[], extra: Partial<Api> = {}) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -324,11 +273,8 @@ function svAccount(record: Options[], extra: Partial<Api> = {}) {
       id: "mockServices", label: "Service Virtualization",
       namespace: "blazemeter-sv", runs_engine: false,
     }],
-    // Two joins, and only one of them is free to be spelled differently here.
-    // A functionality id *is* the funcId (#149), and the sv option group tags
-    // itself with that string, so this fixture has to carry the real one. What
-    // the served constants call it is still the server's own word, which is why
-    // the page reads it off /api/sv-constants rather than testing for it.
+    // The funcId is the functionality id the sv group is tagged with, so it is
+    // the real one; the page reads it off /api/sv-constants.
     svConstants: async () => ({
       func_ids: ["mockServices"],
       ingress_types: ["nginx", "istio"],
@@ -355,19 +301,12 @@ test("an SV location seeds a backend into the bundle, once, on whichever format"
     // configured, and nothing was pressed in the group.
     fireEvent.click(await screen.findByText("Mocks"));
 
-    // The seed reaches the bundle, not just the select: with sv_ingress unset
-    // generate() refuses such a location outright, and the select showing its
-    // own nginx fallback would hide that.
+    // The seed reaches the bundle, not only the select.
     const latest = () => asked[asked.length - 1] ?? {};
     await waitFor(() => expect(latest().sv_ingress).toBe("nginx"));
-    // ...and the format the session arrived with is left exactly as it was.
-    // It used to be corrected to manifests in the same pass, because the chart
-    // could not publish a virtual service; it can, so nothing here overrides a
-    // choice somebody made.
+    // ...and the format the session arrived with is kept.
     expect(latest().output_format).toBe("helm");
-    // Settled: the correction is applied and then there is nothing left to
-    // correct. A loop would keep minting options identities and re-POSTing the
-    // preview for a configuration that stopped changing.
+    // Settled: no further previews once the correction is applied.
     const settled = asked.length;
     await new Promise((r) => setTimeout(r, 400));
     expect(asked.length).toBe(settled);
@@ -376,12 +315,7 @@ test("an SV location seeds a backend into the bundle, once, on whichever format"
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
     expect(await screen.findByText(/this location runs mockServices/)).toBeTruthy();
 
-    // ...and every format is offered for it. The chart was disabled here with
-    // a sentence of its own until it grew the ingress env and its RBAC; docker
-    // was, until #182, with a sentence about HOSTNAME_OVERRIDE "which this
-    // bundle does not carry" -- true of the bundle, never of the agent. Both
-    // segments being live is what says a virtual service can be generated as
-    // any of the three.
+    // ...and every format is offered.
     for (const name of [/Kubernetes manifests/, /Helm chart/, /Docker/]) {
       expect((await screen.findByRole<HTMLButtonElement>("radio", { name }))
         .disabled).toBe(false);
@@ -392,30 +326,9 @@ test("an SV location seeds a backend into the bundle, once, on whichever format"
   });
 
 // -- a functionality the location does not run --------------------------------
-// It is not on the configure step at all now. #113 made it a card that stated
-// it and named the funcId to add, which is a true sentence about the location
-// and nothing this step's reader can act on -- and on a performance location,
-// which is most of them, it was half the section. Only manual entry still
-// renders one, because there the card is the declaration rather than a report
-// of one (#118), and filtering by the answer would take away the control that
-// gives it.
-//
-// Everything #113 established still holds and is still asserted below: the
-// options are cleared rather than merely hidden, and nothing is left blocking a
-// download that nothing on screen can unblock. That is the half a filter cannot
-// do -- hiding a row does not empty it.
-//
-// It was half-configurable before #113, in both source modes and differently in each.
-// Manual mode had no guard at all: flipping Service virtualization on for an
-// identity declared as performance seeded `sv_ingress: nginx` behind empty
-// subdomain and TLS fields, and the rail went red for something nothing on the
-// page had asked for. Connect mode had the mirror -- the card body carried
-// `pointer-events-none` AND the click handler meant to intercept it, on the
-// same element, so a group opened by a restored profile had a switch that could
-// not be pressed and a download blocked by a row nobody could reach.
-//
-// Both need a page: what a *card* offers, and what the options end up as after
-// the page has settled, is exactly what optionGroups.test.ts cannot see.
+// Not on the configure step (manual entry excepted, where the card is the
+// declaration), and its options are cleared rather than merely hidden, so no
+// download is blocked by something off screen.
 
 /** An account whose vocabulary carries both functionalities and whose one location
  *  runs only the first -- which is the state the card has to state. */
@@ -453,11 +366,7 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
                            resources: ["ingresses"], creates: "Ingress",
                            nodeport_ok: true } },
     }),
-    // The one copy of generate.IGNORED_BY_FORMAT (see fixtures.ts). Needed
-    // here since #182: the two service-virtualization groups hide each other by
-    // format, so a page with no table shows both -- the "not read" state, which
-    // is a field too many rather than a hidden one, but not what these tests
-    // are about.
+    // Needed: the two SV groups hide each other by format.
     ignoredOptions: async () => IGNORED_BY_FORMAT,
     generate: async (_facts: unknown, options: Options) => {
       record.push(options);
@@ -468,15 +377,12 @@ function twoFunctionalityAccount(record: Options[], extra: Partial<Api> = {}) {
   });
 }
 
-/** One functionality's card, by the anchor the rail already links to. Found by id
- *  rather than by its label, which is on screen twice -- the card and the rail
- *  entry pointing at it. */
+/** One functionality's card, by the anchor the rail links to (its label is on
+ *  screen twice). */
 const card = (functionalityId: string) =>
   within(document.getElementById("cfg-f-" + functionalityId)!);
 
-/** ...and whether there is one at all, which is now an answer in its own right:
- *  a functionality the location does not run has no card, no rail entry and no
- *  sentence. `card()` throws on a missing one, so the two reads are separate. */
+/** Whether a functionality has a card at all; `card()` throws on a missing one. */
 const hasCard = (functionalityId: string) =>
   document.getElementById("cfg-f-" + functionalityId) != null;
 
@@ -501,19 +407,13 @@ test("a functionality a manually entered identity was not declared to run has "
     await waitFor(() => expect(
       card("performance").getByLabelText("Enabled")).toHaveProperty("checked", true));
 
-    // The card for the other one states it and offers nothing. A switch here
-    // was pressable, seeded an ingress with no domain behind it, and turned the
-    // step red for a functionality nobody had asked for.
+    // The undeclared card offers no switches.
     expect(card("mockServices").queryByRole("switch")).toBeNull();
     expect(card("mockServices").getByText(/tick/)).toBeTruthy();
-    // ...and this is not passing because no card rendered anything: the
-    // declared functionality states the engine size its bundle will carry -- the
-    // documented default, since manual mode has no location to read.
+    // ...while the declared one states the default engine size.
     expect(card("performance").getByText(/2 CPU \/ 8Gi/)).toBeTruthy();
 
-    // ...and nothing was seeded, so the rail has nothing to complain about.
-    // The switch used to write `sv_ingress: nginx` over empty subdomain and TLS
-    // fields, which is what turned this step red.
+    // Nothing was seeded, so the rail has nothing to flag.
     expect(screen.queryByText(/needs attention/)).toBeNull();
   });
 
@@ -534,32 +434,20 @@ test("a restored profile's SV options for a location without mockServices are cl
     const asked: Options[] = [];
     render(<App api={twoFunctionalityAccount(asked)} />);
 
-    // The download is not blocked. This is the failure: the option opens the SV
-    // group through detectGroups, `svIncomplete` sees an ingress with no
-    // subdomain, and the rail reds -- for a row that was inert (connect mode
-    // put `pointer-events-none` on the body) and is now not there at all.
+    // The download is not blocked by the stranded SV option.
     const next = await screen.findByRole<HTMLButtonElement>(
       "button", { name: /Next/ });
-    // All three in one wait. They are one settled state, but not one render:
-    // the button re-enables as soon as the options are cleared, and the rail
-    // re-reads a render later. React 18 batched the pair; 19 does not, so
-    // asserting the second two after waiting only for the first caught the
-    // page between them.
+    // All three in one wait: they settle across more than one render.
     await waitFor(() => {
       expect(next.disabled).toBe(false);
       expect(screen.queryByText(/needs attention/)).toBeNull();
       expect(screen.queryByText(/Service virtualization first/)).toBeNull();
     });
-    // ...and the option itself is gone from the bundle, not merely off screen:
-    // generate() refuses an ingress with no subdomain whatever the location
-    // runs, so hiding the row alone moves the blocker to the server.
+    // ...and the option is gone from the bundle, not merely off screen.
     await waitFor(() => expect(
       asked[asked.length - 1]?.sv_ingress).toBeFalsy());
 
-    // ...and the functionality is not on the step at all. It used to be a card
-    // stating it and naming the funcId to add, which is a true sentence about
-    // the location and nothing this step's reader can act on. Not the card, not
-    // the rail entry: both are the same list.
+    // ...and the functionality has no card and no rail entry.
     await waitFor(() => {
       expect(hasCard("mockServices")).toBe(false);
       expect(screen.queryByText(/Service virtualization/)).toBeNull();
@@ -571,11 +459,7 @@ test("a restored profile's SV options for a location without mockServices are cl
 
 test("a location that runs one functionality shows one card, with nothing configured",
   async () => {
-    // The same rule with no configuration behind it: the test above reaches it
-    // through options somebody's profile left set, and this one through a
-    // location and an agent alone. The card used to be on screen stating
-    // itself; the step now opens on the one functionality this bundle has anything to
-    // say about.
+    // The same, reached through a location and agent alone.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-perf", shipId: "s-1",
@@ -594,23 +478,12 @@ test("a location that runs one functionality shows one card, with nothing config
     });
   });
 
-// -- a format that cannot serve a functionality -------------------------------
-// #115, and what #113 left reachable. The blocked formats were read off the
-// location's *demand*, and generate() refuses on the *configuration*: _sv_cfg
-// returns a config without ever looking at the funcIds. The gap between the two
-// is a location whose funcIds carry no served functionality -- `enabled` is null,
-// nobody has said, so notRunPatch clears nothing and every switch is offered.
-// Real accounts have them: tdm, dataPublisher and delphix are all funcIds this
-// tool models no functionality for.
+// -- a location whose funcIds name no served functionality -----------------------
+// Nobody has said what it runs, so nothing is cleared and every switch is offered.
 
-/** ...that account, with such a location. Its funcId vocabulary answers the way
- *  the server does: the covered baseline with no account, and the account's own
- *  nine -- names, pins and all -- once one is named (#148, #160).
- *
- *  `funcIds` is what the location carries, `["tdm"]` unless a test says
- *  otherwise: a funcId no functionality claims, which is the state the
- *  format-refusal tests below need (nobody has said what this location runs).
- *  A test about what gets *named* passes its own. */
+/** An account with such a location (`funcIds`, `["tdm"]` by default). Its
+ *  vocabulary answers the baseline without an account and the account's own
+ *  list, names and pins included, with one. */
 const unclaimedAccount = (record: Options[], funcIds = ["tdm"]) =>
   twoFunctionalityAccount(record, {
     locations: async () => [{
@@ -626,9 +499,7 @@ const unclaimedAccount = (record: Options[], funcIds = ["tdm"]) =>
         covered: true, sub_func_ids: [] },
       { id: "mockServices", label: "Service Virtualization",
         changes_images: true, covered: true, sub_func_ids: [] },
-      // Three of the 117 pins the account serves under this one. They are not
-      // rows of their own anywhere: not here, and not in a location's funcIds
-      // where they arrive beside the parent.
+      // Pins arrive under their parent, never as rows of their own.
       { id: "functionalGui", label: "GUI Functional", changes_images: true,
         covered: true,
         sub_func_ids: ["chrome:default", "firefox:139", "safari:15"] },
@@ -644,11 +515,8 @@ const unclaimedAccount = (record: Options[], funcIds = ["tdm"]) =>
 
 test("a funcId this tool has no options for is named in the account's own words",
   async () => {
-    // Silence would read as coverage: this location runs tdm, nothing here
-    // configures it, and the honest sentence names it. The account is the only
-    // thing that knows it is called "TDM Integration" -- the keyless vocabulary
-    // is the three covered funcIds and holds no such row -- so this is also the
-    // assertion that the account's list replaced the baseline on connect.
+    // An unconfigured funcId is named in the account's words, which also shows
+    // the account's vocabulary replaced the baseline on connect.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
@@ -667,12 +535,8 @@ test("a funcId this tool has no options for is named in the account's own words"
   });
 
 test("a browser pin is not a funcId this tool has no options for", async () => {
-  // #160, end to end. This location is the shape 43% of one account's are: the
-  // parent beside the browsers it is pinned to, plus a funcId the account
-  // retired years ago. Every pin used to be named on the configure step as
-  // something this tool has no options for -- 41 of them on the worst location
-  // -- which is a true sentence about nothing and buried the one funcId the
-  // sentence exists for.
+  // A GUI location with its browser pins and a retired funcId: the pins are
+  // parameters and are never named.
   session.save({
     sourceMode: "connect", accountId: 1, workspaceId: 10,
     harborId: "h-tdm", shipId: "s-1",
@@ -690,10 +554,7 @@ test("a browser pin is not a funcId this tool has no options for", async () => {
   // serve `sv-bridge`, so this location was created before the removal.
   expect(await screen.findByText(/no longer offers/)).toBeTruthy();
   expect(screen.getByText("sv-bridge")).toBeTruthy();
-  // Not one pin anywhere on the page. `functionalGui` is uncovered here -- this
-  // account's served functionalities are performance and SV -- so this is also
-  // the case where the parent is named and its pins still are not: what a pin
-  // is a parameter *of* does not depend on whether that is configurable.
+  // No pin anywhere, even with the parent itself uncovered.
   for (const pin of ["chrome:default", "firefox:139", "safari:15"]) {
     expect(screen.queryByText(new RegExp(pin))).toBeNull();
   }
@@ -702,18 +563,8 @@ test("a browser pin is not a funcId this tool has no options for", async () => {
 
 test("an SV configuration no location demanded is generated on the format it arrived with",
   async () => {
-    // A restored session is one of the three ways these options arrive without
-    // anyone pressing anything, and the only one that needs no account to
-    // reproduce. A chart plus a complete SV configuration used to be a pair
-    // generate() refused outright, and nothing on the page said so -- the
-    // segment was enabled, the rail was green and the download was not
-    // blocked. #115 answered it by taking the format away; the chart publishes
-    // virtual services now, so what is asserted is the opposite: the pair
-    // reaches the server, and the server builds it.
-    //
-    // Docker was the refusing format until #182, and helm until the chart grew
-    // an ingress. The state this test is about outlived both of them: a
-    // configuration nobody demanded, arriving whole.
+    // A restored chart bundle with a full SV configuration nobody demanded
+    // reaches the server as it is, and is generated.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
@@ -746,15 +597,8 @@ test("an SV configuration no location demanded is generated on the format it arr
 
 test("every format offers the service-virtualization card its own switches",
   async () => {
-    // This card used to have a fourth state: run, and not servable by a bundle
-    // of this format, which it stated instead of its switches. Two formats
-    // reached it -- docker until #182, the chart until it grew an ingress --
-    // and none does now, so what is asserted is that each format offers the
-    // group that is *its* way of publishing a virtual service.
-    //
-    // The location's funcIds say nothing here (`tdm` is a funcId no
-    // functionality claims), which is the state the card's remaining answers
-    // are easiest to confuse in.
+    // Each format offers its own way of publishing a virtual service, for a
+    // location whose funcIds say nothing.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-tdm", shipId: "s-1",
@@ -778,9 +622,7 @@ test("every format offers the service-virtualization card its own switches",
     fireEvent.click(screen.getByRole("radio", { name: /Kubernetes manifests/ }));
     await waitFor(() =>
       expect(card("mockServices").queryByRole("switch")).not.toBeNull());
-    // Docker serves it too, and with its own group rather than the ingress
-    // one: the card is the functionality, and which of the two sets of options
-    // is under it is the format's answer (#182).
+    // Docker's group, not the ingress one.
     fireEvent.click(screen.getByRole("radio", { name: /Docker/ }));
     await waitFor(() => expect(
       card("mockServices").getByRole("switch").getAttribute("aria-label"))
@@ -821,11 +663,7 @@ test("the docker format is a third bundle, and it is what gets generated",
     await waitFor(() =>
       expect(asked[asked.length - 1]?.output_format).toBe("docker"));
 
-    // ...and the questions it makes no sense of are off this step. This is why
-    // the control moved here: choosing docker on the download step left the
-    // form above it asking for a namespace, a ServiceAccount and a node
-    // selector for a bundle that carries none of them, and the only place that
-    // said so was the generated README.
+    // ...and the fields docker has no use for are off the step.
     await waitFor(() => expect(screen.queryByDisplayValue("crane")).toBeNull());
     expect(screen.queryByDisplayValue("blazemeter")).toBeNull();
     expect(screen.queryByText(/Deployment placement/)).toBeNull();
@@ -845,12 +683,8 @@ test("the docker format is a third bundle, and it is what gets generated",
 
 test("the cluster is asked under the posture, and takes the OpenShift-only mode with it",
   async () => {
-    // `platform: openshift` is a *posture* -- the cluster assigns the UID --
-    // and it is recommended on vanilla Kubernetes too, so it was answering a
-    // second question nobody had asked: which cluster this is. Everything the
-    // bundle tells somebody to run came out in `oc`, and OpenShift's own trust
-    // injection was offered to customers whose cluster has nothing to inject
-    // with.
+    // The OpenShift-only CA mode is offered by the cluster answer, not by the
+    // SCC-friendly posture, which vanilla Kubernetes uses too.
     const asked: Options[] = [];
     render(<App api={accountOf([loc("h-0", "Dublin",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
@@ -887,10 +721,7 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
     // It reaches the bundle, which is where `oc` against `kubectl` is decided.
     await waitFor(() =>
       expect(asked[asked.length - 1]?.openshift_cluster).toBe(false));
-    // ...and the mode goes with it. Hiding the radio alone would leave the
-    // option set: an inject ConfigMap off OpenShift is emitted empty, nothing
-    // ever fills it, and the agent trusts nothing extra while the bundle reads
-    // as configured.
+    // ...and the mode is cleared with it, not only hidden.
     expect(asked[asked.length - 1]?.ca_openshift_inject).toBe(false);
     expect(screen.queryByLabelText(/OpenShift cluster trust bundle/)).toBeNull();
     // The posture is untouched: it is the other question, and the one this
@@ -900,18 +731,8 @@ test("the cluster is asked under the posture, and takes the OpenShift-only mode 
 
 test("the CA group asks for a file name, and a blank one is not a blocker",
   async () => {
-    /** #256: this group was four radio buttons -- a PEM slot, a paste box,
-     *  somebody else's ConfigMap, OpenShift injection -- which asked a customer
-     *  to choose an ownership model before they could say the one thing they
-     *  knew. BlazeMeter's own documentation asks for neither a model nor a PEM:
-     *  their chart takes a certificate *file name*, and their Deployment
-     *  example references a ConfigMap built from that file.
-     *
-     *  Blank is deliberately not a refusal. It becomes `<CA_CERT_FILE>`, the
-     *  chart refuses the install and every surface names it -- so blocking the
-     *  download here would be the off-screen blocker this page keeps removing,
-     *  in the one mode whose whole premise is that the certificate is
-     *  elsewhere. */
+    /** The group asks one thing, the certificate's file name. Blank is not a
+     *  blocker: the bundle carries `<CA_CERT_FILE>`. */
     const asked: Options[] = [];
     render(<App api={accountOf([loc("h-0", "Dublin",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
@@ -933,11 +754,8 @@ test("the CA group asks for a file name, and a blank one is not a blocker",
       expect(asked[asked.length - 1]?.ca_bundle_slot).toBe(true));
     expect(asked[asked.length - 1]?.ca_cert_file ?? null).toBeNull();
 
-    // There is one control, and it is the file name. No paste box and no
-    // certificate upload: the bundle never carries a certificate from this
-    // page. Keyed on the accept list rather than on `input[type=file]` at
-    // large -- the profile importer is one of those and belongs to another
-    // step.
+    // No paste box and no upload: the only file input on the step is the
+    // profile importer.
     expect(document.querySelector('input[type="file"][accept^=".pem"]'))
       .toBeNull();
     fireEvent.change(await screen.findByLabelText(/Certificate file name/),
@@ -945,11 +763,8 @@ test("the CA group asks for a file name, and a blank one is not a blocker",
     await waitFor(() =>
       expect(asked[asked.length - 1]?.ca_cert_file).toBe("corp-root.crt"));
 
-    // ...and clearing it again is allowed, and is not a blocker. Blank arrives
-    // as the empty string, like every other text box here, and the generator
-    // resolves it to `<CA_CERT_FILE>` -- so the page never has to hold a marker
-    // in `options`, which is the rule that keeps one out of the session
-    // snapshot looking like something somebody typed.
+    // Clearing it is allowed and blocks nothing; the marker is the generator's,
+    // never held in `options`.
     fireEvent.change(screen.getByLabelText(/Certificate file name/),
                      { target: { value: "" } });
     await waitFor(() =>
@@ -958,13 +773,8 @@ test("the CA group asks for a file name, and a blank one is not a blocker",
   });
 
 // -- the download step, through the page -------------------------------------
-// The two requests this step exists to make now go through the same seam as
-// every other route (#104), so what is asserted here is what the page handed
-// the client: the facts, the options with the agent's id, and the credential
-// request -- the record the whole of #64 was about. Stubbing `fetch` proved the
-// same thing one transport layer lower and could not reach the decision that
-// produces it; the wire shape those two routes put on the request is pinned in
-// api.test.ts, which is where a transport belongs.
+// What the page hands the client: facts, options with the agent id, and the
+// credential request. The wire shape is api.test.ts's.
 
 /** What the page handed the client for a bundle, whichever route it used. */
 interface Sent {
@@ -974,9 +784,7 @@ interface Sent {
   credential: TokenRequest;
 }
 
-/** The bundle route, recording what left and answering as the server would --
- *  the credential sentence included, because it is core's wording and arrives
- *  on the answer rather than being composed on this side. */
+/** The bundle route: records what left, answers with core's credential sentence. */
 function transfers(sent: Sent[]): Partial<Api> {
   return {
     downloadZip: async (facts, options, credential) => {
@@ -991,9 +799,7 @@ function transfers(sent: Sent[]): Partial<Api> {
   };
 }
 
-/** An account with one performance location and one idle agent in it: enough
- *  to reach step 3 with the buttons enabled. `extra` is what the test under way
- *  adds -- the two bundle routes, which nothing else on this page calls. */
+/** One performance location with one idle agent: enough to reach step 3. */
 function perfAccount(extra: Partial<Api> = {}) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -1042,9 +848,7 @@ async function atDownloadStep() {
 
 test("a slow facts answer for the previous location never configures the next one",
   async () => {
-    // Pick one location, then another before the first one's facts arrive. The
-    // first answer landing last used to set facts for a location nobody had
-    // selected any more, and the preview generated with its images.
+    // Pick one location, then another before the first one's facts arrive.
     const first = deferred<Facts>();
     const second = deferred<Facts>();
     const generatedFor: string[] = [];
@@ -1089,39 +893,22 @@ test("downloading sends the configured bundle for the selected agent, and rotate
     expect(sent[0].facts).toMatchObject({ harbor_id: "h-perf" });
     expect(sent[0].options).toMatchObject({
       namespace: "blazemeter", ship_id: "s-1" });
-    // The default, and the whole of #64: reading a bundle must not revoke the
-    // credential the deployed agent is running on. Asserted on the record the
-    // request is made of, so there is no boolean left for the button to
-    // re-apply and no second place it could be re-applied differently.
+    // Reading a bundle must not revoke the deployed agent's credential.
     expect(sent[0].credential).toEqual({ rotate_token: false });
 
-    // Nothing is said about the credential, because nothing happened to it.
-    // Core still answers with its own sentence -- "nothing was issued" -- and
-    // the page keeps it for the branch where something was: a line under every
-    // download reporting that the download was uneventful is what teaches
-    // people not to read the line. The rotated branch is asserted below.
+    // Nothing happened to the credential, so nothing is said about it.
     expect(screen.queryByText(/the AUTH_TOKEN you supplied/)).toBeNull();
   });
 
 test("a blank namespace and service account still download, carrying their markers",
   async () => {
-    // The bug this is here for: the step printed "namespace (<NAMESPACE>) and
-    // service_account_name (<SERVICE_ACCOUNT_NAME>) are empty, so the bundle will
-    // carry those markers instead" and then disabled the button, because `ready`
-    // still required a non-empty service account name. That gate was written when
-    // `generate()` refused an empty one; a blank required field became its own
-    // marker, and nothing revisited the gate -- so the page contradicted itself
-    // and the reason was on no step.
-    //
-    // Driven through the form rather than from an options literal: what broke was
-    // the state a person reaches by clearing two boxes.
+    // Blank namespace and service account: the step warns, and the download
+    // still works. Driven through the form, by clearing the two boxes.
     const sent: Sent[] = [];
     render(<App api={perfAccount(transfers(sent))} />);
     fireEvent.click(await screen.findByText("Perf"));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
-    // The suggestion has to have landed before the boxes are cleared: picking a
-    // location suggests its functionality's namespace, and a clear that races it
-    // is undone by the suggestion rather than by the bug under test.
+    // The namespace suggestion lands first, or it would undo the clearing.
     const ns = await screen.findByPlaceholderText<HTMLInputElement>(/e\.g\. blazemeter/);
     await waitFor(() => expect(ns.value).toBe("blazemeter"));
     for (const box of [/e\.g\. blazemeter/, /e\.g\. crane/]) {
@@ -1129,12 +916,7 @@ test("a blank namespace and service account still download, carrying their marke
                        { target: { value: "" } });
     }
 
-    // The rail reports the state and nothing more. It read "needs attention" in
-    // red, which is what an unfinished group gets -- a fault the step wants
-    // fixed -- over a state this step allows and the download step lists as a
-    // gap. The marker is named under each box instead, where somebody can act
-    // on it: a rail carrying the string as well makes the one line that has to
-    // stay short into two.
+    // The rail reports the state in amber, without the marker string.
     const rail = screen.getByRole("link", { name: /Placement/ });
     await waitFor(() => expect(rail.textContent).toMatch(/not filled in/));
     expect(rail.textContent).not.toMatch(/<NAMESPACE>/);
@@ -1148,18 +930,13 @@ test("a blank namespace and service account still download, carrying their marke
     await waitFor(() => expect(button.disabled).toBe(false));
     fireEvent.click(button);
 
-    // ...and what it sends is the marked bundle, not a bundle with two empty
-    // strings in it: an empty service account name resolves to the namespace's
-    // `default` on a cluster, which is the failure the marker exists to stop.
+    // ...and what is sent carries the markers, not empty strings.
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0].options).toMatchObject({
       namespace: marker("namespace"),
       service_account_name: marker("service_account_name"),
     });
-    // The list stays on screen beside the button that just worked. It is the
-    // half that has to be true for allowing the download to be safe -- and it
-    // is folded shut, so the bar is what says so: the markers, named, in the
-    // fewest words that name them.
+    // The folded list stays beside the button, its bar naming the markers.
     const bar = screen.getByRole("button", { name: /Placeholders/ });
     expect(bar.textContent).toMatch(/<NAMESPACE>/);
     expect(bar.textContent).toMatch(/<SERVICE_ACCOUNT_NAME>/);
@@ -1170,19 +947,8 @@ test("a blank namespace and service account still download, carrying their marke
 
 test("a blank SV subdomain is a marker, not a disabled download",
   async () => {
-    // The last off-screen blocker on this step. `ready` carried `sv.ok`, which
-    // reads `svIncomplete`, which is true on a blank `sv_subdomain` or
-    // `sv_tls_secret` -- and those are the sv group's own `requires`, so the
-    // panel listed them as markers the bundle carries while the button beside
-    // it refused to produce that bundle.
-    //
-    // Measured on the server before it was removed here: generate() renders
-    // both, emitting <SV_SUBDOMAIN> and <SV_TLS_SECRET> into the ConfigMap.
-    // `_sv_cfg`'s refusal cannot fire after `fill_placeholders` has run.
-    //
-    // An SV location with nothing configured, which is the state the page puts
-    // itself in: the location's funcIds seed the backend, and neither of the
-    // two fields that backend requires has been typed.
+    // Blank SV subdomain and TLS secret: generate() renders the markers, so the
+    // download stays enabled. An SV location with nothing typed.
     const asked: Options[] = [];
     render(<App api={svAccount(asked)} />);
     fireEvent.click(await screen.findByText("Mocks"));
@@ -1213,11 +979,7 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
       .getByRole("switch"));
 
     fireEvent.click(await screen.findByRole("radio", { name: /Separate nodes/ }));
-    // The choice states its cost beside it: a dedicated pool without the
-    // location's engine override packs every engine onto the first node. Found
-    // by its own words rather than by "Location settings", which the engine-size
-    // statement on the performance card also names -- two sentences about the
-    // same field, each where its own decision is made.
+    // The separate-nodes choice states its cost beside it.
     expect(await screen.findByText(/autoscalers grow pools by what pods request/))
       .toBeTruthy();
 
@@ -1239,16 +1001,12 @@ test("the scheduling radio prescribes a dedicated engine pool, and the choice re
 
 test("the offered variables reach the bundle, each through the control its type has",
   async () => {
-    // #131's escape hatch, as a list rather than a name box. The point of
-    // driving it from here rather than from env.test.ts is the last mile: a
-    // boolean's third position writes nothing, a key/value table writes JSON,
-    // and "the control was pressed" and "the bundle carries it" are two claims.
+    // What each control writes reaches the bundle: a boolean's third position
+    // writes nothing, a key/value table writes JSON.
     const sent: Sent[] = [];
     render(<App api={perfAccount({
       ...transfers(sent),
-      // Both served tables. Unstubbed they reject, which is the honest "not
-      // read yet" -- and that state offers nothing and refuses nothing, so
-      // neither half below would be under test at all.
+      // Both served tables; unstubbed, nothing would be offered or refused.
       reservedEnv: async () => RESERVED_ENV,
       agentEnv: async () => AGENT_ENV,
     })} />);
@@ -1278,12 +1036,8 @@ test("the offered variables reach the bundle, each through the control its type 
 
 test("the catalogue is asked for over the funcIds the chosen location runs",
   async () => {
-    // #150. The scoping is the server's -- one answer for the CLI, the MCP
-    // server and this page -- so what has to hold here is that the page asks
-    // the right question, and that "nobody has said" reaches the route as an
-    // absent parameter rather than as an empty list. They are different reads:
-    // absent offers the reference whole, empty offers only what every location
-    // has a reader for.
+    // The page asks for the location's funcIds, and "nobody has said" is an
+    // absent parameter, not an empty list.
     const asked: (string[] | null | undefined)[] = [];
     render(<App api={perfAccount({
       reservedEnv: async () => RESERVED_ENV,
@@ -1299,12 +1053,8 @@ test("the catalogue is asked for over the funcIds the chosen location runs",
 
 test("a variable the location's catalogue leaves out is still on screen and still editable",
   async () => {
-    // The way #150 is most easily got wrong. Scoping is a filter on what is
-    // *offered*, never on what is carried: a profile written for a GUI
-    // location, or a location changed after the form was filled in, still holds
-    // the value and the bundle still writes it. So the name/value editor
-    // underneath keeps it -- a form denying a variable the ConfigMap has is the
-    // failure this whole area's rules are about.
+    // Scoping narrows what is offered, never what is carried: an out-of-scope
+    // variable stays editable in the name/value editor.
     const sent: Sent[] = [];
     render(<App api={perfAccount({
       ...transfers(sent),
@@ -1330,9 +1080,7 @@ test("a variable the location's catalogue leaves out is still on screen and stil
         { target: { files: [file] } });
     });
 
-    // ...and still on screen, by name, with the value the profile carried. The
-    // editor's own row states the count while it is closed, so nothing is
-    // silent about it either.
+    // ...on screen by name, with its value; the fold's summary counts it.
     expect(await screen.findByText(/Another variable by name/)).toBeTruthy();
     await waitFor(() => expect(screen.getByText("(1 set)")).toBeTruthy());
     fireEvent.click(screen.getByText(/Another variable by name/));
@@ -1354,12 +1102,8 @@ test("a variable the location's catalogue leaves out is still on screen and stil
 
 test("the environment area says where a variable it will not take is set instead",
   async () => {
-    // The other half of #150, and the reported complaint: "the list is missing
-    // kubernetes auto update". It is not missing -- the bundle writes it, off
-    // the `auto_update` option -- but that option is a tri-state inside a group
-    // about RBAC, so nothing on the page led from the name to the control. The
-    // area now states the whole reserved table with the owning option and the
-    // section holding it, which is what a browser's find can land in.
+    // A variable the bundle writes itself is listed with the option and section
+    // that set it.
     render(<App api={perfAccount({
       reservedEnv: async () => RESERVED_ENV,
       agentEnv: async () => AGENT_ENV,
@@ -1378,11 +1122,7 @@ test("the environment area says where a variable it will not take is set instead
 
 test("a name typed by hand is still refused with the option that owns it",
   async () => {
-    // The editor underneath the list, which is what stops a variable the
-    // catalogue does not carry being unreachable. Its one judgement is the same
-    // as before: a name the bundle already writes is refused on the row, in the
-    // sentence naming the option that owns it -- "set it there" is the whole
-    // answer, and a bare "that one is taken" is not.
+    // A reserved name typed by hand is refused, naming the owning option.
     render(<App api={perfAccount({
       reservedEnv: async () => RESERVED_ENV,
       agentEnv: async () => AGENT_ENV,
@@ -1400,12 +1140,7 @@ test("a name typed by hand is still refused with the option that owns it",
 
 test("an imported profile rewrites the environment rows rather than sitting under them",
   async () => {
-    // The rows are local state and the option is what they add up to, which is
-    // what stops a half-typed name flickering out of existence. Import is on
-    // the same step and writes the option from outside, so without a resync the
-    // rows go on showing variables the bundle no longer carries -- a form
-    // showing a variable no bundle has, which is the failure this area's own
-    // rules are otherwise about. See the `emitted` ref in EnvVars.
+    // Import writes the option from outside, and the rows resync to it.
     render(<App api={perfAccount()} />);
     fireEvent.click(await screen.findByText("Perf"));
     fireEvent.click(screen.getByRole("button", { name: /Configure/ }));
@@ -1438,11 +1173,8 @@ test("an imported profile rewrites the environment rows rather than sitting unde
 
 test("the configure step states the engine size the location implies, and edits nothing",
   async () => {
-    // The engine size is one figure and the location is where it is set
-    // (#132): generate derives the bundle's limits from the location's
-    // overrideCPU/overrideMemory, so the configure step carries a read-only
-    // statement -- no group, no switch, no fields -- naming the size, its
-    // source, and where to change it.
+    // The engine size is stated from the location's requests; there is nothing
+    // to edit on this step.
     const held = { ...loc("h-perf", "Perf",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
       overrideCPU: 1, overrideMemory: 4096 };
@@ -1484,11 +1216,7 @@ test("a location holding no engine requests is stated as the default, never blan
 
 test("a location running two engine functionalities states the engine size once",
   async () => {
-    // One agent, one KUBERNETES_RESOURCES_LIMITS pair, one statement (#149).
-    // Both cards run engines -- a GUI Functional agent carries the same
-    // apm/crane/v4 the performance one does, plus the grid -- so a per-card
-    // `is this the sizing functionality` test would print the size twice and
-    // read as two settings.
+    // Two engine functionalities, one limit pair: stated once.
     const both = { ...loc("h-perf", "Perf",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
       funcIds: ["performance", "functionalGui"] };
@@ -1517,11 +1245,7 @@ test("a location running two engine functionalities states the engine size once"
 
 test("a GUI Functional location is told its engine size on its own card",
   async () => {
-    // The statement used to be pinned to the performance card, and a location
-    // that runs GUI Functional and not Performance has none -- so a bundle
-    // carrying engine limits said nothing about them anywhere. A GUI agent
-    // carries the taurus engine too (apm, crane, v4, plus doduo and a browser),
-    // which is what makes "engines run at" true of it.
+    // A GUI-only location states it on its own card.
     const gui = { ...loc("h-gui", "Gui",
       [{ id: "s-1", name: "agent-1", state: "IDLE" }]),
       funcIds: ["functionalGui"] };
@@ -1550,12 +1274,7 @@ test("a GUI Functional location is told its engine size on its own card",
 
 test("a location that runs no engine is not told what its engines run at",
   async () => {
-    // An SV-only agent carries crane, group-gateway and service-mock and no
-    // taurus engine at all, read off /versions. Its pod limits are still
-    // carried and still sent -- crane applies them to every pod it creates --
-    // but "engines run at 2 CPU / 8Gi" is not a true sentence about it, and
-    // what those limits should be for a mock is #154's to say. So nothing is
-    // stated rather than the wrong thing.
+    // An SV-only agent runs no engine, so no engine size is stated.
     render(<App api={svAccount([])} />);
 
     fireEvent.click(await screen.findByText("Mocks"));
@@ -1567,32 +1286,16 @@ test("a location that runs no engine is not told what its engines run at",
     expect(screen.queryByText(/per engine/)).toBeNull();
   });
 
-// Rotating from this step is gone with its box. It was the second way to mint
-// a credential -- step 1 has the first, on the agent it belongs to and beside
-// the sentence saying what it kills -- and two ways to do one irreversible
-// thing is one more than the page can keep honest. What is left to assert is
-// that the download carries the plan, which the test above does, and that the
-// plan never rotates, which token.test.ts does over every branch.
 
-// Saving to a folder was the other route, and the pair had a test each for
-// reading one credential plan -- which is what stopped them disagreeing about
-// what a click cost (#64). The button is gone from this step (the CLI's -o and
-// the MCP server's opl_bundle write folders now), so there is one route, and
-// what is left to assert is that it carries the plan: the two tests above.
 
-// -- step 1: the two lists, and the two forms that write to the account -------
-// A location holds agents and both are picked from a list, so both are driven
-// here rather than only typechecked. The filter is part of it: a real account
-// has 171 locations and the box only appears above eight, so a list that stops
-// filtering is a list nobody can get to the bottom of.
+// -- step 1: the two lists, and the forms that write to the account -----------
 
 /** One location in a workspace, as the listing carries it. */
 const loc = (id: string, name: string, ships: Ship[] = []): Location =>
   ({ id, name, funcIds: ["performance"], slots: 1, ships });
 
-/** An account holding exactly `locations`, and nothing else of interest. The
- *  list is the fixture's own array, so a test can have a create call add to it
- *  the way the account would. */
+/** An account holding exactly `locations`. The list is the fixture's own array,
+ *  so a create can add to it. */
 function accountOf(locations: Location[], extra: Partial<Api> = {}) {
   return fakeApi({
     keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -1622,17 +1325,10 @@ function accountOf(locations: Location[], extra: Partial<Api> = {}) {
       runs_engine: true,
     }],
     svConstants: async () => ({ func_ids: [], ingress_types: [], backends: {} }),
-    // An account whose agents were all made somewhere else, which is the
-    // ordinary one: the server has minted nothing this session. Stubbed rather
-    // than left to fakeApi's rejection because an empty store and an
-    // unreachable one are different answers and the page says different things
-    // about them -- the tests that mean the second say so themselves.
+    // The server has minted nothing this session. Stubbed rather than left to
+    // reject, because "holds none" and "could not ask" read differently.
     mintedToken: async () => ({ auth_token: null }),
-    // generate.IGNORED_BY_FORMAT as the page receives it, from the one copy of
-    // that table (see fixtures.ts -- this used to be a second, shorter slice,
-    // which is how a page test comes to assert against a table the unit test
-    // would call incomplete). Every format is stated, the two that drop nothing
-    // included: `{}` is an answer and a missing entry is not.
+    // The one copy of IGNORED_BY_FORMAT (fixtures.ts), every format stated.
     ignoredOptions: async () => IGNORED_BY_FORMAT,
     // plan.SIZING_MODELS, from the same one copy: the sizing card renders a
     // field group per model, so a page with no table has no fields.
@@ -1686,10 +1382,8 @@ test("a long list is filtered, and the row picked is the one whose facts are rea
   });
 
 // -- Refresh -----------------------------------------------------------------
-// stale.ts is tested as plain data. What needs a page is the ordering and the
-// ownership: that the cache is dropped *before* the re-read (or the button is
-// served the same list it was pressed about), and that the re-read writes the
-// list and leaves everything else where it was.
+// The cache is dropped before the re-read, and the re-read writes the list and
+// nothing else.
 
 test("Refresh drops the server's cache before re-reading, or it re-reads nothing",
   async () => {
@@ -1708,9 +1402,7 @@ test("Refresh drops the server's cache before re-reading, or it re-reads nothing
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     expect(await screen.findByText("Region 1")).toBeTruthy();
-    // The order is the whole point. The server holds a location list for
-    // CACHE_TTL_S, so a re-read on its own comes back byte-identical and the
-    // click looks exactly like one that worked.
+    // Order matters: without the drop the re-read is served from the cache.
     expect(calls).toEqual(["locations", "refresh", "locations"]);
   });
 
@@ -1748,9 +1440,7 @@ test("a location that has gone is said, and nothing else on the page moves",
 
 test("a refresh that fails leaves the list it could not replace on screen",
   async () => {
-    // The rule the whole page keeps: a read that failed has said nothing about
-    // what the account holds, and blanking here would answer "could not read"
-    // with "there is nothing there".
+    // A failed read leaves the list as it was.
     render(<App api={accountOf([loc("h-0", "Region 0")], {
       refresh: async () => { throw new Error("BlazeMeter is unreachable"); },
     })} />);
@@ -1797,20 +1487,14 @@ test("creating a location sends what the form holds, and selects what comes back
       name: "Frankfurt", account_id: 1, workspace_id: 10,
       func_ids: ["performance"], slots: 4, threads_per_engine: 250,
     });
-    // Selected, so the agent section below is about the location just made --
-    // which is the only reason anyone makes one here. It is on screen twice by
-    // then (its row, and the path line under the step), so the read of the
-    // account is what this asserts on.
+    // Selected: the new location's facts are read.
     await waitFor(() => expect(asked).toEqual(["h-new"]));
     expect(screen.getAllByText("Frankfurt").length).toBeGreaterThan(0);
   });
 
 test("a GUI Functional location says its slot minimum before Create is pressed",
   async () => {
-    // #159. BlazeMeter refuses the create outright below two, and `slots`
-    // defaults to one, so this form's own default was a 400 on every GUI
-    // Functional location it made. The rule is stated on the form, not only
-    // after the account has thrown the write away.
+    // GUI Functional needs at least two slots; the form says so before Create.
     const created: unknown[] = [];
     render(<App api={accountOf([loc("h-0", "Region 0")], {
       funcIdVocabulary: async () => vocabulary([
@@ -1831,9 +1515,7 @@ test("a GUI Functional location says its slot minimum before Create is pressed",
     expect(screen.queryByText(/needs at least/)).toBeNull();
 
     fireEvent.click(screen.getByLabelText("GUI Functional"));
-    // Said as soon as the box is ticked, whether or not the number is wrong
-    // yet -- the constraint is what the form is for, and a rule that only
-    // speaks up after it has taken Create away reads as the form breaking.
+    // Said as soon as the box is ticked.
     expect(await screen.findByText(/GUI Functional needs at least 2/)).toBeTruthy();
     // ...and while the default stands, Create is held with BlazeMeter's own
     // sentence rather than a paraphrase of it.
@@ -1884,14 +1566,9 @@ test("creating an agent in an empty location keeps the credential it is issued w
     ).toHaveProperty("value", "tok-from-the-account"));
   });
 
-// -- ...and keeping it, which is the other half of the same moment -----------
-// The credential is captured where it is free and the browser was the only copy
-// of it, so a refresh threw it away for good: no API reads an AUTH_TOKEN back,
-// and the next bundle silently carried a placeholder for an agent this app had
-// created a minute earlier (#123). What the server remembers is what these
-// drive, and every one of them asserts on the *bundle request* rather than on
-// the field -- a field showing a value the request does not send is the failure
-// being replaced, not evidence against it.
+// -- ...and keeping it --------------------------------------------------------
+// A token this app minted comes back from the server after a reload. Asserted
+// on the bundle request, not on the field.
 
 /** The bundle request most recently sent, or an empty one before the first. */
 const last = (sent: Options[]): Options => sent[sent.length - 1] ?? {};
@@ -1936,26 +1613,20 @@ test("an agent this app created keeps its credential across a refresh",
     await waitFor(() => expect(
       asked.some((o) => o.auth_token === "tok-at-creation")).toBe(true));
 
-    // The refresh, and what it may not carry the token in: session.strip is the
-    // whole safety argument and this change does not touch it, so the value has
-    // to come back from the server or not at all.
+    // The session snapshot never holds the token; it comes back from the server.
     cleanup();
     expect(JSON.stringify(sessionStorage)).not.toContain("tok-at-creation");
     asked.length = 0;
     render(<App api={api} />);
 
-    // Nothing typed, and the bundle carries the real credential rather than the
-    // placeholder it used to fall to.
+    // Nothing typed, and the bundle carries the real credential, not a marker.
     await waitFor(() => expect(last(asked)).toMatchObject({
       ship_id: "s-new", auth_token: "tok-at-creation" }));
   });
 
 test("a credential is only ever found under the agent it was minted for",
   async () => {
-    // Two agents in one location, which is what a store holding "the token" and
-    // one holding a token per ship cannot both survive. The page used to keep
-    // exactly one and clear it whenever the target moved -- the same guarantee,
-    // held together by every caller remembering to let go.
+    // Two agents in one location: each token is found only under its own agent.
     const listing = [loc("h-0", "Perf", [
       { id: "s-1", name: "agent-1", state: "IDLE" },
       { id: "s-2", name: "agent-2", state: "IDLE" },
@@ -2001,9 +1672,7 @@ test("a token typed by hand beats the remembered one, and it does not come back"
 
     fireEvent.change(field, { target: { value: "tok-typed" } });
     await waitFor(() => expect(last(asked).auth_token).toBe("tok-typed"));
-    // Evicted at the server, not merely out-ranked in the page: the page cannot
-    // keep the pasted one (session.strip), so a remembered copy left in place
-    // is one that silently replaces it on the next load.
+    // Evicted at the server too, or the remembered copy would come back on reload.
     await waitFor(() => expect(forgotten).toEqual(["s-1"]));
 
     cleanup();
@@ -2017,11 +1686,7 @@ test("a token typed by hand beats the remembered one, and it does not come back"
 
 test("an agent this app could not be asked about claims nothing about its token",
   async () => {
-    // The distinction this codebase keeps everywhere: an agent nobody minted a
-    // token for and an agent nobody could be asked about are different answers,
-    // and only the first may say a credential cannot be read back. Read as the
-    // same thing, the page tells somebody their own agent's token is
-    // unrecoverable while the server is holding it.
+    // "Could not ask" must not say a token cannot be read back.
     const listing = [loc("h-0", "Perf", [
       { id: "s-1", name: "agent-1", state: "IDLE" }])];
     render(<App api={accountOf(listing, {
@@ -2032,14 +1697,81 @@ test("an agent this app could not be asked about claims nothing about its token"
     expect(await screen.findByText(/could not ask this app/)).toBeTruthy();
     expect(screen.queryByText(/cannot be read back/)).toBeNull();
 
-    // ...where an account that answered gets the sentence that was always here.
-    // A fresh page, not a reload: the snapshot would restore the selection and
-    // this half is about making the same one.
+    // ...while an answered "none" does. A fresh page, not a reload.
     cleanup();
     sessionStorage.clear();
     render(<App api={accountOf(listing)} />);
     fireEvent.click(await screen.findByText("Perf"));
     expect(await screen.findByText(/cannot be read back/)).toBeTruthy();
+  });
+
+test("a regenerated token answering after the agent changed lands on neither",
+  async () => {
+    const listing = [loc("h-0", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])];
+    const issued = deferred<{ auth_token: string }>();
+    const asked: Options[] = [];
+    render(<App api={mintingAccount(listing, {}, asked, {
+      issueToken: () => issued.promise,
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByText("agent-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate token" }));
+    fireEvent.click(screen.getByRole("button", { name: "I'm sure" }));
+    expect(await screen.findByText("Regenerating…")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("agent-2"));
+    await waitFor(() => expect(last(asked).ship_id).toBe("s-2"));
+    await act(async () => {
+      issued.settle({ auth_token: "tok-for-agent-1" });
+      await issued.promise;
+    });
+
+    expect(screen.getByPlaceholderText(/paste the token this agent was created with/))
+      .toHaveProperty("value", "");
+    expect(screen.queryByText("Regenerated")).toBeNull();
+    expect(asked.some((o) => o.auth_token === "tok-for-agent-1")).toBe(false);
+  });
+
+test("a location created after the workspace changed is not selected in the new one",
+  async () => {
+    const created = deferred<Location>();
+    const read: number[] = [];
+    const api = accountOf([loc("h-0", "Perf")], {
+      workspaces: async () => [{ id: 10, name: "Alpha workspace" },
+                               { id: 11, name: "Beta workspace" }],
+      locations: async (ws: number) => {
+        read.push(ws);
+        return ws === 10 ? [loc("h-0", "Perf")] : [loc("h-9", "Beta only")];
+      },
+      createLocation: () => created.promise,
+    });
+    render(<App api={api} />);
+    await screen.findByText("Perf");
+
+    fireEvent.click(screen.getByRole("button", { name: "+ New location" }));
+    fireEvent.change(screen.getByLabelText(/Name \(created in workspace/),
+                     { target: { value: "New one" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // Change workspace while the create is out.
+    fireEvent.click(screen.getByTitle(/the key everything is read with/));
+    fireEvent.focus(await screen.findByLabelText(/^Workspace/));
+    fireEvent.mouseDown(await screen.findByText("Beta workspace"));
+    expect(await screen.findByText("Beta only")).toBeTruthy();
+
+    await act(async () => {
+      created.settle(loc("h-new", "New one"));
+      await created.promise;
+    });
+    // The create re-reads the workspace it was made in; let that land.
+    await waitFor(() => expect(read.filter((w) => w === 10).length).toBe(2));
+    await act(async () => {});
+    expect(screen.queryByText("New one")).toBeNull();
+    expect(screen.getByText("Beta only")).toBeTruthy();
   });
 
 test("a lone agent that is reporting is not auto-picked, and says why when it is",
@@ -2048,10 +1780,7 @@ test("a lone agent that is reporting is not auto-picked, and says why when it is
     // this location and the ones above.
     const live = { id: "s-live", name: "agent-live", state: "IDLE",
                    lastHeartBeat: Date.now() / 1000 - 10 };
-    // Named for the case rather than "Busy": the page prints a location's name
-    // in the list and again in the header once one is chosen, so a name that is
-    // also a word the page uses made `findByText` ambiguous the moment React 19
-    // had both on screen at once.
+    // Named so the text is not also a word the page uses.
     render(<App api={accountOf([loc("h-0", "Reporting", [live])])} />);
 
     fireEvent.click(await screen.findByText("Reporting"));
@@ -2093,10 +1822,7 @@ test("a second click on a location's header folds it, and chooses nothing else",
       screen.queryByLabelText("Dublin settings")).toBeNull());
     expect(header.getAttribute("aria-expanded")).toBe("false");
 
-    // ...and that is all it does. The location is still the one being generated
-    // for -- its agents are still listed, the path line still names it, and no
-    // second read of the account was provoked. Folding a panel that changes
-    // what the bundle is for would be a strange way to hide some text.
+    // ...and that is all: the location stays chosen and nothing is re-read.
     expect(screen.getByText("agent-live")).toBeTruthy();
     const bar = screen.getByText("account").parentElement!.parentElement!;
     expect(bar.textContent).toMatch(/location.*Dublin/);
@@ -2112,10 +1838,7 @@ test("the path under the flow starts at the account, not at the location",
     fireEvent.click(await screen.findByText("Dublin"));
     fireEvent.click(await screen.findByText("agent-live"));
 
-    // All four, in order. The account and the workspace are chosen at the foot
-    // of the drawer, which is shut for most of a session, so this line is the
-    // only place on screen that says whose account a bundle is being built for
-    // -- and two customers' bundles differ in exactly that.
+    // All four, in order: the only place on screen saying whose account it is.
     const bar = screen.getByText("account").parentElement!.parentElement!;
     await waitFor(() => expect(bar.textContent).toMatch(
       /account.*Alpha.*workspace.*Alpha workspace.*location.*Dublin.*agent.*agent-live/));
@@ -2123,16 +1846,9 @@ test("the path under the flow starts at the account, not at the location",
 
 test("the account menu is reachable on the view whose subject is the account",
   async () => {
-    // Layout, so the assertion is on the classes that do it -- jsdom lays
-    // nothing out, exactly as the clipping test below.
-    //
-    // The shell was `min-h-screen`, so the *document* grew to whatever the view
-    // rendered and the `overflow-y-auto` pane never had a bounded parent to
-    // scroll inside. On a real account (166 workspaces) Account capacity is
-    // 11,000px tall; the drawer stretched to match and the account menu at its
-    // foot went that far below the fold -- the control that switches account,
-    // out of reach on the account rollup. Generate hid it because StepFlow pins
-    // itself to `100vh - 6.75rem` and scrolls its own step.
+    // Layout, asserted on the classes (jsdom lays nothing out): the shell is
+    // screen-height and the pane beside the drawer scrolls, so the account menu
+    // at the drawer's foot stays reachable on a tall view.
     render(<App api={accountOf([loc("h-0", "Dublin")])} />);
 
     const capacityTab = await screen.findByRole<HTMLButtonElement>(
@@ -2154,11 +1870,8 @@ test("the account menu is reachable on the view whose subject is the account",
   });
 
 test("the workspace picker is not clipped by the row it grows into", async () => {
-  // A CSS clip, which is the one kind of breakage nothing else here can see:
-  // the row animates by growing inside `overflow-hidden`, and the picker's list
-  // hangs out of that box, so it was cut to the height of the field -- one row
-  // of a 166-workspace account. jsdom does no layout, so the assertion is on
-  // the class that does the clipping rather than on anything measured.
+  // A CSS clip, asserted on the class (jsdom lays nothing out): the growing row
+  // must not cut off the picker's list once it has grown.
   vi.useFakeTimers();
   render(<App api={accountOf([loc("h-0", "Dublin")])} />);
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
@@ -2183,9 +1896,7 @@ test("the workspace picker is not clipped by the row it grows into", async () =>
 
 test("a refresh keeps the confirmations, and keeps them attached to what was confirmed",
   async () => {
-    // A refresh is not a decision. Asking somebody to confirm again what they
-    // already confirmed is asking them to repeat themselves to prove the
-    // browser was listening.
+    // A refresh keeps the confirmations.
     const listing = [loc("h-perf", "Perf", [
       { id: "s-1", name: "agent-1", state: "IDLE" },
       { id: "s-2", name: "agent-2", state: "IDLE" },
@@ -2205,10 +1916,7 @@ test("a refresh keeps the confirmations, and keeps them attached to what was con
     await waitFor(() => expect(screen.getByRole<HTMLButtonElement>(
       "button", { name: /Next/ }).disabled).toBe(false));
 
-    // ...and it is still a confirmation *of an agent*. Restored beside a
-    // different one -- the location's list changed under it, or the snapshot
-    // is older than the choice -- it does not answer for this pairing. Stored
-    // as a flag it would have, which is the whole reason it is not one.
+    // ...but only for the agent that was confirmed.
     cleanup();
     sessionStorage.clear();
     session.save(snapshot("s-2"));
@@ -2230,10 +1938,7 @@ test("nothing is written back over a saved session until the restore has resolve
       plan: EMPTY_PLAN_INPUTS, sizings: DEFAULT_SIZINGS,
     });
 
-    // The key check is the last thing the mount effect waits on. Held open,
-    // it is the refresh this guard was written for: the server had not
-    // answered, the page saved the empty state it was about to restore *from*,
-    // and every selection was gone for good.
+    // The key check is held open: nothing may be saved before it resolves.
     const key = deferred<Awaited<ReturnType<Api["keyStatus"]>>>();
     const listing = [
       loc("h-0", "Region 0"),
@@ -2243,15 +1948,10 @@ test("nothing is written back over a saved session until the restore has resolve
       keyStatus: () => key.promise,
     })} />);
 
-    // The options are back on screen before the connection resolves -- which is
-    // the ordering, not an accident of it: the location list has to arrive
-    // already filtered to the restored workspace.
+    // The options are restored before the connection resolves.
     const ns = await screen.findByPlaceholderText("e.g. blazemeter");
     expect(ns).toHaveProperty("value", "restored-ns");
-    // ...and the snapshot they came from is untouched. None of these four is
-    // page state yet -- they are still waiting for the account to confirm the
-    // things they name still exist -- so anything written now writes nulls
-    // over them.
+    // ...and the snapshot's four ids are untouched while none is confirmed.
     expect(session.load()).toMatchObject({
       accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
     });
@@ -2261,16 +1961,12 @@ test("nothing is written back over a saved session until the restore has resolve
       default_account_id: 1, key_id: "key-1",
     });
 
-    // Only now does the page write. Asserted with an edit on top of the
-    // restored ids, so this cannot pass by nothing having been written at all:
-    // the snapshot has to hold both the typed value and the four ids.
+    // Once it resolves the page writes: the typed value and the four ids.
     fireEvent.change(ns, { target: { value: "typed-ns" } });
     await waitFor(() => expect(session.load()).toMatchObject({
       accountId: 1, workspaceId: 10, harborId: "h-dublin", shipId: "s-1",
       step: 1, options: { namespace: "typed-ns" },
-      // Connected, nothing is declared -- and nothing is written down that
-      // could pin the next load to a functionality the account never said. The
-      // functionality here is derived from the location's funcIds every time (#118).
+      // Connected, nothing is declared.
       declaredFunctionalities: [],
     }));
   });
@@ -2322,10 +2018,7 @@ test("a key check that could not be made keeps the ids, and a later connect re-s
     fireEvent.change(form.getByLabelText("Secret"), { target: { value: "sec" } });
     fireEvent.click(form.getByRole("button", { name: "Connect" }));
 
-    // The location comes back, and the agent inside it. Read on step 1, which
-    // the restored step is not: both are on screen twice there -- in their
-    // list, and in the summary of what the step is for -- which is what a
-    // selection looks like here, rather than an id in storage.
+    // The location comes back, and the agent inside it, on step 1.
     fireEvent.click(
       await screen.findByRole("button", { name: /Capacity & agent/ }));
     await waitFor(() =>
@@ -2349,36 +2042,23 @@ test("an id the account no longer has is written away once the account has said 
     render(<App api={accountOf([loc("h-0", "Region 0")])} />);
 
     expect(await screen.findByText("Region 0")).toBeTruthy();
-    // Both ids go: this is the answer that refutes them, and the agent belonged
-    // to the location that is gone. The account and workspace are still there
-    // and stay -- being kept is not being kept indiscriminately.
+    // Both ids go, the agent with its location; the account and workspace stay.
     await waitFor(() => expect(session.load()).toMatchObject({
       accountId: 1, workspaceId: 10, harborId: null, shipId: null,
     }));
   });
 
-// -- and the one input that decides the bundle and did not survive it (#118) --
-// In manual entry the functionality radio is not a view over a location: it is the
-// declaration. It decides the funcId the typed identity is said to run, which
-// decides the facts, which decides the images the bundle carries. Everything
-// else the page needs to rebuild that identity already survived a refresh --
-// the typed harbor id, the typed ship id, the options -- and this did not, so a
-// reload fell back to the first served functionality and a Service virtualization
-// identity came back a performance one.
-//
-// Driven through the page and asserted on the *request*, not on which radio
-// looks selected: what went wrong is the facts that were gathered, and a radio
-// agreeing with itself would have looked the same either way.
+// -- manual entry's declaration survives a refresh ---------------------------
+// It decides the funcIds the facts are gathered for, so it is asserted on the
+// facts request.
 
 /** A well-formed harbor id and ship id: manualComplete checks the shape, and
  *  nothing is requested for values that are not one. */
 const TYPED = { harbor: "0a1b2c3d4e5f60718293a4b5",
                 ship: "6c5b4a39281706f5e4d3c2b1" };
 
-/** The manual-entry page: no key at all -- manual entry is for an account
- *  nobody here can reach -- with both functionalities and the two funcIds that pick
- *  different images served. Records the funcIds of every facts request, which
- *  is where the declaration ends up. */
+/** The manual-entry page with no key, both functionalities served. Records the
+ *  funcIds of every facts request. */
 function manualPage(asked: string[][], generated: Options[] = [],
                     extra: Partial<Api> = {}) {
   return twoFunctionalityAccount(generated, {
@@ -2392,13 +2072,8 @@ function manualPage(asked: string[][], generated: Options[] = [],
     manualFacts: async (b) => {
       asked.push(b.func_ids);
       return {
-        // The marker for an id nobody typed, which is what `facts.manual` does
-        // on the server: neither id is required, and the *facts* are where a
-        // blank one becomes `<HARBOR_ID>` / `<SHIP_ID>`. Mirrored here rather
-        // than left as "" because the page reads its agent out of this answer,
-        // and a fake that returned the blank back would have the page behave as
-        // though there were no agent at all -- which is the one thing the real
-        // server never says here.
+        // As the server does, a blank id becomes its marker in the facts; the
+        // page reads its agent out of this answer.
         facts: { harbor_id: b.harbor_id || marker("harbor_id"),
                  func_ids: b.func_ids,
                  ships: [{ id: b.ship_id || marker("ship_id"),
@@ -2422,11 +2097,7 @@ async function declareManually() {
 }
 
 // -- ...and the identity nobody has yet --------------------------------------
-// The case: a customer whose private location has not been created, who needs
-// the manifests to get one approved. Both ids used to stop the page -- there is
-// nothing to generate for, on the reading that an id is always available to
-// whoever is asking -- and BlazeMeter has not issued either until somebody
-// creates the location, so the bundle carries the markers and says so.
+// A location not yet created has no ids; the bundle carries the markers.
 
 test("manual entry generates for a location that does not exist yet",
   async () => {
@@ -2435,17 +2106,11 @@ test("manual entry generates for a location that does not exist yet",
     fireEvent.click(await screen.findByRole(
       "radio", { name: /Enter values manually/ }));
 
-    // Nothing typed at all, and the bundle is still generated -- for the agent
-    // the marker stands in for. Asserted on the request rather than on the tick
-    // beside the step: what matters is that a bundle was asked for, and for
-    // which identity.
+    // Nothing typed, and a bundle is still generated.
     await waitFor(() => expect(generated.length).toBeGreaterThan(0));
     expect(generated[generated.length - 1].ship_id).toBe(marker("ship_id"));
 
-    // ...and the form says which fields the bundle will carry a marker for, in
-    // the sentence the configure step's blank fields already get. All three,
-    // here: somebody looking at three empty boxes is owed one answer about
-    // them.
+    // ...and the form names the blank fields, all three.
     const warning = await screen.findByText(/are empty, so the bundle will carry/);
     expect(warning.textContent).toMatch(/harbor_id \(<HARBOR_ID>\)/);
     expect(warning.textContent).toMatch(/ship_id \(<SHIP_ID>\)/);
@@ -2454,21 +2119,11 @@ test("manual entry generates for a location that does not exist yet",
 
 test("a bundle with nothing left blank says so, and offers nothing to open",
   async () => {
-    // The other end of the same panel. A finished bundle used to get silence --
-    // the four warning cards simply were not rendered -- and silence reads
-    // exactly like a step that has not been reached. So the section states it,
-    // with the tick every other finished thing on this page gets.
-    //
-    // **And it is not a fold.** Given no `open`/`onToggle` a `SubSection` is
-    // permanently open, so an empty one drew a blank padded strip under the
-    // header; given them it would be a chevron over nothing. Both are a panel
-    // claiming to hold something. Asserted as "there is no button here",
-    // because that is the shape either mistake takes.
+    // A finished bundle says so, as a bar rather than an empty fold: there is
+    // no button here.
     const generated: Options[] = [];
     render(<App api={manualPage([], generated, {
-      // The one difference from the fixture's default: a bundle that carries
-      // the credential. `placeholder` is what every other manual test wants,
-      // and it is the branch that puts <AUTH_TOKEN> in the list.
+      // A bundle that carries the credential.
       generate: async (_facts: unknown, options: Options) => {
         generated.push(options);
         return { files: [], token: { branch: "given" as const,
@@ -2486,9 +2141,7 @@ test("a bundle with nothing left blank says so, and offers nothing to open",
 
 test("the empty identity boxes show the marker the bundle will carry",
   async () => {
-    // The hint in an empty box is the string that ends up in the file, not a
-    // sample id. A sample was what they showed, which reads as an example of
-    // what to type -- true, and silent about what happens if nothing is typed.
+    // An empty box shows the marker it becomes, not a sample id.
     render(<App api={manualPage([])} />);
     fireEvent.click(await screen.findByRole(
       "radio", { name: /Enter values manually/ }));
@@ -2502,13 +2155,7 @@ test("the empty identity boxes show the marker the bundle will carry",
 
 test("declaring a functionality in manual entry suggests its namespace",
   async () => {
-    // Connected, picking a *location* that runs virtual services suggests
-    // blazemeter-sv. Manually there is no location to read it off -- the radio
-    // is how it is said -- and the suggestion used to arrive through a facts
-    // read-back that fired when the ship id was finished being typed. Not
-    // reading the declaration back out of the facts it produced is the whole of
-    // #118, so the suggestion belongs on the control that declares, which is
-    // also where the connected page puts it: on the act, not on a re-read.
+    // Declaring a functionality suggests its namespace, on the act of declaring.
     const generated: Options[] = [];
     render(<App api={manualPage([], generated)} />);
     await declareManually();
@@ -2527,9 +2174,7 @@ test("a functionality declared in manual entry is what the facts are gathered "
     render(<App api={manualPage(asked, generated)} />);
     await declareManually();
 
-    // The declaration: this identity runs virtual services. In manual mode the
-    // radio is the control rather than a chip, because there is no account to
-    // read the answer off.
+    // In manual mode the checkbox is the declaration.
     fireEvent.click(await within(document.getElementById("cfg-f-mockServices")!)
       .findByLabelText("Enabled"));
     // ...and it is configured as one, so the reload has something of the
@@ -2548,46 +2193,23 @@ test("a functionality declared in manual entry is what the facts are gathered "
     cleanup();
     render(<App api={manualPage(asked, generated)} />);
 
-    // A request of its own, rather than the one still on the list from before
-    // the reload -- and then long enough for a late one to land behind it. The
-    // facts effect is debounced and the vocabulary it needs is served, so a
-    // second request under a different declaration is exactly the shape of this
-    // failure.
+    // A request of its own, and time for a late one to land behind it.
     await waitFor(() => expect(asked.length).toBeGreaterThan(asBefore));
     await new Promise((r) => setTimeout(r, 400));
-    // The acceptance criterion, as the assertion. It was ["performance"]: the
-    // declaration was not in the snapshot, so the page fell back to the first
-    // served functionality and gathered another functionality's images for an identity
-    // nobody had re-declared.
+    // Gathered for the restored declaration.
     expect(asked.slice(asBefore)).toEqual([["mockServices"]]);
 
-    // The functionality's own options came back with it. Restored without the
-    // declaration they were cleared, correctly, by the patch that empties a
-    // functionality the location does not run -- the page had just been told it runs
-    // something else.
+    // Its options came back with it.
     const after = generated[generated.length - 1];
     expect(after.sv_ingress).toBe("nginx");
-    // ...and the namespace is the one that was saved. It is generated into
-    // every manifest, so a restore that suggests over it is a refresh changing
-    // the bundle by another route.
+    // ...and the saved namespace.
     expect(after.namespace).toBe(before.namespace);
   });
 
 test("a restored declaration waits for the vocabulary rather than being lost to it",
   async () => {
-    // The same failure by the other route, and the one a fast localhost hides.
-    // A declaration stands for a funcId, and until the vocabulary lands there
-    // is nothing to check the restored one against -- so the identity is
-    // gathered for no funcId at all, which must not be mistaken for an answer
-    // about what was declared. Read the wrong way round it falls to the first
-    // served functionality and the declaration is gone again, with the
-    // namespace suggestion following it.
-    //
-    // It was /api/func-ids that was deferred here, because a declaration used
-    // to be turned into a funcId through `changes_images`: two vocabularies had
-    // to have landed. Since #149 the declaration *is* the funcId and only the
-    // one list decides -- fewer ways to be outstanding, and the same rule about
-    // what an outstanding one may be read as.
+    // Until the vocabulary lands, a restored declaration cannot be checked; the
+    // identity is gathered for nothing meanwhile, and the declaration survives.
     const served = deferred<Awaited<ReturnType<Api["functionalities"]>>>();
     const asked: string[][] = [];
     session.save({
@@ -2602,9 +2224,7 @@ test("a restored declaration waits for the vocabulary rather than being lost to 
       functionalities: () => served.promise,
     })} />);
 
-    // The identity is gathered for nothing while that list is outstanding,
-    // which is fine -- and is exactly what must not be mistaken for an answer
-    // about what was declared.
+    // Gathered for nothing while the list is outstanding.
     await waitFor(() => expect(asked[asked.length - 1]).toEqual([]));
     served.settle([
       { id: "performance", label: "Performance", namespace: "blazemeter",
@@ -2640,29 +2260,20 @@ test("a restored declaration the vocabulary no longer offers is dropped, not sat
       ],
     })} />);
 
-    // Kept, it would name no funcId at all: the identity's facts would be
-    // gathered as though nothing had been declared, with no radio selected to
-    // say so or to change it with. So it is dropped, and the page lands where a
-    // fresh manual session lands.
+    // A declaration nothing serves is dropped: the page lands where a fresh
+    // manual session does.
     await waitFor(() => expect(asked.length).toBeGreaterThan(0));
     await new Promise((r) => setTimeout(r, 400));
     expect(asked[asked.length - 1]).toEqual(["performance"]);
     expect(card("performance").getByLabelText("Enabled"))
       .toHaveProperty("checked", true);
-    // ...and the namespace read back is still the one read back. Dropping the
-    // declaration is a decision about the declaration; rewriting a namespace
-    // that is generated into every manifest is not part of it.
+    // ...without rewriting the restored namespace.
     expect(screen.getByPlaceholderText("e.g. blazemeter"))
       .toHaveProperty("value", "blazemeter-sv");
   });
 
-// -- ...and the declaration is a list, because a location is (#151) -----------
-// One id was tenable while `performance` claimed four funcIds. Since #149 it is
-// not: a bundle declared for GUI functional alone carries `func_ids:
-// ['functionalGui']`, which is a location nobody would create, and 71 of the 168
-// locations in one real account run performance and GUI functional together.
-// The claim below that only a page can make is that the *list* survives a
-// refresh -- #118 exists because "the declaration is restored" was false once.
+// -- ...and the declaration is a list -----------------------------------------
+// That the whole list survives a refresh.
 
 /** The three covered functionalities, as the server serves them. */
 const THREE: Functionality[] = [
@@ -2682,9 +2293,7 @@ test("a declaration of two functionalities is what the facts are gathered for "
     render(<App api={api()} />);
     await declareManually();
 
-    // Performance is what a fresh manual session opens on; this adds the
-    // browser half, which is the pairing most of a real account's locations
-    // run. Both boxes are ticked at once, which a radio could not say.
+    // Performance plus GUI functional, both ticked.
     fireEvent.click(card("functionalGui").getByLabelText("Enabled"));
     await waitFor(() => expect(asked[asked.length - 1])
       .toEqual(["performance", "functionalGui"]));
@@ -2696,15 +2305,10 @@ test("a declaration of two functionalities is what the facts are gathered for "
     cleanup();
     render(<App api={api()} />);
 
-    // A request of its own, then long enough for a late one to land behind it:
-    // the facts effect is debounced and the vocabulary it needs is served, so a
-    // second request under a shorter declaration is exactly the shape of this
-    // failure.
+    // A request of its own, and time for a late one to land behind it.
     await waitFor(() => expect(asked.length).toBeGreaterThan(asBefore));
     await new Promise((r) => setTimeout(r, 400));
-    // The acceptance criterion, as the assertion. Restored as one id it was
-    // ["performance"], and the GUI half of the bundle -- its grid and its
-    // browser images -- was gathered for nothing.
+    // Both funcIds.
     expect(asked.slice(asBefore)).toEqual([["performance", "functionalGui"]]);
     expect(card("functionalGui").getByLabelText("Enabled"))
       .toHaveProperty("checked", true);
@@ -2712,11 +2316,7 @@ test("a declaration of two functionalities is what the facts are gathered for "
 
 test("a restored declaration keeps the members the vocabulary still offers",
   async () => {
-    // The check #118 added, now that there is more than one thing to check.
-    // Dropping the whole declaration over one withdrawn member would inflict
-    // that loss on the members that are still offered -- and dropping nothing
-    // would gather the identity's facts for a funcId nothing serves, with no
-    // box on screen to say so or to change it with.
+    // A withdrawn member is dropped and the rest kept.
     const asked: string[][] = [];
     session.save({
       sourceMode: "manual", accountId: null, workspaceId: null,
@@ -2737,18 +2337,15 @@ test("a restored declaration keeps the members the vocabulary still offers",
     expect(asked[asked.length - 1]).toEqual(["performance"]);
     expect(card("performance").getByLabelText("Enabled"))
       .toHaveProperty("checked", true);
-    // ...and the namespace that was read back is still the one read back:
-    // dropping a member is a decision about the declaration, and rewriting a
-    // name generated into every manifest is not part of it.
+    // ...without rewriting the restored namespace.
     expect(screen.getByPlaceholderText("e.g. blazemeter"))
       .toHaveProperty("value", "blazemeter");
   });
 
 test("declaring service virtualization clears the functionalities that run engines",
   async () => {
-    // The one opinion this page is entitled to, and only where a location is
-    // being decided. Crane applies one CPU/memory limit pair to every pod it
-    // creates, so engine sizing and mock throughput cannot be set apart.
+    // SV is declared alone where a location is being decided: crane applies one
+    // limit pair to every pod.
     const asked: string[][] = [];
     const generated: Options[] = [];
     render(<App api={manualPage(asked, generated, {
@@ -2761,9 +2358,7 @@ test("declaring service virtualization clears the functionalities that run engin
 
     fireEvent.click(card("mockServices").getByLabelText("Enabled"));
 
-    // The declaration, and therefore the images, are service virtualization's
-    // alone -- an SV agent carries crane, group-gateway and service-mock and no
-    // taurus engine at all.
+    // The declaration is SV's alone.
     await waitFor(() => expect(asked[asked.length - 1]).toEqual(["mockServices"]));
     expect(card("performance").getByLabelText("Enabled"))
       .toHaveProperty("checked", false);
@@ -2792,10 +2387,7 @@ test("the reason it is exclusive is on screen before anything is ticked",
 
 test("a location that already mixes the two is warned about, never blocked",
   async () => {
-    // The asymmetry (#147). Connected, the location exists and nothing here can
-    // un-mix it -- POST /api/locations/func-id was removed in #113, because
-    // changing what a location *is* belongs in BlazeMeter's own UI. So the
-    // bundle generates and the page says what the mixture costs.
+    // Connected, the location exists: the bundle generates and the page warns.
     session.save({
       sourceMode: "connect", accountId: 1, workspaceId: 10,
       harborId: "h-both", shipId: "s-1",
@@ -2828,10 +2420,7 @@ test("a location that already mixes the two is warned about, never blocked",
 // -- the live preview, and the two things that decide when it is asked -------
 
 test("the preview waits for the typing to stop", async () => {
-    // /api/generate renders the whole bundle, so a preview that ran per
-    // keystroke rendered it per keystroke. The folder field used to drive this
-    // test; it was removed with the Save button, and the debounce it was
-    // testing belongs to every option on the page -- so this types into one.
+    // One generate after typing stops, not one per keystroke.
     const asked: Options[] = [];
     render(<App api={perfAccount({
       generate: async (_facts: Facts, options: Options) => {
@@ -2895,9 +2484,7 @@ test("the status poll moves with the agent, and leaves no interval behind",
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
     const watch = await screen.findByRole("switch", { name: /Watch agent status/ });
 
-    // Installed before the click, because the click is what creates the
-    // interval -- afterwards it would be a real one, and vi would advance a
-    // clock nothing is using.
+    // Before the click, which creates the interval.
     vi.useFakeTimers();
     fireEvent.click(watch);
     // Read at once: ten seconds of "polling every 10s…" over an agent that is
@@ -2912,10 +2499,7 @@ test("the status poll moves with the agent, and leaves no interval behind",
     fireEvent.click(screen.getByText("agent-2"));
     expect(polled[polled.length - 1]).toBe("h-perf/s-2");
 
-    // The agent left behind is not still being polled beside the new one: one
-    // request per tick, for the agent on screen. An interval that outlives its
-    // effect keeps asking about an agent nothing is looking at, and every
-    // change of agent adds another.
+    // One request per tick, for the agent on screen only.
     await tick(20_000);
     expect(polled.filter((p) => p === "h-perf/s-1").length).toBe(3);
     expect(polled.filter((p) => p === "h-perf/s-2").length).toBe(3);
@@ -2935,9 +2519,7 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     })} />);
 
     fireEvent.click(await screen.findByText("Mocks"));
-    // The location's own funcIds are what make this an SV watch, and the seed
-    // that follows from them is what makes it configured -- so the poll reads
-    // the namespace as well as the heartbeat only once that has landed.
+    // The poll reads the namespace once the location's SV seed has landed.
     await waitFor(() =>
       expect(asked[asked.length - 1]?.sv_ingress).toBe("nginx"));
     fireEvent.click(screen.getByRole("button", { name: /Download & verify/ }));
@@ -2947,47 +2529,32 @@ test("the SV read travels by ref: typing in the namespace does not restart the p
     fireEvent.click(watch);
     expect(read).toEqual(["blazemeter"]);
 
-    // One second short of the next tick, the namespace is edited. Back rather
-    // than the stepper: the unfinished-group block on this step offers a
-    // "Configure" button of its own, and both go to the same place.
+    // One second before the next tick, the namespace is edited.
     await tick(9_000);
     fireEvent.click(screen.getByRole("button", { name: /Back/ }));
     fireEvent.change(screen.getByPlaceholderText("e.g. blazemeter"),
                      { target: { value: "mocks-ns" } });
 
-    // Half a second later: nothing. A namespace in the dependency array tears
-    // the interval down and stands a new one up, which reads at once -- so the
-    // cluster would be read on every keystroke in the field.
+    // Nothing yet: the interval was not restarted by the edit.
     await tick(500);
     expect(read).toEqual(["blazemeter"]);
 
-    // The tick that was already due arrives on time, and reads what the field
-    // says now: the ref is what carries the new value into an interval that
-    // was never restarted.
+    // The due tick reads the new namespace, carried by the ref.
     await tick(1_000);
     expect(read).toEqual(["blazemeter", "mocks-ns"]);
   });
 
 // -- the sizing, and the location it lands on -------------------------------
-// The planner reaches nothing -- no key, no account, no cluster -- and that is
-// the requirement rather than a property: it is the question somebody asks
-// *before* they have any of it, which is why it is the first card of step 1
-// rather than a view beside the flow. The first test below is that claim, made
-// on a page nobody has connected. The second is the other half: what the
-// profile says is filled into a location's own fields, and the only thing that
-// reaches the account is Save.
+// The sizing works with nothing connected; a location's fields are filled from
+// it, and only Save reaches the account.
 
-/** A plan as core would answer it. The arithmetic is plan.py's and is tested
- *  there; what these two need is an answer that divides by the agents it was
- *  asked with, because that division is the whole reason a location re-asks. */
+/** A plan as core would answer it, divided by the agents it was asked with. */
 function planFor(body: {
   users?: string; agents?: string; vus_per_engine?: string;
   sizings?: { functionality: string; target: string; figure?: string }[];
 }): CapacityPlan {
   const agents = Math.max(Number(body.agents) || 1, 1);
-  // The card sends rows and the location panel sends `users`, and the route
-  // takes both -- so the fake does too, or one of the two callers would be
-  // testing a shape the server never sees.
+  // The route takes rows or `users`, so the fake does too.
   const perf = body.sizings?.find((s) => s.functionality === "performance");
   const users = Number(perf?.target ?? body.users);
   const vus = Number(perf?.figure || body.vus_per_engine) || 500;
@@ -3007,10 +2574,7 @@ function planFor(body: {
     nodes_per_agent: perAgent, nodes: perAgent * agents,
     engine: { cpu: "2", memory: "8Gi", disk_gb: 60, tmp_gb: 40,
               supported_vus: 500 },
-    // A node is one engine plus what the node spends on itself (1 CPU / 2Gi,
-    // in generate.py), and the peak is that times the nodes. Coherent rather
-    // than arbitrary because the summary line states all three, and a fixture
-    // whose figures do not multiply cannot show whether the page's do.
+    // One engine plus the node's own 1 CPU / 2Gi, so the figures multiply.
     node: { cpu: "3", memory: "10Gi", disk_gb: 100 },
     peak: { cpu: String(perAgent * 3), memory: `${perAgent * 10}Gi`,
             disk_gb: perAgent * 60 },
@@ -3022,9 +2586,8 @@ function planFor(body: {
   };
 }
 
-/** The four routes the unconnected page reads at mount, plus the two the
- *  sizing card needs. Everything else rejects by naming itself, so a card that
- *  had come to need an account could not pass any of these. */
+/** The routes the unconnected page reads, plus the sizing card's. Anything
+ *  else rejects, so a card needing an account fails here. */
 const unconnected = (extra: Partial<Api>) => fakeApi({
   keyDetect: async () => ({ candidates: [], active_key_id: null }),
   keyStatus: async () => ({ connected: false }),
@@ -3059,10 +2622,7 @@ test("with no key connected, step 1 still makes a sizing", async () => {
   // The summary is the answer, on the row that is visible with the editor shut.
   const summary = await screen.findByText(
     /5,000 virtual users · 10 engines × 2 CPU/);
-  // Every step, because the total is node capacity: 10 engines at 2 CPU is 20
-  // and the answer is 30, and the node line is where the difference enters. A
-  // summary that skipped it read as arithmetic that does not work. Read off
-  // textContent because the total is emphasised in a span of its own.
+  // Every step of the chain, including the node's own overhead.
   expect(summary.textContent).toMatch(/10 engines × 2 CPU \/ 8Gi/);
   expect(summary.textContent).toMatch(/10 nodes × 3 vCPU \/ 10Gi/);
   expect(summary.textContent).toMatch(/30 vCPU \/ 100Gi total/);
@@ -3078,11 +2638,7 @@ test("with no key connected, step 1 still makes a sizing", async () => {
 
 test("each functionality is asked for in its own unit, and one has no figure",
   async () => {
-    // The three models are served, so this is the page rendering a table
-    // rather than a form somebody wrote three times. What it must get right is
-    // the third: service virtualization has no measured figure, so there is no
-    // box to type one into and the gap is stated instead of being an empty
-    // field that reads as "not filled in yet".
+    // The served models, one of them with no measured figure and so no box.
     render(<App api={unconnected({ plan: async (b) => planFor(b) })} />);
     fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
 
@@ -3107,9 +2663,7 @@ test("each functionality is asked for in its own unit, and one has no figure",
 
 test("a sizing nothing can size is the server's reason, never a node count",
   async () => {
-    // The refusal is the explanation, and it is the server's sentence: this
-    // page must not carry a second copy of why there is no figure. What it
-    // owns is showing it where a plan would have gone.
+    // The server's refusal is shown where the plan would be.
     render(<App api={unconnected({
       plan: async () => { throw new Error("nothing measured here"); },
     })} />);
@@ -3188,9 +2742,7 @@ test("the profile fills a location's settings, and Save is the only write",
           slots: fields.slots ? Number(fields.slots) : held.slots,
           threadsPerEngine: fields.threads_per_engine
             ? Number(fields.threads_per_engine) : held.threadsPerEngine ?? null,
-          // override_memory is deliberately not applied: BlazeMeter's own POST
-          // accepts `threadsPerEngine` and drops it on some accounts, and a
-          // field that comes back unstored is the case the answer exists for.
+          // Deliberately not applied, to test a field that comes back unstored.
           overrideCPU: fields.override_cpu
             ? Number(fields.override_cpu) : held.overrideCPU ?? null };
         const after = state();
@@ -3207,9 +2759,7 @@ test("the profile fills a location's settings, and Save is the only write",
                      { target: { value: "5000" } });
     fireEvent.click(await screen.findByText("Perf"));
 
-    // The row opens on this location's own arithmetic: 10 engines over its two
-    // agents is 5 each, and writing the run's own figure into `slots` would
-    // size the location for twenty.
+    // Divided by the location's two agents: 5 engines each.
     const panel = await screen.findByRole("region", { name: "Perf settings" });
     await waitFor(() => expect(asked.some((a) => a.agents === "2")).toBe(true));
     const field = (label: RegExp) =>
@@ -3226,17 +2776,13 @@ test("the profile fills a location's settings, and Save is the only write",
     await waitFor(() => expect(sent.length).toBe(1));
     expect(sent[0]).toEqual({ slots: "5", threads_per_engine: "500",
                               override_cpu: "2", override_memory: "8192" });
-    // What the account holds now, not what was sent: three landed and one came
-    // back unstored, and the two are reported apart. It survives the re-read
-    // the save itself caused -- the location arrives changed, which is what
-    // used to clear this the moment it appeared.
+    // What the account holds now, stored and unstored reported apart, and still
+    // shown after the save's own re-read.
     expect(await within(panel).findByText(/engines per agent 1 → 5/)).toBeTruthy();
     expect(within(panel).getByText(/BlazeMeter did not store engine memory request/))
       .toBeTruthy();
 
-    // The fields are still fields. A hand edit outranks the profile, and only
-    // what differs from the account is sent -- the two the first save landed
-    // are not written back.
+    // A hand edit outranks the sizing, and only changed fields are sent.
     fireEvent.change(field(/^Engines per agent/), { target: { value: "6" } });
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(sent.length).toBe(2));
@@ -3245,10 +2791,7 @@ test("the profile fills a location's settings, and Save is the only write",
 
 
 test("a location nobody needs to change still has a way on", async () => {
-  // The panel's only control used to be Save, greyed whenever nothing had been
-  // typed -- which is most locations, since most are already configured. So
-  // choosing one opened a form whose one button was dead and left the next
-  // thing to do somewhere else on the page with nothing pointing at it.
+  // With nothing typed, the button is Confirm and writes nothing.
   const sent: unknown[] = [];
   render(<App api={accountOf([loc("h-perf", "Perf",
     [{ id: "s-1", name: "agent-1", state: "IDLE" }])], {
@@ -3268,9 +2811,7 @@ test("a location nobody needs to change still has a way on", async () => {
 
   fireEvent.click(confirm);
 
-  // The location folds away -- both its settings row and the section over it --
-  // and the agent list under it opens. Asserted through the agent becoming
-  // reachable, which is the point of the move.
+  // The location folds away and the agents open.
   await waitFor(() =>
     expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
   expect(screen.getByRole("button", { name: /agent-1/ })).toBeTruthy();
@@ -3281,10 +2822,7 @@ test("a location nobody needs to change still has a way on", async () => {
 
 test("Next waits for both confirmations, and a changed agent withdraws one",
   async () => {
-    // Both lists auto-pick -- a lone agent is chosen for you, and a session
-    // restore brings back a pairing nobody has looked at this time round -- so
-    // "something is selected" was never "somebody said this is the one". Step 1
-    // asked the first while claiming the second.
+    // Both lists auto-pick, so Next waits for both confirmations.
     render(<App api={accountOf([loc("h-perf", "Perf", [
       { id: "s-1", name: "agent-1", state: "IDLE" },
       { id: "s-2", name: "agent-2", state: "IDLE" },
@@ -3296,9 +2834,7 @@ test("Next waits for both confirmations, and a changed agent withdraws one",
     const settings = await screen.findByRole("region", { name: "Perf settings" });
     expect(next().disabled).toBe(true);
 
-    // Confirming the location folds it away and opens the agents. Two of them,
-    // so nothing was auto-picked and the step is still waiting for the choice
-    // itself rather than for a confirmation of one.
+    // Two agents, so nothing is auto-picked.
     fireEvent.click(within(settings).getByRole("button", { name: "Confirm" }));
     await waitFor(() =>
       expect(screen.queryByRole("region", { name: "Perf settings" })).toBeNull());
@@ -3307,7 +2843,6 @@ test("Next waits for both confirmations, and a changed agent withdraws one",
 
     // Chosen, and now it is the confirmation that is outstanding -- the block
     // names that half rather than repeating the whole step.
-    // eslint-disable-next-line no-console
     fireEvent.click(await screen.findByText("agent-1"));
     await waitFor(() =>
       expect(screen.getByText(/confirm the agent/)).toBeTruthy());
@@ -3316,9 +2851,7 @@ test("Next waits for both confirmations, and a changed agent withdraws one",
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(next().disabled).toBe(false));
 
-    // ...and it is a confirmation *of that agent*. Picking the other one is a
-    // different bundle, so the step is unfinished again -- which is why what
-    // was confirmed is stored rather than a flag saying that something was.
+    // Picking the other agent withdraws the confirmation.
     fireEvent.click(screen.getByText("agent-2"));
     await waitFor(() => expect(next().disabled).toBe(true));
     expect(screen.getByText(/confirm the agent/)).toBeTruthy();
@@ -3326,11 +2859,8 @@ test("Next waits for both confirmations, and a changed agent withdraws one",
 
 
 test("a location with no agents is not a bundle request", async () => {
-  // Picking an empty location used to spend a 400 on saying so: the preview
-  // asked for a bundle, and generate() refused -- correctly -- with a sentence
-  // about a ship_id nobody had been asked for yet. An empty location is a
-  // normal state this page has a whole amber panel for, so the preview waits
-  // for the agent instead of asking a question it already knows the answer to.
+  // An empty location: the preview waits for an agent instead of asking the
+  // server for a bundle it would refuse.
   const generated: unknown[] = [];
   const api = accountOf([loc("h-empty", "no agents here")], {
     generate: async (...args: unknown[]) => {
@@ -3349,16 +2879,8 @@ test("a location with no agents is not a bundle request", async () => {
   expect(generated).toEqual([]);
 });
 
-// -- the page says how it stands against the code serving it (#224, #238) ----
-//
-// The failure this replaces was silent: a service that had run since the
-// previous morning served a page whose fetches 404'd, the page honestly read
-// that as "not read yet", and four generator defects were suspected before the
-// server was.
-//
-// Four answers, and what the rendering owes them is here; which sentence each
-// one gets is build.ts, with its own tests. What needs a page is that only one
-// of the four interrupts, and that the other three do not borrow its wording.
+// -- the built page against the code serving it ------------------------------
+// Only a stale page interrupts; build.ts owns the sentences.
 
 const OFFLINE: Partial<Api> = {
   keyDetect: async () => ({ candidates: [], active_key_id: null }),
@@ -3388,9 +2910,7 @@ test("warns when the built page was not built from the server's source", async (
 });
 
 test("a page recording nothing says so, and is not an alert", async () => {
-  // The fourth answer (#238): built before the fingerprint existed, so nothing
-  // is known to be wrong with it. It says which of the four it is -- silence
-  // would read as compared-and-current -- and it does not interrupt.
+  // Built before the fingerprint existed: said, but not an alert.
   render(<App api={fakeApi({
     ...OFFLINE,
     build: async () => ({
@@ -3405,9 +2925,7 @@ test("a page recording nothing says so, and is not an alert", async () => {
 });
 
 test("says nothing where there is no source to compare against", async () => {
-  // A wheel answers `stale: null` -- nothing to compare against, which is not
-  // the same answer as compared-and-current and not the same as unrecorded.
-  // Both of those two are silence here, and only those two.
+  // A wheel (`stale: null`) says nothing, as a matching page does.
   render(<App api={fakeApi({
     ...OFFLINE,
     build: async () => ({

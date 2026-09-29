@@ -1,35 +1,16 @@
-// The option groups of the configure step, declared once each.
-//
-// A group used to be four things in three places -- a title and hint in JSX, a
-// clause in the detection effect, and an enable and a disable arm of one
-// switch -- so the wipe list drifted from the fields it was meant to clear.
-// Here each group states its title, its hint, the option keys it writes, and
-// its three lifecycle functions; App renders by walking the list, and the
-// bodies are separate components taking only what they use.
-//
-// Nothing in this file imports React: it is plain data in, plain data out,
-// which is what makes optionGroups.test.ts possible without a DOM.
+// The option groups of the configure step, each declared once: title, hint,
+// the option keys it writes, and its lifecycle functions. Plain data with no
+// React, so optionGroups.test.ts needs no DOM.
 
 import { FuncIdVocabulary, Functionality, Options } from "./api";
-// The environment area's own rule about what blocks the step. The area is not
-// a group -- it is a list of the variables no group here writes, with a
-// name/value editor under it (see EnvVars) -- so the only thing this file wants
-// from it is that one answer, in configureBlockedBy.
 import { envIncomplete } from "./env";
-// What the bundle is. Only two things here need it: the filter at the foot of
-// this file, and the one group whose recommended mode depends on the platform.
-// formats.ts imports nothing of ours, so this direction is the only one.
 import { Applies, keysApply } from "./formats";
 
 export type GroupId =
   "registry" | "proxy" | "ca" | "sched" | "security" | "sv" | "svDocker";
 
-/** Merged over the current options. `null` clears a key that has a default --
- *  A key with no default must be REMOVED rather than nulled -- generate()
- *  spreads options over the defaults and profile.json dumps what survives, so
- *  an explicit null adds a key that was never there and the bundle stops being
- *  byte-identical to one generated without it. No option needs that today; the
- *  helper that did it went with the ingress-class field it existed for. */
+/** Merged over the current options. `null` clears a key back to its default;
+ *  a key with no default must be left out instead, or profile.json gains it. */
 export type OptionPatch = Record<string, unknown>;
 
 export interface OptionGroup {
@@ -39,255 +20,118 @@ export interface OptionGroup {
   hint: string;
   /** Shown instead of `hint` on a row the caller flags as required. */
   requiredHint?: string;
-  /** Shown instead of `hint` on a row the location demands and the user has
-   *  switched off anyway. A group that can be required and declined has to say
-   *  what was given up, or the row goes quiet at exactly the moment it stopped
-   *  blocking the download. */
+  /** Shown instead of `hint` when the location demands the group and it was
+   *  switched off anyway, saying what was given up. */
   declinedHint?: string;
-  /** Every option key this group writes. Overlap is legal and would be listed
-   *  by each owner, so the sharing is visible here rather than only to someone
-   *  who reads two lifecycle functions -- there is none at present, since
-   *  Service virtualization gave up its claim on `service_type` (#60). The list
-   *  is also what a later view can use to say "set, but not currently shown". */
+  /** Every option key this group writes. */
   keys: string[];
-  /** The ids of the served functionalities this group belongs to (see Functionality in
-   *  api.ts). Empty means every deployment needs it whatever is being
-   *  configured -- registry, proxy, CA trust, scheduling -- and such a group is
-   *  never hidden, so it can never be the reason a download is blocked off
-   *  screen. This tag is the whole frontend half of adding a functionality: the list
-   *  of functionalities itself is served, never enumerated here.
-   *
-   *  A tag must name a functionality the server serves. It always had to -- a group
-   *  tagged with anything else is on no card and reachable from nowhere -- but
-   *  since notRunPatch clears the groups of a functionality the location does
-   *  not run, an unserved tag would clear itself silently as well. Held to
-   *  core.FUNCTIONALITIES by test_server.py, which reads the tags out of this
-   *  file. */
+  /** The served functionality ids this group belongs to; empty means every
+   *  deployment needs it. Each must be a served id (test_server.py checks), or
+   *  notRunPatch would clear the group without anyone seeing why. */
   functionalities: string[];
-  /** Does this config already mean the group is on? Runs on every option
-   *  change, including the ones a preset or an imported profile brings in. */
+  /** Does this config already mean the group is on? Runs on every option change. */
   detect: (o: Options) => boolean;
-  /** Applied when the switch goes on -- empty for a group that only reveals
-   *  fields it does not have to seed. */
+  /** Applied when the switch goes on; empty when there is nothing to seed. */
   enable: (o: Options) => OptionPatch;
-  /** Applied when the switch goes off. OFF hides the fields AND wipes their
-   *  options, so nothing hidden ever reaches the manifests. `required` is the
-   *  location's demand, as in `incomplete`: switching a group off that the
-   *  location asks for is a decision, and only the group knows whether its
-   *  options can record one (SV's can -- see SV_NONE). */
+  /** Applied when the switch goes off: clears the group's options so nothing
+   *  hidden reaches the bundle. `required` is the location's demand, which a
+   *  group may record as a refusal (SV does, with SV_NONE). */
   disable: (o: Options, required: boolean) => OptionPatch;
-  /** Is this group in use but not yet finished, so the bundle cannot generate?
-   *  Declared here with everything else about the group, because the page
-   *  holding one group's rule is how "adding a functionality needs no frontend
-   *  change" breaks: the next functionality with required options would otherwise
-   *  need its own check in App, its own entry in a list, and its own arm on the
-   *  download guard. `required` is the location's own demand -- funcIds can make
-   *  a group mandatory when nothing is set yet. Absent means never blocks.
-   *
-   *  `backends` is the served SV backend table; only the SV group reads it, and
-   *  only to answer whether the chosen backend tolerates NODEPORT -- a
-   *  per-backend fact that lives on the server and cannot be stated here
-   *  without keeping a second copy of it. Undefined before the constants load. */
+  /** In use but unfinished? `required` is the location's demand; `backends` is
+   *  the served SV backend table, undefined until loaded. Absent: never. */
   incomplete?: (o: Options, required: boolean,
                 backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
-  /** Of that, what still stops the step -- defaulting to `incomplete` when a
-   *  group draws no distinction. Only Service virtualization does: see
-   *  svBlocking for why the row and the step now answer differently. */
+  /** The part of `incomplete` that still stops the step. Defaults to it. */
   blocks?: (o: Options, required: boolean,
             backends?: Record<string, { nodeport_ok: boolean }>) => boolean;
-  /** The keys this group cannot produce a working bundle without, given what is
-   *  set on it — read only while the group is ON, and returning those of them
-   *  that are still empty is `blankRequired`'s job, not this one's.
-   *
-   *  Declared here for the same reason `incomplete` is: the alternative is a
-   *  table somewhere else listing which of a group's keys matter, which is the
-   *  group's own answer kept twice. It is a *function* because the answer
-   *  depends on what has been chosen inside the group — the CA group needs a
-   *  ConfigMap name in one mode, a PEM in another and nothing in the third.
-   *
-   *  This is the half the generator cannot work out for itself. A registry, a
-   *  proxy and a CA are configured by *having a value*, so blank and "not using
-   *  one" are the same options dict on the server; the switch that tells them
-   *  apart is here. Absent means the group has no required text field. */
+  /** The keys that must be filled while the group is on, given what is chosen
+   *  in it. The server cannot tell a blank registry from none, so this side says. */
   requires?: (o: Options) => string[];
 }
 
-// -- the cluster, which the posture is not ------------------------------------
+// -- the cluster -----------------------------------------------------------------
 
-/** Is the target cluster OpenShift itself? `generate.is_openshift`, and the one
- *  copy of that reading on this side.
- *
- *  `platform` is a *posture* -- who assigns the pod's UID -- and the
- *  SCC-friendly one is recommended on vanilla Kubernetes too, so it can never
- *  answer which binary the person deploying types. Two readers here need the
- *  product rather than the posture: the SV backends (only OpenShift serves a
- *  route.openshift.io Route) and CA trust (only OpenShift fills a labeled
- *  ConfigMap in). */
-// Absent reads as *off*, which is the generator's default (#256). It used to
-// read absent as on, to match `platform: openshift` beside it -- which is
-// reading the product off the posture, the one thing this pair exists to stop,
-// and it put `oc` in a plain Kubernetes customer's README and offered them a
-// trust-injection ConfigMap nothing would ever fill. `=== true` rather than
-// truthiness so the two halves of the page and the generator agree on what an
-// unanswered option means.
+/** Is the target cluster OpenShift itself (generate.is_openshift)? `platform`
+ *  is only the UID posture, which vanilla Kubernetes may share. An unanswered
+ *  `openshift_cluster` is no, as in the generator. */
 export const isOpenshift = (o: Options) =>
   o.platform === "openshift" && o.openshift_cluster === true;
 
 // -- CA trust ----------------------------------------------------------------
-// One-of: the certificate as a file | the PEM now | somebody else's ConfigMap |
-// OpenShift injection. `file` is the answer this page offers, and the other two
-// ConfigMap modes are reachable only from the CLI or a profile -- see CaGroup
-// for why they are still *shown* where a loaded profile carries one.
-//
-// `file` is the shape BlazeMeter's own documentation uses: the Deployment
-// references a ConfigMap built from a certificate file, and the bundle names
-// the file rather than carrying a PEM. It is also the common moment (#230):
-// crane is failing TLS and the certificate is still with the platform team.
+// One-of. `file` is what this page offers: the bundle names the certificate
+// file and builds the ConfigMap from it. The other ConfigMap modes come from
+// the CLI or a profile.
 export type CaMode = "none" | "file" | "inline" | "existing" | "inject";
 
 export function caModeOf(o: Options): CaMode {
-  // Before `inline`, because the two are the same ConfigMap and the file mode
-  // is the more specific answer -- `_ca_cfg` refuses them together for that
-  // reason.
+  // Before `inline`: the same ConfigMap, and file is the more specific answer.
   return o.ca_bundle_slot ? "file"
     : o.ca_existing_configmap != null ? "existing"
     : o.ca_bundle != null ? "inline"
     : o.ca_openshift_inject ? "inject" : "none";
 }
 
-/** The patch that puts CA trust in `mode`. The group's enable and disable are
- *  this same function at "file" and "none", so the control and the switch
- *  cannot end up disagreeing about what a mode means. */
+/** The patch that puts CA trust in `mode`. The group's enable and disable use
+ *  it too, so the switch and the mode control agree. */
 export function caModePatch(o: Options, mode: CaMode): OptionPatch {
   return {
     ca_existing_configmap: mode === "existing" ? (o.ca_existing_configmap ?? "") : null,
     ca_configmap_key: mode === "existing" ? o.ca_configmap_key : null,
-    // Never both: the generator refuses the file mode beside a PEM, because
-    // naming the certificate and supplying it are two answers to one question.
+    // Never both: the generator refuses a file mode beside a PEM.
     ca_bundle: mode === "inline" ? (o.ca_bundle ?? "") : null,
     ca_bundle_slot: mode === "file",
-    // Kept across a mode switch rather than cleared, because it is the one
-    // thing somebody typed: switching to OpenShift injection and back must not
-    // lose the file name. Cleared only when CA trust is switched off, which is
-    // `disable` -- the whole group going away.
+    // Kept across mode switches, as the one typed value; cleared only when CA
+    // trust is switched off.
     ca_cert_file: mode === "none" ? null : (o.ca_cert_file ?? null),
     ca_openshift_inject: mode === "inject",
   };
 }
 
 // -- engine sizing -----------------------------------------------------------
-// Engine pod limits. Standard is BlazeMeter's own sizing; Small is validated
-// to run real tests and fits dev clusters (CRC/minikube) that can't spare 8Gi.
-//
-// NOT a group any more (#132): the size is never optional -- generate always
-// emits the limits, deriving them from the location's overrideCPU /
-// overrideMemory when no option names them -- so a switch that could be off,
-// and fields that could be blank, misdescribed it. The configure step renders
-// engineSize.sizeStatement instead; the presets below serve the capacity
-// profile on step 1, which still writes the two options as a prescription.
+// Presets for the sizing card. Not a group: generate always emits limits,
+// from the location's overrides when no option names them.
 export const ENGINE_SIZES = [
   { id: "small", cpu: "1", mem: "4Gi", label: "Small — 1 CPU / 4Gi (dev clusters, light tests)" },
   { id: "standard", cpu: "2", mem: "8Gi", label: "Standard — 2 CPU / 8Gi (BlazeMeter default)" },
   { id: "large", cpu: "4", mem: "16Gi", label: "Large — 4 CPU / 16Gi (heavy scripts)" },
 ];
 
-/** BlazeMeter's documented default — what the generator emits when nothing
- *  else names a size (ENGINE_DEFAULT_CPU/MEM on that side), so the one TS
- *  copy of the 2/8Gi figure. engineSize.ts renders it. */
+/** BlazeMeter's documented default: what the generator emits when nothing
+ *  names a size. */
 export const STANDARD_SIZE = ENGINE_SIZES.find((s) => s.id === "standard")!;
 
-/** The funcIds among these whose agent carries a taurus engine, so that "engine
- *  size" is a true statement about its pod limits.
- *
- *  The rows' own `runs_engine`, filtered -- not a list here. It was two ids
- *  written out (`ENGINE_FUNCTIONALITIES`), which is a served table restated in
- *  TypeScript: the answer is `facts.CATEGORY_BY_FUNC`'s, read off real
- *  single-functionality locations' /versions, where performance carries
- *  apm/crane/v4, functionalGui adds doduo and a browser to the same three, and
- *  an SV-only agent carries crane, group-gateway and service-mock and **no
- *  taurus engine at all**.
- *
- *  Placement only, and that is the whole of what survives #149. It was
- *  `SIZING_FUNCTIONALITY`, one id doing two jobs: where the statement renders,
- *  and which locations had `engine_cpu_limit`/`engine_mem_limit` cleared out
- *  from under them. The second job was wrong. Crane applies
- *  KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to **every pod it creates** -- one
- *  pair, with no per-functionality second one -- so the limits belong to no
- *  functionality and are never cleared for one; see notRunPatch. An SV
- *  location's limits still reach its mock pods and are still emitted; what they
- *  mean there is a sizing model that does not exist yet (#154), and stating an
- *  engine size over it would be inventing one. So it gets no statement rather
- *  than a wrong one. */
+/** The functionalities whose agent runs a taurus engine, off the served
+ *  `runs_engine`. Decides only where an engine size is stated: crane applies
+ *  one limit pair to every pod, so the limits are never cleared for any. */
 export function engineFunctionalities(fs: Functionality[]): string[] {
   return fs.filter((f) => f.runs_engine).map((f) => f.id);
 }
 
 // -- service account ---------------------------------------------------------
-// Deliberately not a group. A group is a switch that hides its fields when it is
-// off, and these two are neither optional nor functionality-specific: every
-// deployment runs as some account, so they sit beside the namespace and are
-// always sent. What lives here rather than in App is the one rule that must not
-// be restated -- generate.service_account() refuses an empty name in both
-// output formats, and this is that refusal, in time to be shown on the field.
+// Not a group: every deployment runs as some account.
 
-/** Is the service account usable? `create` may be either way; only an empty
- *  name blocks, because with nothing creating the account the name is the only
- *  thing saying which existing one crane runs as -- and the alternative,
- *  falling back to the namespace's `default`, hands crane's Role to every other
- *  pod in the namespace. */
+/** Is a service account named? An empty name would fall back to the
+ *  namespace's `default`, handing crane's Role to every pod there. */
 export function serviceAccountOk(o: Options): boolean {
   return !!String(o.service_account_name ?? "").trim();
 }
 
 // -- service virtualization --------------------------------------------------
 
-/** `sv_ingress` when the location advertises mockServices and the bundle is
- *  wanted for performance alone. It is *not* an ingress type: unset means
- *  nobody has answered and is refused for such a location, this means answered
- *  no.
- *
- *  generate.SV_INGRESS_NONE is the authority. It is not served on
- *  /api/sv-constants the way `ingress_types` is -- that response is what the
- *  backend picker is built from, and this is not a backend -- and the functions
- *  below are handed options and nothing else, so it could not arrive that way
- *  regardless. So it is a literal, and tests/test_server.py parses it out of
- *  this file and holds it equal to the generator's, the same way the
- *  TokenBranch union is pinned: a rename on either side otherwise leaves both
- *  compiling. */
+/** `sv_ingress` meaning "answered: no virtual services" on a mockServices
+ *  location; unset means unanswered. Must equal generate.SV_INGRESS_NONE
+ *  (test_server.py reads this literal). */
 export const SV_NONE = "none";
 
-/** Is this an SV configuration at all? "none" is a value like any other to
- *  everything that reads options, so the one place that knows better is here
- *  rather than at each `!!o.sv_ingress` -- which is what the row, the group's
- *  own detection and the mock-status poll were all separately getting wrong. */
+/** Is this an SV configuration at all? SV_NONE is an answer, not one. */
 export function svConfigured(ingress: unknown): boolean {
   return !!ingress && ingress !== SV_NONE;
 }
 
-/** Is the SV configuration in use but not finished, so the bundle cannot
- *  generate? The `incomplete` of the sv group below, named so that sv.ts can
- *  ask it directly: the page used to reach `GROUP_BY_ID.sv.incomplete!` through
- *  the table, which is a hole in the promise that a group's rules are the
- *  group's own. A second copy of the rule beside that caller would be worse
- *  still -- #60 relaxed it and had to edit both.
- *
- *  Mirrors _sv_cfg in generate.py: with an ingress chosen, the domain and the
- *  TLS secret are both mandatory (the secret even for plain HTTP -- crane
- *  validates it at startup), and NODEPORT is refused for a backend that cannot
- *  publish over it. With none chosen, only a location whose funcIds demand SV
- *  is unfinished.
- *
- *  An unknown backend does NOT block, and that covers three states this one
- *  value cannot tell apart -- not fetched yet, fetch failed, table served
- *  empty. Usually the repo insists those stay distinct; here they genuinely
- *  share an answer, because none of them is evidence that the pairing is
- *  broken. Blocking on any of them would grey out the download for a
- *  configuration that generates fine, and generate() refuses authoritatively
- *  in the case that is actually broken.
- *
- *  SV_NONE is finished by declaration -- generate() accepts it for a
- *  mockServices location, so blocking the download on it would be the UI
- *  refusing what the backend allows. */
+/** Is SV in use but unfinished? Mirrors generate._sv_cfg: with an ingress
+ *  chosen, the domain and TLS secret are required and NODEPORT must suit the
+ *  backend; with none, only a demanding location is unfinished. An unknown
+ *  backend (table not loaded) does not block; generate() refuses the real case. */
 export function svIncomplete(
     o: Options, required: boolean,
     backends?: Record<string, { nodeport_ok: boolean }>): boolean {
@@ -298,19 +142,10 @@ export function svIncomplete(
     || svNodePortConflict(o, backends);
 }
 
-/** The arms of the rule above that still stop the step, now that a blank field
- *  does not.
- *
- *  Deliberately a second predicate rather than a narrowing of the first: the
- *  row must go on saying it is unfinished with an empty subdomain -- that is
- *  what `incomplete` is for and it is still true -- while the *step* lets you
- *  past, because the bundle now carries `<SV_SUBDOMAIN>` and says so about
- *  itself. What is left here is the two things a marker cannot stand in for and
- *  `generate()` still refuses outright: no ingress chosen at all on a location
- *  that runs mockServices, which is an unanswered question rather than an empty
- *  box, and a service type the chosen backend cannot publish over, which is a
- *  conflict between two answers that were both given. */
-export function svBlocking(
+/** What of svIncomplete still stops the step, now that a blank field becomes a
+ *  marker: an unanswered ingress on a demanding location, or a service type the
+ *  backend cannot publish over. */
+function svBlocking(
     o: Options, required: boolean,
     backends?: Record<string, { nodeport_ok: boolean }>): boolean {
   if (o.sv_ingress === SV_NONE) return false;
@@ -318,12 +153,8 @@ export function svBlocking(
   return svNodePortConflict(o, backends);
 }
 
-/** The one arm of the rule above that the SV panel has to name on its own: a
- *  service type the chosen backend cannot publish over needs a different
- *  sentence from an empty field, because only one of them names a fix that is
- *  somewhere else on the page. Computed rather than deduced from the absence of
- *  the other reasons: deduced, it would inherit whatever a later completeness
- *  rule adds, and the panel would show the nodePort sentence for it. */
+/** A service type the chosen backend cannot publish over. The SV panel names
+ *  it separately because its fix is elsewhere on the page. */
 export function svNodePortConflict(
     o: Options,
     backends?: Record<string, { nodeport_ok: boolean }>): boolean {
@@ -340,8 +171,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "mirror images into your own registry (air-gapped)",
     functionalities: [],
     keys: ["private_registry", "pull_secret", "registry_auth"],
-    // The host alone. A pull secret is optional (a registry may be anonymous)
-    // and registry_auth is a switch, which cannot be blank.
+    // The host alone: a pull secret is optional and registry_auth is a switch.
     requires: () => ["private_registry"],
     detect: (o) => !!(o.private_registry || o.pull_secret || o.registry_auth),
     enable: () => ({}),
@@ -353,10 +183,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     hint: "egress via a corporate proxy, optional authentication",
     functionalities: [],
     keys: ["proxy"],
-    // Not both: one URL is a working proxy configuration, and BlazeMeter's
-    // traffic is HTTPS, so that is the one a proxy group with nothing in it is
-    // missing. Marking both would put two rows in the README for one thing to
-    // go and find out.
+    // One URL is a working proxy, and HTTPS is what BlazeMeter's traffic uses.
     requires: (o) => {
       const p = (o.proxy ?? {}) as Record<string, unknown>;
       const has = (k: string) => !!String(p[k] ?? "").trim();
@@ -373,27 +200,18 @@ export const OPTION_GROUPS: OptionGroup[] = [
     functionalities: [],
     keys: ["ca_existing_configmap", "ca_configmap_key", "ca_bundle",
            "ca_bundle_slot", "ca_cert_file", "ca_openshift_inject"],
-    // Per mode, which is why this is a function. `ca_configmap_key` is not here
-    // in either: it defaults to ca-bundle.crt, and OpenShift injection fills a
-    // ConfigMap this bundle names itself, so that mode needs nothing typed.
+    // Per mode. The key has a default, and injection fills a ConfigMap the
+    // bundle names itself.
     requires: (o) => {
       const mode = caModeOf(o);
       if (mode === "existing") return ["ca_existing_configmap"];
       if (mode === "inline") return ["ca_bundle"];
-      // `file` requires nothing. A blank name is `<CA_CERT_FILE>` and every
-      // surface says so, which is the marker rule -- and this page warns rather
-      // than blocks, so requiring it here would be the off-screen blocker in
-      // the one mode whose whole premise is that the certificate is elsewhere.
+      // `file` requires nothing: a blank name becomes <CA_CERT_FILE> and is
+      // warned about.
       return [];
     },
     detect: (o) => caModeOf(o) !== "none",
-    // On lands on `file`, on every format. It is the only mode that is complete
-    // the moment it is picked -- the bundle names the certificate and wires
-    // everything to it -- so switching the group on can no longer produce a
-    // configuration that blocks the download until something is typed. It also
-    // needs no format branch, which the old seed did: the two ConfigMap-naming
-    // modes reach nothing in a docker bundle, so `existing` there wrote an
-    // option the README then reported as set-and-not-carried.
+    // On lands on `file`, which is complete as soon as it is picked.
     enable: (o) => caModePatch(o, "file"),
     disable: (o) => caModePatch(o, "none"),
   },
@@ -404,10 +222,7 @@ export const OPTION_GROUPS: OptionGroup[] = [
     functionalities: [],
     keys: ["tolerations", "node_selector", "engine_tolerations",
            "engine_node_selector"],
-    // `!= null`, not truthiness: an engine override of {} or [] is a real
-    // setting ("engines take neither, even though crane does") and a falsy one,
-    // so a truthy detect would leave the group collapsed on a bundle that has
-    // it and then clear it on the next save.
+    // `!= null`: an empty engine override is a real setting ("take none").
     detect: (o) => !!(o.tolerations || o.node_selector)
       || o.engine_tolerations != null || o.engine_node_selector != null,
     enable: () => ({}),
@@ -417,27 +232,15 @@ export const OPTION_GROUPS: OptionGroup[] = [
   {
     id: "security",
     title: "Security & RBAC",
-    // Says only what is true of every format. It used to enumerate the
-    // Kubernetes defaults -- "token in a Secret, CLUSTERIP, no cluster RBAC" --
-    // and a docker bundle has none of those three, so the row named settings
-    // its own body had just hidden. What each format's defaults actually are is
-    // in the fields, which is where they can be changed.
+    // True of every format; each format's defaults are in the fields.
     hint: "defaults: the credential kept apart from the configuration, no agent self-update",
-    // Untagged deliberately: how the auth token is stored and whether the
-    // bundle asks for cluster RBAC are questions every deployment answers.
+    // Untagged: every deployment answers these.
     functionalities: [],
-    // Sole owner of service_type -- the SV group gave up its claim once #60
-    // showed an ingress publishes fine over NODEPORT.
+    // The sole owner of service_type.
     keys: ["use_secret", "cluster_rbac", "service_type", "restrict_engines",
            "auto_update"],
-    // Absent service_type means the backend default (CLUSTERIP), so only an
-    // explicit NODEPORT is a departure worth opening the group for -- the same
-    // `!= null` treatment the SV validation uses. restrict_engines is the same
-    // shape the other way up: absent means the backend default, which is on,
-    // so only an explicit false is a departure. auto_update is a tri-state
-    // whose absent value resolves off like `restrict_engines`, but BOTH
-    // booleans still open the group: `false` is worth showing because a bundle
-    // that states it deliberately is not the same as one that never asked.
+    // Only a departure from the backend default opens the group: an explicit
+    // NODEPORT, restrict_engines false, or any stated auto_update.
     detect: (o) => o.use_secret === false || !!o.cluster_rbac
       || o.restrict_engines === false || o.auto_update != null
       || (o.service_type != null && o.service_type !== "CLUSTERIP"),
@@ -451,84 +254,47 @@ export const OPTION_GROUPS: OptionGroup[] = [
     title: "Service virtualization",
     hint: "only for locations with the mockServices functionality",
     requiredHint: "this location runs mockServices — virtual services need an ingress",
-    // Switched off on a location that runs mockServices. Allowed, because a
-    // location often carries both funcIds and the customer runs tests on it and
-    // no virtual services at all -- but the bundle it produces really is the
-    // performance one, so the row says what it costs rather than falling silent
-    // the moment it stopped blocking the download.
+    // Declining on a location that runs mockServices is allowed; this says
+    // what it costs.
     declinedHint: "performance only — virtual services deployed here will stall at WAITING_FOR_DOMAIN",
-    // The funcId, which is what a functionality id is (#149). Not the group id
-    // beside it: `sv` names a row on this page, `mockServices` names something
-    // the account enables, and the two coinciding was how one could be read for
-    // the other.
+    // The funcId; `sv` is only this row's id.
     functionalities: ["mockServices"],
-    // service_type is *not* here. This group used to own it as well, to force
-    // CLUSTERIP; a live run (#60) showed the ingress path works over NODEPORT
-    // on namespaced RBAC, so SV has no opinion on it and Security owns it
-    // alone.
+    // Not service_type: Security owns it, and an ingress works over NODEPORT.
     keys: ["sv_ingress", "sv_subdomain", "sv_tls_secret", "sv_istio_gateway"],
-    // The ingress is what the group is: a domain or TLS secret arriving without
-    // one is not an SV configuration, and an SV *location* is flagged required
-    // by the caller rather than found in the options at all. SV_NONE is an
-    // answer, not a configuration, so it leaves the group closed -- an imported
-    // profile that declined must not re-open it.
-    // Only once a real backend is chosen. SV_NONE and "nobody has answered"
-    // need an ingress picked before either field means anything, and that is
-    // `incomplete`'s arm below rather than a blank text box.
+    // Only once a real backend is chosen. Without one, the ingress is what is
+    // missing, which is `incomplete`'s arm.
     requires: (o) => (svConfigured(o.sv_ingress)
       ? ["sv_subdomain", "sv_tls_secret"] : []),
     detect: (o) => svConfigured(o.sv_ingress),
-    // Stated above, as svIncomplete: sv.ts answers the same question for the
-    // panel that has to explain it, and the two must not be two rules.
+    // Shared with sv.ts, so the row and the panel use one rule.
     incomplete: svIncomplete,
     blocks: svBlocking,
-    // `{}` when an ingress is already chosen, like every other group that has
-    // nothing to seed: a patch with a key in it mints a fresh options identity
-    // and re-POSTs /api/generate for a configuration that did not change.
-    // SV_NONE is not a chosen one -- switching the group back on has to pick a
-    // real backend or the select would show nginx over a value that is not it.
+    // `{}` when an ingress is already chosen, so the options keep their
+    // identity. SV_NONE has to become a real backend.
     enable: (o) => (svConfigured(o.sv_ingress) ? {} : { sv_ingress: "nginx" }),
-    // On a location that demands SV, off is a decision and is recorded as one:
-    // null would be "not answered", which generate() refuses, so the switch
-    // would snap back on and the download stay blocked -- which is exactly what
-    // it used to do. Everywhere else null is still right: nobody asked.
+    // On a demanding location, off is recorded as SV_NONE: null would mean
+    // unanswered, which generate() refuses.
     disable: (_o, required) => ({ sv_ingress: required ? SV_NONE : null,
       sv_subdomain: null, sv_tls_secret: null, sv_istio_gateway: null }),
   },
   {
-    // The same functionality, published the docker agent's way -- and the two
-    // are never on screen together: each group's keys are the other format's
-    // ignored options, so `groupsFor` drops whichever one this bundle cannot
-    // carry (#182). Titled for what it configures rather than for the
-    // functionality, which is the card above it.
+    // Service virtualization the docker agent's way. Each SV group's keys are
+    // the other format's ignored options, so only one is ever on screen.
     id: "svDocker",
     title: "Virtual service endpoints",
     hint: "the hostname this agent advertises, and the certificate it serves them with",
     functionalities: ["mockServices"],
     keys: ["sv_hostname", "sv_tls_cert", "sv_tls_key"],
-    // The hostname is what the group *is*: BlazeMeter's Asset Catalog builds
-    // endpoint URLs from it, and without one they are built from this host's IP
-    // address. Required while the group is on, therefore, even though the
-    // generator does not require it on its own -- that asymmetry is the whole
-    // split between REQUIRED_TEXT and this: blank and "not using one" are the
-    // same options dict on the server, and the switch that tells them apart is
-    // here. The pair joins it only once one of the two has a value, which is
-    // the generator's rule and the same one read from the page's side.
+    // The hostname is what the group is: endpoint URLs are built from it, or
+    // from the host's IP without one. The cert/key pair joins once either is set.
     requires: (o) => ["sv_hostname",
       ...(o.sv_tls_cert || o.sv_tls_key ? ["sv_tls_cert", "sv_tls_key"] : [])],
     detect: (o) => !!(o.sv_hostname || o.sv_tls_cert || o.sv_tls_key),
-    // Nothing to seed. There is no vocabulary to pick from as `sv_ingress` has
-    // -- BlazeMeter's own example value is `C123ABCXYZ`, unexplained anywhere,
-    // so a default here would be this page inventing a shape for a name only
-    // the customer's DNS can settle.
+    // Nothing to seed: the hostname is for the customer's DNS to settle.
     enable: () => ({}),
     disable: () => ({ sv_hostname: null, sv_tls_cert: null, sv_tls_key: null }),
-    // No `incomplete`. A blank field here carries the marker and the step warns
-    // about it, exactly as it does for a private registry or an inline PEM --
-    // and the two things generate() still refuses outright, a key the agent
-    // cannot read and a hostname the certificate does not cover, are values
-    // that were typed rather than boxes left empty. A marker cannot stand in
-    // for either, and neither is something this file can judge.
+    // No `incomplete`: a blank field becomes a marker, and what generate()
+    // refuses (an unreadable key, an uncovered hostname) is typed, not blank.
   },
 ];
 
@@ -540,11 +306,8 @@ export type GroupFlags = Record<GroupId, boolean>;
 export const allGroupsOff = (): GroupFlags =>
   Object.fromEntries(OPTION_GROUPS.map((g) => [g.id, false])) as GroupFlags;
 
-/** Which groups are open, given the config and what was open a moment ago.
- *  Sticky: a group the user opened by hand stays open with nothing set in it,
- *  and a preset or an imported profile only ever opens groups. `required`
- *  carries what the options cannot say -- an SV location needs the SV group
- *  whether or not anything is configured in it. */
+/** Which groups are open. Sticky: it only ever opens one. `required` opens a
+ *  group the options cannot, like SV on an SV location. */
 export function detectGroups(
     o: Options, prev: GroupFlags,
     required: Partial<GroupFlags> = {}): GroupFlags {
@@ -553,74 +316,46 @@ export function detectGroups(
 }
 
 // -- the split the configure step is built on --------------------------------
-// Two buckets, derived from the declarations rather than listed anywhere: a
-// group belongs to no functionality and is therefore in every bundle, or it belongs
-// to one and lives in that functionality's card. Every group is in exactly one of
-// them, which is what stops a group being on screen twice or not at all -- the
-// failure the functionality *view* had, where five of six groups were in both views.
+// A group belongs to no functionality (in every bundle) or to one (in its card).
 
 /** Groups no functionality owns: every deployment gets them. */
 export const SHARED_GROUPS = OPTION_GROUPS.filter((g) => !g.functionalities.length);
 
-/** The groups a functionality owns. Empty is legal and means the functionality adds no
- *  options of its own -- its card says so rather than being left out, because
- *  "nothing to configure" and "not shown" are different answers. */
+/** The groups a functionality owns. Empty means it adds no options, and its
+ *  card says so. */
 export function groupsOf(functionalityId: string): OptionGroup[] {
   return OPTION_GROUPS.filter((g) => g.functionalities.includes(functionalityId));
 }
 
 // -- where an option is set ---------------------------------------------------
-//
-// The environment area's answer to a variable somebody looks for and does not
-// find (#150). AUTO_KUBERNETES_UPDATE was reported as missing from the list; it
-// is not missing, it is *written by the bundle*, off the `auto_update` option --
-// which is a tri-state inside a group titled "Security & RBAC", behind a hint
-// mentioning agent self-update. So the setting existed and nothing on the page
-// led from the name to it, which is the same failure as offering a name the
-// generator refuses, arrived at from the other side.
-//
-// The section comes off `keys`, which every group already declares. A second
-// table mapping variable to section would be the third copy of one fact, and
-// the one nobody would remember to update.
+// For a reserved variable somebody looks for in the environment area: the
+// option that writes it and the section holding that option, off each group's keys.
 
 /** A reserved variable, and where the thing that writes it is set. */
-export interface ReservedWhere {
+interface ReservedWhere {
   name: string;
-  /** The option that writes it, or null where no single option does — the
-   *  identity, the fixed posture. Straight off the served table, including its
-   *  null: inventing an option to send somebody to would be worse than saying
-   *  there is not one. */
+  /** The option that writes it, or null where none does (the identity, a fixed
+   *  posture). */
   owner: string | null;
-  /** The title of the group holding that option, or null where no group does.
-   *  The engine limits are the case: the configure step states them from the
-   *  location and edits them nowhere, so there is no section to name and
-   *  "somewhere on this step" is not a place. */
+  /** The title of the group holding that option, or null (the engine limits
+   *  are stated, not edited, so they have none). */
   where: string | null;
 }
 
-/** What the page can say about `name`, or null if it is not reserved at all.
- *
- *  Null covers both "this name is free" and "the table has not landed" — an
- *  empty served table means "not read yet" everywhere else on this page, and
- *  claiming a variable is taken on no evidence is the wrong half to be wrong
- *  in, exactly as in `envRowError`. */
+/** Where `name` is set, or null if it is not reserved. Also null before the
+ *  table lands: claiming a name is taken on no evidence is the worse error. */
 export function reservedWhere(
     name: string, reserved: Record<string, string | null>): ReservedWhere | null {
   if (!(name in reserved)) return null;
   const owner = reserved[name];
-  // The CA trio names a one-of pair the way the option table itself does, so
-  // the string is split rather than looked up whole: `ca_bundle |
-  // ca_existing_configmap` is no option's name, and both halves are in the one
-  // group anyway.
+  // A one-of owner such as "ca_bundle | ca_existing_configmap" is split.
   const keys = owner ? owner.split("|").map((k) => k.trim()) : [];
   const group = OPTION_GROUPS.find((g) => keys.some((k) => g.keys.includes(k)));
   return { name, owner, where: group?.title ?? null };
 }
 
-/** ...and all of them, in the order they were served. Rendered as a list rather
- *  than searched: the failure is somebody looking for a name and finding
- *  nothing, and a list that is on the page is one the browser's own find lands
- *  in without this area growing a search box of its own. */
+/** ...and all of them in served order, rendered as a list the browser's find
+ *  can search. */
 export function reservedList(
     reserved: Record<string, string | null>): ReservedWhere[] {
   return Object.keys(reserved)
@@ -629,69 +364,24 @@ export function reservedList(
 }
 
 // -- a functionality the location does not run --------------------------------
-// Not on the configure step at all, and configured nowhere. It was stated there
-// for a while (#113) -- a card naming the funcId to add -- which is true and
-// nothing the reader of that step can act on, so the panel now filters it out;
-// only manual entry, where the card is the declaration, still renders one.
-// Everything below is unchanged by that: hiding a row does not empty it, and
-// notRunPatch is what empties it. Half-configurable was the state before: manual
-// mode had no guard at all, so flipping Service virtualization on for an
-// identity declared as performance seeded `sv_ingress: nginx` over empty
-// subdomain and TLS fields, and the step went red for something nothing on the
-// page had asked for.
+// Not shown on the configure step, except in manual entry where the card is
+// the declaration. notRunPatch clears its options.
 
-/** Which functionalities this location runs, or null while nobody has answered.
- *
- *  Three states in one value, and the third is why it is not a plain array.
- *  Manual entry *declares* functionalities; a location read off the account
- *  carries the funcIds its functionalities come from; before either has happened
- *  the question is simply unanswered. Answering the unanswered case with `[]`
- *  takes every card's switches off the page while the account is still being
- *  read, and answering it with the whole list claims an enablement nobody has
- *  confirmed -- the same collapse from either end.
- *
- *  `declared` is a list because a location is (#151), and it is handed through
- *  rather than reduced to its first member: a bundle declared for performance
- *  *and* GUI functional has to have both cards live, and the one that got
- *  dropped is exactly the one whose card then said it had not been declared. */
+/** Which functionalities this location runs, or null while nobody has said.
+ *  Manual entry answers with its declaration; a connected location with its
+ *  funcIds, where none recognised is null rather than []. */
 export function enabledFunctionalities(
     mode: "connect" | "manual", declared: string[],
     locFunctionalities: string[]): string[] | null {
-  // Manual declares rather than reads, so there is nothing outstanding: the
-  // answer is the declaration, and no declaration yet is an empty one.
+  // Manual entry declares, so nothing is outstanding.
   if (mode === "manual") return declared;
-  // An account that has not been read and a location whose funcIds carry no
-  // served functionality both arrive as an empty list, and "nothing has said" is the
-  // honest answer to both.
+  // Not read yet, or no served functionality among the funcIds.
   return locFunctionalities.length ? locFunctionalities : null;
 }
 
-/** The declaration after ticking or unticking `id`, in `order`.
- *
- *  Manual entry's checkbox and the new-location form's funcId list are the two
- *  surfaces where a functionality is *chosen* rather than read, and both need
- *  the same three things: the member added or removed, no duplicate, and a
- *  stable order. `order` is the served vocabulary's (or the account's funcId
- *  list, in the create form), so the result reads down the screen the way the
- *  boxes do and the funcIds a bundle is gathered for do not shuffle when a box
- *  is ticked -- which is what would make a request look new to every reader of
- *  it, `manualFuncIds` included.
- *
- *  An id `order` does not carry is kept where it is: the create form offers the
- *  account's whole vocabulary, and a location may already hold a funcId
- *  BlazeMeter has since retired (43 locations carry `functionalApi`). Dropping
- *  one silently is how a form edits something it never showed.
- *
- *  Emptying is allowed. A declaration nobody has made is a real state -- it is
- *  what a fresh page holds before the vocabulary lands -- and the surface says
- *  what it means rather than refusing the click; a checkbox that will not
- *  untick is the off-screen blocker in one control.
- *
- *  `excludes` is what a tick takes away with it, and it is a parameter rather
- *  than a table here: which functionalities cannot share a location is a fact
- *  about crane's one pod-limit pair, which is service virtualization's to state
- *  (sv.exclusiveWith). This file owns "a declaration is a list, in order"; it
- *  has no opinion about what may be in one. */
+/** The declaration after ticking or unticking `id`, kept in `order` so the
+ *  funcIds do not reshuffle. Ids `order` lacks are kept (a location may hold a
+ *  retired funcId); `excludes(id)` lists what a tick removes. May empty the list. */
 export function toggleDeclared(
     declared: string[], id: string, on: boolean, order: string[],
     excludes: (id: string) => string[]): string[] {
@@ -700,37 +390,22 @@ export function toggleDeclared(
     want.add(id);
     for (const gone of excludes(id)) want.delete(gone);
   } else want.delete(id);
-  // A Set iterates in insertion order, so the ids `order` does not carry keep
-  // the order they were declared in, with a newly ticked one last.
+  // Ids `order` lacks keep their declared order, with a new one last.
   return [...order.filter((f) => want.has(f)),
           ...[...want].filter((f) => !order.includes(f))];
 }
 
-/** Does this location run the functionality? Unanswered counts as yes, deliberately:
- *  a switch shown for a functionality that turns out not to apply is corrected the
- *  moment the account answers, where one hidden on a guess leaves a location
- *  that does run the functionality with nowhere to configure it. */
+/** Does this location run the functionality? Unanswered counts as yes: a
+ *  switch shown too early is corrected, one hidden on a guess strands a location. */
 export function runsFunctionality(
     enabled: string[] | null, functionalityId: string): boolean {
   return enabled == null || enabled.includes(functionalityId);
 }
 
-/** What must be cleared because it configures a functionality the location does not
- *  run, or null when nothing must.
- *
- *  The options can reach that state without anyone choosing it -- an imported
- *  profile, a restored session, or a location picked after the form was filled
- *  in -- and the switch that would clear it is deliberately not on screen. Left
- *  set they are an off-screen blocker twice over: `incompleteGroups` counts the
- *  group, and generate() refuses outright (an `sv_ingress` with no subdomain is
- *  a hard error whatever the location runs).
- *
- *  Each group's own `disable()`, never a wipe list written here -- the drift
- *  between the two is what this file exists to stop. `required` is false by
- *  construction: a demand comes from the location's funcIds, and these are the
- *  functionalities those funcIds do not carry. Applying the patch makes every `detect`
- *  it fired on false, so the next answer is null and the page settles in one
- *  pass -- the property sv.correction is written to hold too. */
+/** The patch clearing options for functionalities the location does not run,
+ *  or null. Built from each group's own `disable()`; applying it makes the next
+ *  answer null, so the page settles in one pass. The engine limits reach every
+ *  pod and are never cleared. */
 export function notRunPatch(
     o: Options, enabled: string[] | null): OptionPatch | null {
   const patch: OptionPatch = {};
@@ -740,47 +415,17 @@ export function notRunPatch(
       Object.assign(patch, g.disable(o, false));
     }
   }
-  // The pod limits used to be cleared here too, on the reading that they size
-  // an engine and a location running no performance has none. #149 removed
-  // that: crane applies KUBERNETES_RESOURCES_LIMITS_CPU/_MEMORY to every pod it
-  // creates, so one pair covers engines, browser pods and mock-service pods
-  // alike and there is no per-functionality second one. Cleared, an SV-only or
-  // GUI-only agent's pods fall to crane's 250m/256Mi defaults -- the silent
-  // failure the LimitRange note in CLAUDE.md is about, arrived at from the page
-  // instead. Nothing replaces the clause: a value that reaches every pod is
-  // never wrong for the ones a location does not run.
   return Object.keys(patch).length ? patch : null;
 }
 
-/** ...and of those, the ones this bundle's format can carry.
- *
- *  A third filter over the same list, so it lives with the other two rather
- *  than beside the predicate it takes. A group whose every declared key is
- *  ignored is not on screen at all -- Scheduling, for docker.
- *  One with some is on screen with the rest of its fields hidden by the
- *  predicate itself: Private registry keeps the registry and loses the
- *  imagePullSecret. Derived from `keys`, so a group gaining an option needs
- *  nothing here.
- *
- *  Unlike the two above this is not a *view*: a functionality hides nothing, and a
- *  group dropped here is one the bundle has no such thing as. */
+/** ...and of those, the ones this format can carry: a group whose every key
+ *  is ignored is dropped, one with some keeps its row. */
 export function groupsFor(gs: OptionGroup[], applies: Applies): OptionGroup[] {
   return gs.filter((g) => keysApply(g.keys, applies));
 }
 
-/** Groups in use but not finished, so the download is blocked. Derived from the
- *  declarations rather than passed in: the caller knowing which groups can be
- *  incomplete is the coupling this exists to remove.
- *
- *  `applies` is the format's, and it is what keeps the claim at the top of this
- *  file true -- "such a group is never hidden, so it can never be the reason a
- *  download is blocked off screen". That held only while every group a format
- *  could hide was untagged and unblocking. Since #182 the two service
- *  virtualization groups hide each other by format, so a walk over all of them
- *  could report one that has no row on this page: the off-screen blocker, from
- *  the one direction the rule had not been asked about. Absent means the table
- *  has not been read, which is every field applying -- formats.ts's own answer,
- *  and the safe direction here too. */
+/** Groups in use but unfinished. Only groups this format shows count, so a
+ *  hidden one never blocks; `applies` absent means every field applies. */
 export function incompleteGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
     backends?: Record<string, { nodeport_ok: boolean }>,
@@ -789,9 +434,7 @@ export function incompleteGroups(
     .filter((g) => g.incomplete?.(o, !!required[g.id], backends));
 }
 
-/** Groups whose state the step genuinely cannot go past, which since blank
- *  fields became markers is a subset of the above. `blocks ?? incomplete` so a
- *  group that draws no distinction needs no second declaration. */
+/** Groups the step cannot go past: each one's `blocks ?? incomplete`. */
 export function blockingGroups(
     o: Options, required: Partial<Record<GroupId, boolean>>,
     backends?: Record<string, { nodeport_ok: boolean }>,
@@ -800,42 +443,14 @@ export function blockingGroups(
     .filter((g) => (g.blocks ?? g.incomplete)?.(o, !!required[g.id], backends));
 }
 
-/** What is stopping the configure step being finished, as the sentence that
- *  says so -- and "" when nothing is, which is what marks the step done.
- *
- *  One derivation for both, because they are one answer: a tick beside a step
- *  and a line saying what it still needs cannot be allowed to disagree.
- *
- *  Named rather than listed. It used to be the fixed string "namespace, service
- *  account and any unfinished group first", which named the same three things
- *  whatever the bundle was -- and a docker bundle has no namespace and no
- *  ServiceAccount, so two thirds of the only sentence telling somebody what to
- *  fix pointed at fields that are deliberately not on the page. A group's title
- *  is what the row beside it says, so the sentence names the row to go back to.
- *
- *  It used to take `applies` for those two fields, to keep "filled in" and
- *  "this format has no such field" from collapsing into one `true`. They are
- *  gone from here -- an empty one is a marker now, not a blocker -- and the
- *  distinction moved with them, into `blankRequired`, which asks the same
- *  predicate for the same reason: a warning must not name a field the form for
- *  this format does not show.
- */
+/** What stops the configure step, as a sentence naming the rows to fix, or ""
+ *  when nothing does (which marks the step done). */
 export function configureBlockedBy(
     o: Options, blocking: OptionGroup[]): string {
   const needs = [
-    // The namespace and the service account used to be here, and are not any
-    // more: an empty one carries `<NAMESPACE>` or `<SERVICE_ACCOUNT_NAME>`
-    // into the bundle -- the marker names the field it stands for -- and is
-    // refused by the API server at apply time with the field named. Blocking as well would be the same answer twice, and the worse
-    // half of it -- a step that will not advance, on a page that had already
-    // let the field be emptied. `blankRequired` warns instead.
+    // A blank namespace or service account becomes a marker: warned, not blocking.
     ...blocking.map((g) => g.title),
-    // The environment area, which is not a group and so is not in `incomplete`
-    // -- it is a list of variables with a name/value editor under it, and only
-    // that editor can produce a name no process could read. Named here rather
-    // than left to the server's refusal for the same reason every other blocker
-    // is: the field is on screen (#114), and the row beside it already says
-    // what is wrong with it.
+    // Not a group, but its editor can hold a name no process could read.
     envIncomplete(o) ? "the environment variables" : "",
   ].filter(Boolean);
   if (!needs.length) return "";
@@ -845,27 +460,11 @@ export function configureBlockedBy(
 }
 
 // -- the served vocabulary ---------------------------------------------------
-// Nothing here enumerates functionalities: a group names the ids it belongs
-// to, and labels, suggested namespaces and which funcIds mean which
-// functionality are all read off /api/functionalities. Adding functional testing, secrets or API
-// monitoring is then a backend entry plus a tag on the groups it owns.
-//
-// The configure step shows every group at once -- the shared ones, then each
-// functionality's own inside its card -- so nothing here selects a *view*. It used
-// to: visibleGroups, setButHidden and hiddenBlockers existed to work out what
-// the view was hiding and hand it back somewhere else, and went with the view.
-// Nothing below writes or clears an option; suggestNamespace comes closest, and
-// it hands a string back for the caller to apply only while the field still
-// holds a suggestion.
+// Functionalities are never enumerated here: labels, namespaces and ids come
+// from /api/functionalities.
 
-/** The functionalities a location's funcIds carry, in served order.
- *
- *  A funcId this tool covers *is* a functionality id (#149), so the join is
- *  equality and there is no table between the two vocabularies. funcIds nothing
- *  covers -- tdm, dataPublisher, delphix, secretsPrivateVault, and since the
- *  split the retired functionalApi and proxyRecorder -- match nothing and are
- *  simply not a signal: never an error, and never a reason to leave the page
- *  empty. */
+/** The functionalities a location's funcIds carry, in served order. A covered
+ *  funcId is a functionality id; the rest match nothing. */
 export function functionalitiesOf(
     funcIds: string[] | undefined, functionalities: Functionality[]): string[] {
   return functionalities
@@ -873,45 +472,10 @@ export function functionalitiesOf(
     .map((f) => f.id);
 }
 
-/** The funcIds a location has that no card claims, in the two kinds they are.
- *
- *  Named on screen rather than dropped: this tool covers three funcIds, accounts
- *  serve nine, and "this location also runs X, which there are no options for"
- *  is a truthful thing to say where silence reads as coverage.
- *
- *  **`uncovered` and `retired` are two answers, and the page says which** (#160).
- *  The account serves `tdm` and this tool configures it nowhere; it does not
- *  serve `sv-bridge` at all, and the only way a location has one is that it was
- *  created before the removal -- 43 locations still carry `functionalApi` and 62
- *  `sv-bridge` in one real account. Both belong on screen and neither sentence
- *  is the other's.
- *
- *  Told apart on `source` and never by remembering which fetch filled the list:
- *  with the account's own vocabulary in hand, absent *is* retired, and there is
- *  no third case, because a funcId nobody ever served cannot get onto a
- *  location. `uncovered` is named -- BlazeMeter's display name, the words the
- *  customer's own UI uses -- and `retired` keeps the raw funcId, because the
- *  name was the account's and the account no longer has a row to read one off.
- *
- *  **A browser pin is neither, and says nothing at all.** `functionalGui`
- *  carries 117 of them (`chrome:default`, `firefox:139`), they arrive in a
- *  location's `funcIds` beside the parent, and a pin is a *parameter* -- which
- *  browser -- rather than a capability the location has in its own right.
- *  Tested against the top-level vocabulary alone, every one fell through here:
- *  43% of one account's 171 locations, 41 pins on the worst, burying the two
- *  funcIds the sentence exists for. Skipped whether or not the parent is
- *  covered, since what a pin is a parameter *of* does not depend on that. A pin
- *  the account has also retired reads as retired rather than being guessed at
- *  from its shape: "the account no longer offers this" is true of it too, and a
- *  rule about colons in BlazeMeter's ids would be this repo inventing a default
- *  for something only the account knows.
- *
- *  **With the baseline, nothing is unclaimed.** It holds the three covered
- *  funcIds and no pins, so it cannot tell `tdm` from `chrome:default` from
- *  something retired, and an answer is not a guess: empty means "not read yet",
- *  which is the direction `IGNORED_BY_FORMAT` and the reserved-env table already
- *  take. It used to fall back to the raw funcId, which is defensible for `tdm`
- *  and is how a GUI Functional location got 41 lines of browser. */
+/** The funcIds a location carries that no card claims, named rather than
+ *  dropped so silence does not read as coverage. `uncovered` are served by the
+ *  account (display names); `retired` are not (raw ids). Browser pins are
+ *  parameters and skipped. Both are empty until the account's vocabulary is read. */
 export type UnclaimedFuncIds = {
   /** Served by the account, configured nowhere here. Display names. */
   uncovered: string[];
@@ -928,31 +492,22 @@ export function unclaimedFuncIds(
   const rest = (funcIds ?? []).filter(
     (id) => !functionalities.some((f) => f.id === id) && !pins.has(id));
   return {
-    // flatMap over map+filter so the name and the membership test are one read:
-    // a row the account serves has a label, because the server falls back to the
-    // raw funcId for one it never named.
+    // A served row always has a label; the server falls back to the id.
     uncovered: rest.flatMap((id) => served.get(id) ?? []),
     retired: rest.filter((id) => !served.has(id)),
   };
 }
 
-/** Which functionality to open a location on: the first served one its funcIds
- *  carry, else the first served of all. A location carrying both therefore
- *  starts on the first -- performance, the common case -- and is routed to the
- *  other by the download-button block if that is where the missing settings
- *  are. `null` only before the vocabulary lands. */
+/** Which functionality to open a location on: the first served one its
+ *  funcIds carry, else the first served. Null only before the vocabulary lands. */
 export function startFunctionality(
     funcIds: string[] | undefined, functionalities: Functionality[]): string | null {
   return functionalitiesOf(funcIds, functionalities)[0]
     ?? functionalities[0]?.id ?? null;
 }
 
-/** The namespace to suggest as the view moves to `functionality`, or null to leave
- *  the field alone. Suggested only while it still holds a namespace some
- *  functionality suggested (or nothing at all): a name that was typed outranks any
- *  suggestion, and returning the value it already has would be a state write
- *  that re-POSTs the preview for no change. Which names count as suggestions is
- *  read off the served vocabulary, so a functionality added later brings its own. */
+/** The namespace to suggest for `functionality`, or null to leave the field
+ *  alone: only a blank or suggested name is replaced, and never with itself. */
 export function suggestNamespace(
     current: string, functionality: Functionality,
     functionalities: Functionality[]): string | null {
