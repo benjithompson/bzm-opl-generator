@@ -398,16 +398,11 @@ def _location(action, args):
             account_id = (core.user(client).get("defaultProject") or {}).get("accountId")
             core.require_location_scope(account_id, workspace_id)
         locs = core.locations(client, account_id, workspace_id)
-        # `.get(key, default)` fills in only an *absent* key, and `{"limit":
-        # null}` is an ordinary way for a client to say "unset" -- which reached
-        # core as "no cap" and handed back the whole account this action exists
-        # to keep out of a result. Uncapped is not offered here on purpose:
-        # raising the cap is a number, and there is no size a session's result
-        # budget cannot be broken by.
-        limit = args.get("limit")
+        # Uncapped is not offered on purpose: raising the cap is a number, and
+        # there is no size a session's result budget cannot be broken by.
         sel = core.select_locations(
             locs, name_contains=args.get("name_contains"),
-            limit=core.DEFAULT_LOCATION_LIMIT if limit is None else limit)
+            limit=_given(args, "limit", core.DEFAULT_LOCATION_LIMIT))
         body = {"account_id": account_id, "workspace_id": workspace_id,
                 "total": sel["total"], "matched": sel["matched"],
                 "returned": sel["returned"],
@@ -437,9 +432,9 @@ def _location(action, args):
         made = core.create_location(
             _client(args), name, account_id, workspace_id,
             func_ids=args.get("func_ids") or ["performance"],
-            slots=args.get("slots", 1),
-            threads_per_engine=args.get("threads_per_engine",
-                                        core.api.DEFAULT_THREADS_PER_ENGINE))
+            slots=_given(args, "slots", 1),
+            threads_per_engine=_given(args, "threads_per_engine",
+                                      core.api.DEFAULT_THREADS_PER_ENGINE))
         loc = made["location"]
         body = {"location": _location_summary(loc),
                 "next": [f"opl_location create_agent with harbor_id "
@@ -781,9 +776,9 @@ def _after_generate(out_dir, options):
     if options.get("output_format") == "helm":
         return [f"helm install bzm-opl {out_dir}/helm "
                 f"-f {out_dir}/bzm-opl-values.yaml "
-                f"-n {options.get('namespace', 'blazemeter')} --create-namespace",
+                f"-n {options.get('namespace', _DEFAULT_NS)} --create-namespace",
                 "opl_agent status, once the release is up"]
-    ns = options.get("namespace", "blazemeter")
+    ns = options.get("namespace", _DEFAULT_NS)
     # The bundle's own command rather than a second copy of it: a plain `create
     # namespace` fails on a namespace that already exists, and this session is
     # about to be told to run it (#164). Merged onto the defaults because the
@@ -812,7 +807,7 @@ def _after_doctor(report, options):
                 "fix what FAILed, then run this again. A WARN is a read the "
                 "cluster refused, not a check that failed."]
     return [f"opl_bundle generate with these options and an absolute out_dir "
-            f"(namespace {options.get('namespace', 'blazemeter')!r})"]
+            f"(namespace {options.get('namespace', _DEFAULT_NS)!r})"]
 
 
 def _token_warnings(source):
@@ -1038,8 +1033,8 @@ def _agent(action, args):
         manifests, namespace, harbor_id, ship_id = _need(
             args, "manifests", "namespace", "harbor_id", "ship_id")
         ok = livetest.run(_client(args), manifests, namespace, harbor_id,
-                          ship_id, cluster=args.get("cluster", "current"),
-                          timeout=args.get("timeout", 600),
+                          ship_id, cluster=_given(args, "cluster", "current"),
+                          timeout=_given(args, "timeout", 600),
                           keep=bool(args.get("keep")))
         return {"ok": bool(ok),
                 "next": (["opl_agent status, and then a real test through the "
@@ -1068,6 +1063,21 @@ def _after_status(st):
                 "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
     return ["the agent reported once and has gone quiet.",
             "kubectl -n <namespace> logs -l role=role-crane --tail=50"]
+
+
+def _given(args, key, default):
+    """`args[key]`, or `default` where it is absent *or null*.
+
+    `.get(key, default)` fills in only an absent key, and `{"limit": null}` is
+    an ordinary way for a client to say "unset" -- which reached core as "no
+    cap" and handed back the whole account `opl_location list` exists to keep
+    out of a result; `slots: null` created a location with it unset.
+    """
+    value = args.get(key)
+    return default if value is None else value
+
+
+_DEFAULT_NS = gen_mod.DEFAULT_OPTIONS["namespace"]
 
 
 def _unknown(action, valid):

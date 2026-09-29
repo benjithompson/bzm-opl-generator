@@ -570,6 +570,16 @@ def test_a_location_a_test_cannot_start_on_says_so_here_too(fake_account):
     assert "Not enough available resources" in body["warning"]
 
 
+def test_an_explicit_null_slots_still_gets_the_default(fake_account):
+    """Same rule as `limit`: null is a client saying "unset", and `.get(key,
+    default)` fills in only an absent key -- so `slots: null` reached core as
+    None and created a location with it unset."""
+    body = ok("opl_location", "create", {"name": "scratch", "account_id": 7,
+                                         "workspace_id": 99, "slots": None,
+                                         "threads_per_engine": None})
+    assert body["location"]["slots"] == 1
+
+
 def test_a_gui_functional_location_is_refused_at_the_default_slots(
         fake_account):
     """#159. `slots` defaults to 1 here as it does everywhere, and BlazeMeter
