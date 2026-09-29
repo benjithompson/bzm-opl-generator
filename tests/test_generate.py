@@ -4025,3 +4025,30 @@ def test_the_notice_leaves_every_refusal_to_the_one_that_owns_it(options):
     the code that can name what is wrong with it."""
     assert gen.ca_slot_notice(dict(options, namespace="ns1",
                                    ca_bundle_slot=True)) is None
+
+
+@pytest.mark.parametrize("use_secret", [True, False])
+def test_every_configmap_value_survives_whatever_it_holds(use_secret):
+    """A value is quoted by the one helper that quotes, never by hand. A bare
+    NO_PROXY of `*.corp.example` is an alias to YAML and the bundle did not
+    parse. Each value must come back out of the parsed object exactly as it
+    went in, in the ConfigMap and in the Secret alike."""
+    no_proxy = "*.corp.example,10.0.0.0/8"
+    proxy_url = 'http://px.example:3128'
+    o = {"namespace": "ns1", "ship_id": "bbb222", "auth_token": "de" * 32,
+         "use_secret": use_secret,
+         "proxy": {"http": proxy_url, "https": proxy_url,
+                   "username": "u", "password": 'p"w\\d',
+                   "no_proxy": no_proxy},
+         "node_selector": {"pool": "*.x"}}
+    files = gen.generate(FACTS, o)
+    docs = {name: list(yaml.safe_load_all(body))
+            for name, body in files.items() if name.endswith(".yaml")}
+    cm = next(d for ds in docs.values() for d in ds
+              if d and d.get("kind") == "ConfigMap"
+              and d["metadata"]["name"] == "blazemeter-configmap")
+    assert cm["data"]["NO_PROXY"] == no_proxy
+    carrier = next(d for ds in docs.values() for d in ds
+                   if d and "HTTP_PROXY" in (d.get("stringData") or d.get("data") or {}))
+    assert ((carrier.get("stringData") or carrier.get("data"))["HTTP_PROXY"]
+            == gen.proxy_env(o)["HTTP_PROXY"])

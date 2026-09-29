@@ -64,6 +64,10 @@ CASES = {
     "auto-update-on-private-registry": {"platform": "k8s", "auto_update": True,
                                         "private_registry": "reg.example.com/bzm"},
     "proxy": {"platform": "k8s", "proxy": {"http": "http://px:3128"}},
+    # A leading `*` is an alias to YAML: a bare NO_PROXY of this shape made
+    # the manifests ConfigMap unparseable while the chart quoted it.
+    "proxy-wildcard-no-proxy": {"platform": "k8s", "proxy": {
+        "http": "http://px:3128", "no_proxy": "*.corp.example,10.0.0.0/8"}},
     # Credentials must reach the Secret, not the ConfigMap...
     "proxy-creds": {"platform": "k8s", "proxy": {"http": "http://px:3128",
                     "https": "http://px:3128", "username": "u", "password": "p"}},
