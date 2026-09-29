@@ -189,7 +189,8 @@ frontend/ (React)  →  bzm_opl_gen/ui_dist (committed build)
   `docs/options.md` with `python -m bzm_opl_gen.options`; never hand-edit
   between its markers. `DEFAULT_OPTIONS` is the only source of default values.
 - **Frontend:** `App.tsx` owns domain state; hooks called from App
-  (`useServedTables`, `useResource`, `useCapacity`, `usePreview`, …) keep it so,
+  (`useServedTables`, `useResource`, `useCapacity`, `useAgentWatch`,
+  `usePreview`, `useBundleOptions`) keep it so,
   and panels keep only view-local state. Every route goes through the `Api`
   seam (`fakeApi` in tests). Tables the generator owns (`IGNORED_BY_FORMAT`,
   `RESERVED_ENV`, sizing models, slot minimums, markers) are **served**, never
