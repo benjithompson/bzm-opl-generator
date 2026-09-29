@@ -22,7 +22,7 @@
 //     behind it is still App's (see NewLocation below); what moved here is the
 //     markup, which is the half that belongs beside the agent form it is a pair
 //     with.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Api, Facts, FuncIdChoice, Location, Ship, SlotMinimum } from "../api";
 import {
   Button, Check, ErrorMsg, Field, NoticeMsg, NumberInput,
@@ -128,8 +128,6 @@ export interface LocationHandover {
   /** Every location in that workspace. One list: the box below narrows it, and
    *  the panel that renders the box is the one that applies it. */
   list: Location[];
-  filter: string;
-  setFilter: (v: string) => void;
   selectedId: string | null;
   pick: (id: string) => void;
   busy: boolean;
@@ -171,9 +169,8 @@ export interface AgentHandover {
    *  the view. */
   showCreate: boolean;
   setShowCreate: (v: boolean) => void;
-  newName: string;
-  setNewName: (v: string) => void;
-  create: () => Promise<void>;
+  /** Create an agent with this name; resolves true once it exists. */
+  create: (name: string) => Promise<boolean>;
   error: string | null;
   /** The agent WAS created and only its credential was refused. In the red
    *  error slot that reads as a failed creation, and the next click makes a
@@ -193,7 +190,7 @@ export interface CredentialHandover {
   setToken: (v: string) => void;
   /** Issue a new one for an agent that already exists. Resolves once the token
    *  is in the field; throws with the account's own refusal if it is refused. */
-  regenerate: () => Promise<void>;
+  regenerate: () => Promise<boolean>;
   /** Why the field is empty, or null where there is nothing to say.
    *
    *  Written by token.recallNote rather than chosen here, because the choice is
@@ -246,8 +243,10 @@ export function AgentPanel({
   const location = locations.list.find((l) => l.id === locations.selectedId)
     ?? null;
   const ships: Ship[] = location?.ships ?? [];
-  const shown = useMemo(() => matching(locations.list, locations.filter),
-                        [locations.list, locations.filter]);
+  const [filter, setFilter] = useState("");
+  const shown = useMemo(() => matching(locations.list, filter),
+                        [locations.list, filter]);
+  const [newName, setNewName] = useState("");
   const empty = !!location && ships.length === 0;
   /** The chosen agent's name, for the rows that name it. */
   const shipName = ships.find((x) => x.id === agents.id)?.name ?? null;
@@ -355,14 +354,18 @@ export function AgentPanel({
     setPinned("none");
   };
 
+  // The agent as of now, so an answer for the previous one is not reported here.
+  const agentId = useRef(agents.id);
+  agentId.current = agents.id;
   const regenerate = async () => {
     if (arm === "done" || issuing) return;
     if (arm === "idle") { setArm("armed"); return; }
+    const forAgent = agents.id;
     setIssuing(true); setIssueErr(null);
     try {
-      await credential.regenerate();
-      setArm("done");
+      if (await credential.regenerate() && agentId.current === forAgent) setArm("done");
     } catch (e) {
+      if (agentId.current !== forAgent) return;
       // The account's own refusal, which names the ship and says a token read
       // off the BlazeMeter UI works just as well. Back to idle: nothing was
       // issued, so nothing was lost, and the button has to be pressable again.
@@ -375,7 +378,9 @@ export function AgentPanel({
   };
   const createShip = async () => {
     setMakingShip(true);
-    try { await agents.create(); } finally { setMakingShip(false); }
+    try {
+      if (await agents.create(newName)) setNewName("");
+    } finally { setMakingShip(false); }
   };
 
   return (
@@ -465,7 +470,7 @@ export function AgentPanel({
                 </Button>
               )}
               {locations.list.length > FILTER_ABOVE && (
-                <TextInput value={locations.filter} onChange={locations.setFilter}
+                <TextInput value={filter} onChange={setFilter}
                   placeholder={`filter ${locations.list.length} locations…`} />
               )}
               {locations.busy && (
@@ -589,7 +594,7 @@ export function AgentPanel({
                                : "New agent in this location"}
                       </p>
                       <Field label="Name">
-                        <TextInput value={agents.newName} onChange={agents.setNewName}
+                        <TextInput value={newName} onChange={setNewName}
                           placeholder="e.g. k8s-prod-cluster" />
                       </Field>
                       <div className="flex gap-2 items-center">
@@ -597,7 +602,7 @@ export function AgentPanel({
                             its token; the button says so while it waits rather
                             than looking ignored, which is how a second click --
                             and a second agent -- happens. */}
-                        <Button disabled={!locations.selectedId || !agents.newName}
+                        <Button disabled={!locations.selectedId || !newName}
                           busy={makingShip} onClick={createShip}>
                           {makingShip ? "Creating…" : "Create"}
                         </Button>

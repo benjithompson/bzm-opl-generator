@@ -1,86 +1,31 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Api, Account, AgentEnvVar, AgentStatus, Capacity, Facts,
-  GeneratedFile, ManualFactsOut, TokenReport,
-  FuncIdVocabulary, Location, Options, Ship, SvCheckOut,
-  SizingModel, SvMocksOut, Workspace,
+  Api, Account, AgentEnvVar, Facts, FuncIdVocabulary, Location, ManualFactsOut,
+  Ship, SizingModel, Workspace,
 } from "./api";
-// What the last download or save did, as one record with one owner -- see
-// attempt.ts for why the four it replaced could not stay four.
 import { Attempt, NO_ATTEMPT } from "./attempt";
-// The only piece of furniture this file still renders itself: every form it
-// used to hold is inside the step that owns it.
 import { Section } from "./components";
-// What a download is about to do to the agent's credential. The branch a bundle's
-// token arrived by is core's and comes back on the answer; this decides what to
-// say about the click that has not happened yet, which is the only moment a
-// rotation can still be reconsidered (#64).
 import { downloadPlan, Recall, recalled, recallNote } from "./token";
-// The option groups of the Configure step: one declaration each (title, hint, the option
-// keys it owns, the functionalities it belongs to, and its detect/enable/disable),
-// plus a body per group. This file only wires them -- what a group *is*, and
-// which of them a functionality puts on screen, lives in optionGroups.ts.
 import {
-  allGroupsOff, blockingGroups, caModeOf, caModePatch, CaMode,
-  configureBlockedBy, detectGroups, enabledFunctionalities, engineFunctionalities,
-  functionalitiesOf, GROUP_BY_ID, GroupFlags, GroupId, incompleteGroups, isOpenshift,
-  notRunPatch,
-  runsFunctionality, serviceAccountOk, startFunctionality, suggestNamespace,
-  toggleDeclared, unclaimedFuncIds,
+  blockingGroups, configureBlockedBy, detectGroups, enabledFunctionalities,
+  engineFunctionalities, functionalitiesOf, GroupId, incompleteGroups,
+  isOpenshift, notRunPatch, runsFunctionality, serviceAccountOk,
+  startFunctionality, suggestNamespace, toggleDeclared, unclaimedFuncIds,
 } from "./optionGroups";
-// Required fields nobody filled in: what they resolve to on the way out, and
-// the one list the two panels warn from.
 import { blankRequired, gaps, withPlaceholders } from "./placeholder";
-// What the bundle is, and which options that leaves reaching something. The
-// table of what a docker bundle drops is the generator's and is fetched, never
-// restated here.
-import {
-  isDocker, optionApplies, whyIgnored as why,
-} from "./formats";
-// The engine size the bundle will carry, and where the figure came from
-// (#132): generate derives it from the location's engine requests, so the
-// configure step states it rather than editing it.
+import { isDocker, optionApplies, whyIgnored as why } from "./formats";
 import { sizeStatement } from "./engineSize";
-// Service virtualization, as one record rather than a dozen values derived in
-// four places here. Whether the location demands it, whether that demand was
-// declined, whether what is configured is finished, the prerequisite context,
-// the RBAC prose, the scheme, the chart's refusal -- and the one patch the
-// options need, which used to be two effects writing what a third read back.
-// ...and, since a location is decided here as well as read, which
-// functionalities may not share one: crane has a single pod-limit pair, so
-// service virtualization is declared alone. `exclusiveWith` is that rule,
-// applied only where something is being decided -- see sv.ts for the asymmetry.
 import { exclusiveWith, SV_FUNCTIONALITY, svState } from "./sv";
-// What BlazeMeter requires of a new location's `slots`, applied where the
-// number is typed rather than where the 400 comes back (#159).
 import { slotsBlockedBy } from "./slots";
-// What survives a refresh, and the one thing that must not.
 import * as session from "./session";
-// A location or agent that has been deleted, told apart from one nothing could
-// be read about. Applied at every call that names one, because a 404 is the one
-// failure here that a retry cannot fix and Refresh can.
 import { goneNotice } from "./stale";
-// What to say about the built page against the code serving it. Four answers
-// from one route, and only one of them is a warning (#238).
 import { buildNotice } from "./build";
-// Whether an agent is reporting. One statement of the rule, with its own tests
-// -- it used to be a closure here, handed to step 1 as a predicate.
 import { shipOnline } from "./heartbeat";
-// The shape a hand-typed id and token come in, and what is wrong with one that
-// does not. Nothing is built from a value that fails it.
 import { blankManualIds, manualComplete } from "./manualIds";
-// What the account can generate, by workspace.
 import { CapacityView } from "./CapacityView";
-// The planner's form shape and its empty value: plain data, so the session
-// snapshot and this page share one declaration of it. `PlanAsk` is what a
-// profile asks for, assembled once here and read by two panels.
 import { EMPTY_PLAN_INPUTS, PlanAsk, PlanInputs } from "./usePlan";
-// Sizings saved under a name, and the ones the page ships with. Plain data,
-// like the session snapshot it is stored in.
 import { defaultSizings, SavedSizing } from "./sizings";
 import { AgentPanel } from "./steps/AgentPanel";
-// The sizing: step 1's first card, and the planner that used to be a view of
-// its own. See Sizing for why it moved.
 import { Sizing } from "./steps/Sizing";
 import { ConfigurePanel } from "./steps/ConfigurePanel";
 import { DownloadPanel } from "./steps/DownloadPanel";
@@ -94,326 +39,173 @@ import { SvDockerGroup } from "./groups/SvDockerGroup";
 import { SvGroup } from "./groups/SvGroup";
 import { PreviewDrawer } from "./layout/PreviewDrawer";
 import { NavDrawer, ViewId } from "./layout/NavDrawer";
-// The key, the account and the workspace: session-wide, so all three live in
-// the drawer rather than inside step 1. See AccountMenu.
-import { AccountMenu } from "./layout/AccountMenu";
+import { AccountMenu, ConnectBody } from "./layout/AccountMenu";
 import { StepFlow } from "./layout/StepFlow";
 import { useServedTables } from "./useServedTables";
 import { useResource } from "./useResource";
+import { useCapacity } from "./useCapacity";
+import { useAgentWatch } from "./useAgentWatch";
+import { usePreview } from "./usePreview";
+import { useBundleOptions } from "./useBundleOptions";
 
+type HeldIds = Pick<session.Session, "accountId" | "workspaceId" | "harborId" | "shipId">;
 
-// The one thing this page does not own: the caller of the local routes. It
-// arrives as an adapter from main.tsx -- the real one in the browser, a fake in
-// vitest -- because every effect below reaches it, and a module-level import
-// leaves nowhere to alter that behaviour without editing in place. Every bug
-// this page has had lived in one of those effects.
-//
-// Fixed for the page's lifetime, which is why it is not in any dependency array.
+/** The page. Owns every piece of domain state and every effect that reaches
+ *  the server; the panels get typed props.
+ *
+ *  `api` is the route caller (a fake under test) and is fixed for the page's
+ *  lifetime. */
 export default function App({ api }: { api: Api }) {
   // -- connection ------------------------------------------------------------
   const [keyPath, setKeyPath] = useState("");
-  const [pasteId, setPasteId] = useState("");
-  const [pasteSecret, setPasteSecret] = useState("");
-  const [saveKey, setSaveKey] = useState(false);
   const [who, setWho] = useState<{ email: string; keyId: string } | null>(null);
-  const [connErr, setConnErr] = useState<string | null>(null);
-  // A round trip to BlazeMeter over someone's corporate network, so the wait is
-  // long enough to look like nothing happened. Also guards re-entry: all three
-  // entry points (Browse, Connect, paste) share this one flag.
+  // Shared by every way of connecting, so it also guards re-entry.
   const [connecting, setConnecting] = useState(false);
 
   // -- account tree ----------------------------------------------------------
   const [accounts, setAccounts] = useState<Account[]>([]);
-  // Both lists are a round trip to BlazeMeter, and both were silent while they
-  // arrived: an empty dropdown and a slow one look the same, so the answer to
-  // "why is my account not in here" was to wait and try again. See locBusy,
-  // which is the same flag for the location list below them.
   const [accountsBusy, setAccountsBusy] = useState(false);
   const [accountId, setAccountId] = useState<number | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspacesBusy, setWorkspacesBusy] = useState(false);
   const [workspaceId, setWorkspaceId] = useState<number | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [locFilter, setLocFilter] = useState("");
+  const [locBusy, setLocBusy] = useState(false);
   const [harborId, setHarborId] = useState<string | null>(null);
   const [showCreateLoc, setShowCreateLoc] = useState(false);
   const [newLoc, setNewLoc] = useState({
     name: "", workspace_id: 0, func_ids: ["performance"], slots: 1, threads_per_engine: 500 });
   const [locErr, setLocErr] = useState<string | null>(null);
-
-  // Which location and which agent have been confirmed, **by id** rather than
-  // as two booleans.
-  //
-  // A confirmation is about a selection, so changing the selection has to
-  // withdraw it -- otherwise step 1 stays finished for a pairing nobody
-  // checked, which is the whole thing the gate exists to stop. Stored as what
-  // was confirmed, that follows from the comparison and no effect has to
-  // remember to clear anything; two booleans would need one per list, and the
-  // one that had to remember is the one that forgets.
+  // What was confirmed, by id: choosing something else withdraws the
+  // confirmation by comparison, with nothing to remember to clear.
   const [confirmed, setConfirmed] =
-    useState<{ loc: string | null; ship: string | null }>(
-      { loc: null, ship: null });
+    useState<{ loc: string | null; ship: string | null }>({ loc: null, ship: null });
 
   // -- agent -----------------------------------------------------------------
   const [shipId, setShipId] = useState<string | null>(null);
   const [showCreateShip, setShowCreateShip] = useState(false);
-  const [newShipName, setNewShipName] = useState("");
   const [shipErr, setShipErr] = useState<string | null>(null);
-  // Separate from shipErr: the agent WAS created, and only its credential
-  // was refused. In the red error slot that reads as a failed creation, and
-  // the next click makes a second agent in the same location.
+  // The agent was created and only its credential was refused: an amber notice,
+  // not an error, or the next click makes a second agent.
   const [shipTokenNotice, setShipTokenNotice] = useState<string | null>(null);
   const [facts, setFacts] = useState<Facts | null>(null);
+  const [factsBusy, setFactsBusy] = useState(false);
 
-  // -- where the three account values come from -------------------------------
-  // "connect" reads them from the account; "manual" takes them typed in, for a
-  // customer whose account (and cluster) nobody here can reach. Everything
-  // downstream consumes `facts` + shipId + options.auth_token and never learns
-  // which way they arrived -- that is the whole point of manual facts being the
-  // same shape gather() returns.
+  // Where the harbor id, ship id and token come from: read off the account, or
+  // typed. Everything downstream reads `facts`, `shipId` and the token either way.
   const [sourceMode, setSourceMode] = useState<"connect" | "manual">("connect");
-  // Identity only. What the location runs is derived from the selected functionality
-  // (manualFuncIds below) rather than stored: it was state with two writers that
-  // disagreed on the miss case, and it is a pure function of `functionality`.
   const [manual, setManual] = useState({ harbor_id: "", ship_id: "" });
 
-  // -- options / preview -----------------------------------------------------
-  const [defaults, setDefaults] = useState<Options>({});
-  // The generator's vocabulary, fetched once and only read (useServedTables.ts).
+  // Current selection, for async work that must not land on a newer one.
+  const harborRef = useRef(harborId);
+  harborRef.current = harborId;
+  const shipRef = useRef(shipId);
+  shipRef.current = shipId;
+  const workspaceRef = useRef(workspaceId);
+  workspaceRef.current = workspaceId;
+
+  // -- options ---------------------------------------------------------------
   const {
     svConst, ignored, reservedEnv, slotMinimums, placeholderSources,
     functionalities, build,
   } = useServedTables(api);
-  const [options, setOptions] = useState<Options>({ namespace: "blazemeter" });
-  // The functionalities in play, and the vocabulary they are chosen from.
-  //
-  // Connected it is a view over the options -- one crane is deployed for the
-  // selected location and that location's funcIds decide what the manifests
-  // contain, so it only decides what the namespace is suggested from. In manual
-  // entry it is the declaration itself, which is why it is a *list*: an account
-  // read live has 71 of its 168 locations running performance and GUI
-  // functional together, and a bundle that could be declared for one of them
-  // was a location nobody would create (#151).
-  //
-  // The vocabulary is served (/api/functionalities, useServedTables) so that
-  // adding a functionality is a backend entry plus a tag on the groups it owns.
-  // ...and which of them run a taurus engine, off the served `runs_engine`.
-  // Read once here with the rest of the domain state rather than by each of the
-  // three consumers, and empty until the vocabulary lands -- which is the same
-  // "nothing excludes anything yet" an empty list has always meant here.
+  const {
+    options, setOptions, patch, set, applyDefaults, grpOn, setGrpOn, flipGroup,
+    caMode, setCaMode, proxy, setProxy, importProfile, exportProfile,
+  } = useBundleOptions();
   const engineFuncIds = useMemo(
     () => engineFunctionalities(functionalities), [functionalities]);
+  // Connected, a view over the location's funcIds; in manual entry, the
+  // declaration of what the typed identity runs.
   const [declared, setDeclared] = useState<string[]>([]);
-  // One way to read a text option. Written out per-site, the `.trim()` was
-  // getting forgotten -- an ingress name pasted with a trailing space missed
-  // the SV_PREREQS lookup and the panel silently lost its prose.
-  const txt = useCallback(
-    (k: string) => String(options[k] ?? "").trim(), [options]);
-  // The same read for a controlled input, where trimming would stop the user
-  // typing a space -- so the two are separate rather than one with a flag.
-  const raw = useCallback(
-    (k: string) => String(options[k] ?? ""), [options]);
-  // What this location runs, and the third state kept: manual entry declares,
-  // a location read off the account carries funcIds, and null is nobody having
-  // said yet. Up here because `sv` reads it -- which of the SV options are on
-  // their way out is what decides whether they may block an output format, and
-  // deriving that below the record that needs it was how the two got out of
-  // step. `locUnclaimed` and `notRun` stay where they are used.
+  const txt = useCallback((k: string) => String(options[k] ?? "").trim(), [options]);
+  // Untrimmed, for controlled inputs.
+  const raw = useCallback((k: string) => String(options[k] ?? ""), [options]);
+
+  // What this location runs: declared (manual), read (connected), or null when
+  // nobody has said yet.
   const locFunctionalities = functionalitiesOf(facts?.func_ids, functionalities);
   const enabled = enabledFunctionalities(sourceMode, declared, locFunctionalities);
-  // Everything about service virtualization, answered once. Four blocks of this
-  // file used to derive it -- what the location demands, whether that demand
-  // was declined, whether what is set is finished, what the panels render
-  // against -- and each read the options for itself, so one question had four
-  // answers free to disagree. Declared up here because the status poll below
-  // asks it too. See sv.ts; it is tested as plain data, with no page at all.
-  //
-  // The fourth input is whether this bundle still carries the functionality at all:
-  // notRunPatch clears the SV options of a location known to run something
-  // else, and options on their way out must not take an output format with
-  // them. Unanswered reads as yes, which is the direction that over-blocks
-  // rather than letting a bundle the server refuses through.
   const svRuns = runsFunctionality(enabled, SV_FUNCTIONALITY);
-  // What the bundle is, and what that leaves reaching anything. Declared here
-  // rather than beside the two predicates further down, because two readers up
-  // here need it: the SV correction reads `format` to say which one it is
-  // replacing, and `svState` reads `applies` -- the two platforms publish a
-  // virtual service with disjoint options (#182), so which set of them this
-  // record is about is the format's answer and not its own.
   const format = String(options.output_format ?? "manifests");
-  /** Does this option reach anything in the bundle being generated? What the
-   *  configure step hides by, and what the blockers below are judged against.
-   *  The table is the generator's; see formats.ts. */
+  /** Does this option reach anything in the bundle being generated? */
   const applies = useCallback(
-    (k: string) => optionApplies(k, format, ignored),
-    [format, ignored]);
+    (k: string) => optionApplies(k, format, ignored), [format, ignored]);
+  const whyIgnored = useCallback(
+    (k: string) => why(k, format, ignored), [format, ignored]);
   const sv = useMemo(
     () => svState(facts?.func_ids, options, svConst, svRuns, applies),
     [facts?.func_ids, options, svConst, svRuns, applies]);
-  /** Drop the credential and everything said about it.
-   *
-   *  One function because it is one fact -- the token, the rotate choice and the
-   *  report of the last download all belong to one agent, and leaving any of them
-   *  behind when the target changes is how a bundle ends up carrying, or claiming
-   *  to carry, another agent's credential. Called from every place the target
-   *  moves: a different location, a different agent, the switch to manual entry.
-   *  Declared with the readers above rather than beside `set` so that the effects
-   *  further down can reach it. */
-  const forgetToken = useCallback(() => {
-    setOptions((o) => ({ ...o, auth_token: null }));
-    // The whole attempt, not only its token report: what the last download or
-    // save did was done for the agent being left behind, and a folder named
-    // under a different agent's bundle is the same claim about the wrong thing.
-    setAttempt(NO_ATTEMPT);
-  }, []);
-  /** What this app still holds of a credential it minted for the chosen agent.
-   *
-   *  Four states rather than a token-or-not, and the pair that matters is
-   *  `none` against `unread`: an agent nobody minted for and an agent nobody
-   *  could be asked about are different answers, and only the first is entitled
-   *  to the sentence saying a token cannot be read back. See token.Recall. */
-  const [recall, setRecall] = useState<Recall>("asking");
 
-  const [files, setFiles] = useState<GeneratedFile[]>([]);
-  const [genErr, setGenErr] = useState<string | null>(null);
-  const [activeFile, setActiveFile] = useState<string | null>(null);
-  const [status, setStatus] = useState<AgentStatus | null>(null);
-  // Carries the namespace it was read from: the field can be edited between
-  // polls, and labelling these rows with a namespace they did not come from
-  // would vouch for virtual services nobody looked for.
-  const [svMocks, setSvMocks] =
-    useState<{ ns: string; read: SvMocksOut } | null>(null);
-  // Endpoint checks, keyed by the host that was probed rather than by row
-  // index: the poll above replaces the list every 10s, and a result must never
-  // end up beside a different virtual service than the one it was asked about.
-  // Keying by host also retires a result when its host does -- editing the
-  // namespace or the domain changes every key, so nothing stale survives.
-  const [svChecks, setSvChecks] =
-    useState<Record<string, { busy: boolean; res?: SvCheckOut; err?: string }>>({});
-  const [polling, setPolling] = useState(false);
-  // Which step is open. Here rather than in StepFlow because the download step
-  // sends you back to the configure step when a group it depends on is
-  // unfinished, and it cannot do that with a position it cannot see.
+  // The required fields left empty, and what is sent in their place. The
+  // marker never enters `options`, or it would be saved as if typed.
+  const blanks = useMemo(
+    () => blankRequired(options, applies, grpOn), [options, applies, grpOn]);
+  const sentOptions = useMemo(
+    () => withPlaceholders(options, blanks), [options, blanks]);
+
+  const [recall, setRecall] = useState<Recall>("asking");
+  // What the last download or save did, for the agent it was done for.
+  const [attempt, setAttempt] = useState<Attempt>(NO_ATTEMPT);
+  /** Drop the credential and everything said about it. Called whenever the
+   *  target agent changes, so a bundle never carries another agent's token. */
+  const forgetToken = useCallback(() => {
+    set("auth_token", null);
+    setAttempt(NO_ATTEMPT);
+  }, [set]);
+
+  const watch = useAgentWatch(api, harborId, shipId, {
+    on: sv.configured, namespace: txt("namespace"),
+    subdomain: txt("sv_subdomain"), scheme: sv.scheme,
+  }, setShipErr);
+  const { clearStatus, setPolling } = watch;
+  const preview = usePreview(api, facts, shipId, sentOptions);
+  const { setGenErr } = preview;
+
+  // -- views -----------------------------------------------------------------
   const [step, setStep] = useState(0);
-  // Which of the two things this page is. The step flow deploys an agent; the
-  // rollup is one read of a whole account and belongs to nothing in the flow.
-  // The planner is no longer among them -- it is step 1's first card, because
-  // reaching nothing is what makes it the first question rather than a separate
-  // page (see Sizing).
   const [view, setView] = useState<ViewId>("flow");
-  // The two drawers. The nav starts open because the views are the first thing
-  // to understand; the preview starts shut because there is nothing in it until
-  // an agent is chosen.
   const [navOpen, setNavOpen] = useState(true);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [cap, setCap] = useState<Capacity | null>(null);
-  const [capErr, setCapErr] = useState<string | null>(null);
-  useEffect(() => {
-    if (view !== "capacity" || !accountId) return;
-    // Not cleared first. The server holds this for a minute, so a re-entry is a
-    // few milliseconds -- but blanking it here showed "reading the account…"
-    // on every visit anyway, which is the thing a cache is supposed to stop.
-    // What is on screen stays until its replacement arrives, and only a change
-    // of account throws it away, because then it is another account's numbers.
-    setCapErr(null);
-    // Guarded, because this is the slowest read on the page (171 locations)
-    // and the account can be changed while it is in flight: without it the
-    // slower answer wins and the numbers on screen belong to whichever account
-    // was asked for first, under the name of the one now selected.
-    let live = true;
-    api.capacity(accountId)
-      .then((c) => { if (live) setCap(c); })
-      .catch((e: Error) => { if (live) setCapErr(e.message); });
-    return () => { live = false; };
-  }, [view, accountId]);
-  useEffect(() => { setCap(null); }, [accountId]);
-  // ...and the same read on demand, for the same reason the location list has
-  // one: the rollup is one read of the whole account and it ages while the view
-  // is open. Its own path rather than the effect above, which is entered by
-  // arriving at the view -- re-firing it would mean leaving and coming back,
-  // and it would be a no-op inside the cache's minute anyway.
-  //
-  // The guard is the effect's, in the shape a callback can have it: `live` is a
-  // closure over one run of an effect, and this outlives any of them. Same
-  // hazard exactly -- 1.3s on a 171-location account is plenty of time to
-  // change account in the drawer, and the slower answer must not land under the
-  // newer account's name.
-  const [capRefreshing, setCapRefreshing] = useState(false);
-  const accountRef = useRef(accountId);
-  accountRef.current = accountId;
-  const refreshCapacity = useCallback(async () => {
-    const id = accountRef.current;
-    if (!id) return;
-    setCapRefreshing(true);
-    setCapErr(null);
-    try {
-      // Dropped first, then re-read -- see refreshLocations. Served from the
-      // cache, this button would do nothing for up to a minute and say so in no
-      // way at all.
-      await api.refresh();
-      const c = await api.capacity(id);
-      if (accountRef.current === id) setCap(c);
-    } catch (e) {
-      // What is on screen stays. A rollup that could not be re-read has said
-      // nothing about the account, and this view's whole subject is a number
-      // people act on.
-      if (accountRef.current === id) setCapErr((e as Error).message);
-    } finally {
-      setCapRefreshing(false);
-    }
-  }, [api]);
+  const capacity = useCapacity(api, view === "capacity", accountId);
   const [planInputs, setPlanInputs] = useState<PlanInputs>(EMPTY_PLAN_INPUTS);
-  // The three sizing models, served: what each functionality is asked for in,
-  // and which of them has a measured per-pod figure at all. Read on mount with
-  // the other keyless vocabularies, because sizing is the question somebody
-  // opens this page with before they have an account to connect it to.
   const [sizingModels, setSizingModels] = useState<SizingModel[]>([]);
-  // Sizings saved under a name, and **null until something has decided them**.
-  // The defaults are one per served model (`defaultSizings`), so they cannot be
-  // the initial value -- the models arrive from /api/sizing-models -- and they
-  // are seeded once rather than merged in wherever the list is read, so
-  // deleting one stays deleted. Which is the whole reason for the null: an
-  // empty list is a list somebody emptied, and filling that one back up is the
-  // "a default came back on the next load" this codebase keeps apart from
-  // "nobody has said yet". It is the snapshot's null too, so a refresh in the
-  // gap before the models land restores the gap rather than an answer.
+  // Null until decided: the defaults are one per served model and are seeded
+  // once, so an emptied list stays empty.
   const [savedSizings, setSavedSizings] = useState<SavedSizing[] | null>(null);
-  // What the preview's bundle currently does for a credential, straight from
-  // core: the preview never rotates, so its answer is a free look at what a
-  // download would carry. Read rather than re-derived here -- the rule has four
-  // branches and one of them revokes a running agent's token.
-  const [previewToken, setPreviewToken] = useState<TokenReport | null>(null);
-  // What the last download or save actually did -- the credential report in
-  // core's own words, where a save landed, and why either was refused. One
-  // piece of state because it is one fact: the four it replaced were reset in
-  // pairs before every call, and whichever field was missed described the click
-  // before last. The download step reports the next one; nothing else writes it
-  // but forgetToken, which drops the lot when the agent changes.
-  const [attempt, setAttempt] = useState<Attempt>(NO_ATTEMPT);
+
+  // -- session restore -------------------------------------------------------
+  // Ids a restored session is waiting to re-select, each consumed by the load
+  // of the list that can confirm it still exists.
+  const pendingWorkspace = useRef<number | null>(null);
+  const pendingHarbor = useRef<string | null>(null);
+  const pendingShip = useRef<string | null>(null);
+  // A restored declaration, until the served vocabulary can check it.
+  const restoredDeclaration = useRef<string[] | null>(null);
+  const [restored, setRestored] = useState(false);
+  // The snapshot's ids, written back in place of the page's own until the list
+  // that could refute each one has answered. A failed read releases nothing:
+  // "could not ask" is not "it is gone".
+  const [held, setHeld] = useState<HeldIds | null>(null);
+  /** Stop writing these ids back: what could refute them has arrived. */
+  const release = useCallback((...keys: (keyof HeldIds)[]) => setHeld((h) => {
+    if (!h || keys.every((k) => h[k] == null)) return h;
+    const next = { ...h };
+    for (const k of keys) next[k] = null;
+    return next;
+  }), []);
 
   useEffect(() => {
     api.keyDetect().then((r) => {
-      // Only the path: the list itself had no reader once the connect form
-      // became a modal that takes one file.
       if (r.candidates[0]) setKeyPath(r.candidates[0].path);
     }).catch(() => {});
-    api.optionDefaults().then((d) => {
-      setDefaults(d);
-      setOptions((o) => ({ ...d, ...o }));
-    }).catch(() => {});
+    api.optionDefaults().then(applyDefaults).catch(() => {});
     api.sizingModels().then((ms) => {
       setSizingModels(ms);
-      // ...and the sizings to offer before anybody has saved one, which are one
-      // per model and so cannot exist until this lands. `?? ` and never a
-      // length test: a restored empty list is an answer.
       setSavedSizings((s) => s ?? defaultSizings(ms));
     }).catch(() => {});
 
-    // The key lives in the server process, so a refresh never disconnected
-    // anything -- the page just forgot. Ask, and put back what it was pointed
-    // at. Selections are restored before the connection resolves so the
-    // location list is filtered to the right workspace as it arrives; the
-    // agent is the exception (see pendingShip).
+    // The key lives in the server process, so a refresh only made the page forget.
     const saved = session.load();
     if (saved) {
       setSourceMode(saved.sourceMode);
@@ -425,23 +217,12 @@ export default function App({ api }: { api: Api }) {
       setSavedSizings(saved.sizings);
       setConfirmed(saved.confirmed);
       pendingShip.current = saved.shipId;
-      // Manual entry's declaration, and only manual entry's: connected, the
-      // functionalities are derived from the location's funcIds, and putting
-      // any back would pin the page to a stale one (#118).
-      //
-      // Applied now rather than held until the vocabulary confirms it, unlike
-      // the ids above -- because `declared` cannot carry the wait. An empty list
-      // here does not mean "not answered yet", it means "declared nothing", and
-      // notRunPatch reads it on the very first render and clears every SV option
-      // the snapshot has just restored. So it is applied, and the effect that
-      // watches the vocabulary land is what drops whichever members turn out not
-      // to be offered any more.
+      // Applied now, because an empty declaration would clear the restored SV
+      // options on the first render; the vocabulary effect checks it later.
       if (saved.sourceMode === "manual" && saved.declaredFunctionalities.length) {
         setDeclared(saved.declaredFunctionalities);
         restoredDeclaration.current = saved.declaredFunctionalities;
       }
-      // The four account-side ids are not page state yet, and may never become
-      // it -- see `held`, which is what carries them until something answers.
       setHeld({ accountId: saved.accountId, workspaceId: saved.workspaceId,
                 harborId: saved.harborId, shipId: saved.shipId });
     }
@@ -454,82 +235,15 @@ export default function App({ api }: { api: Api }) {
       pendingWorkspace.current = saved?.workspaceId ?? null;
       pendingHarbor.current = saved?.harborId ?? null;
       setAccountId(saved?.accountId ?? r.default_account_id ?? accts[0]?.id ?? null);
-      // The account list has arrived, so it is what answers for the account id.
       release("accountId");
     }).catch(() => {})
-      // Only now may the page write its own state back. Saving before this
-      // resolves overwrites the snapshot with the empty state it is about to
-      // restore *from* -- which is what happened the first time: one refresh
-      // against a server that did not answer, and the selections were gone for
-      // good.
-      //
-      // Resolving is not answering, though, and this fires on the rejection
-      // too. What the page may write from here does not include the four ids
-      // nothing has answered for: they are `held` below, which is where the
-      // decision about a failed key check is argued.
+      // Saving before this would overwrite the snapshot being restored from.
       .finally(() => setRestored(true));
+    // Runs once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [restored, setRestored] = useState(false);
 
-  // What a restored session is still waiting to re-select. Each is consumed by
-  // the effect that loads the list it belongs to, because a selection is only
-  // legitimate once the account has confirmed the thing still exists -- a
-  // location deleted since the last page load must not come back as an id the
-  // rest of the page believes.
-  const pendingWorkspace = useRef<number | null>(null);
-  const pendingHarbor = useRef<string | null>(null);
-  const pendingShip = useRef<string | null>(null);
-  // ...and the restored declaration, for as long as nothing could have refuted
-  // it. Not one of the three above: those are ids waiting to be *selected*,
-  // where this is already applied (it has to be -- see the restore) and waiting
-  // to be *checked*. What could refute it is the served vocabulary, and the
-  // effect below is where that arrives -- member by member, because a list that
-  // loses one entry to a withdrawn functionality must not lose the rest with it.
-  const restoredDeclaration = useRef<string[] | null>(null);
-
-  // The four ids the restored snapshot named, for as long as nothing has
-  // answered for them -- and what the page writes back in their place while
-  // that is true (#106).
-  //
-  // `restored` above only defers the loss it was written to stop: a key check
-  // that *rejects* flips it too, and the page then saves harborId and shipId as
-  // null over the ids it had just read back. One unanswered request and the
-  // selections are gone, which is the original bug with an extra tick in front
-  // of it.
-  //
-  // The decision, and the reason: a failed key check means the account could
-  // not be *asked*, and "we could not read" is not "there is nothing there" --
-  // the rule this codebase keeps everywhere else. Nothing has said the location
-  // was deleted; a server that did not answer says nothing about the account at
-  // all. So the snapshot keeps what it held, and the next attempt -- another
-  // refresh, or the Connect form below -- gets to use it.
-  //
-  // The case for clearing them is that with no account there is nothing to
-  // validate an id against, so writing them away is honest. It answers a
-  // different question. The page state IS empty and stays empty: a held id is
-  // never selected, never rendered and never generated for -- it is handed to
-  // the pending refs above and applied only where the account confirms the
-  // thing still exists. What is at stake is only what a later attempt may try,
-  // and an id that turns out to be gone costs one list lookup to find out.
-  //
-  // Each id is released by the answer that could refute it and by nothing else:
-  // the account list for accountId, the workspace list for workspaceId, the
-  // location list for harborId (and for shipId, when the location it belonged
-  // to is gone), the location's own agents for shipId. A list that could not be
-  // read releases nothing, for the same reason a failed key check does not.
-  type HeldIds = Pick<session.Session,
-                      "accountId" | "workspaceId" | "harborId" | "shipId">;
-  const [held, setHeld] = useState<HeldIds | null>(null);
-  /** Stop writing these ids back: what could refute them has arrived. */
-  const release = (...keys: (keyof HeldIds)[]) => setHeld((h) => {
-    if (!h || keys.every((k) => h[k] == null)) return h;
-    const next = { ...h };
-    for (const k of keys) next[k] = null;
-    return next;
-  });
-
-  // Remember what a refresh would otherwise lose. Never the AUTH_TOKEN -- see
-  // session.strip, which is where that decision lives and is tested.
+  // Never the AUTH_TOKEN: session.strip drops it.
   useEffect(() => {
     if (!restored) return;
     session.save({ sourceMode,
@@ -537,79 +251,50 @@ export default function App({ api }: { api: Api }) {
                    workspaceId: workspaceId ?? held?.workspaceId ?? null,
                    harborId: harborId ?? held?.harborId ?? null,
                    shipId: shipId ?? held?.shipId ?? null,
-                   // Only manual entry has declared anything. Connected, this
-                   // is a view over the location's funcIds and re-derives
-                   // itself from them, so writing it down could only pin the
-                   // next page load to functionalities the account never said.
-                   declaredFunctionalities:
-                     sourceMode === "manual" ? declared : [],
+                   declaredFunctionalities: sourceMode === "manual" ? declared : [],
                    manual, options, step, view, plan: planInputs,
                    sizings: savedSizings, confirmed });
   }, [restored, sourceMode, accountId, workspaceId, harborId, shipId, held,
       declared, manual, options, step, view, planInputs, savedSizings,
       confirmed]);
 
-  /** Hand the key back. The server forgets the client; the page forgets
-   *  everything that was read with it, because a stale account tree is worse
-   *  than an empty one -- it offers locations this page can no longer reach. */
+  // -- connecting ------------------------------------------------------------
+  const evicted = useRef<Set<string>>(new Set());
+
+  /** Hand the key back, and forget everything read with it. Lands on manual
+   *  entry, which is what still works with no key. */
   const disconnect = async () => {
     try { await api.keyClear(); } catch { /* forgetting locally still helps */ }
     setWho(null); setAccounts([]); setAccountId(null);
     setWorkspaces([]); setWorkspaceId(null);
     setLocations([]); setHarborId(null); setShipId(null); setFacts(null);
-    setStatus(null); setPolling(false); setConnErr(null);
+    clearStatus(); setPolling(false);
     forgetToken();
-    // The server drops every token it minted with this key (see key_clear), so
-    // the record of which of them were typed over goes too -- kept, it would
-    // stop a token minted after a reconnect from ever being evicted.
+    // The server drops every token it minted with this key.
     evicted.current.clear();
     session.clear();
-    // The held ids too, or the next save writes them straight back into a fresh
-    // snapshot and this clear undoes itself. Nothing is being refuted here --
-    // the key is simply being handed back, and what it was pointed at goes with
-    // it, which is the same reason the account tree above is dropped.
     setHeld(null);
-    // Land somewhere that still works. Account capacity has nothing to roll up
-    // without a key, and Generate's "Connect to BlazeMeter" source has no
-    // account to read a location from -- so the page goes to the flow's first
-    // step in manual entry, where the sizing at the top of it needs
-    // no account at all. That card is what "Plan capacity" used to be, and it
-    // is still the one thing here that works with nothing connected.
     setView("flow");
     setStep(0);
     setSourceMode("manual");
-    setCap(null);
   };
 
-  const connect = async (body: Parameters<typeof api.keySet>[0]) => {
-    if (connecting) return;
-    setConnErr(null);
+  /** Connect with a key. Resolves with the refusal to show, or null. */
+  const connect = async (body: ConnectBody): Promise<string | null> => {
+    if (connecting) return null;
     setConnecting(true);
     try {
       const r = await api.keySet(body);
       setWho({ email: r.user.email, keyId: r.key_id });
-      // Connecting is the answer to "where do the three values come from", so
-      // it settles that question too: picking the account is now the way on,
-      // and leaving the page in manual entry would ask for ids by hand from
-      // someone who has just handed over the account they are in.
-      //
-      // Here rather than in an effect on `who`, deliberately: this is the
-      // deliberate act. A session restored with manual entry saved keeps it,
-      // because reloading a page is not choosing anything.
+      // Connecting is the deliberate act that chooses the account as the source;
+      // a restored session is not, so this is here rather than an effect on `who`.
       switchMode("connect");
-      // Still connecting as far as the user is concerned: the key is accepted
-      // but the account list is what the next step needs, and releasing the
-      // button between the two would show a ready form with nothing in it.
       setAccountsBusy(true);
       const accts = await api.accounts().finally(() => setAccountsBusy(false));
       setAccounts(accts);
-      // A snapshot whose ids nothing has answered for gets its chance here:
-      // after a failed key check this is the first account the page has
-      // reached, and without this a successful connect would leave the ids kept
-      // above with nothing to be applied by. They go through the same pending
-      // refs a restore uses, so each is still applied only where the account
-      // confirms it. The account itself is confirmed against the list rather
-      // than set from the snapshot, because this key may be a different one.
+      // Ids a snapshot is still holding get their chance now, through the same
+      // pending refs a restore uses. The account is checked against the list,
+      // since this may be a different key.
       const h = held;
       if (h) {
         pendingWorkspace.current = h.workspaceId;
@@ -620,15 +305,17 @@ export default function App({ api }: { api: Api }) {
         && accts.some((a) => a.id === h.accountId) ? h.accountId : null;
       setAccountId(known ?? r.default_account_id ?? accts[0]?.id ?? null);
       release("accountId");
-    } catch (e) { setConnErr(String((e as Error).message)); }
-    finally { setConnecting(false); }
+      return null;
+    } catch (e) {
+      return String((e as Error).message);
+    } finally {
+      setConnecting(false);
+    }
   };
 
+  // -- the account tree --------------------------------------------------------
   useEffect(() => {
-    // Cleared first, then the guard -- the shape the workspace effect below
-    // already has. The other way round, clearing the account returned early and
-    // left its workspaces on screen, so the page offered a workspace list
-    // belonging to an account nothing was pointing at any more.
+    // Cleared before the guard, so a cleared account leaves no workspaces behind.
     setWorkspaces([]); setWorkspaceId(null);
     if (!accountId || !who) return;
     setWorkspacesBusy(true);
@@ -639,13 +326,11 @@ export default function App({ api }: { api: Api }) {
       const want = pendingWorkspace.current;
       pendingWorkspace.current = null;
       setWorkspaceId(ws.find((w) => w.id === want)?.id ?? ws[0]?.id ?? null);
-      // The list is what answers for a held workspace id -- including when the
-      // account has none, which is the empty answer rather than no answer.
       release("workspaceId");
     }).catch((e) => { if (live) setLocErr(e.message); })
       .finally(() => { if (live) setWorkspacesBusy(false); });
     return () => { live = false; };
-  }, [accountId, who]);
+  }, [api, accountId, who, release]);
 
   // The account's funcId vocabulary once connected, the keyless baseline before.
   // A failed read keeps the previous answer.
@@ -663,12 +348,12 @@ export default function App({ api }: { api: Api }) {
     [api, enabledKey]);
   const agentEnv: AgentEnvVar[] = agentEnvRead.data ?? [];
 
+  // The initial load of a workspace's locations. Refresh is a separate path
+  // (refreshLocations) because this one also resolves a restored selection.
   useEffect(() => {
     setNewLoc((n) => ({ ...n, workspace_id: workspaceId ?? 0 }));
     setLocations([]); setHarborId(null); setLocErr(null);
     if (workspaceId == null) return;
-    // An empty workspace and an unfetched one look identical, so the list says
-    // which it is rather than showing nothing and meaning two things.
     setLocBusy(true);
     let live = true;
     api.locations(workspaceId).then((ls) => {
@@ -676,13 +361,7 @@ export default function App({ api }: { api: Api }) {
       setLocations(ls);
       const want = pendingHarbor.current;
       pendingHarbor.current = null;
-      // Only if it is still there. An id restored blind would leave the page
-      // configured for a location the account no longer has.
-      //
-      // Either way this list is the answer for a held location id, so it stops
-      // being written back here -- and it takes the agent id with it when the
-      // location is gone, because an agent outlives its location nowhere. A
-      // location that is still there answers for its own agents, below.
+      // Re-selected only if still there; a gone location takes its agent id with it.
       if (want && ls.some((l) => l.id === want)) {
         setHarborId(want);
         release("harborId");
@@ -692,250 +371,399 @@ export default function App({ api }: { api: Api }) {
     }).catch((e) => { if (live) setLocErr(e.message); })
       .finally(() => { if (live) setLocBusy(false); });
     return () => { live = false; };
-  }, [workspaceId]);
-
-  // What is currently being fetched. Two flags rather than one: they are two
-  // requests, and a location list that has arrived while its facts are still
-  // coming is a real state to show.
-  const [locBusy, setLocBusy] = useState(false);
-  const [factsBusy, setFactsBusy] = useState(false);
+  }, [api, workspaceId, release]);
 
   const location = useMemo(
     () => locations.find((l) => l.id === harborId) ?? null, [locations, harborId]);
   const ships: Ship[] = location?.ships ?? [];
 
-  // The engine size this bundle will carry, and where the figure came from
-  // (#132): the location's overrideCPU/overrideMemory unless an option
-  // outranks them. Read off the page's own list rather than facts, because
-  // locationUpdated keeps the list fresh after a settings save and facts are
-  // fetched once; manual mode has no location and the statement carries that
-  // structurally (noLocation), never as "the location sets nothing".
+  // Read off the list rather than facts, so a settings save shows here at once.
   const engineSize = useMemo(
-    () => sizeStatement(raw("engine_cpu_limit"), raw("engine_mem_limit"),
-                        location),
+    () => sizeStatement(raw("engine_cpu_limit"), raw("engine_mem_limit"), location),
     [raw, location]);
 
   useEffect(() => {
-    setShipId(null); setFacts(null); setStatus(null); setShowCreateShip(false);
-    // A token belongs to one agent. Carried into another location's bundle it
-    // applies cleanly and leaves that agent at 0/1 with a credential that was
-    // never its own -- so changing location empties the field, and so does
-    // picking a different agent below.
+    setShipId(null); setFacts(null); clearStatus(); setShowCreateShip(false);
+    // A token belongs to one agent.
     forgetToken();
     if (!harborId) return;
     setFactsBusy(true);
-    // Guarded like every fetch keyed on a selection: pick A then B, and A's
-    // facts arriving last would configure B's bundle with A's images.
     let live = true;
     api.facts(harborId).then((f) => { if (live) setFacts(f); })
-      // A 404 here is the location itself, and it says so rather than relaying
-      // BlazeMeter's sentence about a harbor id nobody typed.
       .catch((e) => { if (live) setShipErr(goneNotice(e, "location") ?? e.message); })
       .finally(() => { if (live) setFactsBusy(false); });
     return () => { live = false; };
-  }, [harborId]);
+  }, [api, harborId, forgetToken, clearStatus]);
 
   useEffect(() => {
-    // A restored agent outranks the auto-pick: it is what the user chose, and
-    // it is applied only once the location's own list has confirmed it exists.
+    // A restored agent outranks the auto-pick, once the location confirms it.
     const want = pendingShip.current;
     if (want && ships.some((s) => s.id === want)) {
       pendingShip.current = null;
       setShipId(want);
     } else if (ships.length === 1 && !shipOnline(ships[0])) {
-      // Auto-pick a lone agent only if it isn't running somewhere already --
-      // a new deployment should get a NEW agent identity, not clone a live one.
+      // A lone agent is picked only if idle: a new deployment should not clone
+      // a live identity.
       setShipId(ships[0].id);
     }
-    // The location carries its own agents, so a location on screen is the
-    // answer for a held agent id: re-selected just above if it is still there,
-    // and written away if it is not.
     if (harborId) release("shipId");
+    // On a change of location or agent count, not on every re-read of the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [harborId, ships.length]);
 
-  // Which half of the agent section is on screen -- picking an identity or
-  // minting one -- is derived from `showCreateShip` and the agents themselves,
-  // in the panel that renders both: it is a view's decision, and the state it
-  // is derived from is still here.
-
-  // The credential of an agent this app minted for, back after a refresh (#123).
-  //
-  // A token is seen at exactly two moments -- creating an agent, and Regenerate
-  // -- and both are this app's own writes, so the server keeps what it handed
-  // over. Nothing else can: BlazeMeter shows a token once and no API reads one
-  // back, which is why a reload used to lose it permanently and the next bundle
-  // fell to a placeholder for an agent created a minute earlier.
-  //
-  // **Silently**, with no "restored" notice: a token claims nothing about the
-  // world. It is the same value that was handed over, and it fails identically
-  // whether it came from here or from a clipboard.
-  //
-  // Connect mode only. In manual entry the token is typed beside the two ids it
-  // belongs to and switchMode clears it deliberately, so a lookup there would
-  // put back exactly what that clear was for.
+  // -- the credential ----------------------------------------------------------
+  // A token this app minted for the agent comes back after a reload; the server
+  // holds it. Connect mode only: in manual entry the token is typed.
   useEffect(() => {
     setRecall("asking");
     if (sourceMode !== "connect" || !shipId) return;
-    // Guarded like the capacity read: picking through a list of agents leaves
-    // two answers in flight, and the slower one must not land under the agent
-    // now selected.
     let live = true;
     api.mintedToken(shipId).then((r) => {
       if (!live) return;
       setRecall(recalled(r));
-      // Only where there is one. A null is the server saying it holds nothing,
-      // and writing that into the field would be this effect clearing a token
-      // rather than restoring one -- forgetToken is what clears, on the move
-      // that makes the old one wrong.
-      if (r.auth_token) setOptions((o) => ({ ...o, auth_token: r.auth_token }));
+      if (r.auth_token) set("auth_token", r.auth_token);
     }).catch(() => {
-      // Not `none`. The app may well be holding this agent's token and simply
-      // be unable to say so, and the sentence for `none` would be a claim about
-      // an account nothing here managed to ask.
+      // Could not ask, which is not the same as "holds none".
       if (live) setRecall("unread");
     });
     return () => { live = false; };
-  }, [sourceMode, shipId]);
+  }, [api, sourceMode, shipId, set]);
 
-  /** Which agents' remembered tokens have been typed over this session.
-   *
-   *  The token field is a controlled input, so `setToken` runs on every
-   *  keystroke and the eviction must not. Once per agent is enough -- there is
-   *  nothing left to forget after the first -- and a failed request re-arms it,
-   *  because a store that still holds the old value is exactly the state this
-   *  is for. */
-  const evicted = useRef<Set<string>>(new Set());
-  /** A hand-typed token wins, and goes on winning after a reload.
-   *
-   *  Without this the remembered copy comes back on the next page load and
-   *  silently replaces what somebody typed over it. The page cannot keep the
-   *  pasted one instead -- session.strip is where that is decided -- and this
-   *  server only ever remembers what it minted, so dropping ours is the whole
-   *  of it. */
+  /** A hand-typed token wins: drop the server's remembered copy so it does not
+   *  come back on reload. Once per agent; a failure re-arms it. */
   const forgetMintedToken = useCallback(() => {
     if (sourceMode !== "connect" || !shipId) return;
     if (evicted.current.has(shipId)) return;
     const ship = shipId;
     evicted.current.add(ship);
     api.forgetMintedToken(ship)
-      // The store is empty for this agent now, and the field may yet be
-      // cleared: `none` is what the sentence under an empty field should then
-      // be reasoning from.
       .then(() => setRecall((r) => (r === "held" ? "none" : r)))
       .catch(() => { evicted.current.delete(ship); });
-  }, [sourceMode, shipId]);
+  }, [api, sourceMode, shipId]);
 
-  /** Issue a NEW AUTH_TOKEN for the selected agent, and put it in the field.
-   *
-   *  This is the one way to mint from the page now: the download step had a
-   *  rotate box beside its button, and it is gone. Minting belongs on the agent
-   *  the credential is for, where what it kills is on screen. */
-  const regenerateToken = async () => {
-    if (!harborId || !shipId) return;
-    const r = await api.issueToken(harborId, shipId);
-    setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-    // The server remembered this one as it issued it, so the page is holding
-    // what a reload would get back. The eviction re-arms with it: a token typed
-    // over *this* one has a fresh copy to displace, and an agent left in the
-    // evicted set would keep a dead credential alive across the next refresh.
+  /** Issue a new AUTH_TOKEN for the selected agent and put it in the field.
+   *  Resolves false when the agent changed while the request was out. */
+  const regenerateToken = async (): Promise<boolean> => {
+    const ship = shipId;
+    if (!harborId || !ship) return false;
+    const r = await api.issueToken(harborId, ship);
+    if (shipRef.current !== ship) return false;
+    set("auth_token", r.auth_token);
+    // The server remembers what it issued, so a later hand edit can evict it again.
     setRecall("held");
-    evicted.current.delete(shipId);
+    evicted.current.delete(ship);
+    return true;
   };
 
-  // Creating the agent identity. A named function rather than the button's own
-  // handler because the panel renders its own button and this is a real write
-  // to the account -- one copy of it, or the two drift.
-  const createShipNow = async () => {
+  /** Create an agent in the selected location. The token is captured here, the
+   *  one moment it is free. Resolves true once the agent exists. */
+  const createShipNow = async (name: string): Promise<boolean> => {
+    const harbor = harborRef.current;
+    const ws = workspaceRef.current;
+    if (!harbor || ws == null) return false;
+    let created;
     try {
-      const r = await api.createShip(harborId!, newShipName);
-      // Together: the write just dropped the server's cache, so both are cold
-      // and neither depends on the other. In series this was the slower of the
-      // two added to the other one, on the click that already waited for a
-      // create.
-      const [ls] = await Promise.all([
-        api.locations(workspaceId!),
-        api.facts(harborId!).then(setFacts).catch(() => {}),
-      ]);
-      setLocations(ls); setShipId(r.ship.id); setNewShipName("");
-      setShowCreateShip(false);
-      // The whole point of #64: the credential is captured at the one moment
-      // it is free -- a ship created a second ago has no previous token for
-      // the issue to invalidate -- so every download from here on carries it
-      // without asking BlazeMeter for another. Nothing stores it, so the field
-      // below is the copy to keep.
-      setOptions((o) => ({ ...o, auth_token: r.auth_token }));
-      setShipTokenNotice(r.token_error);
+      created = await api.createShip(harbor, name);
     } catch (e) {
-      setShipErr(goneNotice(e, "location") ?? String((e as Error).message));
+      if (harborRef.current === harbor) {
+        setShipErr(goneNotice(e, "location") ?? String((e as Error).message));
+      }
+      return false;
+    }
+    try {
+      // Both are cold after the write, and neither needs the other.
+      const [ls, f] = await Promise.all([
+        api.locations(ws), api.facts(harbor).catch(() => null)]);
+      if (workspaceRef.current === ws) setLocations(ls);
+      if (harborRef.current !== harbor) return true;
+      if (f) setFacts(f);
+      setShipId(created.ship.id);
+      setShowCreateShip(false);
+      set("auth_token", created.auth_token);
+      setShipTokenNotice(created.token_error);
+    } catch (e) {
+      if (harborRef.current === harbor) {
+        setShipErr(goneNotice(e, "location") ?? String((e as Error).message));
+      }
+    }
+    return true;
+  };
+
+  // -- manual entry ------------------------------------------------------------
+  // The declaration is the funcIds, filtered against what is served.
+  const manualFuncIds = useMemo(
+    () => functionalities.filter((f) => declared.includes(f.id)).map((f) => f.id),
+    [functionalities, declared]);
+
+  // Facts rebuilt from the typed values, debounced like the preview. Nothing is
+  // built from an id that is not the shape one comes in.
+  useEffect(() => {
+    if (sourceMode !== "manual") return;
+    if (!manualComplete(manual.harbor_id, manual.ship_id,
+                        String(options.auth_token ?? ""))) {
+      setFacts(null); setShipId(null); return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      api.manualFacts({
+        harbor_id: manual.harbor_id.trim(),
+        ship_id: manual.ship_id.trim(),
+        func_ids: manualFuncIds,
+      }).then((r: ManualFactsOut) => {
+        if (!live) return;
+        setFacts(r.facts);
+        setShipId(r.facts.ships[0].id);
+      }).catch((e) => { if (live) setGenErr(String(e.message)); });
+    }, 250);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [api, sourceMode, manual, manualFuncIds, options.auth_token, setGenErr]);
+
+  /** Switching modes drops what the other one established, the token included. */
+  const switchMode = (m: string) => {
+    const mode = m as "connect" | "manual";
+    if (mode === sourceMode) return;
+    setSourceMode(mode);
+    setFacts(null); setShipId(null); clearStatus(); setGenErr(null);
+    forgetToken();
+  };
+
+  // -- option groups -------------------------------------------------------------
+  // Only ever opens groups, so one opened by hand stays open.
+  useEffect(() => {
+    setGrpOn((g) => detectGroups(options, g, { sv: sv.required }));
+  }, [options, sv.required, setGrpOn]);
+  // The SV options a location or import leaves stranded, corrected once.
+  useEffect(() => { patch(sv.patch); }, [sv.patch, patch]);
+
+  /** Suggest the namespace for a declaration, if the field still holds a
+   *  suggested one. Several functionalities suggest the first in served order,
+   *  as a connected location carrying them does. */
+  const suggestNsFor = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    const lead = startFunctionality(ids, functionalities);
+    const f = functionalities.find((x) => x.id === lead);
+    if (!f) return;
+    setOptions((o) => {
+      const ns = suggestNamespace(String(o.namespace ?? ""), f, functionalities);
+      return ns == null ? o : { ...o, namespace: ns };
+    });
+  }, [functionalities, setOptions]);
+
+  /** Replace the declaration. Only a location being opened suggests a namespace:
+   *  looking at a functionality must not change the bundle. */
+  const pickFunctionality = useCallback((id: string, suggestNs = false) => {
+    setDeclared([id]);
+    if (suggestNs) suggestNsFor([id]);
+  }, [suggestNsFor]);
+
+  /** Manual entry's checkbox. Service virtualization is declared alone, since
+   *  crane sizes every pod from one limit pair. */
+  const declareFunctionality = useCallback((id: string, on: boolean) => {
+    const next = toggleDeclared(declared, id, on,
+                                functionalities.map((f) => f.id),
+                                exclusiveWith(engineFuncIds));
+    setDeclared(next);
+    suggestNsFor(next);
+  }, [declared, engineFuncIds, functionalities, suggestNsFor]);
+
+  // Which functionality a location opens on. Keyed on the harbor rather than on
+  // `facts`, which is refetched after creating an agent and must not move the view.
+  useEffect(() => {
+    if (!functionalities.length) return;
+    // A restored declaration is checked member by member once the vocabulary
+    // lands; the survivors stand, and none surviving is a fresh manual session.
+    const restoredIds = restoredDeclaration.current;
+    if (restoredIds) {
+      restoredDeclaration.current = null;
+      const kept = functionalities.filter((f) => restoredIds.includes(f.id))
+        .map((f) => f.id);
+      if (kept.length) {
+        if (kept.length !== restoredIds.length) setDeclared(kept);
+        return;
+      }
+      pickFunctionality(functionalities[0].id);
+      return;
+    }
+    // Manual entry declares rather than reads. With no facts yet (a location's
+    // are in flight), keep the current view rather than flip to the default.
+    if (sourceMode === "manual" || !facts) {
+      if (!declared.length) pickFunctionality(functionalities[0].id, true);
+      return;
+    }
+    const start = startFunctionality(facts.func_ids, functionalities);
+    if (start) pickFunctionality(start, true);
+    // Reads `declared` and `facts` without following them: re-running on either
+    // would re-force the starting functionality over the user's choice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [facts?.harbor_id, functionalities, pickFunctionality, sourceMode]);
+
+  // -- step 1: has the choice been made? -------------------------------------------
+  // Both lists auto-pick, so being selected is not being confirmed. Manual entry
+  // has no lists: typing the ids is the deliberate act.
+  const locConfirmed = !!harborId && confirmed.loc === harborId;
+  const shipConfirmed = !!shipId && confirmed.ship === shipId;
+  const chosen = sourceMode === "manual" || (locConfirmed && shipConfirmed);
+  const agentBlocked = !facts || !shipId
+    ? "fill in the agent details to continue"
+    : chosen ? ""
+    : "confirm " + [!locConfirmed ? "the location" : "",
+                    !shipConfirmed ? "the agent" : ""]
+      .filter(Boolean).join(" and ");
+
+  // -- step 2: what the bundle is --------------------------------------------------
+  // Judged against the format: an option this bundle cannot carry has no field
+  // on screen, so it must not block anything.
+  const namespaceOk = !applies("namespace") || !!txt("namespace");
+  const saOk = !applies("service_account_name") || serviceAccountOk(options);
+  const saCreate = options.service_account_create !== false;
+  const tokenPlan = downloadPlan(preview.previewToken);
+  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities, funcIds);
+  // Options set for a functionality the location does not run are cleared; the
+  // switch that would clear them is not on screen.
+  const notRun = notRunPatch(options, enabled);
+  useEffect(() => { patch(notRun); }, [notRun, patch]);
+  const incomplete = incompleteGroups(
+    options, sv.groupRequired, svConst.backends, applies);
+  const configureBlocked = configureBlockedBy(
+    options, blockingGroups(options, sv.groupRequired, svConst.backends, applies));
+  // Manual entry is the only mode the identity can be blank in.
+  const idBlanks = useMemo(
+    () => (sourceMode === "manual"
+      ? blankManualIds(manual.harbor_id, manual.ship_id) : []),
+    [sourceMode, manual]);
+  const downloadGaps = useMemo(
+    () => gaps(idBlanks, blanks, tokenPlan.incomplete, placeholderSources),
+    [idBlanks, blanks, tokenPlan.incomplete, placeholderSources]);
+
+  const envArea = (
+    <EnvVars env={options.extra_env} vars={agentEnv} reserved={reservedEnv}
+      cluster={!isDocker(format)}
+      onChange={(v) => set("extra_env", v)} />
+  );
+
+  const groupBody: Record<GroupId, ReactNode> = {
+    registry: (
+      <RegistryGroup applies={applies} whyIgnored={whyIgnored}
+        registry={raw("private_registry")}
+        pullSecret={raw("pull_secret")}
+        registryAuth={Boolean(options.registry_auth)}
+        onRegistry={(v) => set("private_registry", v)}
+        onPullSecret={(v) => set("pull_secret", v)}
+        onRegistryAuth={(v) => set("registry_auth", v)} />
+    ),
+    proxy: <ProxyGroup proxy={proxy} onField={setProxy} />,
+    ca: (
+      <CaGroup applies={applies} openshift={isOpenshift(options)}
+        mode={caMode} onMode={setCaMode}
+        configmap={raw("ca_existing_configmap")}
+        configmapKey={raw("ca_configmap_key")}
+        certFile={raw("ca_cert_file")}
+        onCertFile={(v) => set("ca_cert_file", v)} />
+    ),
+    sched: (
+      <SchedGroup
+        tolerations={options.tolerations} nodeSelector={options.node_selector}
+        engineTolerations={options.engine_tolerations}
+        engineNodeSelector={options.engine_node_selector}
+        onPatch={patch} />
+    ),
+    security: (
+      <SecurityGroup applies={applies} cluster={!isDocker(format)}
+        useSecret={Boolean(options.use_secret)}
+        clusterRbac={Boolean(options.cluster_rbac)}
+        // Absent means the default, which is on.
+        restrictEngines={options.restrict_engines !== false}
+        serviceType={String(options.service_type ?? "CLUSTERIP")}
+        // Tri-state: absent stays absent rather than being written as a choice.
+        autoUpdate={options.auto_update == null ? null : Boolean(options.auto_update)}
+        onUseSecret={(v) => set("use_secret", v)}
+        onClusterRbac={(v) => set("cluster_rbac", v)}
+        onRestrictEngines={(v) => set("restrict_engines", v)}
+        onAutoUpdate={(v) => set("auto_update", v)}
+        onServiceType={(v) => set("service_type", v)} />
+    ),
+    sv: (
+      <SvGroup sv={sv}
+        onIngress={(v) => set("sv_ingress", v)}
+        onSubdomain={(v) => set("sv_subdomain", v)}
+        onTlsSecret={(v) => set("sv_tls_secret", v)}
+        onGateway={(v) => set("sv_istio_gateway", v)} />
+    ),
+    svDocker: (
+      <SvDockerGroup
+        hostname={raw("sv_hostname")} cert={raw("sv_tls_cert")}
+        key_={raw("sv_tls_key")}
+        onHostname={(v) => set("sv_hostname", v)}
+        onCert={(v) => set("sv_tls_cert", v)}
+        onKey={(v) => set("sv_tls_key", v)} />
+    ),
+  };
+
+  /** Put a location that was just changed back into the list, in place. */
+  const locationUpdated = useCallback((loc: Location) => {
+    setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, ...loc } : l)));
+  }, []);
+
+  // -- Refresh -----------------------------------------------------------------------
+  // Writes `locations` and nothing else: not the selection, the options or facts.
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshLocations = useCallback(async () => {
+    const ws = workspaceRef.current;
+    if (ws == null) return;
+    setRefreshing(true);
+    setLocErr(null);
+    try {
+      // The server caches the list; drop it first or the re-read is a no-op.
+      await api.refresh();
+      const ls = await api.locations(ws);
+      if (workspaceRef.current === ws) setLocations(ls);
+    } catch (e) {
+      // The list on screen stays: a failed read says nothing about the account.
+      if (workspaceRef.current === ws) setLocErr((e as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [api]);
+
+  // BlazeMeter refuses a create below the slot minimum, so it is said first.
+  const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
+    : !newLoc.workspace_id ? "pick a workspace above first"
+    : slotsBlockedBy(newLoc.func_ids, newLoc.slots, slotMinimums);
+
+  /** Create the private location the form describes, and select it. */
+  const createLocationNow = async () => {
+    const ws = workspaceRef.current;
+    if (ws == null || !accountId) return;
+    try {
+      const l = await api.createLocation({ ...newLoc, account_id: accountId });
+      const ls = await api.locations(ws);
+      if (workspaceRef.current !== ws) return;
+      setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
+    } catch (e) {
+      if (workspaceRef.current === ws) setLocErr(String((e as Error).message));
     }
   };
 
-  // agent status polling. An SV deployment also reads the namespace on the same
-  // tick: the agent reports idle whether or not its virtual services ever
-  // became reachable, so the heartbeat alone stays green through a deploy
-  // stalled at WAITING_FOR_DOMAIN.
-  //
-  // The SV parameters travel by ref, not by dependency: they come from options,
-  // and depending on them would tear down and restart the interval on every
-  // keystroke in the namespace field.
-  const svWatchRef = useRef({ on: false, ns: "", dom: "" });
-  svWatchRef.current = { on: sv.configured, ns: txt("namespace"),
-                         dom: txt("sv_subdomain") };
-  useEffect(() => {
-    if (!polling || !harborId || !shipId) return;
-    let live = true;
-    const tick = () => {
-      const { on, ns, dom } = svWatchRef.current;
-      // Each request applies as it lands, rather than the pair being awaited
-      // together: sv_read waits up to 15s on a cluster that never answers (it
-      // has to -- kubectl retries an unreachable API server rather than
-      // failing), which on a 10s poll would otherwise hold the heartbeat behind
-      // a hung cluster. Failures keep the last good value, as before.
-      api.status(harborId, shipId)
-        .then((s) => { if (live) setStatus(s); })
-        // Transient failures stay swallowed -- the last good status stands, and
-        // a dropped tick is not news. 404 is the exception and is let through,
-        // because it is the one answer the next tick cannot improve on: the
-        // agent is gone, and without this the page shows its last heartbeat as
-        // a live one indefinitely. Watching stops with it; there is nothing
-        // left to watch, and 6 requests a minute against a deleted agent is
-        // just a way of not saying so.
-        .catch((e) => {
-          if (!live) return;
-          const gone = goneNotice(e, "agent");
-          if (gone) { setShipErr(gone); setPolling(false); }
-        });
-      if (on && ns) {
-        api.svMocks(ns, dom)
-          .then((m) => { if (live) setSvMocks({ ns, read: m }); }).catch(() => {});
-      }
-    };
-    tick();
-    const t = window.setInterval(tick, 10000);
-    return () => { live = false; window.clearInterval(t); };
-  }, [polling, harborId, shipId]);
+  const accountName = useMemo(
+    () => accounts.find((a) => a.id === accountId)?.name ?? null,
+    [accounts, accountId]);
+  const workspaceName = useMemo(
+    () => workspaces.find((w) => w.id === workspaceId)?.name ?? null,
+    [workspaces, workspaceId]);
+  /** One segment of the path under the flow; `warn` says "none yet" in amber. */
+  const pathSeg = (label: string, value: string | null, warn = false) => (
+    <span className="flex items-center gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
+      <span className={"text-xs font-medium "
+        + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
+        {value ?? (warn ? "none yet" : "—")}
+      </span>
+    </span>
+  );
 
-  const set = useCallback((k: string, v: unknown) =>
-    setOptions((o) => ({ ...o, [k]: v })), []);
-
-  /** What the sizing card states.
-   *
-   *  Assembled once, read twice: by the sizing card at the top of step 1, and
-   *  by whichever location is open below it -- which re-asks with its own agent
-   *  count, since `slots` is engines per agent. The rows are the planner's own
-   *  (they are what was typed at a target); the rest are bundle options,
-   *  because the sizing is for the engine the bundle asks for and a second copy
-   *  of that size is how the two came to disagree.
-   *
-   *  A row per ticked functionality, in the served table's order rather than in
-   *  the order they were ticked: the plan comes back in that order too, so the
-   *  card and the document list them the same way whatever was picked first.
-   *  A model with no measured figure carries no `figure`, and the ask cannot
-   *  invent one for it -- there is no box that could have filled it.
-   *
-   *  There is nothing to "apply". The four location settings the plan implies
-   *  are a write to the customer's account, and that write is made in one place
-   *  -- the location's own panel, beside the sentence saying what it costs. */
+  /** What the sizing card states, and what the open location re-asks with its
+   *  own agent count. One row per ticked functionality, in served order; a
+   *  model with no measured figure carries none. */
   const profileAsk: PlanAsk = {
     sizings: sizingModels
       .filter((m) => planInputs.functionalities.includes(m.functionality))
@@ -950,872 +778,156 @@ export default function App({ api }: { api: Api }) {
     enginesPerNode: raw("engines_per_node"),
   };
 
-  // What manual mode declares the typed identity runs: the declared
-  // functionalities, which *are* the funcIds (#149) -- so the declaration
-  // reaches `manualFacts` with nothing in between and nothing to wait for.
-  //
-  // It used to pick "the first funcId this functionality claims that changes
-  // the images", off /api/func-ids, because one functionality claimed four. Two
-  // vocabularies had to have landed before a declaration named anything, and
-  // until the second did the identity was gathered for no funcId at all -- a
-  // wait indistinguishable from a declaration nobody had made. The 1:1 mapping
-  // removes the lookup rather than fixing it. Still no literal funcId here:
-  // `declared` is only ever written from the served list.
-  //
-  // Filtered against that list on the way out rather than trusted: a member the
-  // vocabulary does not carry names no funcId, and the effect below is what
-  // drops it for good. In the render before it does, this is what stops it
-  // reaching the account as one.
-  const manualFuncIds = useMemo(
-    () => functionalities.filter((f) => declared.includes(f.id)).map((f) => f.id),
-    [functionalities, declared]);
-
-  // Manual facts are rebuilt from the typed values rather than held separately,
-  // so there is one `facts` for the rest of the page whichever mode is on.
-  // Debounced for the same reason the preview is: this runs on every keystroke.
-  useEffect(() => {
-    if (sourceMode !== "manual") return;
-    // Nothing is built from a value that is not the shape an id comes in. The
-    // fields say what is wrong; what this stops is the rest of the page --
-    // preview, download -- describing a bundle assembled around a
-    // truncated paste, which is a bundle that applies cleanly and then joins
-    // nothing. `done` below follows from `facts`, so this is also what keeps
-    // step 1 from being leavable.
-    if (!manualComplete(manual.harbor_id, manual.ship_id,
-                        String(options.auth_token ?? ""))) {
-      setFacts(null); setShipId(null); return;
-    }
-    // The timer and the answer both belong to this run of the effect: an edit
-    // that lands inside the debounce, or while the request is out, must not let
-    // the previous id's facts arrive after it.
-    let live = true;
-    const timer = window.setTimeout(() => {
-      api.manualFacts({
-        harbor_id: manual.harbor_id.trim(),
-        ship_id: manual.ship_id.trim(),
-        func_ids: manualFuncIds,
-      }).then((r: ManualFactsOut) => {
-        if (!live) return;
-        setFacts(r.facts);
-        setShipId(r.facts.ships[0].id);
-      }).catch((e) => { if (live) setGenErr(String(e.message)); });
-    }, 250);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [sourceMode, manual, manualFuncIds, options.auth_token]);
-
-  // Switching modes drops what the other one established. Leaving a connected
-  // location's facts in place while manual fields are on screen is how the
-  // preview ends up describing an agent nobody is looking at.
-  const switchMode = (m: string) => {
-    const mode = m as "connect" | "manual";
-    if (mode === sourceMode) return;
-    setSourceMode(mode);
-    setFacts(null); setShipId(null); setStatus(null); setGenErr(null);
-    // Both modes now hold a typed-or-captured token, and it belongs to the agent
-    // the other mode was about -- so it must not survive the switch either way.
-    forgetToken();
-  };
-
-  const exportProfile = () => {
-    const drop = new Set(["auth_token", "ship_id"]);
-    const clean = Object.fromEntries(Object.entries(options)
-      .filter(([k, v]) => !drop.has(k) && v !== (defaults as Record<string, unknown>)[k]));
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(clean, null, 2)],
-      { type: "application/json" }));
-    a.download = "bzm-opl-profile.json";
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  const importProfile = (file: File) => {
-    file.text().then((t) => setOptions({ ...defaults, ...JSON.parse(t) }))
-      .catch(() => setGenErr("could not parse profile JSON"));
-  };
-
-  const proxyOpt = (options.proxy ?? {}) as Record<string, string | undefined>;
-  const setProxy = (k: string, v: string) => {
-    const p = { ...proxyOpt, [k]: v || undefined };
-    set("proxy", Object.values(p).some(Boolean) ? p : null);
-  };
-
-  // CA trust is one-of: existing ConfigMap | inline PEM | OpenShift injection.
-  // Derived from the options rather than stored, so the radios and the group's
-  // own switch (which is caModePatch at "existing"/"none") cannot disagree.
-  const caMode: CaMode = caModeOf(options);
-  const setCaMode = (m: CaMode) =>
-    setOptions((o) => ({ ...o, ...caModePatch(o, m) }));
-
-  // Toggle-to-enable option groups: OFF hides the fields AND wipes their
-  // options, so nothing hidden ever reaches the manifests. Auto-flips on when
-  // a preset/import brings values in.
-  const [grpOn, setGrpOn] = useState<GroupFlags>(allGroupsOff);
-  // Sticky: this only ever opens groups, so a group the user opened by hand
-  // stays open with nothing set in it. `sv.required` is the dependency, not the
-  // record it is carried in: a fresh object every render would re-run this on
-  // every keystroke.
-  useEffect(() => {
-    setGrpOn((g) => detectGroups(options, g, { sv: sv.required }));
-  }, [options, sv.required]);
-  // The one place an SV option is written without anyone pressing anything, and
-  // the whole of it: an imported profile can arrive stranded (an openshift
-  // ingress on a platform that is not OpenShift, a gateway no backend will
-  // read), and a location can turn out to be an SV one after the form was
-  // filled in. What has to change is decided in sv.ts as a value -- which is
-  // what makes it testable, and what stops this being two effects writing what
-  // a third reads back. Applying the patch makes the next one null, so this
-  // settles in one pass.
-  //
-  // It used to be able to move the *output format* as well, for a bundle
-  // configured for service virtualization on a format that refused it, and the
-  // notice beside the segment was that write saying so. No format refuses one
-  // now, so every branch left completes a choice made here rather than
-  // overriding one, and there is nothing for a notice to be about.
-  useEffect(() => {
-    if (sv.patch) setOptions((o) => ({ ...o, ...sv.patch }));
-  }, [sv.patch]);
-  const flipGroup = (id: GroupId, on: boolean) => {
-    setGrpOn((g) => ({ ...g, [id]: on }));
-    const group = GROUP_BY_ID[id];
-    setOptions((o) => {
-      // `required` reaches disable so a group the location demands can record
-      // being switched off rather than merely emptied -- see the SV group.
-      const patch = on ? group.enable(o)
-        : group.disable(o, !!sv.groupRequired[id]);
-      // A group that seeds nothing must hand back the same object: a fresh
-      // identity would re-run the preview effect and re-POST /api/generate for
-      // options that did not change.
-      return Object.keys(patch).length ? { ...o, ...patch } : o;
-    });
-  };
-  // Moving the view. The only option it may write is the namespace, and only
-  // while that still holds one a functionality suggested -- everything else stays
-  // exactly as it is, because narrowing a view must not change what the bundle
-  // generates. No group is flipped on or off here for the same reason.
-  //
-  // A function rather than an effect on `functionality`: an effect would also fire
-  // when the vocabulary lands mid-session and rewrite a namespace already typed.
-  // `suggestNs` is opt-in and only the location effect passes it. Switching the
-  // view by hand must not touch the namespace: the namespace is generated into
-  // every manifest, so suggesting on a manual switch would make looking at a
-  // functionality change the bundle -- the one thing a view is not allowed to do. It
-  // also flip-flopped blazemeter <-> blazemeter-sv on a location that has both.
-
-  /** Suggest the namespace that goes with a declaration, if the field still
-   *  holds one somebody else's suggestion put there.
-   *
-   *  **Several functionalities, one namespace.** One bundle deploys into one
-   *  namespace, so a declaration of two cannot have both suggest; the rule is
-   *  the *first in served order*, which is `startFunctionality` -- the same
-   *  tie-break a connected location already uses for the same reason (a
-   *  location carrying both funcIds opens on the first). So a manual identity
-   *  declared for performance and GUI functional lands on `blazemeter`, exactly
-   *  where a connected location carrying those two funcIds lands, rather than
-   *  on whichever box happened to be ticked last. Nothing is suggested for an
-   *  empty declaration: `startFunctionality` answers with the first served
-   *  functionality when it recognises none of the ids, which would be a
-   *  namespace written from having unticked everything. */
-  const suggestNsFor = useCallback((ids: string[]) => {
-    if (!ids.length) return;
-    const lead = startFunctionality(ids, functionalities);
-    const f = functionalities.find((x) => x.id === lead);
-    if (!f) return;
-    setOptions((o) => {
-      const ns = suggestNamespace(String(o.namespace ?? ""), f, functionalities);
-      // Same object when there is nothing to suggest: a fresh identity re-POSTs
-      // /api/generate for options that did not change.
-      return ns == null ? o : { ...o, namespace: ns };
-    });
-  }, [functionalities]);
-
-  const pickFunctionality = useCallback((id: string, suggestNs = false) => {
-    setDeclared([id]);
-    if (suggestNs) suggestNsFor([id]);
-  }, [suggestNsFor]);
-
-  /** Manual entry's checkbox: tick or untick one functionality of the
-   *  declaration.
-   *
-   *  A different act from `pickFunctionality`, which *replaces* the list --
-   *  that is a location being opened, and this is somebody saying what they are
-   *  building. Nothing else is written: `manualFuncIds` derives the funcIds from
-   *  `declared`, so ticking a box is the whole action, and the namespace follows
-   *  the rule above.
-   *
-   *  `exclusiveWith` is where a location being *decided* gets an opinion:
-   *  service virtualization is declared on its own, because crane sizes every
-   *  pod it creates from one limit pair. The card states it beside the boxes;
-   *  connect mode has no such rule, only the warning, because there the
-   *  location already exists. */
-  const declareFunctionality = useCallback((id: string, on: boolean) => {
-    const next = toggleDeclared(declared, id, on,
-                                functionalities.map((f) => f.id),
-                                exclusiveWith(engineFuncIds));
-    setDeclared(next);
-    suggestNsFor(next);
-  }, [declared, engineFuncIds, functionalities, suggestNsFor]);
-
-  // Which functionality a location opens on, from its funcIds. Keyed on the harbor
-  // rather than on `facts`, which is refetched after creating an agent: that
-  // must not yank the view back from wherever the user moved it. `declared` is
-  // read but deliberately not a dependency -- depending on it would re-force
-  // the starting functionality every time the user changed the declaration.
-  useEffect(() => {
-    if (!functionalities.length) return;
-    // ...and where a restored declaration is checked, because this is where the
-    // thing that could refute it arrives: it names a functionality from the served
-    // vocabulary, and until that has landed there is nothing to check it
-    // against. Still offered means it stands, and nothing below may touch it --
-    // hence the return rather than a fall-through.
-    const restoredIds = restoredDeclaration.current;
-    if (restoredIds) {
-      restoredDeclaration.current = null;
-      // Checked member by member, and the survivors kept. A functionality this
-      // build does not serve names no funcId, so a member left in would have
-      // the identity's facts gathered for an id nothing offers, with no box on
-      // screen to say so or to change it with. Dropping the whole declaration
-      // over one such member would be the same loss inflicted on the ones that
-      // are still offered -- which is what makes this a filter rather than the
-      // `some(...)` test it was while a declaration was one id (#151).
-      const kept = functionalities.filter((f) => restoredIds.includes(f.id))
-        .map((f) => f.id);
-      // Written back only where something actually went, so a declaration that
-      // stands does not mint a new list identity and re-POST the preview.
-      if (kept.length) {
-        if (kept.length !== restoredIds.length) setDeclared(kept);
-        return;
-      }
-      // None of it is offered any more, so the page lands where a fresh manual
-      // session lands. Without the namespace suggestion, though: a restore is
-      // not a hand switch and not a location being picked, and what it read back
-      // is generated into every manifest.
-      pickFunctionality(functionalities[0].id);
-      return;
-    }
-    // Manual entry declares rather than reads, so the facts have nothing to say
-    // here: their funcIds *are* the declaration (manualFuncIds), and reading
-    // them back can only restate it -- or lose it, where the declared functionality
-    // has no image-changing funcId and startFunctionality falls back to the first
-    // served one. What went with it is a namespace suggestion that fired when
-    // the ship id was finished being typed, which is not a location being picked
-    // either.
-    if (sourceMode === "manual" || !facts) {
-      // facts is cleared while the next location's are fetched. Falling back to
-      // the default in that gap would flip the view (and the suggested
-      // namespace) to performance and back for every SV location picked.
-      if (!declared.length) pickFunctionality(functionalities[0].id, true);
-      return;
-    }
-    const start = startFunctionality(facts.func_ids, functionalities);
-    if (start) pickFunctionality(start, true);
-  }, [facts?.harbor_id, functionalities, pickFunctionality, sourceMode]);
-
-  // -- has the choice been made, or only landed on? ---------------------------
-  // Both lists auto-pick: a lone agent is chosen for you, and a session restore
-  // brings back a location and an agent nobody has looked at this time round.
-  // So "something is selected" was never the same question as "somebody has
-  // said this is the one", and step 1 asked the first while claiming the
-  // second. Confirm on each list answers it.
-  //
-  // Manual entry has neither list. Typing a harbor id and a ship id by hand IS
-  // the deliberate act, and there is no panel to press -- so it is finished on
-  // the ids alone, exactly as before.
-  const locConfirmed = !!harborId && confirmed.loc === harborId;
-  const shipConfirmed = !!shipId && confirmed.ship === shipId;
-  const chosen = sourceMode === "manual" || (locConfirmed && shipConfirmed);
-  /** What step 1 is still waiting for, or "" when nothing. Same shape as the
-   *  configure step's: one derivation behind the tick and the sentence. */
-  const agentBlocked = !facts || !shipId
-    ? "fill in the agent details to continue"
-    : chosen ? ""
-    : "confirm " + [!locConfirmed ? "the location" : "",
-                    !shipConfirmed ? "the agent" : ""]
-      .filter(Boolean).join(" and ");
-
-  // -- what the bundle is ----------------------------------------------------
-  // Flat YAML to kubectl apply, the chart with a values overlay, or one agent
-  // as one container. The first two render the same objects and differ only in
-  // how you install and upgrade; the third is a different platform, and around
-  // two dozen options reach nothing in it. So the choice is made at the top of
-  // the configure step and the form follows it -- asking for a namespace and a
-  // ServiceAccount and then handing over a bundle with neither is the silent
-  // failure this arrangement exists to stop. No format *refuses* a
-  // configuration -- the pair of tables that said which did is gone with the
-  // last refusal (see sv.ts) -- so the choice is free and what changes is the
-  // form, never the bundle's contents.
-  // `format` and `applies` are both declared with `sv`, which reads them.
-  /** ...and, where a field's absence needs explaining, the generator's own
-   *  sentence for it. Served with the keys for exactly this: the bundle's
-   *  README prints these, and the form hiding the field should not have to
-   *  write its own version. */
-  const whyIgnored = useCallback(
-    (k: string) => why(k, format, ignored), [format, ignored]);
-
-  // Both are answered against the format, not against the options alone: they
-  // are what blocks the download, and an option this bundle cannot carry must
-  // not block it -- the field for it is not on screen, so there would be
-  // nothing to fix. generate() agrees on both counts for a docker bundle.
-  const namespaceOk = !applies("namespace") || !!txt("namespace");
-  // Neither blocks anything any more: `generate()` refused an empty service
-  // account once, `fill_placeholders` runs before every validator now, and the
-  // gate that still read this is gone (see DownloadPanel's `ready`). What is
-  // left is amber: the field's own border, its hint naming the marker, and the
-  // rail reporting the state.
-  const saOk = !applies("service_account_name") || serviceAccountOk(options);
-  const saCreate = options.service_account_create !== false;
-  // What the download button will do about the credential: the hint beside it,
-  // whether the bundle can be applied at all, and the request it sends. One
-  // derivation because those answer one question and could otherwise disagree
-  // -- see token.ts. It no longer takes a rotate choice: the box that made one
-  // is gone, and minting is step 1's, on the agent the credential belongs to.
-  const tokenPlan = downloadPlan(previewToken);
-  // -- what this location runs -----------------------------------------------
-  // `locFunctionalities` and `enabled` are derived above, beside the record that reads
-  // them. This is the funcIds the location carries that the tool has no options
-  // for: locations already run tdm/dataPublisher/delphix, and naming them is
-  // the honest version of a page that quietly models three funcIds. Named with
-  // the served vocabulary, so they carry BlazeMeter's own words rather than a
-  // camelCase id -- and split by whether the account still serves them, which
-  // is why the whole vocabulary goes in and not its `choices` (#160).
-  const locUnclaimed = unclaimedFuncIds(facts?.func_ids, functionalities, funcIds);
-  // The second and last place an option is written without anyone pressing
-  // anything, and the same shape as the SV correction above: what has to change
-  // is a value optionGroups decides, this only applies it. A profile, a
-  // restored session or a location picked after the form was filled in can all
-  // leave options set for a functionality the location does not run -- and the switch
-  // that would clear them is deliberately not on screen, so nothing else can.
-  // Below `enabled` rather than beside the other effects because it reads it.
-  const notRun = notRunPatch(options, enabled);
-  useEffect(() => {
-    if (!notRun) return;
-    setOptions((o) => ({ ...o, ...notRun }));
-  }, [notRun]);
-  // Which groups are in use but not finished. Each group declares its own rule,
-  // so a functionality gaining required options later needs nothing here.
-  // `applies` too: a group whose every key this format ignores has no row on
-  // this page, so it can never be what is in the way (see incompleteGroups).
-  const incomplete = incompleteGroups(
-    options, sv.groupRequired, svConst.backends, applies);
-  // ...and what that leaves the configure step still needing, named. Empty is
-  // "nothing", which is what ticks the step off -- see configureBlockedBy. The
-  // blocking subset, not `incomplete`: a group with an empty required field is
-  // unfinished on its row and no longer in the way of the step.
-  const configureBlocked = configureBlockedBy(
-    options,
-    blockingGroups(options, sv.groupRequired, svConst.backends, applies));
-  // The required fields left empty. One list, feeding three things that must
-  // not be allowed to disagree: what is sent, what the configure step warns
-  // about, and what the download step repeats. Memoised on the options identity
-  // because `withPlaceholders` below is in the preview effect's dependencies.
-  const blanks = useMemo(
-    () => blankRequired(options, applies, grpOn),
-    [options, applies, grpOn]);
-  // ...and the identity, which is a separate list because it is filled in on a
-  // separate step and is not an option: `harbor_id` is a fact, and `ship_id` is
-  // resolved out of one by the generator. Manual entry is the only mode it can
-  // be missing in -- connect mode reads both off a location somebody picked, so
-  // there is no box to leave empty. The token is deliberately not asked about
-  // here; the download step's own line answers for it (see blankManualIds).
-  const idBlanks = useMemo(
-    () => (sourceMode === "manual"
-      ? blankManualIds(manual.harbor_id, manual.ship_id) : []),
-    [sourceMode, manual]);
-  // What every caller that generates actually sends. Derived, never stored:
-  // the marker must not reach `options`, or it lands in the session snapshot
-  // and comes back on the next load as a value somebody appears to have typed
-  // -- and the input on screen would show it, which is a form answering its own
-  // question. Same object when there is nothing to fill, so the effect below
-  // does not re-POST for a bundle that did not change.
-  const sentOptions = useMemo(
-    () => withPlaceholders(options, blanks), [options, blanks]);
-  // ...and the three lists joined, which is what the download step shows: one
-  // row per field the bundle carries a marker for, in the order somebody would
-  // fill them in. Joined here rather than in the panel because all three parts
-  // are this file's state, and a panel that reassembled them would be a second
-  // place for them to disagree.
-  const downloadGaps = useMemo(
-    () => gaps(idBlanks, blanks, tokenPlan.incomplete, placeholderSources),
-    [idBlanks, blanks, tokenPlan.incomplete, placeholderSources]);
-
-  // debounced live preview
-  useEffect(() => {
-    // The token report goes with the files: it describes the bundle those came
-    // from, and left behind it announces a placeholder in a bundle that no longer
-    // exists -- which is exactly what switching source mode used to leave on
-    // screen.
-    if (!facts) { setFiles([]); setPreviewToken(null); return; }
-    // A bundle is generated *for an agent*, so without one there is nothing to
-    // preview and generate() refuses -- correctly, and with a sentence about a
-    // ship_id nobody has been asked for yet. Picking a location that has no
-    // agents is a normal state this page has a whole amber panel for, and it
-    // used to spend a 400 on saying so. The preview waits for the agent
-    // instead; the empty preview reads as "not yet", which is what it is.
-    if (!shipId) { setFiles([]); setPreviewToken(null); setGenErr(null); return; }
-    // Per run, like the manual-facts effect: a timer left pending after the
-    // agent changed, or an older generate resolving after a newer one, would
-    // put the previous bundle -- and its token report -- back on screen.
-    let live = true;
-    const timer = window.setTimeout(async () => {
-      try {
-        const opts = { ...sentOptions, ship_id: shipId ?? undefined };
-        const r = await api.generate(facts, opts);
-        if (!live) return;
-        setFiles(r.files);
-        setPreviewToken(r.token);
-        setGenErr(null);
-        // Keep the open file open across the re-render every option edit
-        // causes; fall back to the first manifest only once the one being read
-        // stops being generated at all.
-        setActiveFile((a) => (a && r.files.some((f) => f.name === a)
-          ? a : r.files[0]?.name ?? null));
-      } catch (e) { if (live) setGenErr(String((e as Error).message)); }
-    }, 250);
-    return () => { live = false; window.clearTimeout(timer); };
-  }, [facts, sentOptions, shipId]);
-
-  // -- is the published endpoint answering? ----------------------------------
-  // A Running mock pod says nothing about whether anything routes to it: where
-  // the controller rejects crane's Ingress the endpoint 503s while the pod is
-  // healthy. The scheme is the record's -- it follows the TLS secret, because
-  // that is what decides whether the published endpoint terminates TLS.
-  //
-  // Nothing renders off the promise: the row goes busy, the status poll behind
-  // it keeps running, and the server bounds its own wait well inside one poll
-  // interval, so a hanging endpoint holds up nothing but its own row.
-  const checkEndpoint = async (host: string) => {
-    setSvChecks((c) => ({ ...c, [host]: { busy: true } }));
-    try {
-      const res = await api.svCheck(host, sv.scheme);
-      setSvChecks((c) => ({ ...c, [host]: { busy: false, res } }));
-    } catch (e) {
-      setSvChecks((c) => ({ ...c, [host]: { busy: false, err: String((e as Error).message) } }));
-    }
-  };
-
-  // The environment variables, which are no longer a group.
-  //
-  // #131 made them one, and a switch was the wrong control for them: what the
-  // switch turned on was an empty name box, so the area asked somebody to
-  // supply the vocabulary as well as the value. It is a list now -- everything
-  // BlazeMeter documents that no group here already writes -- and a list has
-  // nothing to be off. It sits beside Advanced for that reason: closed, not
-  // outside the form.
-  const envArea = (
-    <EnvVars env={options.extra_env} vars={agentEnv} reserved={reservedEnv}
-      cluster={!isDocker(format)}
-      // Written whole and already normalised: env.ts emits `null` for "nothing
-      // set", so what comes out of the area is exactly what comes back as
-      // `env`, which is how its editors tell their own writes from an imported
-      // profile's.
-      onChange={(v) => set("extra_env", v)} />
-  );
-
-  // Each group's body, wired with the props that group actually needs -- no
-  // shared bag of options handed round, so a group reads on its own and what it
-  // may write is what its declaration says it owns.
-  const groupBody: Record<GroupId, ReactNode> = {
-    registry: (
-      <RegistryGroup applies={applies} whyIgnored={whyIgnored}
-        registry={raw("private_registry")}
-        pullSecret={raw("pull_secret")}
-        registryAuth={Boolean(options.registry_auth)}
-        onRegistry={(v) => set("private_registry", v)}
-        onPullSecret={(v) => set("pull_secret", v)}
-        onRegistryAuth={(v) => set("registry_auth", v)} />
-    ),
-    proxy: <ProxyGroup proxy={proxyOpt} onField={setProxy} />,
-    ca: (
-      <CaGroup applies={applies} openshift={isOpenshift(options)}
-        mode={caMode} onMode={setCaMode}
-        configmap={raw("ca_existing_configmap")}
-        configmapKey={raw("ca_configmap_key")}
-        certFile={raw("ca_cert_file")}
-        onCertFile={(v) => set("ca_cert_file", v)} />
-    ),
-    sched: (
-      <SchedGroup
-        tolerations={options.tolerations} nodeSelector={options.node_selector}
-        engineTolerations={options.engine_tolerations}
-        engineNodeSelector={options.engine_node_selector}
-        onPatch={(p) => setOptions((o) => ({ ...o, ...p }))} />
-    ),
-    security: (
-      <SecurityGroup applies={applies} cluster={!isDocker(format)}
-        useSecret={Boolean(options.use_secret)}
-        clusterRbac={Boolean(options.cluster_rbac)}
-        // Absent means the backend default, which is on -- so `!== false`
-        // rather than Boolean(), which would show an untouched bundle as
-        // unrestricted and invite someone to "fix" it by ticking a box that
-        // then writes a key that was never there.
-        restrictEngines={options.restrict_engines !== false}
-        serviceType={String(options.service_type ?? "CLUSTERIP")}
-        // Tri-state, so absent stays absent: `== null` rather than Boolean(),
-        // which would resolve the default here and write it back as a choice.
-        autoUpdate={options.auto_update == null ? null : Boolean(options.auto_update)}
-        onUseSecret={(v) => set("use_secret", v)}
-        onClusterRbac={(v) => set("cluster_rbac", v)}
-        onRestrictEngines={(v) => set("restrict_engines", v)}
-        onAutoUpdate={(v) => set("auto_update", v)}
-        onServiceType={(v) => set("service_type", v)} />
-    ),
-    // The one record, and the four writes. Which backend is chosen, whether it
-    // is finished, what the prose is rendered against and what may be offered
-    // are all one answer -- assembled here from eleven props, they were eleven
-    // chances to assemble it wrongly.
-    sv: (
-      <SvGroup sv={sv}
-        onIngress={(v) => set("sv_ingress", v)}
-        onSubdomain={(v) => set("sv_subdomain", v)}
-        onTlsSecret={(v) => set("sv_tls_secret", v)}
-        onGateway={(v) => set("sv_istio_gateway", v)} />
-    ),
-    // The same functionality, the docker agent's way. No record to hand it:
-    // there is nothing here to derive -- no backend to look prose up by, no
-    // completeness rule the server does not already own -- so it takes the
-    // three values and the three writes, which is what every other group with
-    // nothing to decide takes.
-    svDocker: (
-      <SvDockerGroup
-        hostname={raw("sv_hostname")} cert={raw("sv_tls_cert")}
-        key_={raw("sv_tls_key")}
-        onHostname={(v) => set("sv_hostname", v)}
-        onCert={(v) => set("sv_tls_cert", v)}
-        onKey={(v) => set("sv_tls_key", v)} />
-    ),
-  };
-
-  /** Put a location that has just been changed back into the list.
-   *
-   *  In place rather than by re-fetching the workspace: the answer came from a
-   *  re-read of that location, so it is newer than anything a list call would
-   *  bring back, and re-fetching would also drop the ships the list is showing
-   *  for every other row. The selection does not move -- changing a location's
-   *  settings is not a reason to stop working on it. */
-  const locationUpdated = useCallback((loc: Location) => {
-    setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, ...loc } : l)));
-  }, []);
-
-  // -- Refresh ----------------------------------------------------------------
-  // The list ages while the page is open: an agent a colleague created, a
-  // location deleted in BlazeMeter's own UI, an agent that has gone quiet since
-  // the workspace was read. There is no poll -- the staleness is rare and a
-  // button is a hint that it is possible at all, which a silent background
-  // refresh is not.
-  //
-  // Its own path rather than re-firing the workspace effect above, and that is
-  // the whole reason it is written out here. That effect is the *initial* load:
-  // it clears the list, resolves the harbor id held by a restored session and
-  // calls `release()`. Re-running it as a refresh would re-run the session
-  // handover against a page that is already configured, and blank the list on
-  // the way past for a read that usually returns the same thing.
-  //
-  // So this writes `locations` and nothing else -- not the selection, not the
-  // options, not the declared functionalities, not facts. Facts in particular:
-  // they carry the image list into the bundle, and re-reading them would
-  // re-enter the path that seeds bundle options from a location. The cache is
-  // dropped for them too, so picking the location again is what re-reads them.
-  const [refreshing, setRefreshing] = useState(false);
-  // The workspace as of now, for a reply that lands after the drawer moved on.
-  // Assigned in render, like svWatchRef: `workspaceId` closed over below is the
-  // value the callback was built with, and a slow answer for the workspace you
-  // just left would otherwise overwrite the one you are looking at.
-  const workspaceRef = useRef(workspaceId);
-  workspaceRef.current = workspaceId;
-  const refreshLocations = useCallback(async () => {
-    const ws = workspaceRef.current;
-    if (ws == null) return;
-    setRefreshing(true);
-    setLocErr(null);
-    try {
-      // Two calls, in this order and never one. The server holds a location
-      // list for CACHE_TTL_S, so a re-read on its own would be served from the
-      // same cache the button exists to get past -- a click that changes
-      // nothing for up to a minute and looks exactly like one that worked.
-      await api.refresh();
-      const ls = await api.locations(ws);
-      if (workspaceRef.current === ws) setLocations(ls);
-    } catch (e) {
-      // The list stays on screen. A refresh that failed has said nothing about
-      // what the account holds, and blanking it here would answer "could not
-      // read" with "there is nothing there".
-      if (workspaceRef.current === ws) setLocErr((e as Error).message);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [api]);
-
-  // What Create is waiting for, as the sentence it shows rather than as a
-  // silently greyed button.
-  //
-  // The slot minimum is last and is the one that is not this form's own rule:
-  // BlazeMeter refuses the create outright below it (#159), so the sentence is
-  // BlazeMeter's, said here before the write rather than relayed from the 400
-  // afterwards. The two above it are questions nobody has answered yet, which
-  // is why they come first.
-  const createLocBlockedBy = !newLoc.name.trim() ? "name the location first"
-    : !newLoc.workspace_id ? "pick a workspace above first"
-    : slotsBlockedBy(newLoc.func_ids, newLoc.slots, slotMinimums);
-
-  /** Create the private location the form describes, and work on it.
-   *
-   *  A named function here, like createShipNow, rather than a handler inside the
-   *  form: this is a real write to the customer's account, and the panel renders
-   *  the button beside the sentence saying so without being able to make the
-   *  call itself. The list is re-read afterwards because a location arrives with
-   *  no agents and the row has to say so. */
-  const createLocationNow = async () => {
-    try {
-      const l = await api.createLocation({ ...newLoc, account_id: accountId! });
-      const ls = await api.locations(workspaceId!);
-      setLocations(ls); setHarborId(l.id); setShowCreateLoc(false);
-    } catch (e) { setLocErr(String((e as Error).message)); }
-  };
-  /** Where in BlazeMeter the page is pointed. Named once because four things
-   *  ask -- the summary line under the flow, the location list's heading, and
-   *  the new-location form -- and three of them were each doing the find. */
-  const accountName = useMemo(
-    () => accounts.find((a) => a.id === accountId)?.name ?? null,
-    [accounts, accountId]);
-  const workspaceName = useMemo(
-    () => workspaces.find((w) => w.id === workspaceId)?.name ?? null,
-    [workspaces, workspaceId]);
-  /** One segment of the summary line under the flow: a label nobody has to
-   *  read twice, and a value that says "none yet" in amber where the absence is
-   *  the thing worth knowing. */
-  const pathSeg = (label: string, value: string | null, warn = false) => (
-    <span className="flex items-center gap-1.5">
-      <span className="text-[10px] uppercase tracking-wide text-slate-400">{label}</span>
-      <span className={"text-xs font-medium "
-        + (value ? "text-slate-800" : warn ? "text-amber-700" : "text-slate-400")}>
-        {value ?? (warn ? "none yet" : "—")}
-      </span>
-    </span>
-  );
-
-  const body = (
-    <>
-      {view === "capacity" ? (
-        <main className="max-w-screen-xl mx-auto p-6">
-          {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
-          {capErr && <p className="text-sm text-red-600">{capErr}</p>}
-          {!cap && accountId && !capErr && (
-            <p className="text-sm text-slate-500">reading the account…</p>
-          )}
-          {cap && <CapacityView cap={cap} refresh={refreshCapacity}
-            refreshing={capRefreshing} />}
-        </main>
-      ) : (
-      <main className="max-w-screen-xl mx-auto p-6">
-        {/* `done` is what a step cannot say about itself -- whether it is
-            finished enough to leave. The last step never is: there is nothing
-            after the download to go on to. */}
-        <StepFlow
-          at={step} onGo={setStep}
-          /* What all of step 1 adds up to, under the panel rather than inside
-             it. It was a line between two of the three sections, where it read
-             as a divider between them rather than as their result -- and it
-             answers "which location and agent am I generating for?", which is a
-             question you also have in steps 2 and 3. So it stays put as the
-             steps change. */
-          footer={sourceMode === "connect" ? (
-            <div className="mt-3 pt-2.5 border-t border-slate-200 flex items-center gap-2 flex-wrap">
-              {/* The whole path, account first: the account and workspace are
-                  chosen in the drawer, which is collapsed for most of a
-                  session, so a bar that started at the location said which
-                  location without saying which account's. Two bundles for two
-                  customers differ in exactly that. */}
-              {pathSeg("account", accountName)}
-              <span className="text-slate-300">›</span>
-              {pathSeg("workspace", workspaceName)}
-              <span className="text-slate-300">›</span>
-              {pathSeg("location", location?.name ?? null)}
-              <span className="text-slate-300">›</span>
-              {pathSeg("agent",
-                       ships.find((x) => x.id === shipId)?.name ?? null,
-                       !!location)}
-              {!!location && ships.length === 0 && (
-                <span className="text-[11px] text-amber-700 ml-1">
-                  — this location is empty; the first agent has to be created
-                </span>
-              )}
-            </div>
-          ) : undefined}
-          /* Step 2's tick and step 2's reason are one derivation, so the dot
-             and the sentence under it cannot disagree -- and the sentence
-             names what this bundle actually still needs rather than the three
-             things a Kubernetes one would. */
-          done={[!agentBlocked, !configureBlocked, false]}
-          blockedBy={[agentBlocked, configureBlocked, ""]}>
-          {/* 1 · How big the run is, and which agent it is generated for.
-              The profile comes first because it decides everything after it and
-              needs none of it -- no key, no account, no cluster -- and because
-              its answer is four settings on the location picked below, which is
-              the next thing on this screen rather than a number to carry to
-              another one. Under it, where the harbor id, ship id and token come
-              from: connected they are picked from the account, manually they
-              are typed, and both end at the same three values. */}
-          <Section n={1} title="Capacity & agent" done={!agentBlocked}
-            hint="Size the run, then the location and agent it is generated for.">
-            <div className="space-y-3">
-            <Sizing
-              api={api} ask={profileAsk} models={sizingModels}
-              inputs={planInputs} setInputs={setPlanInputs}
-              saved={savedSizings ?? []} setSaved={setSavedSizings}
-              /* The engine size and the engines per node are the bundle's own
-                 options, edited here as well as in the Configure step's Sizing
-                 group: the profile is sized for the engine the manifests ask
-                 for, so there is one value rather than two that agree until
-                 somebody changes one. */
-              setEngine={(cpu, mem) => setOptions((o) => ({
-                ...o, engine_cpu_limit: cpu, engine_mem_limit: mem }))}
-              /* An integer option, so it is stored as one: the field is a
-                 string because every form field is, and generate() refuses a
-                 string here. */
-              setPerNode={(v) => set("engines_per_node",
-                                     v.trim() ? Number(v) : null)} />
-            {/* Five records, assembled here. Every value in them is state this
-                file still owns -- what the panel gained is the three answers it
-                used to be handed already worked out: the filtered list, whether
-                an agent is reporting, and the new-location form as a finished
-                element. */}
-            <AgentPanel
-              api={api} profile={profileAsk}
-              source={{
-                mode: sourceMode, switchTo: switchMode,
-                manual, setManual, who,
-              }}
-              locations={{
-                accountName, workspaceName,
-                list: locations, filter: locFilter, setFilter: setLocFilter,
-                selectedId: harborId, pick: setHarborId,
-                busy: locBusy, error: locErr, updated: locationUpdated,
-                refresh: refreshLocations, refreshing,
-                create: {
-                  open: showCreateLoc,
-                  // Opening or closing the form drops the last refusal with it:
-                  // an error about a form nobody is looking at describes
-                  // nothing.
-                  setOpen: (v) => { setLocErr(null); setShowCreateLoc(v); },
-                  workspace: workspaceName,
-                  draft: newLoc,
-                  // The draft the panel edits is four of the five fields; the
-                  // workspace id is the drawer's and is merged back here.
-                  setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
-                  choices: funcIds.choices, engines: engineFuncIds,
-                  minimums: slotMinimums,
-                  blockedBy: createLocBlockedBy,
-                  submit: createLocationNow,
-                },
-                confirmed: locConfirmed,
-                confirm: () => setConfirmed((c) => ({ ...c, loc: harborId })),
-              }}
-              agents={{
-                id: shipId,
-                pick: (id) => { setShipId(id); forgetToken(); },
-                busy: factsBusy, facts,
-                showCreate: showCreateShip, setShowCreate: setShowCreateShip,
-                newName: newShipName, setNewName: setNewShipName,
-                create: createShipNow,
-                error: shipErr, tokenNotice: shipTokenNotice,
-                confirmed: shipConfirmed,
-                confirm: () => setConfirmed((c) => ({ ...c, ship: shipId })),
-              }}
-              credential={{
-                token: raw("auth_token"),
-                // Typing is the one write to this field the app did not make,
-                // so it is where the remembered copy is dropped -- see
-                // forgetMintedToken.
-                setToken: (v) => {
-                  set("auth_token", v || null);
-                  forgetMintedToken();
-                },
-                regenerate: regenerateToken,
-                note: recallNote(recall),
-              }} />
-            </div>
-          </Section>
-
-          {/* 2 · Configure */}
-          <Section n={2} title="Configure"
-            hint="Everything re-renders the preview live.">
-            <ConfigurePanel
-              functionalities={functionalities} declare={declareFunctionality}
-              sourceMode={sourceMode} enabled={enabled}
-              locUnclaimed={locUnclaimed}
-              options={options} set={set}
-              format={format}
-              setFormat={(v) => set("output_format", v)}
-              applies={applies}
-              grpOn={grpOn} grpRequired={sv.groupRequired}
-              grpDeclined={sv.groupDeclined}
-              // Null where the format has no limits env (docker names the two
-              // keys in its ignored table), so the card does not state a size
-              // nothing reads.
-              engineNote={applies("engine_cpu_limit") ? engineSize.text : null}
-              flipGroup={flipGroup} groupBody={groupBody} envArea={envArea}
-              incomplete={incomplete} blanks={blanks}
-              namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
-              exportProfile={exportProfile} importProfile={importProfile} />
-          </Section>
-
-          {/* 3 · Download & verify */}
-          <Section n={3} title="Download & verify">
-            {/* Four records and one report, assembled here. Every value in
-                them is state this file still owns -- what changed is that the
-                panel is handed the five questions it answers rather than forty
-                fields it has to reassemble them from. */}
-            <DownloadPanel
-              /* The two requests that produce a bundle are made in the panel,
-                 beside the warning saying what they cost -- but through the
-                 same client every other route uses, so what one carries about
-                 the credential is drivable rather than only reviewable. */
-              api={api}
-              bundle={{
-                // `sentOptions`, not `options`: the zip this panel downloads has
-                // to be the bundle the preview showed, markers included.
-                facts, shipId, options: sentOptions, format,
-                sv, genErr, gaps: downloadGaps,
-                goToConfigure: () => setStep(1),
-                goToAgent: () => setStep(0),
-              }}
-              credential={{ plan: tokenPlan }}
-              attempt={attempt} report={setAttempt}
-              watch={{
-                available: sourceMode === "connect",
-                on: polling, setOn: setPolling,
-                agent: ships.find((s) => s.id === shipId)?.name || shipId,
-                status, mocks: svMocks, checks: svChecks,
-                check: checkEndpoint,
-              }} />
-          </Section>
-        </StepFlow>
-      </main>
+  const { cap, capErr, capRefreshing, refreshCapacity } = capacity;
+  const body = view === "capacity" ? (
+    <main className="max-w-screen-xl mx-auto p-6">
+      {!accountId && <p className="text-sm text-slate-500">Connect first.</p>}
+      {capErr && <p className="text-sm text-red-600">{capErr}</p>}
+      {!cap && accountId && !capErr && (
+        <p className="text-sm text-slate-500">reading the account…</p>
       )}
-    </>
+      {cap && <CapacityView cap={cap} refresh={refreshCapacity}
+        refreshing={capRefreshing} />}
+    </main>
+  ) : (
+    <main className="max-w-screen-xl mx-auto p-6">
+      <StepFlow
+        at={step} onGo={setStep}
+        // Which account, workspace, location and agent the bundle is for.
+        footer={sourceMode === "connect" ? (
+          <div className="mt-3 pt-2.5 border-t border-slate-200 flex items-center gap-2 flex-wrap">
+            {pathSeg("account", accountName)}
+            <span className="text-slate-300">›</span>
+            {pathSeg("workspace", workspaceName)}
+            <span className="text-slate-300">›</span>
+            {pathSeg("location", location?.name ?? null)}
+            <span className="text-slate-300">›</span>
+            {pathSeg("agent",
+                     ships.find((x) => x.id === shipId)?.name ?? null,
+                     !!location)}
+            {!!location && ships.length === 0 && (
+              <span className="text-[11px] text-amber-700 ml-1">
+                — this location is empty; the first agent has to be created
+              </span>
+            )}
+          </div>
+        ) : undefined}
+        done={[!agentBlocked, !configureBlocked, false]}
+        blockedBy={[agentBlocked, configureBlocked, ""]}>
+        <Section n={1} title="Capacity & agent" done={!agentBlocked}
+          hint="Size the run, then the location and agent it is generated for.">
+          <div className="space-y-3">
+          <Sizing
+            api={api} ask={profileAsk} models={sizingModels}
+            inputs={planInputs} setInputs={setPlanInputs}
+            saved={savedSizings ?? []} setSaved={setSavedSizings}
+            // The engine size is the bundle's own option, edited from here too.
+            setEngine={(cpu, mem) => patch({ engine_cpu_limit: cpu, engine_mem_limit: mem })}
+            // An integer option: generate() refuses a string.
+            setPerNode={(v) => set("engines_per_node", v.trim() ? Number(v) : null)} />
+          <AgentPanel
+            api={api} profile={profileAsk}
+            source={{
+              mode: sourceMode, switchTo: switchMode,
+              manual, setManual, who,
+            }}
+            locations={{
+              accountName, workspaceName,
+              list: locations,
+              selectedId: harborId, pick: setHarborId,
+              busy: locBusy, error: locErr, updated: locationUpdated,
+              refresh: refreshLocations, refreshing,
+              create: {
+                open: showCreateLoc,
+                setOpen: (v) => { setLocErr(null); setShowCreateLoc(v); },
+                workspace: workspaceName,
+                draft: newLoc,
+                setDraft: (f) => setNewLoc((n) => ({ ...n, ...f(n) })),
+                choices: funcIds.choices, engines: engineFuncIds,
+                minimums: slotMinimums,
+                blockedBy: createLocBlockedBy,
+                submit: createLocationNow,
+              },
+              confirmed: locConfirmed,
+              confirm: () => setConfirmed((c) => ({ ...c, loc: harborId })),
+            }}
+            agents={{
+              id: shipId,
+              pick: (id) => { setShipId(id); forgetToken(); },
+              busy: factsBusy, facts,
+              showCreate: showCreateShip, setShowCreate: setShowCreateShip,
+              create: createShipNow,
+              error: shipErr, tokenNotice: shipTokenNotice,
+              confirmed: shipConfirmed,
+              confirm: () => setConfirmed((c) => ({ ...c, ship: shipId })),
+            }}
+            credential={{
+              token: raw("auth_token"),
+              // Typing is the one write the app did not make, so it evicts the
+              // remembered copy.
+              setToken: (v) => {
+                set("auth_token", v || null);
+                forgetMintedToken();
+              },
+              regenerate: regenerateToken,
+              note: recallNote(recall),
+            }} />
+          </div>
+        </Section>
+
+        <Section n={2} title="Configure"
+          hint="Everything re-renders the preview live.">
+          <ConfigurePanel
+            functionalities={functionalities} declare={declareFunctionality}
+            sourceMode={sourceMode} enabled={enabled}
+            locUnclaimed={locUnclaimed}
+            options={options} set={set}
+            format={format}
+            setFormat={(v) => set("output_format", v)}
+            applies={applies}
+            grpOn={grpOn} grpRequired={sv.groupRequired}
+            grpDeclined={sv.groupDeclined}
+            // Docker carries no limits pair, so no size is stated for it.
+            engineNote={applies("engine_cpu_limit") ? engineSize.text : null}
+            flipGroup={(id, on) => flipGroup(id, on, !!sv.groupRequired[id])}
+            groupBody={groupBody} envArea={envArea}
+            incomplete={incomplete} blanks={blanks}
+            namespaceOk={namespaceOk} saOk={saOk} saCreate={saCreate}
+            exportProfile={exportProfile}
+            importProfile={(f) => importProfile(f, setGenErr)} />
+        </Section>
+
+        <Section n={3} title="Download & verify">
+          <DownloadPanel
+            api={api}
+            bundle={{
+              // What the preview showed, markers included.
+              facts, shipId, options: sentOptions, format,
+              sv, genErr: preview.genErr, gaps: downloadGaps,
+              goToConfigure: () => setStep(1),
+              goToAgent: () => setStep(0),
+            }}
+            credential={{ plan: tokenPlan }}
+            attempt={attempt} report={setAttempt}
+            watch={{
+              available: sourceMode === "connect",
+              on: watch.polling, setOn: setPolling,
+              agent: ships.find((s) => s.id === shipId)?.name || shipId,
+              status: watch.status, mocks: watch.svMocks, checks: watch.svChecks,
+              check: watch.checkEndpoint,
+            }} />
+        </Section>
+      </StepFlow>
+    </main>
   );
 
-  // What to say about the page this server is serving, or null for the two
-  // answers that need no sentence. `?? null` because *unasked* -- the read has
-  // not landed -- is the wheel's silence too: neither is anything to act on.
+  // Null for the answers that need no sentence, including "not read yet".
   const notice = buildNotice(build?.stale ?? null);
 
   return (
-    // The window's height, not a minimum of it, and the overflow is the inner
-    // pane's. `min-h-screen` let the *document* grow to whatever the view
-    // rendered, so the `overflow-y-auto` below never had a bounded parent to
-    // scroll inside: on a real account Account capacity is 11,000px tall, the
-    // drawer stretched to match, and the account menu at its foot sat that far
-    // below the fold -- the one control that switches account, unreachable on
-    // the view whose whole subject is the account. Generate never showed it
-    // because StepFlow pins itself to `100vh - 6.75rem` and scrolls its own
-    // step; this is that assumption made true for the shell rather than
-    // restated per view.
-    //
-    // The height alone, with no `overflow-hidden` beside it: bounding the row
-    // is what makes the pane scroll, and a clip here would also clip the one
-    // thing that has to leave the drawer -- the account menu, which is
-    // absolutely positioned inside it. It is what the drawer's own workspace
-    // picker was already cut by once.
+    // The window's height, so the pane beside the drawer is what scrolls and the
+    // account menu at the drawer's foot stays reachable. No overflow clip here:
+    // that menu has to be able to leave the drawer.
     <div className="h-screen flex flex-col">
       <header className="bg-white border-b border-slate-200 px-4 py-2.5 shrink-0">
         <div className="flex items-baseline gap-3">
@@ -1828,11 +940,7 @@ export default function App({ api }: { api: Api }) {
         </div>
       </header>
 
-      {/* Which of /api/build's four answers deserves a sentence, and how loud
-          it is, is build.ts -- here is only where it goes. The alert role is
-          for the stale page alone: an unrecorded one is nothing known to be
-          wrong, and interrupting a screen reader about it would be the same
-          crying wolf in another medium. */}
+      {/* An alert only for a stale page; an unrecorded one is nothing known wrong. */}
       {notice && (
         <div role={notice.tone === "warning" ? "alert" : "status"}
           className={"border-b px-4 py-2 text-sm "
@@ -1845,14 +953,9 @@ export default function App({ api }: { api: Api }) {
         </div>
       )}
 
-      {/* The shell: the drawer picks the view, the view fills what is left, and
-          the preview slides over the top of it from the right. */}
       <div className="flex grow min-h-0">
         <NavDrawer view={view} setView={setView} connected={!!who}
           open={navOpen} setOpen={setNavOpen}
-          /* Which key, which account it can see, which workspace inside it:
-             one control, because they are one answer narrowed three times, and
-             all three are the session's rather than any step's. */
           footer={
             <AccountMenu
               who={who} disconnect={disconnect}
@@ -1861,19 +964,14 @@ export default function App({ api }: { api: Api }) {
               workspaces={workspaces} workspaceId={workspaceId}
               setWorkspaceId={setWorkspaceId} workspacesBusy={workspacesBusy}
               keyPath={keyPath} setKeyPath={setKeyPath}
-              pasteId={pasteId} setPasteId={setPasteId}
-              pasteSecret={pasteSecret} setPasteSecret={setPasteSecret}
-              saveKey={saveKey} setSaveKey={setSaveKey}
-              connect={connect} connErr={connErr} setConnErr={setConnErr}
+              connect={connect}
               connecting={connecting} collapsed={!navOpen} />
           } />
         <div className="grow min-w-0 overflow-y-auto">{body}</div>
-        {/* Only beside the view that produces manifests. On the two planning
-            views there is nothing for it to show, and a rail promising a
-            preview of nothing is a door to an empty room. */}
+        {/* Only beside the view that produces manifests. */}
         {view === "flow" && (
-          <PreviewDrawer files={files} activeFile={activeFile}
-            setActiveFile={setActiveFile} genErr={genErr}
+          <PreviewDrawer files={preview.files} activeFile={preview.activeFile}
+            setActiveFile={preview.setActiveFile} genErr={preview.genErr}
             open={previewOpen} setOpen={setPreviewOpen} />
         )}
       </div>

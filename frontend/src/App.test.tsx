@@ -2042,6 +2042,75 @@ test("an agent this app could not be asked about claims nothing about its token"
     expect(await screen.findByText(/cannot be read back/)).toBeTruthy();
   });
 
+test("a regenerated token answering after the agent changed lands on neither",
+  async () => {
+    const listing = [loc("h-0", "Perf", [
+      { id: "s-1", name: "agent-1", state: "IDLE" },
+      { id: "s-2", name: "agent-2", state: "IDLE" },
+    ])];
+    const issued = deferred<{ auth_token: string }>();
+    const asked: Options[] = [];
+    render(<App api={mintingAccount(listing, {}, asked, {
+      issueToken: () => issued.promise,
+    })} />);
+
+    fireEvent.click(await screen.findByText("Perf"));
+    fireEvent.click(await screen.findByText("agent-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Regenerate token" }));
+    fireEvent.click(screen.getByRole("button", { name: "I'm sure" }));
+    expect(await screen.findByText("Regenerating…")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("agent-2"));
+    await waitFor(() => expect(last(asked).ship_id).toBe("s-2"));
+    await act(async () => {
+      issued.settle({ auth_token: "tok-for-agent-1" });
+      await issued.promise;
+    });
+
+    expect(screen.getByPlaceholderText(/paste the token this agent was created with/))
+      .toHaveProperty("value", "");
+    expect(screen.queryByText("Regenerated")).toBeNull();
+    expect(asked.some((o) => o.auth_token === "tok-for-agent-1")).toBe(false);
+  });
+
+test("a location created after the workspace changed is not selected in the new one",
+  async () => {
+    const created = deferred<Location>();
+    const read: number[] = [];
+    const api = accountOf([loc("h-0", "Perf")], {
+      workspaces: async () => [{ id: 10, name: "Alpha workspace" },
+                               { id: 11, name: "Beta workspace" }],
+      locations: async (ws: number) => {
+        read.push(ws);
+        return ws === 10 ? [loc("h-0", "Perf")] : [loc("h-9", "Beta only")];
+      },
+      createLocation: () => created.promise,
+    });
+    render(<App api={api} />);
+    await screen.findByText("Perf");
+
+    fireEvent.click(screen.getByRole("button", { name: "+ New location" }));
+    fireEvent.change(screen.getByLabelText(/Name \(created in workspace/),
+                     { target: { value: "New one" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    // Change workspace while the create is out.
+    fireEvent.click(screen.getByTitle(/the key everything is read with/));
+    fireEvent.focus(await screen.findByLabelText(/^Workspace/));
+    fireEvent.mouseDown(await screen.findByText("Beta workspace"));
+    expect(await screen.findByText("Beta only")).toBeTruthy();
+
+    await act(async () => {
+      created.settle(loc("h-new", "New one"));
+      await created.promise;
+    });
+    // The create re-reads the workspace it was made in; let that land.
+    await waitFor(() => expect(read.filter((w) => w === 10).length).toBe(2));
+    await act(async () => {});
+    expect(screen.queryByText("New one")).toBeNull();
+    expect(screen.getByText("Beta only")).toBeTruthy();
+  });
+
 test("a lone agent that is reporting is not auto-picked, and says why when it is",
   async () => {
     // Fresh by the rule in heartbeat.ts, which is the whole difference between

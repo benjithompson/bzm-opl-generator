@@ -21,7 +21,7 @@
 // something else, what it costs said before it is pressed, and the answer
 // reporting what the account *now holds* rather than what was typed --
 // core.update_location re-reads for exactly that reason.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Api, CapacityPlan, Location, LocationSettings as Settings,
          LocationUpdate } from "../api";
@@ -190,7 +190,11 @@ export function LocationSettings(props: {
     setDraft({ ...draft, [k]: v });
   };
 
+  // The location as of now: a save answering after it changed reports nothing here.
+  const locationId = useRef(location.id);
+  locationId.current = location.id;
   const save = async () => {
+    const forLocation = location.id;
     setBusy(true); setErr(null); setResult(null);
     try {
       // Only the fields that changed. Sending all four would write back three
@@ -200,12 +204,14 @@ export function LocationSettings(props: {
       edited.forEach((k) => { body[k] = draft[k].trim(); });
       const out = await props.api.updateLocation(
         { harbor_id: location.id, ...body });
-      setResult(out);
       props.onUpdated(out.location);
+      if (locationId.current === forLocation) setResult(out);
     } catch (e) {
       // A location deleted since this list was read says so, rather than
       // relaying BlazeMeter's 404 as though the settings had been rejected.
-      setErr(goneNotice(e, "location") ?? String((e as Error).message));
+      if (locationId.current === forLocation) {
+        setErr(goneNotice(e, "location") ?? String((e as Error).message));
+      }
     } finally {
       setBusy(false);
     }

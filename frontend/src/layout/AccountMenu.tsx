@@ -26,6 +26,8 @@ import {
   TextInput,
 } from "../components";
 
+export interface ConnectBody { path?: string; id?: string; secret?: string; save?: boolean }
+
 export interface ConnectProps {
   who: { email: string; keyId: string } | null;
   disconnect: () => void;
@@ -40,15 +42,8 @@ export interface ConnectProps {
   workspacesBusy: boolean;
   keyPath: string;
   setKeyPath: (v: string) => void;
-  pasteId: string;
-  setPasteId: (v: string) => void;
-  pasteSecret: string;
-  setPasteSecret: (v: string) => void;
-  saveKey: boolean;
-  setSaveKey: (v: boolean) => void;
-  connect: (body: { path?: string; id?: string; secret?: string; save?: boolean }) => void;
-  connErr: string | null;
-  setConnErr: (v: string | null) => void;
+  /** Resolves with the refusal to show, or null. */
+  connect: (body: ConnectBody) => Promise<string | null>;
   connecting: boolean;
   /** The drawer is a rail: the status dot alone, with the email as its
    *  tooltip. Whether there is a key is the one thing that still has to be
@@ -66,6 +61,14 @@ export function AccountMenu(p: ConnectProps) {
   const [form, setForm] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const connected = !!p.who;
+  const [pasteId, setPasteId] = useState("");
+  const [pasteSecret, setPasteSecret] = useState("");
+  const [saveKey, setSaveKey] = useState(false);
+  const [connErr, setConnErr] = useState<string | null>(null);
+  const connect = async (body: ConnectBody) => {
+    setConnErr(null);
+    setConnErr(await p.connect(body));
+  };
 
   // A menu closes when you look elsewhere; the modal it opens does not.
   //
@@ -97,7 +100,7 @@ export function AccountMenu(p: ConnectProps) {
   // page would make the user close the thing that had just succeeded.
   useEffect(() => { if (connected) setForm(false); }, [connected]);
 
-  const pasted = !!(p.pasteId && p.pasteSecret);
+  const pasted = !!(pasteId && pasteSecret);
   const account = p.accounts.find((a) => a.id === p.accountId) ?? null;
   // Built once per list rather than per render. This menu re-renders whenever
   // anything in App does, and a fresh array each time re-filters 166 workspace
@@ -260,7 +263,7 @@ export function AccountMenu(p: ConnectProps) {
         </div>
       )}
 
-      <Modal open={form} onClose={() => { setForm(false); p.setConnErr(null); }}
+      <Modal open={form} onClose={() => { setForm(false); setConnErr(null); }}
         title="Connect to BlazeMeter"
         hint="the key stays on this machine; only used server-side">
         <div className="space-y-3">
@@ -272,14 +275,14 @@ export function AccountMenu(p: ConnectProps) {
             <summary className="cursor-pointer text-slate-500">Paste a key instead</summary>
             <div className="mt-2 space-y-2">
               <Field label="Key ID">
-                <TextInput value={p.pasteId} onChange={p.setPasteId} mono
+                <TextInput value={pasteId} onChange={setPasteId} mono
                   disabled={connected} /></Field>
               <Field label="Secret">
                 {/* The page's masked-credential control, not a hand-built
                     type=password: this one gets the same Show/Hide as the
                     AUTH_TOKEN field, which is the other secret on the page. */}
-                <SecretInput value={p.pasteSecret}
-                  onChange={p.setPasteSecret} />
+                <SecretInput value={pasteSecret}
+                  onChange={setPasteSecret} />
               </Field>
             </div>
           </details>
@@ -305,20 +308,20 @@ export function AccountMenu(p: ConnectProps) {
                   const f = e.target.files?.[0];
                   if (!f) return;
                   e.target.value = "";
-                  p.setConnErr(null);
+                  setConnErr(null);
                   try {
                     const d = JSON.parse(await f.text());
                     if (!d.id || !d.secret) throw new Error();
-                    p.connect({ id: d.id, secret: d.secret, save: p.saveKey });
+                    connect({ id: d.id, secret: d.secret, save: saveKey });
                   } catch {
-                    p.setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
+                    setConnErr(`${f.name} is not an api-key JSON ({"id": ..., "secret": ...})`);
                   }
                 }} />
             </label>
           </div>
 
-          <Check label="Remember this key on this machine" checked={p.saveKey}
-            onChange={p.setSaveKey} disabled={connected}
+          <Check label="Remember this key on this machine" checked={saveKey}
+            onChange={setSaveKey} disabled={connected}
             hint="Browse & paste only — saved to ~/.config/bzm-opl-gen/api-key.json (chmod 600)" />
 
           <div className="flex items-center gap-2">
@@ -326,8 +329,8 @@ export function AccountMenu(p: ConnectProps) {
                 one, the file otherwise. The pasted pair is the deliberate act --
                 if it is filled in, it is what was meant. */}
             <Button
-              onClick={() => p.connect(pasted
-                ? { id: p.pasteId, secret: p.pasteSecret, save: p.saveKey }
+              onClick={() => connect(pasted
+                ? { id: pasteId, secret: pasteSecret, save: saveKey }
                 : { path: p.keyPath })}
               disabled={connected || (!pasted && !p.keyPath)}
               busy={p.connecting}>
@@ -339,7 +342,7 @@ export function AccountMenu(p: ConnectProps) {
               </span>
             )}
           </div>
-          <ErrorMsg msg={p.connErr} />
+          <ErrorMsg msg={connErr} />
         </div>
       </Modal>
     </div>
