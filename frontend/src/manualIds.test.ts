@@ -18,8 +18,7 @@ describe("checkId", () => {
   });
 
   it("says nothing about a blank field", () => {
-    // Whether it is *needed* is the step's question, not this one's -- a red
-    // message under a field nobody has reached yet is noise.
+    // Blank is not a complaint here.
     expect(checkId(HARBOR, "")).toBeNull();
     expect(checkId(TOKEN, "   ")).toBeNull();
   });
@@ -33,8 +32,7 @@ describe("checkId", () => {
   });
 
   it("names the character that is not hexadecimal", () => {
-    // The reason it names it: one character from the wrong keyboard layout is
-    // invisible in a 24-character string.
+    // Names the offending character.
     expect(checkId(HARBOR, "6a63a79dcc45dccca90bf44g")).toMatch(/“g”/);
     expect(checkId(HARBOR, "6a63a79dcc45dccca90bf4 0")).toMatch(/space/);
   });
@@ -54,10 +52,7 @@ describe("tidy", () => {
 
 describe("manualComplete", () => {
   it("takes every field blank, because the bundle carries the markers", () => {
-    // The use case this exists for: a customer whose private location has not
-    // been created yet needs the manifests before BlazeMeter has issued any of
-    // these values. The bundle then carries <HARBOR_ID>, <SHIP_ID> and
-    // <AUTH_TOKEN>, the page says so, and the cluster refuses to apply it.
+    // All blank is usable: the bundle carries the markers.
     expect(manualComplete("", "", "")).toBe(true);
     expect(manualComplete(id, "", "")).toBe(true);
     expect(manualComplete("", id, tok)).toBe(true);
@@ -65,8 +60,7 @@ describe("manualComplete", () => {
   });
 
   it("is false while any field is the wrong shape", () => {
-    // Which is the failure it was written for, and is untouched: a truncated
-    // paste renders a bundle that applies cleanly and joins nothing.
+    // A truncated paste is not.
     expect(manualComplete(id.slice(0, 12), id, "")).toBe(false);
     expect(manualComplete(id, id, "not-a-token")).toBe(false);
   });
@@ -81,9 +75,7 @@ describe("blankManualIds", () => {
   });
 
   it("says nothing about a token it was not asked about", () => {
-    // The download step's own line answers for the credential, off the branch
-    // the server reports rather than off this form -- so it leaves the argument
-    // out, and two sentences about one credential never appear together.
+    // Without a token argument, only the ids are asked about.
     expect(blankManualIds("", "")).toEqual(["harbor_id", "ship_id"]);
     expect(blankManualIds(id, id)).toEqual([]);
   });

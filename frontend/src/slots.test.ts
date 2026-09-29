@@ -1,10 +1,5 @@
-// The rule BlazeMeter would apply to the new-location form, applied before it.
-//
-// Data in, data out -- the funcIds ticked, the number typed, and the served
-// table -- so it runs with no DOM, like the option groups and sv.ts. The
-// minimums are a fixture rather than literals here: the number came off a live
-// POST and the sentence is BlazeMeter's own, and `fixtures.ts` is the one copy
-// of both, held equal to core by tests/test_server.py.
+// The rule BlazeMeter applies to a new location's `slots`, applied first. The
+// minimums come from fixtures.ts, the one copy of the served table.
 import { describe, expect, it } from "vitest";
 import { SlotMinimum } from "./api";
 import { SLOT_MINIMUMS } from "./fixtures";
@@ -19,16 +14,13 @@ describe("slotRule", () => {
   });
 
   it("has nothing to say about a declaration no rule reaches", () => {
-    // `slots` is engines per agent and a real cost -- accounts run 17 agents
-    // at slots=1 -- so a form that offered the higher number to everybody
-    // would be this page raising a setting nobody asked it to.
+    // No minimum means no rule: slots is a real cost and not raised for anybody.
     expect(slotRule(["performance"], SLOT_MINIMUMS)).toBeNull();
     expect(slotRule([], SLOT_MINIMUMS)).toBeNull();
   });
 
   it("takes the strictest of the rules that apply", () => {
-    // Two funcIds with minimums is not a case the account has today; the
-    // answer still cannot depend on which box was ticked first.
+    // The strictest applies, whatever order the boxes were ticked in.
     const two: Record<string, SlotMinimum> = {
       ...SLOT_MINIMUMS,
       somethingBigger: { label: "Something Bigger", minimum: 4, message: "x" },
@@ -38,18 +30,14 @@ describe("slotRule", () => {
   });
 
   it("refuses nothing while the table has not been read", () => {
-    // Empty is "not asked yet", never "no rules" -- the same direction the
-    // ignored-options table goes. A create the account then rejects beats a
-    // form refusing on a guess.
+    // Empty is "not read yet": no rule.
     expect(slotRule(["functionalGui"], {})).toBeNull();
   });
 });
 
 describe("slotsBlockedBy", () => {
   it("gives BlazeMeter's own sentence, and only that", () => {
-    // Verbatim, because it is what a customer meeting this rule in
-    // BlazeMeter's UI reads -- one refusal, one spelling. What to type is
-    // said on the field, which is where the number is.
+    // BlazeMeter's sentence, verbatim.
     expect(slotsBlockedBy(["functionalGui"], 1, SLOT_MINIMUMS))
       .toBe(SLOT_MINIMUMS.functionalGui.message);
   });
@@ -61,8 +49,7 @@ describe("slotsBlockedBy", () => {
   });
 
   it("blocks a slots field somebody has emptied", () => {
-    // NumberInput hands back "" as NaN, and NaN < 2 is false -- so a blank
-    // field would have sailed past a bare comparison into the POST.
+    // A blank field (NaN) is below the minimum.
     expect(slotsBlockedBy(["functionalGui"], NaN, SLOT_MINIMUMS)).not.toBe("");
     expect(slotsBlockedBy(["functionalGui"], 0, SLOT_MINIMUMS)).not.toBe("");
   });

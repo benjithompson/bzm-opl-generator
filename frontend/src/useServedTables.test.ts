@@ -7,9 +7,8 @@ import { IGNORED_BY_FORMAT } from "./fixtures";
 import { useServedTables } from "./useServedTables";
 
 test("a table that lands is served, and one that is refused stays unread", async () => {
-  // Nothing but the ignored-options table answers: every other route is the
-  // fake's rejection, which must leave each at its own "not read" value --
-  // null where the table is displayed, empty where it is consulted.
+  // Only one table answers; each other stays at its "not read" value (null
+  // where displayed, empty where consulted).
   const { result } = renderHook(() => useServedTables(fakeApi({
     ignoredOptions: async () => IGNORED_BY_FORMAT,
   })));

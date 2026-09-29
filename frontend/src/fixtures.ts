@@ -1,27 +1,11 @@
-// Fixtures shared by more than one test file, declared once each.
-//
-// The rule is tests/evidence_fixtures.py's, one layer up: there were two
-// builders for the evidence document with different defaults for the same
-// schema, and one test file imported both. The same thing had started here --
-// formats.test.ts and App.test.tsx each carried their own slice of the ignored
-// table, and they had already diverged by five keys, so the page test
-// was asserting against a table the unit test would have called incomplete.
-//
-// Not in fakeApi.ts: that file deliberately holds no payloads (an invented
-// answer lets a test pass while proving nothing). This is a payload, and it is
-// only ever handed to a route a test chose to stub.
+// Payloads shared by more than one test file, declared once each. Copies of
+// served tables are held equal to the Python originals by tests/test_server.py.
 import {
   AgentEnvVar, SizingModel, SlotMinimum,
 } from "./api";
 
-/** core.SLOT_MINIMUMS as the page receives it from /api/slot-minimums — the
- *  slots a functionality needs before BlazeMeter will create the location.
- *
- *  A copy, and the only one, held equal to core's by
- *  `tests/test_server.py::test_the_pages_copy_of_the_slot_minimums_is_cores`.
- *  `message` is transcribed rather than paraphrased on purpose: it is
- *  BlazeMeter's own sentence, which is what a customer meeting this rule in
- *  BlazeMeter's UI reads. */
+/** core.SLOT_MINIMUMS as /api/slot-minimums serves it. The only copy, held
+ *  equal by test_server.py; `message` is BlazeMeter's sentence verbatim. */
 export const SLOT_MINIMUMS: Record<string, SlotMinimum> = {
   functionalGui: {
     label: "GUI Functional",
@@ -31,17 +15,8 @@ export const SLOT_MINIMUMS: Record<string, SlotMinimum> = {
   },
 };
 
-/** plan.SIZING_MODELS as the page receives it from /api/sizing-models.
- *
- *  A copy, and the only one, held equal to the planner's table by
- *  `tests/test_server.py::test_the_pages_copy_of_the_sizing_models_is_the_planner_s`.
- *  It cannot be derived: the authority is Python and the page's tests run
- *  without a server.
- *
- *  `measured: false` is the one the card branches on, and the reason this is a
- *  copy rather than a sample: a model with no measured figure offers no
- *  per-pod box, and a fixture that quietly gave service virtualization one
- *  would let a test pass over the exact case the card exists to get right. */
+/** plan.SIZING_MODELS as /api/sizing-models serves it. The only copy, held
+ *  equal by test_server.py; `measured: false` must stay as served. */
 export const SIZING_MODELS: SizingModel[] = [
   { functionality: "performance", label: "Performance",
     unit: "virtual users", figure_unit: "virtual users per engine",
@@ -54,22 +29,9 @@ export const SIZING_MODELS: SizingModel[] = [
     pods: "mock pods", measured: false, example_target: 2000 },
 ];
 
-/** generate.IGNORED_BY_FORMAT, as the page receives it from
- *  /api/ignored-options.
- *
- *  A copy, and the only one. It cannot be derived -- the authority is Python --
- *  so `tests/test_server.py::test_ignored_options_are_served_from_the_generator`
- *  holds the route equal to the generator's table, and what is checked here is
- *  the half no Python test can see: what a page does with such a table.
- *
- *  **Every format is stated, `{}` included.** `{}` is the answer "this format
- *  drops nothing", and a fixture leaving a format out would be handing the page
- *  the one state that means "nothing has been read" -- so a test asserting that
- *  every field shows for that bundle would pass without the page ever having
- *  read an answer. The two cluster formats no longer *are* `{}`, since service
- *  virtualization is published with disjoint variables per platform (#182), but
- *  the rule is about the shape rather than about which formats happen to be
- *  empty today. */
+/** generate.IGNORED_BY_FORMAT as /api/ignored-options serves it. The only
+ *  copy, held equal by test_server.py. Every format is stated, `{}` included:
+ *  a missing format would mean "not read yet" to the page. */
 export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
   manifests: {
     sv_hostname: "HOSTNAME_OVERRIDE is a docker variable; a Kubernetes agent "
@@ -126,12 +88,8 @@ export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
 };
 
 
-/** generate.RESERVED_ENV with the option that owns each name, as the page
- *  receives it from /api/reserved-env -- the environment variables a bundle
- *  writes for itself, which `extra_env` refuses.
- *
- *  A copy, and the only one, held equal to the generator's by
- *  `tests/test_server.py::test_the_pages_copy_of_the_reserved_env_names_is_the_generators`.
+/** generate.RESERVED_ENV with each name's owning option, as
+ *  /api/reserved-env serves it. The only copy, held equal by test_server.py;
  *  `null` is a name no single option owns. */
 export const RESERVED_ENV: Record<string, string | null> = {
   AUTH_TOKEN: "auth_token",
@@ -171,29 +129,9 @@ export const RESERVED_ENV: Record<string, string | null> = {
   TLS_KEY: "sv_tls_key",
 };
 
-/** A few of the variables /api/agent-env offers, one per control the area can
- *  render.
- *
- *  A **sample**, and deliberately not a copy: unlike RESERVED_ENV and
- *  IGNORED_BY_FORMAT above, nothing on the page has to agree with this list. The
- *  area renders what it is served and offers a name box for whatever is not in
- *  it, so a table here held equal to the catalogue would be forty records kept
- *  in step to prove something no rendering depends on. What the tests need is
- *  one variable of each type, which is what this is.
- *
- *  The names are real ones, so a record that stopped being offered -- an option
- *  added to the generator claims it into RESERVED_ENV -- shows up as a test
- *  about a variable the server would no longer serve. Their `functionalities`
- *  are the real tags too, for the same reason and no stronger one: a test that
- *  serves this list scoped, as the server would, wants a row that really does
- *  drop out of a performance location's answer.
- *
- *  **There is no docker-only row, and there cannot be one.** BlazeMeter's
- *  Docker-only column is `DOCKER_REGISTRY_*`, `AUTO_UPDATE`, and since #182
- *  `HOSTNAME_OVERRIDE` / `TLS_CERT` / `TLS_KEY` -- every one of them now written
- *  off an option, so every one is reserved and none is served. `HOSTNAME_OVERRIDE`
- *  was the sample here until then. The platform filter is still exercised, from
- *  the other side, by the `kubernetes`-only row below it. */
+/** A sample of /api/agent-env, one variable per control type, with real names
+ *  and tags. Not a copy: nothing on the page has to agree with the catalogue.
+ *  Every docker-only variable is now reserved, so there is no docker-only row. */
 export const AGENT_ENV: AgentEnvVar[] = [
   { name: "PREFERRED_INTERFACE", type: "string",
     platforms: ["kubernetes", "docker"], functionalities: [],
@@ -218,22 +156,9 @@ export const AGENT_ENV: AgentEnvVar[] = [
 ];
 
 
-/** The marker rule, as worked examples: an option key beside what `marker`
- *  must produce for it.
- *
- *  Not a copy of a table -- there is no table, only a rule -- and that is why
- *  this shape. `placeholder.ts` and `generate.py` each implement the rule, and
- *  neither can call the other: the page writes a marker into what it sends
- *  before any response has arrived, so the rule cannot be served. Examples are
- *  what both can be held to. `placeholder.test.ts` asserts the page's `marker`
- *  against these, and
- *  `tests/test_server.py::test_the_marker_rule_is_one_rule_in_both_languages`
- *  asserts `generate.marker` against the same entries -- so a side that changes
- *  the rule alone fails, and a side that changes the rule *and* these fails on
- *  the other side.
- *
- *  The four cases are the four shapes a key has: one word, two words, a nested
- *  key, and an `extra_env` name the customer supplied. */
+/** The marker rule as worked examples, one per key shape. placeholder.test.ts
+ *  holds the page's `marker` to them and test_server.py holds generate.marker
+ *  to the same entries. */
 export const MARKER_EXAMPLES: Record<string, string> = {
   namespace: "<NAMESPACE>",
   auth_token: "<AUTH_TOKEN>",
