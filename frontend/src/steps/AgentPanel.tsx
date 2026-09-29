@@ -463,80 +463,80 @@ export function AgentPanel({
                             </div>
 
                             <Collapse open={isOpen}>
-                                {agentRow.shown(s.id) && (
-                                  <div className="px-3 pb-3 pl-10 space-y-2">
-                                    <label className="block">
-                                      <span className="text-xs font-medium text-slate-600">
-                                        Agent AUTH_TOKEN
+                              {agentRow.shown(s.id) && (
+                                <div className="px-3 pb-3 pl-10 space-y-2">
+                                  <label className="block">
+                                    <span className="text-xs font-medium text-slate-600">
+                                      Agent AUTH_TOKEN
+                                    </span>
+                                    <SecretInput value={credential.token}
+                                      onChange={credential.setToken}
+                                      placeholder="paste the token this agent was created with" />
+                                  </label>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    {/* Nothing changes until this is pressed twice. */}
+                                    {(reusing || arm === "done") && (
+                                      <button type="button"
+                                        disabled={issuing || arm === "done"}
+                                        onClick={(e) => { e.stopPropagation(); regenerate(); }}
+                                        className={"text-2xs font-semibold rounded px-2 py-1 flex items-center gap-1.5 " + ({
+                                          idle: "bg-red-600 text-white hover:bg-red-700",
+                                          armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
+                                          done: "bg-slate-200 text-slate-500 cursor-default",
+                                        })[arm]}>
+                                        {issuing && <Spinner className="text-white" />}
+                                        {issuing ? "Regenerating…"
+                                          : { idle: "Regenerate token",
+                                              armed: "I'm sure",
+                                              done: "Regenerated" }[arm]}
+                                      </button>
+                                    )}
+                                    {/* A way out of the armed state. */}
+                                    {arm === "armed" && !issuing && (
+                                      <button type="button"
+                                        onClick={(e) => { e.stopPropagation(); setArm("idle"); }}
+                                        className="text-2xs font-medium rounded px-2 py-1 border border-slate-300 text-slate-600 hover:bg-slate-100">
+                                        Cancel
+                                      </button>
+                                    )}
+                                    {/* "could not ask" and "holds none" read differently. */}
+                                    {reusing && arm === "idle" && !issuing
+                                      && credential.note && (
+                                      <span className="text-2xs text-slate-500">
+                                        {credential.note}
                                       </span>
-                                      <SecretInput value={credential.token}
-                                        onChange={credential.setToken}
-                                        placeholder="paste the token this agent was created with" />
-                                    </label>
-                                    <div className="flex items-center gap-2 flex-wrap">
-                                      {/* Nothing changes until this is pressed twice. */}
-                                      {(reusing || arm === "done") && (
-                                        <button type="button"
-                                          disabled={issuing || arm === "done"}
-                                          onClick={(e) => { e.stopPropagation(); regenerate(); }}
-                                          className={"text-2xs font-semibold rounded px-2 py-1 flex items-center gap-1.5 " + ({
-                                            idle: "bg-red-600 text-white hover:bg-red-700",
-                                            armed: "bg-red-800 text-white hover:bg-red-900 ring-2 ring-red-300",
-                                            done: "bg-slate-200 text-slate-500 cursor-default",
-                                          })[arm]}>
-                                          {issuing && <Spinner className="text-white" />}
-                                          {issuing ? "Regenerating…"
-                                            : { idle: "Regenerate token",
-                                                armed: "I'm sure",
-                                                done: "Regenerated" }[arm]}
-                                        </button>
-                                      )}
-                                      {/* A way out of the armed state. */}
-                                      {arm === "armed" && !issuing && (
-                                        <button type="button"
-                                          onClick={(e) => { e.stopPropagation(); setArm("idle"); }}
-                                          className="text-2xs font-medium rounded px-2 py-1 border border-slate-300 text-slate-600 hover:bg-slate-100">
-                                          Cancel
-                                        </button>
-                                      )}
-                                      {/* "could not ask" and "holds none" read differently. */}
-                                      {reusing && arm === "idle" && !issuing
-                                        && credential.note && (
-                                        <span className="text-2xs text-slate-500">
-                                          {credential.note}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {arm === "armed" && (
-                                      <Callout tone="red">
-                                        <p className="text-xs font-semibold text-red-900">
-                                          This kills the token {s.name || s.id} is running on.
-                                        </p>
-                                        <p className="text-2xs text-red-800 mt-0.5">
-                                          {rotateHazard(s.id)} A new agent instead
-                                          costs nothing and leaves that install alone.
-                                        </p>
-                                      </Callout>
-                                    )}
-                                    {arm === "done" && (
-                                      <Callout tone="emerald" className="text-xs">
-                                        New AUTH_TOKEN for <b>{s.name || s.id}</b>, in
-                                        the field above — this bundle is the only
-                                        copy. Re-apply it wherever that agent was
-                                        running.
-                                      </Callout>
-                                    )}
-                                    <ErrorMsg msg={issueErr} />
-                                    {up && (
-                                      <Callout tone="amber" className="text-xs">
-                                        <b>{s.name || s.id}</b> is online — already
-                                        running somewhere. A second deployment on
-                                        it will conflict.
-                                      </Callout>
                                     )}
                                   </div>
-                                )}
+
+                                  {arm === "armed" && (
+                                    <Callout tone="red">
+                                      <p className="text-xs font-semibold text-red-900">
+                                        This kills the token {s.name || s.id} is running on.
+                                      </p>
+                                      <p className="text-2xs text-red-800 mt-0.5">
+                                        {rotateHazard(s.id)} A new agent instead
+                                        costs nothing and leaves that install alone.
+                                      </p>
+                                    </Callout>
+                                  )}
+                                  {arm === "done" && (
+                                    <Callout tone="emerald" className="text-xs">
+                                      New AUTH_TOKEN for <b>{s.name || s.id}</b>, in
+                                      the field above — this bundle is the only
+                                      copy. Re-apply it wherever that agent was
+                                      running.
+                                    </Callout>
+                                  )}
+                                  <ErrorMsg msg={issueErr} />
+                                  {up && (
+                                    <Callout tone="amber" className="text-xs">
+                                      <b>{s.name || s.id}</b> is online — already
+                                      running somewhere. A second deployment on
+                                      it will conflict.
+                                    </Callout>
+                                  )}
+                                </div>
+                              )}
                             </Collapse>
                           </div>
                         );
