@@ -150,6 +150,11 @@ VERSIONS_SOURCE = "location image list"
 INVENTORY_SOURCE = "live agent inventory"
 CATALOGUE_SOURCE = "fallback-catalogue"
 
+# The same three as each image entry's `source`, and crane's `crane_source`.
+ENTRY_SOURCE = {VERSIONS_SOURCE: "location-versions",
+                INVENTORY_SOURCE: "agent-inventory",
+                CATALOGUE_SOURCE: "catalogue"}
+
 
 def image_list_state(facts):
     """Which image-list state these facts record; absent is `not-asked`."""
@@ -277,7 +282,7 @@ def gather(client, harbor_id):
             base = key_base(e["key"])
             if base in entries:
                 continue
-            entries[base] = e
+            entries[base] = dict(e, source=ENTRY_SOURCE[label])
             taken = True
         if taken:
             sources.append(label)
@@ -287,11 +292,12 @@ def gather(client, harbor_id):
     take(CATALOGUE_SOURCE, [dict(i, size_mb=None) for i in FALLBACK_IMAGES])
 
     # Crane is pinned from a live source, matched by the public repo.
-    facts["crane_image"] = next(
-        (f"{CRANE_REPO}:{e['tag']}"
-         for source in (resources or [], inventory)
+    facts["crane_image"], facts["crane_source"] = next(
+        ((f"{CRANE_REPO}:{e['tag']}", ENTRY_SOURCE[label])
+         for label, source in ((VERSIONS_SOURCE, resources or []),
+                               (INVENTORY_SOURCE, inventory))
          for e in source if e["repo"] == CRANE_REPO),
-        f"{CRANE_REPO}:latest")
+        (f"{CRANE_REPO}:latest", ENTRY_SOURCE[CATALOGUE_SOURCE]))
     facts["images"] = list(entries.values())
     facts["images_source"] = " + ".join(sources)
     return facts
@@ -343,12 +349,14 @@ def manual(harbor_id, ship_id, func_ids=None, harbor_name=None):
         "ships": [{"id": or_marker(ship_id, "ship_id"), "name": None,
                    "state": None, "installed_version": None,
                    "last_heartbeat": None}],
-        "images": [dict(i, size_mb=None) for i in FALLBACK_IMAGES],
+        "images": [dict(i, size_mb=None, source=ENTRY_SOURCE[CATALOGUE_SOURCE])
+                   for i in FALLBACK_IMAGES],
         "images_source": MANUAL_SOURCE,
         "image_list": {"state": IMAGE_LIST_NOT_ASKED, "count": None,
                        "detail": "no account access, so the location's image "
                                  "list was never asked for"},
         "crane_image": f"{CRANE_REPO}:latest",
+        "crane_source": ENTRY_SOURCE[CATALOGUE_SOURCE],
     }
 
 

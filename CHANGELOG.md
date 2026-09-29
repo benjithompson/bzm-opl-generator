@@ -13,6 +13,34 @@ anything that breaks.
 
 ### Added
 
+- **Every bundle carries `IMAGES.md`.** It lists the images the agent pulls,
+  what each one does, which functionality needs it, when it is pulled, and
+  whether that was seen in a live run. With `--private-registry` it also lists
+  the name each image must have in your registry. It warns about floating
+  (`latest`) tags and says how to check a mirror after a BlazeMeter release.
+
+- **`images --explain`** prints the same catalogue for a location (or, with no
+  location, every image this tool knows), as a table, Markdown, CSV or JSON.
+  `--lookup` adds each image's digest, compressed size and newest published
+  tag from BlazeMeter's public registry, so you can see when a mirror is
+  behind. A registry that does not answer is reported as unread and never
+  stops the command.
+
+- **`images --verify <registry>`** checks that your mirror holds every image
+  under the name the agent asks for, and reports each one as present, missing
+  or unread. It exits 1 when an image is missing. Pass the bundle's
+  `--profile profile.json` for a docker bundle's names, and `--ca-file` for a
+  registry signed by your own CA. Credentials come from `BZM_REGISTRY_USER` and
+  `BZM_REGISTRY_PASSWORD` or your docker config, never from a flag. See
+  [docs/images.md](docs/images.md).
+
+- **`GET /api/images`** serves the catalogue to the web UI, and the MCP
+  server's `opl_bundle images` returns it as `catalogue`.
+
+- **`facts` records where each image came from.** Each image entry has a
+  `source` (`location-versions`, `agent-inventory` or `catalogue`), and the
+  facts have a `crane_source`. Older facts files still work.
+
 - **Engines request what they are limited to.** Manifests and the Helm chart
   now set `KUBERNETES_RESOURCES_DEFAULT_CPU` / `KUBERNETES_RESOURCES_DEFAULT_MEM`
   beside the engine limits, so each engine requests 2 CPU / 8Gi by default

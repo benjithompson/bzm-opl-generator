@@ -87,6 +87,23 @@ def docker_composed_targets(facts, o):
             for i in select_images(facts)}
 
 
+def mirror_targets(facts, o):
+    """[(public ref, destination)] in the order the mirror script copies them:
+    crane first, then the location's images, then crane-hook's where the
+    bundle carries it. The destination is what crane asks for on this
+    platform; crane and crane-hook keep only their last path segment.
+    """
+    refs = image_refs(facts)
+    # The hook's image is not in the location's inventory. Docker ignores
+    # crane_hook, so it is not mirrored there.
+    if o.get("crane_hook") and "crane_hook" not in ignored_options(o):
+        refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
+    reg = o["private_registry"].rstrip("/")
+    composed = docker_composed_targets(facts, o) or cluster_composed_targets(facts, o)
+    return [(ref, composed.get(ref, f"{reg}/{ref.rsplit('/', 1)[-1]}"))
+            for ref in refs]
+
+
 def mirror_script(facts, o):
     """A script that pulls BlazeMeter's images and pushes them into the private
     registry.
@@ -95,11 +112,7 @@ def mirror_script(facts, o):
     login already in place. Crane goes first because it is small, so a registry
     that refuses the push fails fast.
     """
-    refs = image_refs(facts)
-    # The hook's image is not in the location's inventory. Docker ignores
-    # crane_hook, so it is not mirrored there.
-    if o["crane_hook"] and "crane_hook" not in ignored_options(o):
-        refs = refs + [f"{PUBLIC_REGISTRY}/{HOOK_IMAGE_REPO}:{HOOK_IMAGE_TAG}"]
+    targets = mirror_targets(facts, o)
     reg = o["private_registry"].rstrip("/")
     host = reg.split("/")[0]
     # Only the `mirror` calls run anything, and they quote what they are given;
@@ -135,8 +148,7 @@ def mirror_script(facts, o):
     ]
     # The destination is what crane composes on this platform (see the module
     # docstring).
-    composed = docker_composed_targets(facts, o)
-    if composed:
+    if docker_composed_targets(facts, o):
         lines += [
             "# Destinations:",
             "#   crane               <registry>/crane:<version>",
@@ -146,7 +158,6 @@ def mirror_script(facts, o):
             "",
         ]
     else:
-        composed = cluster_composed_targets(facts, o)
         lines += [
             "# Destinations:",
             "#   crane, crane-hook   <registry>/<name>:<version>",
@@ -155,9 +166,7 @@ def mirror_script(facts, o):
             "# match IMAGE_OVERRIDES in this bundle.",
             "",
         ]
-    for ref in refs:
-        name = ref.rsplit("/", 1)[-1]
-        dest = composed.get(ref, f"{reg}/{name}")
+    for ref, dest in targets:
         lines.append(f"mirror {shlex.quote(ref)} {shlex.quote(dest)}")
-    lines += ["", f'echo "done -- {len(refs)} images in {reg}"']
+    lines += ["", f'echo "done -- {len(targets)} images in {reg}"']
     return "\n".join(lines) + "\n"

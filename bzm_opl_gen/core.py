@@ -22,8 +22,9 @@ import zipfile
 from . import (agent_env as agent_env_mod, api, bundle_env, bundle_names,
                bundle_options, doctor, evidence as evidence_mod,
                facts as facts_mod, footprint, generate as gen_mod,
-               image_registry, markers, options as options_mod, plan,
-               quantity, required_fields, service_virt, suggest as suggest_mod,
+               image_catalog as image_catalog_mod, image_registry, markers,
+               options as options_mod, plan, quantity, registry_client,
+               required_fields, service_virt, suggest as suggest_mod,
                sv_read, workstation)
 
 
@@ -811,6 +812,96 @@ def _docker(args, dry_run):
 def bundle_images(facts, all_images=False):
     """Every image reference this location's bundle will pull (crane first)."""
     return facts_mod.image_refs(facts, all_images=all_images)
+
+
+# Registry reads run side by side; each is short-timed in registry_client.
+REGISTRY_WORKERS = 8
+
+_NOT_LOOKED_UP = {"registry_state": registry_client.NOT_ASKED,
+                  "registry_detail": None, "digest": None, "size_mb": None,
+                  "newest_tag": None, "update_available": None}
+
+
+def image_catalog(facts=None, lookup=True, all_images=False):
+    """Each image a location pulls, with what it is for: {source, location,
+    image_list_state, registry_lookup, images}.
+
+    Without facts, every image the catalogue knows (`required` null). With
+    `lookup`, BlazeMeter's public registry adds each image's digest, size and
+    newest tag in its series. A registry read never raises: its state is per
+    image, and `registry_lookup.state` is read, unread, partial or not-asked.
+    """
+    if facts is None:
+        rows = image_catalog_mod.catalogue_rows()
+        head = {"source": "catalogue", "location": None,
+                "image_list_state": facts_mod.IMAGE_LIST_NOT_ASKED}
+    else:
+        rows = image_catalog_mod.location_rows(facts, all_images=all_images)
+        head = {"source": "location",
+                "location": {"harbor_id": facts.get("harbor_id") or "",
+                             "name": facts.get("harbor_name") or "",
+                             "func_ids": list(facts.get("func_ids") or [])},
+                "image_list_state": facts_mod.image_list_state(facts)}
+    if not lookup:
+        return {**head, "registry_lookup": {"state": registry_client.NOT_ASKED,
+                                            "detail": None},
+                "images": [{**r, **_NOT_LOOKED_UP} for r in rows]}
+    with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
+        found = list(pool.map(registry_client.lookup, [r["ref"] for r in rows]))
+    images = [{**r, **f} for r, f in zip(rows, found)]
+    unread = [i for i in images
+              if i["registry_state"] != registry_client.READ]
+    if not unread:
+        summary = {"state": registry_client.READ, "detail": None}
+    else:
+        summary = {"state": registry_client.UNREAD if len(unread) == len(images)
+                   else "partial",
+                   "detail": f"{len(unread)} of {len(images)} images could not "
+                             f"be read from the registry; the first: "
+                             f"{unread[0]['registry_detail']}"}
+    return {**head, "registry_lookup": summary, "images": images}
+
+
+def verify_mirror(facts, registry, options=None, ca_file=None):
+    """Is each image this bundle pulls in the customer's `registry`, under the
+    name the mirror script pushes it to? Each is present, missing or unread.
+
+    `options` are the bundle's (its profile.json): the format and crane_hook
+    decide the names. Credentials come from the environment or the docker
+    config, never from an argument. A leading `http://` marks a plain-HTTP
+    registry.
+    """
+    reg_prefix = registry_client.strip_scheme(registry)
+    if not reg_prefix:
+        raise BadRequest("--verify needs a registry, such as "
+                         "registry.example.com/blazemeter")
+    o = {**bundle_options.DEFAULT_OPTIONS, **(options or {}),
+         "private_registry": reg_prefix}
+    targets = image_registry.mirror_targets(facts, o)
+    scheme, host, _, _ = registry_client.split_ref(
+        f"{registry.rstrip('/')}/probe:latest")
+    user, password, where = registry_client.credentials_for(host)
+    try:
+        client = registry_client.Registry(
+            host, scheme=scheme,
+            credentials=(user, password) if user else None, ca_file=ca_file)
+    except (OSError, ssl.SSLError) as e:
+        raise BadRequest(f"the CA file {ca_file!r} could not be used: {e}")
+
+    def check(pair):
+        ref, target = pair
+        _, _, path, tag = registry_client.split_ref(target)
+        return {"ref": ref, "target": target, **client.check(path, tag)}
+
+    with concurrent.futures.ThreadPoolExecutor(REGISTRY_WORKERS) as pool:
+        images = list(pool.map(check, targets))
+    counts = collections.Counter(i["state"] for i in images)
+    return {"registry": reg_prefix,
+            "credentials": where if user else f"anonymous ({where})",
+            "images": images,
+            "present": counts[registry_client.PRESENT],
+            "missing": counts[registry_client.MISSING],
+            "unread": counts[registry_client.UNREAD]}
 
 
 # -- planning, before any of the above exists ---------------------------------

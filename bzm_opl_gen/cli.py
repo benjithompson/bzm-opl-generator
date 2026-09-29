@@ -11,7 +11,8 @@ Subcommands:
   doctor       preflight a cluster: can it schedule the location's concurrency?
   suggest      what a cluster's evidence implies about the generate options
   sv-expose    emit a working Service+Ingress per deployed virtual service
-  images       list / pull / mirror the images the location actually needs
+  images       list / explain / pull / mirror / verify the images the location
+               actually needs
   livetest     start a bundle for real (a cluster, or docker compose) and
                verify the agent comes online
 """
@@ -376,10 +377,106 @@ def cmd_toolcheck(a):
     sys.exit(0 if not doctor.has_failures(checks) else 1)
 
 
+EXPLAIN_COLUMNS = ["ref", "key", "category", "functionalities", "required",
+                   "verified", "tag_mutable", "source", "purpose",
+                   "pulled_when", "registry_state", "registry_detail",
+                   "digest", "size_mb", "newest_tag", "update_available"]
+
+
+def _explain_cell(value):
+    if isinstance(value, list):
+        return ";".join(value)
+    return "" if value is None else str(value)
+
+
+def _print_explain(cat, fmt):
+    """The catalogue rows in the format asked for; json is core's answer as
+    is."""
+    if fmt == "json":
+        print(json.dumps(cat, indent=2))
+        return
+    rows = cat["images"]
+    if fmt == "csv":
+        import csv
+        w = csv.writer(sys.stdout)
+        w.writerow(EXPLAIN_COLUMNS)
+        for r in rows:
+            w.writerow([_explain_cell(r[c]) for c in EXPLAIN_COLUMNS])
+        return
+    looked = cat["registry_lookup"]["state"] != "not-asked"
+    if fmt == "md":
+        cols = ["Image", "What it does", "Functionality", "When it is pulled",
+                "Seen in a live run"] + (["Size (MB)", "Newest tag"] if looked else [])
+        print("| " + " | ".join(cols) + " |")
+        print("|" + "---|" * len(cols))
+        for r in rows:
+            cells = [f"`{r['ref']}`", r["purpose"], ", ".join(r["functionalities"]),
+                     r["pulled_when"], "yes" if r["verified"] else "no"]
+            if looked:
+                cells += [_explain_cell(r["size_mb"]), _explain_cell(r["newest_tag"])]
+            print("| " + " | ".join(c.replace("|", "\\|") for c in cells) + " |")
+        return
+    loc = cat["location"]
+    print(f"location {loc['name'] or loc['harbor_id']} ({loc['harbor_id']}), "
+          f"funcIds {loc['func_ids']}, image list {cat['image_list_state']}"
+          if loc else "the built-in catalogue (no location)")
+    for r in rows:
+        need = {True: "required", False: "not required", None: ""}[r["required"]]
+        flags = [f for f in (need, "floating tag" if r["tag_mutable"] else "",
+                             "" if r["verified"] else "not seen in a live run") if f]
+        print(f"\n{r['ref']}  [{', '.join(r['functionalities']) or 'none'}]"
+              + (f"  ({'; '.join(flags)})" if flags else ""))
+        print(f"    {r['purpose']}\n    pulled: {r['pulled_when']}")
+        if looked:
+            if r["registry_state"] == "read":
+                newer = (f", newer tag {r['newest_tag']}" if r["update_available"]
+                         else "")
+                print(f"    registry: {r['digest'] or 'no such tag'}, "
+                      f"{_explain_cell(r['size_mb']) or '?'} MB{newer}")
+            if r["registry_detail"]:
+                print(f"    registry: {r['registry_detail']}")
+    if looked and cat["registry_lookup"]["detail"]:
+        print(f"\nWARN: {cat['registry_lookup']['detail']}", file=sys.stderr)
+
+
+def _verify(f, a):
+    options = None
+    if a.profile:
+        try:
+            with open(a.profile) as fh:
+                options = json.load(fh)
+        except (OSError, ValueError) as e:
+            sys.exit(f"--profile {a.profile}: {e}")
+    out = core.verify_mirror(f, a.verify, options=options, ca_file=a.ca_file)
+    print(f"checking {out['registry']} (credentials: {out['credentials']})")
+    for i in out["images"]:
+        state = i["state"].upper() if i["state"] == "missing" else i["state"]
+        print(f"  {state:8} {i['target']}"
+              + (f"  {i['digest']}" if i["digest"] else "")
+              + (f"  -- {i['detail']}" if i["state"] != "present" else ""))
+    print(f"{out['present']} present, {out['missing']} missing, "
+          f"{out['unread']} unread")
+    if out["unread"]:
+        print("WARN: an unread image may or may not be there; the registry did "
+              "not say.", file=sys.stderr)
+    if out["missing"]:
+        sys.exit(1)
+
+
 def cmd_images(a):
     f = facts_mod.load(a.facts) if a.facts else None
+    if a.explain and f is None and not a.harbor_id:
+        # No location named: the whole catalogue.
+        _print_explain(core.image_catalog(None, lookup=a.lookup), a.format)
+        return
     if f is None:
         f = core.gather_facts(_client(a), a.harbor_id)
+    if a.verify:
+        return _verify(f, a)
+    if a.explain:
+        _print_explain(core.image_catalog(f, lookup=a.lookup,
+                                          all_images=a.all), a.format)
+        return
     imgs = core.bundle_images(f, all_images=a.all)
     for ref in imgs:
         print(ref)
@@ -968,7 +1065,8 @@ def main():
                    help="check the proxy rig too")
     w.set_defaults(fn=cmd_toolcheck)
 
-    i = sub.add_parser("images", help="list/pull/mirror the location's images")
+    i = sub.add_parser("images", help="list/explain/pull/mirror/verify the "
+                                      "location's images")
     i.add_argument("--facts")
     i.add_argument("--api-key")
     i.add_argument("--harbor-id")
@@ -978,6 +1076,28 @@ def main():
     i.add_argument("--platform", default="linux/amd64",
                    help="pull arch (BlazeMeter images are amd64-only)")
     i.add_argument("--dry-run", action="store_true")
+    i.add_argument("--explain", action="store_true",
+                   help="what each image is for, which functionality needs it "
+                        "and when it is pulled. Without --facts or --harbor-id, "
+                        "every image the built-in catalogue knows")
+    i.add_argument("--format", choices=["table", "md", "csv", "json"],
+                   default="table", help="--explain output format")
+    i.add_argument("--lookup", action="store_true",
+                   help="with --explain: read each image's digest, size and "
+                        "newest tag from BlazeMeter's public registry")
+    i.add_argument("--verify", metavar="REGISTRY",
+                   help="check that each image is in REGISTRY under the name "
+                        "the mirror script pushes it to; exits 1 if one is "
+                        "missing. Credentials come from BZM_REGISTRY_USER and "
+                        "BZM_REGISTRY_PASSWORD, or the docker config. Prefix "
+                        "http:// for a plain-HTTP registry")
+    i.add_argument("--ca-file", metavar="PEM",
+                   help="with --verify: the CA that signed REGISTRY's "
+                        "certificate")
+    i.add_argument("--profile", metavar="PROFILE_JSON",
+                   help="with --verify: the bundle's profile.json, whose format "
+                        "and crane_hook decide the names (default: a Kubernetes "
+                        "bundle)")
     i.set_defaults(fn=cmd_images)
 
     t = sub.add_parser("livetest", help="start a bundle for real, verify the "

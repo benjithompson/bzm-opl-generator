@@ -1060,3 +1060,15 @@ def test_the_instructions_offer_planning_before_the_account():
     text = listing()["instructions"]
     assert "opl_plan" in text
     assert "no cluster" in text or "before there is a cluster" in text
+
+
+def test_listing_images_explains_each_one(fake_account):
+    """The images action returns a catalogue row per image, registry fields
+    not asked unless lookup is set."""
+    body = ok("opl_bundle", "images", {"facts": FACTS})
+    rows = body["catalogue"]
+    assert [r["ref"] for r in rows] == body["images"]
+    assert all(r["purpose"] and r["pulled_when"] for r in rows)
+    assert body["registry_lookup"]["state"] == "not-asked"
+    looked = ok("opl_bundle", "images", {"facts": FACTS, "lookup": True})
+    assert looked["registry_lookup"]["state"] == "unread"

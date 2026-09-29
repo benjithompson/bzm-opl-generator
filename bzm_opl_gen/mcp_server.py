@@ -104,7 +104,7 @@ Reference, readable as resources on this server ({RESOURCE_SCHEME}://docs/...):
 options.md (every generate option), preflight.md (evidence files and what the
 checks mean), capacity-planning.md (sizing a cluster nobody has yet), helm.md
 and docker.md (the two non-manifest output formats), service-virtualization.md,
-hardened-engines.md, live-test.md. Read the one that covers the question rather
+hardened-engines.md, images.md, live-test.md. Read the one that covers the question rather
 than guessing at an option name -- `opl_bundle options` lists them all with a
 one-line summary each, and every page this server serves is in `docs`.
 
@@ -196,6 +196,8 @@ DOC_SUMMARIES = {
                                  "generate such a location for performance alone.",
     "hardened-engines.md": "The restricted engine posture, and which images "
                            "have run under it.",
+    "images.md": "What each image does and which functionality needs it, "
+                 "mirroring them, and checking a mirror with images --verify.",
     "live-test.md": "The live rig: what it proves and what it costs.",
     "web-ui.md": "The local web UI, for a human doing this by hand.",
     # That page's fix is a patch to crane's source; the runnable workarounds
@@ -525,7 +527,10 @@ DESCRIPTIONS["opl_bundle"] = (
     "  read     -- one file out of a written bundle {out_dir, name}\n"
     "  options  -- every generate option, its default and what it does\n"
     "  images   -- the image references this bundle pulls {facts, "
-    "all?}. With mirror=<prefix> it also pulls them and pushes them "
+    "all?, lookup?}, and a `catalogue` row per image: what it does, "
+    "the funcIds that need it, when it is pulled, whether that was seen "
+    "live. lookup=true adds digest, size and newest tag from BlazeMeter's "
+    "public registry. With mirror=<prefix> it also pulls them and pushes them "
     "into that registry, under the names a Kubernetes agent then asks "
     "for, which writes to it -- confirm before calling it that way. A "
     "docker bundle's images are its own script's, not these.\n"
@@ -576,7 +581,11 @@ def _bundle(action, args):
         facts, = _need(args, "facts")
         refs = core.bundle_images(facts, all_images=bool(args.get("all")))
         if not (args.get("pull") or args.get("mirror")):
+            cat = core.image_catalog(facts, lookup=bool(args.get("lookup")),
+                                     all_images=bool(args.get("all")))
             return {"images": refs,
+                    "catalogue": cat["images"],
+                    "registry_lookup": cat["registry_lookup"],
                     "next": ["pass mirror=<registry-prefix> to copy these into "
                              "a private registry, or run the bundle's "
                              "bzm-opl-image-mirror.sh yourself"]}

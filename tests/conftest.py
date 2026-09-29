@@ -26,3 +26,20 @@ def _no_cluster_binaries():
     subprocess.run = guarded
     yield
     subprocess.run = real
+
+
+@pytest.fixture(autouse=True)
+def _no_registry_network():
+    """No offline test reaches a real registry: every registry read answers
+    `unread`, as if offline. A test that needs an answer fakes
+    `registry_client.http_request` itself. Not `monkeypatch`, whose teardown
+    order would change other modules' fixtures."""
+    from bzm_opl_gen import registry_client
+
+    def offline(method, url, *a, **kw):
+        raise registry_client.Unreachable(f"offline test: {method} {url}")
+
+    real = registry_client.http_request
+    registry_client.http_request = offline
+    yield
+    registry_client.http_request = real

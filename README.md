@@ -132,13 +132,16 @@ Step 0 needs no account and no cluster — that is the case it exists for, since
 its answer is what you raise the cluster request *with*
 ([docs/capacity-planning.md](docs/capacity-planning.md)).
 
-`out/README.md` is written for whoever receives the bundle; `out/profile.json`
+`out/README.md` is written for whoever receives the bundle, and `out/IMAGES.md`
+lists the images the agent pulls and what each does; `out/profile.json`
 is the resolved options minus the token, replayed with `generate --profile`.
 
 Also: `--format helm` for a chart ([docs/helm.md](docs/helm.md)),
 `--format docker` for one agent as one container
 ([docs/docker.md](docs/docker.md)), `--private-registry` plus `images --pull
---mirror` for an air-gapped cluster, and `livetest` to start a bundle for real
+--mirror` for an air-gapped cluster (`images --explain` says what each image
+does, `images --verify` checks the mirror: [docs/images.md](docs/images.md)),
+and `livetest` to start a bundle for real
 and wait for the agent to come online -- a cluster for the manifests, `docker
 compose` on this host for a docker bundle
 ([docs/live-test.md](docs/live-test.md)).
@@ -214,6 +217,7 @@ option or only narrows it
 | [docs/helm.md](docs/helm.md) | `--format helm`, and `helm upgrade` |
 | [docs/docker.md](docs/docker.md) | `--format docker`, and which options reach it |
 | [docs/service-virtualization.md](docs/service-virtualization.md) | ingress backends for `mockServices`, and `sv-expose` |
+| [docs/images.md](docs/images.md) | `images` — what each image does, mirroring, and checking a mirror |
 | [docs/preflight.md](docs/preflight.md) | `doctor`, `suggest`, `toolcheck`, engine sizing |
 | [docs/live-test.md](docs/live-test.md) | the live rig: registry, proxy + CA, egress containment |
 | [docs/hardened-engines.md](docs/hardened-engines.md) | the security context crane stamps on the pods it spawns |
