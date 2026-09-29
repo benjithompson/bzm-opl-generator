@@ -1,15 +1,6 @@
-# crane-hook -- github.com/Blazemeter/crane-hook. A one-shot Pod that checks the
-# cluster against what an agent needs (node capacity, egress to BlazeMeter and
-# the registries, the RBAC below, and for service virtualization the ingress and
-# its TLS secret) and exits 0 or 1.
-#
-# Upstream ships this as `kubernetes/cranehook.yaml` with `default` in every
-# namespace field and placeholders for the rest; here every one of those values
-# is something the bundle already decided, so they are substituted rather than
-# left for a reader to fill in twice and get wrong once.
-#
-# Its Role is its own and is read-only -- it is not the agent's Role and grants
-# the agent nothing. Both are namespaced, like everything else here.
+# crane-hook (github.com/Blazemeter/crane-hook): a one-shot Pod that checks the
+# cluster against what the agent needs and exits 0 or 1. Its Role is read-only
+# and separate from the agent's.
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
 metadata: { namespace: ${NAMESPACE}, name: ${HOOK_ROLE} }
@@ -23,9 +14,6 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: [ingresses]
     verbs: [get, list]
-  # Read-only, and present whether or not istio is the configured backend: the
-  # check is "is the ingress you asked for actually there", which it cannot
-  # answer about a resource it may not list.
   - apiGroups: ["networking.istio.io"]
     resources: [virtualservices, destinationrules, gateways, serviceentries]
     verbs: [get, list]
@@ -48,9 +36,7 @@ metadata: { namespace: ${NAMESPACE}, name: cranehook }
 spec:
   serviceAccountName: ${SERVICE_ACCOUNT}
   automountServiceAccountToken: true
-  # It runs once and stops. Never, not OnFailure: a failed check is the answer,
-  # and restarting it would turn a red exit code into a CrashLoopBackOff that
-  # reads like the check itself is broken.
+  # Runs once; a failed check is reported by the exit code, not retried.
   restartPolicy: "Never"
   containers:
     - name: cranehook-ctr

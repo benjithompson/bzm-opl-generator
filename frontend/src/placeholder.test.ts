@@ -88,7 +88,7 @@ describe("blankRequired, for a group that is switched on", () => {
 
 describe("marker", () => {
   it("follows the rule the generator follows", () => {
-    // The examples test_server.py also holds generate.marker to.
+    // The examples test_server.py also holds markers.marker to.
     for (const [key, want] of Object.entries(MARKER_EXAMPLES)) {
       expect(marker(key)).toBe(want);
     }

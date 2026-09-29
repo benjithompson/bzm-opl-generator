@@ -10,29 +10,22 @@ data:
   HARBOR_ID: {{ .Values.harborId | quote }}
   SHIP_ID: {{ .Values.shipId | quote }}
   {{- if not .Values.useSecret }}
-  # Simplified: AUTH_TOKEN in the ConfigMap, readable by anyone who can read
-  # ConfigMaps. Hardened option: useSecret=true.
+  # Readable by anyone who can read ConfigMaps; useSecret=true moves it to a Secret.
   AUTH_TOKEN: {{ .Values.authToken | quote }}
   {{- end }}
   CONTAINER_MANAGER_TYPE: KUBERNETES
   {{- if .Values.restrictEngines }}
-  # Engines inherit crane's UID:GID and drop all capabilities, so the pods crane
-  # spawns pass restricted PodSecurity, OpenShift's restricted-v2 SCC and GKE
-  # Autopilot's Warden. Crane's own default is privileged, which every one of
-  # those refuses -- and refuses invisibly, since the agent is online by then.
+  # Engines run as crane's UID:GID with no capabilities (see restrictEngines).
   INHERIT_RUNNING_USER_AND_GROUP: 'true'
   KUBERNETES_SECURITY_CONTEXT_CAP_JSON: '{"drop": ["ALL"]}'
   {{- end }}
   KUBERNETES_SERVICE_USE_TYPE: {{ .Values.serviceType | quote }}
   RUN_HEALTH_WEB_SERVICE: 'true'
   {{- if include "bzm-opl.svEnabled" . }}
-  # Service virtualization ingress. The endpoint crane advertises is
-  # <virtual-service>-<port>-<namespace>.<subdomain>, so the subdomain must be
-  # the wildcard domain your ingress controller already serves.
+  # Service virtualization. Endpoints are <virtual-service>-<port>-<namespace>.<subdomain>.
   KUBERNETES_WEB_EXPOSE_TYPE: {{ .Values.sv.ingress | upper | quote }}
   KUBERNETES_WEB_EXPOSE_SUB_DOMAIN: {{ .Values.sv.subdomain | quote }}
-  # Required even for HTTP virtual services -- crane validates it at startup and
-  # crash-loops when it is empty.
+  # Required even for HTTP virtual services.
   KUBERNETES_WEB_EXPOSE_TLS_SECRET_NAME: {{ .Values.sv.tlsSecret | quote }}
   {{- if eq .Values.sv.ingress "istio" }}
   {{- with .Values.sv.istioGateway }}
@@ -42,40 +35,30 @@ data:
   {{- end }}
   {{- end }}
   {{- end }}
-  {{- /*
-    Unconditional: bzm-opl.dockerRegistry falls back to BlazeMeter's public
-    project, so this line is the same either way. Only the overrides below
-    depend on privateRegistry.
-  */}}
   DOCKER_REGISTRY: {{ include "bzm-opl.dockerRegistry" . | quote }}
   {{- if .Values.privateRegistry }}
   IMAGE_OVERRIDES: {{ .Values.imageOverrides | toJson | squote }}
   {{- if .Values.registryAuth }}
-  # Crane-side auth for engine image pulls (or use image.pullSecret plus a
-  # cluster pull secret, and leave these unset -- a password here is readable by
-  # anyone who can read ConfigMaps):
+  # Registry credentials for engine image pulls. Readable by anyone who can read
+  # ConfigMaps; prefer a cluster pull secret.
   # DOCKER_REGISTRY_USERNAME: <user>
   # DOCKER_REGISTRY_PASSWORD: <password>
   # DOCKER_REGISTRY_EMAIL: <email>
   {{- end }}
   {{- end }}
   {{- if eq (include "bzm-opl.autoUpdate" .) "true" }}
-  # On: crane rewrites this Deployment -- its image, and .spec.strategy to
-  # RollingUpdate -- when BlazeMeter ships a newer agent, taking field ownership
-  # as it does. That is what makes the next `helm upgrade` conflict, so changing
-  # anything here is uninstall + install. See autoUpdate in values.yaml.
+  # On: crane updates its own Deployment, so `helm upgrade` conflicts and
+  # changes need uninstall + install. See autoUpdate in values.yaml.
   {{- else }}
-  # Crane leaves this Deployment to Helm, so `helm upgrade` behaves normally and
-  # keeping the agent current is your job. See autoUpdate in values.yaml.
+  # Off: Helm manages the Deployment; upgrade the agent by bumping image.tag.
   {{- end }}
   AUTO_KUBERNETES_UPDATE: {{ include "bzm-opl.autoUpdate" . | squote }}
   {{- if .Values.proxy.enabled }}
   {{- if include "bzm-opl.proxyInSecret" . }}
-  # HTTP(S)_PROXY embed credentials -> kept in {{ include "bzm-opl.secretName" . }}.
+  # HTTP(S)_PROXY carry credentials and are in {{ include "bzm-opl.secretName" . }}.
   {{- else }}
   {{- if include "bzm-opl.proxyHasCreds" . }}
-  # WARNING: the proxy credentials below are plaintext -- anyone who can read
-  # ConfigMaps sees them. Set useSecret=true to move them into the Secret.
+  # WARNING: plaintext proxy credentials. Set useSecret=true to move them to the Secret.
   {{- end }}
   {{- with .Values.proxy.http }}
   HTTP_PROXY: {{ . | quote }}
@@ -86,30 +69,14 @@ data:
   {{- end }}
   NO_PROXY: {{ .Values.proxy.noProxy | quote }}
   {{- end }}
-  {{- /*
-    Engine placement, NOT crane's. nodeSelector/tolerations above place the
-    crane pod; these two place the engines crane spawns, and on a two-pool
-    cluster they are deliberately different values. bzm-opl-gen resolves
-    "unset, so follow crane" into engineNodeSelector/engineTolerations when it
-    writes values.yaml, so what is here is always the effective engine
-    placement -- do not fall back to .Values.nodeSelector, or an explicitly
-    empty engine selector would silently inherit crane's pool.
-  */}}
+  {{- /* Engine placement only; crane's own placement is in the Deployment. */}}
   {{- with .Values.engineTolerations }}
   KUBERNETES_TOLERATIONS_JSON: {{ toJson . | squote }}
   {{- end }}
   {{- with .Values.engineNodeSelector }}
   KUBERNETES_NODE_SELECTOR_JSON: {{ toJson . | squote }}
   {{- end }}
-  {{- /*
-    Always emitted, defaults included: doctor and the planner certify the
-    2 CPU / 8Gi fallback, and a ConfigMap that omitted these on an empty value
-    ran engines with no limits at all (OOMKilled 4s in, live -- #132). The
-    fallback lives in the two helpers, which the pod comment and NOTES.txt also
-    read, so the figure this ConfigMap sets is the figure they quote; those
-    literals restate generate.ENGINE_DEFAULT_CPU/MEM and tests/test_helm.py
-    holds them equal.
-  */}}
+  {{- /* Always set: an engine with no limits can be OOM-killed by the node. */}}
   KUBERNETES_RESOURCES_LIMITS_CPU: {{ include "bzm-opl.engineCpuLimit" . | quote }}
   KUBERNETES_RESOURCES_LIMITS_MEMORY: {{ include "bzm-opl.engineMemoryLimit" . | quote }}
   {{- with .Values.engine.ephemeralRequestMb }}
@@ -123,26 +90,18 @@ data:
   {{- $key := .Values.caBundle.key }}
   {{- $path := printf "%s/%s" (trimSuffix "/" .Values.caBundle.mountPath) $key }}
   {{- if eq .Values.caBundle.mode "existing" }}
-  # CA bundle from existing ConfigMap '{{ $cm }}' -- the platform team owns and
-  # rotates it; this chart only references it.
+  # CA bundle from the existing ConfigMap '{{ $cm }}', which this chart only reads.
   {{- else if eq .Values.caBundle.mode "openshiftInject" }}
   # OpenShift cluster trust bundle (operator-injected ConfigMap).
   {{- else }}
-  # Corporate CA bundle (ConfigMap created by this chart).
+  # Corporate CA bundle, from the ConfigMap this chart creates.
   {{- end }}
-  # Mounted into crane as a directory; engines get the same ConfigMap mounted as
-  # a file via KUBERNETES_CA_BUNDLE_MOUNT (ENV=configmapName=fileKey).
+  # Mounted into crane; engines get it via KUBERNETES_CA_BUNDLE_MOUNT.
   REQUESTS_CA_BUNDLE: {{ $path | quote }}
   AWS_CA_BUNDLE: {{ $path | quote }}
   KUBERNETES_CA_BUNDLE_MOUNT: {{ printf "REQUESTS_CA_BUNDLE=%s=%s:AWS_CA_BUNDLE=%s=%s" $cm $key $cm $key | quote }}
   {{- end }}
-  {{- /*
-    Agent variables with no value of their own in this chart. Last, so it reads
-    as the addition it is -- and it can shadow nothing above, because
-    bzm-opl-gen refuses every name written here before it writes the overlay
-    (generate.RESERVED_ENV). Quoted: a ConfigMap value is a string, and an
-    unquoted `8080` or `true` renders as one Helm then refuses to marshal.
-  */}}
+  {{- /* extraEnv, quoted because ConfigMap values must be strings. */}}
   {{- range $name, $value := .Values.extraEnv }}
   {{ $name }}: {{ $value | quote }}
   {{- end }}

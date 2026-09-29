@@ -5,7 +5,7 @@
 
 import { AgentEnvVar, Options } from "./api";
 
-/** Names the generator accepts (generate.ENV_NAME_RE; test_server.py holds
+/** Names the generator accepts (bundle_env.ENV_NAME_RE; test_server.py holds
  *  them equal). Dots and dashes would apply cleanly and reach no process. */
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

@@ -201,7 +201,7 @@ section](#service_type-and-the-backend-you-chose).
 | needs an `IngressClass` | yes, named `nginx` | no | no | no |
 | `--sv-tls-secret` | referenced; must exist in the agent namespace | **never referenced** | referenced; must exist in the agent namespace | not referenced (`edge/Allow`) |
 | Role grants | `ingresses` | `gateways`, `virtualservices` | `httpproxies` | `routes`, `routes/custom-host` |
-| requires | – | – | – | an OpenShift cluster: `--platform openshift` and not `--not-openshift` |
+| requires | – | – | – | an OpenShift cluster: `--platform openshift --openshift` |
 
 **Why nginx's row is a "depends".** Crane's Ingress backend says
 `port.number: 8080` while the Service it created publishes `port: 80`

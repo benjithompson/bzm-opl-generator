@@ -12,7 +12,8 @@ import { envToRows } from "../env";
 import { Applies, keysApply, OUTPUT_FORMATS } from "../formats";
 import { GroupRow } from "../groups/GroupRow";
 import {
-  engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, OptionGroup,
+  engineFunctionalities, GroupFlags, GroupId, groupsFor, groupsOf, isOpenshift,
+  OptionGroup,
   runsFunctionality, SHARED_GROUPS, UnclaimedFuncIds,
 } from "../optionGroups";
 import { marker, placeholderWarning } from "../placeholder";
@@ -154,8 +155,8 @@ function FoldRow(props: {
  *  vanilla Kubernetes may use it too). */
 function AdvancedRow(p: ConfigurePanelProps) {
   const posture = p.options.platform === "openshift";
-  // Absent shows as OpenShift, and a select rather than a checkbox shows that.
-  const openshift = p.options.openshift_cluster !== false;
+  // Absent is plain Kubernetes, as in the generator (optionGroups.isOpenshift).
+  const openshift = isOpenshift(p.options);
   return (
     <FoldRow title="Advanced"
       hint="security posture, cluster and UID — you should not need these">

@@ -53,8 +53,9 @@ def nodepools_md(facts, o):
     max_pods = TYPICAL_SYSTEM_PODS + per_node
 
     # Sized from the engine's limits, which is what it runs at.
-    node_cpu = format_cpu(cpu + NODE_OVERHEAD_CPU)
-    node_mem = format_memory(mem + NODE_OVERHEAD_MEM)
+    node_cpu = format_cpu(cpu * per_node + NODE_OVERHEAD_CPU)
+    node_mem = format_memory(mem * per_node + NODE_OVERHEAD_MEM)
+    engines = f"{per_node} engine{'s' if per_node > 1 else ''}"
 
     sel_pairs = ",".join(f"{k}={v}" for k, v in eng_sel.items()) or "(none set)"
     crane_desc = (", ".join(f"{k}={v}" for k, v in crane_sel.items())
@@ -64,8 +65,7 @@ def nodepools_md(facts, o):
         f"# Node pools for {facts.get('harbor_name') or facts['harbor_id']}",
         "",
         "This bundle places crane and its engines on **different nodes**. The",
-        "manifests carry the labels and tolerations; the pools themselves are",
-        "yours to create, and this is what they need to be.",
+        "manifests carry the labels and tolerations; you create the pools.",
         "",
         "| | crane pool | engine pool |",
         "|---|---|---|",
@@ -76,99 +76,62 @@ def nodepools_md(facts, o):
         f"{format_cpu(cpu)} CPU / {format_memory(mem)} per engine |",
         "| autoscaling | fixed, 1-2 nodes | min 0, scales with the run |",
         "",
-        "## Why two pools",
+        "Crane is small and always running; engines are large and exist only",
+        "during a run. Separate pools let the engine pool scale to zero between",
+        "tests.",
         "",
-        "Crane is a small orchestrator that must not move: it holds the",
-        f"location's registration, and it needs {CRANE_CPU_LIMIT} CPU / {CRANE_MEM_LIMIT} to do it.",
-        f"An engine needs {format_cpu(cpu)} CPU / {format_memory(mem)} and exists only for the length",
-        "of a run. Sharing one pool means either paying for engine-sized nodes",
-        "around the clock, or letting crane sit on a node the autoscaler wants",
-        "to remove -- so the pool never drains and the saving never arrives.",
+        "## 1. Set the location's CPU/memory overrides",
         "",
-        "## Set the location's CPU/memory overrides first",
+        "The scheduler and cluster autoscaler place pods by their **requests**.",
+        f"An engine's limits come from this bundle ({format_cpu(cpu)} / {format_memory(mem)}); its requests come",
+        "from the location's `overrideCPU` and `overrideMemory` (Settings ->",
+        f"Private Locations), default {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}. At the default, many engines",
+        "fit on one node and slow each other down, skewing results.",
         "",
-        "**This is the fix. Everything below is a backstop for it.**",
+        f"Set **overrideCPU: {format_cpu(cpu)}** and **overrideMemory: {mem // (1024 ** 2)}** (MB) so that",
+        "requests match limits and the autoscaler adds the right number of nodes.",
         "",
-        "The scheduler and the cluster autoscaler place pods by their",
-        "**requests**, not their limits. An engine's limits come from this bundle",
-        f"({format_cpu(cpu)} / {format_memory(mem)}); its *requests* come from the location, as",
-        "`overrideCPU` and `overrideMemory` under Settings -> Private Locations.",
-        "They are different fields, not rival settings for one field --",
-        "confirmed on a live run, where a location at `overrideCPU: 1` /",
-        "`overrideMemory: 4096` and a bundle at 2 CPU / 8Gi produced an engine pod",
-        "with `requests {cpu: 1, memory: 4Gi}` and `limits {cpu: 2, memory: 8Gi}`.",
+        "## 2. Cap engines per node with maxPods",
         "",
-        f"Left unset -- as {ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM} -- an engine asks the scheduler for a",
-        "fraction of what it will use, so the autoscaler adds **one** node and",
-        "packs the whole run onto it. The engines then throttle against each",
-        "other and the test reports the load generator's latency, not the",
-        "system's.",
-        "",
-        f"So set them to match the limits this bundle asks for: **overrideCPU: {format_cpu(cpu)}**,",
-        f"**overrideMemory: {mem // (1024 ** 2)}** (it is in MB). Then requests equal limits, the",
-        "scheduler places engines truthfully, the autoscaler grows the pool by",
-        "the right number of nodes, and none of the `maxPods` arithmetic below",
-        "has to carry the weight on its own.",
-        "",
-        "A LimitRange still cannot do this: crane sets the requests explicitly",
-        "either way, and `defaultRequest` only fills fields a pod leaves unset.",
-        "",
-        "## The backstop, when the overrides are not set",
-        "",
-        f"**`maxPods` on the engine pool is the ceiling that works.** At {max_pods} a node",
-        "takes its own system pods and exactly one engine, so N engines force N",
-        f"nodes regardless of what they requested. Measure before trusting {max_pods} --",
-        "count the pods on a node of the pool, on a node of a pool with the same",
-        "taints, or on any node if you have neither:",
+        f"As a backstop, set **`maxPods: {max_pods}`** on the engine pool: room for the",
+        f"node's own system pods (about {TYPICAL_SYSTEM_PODS}) plus {engines}. Check the system",
+        "pod count on a node like the ones in the pool:",
         "",
         "```",
         f"{cli(o)} get pods -A --field-selector spec.nodeName=<NODE> --no-headers | wc -l",
         "```",
         "",
-        f"**Do not count DaemonSet objects for this.** `{cli(o)} get ds -A | wc -l`",
-        "reports 32 on a stock GKE cluster where 4 DaemonSet pods actually land:",
-        "most are variants gated by nodeAffinity -- GPU plugins, Windows builds,",
-        "metrics agents chosen by machine size -- and counting them sizes the pool",
-        "eight times too loose.",
+        f"`maxPods` is that count plus {per_node}. Count pods, not DaemonSets: many",
+        "DaemonSets place no pod on a given node. Too low a value leaves system",
+        "pods Pending with `Too many pods`. The taint keeps other workloads off",
+        "the pool, so the count stays stable.",
         "",
-        "That count + 1 is your `maxPods`. Too low and the node's own agents never",
-        "start, which looks like a broken node rather than a full one: a cluster",
-        "left at `maxPods: 10` had six system pods stuck Pending on `Too many",
-        "pods`, managed Prometheus among them.",
+        "## 3. Size the engine node",
         "",
-        "The taint is what makes the number predictable. Without it the pool also",
-        "takes whatever Deployments the scheduler spreads there -- kube-dns,",
-        "metrics-server, konnectivity-agent -- for another 5-6 slots a node that",
-        "come and go.",
-        "",
-        "## Sizing the engine node",
-        "",
-        f"One engine per node means the machine must hold {format_cpu(cpu)} CPU / {format_memory(mem)}",
-        "*allocatable*, and allocatable is what is left after the kubelet's",
-        f"reservations -- roughly {format_cpu(NODE_OVERHEAD_CPU)} CPU and {format_memory(NODE_OVERHEAD_MEM)} on a managed node. So pick a",
-        f"machine with at least **{node_cpu} vCPU and {node_mem}** of capacity, and confirm with",
-        f"`{cli(o)} get node <name> -o jsonpath='{{.status.allocatable}}'` once one exists.",
+        f"A node holding {engines} needs {format_cpu(cpu * per_node)} CPU / {format_memory(mem * per_node)}",
+        f"*allocatable*, which is roughly {format_cpu(NODE_OVERHEAD_CPU)} CPU and {format_memory(NODE_OVERHEAD_MEM)} less than capacity on",
+        f"a managed node. Pick a machine with at least **{node_cpu} vCPU and {node_mem}**, and",
+        f"confirm with `{cli(o)} get node <name> -o jsonpath='{{.status.allocatable}}'`.",
         "",
     ]
     if slots:
         lines += [
-            f"This location advertises **slots={slots}**, so size the pool's maximum",
-            f"at {slots} node(s) to run a full-width test.",
+            f"This location has **slots={slots}**, so allow the pool at least",
+            f"{slots} node(s) for a full-width test.",
             "",
         ]
     else:
         lines += [
-            "The location's concurrency (`slots`) is not recorded in these facts;",
-            "set the pool maximum to the widest test you intend to run.",
+            "Set the pool maximum to the widest test you intend to run (the",
+            "location's `slots`).",
             "",
         ]
 
     lines += _nodepool_commands(o, eng_sel, taints, max_pods, slots)
     lines += [
-        "## Checking it worked",
+        "## Check it worked",
         "",
-        "Run a test, then -- while it is running -- confirm the engine is on the",
-        "engine pool and is the size you configured:",
+        "While a test is running, confirm the engines are on the engine pool:",
         "",
         "```",
         f"{cli(o)} -n {o['namespace']} get pods -o wide",
@@ -176,16 +139,11 @@ def nodepools_md(facts, o):
         "  -o jsonpath='{.spec.nodeName}{\"\\n\"}{.spec.containers[*].resources}{\"\\n\"}'",
         "```",
         "",
-        f"Expect `limits` of {format_cpu(cpu)}/{format_memory(mem)} and `requests` of "
-        f"{ENGINE_DEFAULT_REQUEST_CPU}/{ENGINE_DEFAULT_REQUEST_MEM}.",
-        "The mismatch is expected and is the reason for `maxPods`. What matters",
-        "is that the node is one of the engine pool's, and that no more engines",
-        "share it than the pool was sized for -- which is one per node where the",
-        f"platform allows it and {_engines_per_node(max_pods, GKE_MIN_MAX_PODS)} on GKE, whose maxPods floor of "
-        f"{GKE_MIN_MAX_PODS} does not",
-        "go low enough. More than that means `maxPods` is not in effect.",
+        f"Expect `limits` of {format_cpu(cpu)}/{format_memory(mem)}, and `requests` matching the location's",
+        "overrides. No node should hold more engines than the pool was sized for",
+        f"({per_node}, or {_engines_per_node(max_pods, GKE_MIN_MAX_PODS)} on GKE); more means `maxPods` is not in effect.",
         "",
-        "`bzm-opl-gen doctor` checks the same shape before you deploy.",
+        "`bzm-opl-gen doctor` checks the cluster before you deploy.",
         "",
     ]
     return "\n".join(lines)
@@ -220,13 +178,11 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     maximum = slots or 5
     machine = _machine_for(o, engines_per_node(o))
     out = [
-        "## Creating the engine pool",
+        "## 4. Create the engine pool",
         "",
-        "Four things matter and are the same everywhere: the **labels** the",
-        "manifests select on, the **taints** that keep other workloads off, the",
-        f"**`maxPods: {max_pods}`** ceiling ({engines_per_node(o)} engine(s) a node plus",
-        f"~{TYPICAL_SYSTEM_PODS} system pods), and a **minimum of zero** so the pool",
-        "drains between runs.",
+        "On every platform the pool needs the **labels** the manifests select on,",
+        f"the **taints** that keep other workloads off, **`maxPods: {max_pods}`**, and a",
+        "**minimum of zero** nodes.",
         "",
     ]
 
@@ -245,21 +201,12 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     out += ["```", ""]
     if gke_max_pods > max_pods:
         out += [
-            f"**GKE will not go below {GKE_MIN_MAX_PODS}.** The API refuses anything lower",
-            f"(\"Maximum pods per node must be at least {GKE_MIN_MAX_PODS} and at most 256\"), so the",
-            f"{max_pods} this pool actually wants is not reachable and the floor leaves room",
-            f"for **{gke_engines} engines a node**, not one.",
-            "",
-            "That is not a setting you can tighten, so size the node for those",
-            f"{gke_engines} engines rather than for one -- the machine type above already",
-            "is. The alternative is fewer system pods on the pool (dropping",
-            "managed Prometheus or NodeLocalDNS from it), which buys one slot each",
-            "and costs observability.",
+            f"**GKE will not go below {GKE_MIN_MAX_PODS}** max pods per node, so this pool holds",
+            f"**{gke_engines} engines a node**; the machine type above is sized for that.",
             "",
         ]
     out += [
-        "`--max-pods-per-node` cannot be changed after creation -- it sizes the",
-        "node's alias IP range, so getting it wrong means replacing the pool.",
+        "`--max-pods-per-node` cannot be changed after the pool is created.",
         "",
     ]
 
@@ -273,16 +220,14 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     out += [
         "```",
         "",
-        "**Two of the four are not on that command.** Taints go in the `eksctl`",
-        "ClusterConfig (`taints:` under the node group), and `maxPods` comes from",
-        "the launch template's bootstrap:",
+        "Set the taints in the `eksctl` ClusterConfig (`taints:` under the node",
+        "group), and `maxPods` in the launch template's bootstrap:",
         "",
         "```",
         f"--kubelet-extra-args '--max-pods={max_pods}'",
         "```",
         "",
-        "EKS otherwise derives maxPods from the instance type's ENI limits, which",
-        "is far higher than anything wanted here.",
+        "Otherwise EKS derives maxPods from the instance type, which is far too high.",
         "",
     ]
 
@@ -320,9 +265,8 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     out += [
         "```",
         "",
-        "Pair it with a `MachineAutoscaler` (`minReplicas: 0`), and set maxPods",
-        "through a `KubeletConfig` selecting that pool's machine config pool --",
-        "it is not a MachineSet field:",
+        "Add a `MachineAutoscaler` (`minReplicas: 0`), and set maxPods with a",
+        "`KubeletConfig` for that pool's machine config pool:",
         "",
         "```yaml",
         "apiVersion: machineconfiguration.openshift.io/v1",
@@ -337,7 +281,7 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     out += [
         "### Anything else (kubeadm, Rancher, on-prem)",
         "",
-        "No pool object, so the same four things are set per node:",
+        "Set the labels and taints per node:",
         "",
         "```",
     ]
@@ -347,10 +291,9 @@ def _nodepool_commands(o, eng_sel, taints, max_pods, slots):
     out += [
         "```",
         "",
-        f"`maxPods: {max_pods}` goes in the kubelet config",
-        "(`/var/lib/kubelet/config.yaml`) and needs a kubelet restart. With no",
-        "cluster autoscaler the pool cannot scale to zero: cordon the nodes",
-        "between runs, or accept that they idle.",
+        f"Set `maxPods: {max_pods}` in the kubelet config",
+        "(`/var/lib/kubelet/config.yaml`) and restart the kubelet. Without a",
+        "cluster autoscaler the nodes stay up between runs.",
         "",
     ]
     return out

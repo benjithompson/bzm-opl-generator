@@ -256,7 +256,7 @@ def is_openshift(o):
     Kubernetes too; this is the product, which decides `oc` or `kubectl`, the
     Route backend and the injected trust bundle.
     """
-    return o["platform"] == "openshift" and bool(o.get("openshift_cluster", True))
+    return o["platform"] == "openshift" and bool(o.get("openshift_cluster", False))
 
 
 def cli(o):

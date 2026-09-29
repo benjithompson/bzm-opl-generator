@@ -1,4 +1,4 @@
-# OPTIONAL -- only apply alongside clusterrole. See that file for rationale.
+# Optional; apply only with bzm_clusterrole.yaml.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata: { name: cluster-role-binding-crane }

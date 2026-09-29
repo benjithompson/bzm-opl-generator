@@ -13,6 +13,11 @@ anything that breaks.
 
 ### Added
 
+- **`generate --openshift`** says the target cluster is OpenShift: commands
+  use `oc`, `sv_ingress=openshift` (a Route) is allowed, and the injected
+  cluster trust bundle is offered. The cluster defaults to plain Kubernetes, so
+  `--not-openshift` alone could only restate the default.
+
 - **`--format helm` now covers service virtualization.** The chart was refused
   for a bundle configured to publish virtual services, because it carried
   neither the `KUBERNETES_WEB_EXPOSE_*` environment nor the RBAC the chosen
@@ -67,7 +72,42 @@ anything that breaks.
   deliberately: that is a question with two answers rather than none, and
   guessing binds the bundle to an agent somebody else may be running.
 
+### Changed
+
+- **Generated bundles read as customer documentation.** Comments in the
+  manifests, the Helm chart (`values.yaml`, templates, README), the docker
+  script and compose file, `nodepools.md` and the mirror script are shorter and
+  say only what an operator needs to act on. Content is unchanged: every
+  manifest, rendered chart, script and compose file parses to the same objects
+  as before.
+- **An existing Helm release restarts crane once on its next `helm upgrade`.**
+  The chart's `checksum/config` and `checksum/secret` annotations hash the
+  template text, and the template comments changed.
+- **The chart's refusal messages are shorter**, and its README now agrees with
+  the chart that contour reads `sv.tlsSecret`.
+- **`docs/` is rewritten as customer-facing reference**, with developer-only
+  material moved to `CONTRIBUTING.md`.
+
 ### Fixed
+
+- **The web UI showed an unanswered cluster as OpenShift** while the bundle
+  was generated for plain Kubernetes. The Advanced selector now shows what the
+  generator does, and the generator's own fallback for a partially resolved
+  option set agrees with its default.
+
+- **A `no_proxy` such as `*.corp.example` made the manifests bundle
+  unparseable.** A bare leading `*` is a YAML alias; every ConfigMap value is
+  now quoted, as the chart already did.
+- **MCP tool errors reached the client as `Error executing tool <name>`** on
+  mcp 2.2, with the actual reason withheld. They carry the full sentence again.
+- **A BlazeMeter that could not be reached** (DNS, refused connection,
+  timeout, a proxy's HTML page) surfaced as a 500 with a traceback; it is now
+  the same error any other BlazeMeter refusal is.
+- **`doctor` told somebody to create a namespace they were only not allowed to
+  read.** A refused read is now reported as unread.
+- **The web UI could configure one location's bundle with another's facts**
+  when two were picked in quick succession, and a regenerate or create that
+  finished after the selection changed wrote its result to the new selection.
 
 - **The configure step's rail called a blank namespace an error.** Placement
   showed a red dot and `needs attention` beside a step that blocks nothing: an

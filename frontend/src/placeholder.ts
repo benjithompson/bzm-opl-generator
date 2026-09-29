@@ -3,7 +3,7 @@
  *  A blank required field is sent as `<KEY>`, so applying the bundle fails
  *  naming the field instead of deploying something subtly wrong. The marker is
  *  applied only to what is sent, never to the options the page holds.
- *  generate.REQUIRED_TEXT covers what the options alone show is required; this
+ *  required_fields.REQUIRED_TEXT covers what the options alone show is required; this
  *  adds what only a switch on the page shows. */
 import { Options, PlaceholderSource } from "./api";
 import { Applies } from "./formats";
@@ -11,7 +11,7 @@ import { GroupId, OPTION_GROUPS, serviceAccountOk } from "./optionGroups";
 
 /** The marker for an option key: upper case, a dotted key joined by an
  *  underscore (`proxy.https` gives `<PROXY_HTTPS>`). Same rule as
- *  generate.marker, held equal through fixtures.ts. */
+ *  markers.marker, held equal through fixtures.ts. */
 export function marker(key: string): string {
   return `<${key.replace(/\./g, "_").toUpperCase()}>`;
 }

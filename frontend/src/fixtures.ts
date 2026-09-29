@@ -29,7 +29,7 @@ export const SIZING_MODELS: SizingModel[] = [
     pods: "mock pods", measured: false, example_target: 2000 },
 ];
 
-/** generate.IGNORED_BY_FORMAT as /api/ignored-options serves it. The only
+/** bundle_options.IGNORED_BY_FORMAT as /api/ignored-options serves it. The only
  *  copy, held equal by test_server.py. Every format is stated, `{}` included:
  *  a missing format would mean "not read yet" to the page. */
 export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
@@ -88,7 +88,7 @@ export const IGNORED_BY_FORMAT: Record<string, Record<string, string>> = {
 };
 
 
-/** generate.RESERVED_ENV with each name's owning option, as
+/** bundle_env.RESERVED_ENV with each name's owning option, as
  *  /api/reserved-env serves it. The only copy, held equal by test_server.py;
  *  `null` is a name no single option owns. */
 export const RESERVED_ENV: Record<string, string | null> = {
@@ -157,7 +157,7 @@ export const AGENT_ENV: AgentEnvVar[] = [
 
 
 /** The marker rule as worked examples, one per key shape. placeholder.test.ts
- *  holds the page's `marker` to them and test_server.py holds generate.marker
+ *  holds the page's `marker` to them and test_server.py holds markers.marker
  *  to the same entries. */
 export const MARKER_EXAMPLES: Record<string, string> = {
   namespace: "<NAMESPACE>",

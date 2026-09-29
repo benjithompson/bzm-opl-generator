@@ -1226,3 +1226,21 @@ def test_the_default_ca_mode_asks_for_no_proxy(monkeypatch, tmp_path):
     not start refusing runs that never mentioned a CA."""
     regenerate, _, exit = _livetest(monkeypatch, tmp_path, FakeClient())
     assert exit.code == 0 and regenerate is not None
+
+
+@pytest.mark.parametrize("flags, expected", [
+    ((), False), (("--openshift",), True), (("--not-openshift",), False)])
+def test_the_cluster_defaults_to_kubernetes_and_openshift_has_a_flag(
+        monkeypatch, tmp_path, flags, expected):
+    """The default is plain Kubernetes, so the positive needs a flag of its own;
+    `--not-openshift` alone could only restate the default."""
+    _generate(monkeypatch, tmp_path, *flags)
+    profile = json.loads((tmp_path / "out" / "profile.json").read_text())
+    assert profile["openshift_cluster"] is expected
+    readme = (tmp_path / "out" / "README.md").read_text()
+    assert ("\noc -n " in readme) is expected
+
+
+def test_openshift_and_not_openshift_are_exclusive(monkeypatch, tmp_path):
+    with pytest.raises(SystemExit):
+        _generate(monkeypatch, tmp_path, "--openshift", "--not-openshift")

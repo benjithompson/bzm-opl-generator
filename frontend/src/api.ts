@@ -376,7 +376,7 @@ export const api = {
  *  fake (main.tsx picks the real one). */
 export type Api = typeof api;
 
-/** Served, because generate.py owns the list and new backends must reach the
+/** Served, because service_virt.py owns the list and new backends must reach the
  *  picker without an edit here. */
 export interface SvBackend {
   group: string;

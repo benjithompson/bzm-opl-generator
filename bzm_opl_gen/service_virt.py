@@ -124,7 +124,7 @@ def sv_cfg(facts, o):
         raise ValueError(
             f"sv_ingress=openshift requires an OpenShift cluster, got "
             f"platform={o['platform']} openshift_cluster="
-            f"{bool(o.get('openshift_cluster', True))}. That backend publishes a "
+            f"{bool(o.get('openshift_cluster', False))}. That backend publishes a "
             "route.openshift.io Route, which a plain Kubernetes API server does "
             "not serve -- the agent would deploy cleanly and then stall with "
             "nothing to create."
@@ -282,7 +282,7 @@ def sv_expose(mocks, namespace, publish):
     exposes 80, so the advertised endpoint answers 503. This pair sets port ==
     targetPort and selects on the pod's identity labels, leaving crane's
     objects alone. `mocks` are {name, port, harbor, ship}, read off the running
-    pods (livetest.sv_mocks).
+    pods (sv_read.sv_mocks).
     """
     ns, docs = namespace, []
     for m in mocks:

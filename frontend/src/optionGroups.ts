@@ -51,7 +51,7 @@ export interface OptionGroup {
 
 // -- the cluster -----------------------------------------------------------------
 
-/** Is the target cluster OpenShift itself (generate.is_openshift)? `platform`
+/** Is the target cluster OpenShift itself (bundle_options.is_openshift)? `platform`
  *  is only the UID posture, which vanilla Kubernetes may share. An unanswered
  *  `openshift_cluster` is no, as in the generator. */
 export const isOpenshift = (o: Options) =>
@@ -119,7 +119,7 @@ export function serviceAccountOk(o: Options): boolean {
 // -- service virtualization --------------------------------------------------
 
 /** `sv_ingress` meaning "answered: no virtual services" on a mockServices
- *  location; unset means unanswered. Must equal generate.SV_INGRESS_NONE
+ *  location; unset means unanswered. Must equal service_virt.SV_INGRESS_NONE
  *  (test_server.py reads this literal). */
 export const SV_NONE = "none";
 
@@ -128,7 +128,7 @@ export function svConfigured(ingress: unknown): boolean {
   return !!ingress && ingress !== SV_NONE;
 }
 
-/** Is SV in use but unfinished? Mirrors generate._sv_cfg: with an ingress
+/** Is SV in use but unfinished? Mirrors service_virt.sv_cfg: with an ingress
  *  chosen, the domain and TLS secret are required and NODEPORT must suit the
  *  backend; with none, only a demanding location is unfinished. An unknown
  *  backend (table not loaded) does not block; generate() refuses the real case. */

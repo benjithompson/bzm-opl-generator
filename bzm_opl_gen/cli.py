@@ -767,13 +767,18 @@ def main():
                         "and virtual services are published by hostname rather "
                         "than by ingress")
     g.add_argument("--platform", choices=["openshift", "k8s"])
-    # Only the negative has a flag: the default posture and cluster are OpenShift's.
-    g.add_argument("--not-openshift", dest="openshift_cluster",
-                   action="store_false", default=None,
-                   help="the SCC-friendly posture on a cluster that is not "
-                        "OpenShift: every command the bundle prints is written "
-                        "with kubectl, sv_ingress=openshift is refused, and no "
-                        "inject-trusted-cabundle ConfigMap is offered")
+    # The cluster defaults to plain Kubernetes; the posture (--platform) is a
+    # separate question. Tri-state so a flag overrides a --profile either way.
+    ocp = g.add_mutually_exclusive_group()
+    ocp.add_argument("--openshift", dest="openshift_cluster",
+                     action="store_true", default=None,
+                     help="the target cluster is OpenShift: commands use oc, "
+                          "sv_ingress=openshift (a Route) is allowed, and the "
+                          "injected cluster trust bundle is offered")
+    ocp.add_argument("--not-openshift", dest="openshift_cluster",
+                     action="store_false", default=None,
+                     help="the target cluster is plain Kubernetes (the "
+                          "default): commands use kubectl")
     g.add_argument("--namespace")
     g.add_argument("--ship-id", dest="ship_id")
     g.add_argument("--auth-token", dest="auth_token",
